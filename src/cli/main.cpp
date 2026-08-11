@@ -33,6 +33,7 @@
 #include "katana/runtime/gdi.hpp"
 #include "katana/runtime/game_entry_handoff_artifact.hpp"
 #include "katana/runtime/game_project_artifact.hpp"
+#include "katana/runtime/native_port_artifact.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
 #include "katana/sh4/isa_coverage.hpp"
@@ -2339,7 +2340,7 @@ class SupervisedHostCommandTelemetryAttempt final {
 };
 
 inline constexpr auto maximum_port_host_command_runtime =
-    std::chrono::minutes(15);
+    std::chrono::minutes(20);
 
 inline constexpr auto windows_port_host_post_exit_grace =
     std::chrono::milliseconds(500);
@@ -2378,7 +2379,7 @@ PortHostCommandTimeout configured_port_host_command_runtime(
             milliseconds > maximum_wait_milliseconds)
             throw std::invalid_argument(
                 "KATANA_PORT_HOST_COMMAND_TIMEOUT_MS muss 'unlimited' "
-                "oder zwischen 1 und 900000 liegen.");
+                "oder zwischen 1 und 1200000 liegen.");
         return std::chrono::milliseconds(milliseconds);
     }();
     const auto test_stage =
@@ -3468,7 +3469,7 @@ SupervisedHostCommandResult run_supervised_host_command(
          *timeout > maximum_port_host_command_runtime))
         throw std::invalid_argument(
             "Port-Hostprozess braucht 'unlimited' oder ein Zeitlimit von "
-            "hoechstens 15 Minuten.");
+            "hoechstens 20 Minuten.");
     SupervisedHostCommandResult result;
     const SupervisedHostCommandTelemetryAttempt telemetry_attempt(
         telemetry, telemetry_phase, result);
@@ -4509,7 +4510,8 @@ class ExclusivePortExportLock final {
                     "Port-Exportpfad wird bereits von einem "
                     "anderen Export verwendet.");
             throw std::runtime_error(
-                "Port-Exportpfad-Sperre konnte nicht geoeffnet werden.");
+                "Port-Exportpfad-Sperre konnte nicht geoeffnet werden "
+                "(Win32-Fehler " + std::to_string(error) + ").");
         }
         FILE_ATTRIBUTE_TAG_INFO attributes{};
         if (!GetFileInformationByHandleEx(
@@ -5508,6 +5510,24 @@ void require_telemetry_path_outside_tree(
         std::string(description) + " liegen.");
 }
 
+void require_native_port_definition_path_disjoint_from_path(
+    const std::filesystem::path& native_port_definition_path,
+    const std::filesystem::path& protected_path,
+    const std::string_view description) {
+    if (native_port_definition_path.empty() || protected_path.empty()) return;
+    const auto native_path =
+        std::filesystem::absolute(native_port_definition_path).lexically_normal();
+    const auto protected_absolute =
+        std::filesystem::absolute(protected_path).lexically_normal();
+    if (!port_paths_alias(native_path, protected_absolute) &&
+        !path_is_within(native_path, protected_absolute) &&
+        !path_is_within(protected_absolute, native_path))
+        return;
+    throw std::invalid_argument(
+        "--native-port-definition darf " + std::string(description) +
+        " weder direkt noch ueber einen Hardlink aliasieren.");
+}
+
 inline constexpr std::uintmax_t maximum_port_export_cache_state_bytes =
     4u * 1024u;
 inline constexpr std::string_view generated_artifact_manifest_name =
@@ -5633,6 +5653,49 @@ validated_generated_source_files(const std::filesystem::path& root) {
     const std::vector<std::filesystem::path> expected{"main.cpp"};
     if (*actual != expected) return std::nullopt;
     return std::vector<std::filesystem::path>{source_root / expected.front()};
+}
+
+std::optional<std::uint64_t>
+validated_native_host_translation_unit_supplement(
+    const std::filesystem::path& build_root) {
+    const auto plan = build_root / ".katana-native-host-build-plan";
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(plan, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        unsafe_port_filesystem_link(plan, status))
+        return std::nullopt;
+    std::error_code size_error;
+    const auto size = std::filesystem::file_size(plan, size_error);
+    if (size_error || size == 0u || size > 256u) return std::nullopt;
+    std::ifstream input(plan, std::ios::binary);
+    std::string header;
+    std::string value;
+    std::string trailing;
+    if (!input ||
+        !std::getline(input, header) ||
+        !std::getline(input, value) ||
+        std::getline(input, trailing) ||
+        !input.eof())
+        return std::nullopt;
+    const auto strip_windows_carriage_return = [](std::string& line) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+    };
+    strip_windows_carriage_return(header);
+    strip_windows_carriage_return(value);
+    if (header != "katana-native-host-build-plan-v1")
+        return std::nullopt;
+    constexpr std::string_view prefix =
+        "translation_unit_supplement=";
+    if (!value.starts_with(prefix)) return std::nullopt;
+    const auto digits = std::string_view(value).substr(prefix.size());
+    std::uint64_t count = 0u;
+    const auto conversion = std::from_chars(
+        digits.data(), digits.data() + digits.size(), count, 10);
+    if (digits.empty() || conversion.ec != std::errc{} ||
+        conversion.ptr != digits.data() + digits.size() ||
+        count == 0u || count > 65'536u)
+        return std::nullopt;
+    return count;
 }
 
 std::string read_port_distribution_text(
@@ -6742,6 +6805,8 @@ int export_port_project(const std::filesystem::path& source_path,
                         const std::optional<std::filesystem::path>&
                             game_project_path = std::nullopt,
                         const std::optional<std::filesystem::path>&
+                            native_port_definition_path = std::nullopt,
+                        const std::optional<std::filesystem::path>&
                             game_entry_handoff_path = std::nullopt,
                         const std::vector<RuntimeImagePayloadArgument>&
                             runtime_image_payload_arguments = {},
@@ -6772,11 +6837,17 @@ int export_port_project(const std::filesystem::path& source_path,
     const auto analysis_mode_identity =
         port_analysis_mode_identity(analysis_mode);
     if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly &&
-        (diagnostic_partial || boot_executable_artifact ||
-         !game_project_path.has_value()))
+        (diagnostic_partial || !game_project_path.has_value()))
         throw std::invalid_argument(
             "--analysis-mode runtime-only braucht einen vollstaendigen "
-            "NativeDisc-Produktport mit --game-project.");
+            "Produktport mit --game-project.");
+    if (!diagnostic_partial && !native_port_definition_path.has_value())
+        throw std::invalid_argument(
+            "Produktports brauchen --native-port-definition.");
+    if (diagnostic_partial && native_port_definition_path.has_value())
+        throw std::invalid_argument(
+            "--native-port-definition ist ausschliesslich fuer "
+            "vollstaendige Produktports erlaubt.");
     if (!native_aot_resume_entries.empty() &&
         (analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly ||
          diagnostic_partial || boot_executable_artifact ||
@@ -6795,6 +6866,66 @@ int export_port_project(const std::filesystem::path& source_path,
         absolute_output.parent_path(), "Port-Ausgabeelternpfad");
     const auto publish_paths =
         port_publish_output_paths(absolute_output);
+    std::shared_ptr<katana::runtime::NativePortArtifact>
+        verified_native_port;
+    std::optional<std::filesystem::path> native_adapter_source_dir;
+    if (native_port_definition_path.has_value()) {
+        verified_native_port =
+            katana::runtime::NativePortArtifact::load(
+                *native_port_definition_path);
+        const auto& native_definition_path =
+            verified_native_port->canonical_path();
+        native_adapter_source_dir = native_definition_path.parent_path();
+        ensure_safe_absolute_directory_chain(
+            *native_adapter_source_dir,
+            "Privater Native-Port-Adapter");
+        const auto adapter_cmake =
+            *native_adapter_source_dir / "CMakeLists.txt";
+        std::error_code adapter_cmake_error;
+        const auto adapter_cmake_status =
+            std::filesystem::symlink_status(
+                adapter_cmake, adapter_cmake_error);
+        if (adapter_cmake_error ||
+            !std::filesystem::is_regular_file(adapter_cmake_status) ||
+            unsafe_port_filesystem_link(
+                adapter_cmake, adapter_cmake_status))
+            throw std::invalid_argument(
+                "Der Ordner der Native-Port-Definition muss einen sicheren "
+                "privaten CMakeLists.txt-Titeladapter enthalten.");
+        if (!source_root.empty() &&
+            path_is_within(
+                native_definition_path,
+                std::filesystem::absolute(source_root).lexically_normal()))
+            throw std::invalid_argument(
+                "Native-Port-Definition muss ausserhalb des "
+                "KatanaRecomp-Quellbaums liegen.");
+        require_native_port_definition_path_disjoint_from_path(
+            native_definition_path, source_path, "die Portquelle");
+        require_native_port_definition_path_disjoint_from_path(
+            native_definition_path, publish_paths.output,
+            "das publizierte Portpaket");
+        require_native_port_definition_path_disjoint_from_path(
+            native_definition_path, publish_paths.lock_base,
+            "die Port-Publish-Sperre");
+        require_native_port_definition_path_disjoint_from_path(
+            native_definition_path, publish_paths.journal,
+            "das Port-Publish-Journal");
+        if (game_project_path.has_value())
+            require_native_port_definition_path_disjoint_from_path(
+                native_definition_path, *game_project_path,
+                "das Game-Project");
+        if (game_entry_handoff_path.has_value())
+            require_native_port_definition_path_disjoint_from_path(
+                native_definition_path, *game_entry_handoff_path,
+                "den Game-Entry-Handoff");
+        for (const auto& [image_id, payload_path] :
+             runtime_image_payload_arguments) {
+            static_cast<void>(image_id);
+            require_native_port_definition_path_disjoint_from_path(
+                native_definition_path, payload_path,
+                "ein Runtime-Image-Payload");
+        }
+    }
     std::optional<std::filesystem::path>
         normalized_telemetry_jsonl_path;
     if (telemetry_jsonl_path.has_value()) {
@@ -6886,6 +7017,11 @@ int export_port_project(const std::filesystem::path& source_path,
                 telemetry_path,
                 *game_entry_handoff_path,
                 "den Game-Entry-Handoff");
+        if (verified_native_port)
+            require_telemetry_path_disjoint_from_file(
+                telemetry_path,
+                verified_native_port->canonical_path(),
+                "die Native-Port-Definition");
         for (const auto& [image_id, payload_path] :
              runtime_image_payload_arguments) {
             static_cast<void>(image_id);
@@ -6978,6 +7114,11 @@ int export_port_project(const std::filesystem::path& source_path,
                 telemetry_writer_lock,
                 *game_entry_handoff_path,
                 "den Game-Entry-Handoff");
+        if (verified_native_port)
+            require_telemetry_path_disjoint_from_file(
+                telemetry_writer_lock,
+                verified_native_port->canonical_path(),
+                "die Native-Port-Definition");
         for (const auto& [image_id, payload_path] :
              runtime_image_payload_arguments) {
             static_cast<void>(image_id);
@@ -7109,8 +7250,8 @@ int export_port_project(const std::filesystem::path& source_path,
     std::uint32_t whole_export_source_contract_version = 0u;
     std::string whole_export_boot_file_name;
     std::uint32_t whole_export_entry_address = 0u;
-    const auto implementation_identities =
-        port_export_implementation_identities();
+    std::string native_port_artifact_identity;
+    std::uint32_t native_port_artifact_format_version_for_cache = 0u;
     if (game_project_path.has_value() && diagnostic_partial)
         throw std::invalid_argument(
             "--game-project ist ausschliesslich fuer vollstaendige Produktports erlaubt.");
@@ -7133,6 +7274,16 @@ int export_port_project(const std::filesystem::path& source_path,
                 *game_project_path);
         resolved_game_project = verified_game_project->definition();
     }
+    if (verified_native_port) {
+        native_port_artifact_identity =
+            verified_native_port->artifact_identity();
+        native_port_artifact_format_version_for_cache =
+            katana::runtime::native_port_artifact_format_version;
+    }
+    const auto implementation_identities =
+        port_export_implementation_identities(
+            native_port_artifact_identity,
+            native_port_artifact_format_version_for_cache);
     if (boot_executable_artifact) {
         verified_boot_artifact =
             katana::platform::load_dreamcast_boot_executable_artifact(source_path);
@@ -7341,6 +7492,8 @@ int export_port_project(const std::filesystem::path& source_path,
         console_profile,
         game_project_identity,
         handoff_artifact_identity,
+        native_port_artifact_identity,
+        native_port_artifact_format_version_for_cache,
         latent_aot_hint_identity,
         analysis_mode_identity,
         implementation_identities.whole_export);
@@ -7351,6 +7504,13 @@ int export_port_project(const std::filesystem::path& source_path,
     const auto workspace_root =
         port_export_workspace_root(
             absolute_output.parent_path());
+    if (verified_native_port &&
+        path_is_within(
+            verified_native_port->canonical_path(),
+            std::filesystem::absolute(workspace_root).lexically_normal()))
+        throw std::invalid_argument(
+            "Native-Port-Definition muss ausserhalb des globalen "
+            "Port-Arbeitscaches liegen.");
     if (workspace_root == workspace_root.root_path() ||
         workspace_root.filename().empty())
         throw std::invalid_argument(
@@ -7457,6 +7617,10 @@ int export_port_project(const std::filesystem::path& source_path,
             resolved_game_project.has_value()
                 ? &*resolved_game_project
                 : nullptr;
+        export_options.native_port_definition =
+            verified_native_port
+                ? &verified_native_port->definition()
+                : nullptr;
         export_options.game_project_runtime_image_payloads =
             runtime_image_payloads;
         export_options.native_aot_resume_entries =
@@ -7562,7 +7726,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 boot_executable_artifact
                     ? katana::codegen::
                           export_dreamcast_port_project_from_boot_artifact(
-                              source_path, workspace, export_options)
+                              source_path, workspace, export_options,
+                              analysis_mode)
                     : katana::codegen::export_dreamcast_port_project(
                           *verified_native_disc,
                           workspace,
@@ -7832,6 +7997,10 @@ int export_port_project(const std::filesystem::path& source_path,
             " -DKATANA_PORT_BUILD_PROFILE=" + build_profile;
         configure +=
             " -DKATANA_PORT_RUNTIME_PROFILE=" + port_runtime_profile;
+        if (native_adapter_source_dir.has_value())
+            configure +=
+                " -DKATANA_NATIVE_ADAPTER_SOURCE_DIR=" +
+                shell_quote(*native_adapter_source_dir);
         configure +=
             " -DKATANA_HOST_COMPILE_JOBS_REQUESTED=" +
             std::to_string(host_compile_budget.requested) +
@@ -8056,8 +8225,30 @@ int export_port_project(const std::filesystem::path& source_path,
                 "Hostbuild-TU-Plan ist unerwartet leer.");
         // katana_generated always enables one CMake-generated PCH compile
         // edge in addition to every listed generated/support source.
+        std::uint64_t native_translation_unit_supplement = 0u;
+        if (verified_native_port) {
+            const auto supplement =
+                validated_native_host_translation_unit_supplement(
+                    build_path);
+            if (!supplement)
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    "Nativer Hostbuild besitzt keinen exakten "
+                    "Runtime-/Adapter-TU-Plan.");
+            native_translation_unit_supplement = *supplement;
+        }
+        if (generated_translation_units >
+                std::numeric_limits<std::uint64_t>::max() -
+                    support_translation_units - 1u ||
+            generated_translation_units + support_translation_units + 1u >
+                std::numeric_limits<std::uint64_t>::max() -
+                    native_translation_unit_supplement)
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
+                "Hostbuild-TU-Plan ist numerisch ungueltig.");
         const auto planned_translation_units =
-            generated_translation_units + support_translation_units + 1u;
+            generated_translation_units + support_translation_units + 1u +
+            native_translation_unit_supplement;
         auto built_executable = build_path / target_name;
 #ifdef _WIN32
         built_executable += ".exe";
@@ -8083,15 +8274,18 @@ int export_port_project(const std::filesystem::path& source_path,
                 katana::cli::ExitCode::BuildFailure,
                 "Vorheriges Hostartefakt konnte nicht sicher geprueft "
                 "werden.");
-        // CMake's Ninja/MSVC launcher runs vs_link_exe for the required
-        // link pass and may run FINAL-LINK once more while updating a
-        // manifest. Both are physical launcher executions for one logical
-        // executable link; zero or one omitted pass remains an up-to-date
-        // hit, while more than two remains fail-closed.
+        // CMake's Ninja/MSVC launcher runs vs_link_exe for a required link
+        // pass and may run FINAL-LINK once more while updating a manifest.
+        // A native product also builds the small streaming link-audit tool,
+        // so its graph contains two executable links. Zero or omitted passes
+        // remain up-to-date hits; an excess still fails closed.
+        const auto planned_executables =
+            verified_native_port ? 2u : 1u;
 #ifdef _WIN32
-        const auto planned_link_steps = use_ninja ? 2u : 1u;
+        const auto planned_link_steps =
+            planned_executables * (use_ninja ? 2u : 1u);
 #else
-        constexpr auto planned_link_steps = 1u;
+        const auto planned_link_steps = planned_executables;
 #endif
         katana::cli::HostBuildProgressObserver host_build_progress(
             host_build_event_root,
@@ -8200,28 +8394,14 @@ int export_port_project(const std::filesystem::path& source_path,
         }
         if (build_result.timed_out) {
             host_build_progress.fail();
-            const auto failure =
+            throw katana::cli::Error(
+                katana::cli::ExitCode::BuildFailure,
                 std::string(
                     "KATANA_PORT_HOST_COMMAND_TIMEOUT "
                     "stage=host-build limit_ms=") +
-                std::to_string(build_runtime->count()) +
-                " process_tree=terminated";
-            try {
-                remove_failed_port_host_build_state(
-                    report.output_root,
-                    build_path);
-            } catch (const std::exception& cleanup_error) {
-                throw katana::cli::Error(
-                    katana::cli::ExitCode::BuildFailure,
-                    failure +
-                        "; unvollstaendiger Buildzustand konnte nicht "
-                        "bereinigt werden: " +
-                        cleanup_error.what());
-            }
-            throw katana::cli::Error(
-                katana::cli::ExitCode::BuildFailure,
-                failure +
-                    "; unvollstaendiger Buildzustand wurde entfernt.");
+                    std::to_string(build_runtime->count()) +
+                    " process_tree=terminated; inkrementeller Ninja-/CMake-"
+                    "Buildzustand bleibt fuer den naechsten Lauf erhalten.");
         }
         if (build_result.exit_code != 0) {
             host_build_progress.fail();
@@ -8496,6 +8676,7 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
+              "[--native-port-definition <private .katana-native-port>] "
                "[--analysis-mode <platform|runtime-only>] "
                "[--native-aot-resume-entry <0xAdresse>]... "
                "[--runtime-image-payload <Image-ID>=<private-Datei>] "
@@ -8509,8 +8690,10 @@ void print_usage(std::ostream& output) {
               "[--console-profile <...>] [--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
               "--target-name <Name> [--console-profile <...>] "
-              "[--game-project <Descriptor-Artefakt>] "
-              "[--runtime-image-payload <Image-ID>=<private-Datei>]... "
+               "[--game-project <Descriptor-Artefakt>] "
+               "[--native-port-definition <private .katana-native-port>] "
+               "[--analysis-mode <platform|runtime-only>] "
+               "[--runtime-image-payload <Image-ID>=<private-Datei>]... "
               "[--game-entry-handoff <privates-Artefakt>] "
               "[--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp probe-port-executable <boot.katana-executable> --output "
@@ -9003,6 +9186,8 @@ int main(const int argc, char* argv[]) {
                 game_entry_handoff_path;
             std::optional<std::filesystem::path> game_project_path;
             std::optional<std::filesystem::path>
+                native_port_definition_path;
+            std::optional<std::filesystem::path>
                 telemetry_jsonl_path;
             std::vector<RuntimeImagePayloadArgument>
                 runtime_image_payload_arguments;
@@ -9041,6 +9226,13 @@ int main(const int argc, char* argv[]) {
                             port_command == "port-executable") &&
                            !game_project_path.has_value()) {
                     game_project_path =
+                        std::filesystem::path(argv[argument + 1u]);
+                } else if (
+                    option == "--native-port-definition" &&
+                    (port_command == "port" ||
+                     port_command == "port-executable") &&
+                    !native_port_definition_path.has_value()) {
+                    native_port_definition_path =
                         std::filesystem::path(argv[argument + 1u]);
                 } else if (
                     option == "--runtime-image-payload" &&
@@ -9094,7 +9286,9 @@ int main(const int argc, char* argv[]) {
                     native_aot_resume_entries.push_back(
                         parse_native_aot_resume_entry(argv[argument + 1u]));
                 } else if (option == "--analysis-mode" &&
-                           port_command == "port" && !analysis_mode_seen) {
+                           (port_command == "port" ||
+                            port_command == "port-executable") &&
+                           !analysis_mode_seen) {
                     analysis_mode = parse_port_analysis_mode(
                         argv[argument + 1u]);
                     analysis_mode_seen = true;
@@ -9124,6 +9318,10 @@ int main(const int argc, char* argv[]) {
                 !game_project_path.has_value())
                 throw std::invalid_argument(
                     "--analysis-mode runtime-only braucht --game-project.");
+            if (!diagnostic_partial &&
+                !native_port_definition_path.has_value())
+                throw std::invalid_argument(
+                    "Produktports brauchen --native-port-definition.");
             return export_port_project(std::filesystem::path(argv[2]),
                                        *output_path,
                                        *target_name,
@@ -9131,6 +9329,7 @@ int main(const int argc, char* argv[]) {
                                        console_profile,
                                        boot_executable_artifact,
                                        game_project_path,
+                                       native_port_definition_path,
                                        game_entry_handoff_path,
                                        runtime_image_payload_arguments,
                                        latent_aot_entry_hints,

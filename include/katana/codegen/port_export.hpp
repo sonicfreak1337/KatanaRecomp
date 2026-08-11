@@ -31,7 +31,7 @@ namespace katana::codegen {
 
 inline constexpr std::uint32_t port_project_contract_version =
     build_contract::port_project_contract_version;
-inline constexpr std::uint32_t port_partition_emission_schema_version = 5u;
+inline constexpr std::uint32_t port_partition_emission_schema_version = 7u;
 inline constexpr std::uint32_t port_metadata_cache_schema_version = 3u;
 
 using PortExportProgressCallback =
@@ -195,6 +195,13 @@ export_dreamcast_port_project_from_boot_artifact(
     const std::filesystem::path& artifact_manifest_path,
     const std::filesystem::path& output_root,
     const PortExportOptions& options);
+
+[[nodiscard]] PortExportResult
+export_dreamcast_port_project_from_boot_artifact(
+    const std::filesystem::path& artifact_manifest_path,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options,
+    PortAnalysisMode analysis_mode);
 
 // Moves local-only mutable state from a replaced port into its freshly
 // published successor without ever copying it through codegen staging.

@@ -207,6 +207,12 @@ enum class NativePortStopReason : std::uint8_t {
     HostDeadline,
     HookAbort,
     MissingStaticEntry,
+    ExecutableCodeWrite,
+    ReadOnlyImageWrite,
+    GuestExceptionOrSleep,
+    AotContractViolation,
+    UnresolvedHardwareAccess,
+    ForbiddenHardwareOperation,
 };
 
 struct NativePortContext final {
@@ -224,7 +230,14 @@ enum class NativePortContractFailure : std::uint8_t {
     InvalidHookResult,
     MissingRequiredHook,
     UnresolvedHardwareAccess,
-    BootstrapFailed
+    BootstrapFailed,
+    MissingStaticEntry,
+    ForbiddenHardwareOperation,
+    ImmutableMemoryWrite,
+    HookAborted,
+    GuestExceptionOrSleep,
+    AotContractViolation,
+    ContentLoadFailed
 };
 
 class NativePortContractError final : public std::runtime_error {

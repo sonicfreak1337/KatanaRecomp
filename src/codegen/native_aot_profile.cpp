@@ -104,6 +104,7 @@ make_native_aot_backend_request(const NativeAotEmissionProfile profile,
     request.external_instruction_observer = options.external_instruction_observer;
     request.conservative_register_localization =
         contract.conservative_register_localization && !options.external_instruction_observer;
+    request.runtime_binding = options.runtime_binding;
     return request;
 }
 

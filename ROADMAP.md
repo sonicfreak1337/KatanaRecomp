@@ -135,13 +135,17 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `77`, Native-Port-Profilvertrag `2` und
-der erweiterte Linkmap-Audit sperren jede Rueckkante. Der unabhaengige
-`NativePortDefinition`-/`NativePortContext`-Vertrag sowie eine fail-closed
-Hardware-Closure sind vorhanden. Der Produktconfigure endet bis zum echten
-privaten Definitionsprovider und Bootstrap-/Direkthook-Codegen bewusst mit
-`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`; dieser vertikale Pfad ist der
-aktive `KR-5001` und darf nicht den historischen Launcher wiederverwenden.
+kein Portprofil. Portprojektvertrag `79`, Native-Port-Profilvertrag `4` und
+der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
+NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
+read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
+Dispatch sind implementiert. Ein privater Adapter wird erreicht, statisch
+rekompilierter Spielcode startet, und der erste unaufgeloeste Plattformzugriff
+endet typisiert als `UnresolvedHardwareAccess` ohne Emulator-/Interpreter- oder
+Runtimefallback. Der generierte Runner verlangt Executable plus privaten
+ContentRoot und validiert beide Pfade; der Bring-up-Schalter gilt nur bei
+unvollstaendiger Closure. Der aktive Folgetask ist `KR-5001` native
+Hookkarte/ABI/Closure, nicht ein historischer Launcherpfad.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -179,7 +183,7 @@ Frames mit `1.228.800` geaenderten Pixeln; der Audiohash
 `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau identisch.
 Der Hostprozess nutzte nur etwa `1,64` Kerne beziehungsweise `6,8 %` der
 24-Thread-Kapazitaet. Der serielle Runtime-/Dispatch-Overhead und der
-post-filmische Identity-Miss `0x8C054008 -> 0x8C9000E8` bleiben historische
+der post-filmische private Identity-Miss bleibt ein historischer
 Diagnosebefunde, sind aber keine aktiven Produktgates des nativen Pfads.
 
 ## Historischer Candidate-Evidenzstand
@@ -192,12 +196,16 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 91, PlatformServices-ABI 14, Backend-Interface-ABI 14,
+  Runtime-ABI 92, PlatformServices-ABI 14, Backend-Interface-ABI 16,
   PVR-State-Contract 3
-  Analyzer-ABI 35
+  Analyzer-ABI 36
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
+  Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7
+
+Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
+installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie
+`native_port_artifact.hpp` aus der Analyzer-SDK-Headerinstallation aus.
 
 frueherer Vergleichslauf:
   D-Lauf, 460,6 s gesamt; Candidate Resolution ca. 325,8 s
@@ -229,11 +237,11 @@ Der abgeschlossene Diagnose-Unterauftrag im Lauf
 der daraus erwartbare Supervisorstatus `product-exit -1` ist kein Fehler- oder
 Hängerbefund. Peak Root lag bei `1.260.388.352 B`, Peak Job bei
 `1.387.151.360 B`; es gab keine Publikation und kein `game.exe`.
-`uncategorized=0` galt für alle Top-8-Funktionen. Bei `0x8C10E44E` waren alle
+`uncategorized=0` galt für alle Top-8-Funktionen. Bei der dominanten Hot-Callee waren alle
 `20` semantischen Änderungen und `40` Stack-Widenings ausschließlich
 SavedEpoch-pending-ABI-Skalare; der Stackvertrag war am Callee-Set unvollständig.
-`0x8C09859C` zeigte `28` Änderungen mit gemischten Domänen und ebenfalls
-unvollständigem Callee-Set; `0x8C64E55E` zeigte `48` Änderungen bei vollständigem
+Eine zweite geprüfte Hot-Callee zeigte `28` Änderungen mit gemischten Domänen und ebenfalls
+unvollständigem Callee-Set; eine vollständige-stackvertragliche Hot-Callee zeigte `48` Änderungen bei vollständigem
 Stackvertrag, darunter `reg_epoch_pending=180`. Der Diagnose-Unterauftrag ist
 damit abgeschlossen, KR-4981 und das globale Sonic-Produktgate bleiben offen.
 Der SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
@@ -271,8 +279,8 @@ Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits vom
 semantischen Evaluation-Limit. Der echte Evaluation-Cap erhoeht nur den
-Evaluation-Zaehler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
-In-Process-Evaluation-Cache-Schema `13` sind aktuell.
+Evaluation-Zaehler; im historischen Stand waren Analyzer-ABI `34`,
+Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13` aktiv.
 
 Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
@@ -281,7 +289,7 @@ Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
 Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
 stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
 Publikation und kein Artefakt. Admission `1024/1024`, projected context/match
-jeweils `0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und
+jeweils `0`; der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und
 `508` Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der Supervisor
 schrieb wegen `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-
 Job beendete den Child trotzdem.
@@ -340,7 +348,7 @@ anheben, danach den post-filmischen AOT-Identity-Blocker schliessen.
 KR-4981 bleibt bis Memory-Card-Screen und Hauptmenue offen.
 ARM7-Ausfuehrung, AICA-Interrupt-/Monitor-Lifecycle, Sofdec-Audiotakt und
 Movie-Bildpublikation laufen. Der nachgelagerte funktionale Blocker ist der
-Call `0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`).
+nachgelagerte private Identity-Miss (`byte-identity-mismatch`).
 
 Der Candidate-Resolution-P0 bleibt als historische PlatformAbi-Diagnostik
 dokumentiert. Null Eviction-Recomputes liefern keinen Beleg fuer Cache-Eviction
@@ -389,7 +397,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4989 | Indexierte exakte Context-Bindings | nur bei positivem Kostengate vermeiden exakte Treffer den linearen Scan |
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist mit dem SDK-Linkabschluss unter dem aktuellen Analyzer-ABI 36 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
 | KR-4981 | Einmaliges Sonic-Produktzeitgate | historisches RuntimeOnly-Gate; `FirstVisibleGameFrame` und 24,2926 MHz belegt, durch das native Alpha-Gate KR-5005 abgeloest |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
@@ -402,7 +410,7 @@ KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
   -> historische RuntimeOnly-Performancezielmarke mindestens 100 MHz
-  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
+  -> post-filmischen privaten Identity-Miss schliessen
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
   -> PlatformAbi-Candidate-Resolution bleibt deferred und ist kein RuntimeOnly-
      Buildblocker

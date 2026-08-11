@@ -241,9 +241,16 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "  set_property(TARGET katana_generated PROPERTY "
               "RULE_LAUNCH_LINK \"${KATANA_HOST_ARCHIVE_LAUNCHER}\")\n"
            << "endif()\n"
-           << "target_precompile_headers(katana_generated PRIVATE\n"
-           << "  <katana/runtime/aot_runtime_abi.hpp>\n"
-           << ")\n"
+           << "if(DEFINED KATANA_PORT_RUNTIME_PROFILE AND\n"
+           << "   KATANA_PORT_RUNTIME_PROFILE STREQUAL \"native-port\")\n"
+           << "  target_precompile_headers(katana_generated PRIVATE\n"
+           << "    <katana/runtime/native_port_aot_runtime.hpp>\n"
+           << "  )\n"
+           << "else()\n"
+           << "  target_precompile_headers(katana_generated PRIVATE\n"
+           << "    <katana/runtime/aot_runtime_abi.hpp>\n"
+           << "  )\n"
+           << "endif()\n"
            << "if(MSVC)\n"
            << "  target_compile_options(katana_generated PRIVATE /bigobj /FS)\n"
            << "  if(CMAKE_GENERATOR MATCHES \"^Visual Studio\")\n"
@@ -425,7 +432,11 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
     };
     std::vector<BuildSource> scheduled_sources;
     for (const auto& artifact : artifacts) {
-        if (artifact.relative_path.extension() == ".cpp") {
+        // Host-side validation tools are emitted into the artifact set so
+        // the root product project can build them, but they must not also be
+        // compiled into the generated guest-code archive.
+        if (artifact.relative_path.extension() == ".cpp" &&
+            !artifact.relative_path.generic_string().starts_with("tools/")) {
             scheduled_sources.push_back({artifact.relative_path, artifact.content.size()});
         }
     }

@@ -22,24 +22,24 @@
   Dreamcast-MHz sind kein Produkt- oder Versionsgate des nativen Ports. Die
   neue Reihenfolge bilden KR-5000 bis KR-5005.
 
-- Der Native-Port-Architekturreview schliesst KR-5000 als physische Source-,
-  Link- und Installgrenze. Ein expliziter AOT-Quellabschluss und
-  `native_port_runtime` bilden das einzige installierte Produkt-SDK;
-  Runtime-, ARM7/AICA-, PVR/TA-, ASIC-, GD-ROM-, Maple-, Firmware- und
-  Interpretertargets bleiben nicht installierbarer Diagnosebestand. Der alte
-  Geraetepfad ist kein Portexportprofil mehr.
+- KR-5000 schliesst die physische Source-, Link- und Installgrenze. Ein
+  statischer AOT-Kern und `native_port_runtime` bilden den nativen
+  Produktpfad; Runtime-, ARM7/AICA-, PVR/TA-, ASIC-, GD-ROM-, Maple-,
+  Firmware- und Interpretertargets bleiben build-tree-only Diagnosebestand.
+  Der alte Geraetepfad ist kein Produktprofil mehr.
 
-- `NativePortDefinition`, `NativePortContext`, identitaetsgebundene Image-,
-  Bootstrap- und direkte Hooksymbolvertraege sowie eine vollstaendig
-  ersetzende Hooksemantik schaffen die unabhaengige Produkt-ABI. Das
-  Hardware-Closure-Gate konsumiert exakte unresolved-memory-Sites, lehnt
-  nicht separat auditierte Latent-/Overlaymodule ab und schreibt
-  `native-hardware-closure.v1`. Bis KR-5001 den echten Bootstrap-/Direkthook-
-  Codegen emittiert, stoppt Configure mit
-  `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`; es gibt keinen Legacy-Fallback.
+- `NativePortDefinition`, `NativePortArtifact`, `NativePortContent`,
+  `NativePortRuntime`, Bootstrap, read-only Content-Mappings, direkte
+  Hooksymbole, Hook-/Hardware-Closure, nativer Dispatch und Linkaudit sind
+  implementiert. Ein privater Adapter wird erreicht, statisch rekompilierter
+  Spielcode startet; der erste unaufgeloeste Plattformzugriff endet typisiert
+  als `UnresolvedHardwareAccess`, ohne Emulator-/Interpreter-/Runtimefallback.
+  Der generierte Runner verlangt Executable plus privaten ContentRoot und
+  validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
+  Closure.
 
-- Runtime-ABI `91`, Analyzer-ABI `35`, Backend-Interface-ABI `14`,
-  Portprojektvertrag `77`, Native-Port-Profilvertrag `2`, Hardwareaudit-Schema
+- Runtime-ABI `92`, Analyzer-ABI `36`, Backend-Interface-ABI `16`,
+  Portprojektvertrag `79`, Native-Port-Profilvertrag `4`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
@@ -47,12 +47,24 @@
   historische GameProject-Vertrag `5` samt Artefaktformat `4` bleibt
   unveraendert und enthaelt bewusst keine Native-Port-Definition; deren
   unabhaengiger privater Provider folgt mit KR-5001.
-  Backend-Interface-ABI `14` bindet den neuen unabhaengigen
+  Backend-Interface-ABI `16` bindet den neuen unabhaengigen
   `PortExportOptions::native_port_definition`-Zeiger; er wird nicht in den
   alten Dreamcast-Spielprojektvertrag eingebaut. Der korrekte SkyEmu-MIT-
   Hinweis und die vendorte Lizenz bleiben im Repository
   beziehungsweise dem klar benannten internen Diagnosepaket; das installierte
   Analyzer-SDK enthaelt keine historischen Geraeteobjekte.
+
+- Der inkompatible Analyzer-SDK-Linkbruch ist als Reviewabschluss behoben:
+  `port_export.cpp` liegt in einer separaten, nicht installierten Tooling-
+  Object-Closure; `port_export.hpp` und `native_port_artifact.hpp` sind aus
+  der Analyzer-SDK-Headerinstallation ausgeschlossen. Analyzer-ABI `36`
+  versioniert diese Korrektur.
+
+- Der KR-5000-Reviewstand wurde mit `katana-recomp`,
+  `katana_analyzer_sdk` und `katana_native_port_runtime` in einem
+  inkrementellen 24-Worker-Build in `14,2 s` bestaetigt. In diesem
+  Dokumentations-/Source-Checkpoint wurden keine Tests oder neuen
+  Sonic-Laeufe ausgefuehrt; der naechste aktive Task ist KR-5001.
 
 - Der historische Runtime-Performance-Zwischenstand haelt den natuerlichen
   No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische
@@ -83,7 +95,7 @@
 - Der No-Skip-Sonic-PAL-Lauf
   `katana-visible-accept-20260811T035207101Z` belegt erstmals den echten
   sichtbaren Moviepfad: `game.exe` mit SHA-256
-  `8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`
+  eine private game-executable identity
   zeigt ohne Start-Impuls, Movie-Skip, automatischen FB-Flip oder private
   Bildbruecke den Sonic-Team-Film von etwa `60 s` bis zum Fade bei etwa
   `145 s`. `56.000` YUV-Makrobloecke, `579` erfolgreiche Renderabschluesse,
@@ -91,7 +103,7 @@
   bisherigen Movie-Renderblocker.
 
 - Der Lauf endet erst nach dem Film am neuen, engeren RuntimeOnly-AOT-Blocker:
-  Der Call `0x8C054008 -> 0x8C9000E8` wird wegen
+  Der nachgelagerte private Identity-Miss wird wegen
   `byte-identity-mismatch` fail-closed abgelehnt. Memory-Card-Screen und
   Hauptmenue bleiben deshalb KR-4981. Die private Produktevidenz liegt nur im
   nicht veroeffentlichten SA-Projektordner; Retaildaten wurden nicht in das
@@ -114,7 +126,7 @@
   angepasst und bestand nach einem erfolgreichen 24-Thread-Build. Ein
   frueherer Sonic-PAL-Lauf lief `45,564 s` ohne Fatalfehler oder Crash;
   die `game.exe` hat SHA-256
-  `8dae9c7b93741207393366487c7f3da83947066b1775801a23c62c77e2ce3e15`.
+  einer privaten game-executable identity.
   Zwei AICA-Stimmen waren aktiv und der zuvor stehende Sofdec-Audiotakt
   erreichte `0x2D0` und `0x890` bei `44.100` Einheiten pro Sekunde. Der Film
   blieb dennoch unsichtbar; KR-4981 bleibt fuer die nachgelagerte CRI-
@@ -133,7 +145,7 @@
 
 - Ein noch frueherer RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
   Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-  `a9aec927dfd7955c20fcd823b6c619c6777623d4138f10245ba8503f215a90ee`.
+  einer privaten game-executable identity.
   Nach Presented by Sega blieb der Kontaktbogen ab etwa `30 s` schwarz;
   Memory-Card-Screen und Hauptmenue wurden nicht erreicht.
 
@@ -184,8 +196,8 @@
   Detailtelemetrie opt-in aktiv und beeinflusst weder Analyse noch Cache oder
   kanonische Publikation.
 - KR-4993 schliesst den vollstaendigen Candidate-Resolution-Source-Endreview
-  ab; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34
-  geschlossen. Das Produktgate KR-4981 bleibt offen.
+  ab; das Analyzer-ABI-Finding ist mit dem SDK-Linkabschluss unter dem
+  aktuellen Analyzer-ABI 36 geschlossen. Das Produktgate KR-4981 bleibt offen.
 - KR-4987 ist source-seitig abgeschlossen: bewiesene Read-Lens-Projektion,
   vollstaendige Key-Bytes und konservativer FullState-Fallback erhalten
   exakte Provenienz. Der D9-Produktlauf endete fail-closed ohne Portartefakt
@@ -218,7 +230,7 @@
   Hot-Callee-Diagnose erreichte im Lauf `kr4981-20260809-024141-c4ffdf15` das
   vollständige `attempts=1024`-Gate und wurde nach `244,549 s` bei Wave `24`
   gezielt beendet. `uncategorized=0` für alle Top-8-Funktionen; kein Fehler,
-  Hänger, Portartefakt oder bestandenes KR-4981-Gate. Bei `0x8C10E44E` sind
+  Hänger, Portartefakt oder bestandenes KR-4981-Gate. Bei der dominanten Hot-Callee sind
   `20` echte semantische Änderungen und `40` Stack-Widenings ausschließlich
   SavedEpoch-pending-ABI-Skalare (`reg 92`, `stack 80`, `tail 20`,
   `state_stack 20`, `state_memory 20`) mit unvollständigem Callee-Set-
@@ -260,8 +272,8 @@
   `kr4981-20260809-050420-3f47fd65` endete nach `322,632 s` bei Wave `39` wegen
   belegter Nichtverbesserung, ebenfalls ohne `game.exe`. Das `attempts=1024`-
   Gate blieb gegenüber `9baea88` bitgleich; die korrekte Gateänderung ist kein
-  Konvergenzhebel. Analyzer-ABI `34`, Epoch-Schema `27` und lokales
-  In-Process-Evaluation-Cache-Schema `13` sind aktuell.
+Konvergenzhebel. Im damaligen Source-Stand waren Analyzer-ABI `34`,
+Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13` aktiv.
 - Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
   `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
   Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
@@ -271,7 +283,7 @@
   Publikation und kein Artefakt. Der Supervisor schrieb wegen `taskkill`-
   Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete den Child
   trotzdem. Admission `1024/1024`, projected context/match jeweils `0`;
-  `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+  Der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und `508`
   Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
 - Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
   `286,387 s` (Candidate ca. `232,5 s`) mit `nonconvergence`/Wrapper-Exit `31`
@@ -467,7 +479,7 @@
   Grund und Provenienz berichtet; der Produkt-Export stoppt vor
   Codegen/Hostcompiler. Analyzer-ABI 9 und Portprojektvertrag 65 versionieren
   die Aenderung. Die echte statische PAL-Analyse bindet den zuvor fehlenden
-  Einstieg `0x8C64784E` an den gemeinsamen Body `0x8C6478C2`, mit `2.221`
+  Einstieg an eine private Callback-Kante mit gemeinsamem Body, mit `2.221`
   Guarded-AOT-Einstiegen, `0` Rejections und ohne Inventartruncation. Der
   neue Produktlauf steht noch aus.
 - Der aus `1629268` erzeugte ABI-73-Sonic-PAL-NativeDisc-v33-Port passiert
@@ -480,7 +492,7 @@
   Portpaket enthaelt keine Retailsektoren. Der echte NativeDisc-Lauf
   praesentiert einen IP.BIN-Frame und stoppt fail-closed bei Gesamtzyklus
   487.233.787 beziehungsweise 72.000.517 Post-Entry-Zyklen am neuen
-  `missing-aot`-Ziel `0x8C65EA06 -> 0x8C0101F2`, ohne
+  privaten `missing-aot`-Ziel, ohne
   Interpreter-Materialisierung. Das 600-Millionen-Gate ist nicht erreicht.
   Der generierte Gatewrapper meldet auf dieser typisierten Fehlerstrecke
   faelschlich Exitcode 0; eine separate v33-Sichtaufnahme steht noch aus.
@@ -516,14 +528,14 @@
   `r15`-Offsets werden nur fuer vollstaendige, nicht aliasierende
   Singletonwerte in einem kleinen Guardfenster fortgeschrieben. Der
   bestehende Kontrollflussvertrag deckt Spill, Reload und Runtime-Objektstore
-  ab. Die reale generische Analyse findet dadurch `0x8C64784E` als Funktion
-  und den gemeinsamen Body `0x8C6478C2` als erreichbaren Code, ohne
+  ab. Die reale generische Analyse findet dadurch eine private Callback-Kante als Funktion
+  und ihren gemeinsamen Body als erreichbaren Code, ohne
   Budgeterschoepfung. Der vollstaendige, aus
   `854141b8780626e24815c0bbbb60b5927635a1a6` erzeugte v30-Produktport
   uebernimmt diesen Seed jedoch noch nicht in CFG, Source-Map und AOT. Der
   erneut mit der privaten Originaldisc installierte Lauf endet deshalb
   unveraendert bei Gastzyklus `553.990.562`, `10.079.932`
-  Zentraldispatches und `0x8C11088C -> 0x8C64784E` mit
+  Zentraldispatches und der geprüften privaten Callback-Kante mit
   `aot-template-mismatch`. Zwei technische Direct-Frames und `302.287`
   geaenderte Pixel bleiben erhalten; 15 reale Fensteraufnahmen bleiben
   schwarz. Dieser damalige v30-Stand war damit teilweise umgesetzt und
@@ -540,12 +552,12 @@
   statische Analyse und Codegen, waehrend ein hookfreier Produktport nur die
   reduzierte Identitaets-, Boot- und Handoffdefinition registriert. Der
   reale, mit der privaten PAL-Disc installierte v28-MSVC-Port passiert dadurch
-  das alte Ziel `0x8C010F22` und erreicht Gastzyklus `553.990.562`,
+  das alte private Ziel und erreicht Gastzyklus `553.990.562`,
   `10.079.932` Zentraldispatches und damit `+1.086.915` Gastzyklen gegen v26.
   138.757.292 Post-Entry-Zyklen in 5,275792 Sekunden entsprechen 26,3008
   MHz gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`, aber noch
   keinem 600-Millionen-Gate. Der neue erste Blocker KR-4972 ist
-  `0x8C11088C -> 0x8C64784E`; die getrennte Diagnose meldet den fehlenden
+  der geprüften privaten Callback-Kante; die getrennte Diagnose meldet den fehlenden
   statischen Eintrag korrekt als `aot-template-mismatch`. Zwei technische
   Direct-Frames bleiben erhalten, sechzehn reale Aufnahmen bleiben schwarz.
   Der warme Gesamtexport dauerte 4,209083 Sekunden, der unveraenderte
@@ -560,11 +572,11 @@
   dekodiert, und ein mit `ADTSEL=5` armierter AICA-G2-Transfer wertet das
   echte Request-Level `SB_FFST.bit0=0` aus. Periodische Audio-Ticks erfinden
   keinen Request. Der aus `4cbab1e` erzeugte und mit der privaten PAL-Disc
-  installierte v26-Port beendet G2-Kanal 0, verlaesst den alten Poll
-  `0x8C666D42` und erzeugt zwei technische Direct-Frames mit 302.287
+  installierte v26-Port beendet G2-Kanal 0, verlaesst den alten Poll und
+  erzeugt zwei technische Direct-Frames mit 302.287
   geaenderten Pixeln. Sechzehn reale Fensteraufnahmen bleiben schwarz.
-  Der damalige erste Blocker war KR-4971 bei
-  `0x8C602B0A -> 0x8C010F22`: Der interne Materializerfehler
+  Der damalige erste Blocker war KR-4971 an der früheren privaten Zielgrenze:
+  Der interne Materializerfehler
   `AotTemplateMismatch` (14) belegt einen fehlenden statischen AOT-Eintrag,
   keinen Bytewechsel. Die terminale Dispatchdiagnose bezeichnete diesen Fall
   damals noch irrefuehrend als `byte-identity-mismatch`. Nach dem
@@ -594,7 +606,7 @@
   Der terminal gemeldete Wert von 119,64 MHz teilt faelschlich den absoluten
   Schedulerstand durch die Hostzeit und ist kein vergleichbarer
   Performancewert. Beide enden ohne `first_problem` am
-  PC `0x8C666D42`, mit jeweils 72 GD-ROM-Kommandos sowie 180
+  am damaligen Poll-PC, mit jeweils 72 GD-ROM-Kommandos sowie 180
   beziehungsweise 179 Audiopuffern. Damit sind
   CompletePlatform-Capture und -Verwendung bewiesen; die normative
   Digestparitaet war jedoch noch nicht belegt. Der damalige Koordinator
@@ -767,7 +779,7 @@
   Detail-Lauf 49,2 Sekunden. Beide Gastframemarker werden am sichtbaren
   Sega-Bild erreicht; die alte Zwei-Instruktions-JSR-Schleife ist
   verschwunden. Der Lauf endet jetzt eindeutig und ohne Fallback am fehlenden
-  AOT-Ziel `0x8C65E96A -> 0x8C652150`: 7.422.352 Dispatch-Hits mit einem Miss
+  typisierten privaten AOT-Ziel: 7.422.352 Dispatch-Hits mit einem Miss
   sowie 2.609.376 `RuntimeOnly`-Hits mit einem Miss und null Fallbacks. Der
   allgemeine Quellefix katalogisiert endliche, mit bewiesener
   Aufrufargument-Provenienz ueber nicht-Stack-bezogene 32-Bit-Stores
@@ -1113,7 +1125,7 @@
   Instanz gebunden und kann Beweise nicht mehr zwischen Images weiterreichen;
   P2-Tabellenadressen werden vor der Analyse auf ihre physische P1-Herkunft
   aufgeloest. Der damalige Produktlauf bestaetigt den Vertrag: Der alte Fehler
-  bei `0x8C654F5C` tritt nicht mehr auf; ein Gastframe wird weiterhin nicht
+  am damaligen Hotspot tritt nicht mehr auf; ein Gastframe wird weiterhin nicht
   behauptet.
 - Externe Dispatchfortsetzungen bewahren jetzt auch ueber mehrere lokal
   verkettete AOT-Bloecke die exakte tatsaechliche Terminatorquelle, Callsite,
@@ -1152,7 +1164,7 @@
   Zyklen erreicht der Gast Spielecode, zwei GD-ROM-Kommandos und einen spaeten
   PVR-Registerwrite. Alle 761.011 Dispatchereignisse bleiben fehlerfrei; TA,
   Render und Gastframe bleiben null. Der fuehrende Hotspot
-  `0x8C6658D0 -> 0x8C65247E` mit 696.053 Aufrufen ist ein endlicher
+  Der fuehrende private Hotspot mit 696.053 Aufrufen ist ein endlicher
   4-Byte-Kopier-/Initialisierungsloop (`r6=4`, Ziel `r14`, Quelle Stack,
   `r14+=4`) und kein fehlender Zielblock. `KR-4848` bleibt wegen der weiterhin
   offenen strukturierten Disc-Ladetransaktionen und latenten Module offen.
@@ -1216,7 +1228,7 @@
   erreichte der naechste budgetierte Lauf 345.568.225 Hardwarezyklen und
   7.421.380 native Bloecke sowie erstmals spaetere PVR-Registerwrites. Der
   naechste ehrliche Blocker ist ein fehlender nativer Inneneinstieg bei
-  `0x8C654F5C`; TA-Transfers, Renderrequests und echte Gastframes bleiben null.
+  dem damaligen Hotspot; TA-Transfers, Renderrequests und echte Gastframes bleiben null.
 - `EntryPointStraightLineQuiescent` beginnt bei Images mit mehreren Eintritten
   jetzt am explizit ausgezeichneten `initial_snapshot_entry`. Nur Images ohne
   diese Markierung und mit genau einem Entry verwenden den kompatiblen
@@ -1591,8 +1603,8 @@
   non-interlaced) sowie VGA sind als spielunabhaengige Profile getestet.
   `SPG_STATUS` ist read-only, und VBlank-Start/-Ende verwenden ihre korrekte
   Bitfeldrichtung. Sonic Adventure PAL verlaesst damit die zuvor permanente
-  Warteschleife bei `0x8C6044DE` und erreicht ohne Exception wieder den
-  Bootcode bei `0x8C0100E2`; der erste Gastframe bleibt offen.
+  fruehere Warteschleife und erreicht ohne Exception wieder den
+  Bootcode; der erste Gastframe bleibt offen.
 - Der produktive AOT-Dispatcher beendet jede generierte Basic-Block-Ausfuehrung
   wieder an der zentralen Fetchgrenze. Aktive MMU-, Adressraum-, Watchpoint-
   und FPSCR-Generationen bilden den Variantenschluessel; statischer Code wird

@@ -67,6 +67,17 @@ enum class BlockEndKind : std::uint8_t {
     InterruptSafepoint
 };
 
+// Generated AOT owners publish only the classification of the control-flow
+// edge which left the owner.  Keeping this POD classification in the common
+// block ABI lets the native product dispatcher consume it without importing
+// the historical indirect-dispatch implementation or any device runtime.
+enum class DynamicDispatchSiteClass : std::uint8_t {
+    NotDynamic,
+    Guarded,
+    RuntimeOnly,
+    Unresolved
+};
+
 enum class BlockSyncPoint : std::uint8_t { Entry, Exit, BackendBoundary, FallbackBoundary };
 
 struct BlockExecutionContext {

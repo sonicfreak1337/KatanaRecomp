@@ -47,33 +47,47 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `2`, Portprojektvertrag `77` und der Post-Link-Audit sperren
+Profilvertrag `4`, Portprojektvertrag `79` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
-Aktiv ist `KR-5001`: Der neue unabhaengige `NativePortDefinition`-/
-`NativePortContext`-Vertrag, direkte Hooksymbole, Imagebindungen und das
-fail-closed Hardware-Closure-Gate sind vorhanden. Der generierte native
-Definitionsprovider, Bootstrap und direkte Hook-/Callbackpfad fehlen noch;
-daher endet ein
-Produktconfigure ehrlich mit `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` statt
-den historischen Dreamcast-Launcher zu verwenden.
+`KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
+NativePortContent, NativePortRuntime und Bootstrap sowie read-only
+Content-Mappings, Hook-/Hardware-Closure, direkter nativer Dispatch und
+Linkaudit sind implementiert. Ein privater Adapter wird erreicht,
+statisch rekompilierter Spielcode startet, und der erste unaufgeloeste
+Plattformzugriff endet typisiert als `UnresolvedHardwareAccess` ohne
+Emulator-/Interpreter-/Runtimefallback. Der generierte Runner verlangt
+Executable plus privaten ContentRoot und validiert beide Pfade; der
+Bring-up-Schalter gilt nur bei unvollstaendiger Closure.
+
+Aktiv ist `KR-5001` als naechster Task: native Hookkarte, ABI- und
+Closure-Verbindung auf diesem Stack. Danach folgen KR-5002 bis KR-5004;
+erst anschliessend ist KR-5005 als einziger Sonic-Produktlauf freigegeben.
+
+Der KR-5000-Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
+`katana_native_port_runtime` in einem inkrementellen 24-Worker-Build in
+`14,2 s` bestaetigt. In diesem Checkpoint gab es keine Tests und keinen neuen
+Sonic-Export oder -Lauf.
 
 Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller Native-Port-Architekturreview-
-Checkpoint. Aktuell gelten Runtime-ABI `91`,
-PlatformServices-ABI `14`, Analyzer-ABI `35`, Function-Analysis-Epoch-Schema
+Checkpoint. Aktuell gelten Runtime-ABI `92`,
+PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`14`, PVR-State-Contract `3`, Portprojektvertrag `77` und Native-Port-
-Profilvertrag `2`. Der historische GameProject-Vertrag bleibt auf `5` mit
+`16`, PVR-State-Contract `3`, Portprojektvertrag `79` und Native-Port-
+Profilvertrag `4`. Der historische GameProject-Vertrag bleibt auf `5` mit
 Artefaktformat `4` und transportiert die unabhaengige Native-Port-Definition
-ausdruecklich nicht.
+ausdruecklich nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
+nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
+`port_export.hpp` sowie `native_port_artifact.hpp` aus der Analyzer-
+Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
-Backend-Interface-ABI `14` versioniert; bestehende generierte Ports muessen
+Backend-Interface-ABI `16` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der historische Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig und bleibt jetzt ausschliesslich internes
@@ -98,7 +112,7 @@ Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
 und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der
 Hostprozess nutzte nur etwa `1,64` Kerne beziehungsweise `6,8 %` der
 24-Thread-Kapazitaet. `100 MHz`, der post-filmische Identity-Miss
-`0x8C054008 -> 0x8C9000E8` und das Memory-Card-/Hauptmenue-Gate bleiben offen.
+der private Identity-Miss und das Memory-Card-/Hauptmenue-Gate bleiben offen.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -299,16 +313,16 @@ diesen Stop, nicht durch Fehler oder Hänger. Peak Root WS war
 `1.260.388.352 B`, Peak Job WS `1.387.151.360 B`; keine Publikation und kein
 `game.exe`. `uncategorized=0` für alle Top-8-Funktionen.
 
-Der dominante Befund ist `0x8C10E44E`: `20` echte semantische Änderungen und
+Der dominante Befund ist eine Hot-Callee: `20` echte semantische Änderungen und
 `40` Stack-Widenings, ausschließlich SavedEpoch-pending-ABI-Skalare
 (`reg_epoch_pending=92`, `stack_epoch_pending=80`, `tail_epoch_pending=20`,
 `state_stack_epoch_pending=20`, `state_memory_epoch_pending=20`), bei
-unvollständigem Callee-Set-Stackvertrag (`owner=0x8C10E44E`,
-`site=0x8C10E486`, `target=0`). Ordinary/direct-code/direct-PC/contextual,
+unvollständigem Callee-Set-Stackvertrag am Owner-/Site-/Target-Feld
+(`target=0`). Ordinary/direct-code/direct-PC/contextual,
 Callback-Loss-, Topologie-, Top-Domain-, Map-/Tail-Topologie- und
-Metadatenänderungen waren dort `0`. `0x8C09859C` zeigte `28` Änderungen,
-ebenfalls Callee-Set-incomplete an `0x8C0985B0`, jedoch gemischte Domänen.
-`0x8C64E55E` zeigte `48` Änderungen, darunter
+Metadatenänderungen waren dort `0`. Eine zweite Hot-Callee zeigte `28` Änderungen,
+ebenfalls Callee-Set-incomplete, jedoch gemischte Domänen. Eine weitere Hot-Callee
+zeigte `48` Änderungen, darunter
 `reg_epoch_pending=180`, bei vollständigem Stackvertrag.
 
 Der Diagnose-Unterauftrag ist damit abgeschlossen; KR-4981 und das
@@ -352,9 +366,9 @@ Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top in sämtlichen Truncation-/Publication-
 Checks fail-closed und transportiert Provenance-Replay-Capsule-/Keybyte-Limits
 öffentlich getrennt vom semantischen Evaluation-Limit. Ein echter Evaluation-
-Cap belastet wieder nur den Evaluation-Zähler. Analyzer-ABI `34`,
-Function-Analysis-Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-
-Schema `13` sind aktiv; der bestätigte Build war
+Cap belastet wieder nur den Evaluation-Zähler. Im historischen Stand waren
+Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `27` und lokales In-Process-
+Evaluation-Cache-Schema `13` aktiv; der bestätigte Build war
 Build-Exit `0` nach ca. `48 s`; `build-contextual-dirty/katana-recomp.exe`
 trug LastWriteTime `09.08.2026 09:08:11 +02:00`. Tests wurden nicht ausgeführt.
 
@@ -367,7 +381,7 @@ stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
 Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
 `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
 den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
-`0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+`0`; der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und `508`
 Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
 
 Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach

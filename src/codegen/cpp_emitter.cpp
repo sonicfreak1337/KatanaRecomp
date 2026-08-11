@@ -369,6 +369,30 @@ std::uint8_t required_direct_ram_write_kinds(
     return 0u;
 }
 
+std::uint8_t required_guest_ram_write_kinds(
+    const katana::ir::Instruction& instruction) noexcept {
+    if (instruction.memory_effects.access !=
+        katana::ir::MemoryAccessKind::Write)
+        return 0u;
+
+    using katana::ir::OperandWidth;
+    switch (instruction.memory_effects.width) {
+    case OperandWidth::Bits8:
+        return direct_ram_write_kind_mask(DirectRamWriteKind::U8);
+    case OperandWidth::Bits16:
+        return direct_ram_write_kind_mask(DirectRamWriteKind::U16);
+    case OperandWidth::Bits32:
+    case OperandWidth::Bits64:
+        return direct_ram_write_kind_mask(DirectRamWriteKind::U32);
+    case OperandWidth::None:
+    case OperandWidth::Bit1:
+    case OperandWidth::Bits4:
+    case OperandWidth::Bits12:
+        return 0u;
+    }
+    return 0u;
+}
+
 const char* direct_ram_read_suffix(const DirectRamReadKind kind) noexcept {
     switch (kind) {
     case DirectRamReadKind::U8:
@@ -699,22 +723,10 @@ std::string direct_ram_write_statement(const katana::ir::Instruction& instructio
                                        const DirectRamWriteKind kind,
                                        std::string source =
                                            "katana::runtime::CodeWriteSource::Cpu") {
-    const char* guest_write = nullptr;
-    switch (kind) {
-    case DirectRamWriteKind::U8:
-        guest_write = "guest_write_u8_at";
-        break;
-    case DirectRamWriteKind::U16:
-        guest_write = "guest_write_u16_at";
-        break;
-    case DirectRamWriteKind::U32:
-        guest_write = "guest_write_u32_at";
-        break;
-    }
-
     if (!has_direct_linear_ram_write(instruction)) {
-        return std::string{"katana::runtime::"} + guest_write +
-               "(cpu, guest_origin, " + address + ", " + value + ", " + source + ")";
+        return std::string{"katana_guest_ram_write_"} +
+               direct_ram_write_suffix(kind) + "(guest_origin, " + address +
+               ", " + value + ", " + source + ")";
     }
     return std::string{"katana_direct_ram_write_"} + direct_ram_write_suffix(kind) +
            "(katana_direct_ram_writes, guest_origin, " + address + ", " + value +
@@ -723,6 +735,49 @@ std::string direct_ram_write_statement(const katana::ir::Instruction& instructio
                 ? "true"
                 : "katana_guarded_unknown_ram_writes") +
            ")";
+}
+
+void emit_guest_ram_write_helper(std::ostringstream& output,
+                                 const DirectRamWriteKind kind) {
+    const char* guest_write = nullptr;
+    const char* raw_type = nullptr;
+    switch (kind) {
+    case DirectRamWriteKind::U8:
+        guest_write = "guest_write_u8_at";
+        raw_type = "std::uint8_t";
+        break;
+    case DirectRamWriteKind::U16:
+        guest_write = "guest_write_u16_at";
+        raw_type = "std::uint16_t";
+        break;
+    case DirectRamWriteKind::U32:
+        guest_write = "guest_write_u32_at";
+        raw_type = "std::uint32_t";
+        break;
+    }
+
+    output << "    const auto katana_guest_ram_write_"
+           << direct_ram_write_suffix(kind) << " =\n"
+           << "        [&](const katana::runtime::GuestInstructionOrigin& "
+              "katana_origin,\n"
+           << "            const std::uint32_t katana_ram_address,\n"
+           << "            const " << raw_type << " katana_ram_value,\n"
+           << "            const katana::runtime::CodeWriteSource "
+              "katana_source) {\n"
+           << "        const auto katana_code_generation_before =\n"
+           << "            katana::runtime::native_aot_code_tracker_generation(\n"
+           << "                katana_direct_ram_code_tracker);\n"
+           << "        katana::runtime::" << guest_write
+           << "(cpu, katana_origin, katana_ram_address,\n"
+           << "                                     katana_ram_value, "
+              "katana_source);\n"
+           << "        katana_guest_write_exit_requested =\n"
+           << "            katana_guest_write_exit_requested ||\n"
+           << "            katana_direct_ram_code_tracker == nullptr ||\n"
+           << "            katana::runtime::native_aot_code_tracker_generation(\n"
+           << "                katana_direct_ram_code_tracker) !=\n"
+           << "                katana_code_generation_before;\n"
+           << "    };\n";
 }
 
 void emit_direct_ram_write_helper(std::ostringstream& output,
@@ -793,8 +848,8 @@ void emit_direct_ram_write_helper(std::ostringstream& output,
            << "            const bool katana_had_staged_writes = "
               "!katana_batch->empty();\n"
            << "            katana_batch->flush();\n"
-           << "            katana_direct_ram_write_exit_requested =\n"
-           << "                katana_direct_ram_write_exit_requested || "
+           << "            katana_guest_write_exit_requested =\n"
+           << "                katana_guest_write_exit_requested || "
               "katana_had_staged_writes;\n"
            << "        }\n";
     output << "        const bool katana_direct_written =\n"
@@ -816,8 +871,8 @@ void emit_direct_ram_write_helper(std::ostringstream& output,
         output << "            if (katana_reacquire_registers) "
                   "katana_registers.reload_acquire();\n";
     output << "        }\n";
-    output << "        katana_direct_ram_write_exit_requested =\n"
-           << "            katana_direct_ram_write_exit_requested ||\n"
+    output << "        katana_guest_write_exit_requested =\n"
+           << "            katana_guest_write_exit_requested ||\n"
            << "            katana_direct_ram_code_tracker == nullptr ||\n"
            << "            katana_aliases_executable ||\n"
            << "            (katana_direct_ram_code_tracker != nullptr &&\n"
@@ -2793,9 +2848,9 @@ void emit_direct_write_batch_flush(std::ostringstream& output,
     emit_indent(output, indent + 1);
     output << "katana_direct_ram_writes->flush();\n";
     emit_indent(output, indent + 1);
-    output << "katana_direct_ram_write_exit_requested =\n";
+    output << "katana_guest_write_exit_requested =\n";
     emit_indent(output, indent + 2);
-    output << "katana_direct_ram_write_exit_requested || "
+    output << "katana_guest_write_exit_requested || "
               "katana_had_staged_writes;\n";
     emit_indent(output, indent);
     output << "}\n";
@@ -2808,7 +2863,7 @@ void emit_direct_write_batch_exit(std::ostringstream& output,
                                   const NativeRegisterEmission& registers) {
     if (!has_direct_ram_writes) return;
     emit_indent(output, indent);
-    output << "if (katana_direct_ram_write_exit_requested) {\n";
+    output << "if (katana_guest_write_exit_requested) {\n";
     emit_multi_block_completion(
         output, indent + 1, single_block, false, registers);
     emit_indent(output, indent + 1);
@@ -2826,11 +2881,12 @@ void emit_direct_write_instruction_exit(
     const bool single_block,
     const NativeRegisterEmission& registers) {
     if (!has_direct_ram_writes ||
-        !has_direct_linear_ram_write(instruction) ||
+        instruction.memory_effects.access !=
+            katana::ir::MemoryAccessKind::Write ||
         instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot)
         return;
     emit_indent(output, indent);
-    output << "if (katana_direct_ram_write_exit_requested) {\n";
+    output << "if (katana_guest_write_exit_requested) {\n";
     if (direct_block_exit_metadata) {
         emit_indent(output, indent + 1);
         output << "runtime_dispatch_detail::active_exit_source = {\n";
@@ -4954,7 +5010,8 @@ BackendCapabilities CppBackend::capabilities() const noexcept {
            capability(BackendCapability::RuntimeMemory) |
            capability(BackendCapability::StructuredExceptions) |
            capability(BackendCapability::Fpu) | capability(BackendCapability::BlockTransitions) |
-           capability(BackendCapability::PlatformServices);
+           capability(BackendCapability::PlatformServices) |
+           capability(BackendCapability::NativePortServices);
 }
 
 namespace {
@@ -5074,7 +5131,21 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
     std::ostringstream function_bodies;
     std::ostringstream metadata;
 
-    declarations << "#include \"katana/runtime/aot_runtime_abi.hpp\"\n"
+    if (request.runtime_binding == BackendRuntimeBinding::NativePort &&
+        request.emit_run_functions)
+        throw std::invalid_argument(
+            "Native-Port-AOT wird ausschliesslich ueber den generierten "
+            "Produktbootstrap gestartet.");
+    const auto runtime_header =
+        request.runtime_binding == BackendRuntimeBinding::NativePort
+            ? "katana/runtime/native_port_aot_runtime.hpp"
+            : "katana/runtime/aot_runtime_abi.hpp";
+    const auto services_type =
+        request.runtime_binding == BackendRuntimeBinding::NativePort
+            ? "katana::runtime::NativePortAotServices"
+            : "katana::runtime::PlatformServices";
+
+    declarations << "#include \"" << runtime_header << "\"\n"
                  << "#include <cstdint>\n"
                  << "#include <stdexcept>\n\n"
                  << "namespace " << request.symbol_namespace << " {\n\n"
@@ -5091,7 +5162,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << ");\n\n"
                  << "using CpuState = katana::runtime::CpuState;\n"
                  << "using Memory = katana::runtime::Memory;\n"
-                 << "using PlatformServices = katana::runtime::PlatformServices;\n"
+                 << "using PlatformServices = " << services_type << ";\n"
                  << "using BlockExecutionContext = katana::runtime::BlockExecutionContext;\n"
                  << "using BlockExit = katana::runtime::BlockExit;\n"
                  << "using katana::runtime::enter_memory_exception;\n"
@@ -5201,12 +5272,22 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             request.external_instruction_observer);
         std::uint8_t direct_ram_read_kinds = 0u;
         std::uint8_t direct_ram_write_kinds = 0u;
+        std::uint8_t guest_ram_write_kinds = 0u;
         bool has_guarded_linear_ram_reads = false;
         bool has_guarded_linear_ram_writes = false;
         for (const auto& block : function.blocks) {
             for (const auto& instruction : block.instructions) {
                 direct_ram_read_kinds |= required_direct_ram_read_kinds(instruction);
                 direct_ram_write_kinds |= required_direct_ram_write_kinds(instruction);
+                const auto guest_write_kinds =
+                    required_guest_ram_write_kinds(instruction);
+                if (instruction.memory_effects.access ==
+                        katana::ir::MemoryAccessKind::Write &&
+                    guest_write_kinds == 0u)
+                    throw std::invalid_argument(
+                        "Native AOT besitzt einen nicht beobachtbaren "
+                        "Gastschreibzugriff.");
+                guest_ram_write_kinds |= guest_write_kinds;
                 has_guarded_linear_ram_reads =
                     has_guarded_linear_ram_reads ||
                     has_guarded_linear_ram_read(instruction);
@@ -5220,10 +5301,9 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         const bool guarded_unknown_ram_accesses =
             request.guarded_local_block_chaining &&
             !request.external_instruction_observer;
-        const bool has_direct_ram_writes =
-            direct_ram_write_kinds != 0u;
+        const bool has_direct_ram_writes = guest_ram_write_kinds != 0u;
         const bool enable_direct_write_batch =
-            has_direct_ram_writes &&
+            direct_ram_write_kinds != 0u &&
             request.single_block_execution &&
             request.guarded_local_block_chaining;
         if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
@@ -5234,7 +5314,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "(CpuState& cpu, BlockExecutionContext& context) {\n"
                 << "    auto* const services = runtime_dispatch_detail::active_services;\n"
                 << "    if (services == nullptr)\n"
-                << "        throw std::runtime_error(\"Runtime-Plattformdienste fehlen.\");\n"
+                << "        throw std::runtime_error(\"AOT-Laufzeitbindung fehlt.\");\n"
                 << "    katana::runtime::NativeAotCallExitStateFrame "
                    "native_call_exit_state(\n"
                 << "        runtime_dispatch_detail::active_exit_source,\n"
@@ -5263,10 +5343,15 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "> katana_registers(cpu);\n";
         if (has_direct_ram_writes)
             emitted_function
-                << "    bool katana_direct_ram_write_exit_requested = false;\n"
+                << "    bool katana_guest_write_exit_requested = false;\n"
                 << "    auto* const katana_direct_ram_code_tracker = "
                    "services != nullptr\n"
-                << "        ? services->executable_code_tracker() : nullptr;\n";
+                << "        ? services->"
+                << (request.runtime_binding ==
+                            BackendRuntimeBinding::NativePort
+                        ? "immutable_write_guard()"
+                        : "executable_code_tracker()")
+                << " : nullptr;\n";
         if (uses_direct_linear_ram_accesses) {
             emitted_function
                 << "    auto katana_direct_ram = "
@@ -5348,6 +5433,9 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         for (const auto kind : {DirectRamWriteKind::U8,
                                DirectRamWriteKind::U16,
                                DirectRamWriteKind::U32}) {
+            if ((guest_ram_write_kinds & direct_ram_write_kind_mask(kind)) !=
+                0u)
+                emit_guest_ram_write_helper(emitted_function, kind);
             if ((direct_ram_write_kinds & direct_ram_write_kind_mask(kind)) != 0u)
                 emit_direct_ram_write_helper(
                     emitted_function, kind, registers);

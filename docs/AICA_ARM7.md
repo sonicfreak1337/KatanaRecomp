@@ -82,7 +82,7 @@ Sega und den sichtbaren Sonic-Team-Film. Beide Readinesspfade schalten auf
 ueber `579` erfolgreiche Renderabschluesse gastgesteuert publiziert. Damit
 sind AICA-Bereitschaft, Audiotakt und Movie-Bildpublikation gemeinsam belegt.
 
-KR-4981 bleibt dennoch offen: Nach dem Film endet der Call
-`0x8C054008 -> 0x8C9000E8` wegen `byte-identity-mismatch` fail-closed, bevor
+KR-4981 bleibt dennoch offen: Nach dem Film endet der Call am nachgelagerten
+privaten Identity-Miss wegen `byte-identity-mismatch` fail-closed, bevor
 Memory-Card-Screen oder Hauptmenue erreicht werden. Movie-Skip, automatischer
 Framebuffer-Flip oder titelbezogener Runtime-Hack bleiben ausgeschlossen.

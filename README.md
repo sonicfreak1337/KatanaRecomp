@@ -25,12 +25,12 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 91, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 92, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 35, Function-Analysis-Epoch-Schema 27, lokales
+Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 77, Native-Port-Profilvertrag 2 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+Portprojektvertrag 79, Native-Port-Profilvertrag 4 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
 installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
@@ -38,12 +38,20 @@ installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
 AOT-Header; Runtime-, PlatformServices-, Firmware-, Interpreter-, ARM7-,
 AICA-, PVR-, ASIC-, GD-ROM- und Maple-Oberflaechen bleiben ausserhalb des
 Produkt-SDK und im Buildbaum als internes Diagnoseorakel.
-`NativePortDefinition`, `NativePortContext`, direkte Linkersymbole, ein
-identitaetsgebundenes Image-/Hookmanifest und die fail-closed
-Hardware-Closure bilden den neuen Produktvertrag. Solange der unabhaengige
-private Definitionsprovider, der generierte Bootstrap und die direkten
-Hookcalls aus `KR-5001` fehlen, endet
-ein Produktconfigure bewusst mit `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`.
+Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
+Tooling-Object-Closure vom Analyzer-SDK und schliesst
+`port_export.hpp` sowie `native_port_artifact.hpp` aus der Analyzer-Header-
+Installation aus. `NativePortDefinition`, `NativePortArtifact`,
+`NativePortContent`, `NativePortRuntime`, `NativePortContext`, Bootstrap,
+direkte Linkersymbole, read-only Content-Mappings, Hook-/Hardware-Closure,
+direkter nativer Dispatch und Linkaudit sind implementiert. Ein privater
+Sonic-Adapter wird erreicht, statisch rekompilierter Spielcode startet; der
+erste unaufgeloeste Plattformzugriff endet typisiert als
+`UnresolvedHardwareAccess` ohne Emulator-/Interpreter-/Runtimefallback. Der
+generierte Runner verlangt Executable plus privaten ContentRoot und validiert
+beide Pfade; der explizite Bring-up-Schalter gilt nur bei unvollstaendiger
+Closure. Einen historischen Guest-Cycle-Budgetpfad gibt es nicht. Das
+identitaetsgebundene Image-/Hookmanifest bleibt Teil des Produktvertrags.
 Der historische Dreamcast-Launcher wird niemals als nativer Fallback gelinkt.
 
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
@@ -90,7 +98,7 @@ Movie-Lifecycle auf Status `5`, und YUV-/PVR-/FB_R-Publikation wurde sichtbar.
 Der Hostprozess nutzte dabei nur etwa `1,64` Kerne beziehungsweise `6,8 %`
 der 24-Thread-Kapazitaet; der damalige Performanceblocker lag daher beim
 seriellen Runtime-/Dispatch-Overhead. `100 MHz`, der anschliessende
-Identity-Miss `0x8C054008 -> 0x8C9000E8` und das nicht erreichte Hauptmenue
+der nachgelagerte private Identity-Miss und das nicht erreichte Hauptmenue
 sind historische Evidenz, aber keine aktiven Produktgates mehr.
 Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
@@ -146,7 +154,7 @@ Der abgeschlossene Diagnose-Unterauftrag erreichte im Lauf
 `kr4981-20260809-024141-c4ffdf15` das vollständige `attempts=1024`-Gate und
 wurde nach `244,549 s` bei Wave `24` gezielt beendet. `uncategorized=0` für
 alle Top-8-Funktionen; kein Fehler, Hänger, Portartefakt oder
-KR-4981-Produktgate. Dominant war `0x8C10E44E` mit ausschließlich SavedEpoch-
+KR-4981-Produktgate. Dominant war eine Hot-Callee mit ausschließlich SavedEpoch-
 pending-ABI-Skalaren und unvollständigem Callee-Set-Stackvertrag.
 Der SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
 gemeinsame Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss-/MemoryEpoch-
@@ -170,8 +178,9 @@ Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed, trennt öffentliche Provenance-Replay-Capsule-/Keybyte-Limits vom
 semantischen Evaluation-Limit und belastet bei echtem Evaluation-Cap nur den
-Evaluation-Zähler. Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `27` und
-lokales In-Process-Evaluation-Cache-Schema `13` sind aktiv; der bestätigte Build
+Evaluation-Zähler. Im historischen Stand waren Analyzer-ABI `34`,
+Function-Analysis-Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-
+Schema `13` aktiv; der bestätigte Build
 war erfolgreich, die EXE trug den Zeitstempel
 Build-Exit `0` nach ca. `48 s`; `build-contextual-dirty/katana-recomp.exe`
 trug LastWriteTime `09.08.2026 09:08:11 +02:00`. Tests wurden nicht ausgeführt.
@@ -197,7 +206,7 @@ stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
 Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
 `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
 den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
-`0`. `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+`0`. Der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und `508`
 Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
 
 Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
@@ -233,15 +242,15 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    91
+Runtime-ABI:                    92
 Block-ABI:                       5
-Analyzer-ABI:                   35
+Analyzer-ABI:                   36
 PlatformServices-ABI:           14
-Backend-Interface-ABI:          14
-Portprojektvertrag:             77
-Native-Port-Profilvertrag:       2
-Native-AOT-Emissionsprofil:     25
-AOT-Partitionsschema:            5
+Backend-Interface-ABI:          16
+Portprojektvertrag:             79
+Native-Port-Profilvertrag:       4
+Native-AOT-Emissionsprofil:     27
+AOT-Partitionsschema:            7
 ```
 
 KatanaRecomp ist ein unabhaengiges C++20-Framework fuer die statische
@@ -356,8 +365,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
-Source-Checkpoint `18f8537` verwendet Runtime-ABI 85 und
-Portprojektvertrag 75. Davon getrennt verwendet `GameProject` Vertrag 5 und
+Der aktuelle KR-5000-Stand verwendet Runtime-ABI 92 und
+Portprojektvertrag 79. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
@@ -387,6 +396,13 @@ interpretiert SH-4.
 
 Vollstaendiger Vertrag:
 [Executable-First-Entwicklung](docs/EXECUTABLE_FIRST_DEVELOPMENT.md)
+
+## Historischer Disc-Diagnosepfad
+
+Die folgende `--install-disc`-Beschreibung gehoert ausschliesslich zum
+historischen Disc-Diagnosepfad. Ein nativer Produkt-Runner erwartet stattdessen
+eine Executable und einen privaten `ContentRoot`, validiert beide Pfade und
+besitzt keinen `--install-disc`-Produktflow.
 
 ## Nutzerinstallation
 
@@ -461,8 +477,9 @@ erreichtem Pflichtmeilenstein und echtem `KATANA_PRODUCT_GATE` zulaessig. Die
 Zusammenfassung nennt Gastzyklen, Hostzeit, Dispatches, technische
 Framemarker und das erste neue AOT-, Runtime- oder Geraeteproblem; ein
 sichtbarer Bildschirm wird separat anhand einer realen Ausgabeaufnahme
-klassifiziert. Dieser Vertrag ist im Source-Checkpoint `18f8537`
-implementiert, aber noch nicht mit einem aktuellen Sonic-Port abgenommen.
+klassifiziert. Dieser Vertrag bleibt als historische Diagnosegrenze
+dokumentiert; KR-5000 trennt den nativen Produktpfad physisch von diesem
+Geraeteverbund.
 Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-Produktversuch; er bestand
 das globale Produktgate nicht. Ein weiterer vollstaendiger privater
 Produktlauf ist nicht automatisch freigegeben.
@@ -496,10 +513,10 @@ v30-Sichtlauf ist kein kontrollierter Performancebenchmark; wegen des
 vorzeitigen Fehlers gibt es weiterhin keine 600-Millionen-Abnahme.
 
 Sein erster Blocker war KR-4972:
-`0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel beginnt mit einem Sprung
+die geprüfte private Callback-Kante. Das unveraenderte Ziel beginnt mit einem Sprung
 auf einen gemeinsamen Codepfad. Die generische Analyse verfolgt den
 Callback jetzt ueber begrenzte Tail-Jump- und Runtime-Frame-Pfade, erkennt
-`0x8C64784E` als Funktion und erreicht `0x8C6478C2` als gemeinsamen Body.
+die private Callback-Kante als Funktion und erreicht den gemeinsamen Body.
 Der aktuelle Quellstand transportiert solche bewachten AOT-Einstiege durch
 CFG, Source-Map und AOT und erzwingt ihre Exportvollstaendigkeit. Der
 aktuelle Produktnachweis steht weiterhin aus; der aktuelle D-Lauf bestand das
@@ -527,7 +544,7 @@ Der kanonische, frisch exportierte und ueber die private Original-GDI
 installierte v32-MSVC-Port zeigt ab 2,032 Sekunden den Sega-Lizenzscreen und
 praesentiert 127 Hostframes. Er endet bei
 Gastzyklus 553.990.562 und damit exakt wie DirectBoot-v30 an
-`0x8C11088C -> 0x8C64784E`; NativeDisc ist sichtbar, DirectBoot-v30 blieb am
+die geprüfte private Callback-Kante; NativeDisc ist sichtbar, DirectBoot-v30 blieb am
 gleichen Punkt schwarz. Der Lauf dauerte 6,701 Sekunden, fuehrte
 11.080.283 Zentraldispatches aus, erreichte 82,67 MHz bis zum Fehler und
 erzeugte eine 53.677.056 Byte grosse EXE. Er erreichte wegen KR-4972 nicht

@@ -124,13 +124,13 @@ namespace katana::codegen::detail {
 
 [[nodiscard]] inline bool native_aot_requires_direct_write_resume(
     const katana::ir::Instruction& instruction) noexcept {
-    if (instruction.delay_slot.role != katana::ir::DelaySlotRole::None ||
-        instruction.memory_effects.access != katana::ir::MemoryAccessKind::Write)
-        return false;
-
-    return instruction.memory_effects.region ==
-               katana::ir::MemoryRegionKind::NormalRam ||
-           native_aot_has_guarded_linear_ram_write(instruction);
+    // Every emitted guest store observes the immutable AOT-code contract.
+    // Even an otherwise generic/MMIO-capable write can therefore request an
+    // exact post-instruction exit when it changes executable bytes.
+    return instruction.delay_slot.role ==
+               katana::ir::DelaySlotRole::None &&
+           instruction.memory_effects.access ==
+               katana::ir::MemoryAccessKind::Write;
 }
 
 [[nodiscard]] inline bool native_aot_may_return_at_instruction_fallthrough(

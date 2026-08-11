@@ -72,9 +72,9 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der aktuelle Source-Stand ist der Native-Port-Architekturreview-Checkpoint;
-Runtime-ABI 91, PlatformServices-ABI 14, Analyzer-ABI 35,
-Backend-Interface-ABI 14, Portprojektvertrag 77 und Native-Port-
-Profilvertrag 2,
+Runtime-ABI 92, PlatformServices-ABI 14, Analyzer-ABI 36,
+Backend-Interface-ABI 16, Portprojektvertrag 79 und Native-Port-
+Profilvertrag 4,
 PVR-State-Contract 3, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der historische opt-in Modus
 `port --analysis-mode runtime-only` war nur mit `--game-project` zulaessig
@@ -116,7 +116,7 @@ keine kanonische Publikation und kein Portartefakt; KR-4981 bleibt offen.
 Der abgeschlossene Hot-Callee-Diagnoseunterauftrag erreichte im Lauf
 `kr4981-20260809-024141-c4ffdf15` das vollständige `attempts=1024`-Gate und
 wurde nach `244,549 s` bei Wave `24` gezielt beendet. `uncategorized=0` für
-alle Top-8-Funktionen. `0x8C10E44E` isolierte SavedEpoch-pending-ABI-Skalare
+alle Top-8-Funktionen. Die dominante Hot-Callee isolierte SavedEpoch-pending-ABI-Skalare
 als dominante semantische Änderungsdomäne; der Callee-Set-Stackvertrag war
 unvollständig. Der Unterauftrag ist abgeschlossen, KR-4981 bleibt offen; der
 SavedEpoch-Lifecycle-Unterauftrag ist abgeschlossen; der neue
@@ -146,7 +146,7 @@ Amplifikationssamples: `0/1274` Roots, HOL `0`, Wave `107`, `280` Contexts,
 `970` Semantic-Lanes, `1.861` physische, `2.526` logische Requests,
 Input-Widening `536`, Summary `22`, Forward `123`, stale Requeues `272`,
 stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
-Publikation und kein Artefakt. `0x8C641202` blieb bei `84/84` Attempts/Semantic
+Publikation und kein Artefakt. Der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic
 Changes und `508` Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
 Der Supervisor schrieb wegen `taskkill`-Zugriffsverweigerung keine Summary;
 der Kill-on-close-Job beendete den Child trotzdem.
@@ -173,9 +173,9 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4968 | AICA-/G2-/DMAC-/Scheduler-/IRQ-Handoff fuer Soundfortschritt | quellseitig implementiert; echter ARM7-/Sound-/Main-Interrupt- und Common-Monitorpfad unter Runtime-ABI 90 laeuft, vollstaendige Produktabnahme bleibt KR-4981 |
 | KR-4969 | PVR-/SPG-/ASIC-Handoff fuer den ersten Spiel-Frame | quellseitig implementiert, Produktabnahme offen; Video-/ISP-/TSP-RenderDone-Fanout und resetfeste TA-Metrik unter Runtime-ABI 89 vorhanden, sichtbare Abnahme weiter offen |
 | KR-4970 | Produkt-sicherer Maple-/VMU-Handoff und Event-Rehydration | quellseitig implementiert, Produktabnahme offen; installierte VMU-/Flashdaten bleiben autoritativ, Hostdiagnostik wird nicht als Gastzustand restauriert |
-| KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze `0x8C010F22 + 0x18`, getrennte AOT-Template-Diagnose belegt |
+| KR-4971 | RuntimeOnly-AOT-Coverage fuer statisch identifizierbares Ziel herstellen | abgeschlossen; v28 emittiert und passiert die externe hashgebundene Grenze, getrennte AOT-Template-Diagnose belegt |
 | KR-4972 | Hashgebundene Shared-Callback-/Thunk-AOT-Coverage herstellen | quellseitig implementiert, Produktabnahme offen; Guarded-AOT-Entry und Exportinvariante erhalten Ziel/Shared-Body, reale Carrier-Kanten und Codepointerprovenienz ohne erfundene feste CFG-Kante |
-| KR-4973 | NativeDisc-Sichtregression und proof-unabhaengige PVR-Ausgabe | abgeschlossen durch historische ABI-64-v32-Evidenz; Sega ab 2,032 s, 127 Hostframes, Fehler bei `553.990.562` / `11.080.283` an `0x8C11088C -> 0x8C64784E` |
+| KR-4973 | NativeDisc-Sichtregression und proof-unabhaengige PVR-Ausgabe | abgeschlossen durch historische ABI-64-v32-Evidenz; Sega ab 2,032 s, 127 Hostframes, Fehler bei `553.990.562` / `11.080.283` an der privaten Callback-Kante |
 | KR-4974 | Reproduzierbare Kaltbuild-Telemetrie und Miss-Reason-Ledger | abgeschlossen; JSONL-, Prozessbaum-, Phasen-, Workset- und Cache-Miss-Telemetrie produktiv verdrahtet |
 | KR-4975 | Semantische FunctionEvaluation-Key-Projektion und Cachelinsen | abgeschlossen; versionierte fail-closed Register-/Stackprojektion, kanonische Ausgaenge, Set-Interning und Lens-Telemetrie produktiv verdrahtet |
 | KR-4976 | Persistente FunctionValue-Programm-/SCC-Session | abgeschlossen; immutable Graphshards, persistente SCC-/ABI-/Summary-Epoch und gerichtete Invalidierung produktiv verdrahtet |
@@ -195,11 +195,11 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | bedingt geplant P1; nur bei positivem Zehn-Prozent-Kosten- und 50-Prozent-Reusegate, sonst Full-Rebuild |
 | KR-4991 | Versionierte monotone Context-Worklist | bedingt geplant P0; D2 entscheidet vor Taskbeginn, Umbau nur bei positivem Barrier-Messgate G2 |
 | KR-4992 | Begrenzte Spekulation spaeterer Resolution-Roots | optionales P1 erst nach verfehltem KR-4981 und positivem Restkosten-/RAM-Gate; danach Retry nur auf ausdrueckliche Freigabe |
-| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
+| KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding mit dem SDK-Linkabschluss unter dem aktuellen Analyzer-ABI 36 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und No-Skip-Sonic-Lauf belegen echten ARM7, fortschreitenden Sofdec-Audiotakt, Player-Status 5 und sichtbare Movie-Bildpublikation |
-| KR-5000 | Native Produktgrenze und Linkisolation | [x] physische Source-/Link-/Installgrenze abgeschlossen; Portprojektvertrag 77, Profilvertrag 2, nur AOT-/Native-Runtime im Produkt-SDK, historischer Geraetepfad ausschliesslich nichtinstallierbares Buildbaum-Orakel |
-| KR-5001 | Statische Spiel-/SDK-Hookkarte | aktiv P0; hoechste belegte Audio-/Movie-, Grafik- und Plattformgrenzen aus privater Adresskarte binden |
+| KR-5000 | Native Produktgrenze und Linkisolation | [x] physische Source-/Link-/Installgrenze abgeschlossen; Runtime-ABI 92, Backend-ABI 16, Portprojektvertrag 79, Profilvertrag 4, NativePortDefinition/Artifact/Content/Runtime/Bootstrap, read-only Content-Mappings, Hook-/Hardware-Closure, direkter Dispatch und Linkaudit implementiert; erster Plattformfehler typisiert `UnresolvedHardwareAccess`, kein Fallback |
+| KR-5001 | Statische Spiel-/SDK-Hookkarte | aktiv P0; native Hookkarte, ABI- und Closure-Verbindung auf dem implementierten Native-Port-Stack |
 | KR-5002 | Nativer Audio-/Moviepfad | geplant P0 nach KR-5001; kein ARM7/AICA-Firmwarepfad im Produkt, No-Skip-Lifecycle ueber native Hostdienste |
 | KR-5003 | Nativer GPU-Pfad | geplant P0 nach KR-5001; native GPU-API und kein CPU-PVR im Produktlink |
 | KR-5004 | Native Disc-, Eingabe- und Save-Dienste | geplant P0 nach KR-5001; lokale Originalinstallation und native PC-Plattformdienste |

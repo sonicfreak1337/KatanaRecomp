@@ -28,7 +28,9 @@ struct PortExportImplementationIdentities final {
     std::string_view target_name);
 
 [[nodiscard]] PortExportImplementationIdentities
-port_export_implementation_identities();
+port_export_implementation_identities(
+    std::string_view native_port_artifact_identity = {},
+    std::uint32_t native_port_artifact_format_version = 0u);
 
 [[nodiscard]] std::string port_export_cache_key(
     std::string_view source_kind,
@@ -41,6 +43,8 @@ port_export_implementation_identities();
     std::string_view console_profile,
     std::string_view game_project_identity,
     std::string_view game_entry_handoff_artifact_identity,
+    std::string_view native_port_artifact_identity,
+    std::uint32_t native_port_artifact_format_version,
     std::string_view latent_aot_entry_hint_identity,
     std::string_view analysis_mode_identity,
     std::string_view implementation_identity,

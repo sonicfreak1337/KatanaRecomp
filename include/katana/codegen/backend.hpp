@@ -22,7 +22,8 @@ enum class BackendCapability : std::uint64_t {
     StructuredExceptions = 1ull << 3u,
     Fpu = 1ull << 4u,
     BlockTransitions = 1ull << 5u,
-    PlatformServices = 1ull << 6u
+    PlatformServices = 1ull << 6u,
+    NativePortServices = 1ull << 7u
 };
 
 using BackendCapabilities = std::uint64_t;
@@ -55,6 +56,11 @@ struct NativeAotBlockOwnerEntry {
     std::uint32_t owner_entry = 0u;
 };
 
+enum class BackendRuntimeBinding : std::uint8_t {
+    DiagnosticPlatformServices,
+    NativePort
+};
+
 struct BackendRequest {
     std::span<const katana::ir::Function> functions;
     std::uint32_t entry_address = 0u;
@@ -78,6 +84,8 @@ struct BackendRequest {
     // emitted guest function is a pure leaf with no architectural boundary.
     bool conservative_register_localization = false;
     std::span<const NativeAotBlockOwnerEntry> native_block_owner_entries;
+    BackendRuntimeBinding runtime_binding =
+        BackendRuntimeBinding::DiagnosticPlatformServices;
 };
 
 struct BackendEmission {

@@ -32,14 +32,13 @@ Code endet an einer typisierten Runtimegrenze. Der begrenzte
 Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 `diagnostic_partial` erzeugten Diagnoseports.
 
-Source-Checkpoint `18f8537` versioniert diesen Produktvertrag mit
-Runtime-ABI 85, Block-ABI 5, Analyzer-ABI 23, PlatformServices-ABI 13,
-Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13 und
-Partitionsschema 5. Der Checkpoint ist kein P0-Abschluss. Der abgebrochene
-NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und keinen
-Produktnachweis. Erst nach KR-4974 bis KR-4984 darf genau ein neuer
-NativeDisc-Port mit real installierter Disc und neuem echtem Screenshot
-Boot- oder Performanceerfolg belegen.
+Der aktuelle KR-5000-Stand verwendet Runtime-ABI 92, Block-ABI 5,
+Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 16,
+Portprojektvertrag 79, Native-Port-Profilvertrag 4, Native-AOT-Profil 27 und
+Partitionsschema 7. Die historischen Checkpoint- und Laufangaben dieses
+Dokuments bleiben an ihre damaligen Vertraege gebunden. Der aktuelle native
+Produktpfad ist durch KR-5000 physisch von den historischen Diagnosegeraeten
+getrennt; der naechste aktive Task ist KR-5001.
 
 ## Drei Ebenen
 
@@ -114,7 +113,7 @@ MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
 Der aktuelle Handoff-Quellvertrag besteht aus Handoff-Artefaktformat 2,
-Runtime-ABI 85, Portprojektvertrag 75 und Plattformzustandsvertrag 2.
+Runtime-ABI 92, Portprojektvertrag 79 und Plattformzustandsvertrag 2.
 Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
 Evidenz und muessen vor einem weiteren DirectBoot-Produktlauf fuer den dann
@@ -190,8 +189,8 @@ gegen 23,9578 MHz bei v26, also provisorisch `+9,78 %`, aber noch kein
 600-Millionen-Gate.
 
 Der historische v28-/v30-Blocker KR-4972 war
-`0x8C11088C -> 0x8C64784E`. Das Ziel beginnt mit einem `BRA` auf den
-gemeinsamen Pfad `0x8C6478C2`. Die damalige generische Analyse gewann Ziel und
+die historische private Callback-Kante. Das Ziel beginnt mit einem `BRA` auf den
+gemeinsamen Pfad/Body. Die damalige generische Analyse gewann Ziel und
 Body aus konkreter Codepointer-Provenienz ueber einen begrenzten
 Tail-Jump-/Runtime-Frame-Pfad. Der damalige vollstaendige Export mit dem
 externen Spielprojekt erhielt diesen Seed aber noch nicht in CFG, Source-Map
@@ -210,7 +209,7 @@ vor jeder Mutation. `port <gdi>` akzeptiert dieselbe externe
 dadurch in allen Aufnahmen den Sega-Lizenzscreen, praesentiert 127 Hostframes
 und endet nach 6,701 Sekunden bei exakt demselben Zyklus `553.990.562` sowie
 11.080.283 Zentraldispatches, provisorisch 82,67 MHz und derselben
-KR-4972-Kante `0x8C11088C -> 0x8C64784E` wie DirectBoot-v30. Der sichtbare
+KR-4972-Kante an der privaten Callback-Stelle wie DirectBoot-v30. Der sichtbare
 Unterschied ist damit kein abweichender Gastfortschritt. DirectBoot selbst
 braucht fuer einen spaeteren aktuellen Vertrag einen frischen ABI-passenden
 Handoff; IP.BIN und
@@ -229,7 +228,7 @@ Adressprovenienz eines geladenen Objekts wird nicht als
 Codepointerprovenienz des Inhalts vererbt. Der Export verlangt fuer jeden
 akzeptierten Guarded-AOT-Einstieg einen statischen Block, ein natives Template
 oder eine explizite Ablehnung. Ob der reale Sonic-Lauf damit
-`0x8C64784E` passiert, ist bis zur nach KR-4974 bis KR-4984 zulaessigen,
+die private Callbackkante passiert, ist bis zur nach KR-4974 bis KR-4984 zulaessigen,
 ABI-passenden Produktabnahme offen.
 
 ## Statischer und dynamischer AOT-Dispatch

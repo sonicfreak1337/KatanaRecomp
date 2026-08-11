@@ -4,13 +4,11 @@ Dieser KR-4704-Vertrag trennt den Inhalt geladener Bytes von ihren
 Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
-Source-Checkpoint `18f8537` verwendet Runtime-ABI 85, Block-ABI 5,
-Analyzer-ABI 23, PlatformServices-ABI 13, Backend-Interface-ABI 12,
-Portprojektvertrag 75, Native-AOT-Emissionsprofil 13 und
-Portpartitionsschema 5. Der Checkpoint ist kein P0-Abschluss. Der
-abgebrochene NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und
-keinen Produktnachweis; vor dem naechsten privaten Lauf stehen KR-4974 bis
-KR-4984.
+Der aktuelle KR-5000-Stand verwendet Runtime-ABI 92, Block-ABI 5,
+Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 16,
+Portprojektvertrag 79, Native-AOT-Emissionsprofil 27 und
+Portpartitionsschema 7. Historische Checkpoint- und Laufangaben bleiben an
+ihre damaligen Vertraege gebunden; der naechste aktive Task ist KR-5001.
 
 ## Byteinventar
 
@@ -278,10 +276,10 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
-abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 85,
-Block-ABI 5, Analyzer-ABI 23, Backend-Interface-ABI 12,
-PlatformServices-ABI 13, Portprojektvertrag 75, Native-AOT-Emissionsprofil 13
-und Portpartitionsschema 5. Systemreplay-Schema 8
+abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 92,
+Block-ABI 5, Analyzer-ABI 36, Backend-Interface-ABI 16,
+PlatformServices-ABI 14, Portprojektvertrag 79, Native-AOT-Emissionsprofil 27
+und Portpartitionsschema 7. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien
 Materialisierungsvertrag zu aendern.
@@ -367,7 +365,7 @@ Probe-Lauf und Detail-Lauf benoetigten 187,8, 16,8, 73,5 beziehungsweise
 49,2 Sekunden. Beide Gastframemarker werden am Sega-Bild erreicht; die alte
 Zwei-Instruktions-JSR-Schleife ist verschwunden. Der Detail-Lauf endet mit
 7.422.352 Dispatch-Hits/1 Miss und 2.609.376 `RuntimeOnly`-Hits/1 Miss/0
-Fallbacks am typisierten Missing-AOT `0x8C65E96A -> 0x8C652150`. Der oben
+Fallbacks am typisierten privaten Missing-AOT-Ziel. Der oben
 beschriebene allgemeine Stored-Code-Pointer-Beleg war fokussiert
 regressionsgeprueft. Diese Werte bleiben historische v7-Evidenz und duerfen
 nicht als aktueller Produktnachweis gelesen werden.

@@ -1210,6 +1210,10 @@ bool Memory::has_guest_write_observer() const noexcept {
     return static_cast<bool>(guest_write_observer_);
 }
 
+std::uint64_t Memory::guest_write_observer_generation() const noexcept {
+    return guest_write_observer_generation_;
+}
+
 bool Memory::guest_write_observer_allows_prevalidated_linear_writes() const noexcept {
     return !guest_write_observer_ ||
            guest_write_observer_contract_ ==

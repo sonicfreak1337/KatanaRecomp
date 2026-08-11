@@ -97,7 +97,7 @@ RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen.
 ## Laufzeit und Ressourcen
 
 - Kein gestarteter Prozess und keine einzelne Phase laeuft laenger als
-  15 Minuten. Nur eine ausdrueckliche Nutzerfreigabe fuer genau einen benannten
+  20 Minuten. Nur eine ausdrueckliche Nutzerfreigabe fuer genau einen benannten
   Lauf hebt diese Grenze voruebergehend auf.
 - Ein abgelaufener oder abgebrochener Prozess wird mitsamt seinem Prozessbaum
   quiesziert, bevor ein Nachfolger startet.
@@ -110,7 +110,7 @@ RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen.
 - Ein wiederholter Heartbeat ohne Aenderung von Phase, geplant, queued, aktiv,
   fertig oder kanonisch publiziert ist nur Liveness und kein Fortschritt.
   Bleibt ein Prozess 60 Sekunden ohne nachweisliche Arbeitsbewegung, wird er
-  vor der 15-Minuten-Obergrenze als Stall beendet und sein Prozessbaum
+  vor der 20-Minuten-Obergrenze als Stall beendet und sein Prozessbaum
   quiesziert.
 - Steigende CPU-Last, Evaluation-, Cache-, Miss-, Requeue- oder
   Kontextzaehler gelten fuer sich niemals als Produktfortschritt. Bleiben

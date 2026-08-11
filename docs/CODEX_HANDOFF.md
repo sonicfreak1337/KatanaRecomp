@@ -29,28 +29,41 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
-`KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geräteverbund
+`KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `2`, Portprojektvertrag `77` und der Linkmap-Audit verhindern
+Profilvertrag `4`, Portprojektvertrag `79` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
-Interpreter. Aktiv ist `KR-5001`: unabhaengiger privater
-Definitionsprovider, Bootstrap und direkte Hook-/Callback-Emission. Bis sie
-existieren, muss der Produktconfigure mit
-`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` enden; niemals den historischen
-Launcher als Fallback aktivieren.
+Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
+NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
+Hardware-Closure, direkter nativer Dispatch und Linkaudit sind implementiert.
+Ein privater Adapter wird erreicht, statisch rekompilierter Spielcode startet;
+der erste unaufgeloeste Plattformzugriff endet typisiert als
+`UnresolvedHardwareAccess` ohne Emulator-/Interpreter-/Runtimefallback.
+Der generierte Runner verlangt Executable plus privaten ContentRoot und
+validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
+Closure. Aktiv ist `KR-5001` als naechster Task fuer Hookkarte, ABI und
+Closure. Niemals den historischen Launcher als Fallback aktivieren.
+
+Der KR-5000-Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
+`katana_native_port_runtime` in einem inkrementellen 24-Worker-Build in
+`14,2 s` bestaetigt. Es wurden keine Tests und kein neuer Sonic-Export oder
+-Lauf ausgefuehrt; nach KR-5000 folgt KR-5001.
 
 ## Historischer RuntimeOnly-Bring-up
 
 Funktionaler Source-Stand: aktueller Native-Port-Architekturreview-
-Checkpoint. Aktuell gelten Runtime-ABI `91`,
-PlatformServices-ABI `14`, Analyzer-ABI `35`, Function-Analysis-Epoch-Schema
+Checkpoint. Aktuell gelten Runtime-ABI `92`,
+PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`14`, PVR-State-Contract `3`, Portprojektvertrag `77` und Native-Port-
-Profilvertrag `2`.
+`16`, PVR-State-Contract `3`, Portprojektvertrag `79` und Native-Port-
+Profilvertrag `4`.
+Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
+Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
+`native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze hebt das
-Backend-Interface-ABI auf `14`; bestehende generierte Ports muessen neu
+Backend-Interface-ABI auf `16`; bestehende generierte Ports muessen neu
 exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig. Er ist jetzt internes Diagnoseorakel und kein
@@ -83,7 +96,7 @@ endete nach vier bewiesenen Frames mit `1.228.800` geaenderten Pixeln.
 Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
 und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der
 Audiohash `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau
-identisch. `100 MHz`, der Identity-Miss `0x8C054008 -> 0x8C9000E8` sowie
+identisch. `100 MHz`, der private Identity-Miss sowie
 Memory-Card-Screen und Hauptmenue bleiben offen.
 
 Der Runtime-Performance-Stand haelt ARM7-RAM/Registerlocks ueber einen
@@ -223,7 +236,7 @@ und der Nutzer diesen Lauf freigegeben hat.
 
 ## Laufzeit und Ressourcen
 
-- Kein Prozess und keine einzelne Phase laeuft laenger als 15 Minuten, ausser
+- Kein Prozess und keine einzelne Phase laeuft laenger als 20 Minuten, ausser
   der Nutzer hebt die Grenze fuer genau einen benannten Lauf auf.
 - Jeder potenziell lange Prozess meldet spaetestens alle zehn Sekunden
   belastbaren Fortschritt oder einen Heartbeat.
@@ -494,7 +507,7 @@ Der abgeschlossene Diagnose-Unterauftrag lief unter
 `uncategorized=0` für alle Top-8-Funktionen; der erwartbare
 `product-exit -1`-Status entstand durch diesen Stop. Peak Root WS:
 `1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`; keine Publikation und kein
-`game.exe`. `0x8C10E44E` ist mit `20` semantischen Änderungen und `40`
+`game.exe`. Die dominante Hot-Callee ist mit `20` semantischen Änderungen und `40`
 Stack-Widenings ausschließlich SavedEpoch-pending-ABI-Skalaren sowie
 unvollständigem Callee-Set-Stackvertrag der dominante Befund.
 Der SavedEpoch-Lifecycle-Fix ist source-seitig abgeschlossen. Offen bleibt die
@@ -529,8 +542,8 @@ Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top fail-closed in allen Truncation-/Publication-
 Checks und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich vom
 semantischen Evaluation-Limit. Der echte Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
-In-Process-Evaluation-Cache-Schema `13` sind aktiv.
+Evaluation-Zähler; im historischen Stand waren Analyzer-ABI `34`,
+Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13` aktiv.
 
 Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
@@ -541,7 +554,7 @@ stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
 Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
 `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
 den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
-`0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+`0`; der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und `508`
 Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der historische P0 ist
 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
 vollstaendigen Stackvertrag/Gate.
@@ -589,7 +602,8 @@ nicht zu diesem Dokumentationspass.
 
 D1 und D2 sind ausdruecklich freizugebende Sonic-Diagnoseexporte, keine
 Testmatrix. Der vollstaendige KR-4993-Source-Endreview ist abgeschlossen; das
-Analyzer-ABI-Finding ist geschlossen; der aktuelle Analyzer-ABI ist `34`. KR-4994 und KR-4995 sind source-seitig
+Analyzer-ABI-Finding ist mit dem SDK-Linkabschluss geschlossen; der aktuelle
+Analyzer-ABI ist `36`. KR-4994 und KR-4995 sind source-seitig
 abgeschlossen, aber die autoritative Hybrid-Join-Closure ist beim vollstaendigen
 Stackvertrag/Gate noch nicht wirksam. Es gibt kein
 bestandenes Produktgate; die Produkt-P0-Abnahme bleibt offen.

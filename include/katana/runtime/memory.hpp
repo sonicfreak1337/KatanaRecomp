@@ -804,6 +804,8 @@ class Memory {
         GuestWriteObserverContract contract = GuestWriteObserverContract::General);
     void clear_guest_write_observer() noexcept;
     [[nodiscard]] bool has_guest_write_observer() const noexcept;
+    [[nodiscard]] std::uint64_t
+    guest_write_observer_generation() const noexcept;
     [[nodiscard]] bool
     guest_write_observer_allows_prevalidated_linear_writes() const noexcept;
     void set_guest_write_batch_observer(GuestWriteBatchObserver observer) noexcept;

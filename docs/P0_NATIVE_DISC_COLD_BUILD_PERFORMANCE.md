@@ -2,9 +2,9 @@
 
 Status: historischer RuntimeOnly-/PlatformAbi-Performancevertrag. Ab v0.49.1
 hat `NATIVE_PORT_PRODUCT_CONTRACT.md` Vorrang; aktive Sourcewerte sind
-Runtime-ABI 91, Analyzer-ABI 35, Portprojektvertrag 77 und Native-Port-
-Profilvertrag 2. Das aktuelle Native-AOT-Emissionsprofil ist 25; das AOT-
-Partitionsschema ist 5. Die folgenden Angaben beschreiben das interne
+Runtime-ABI 92, Analyzer-ABI 36, Portprojektvertrag 79 und Native-Port-
+Profilvertrag 4. Das aktuelle Native-AOT-Emissionsprofil ist 27; das AOT-
+Partitionsschema ist 7. Die folgenden Angaben beschreiben das interne
 Diagnoseorakel und sind keine Produktarchitektur. Der historische opt-in
 Modus `port --analysis-mode runtime-only` war nur mit `--game-project`
 zulaessig und ist jetzt kein Produkt-/Releaseprofil.
@@ -37,7 +37,7 @@ Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
 und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der aktuelle
 Runtime-P0 ist weiterhin der serielle Runtime-/Dispatch-Overhead bis
 mindestens `100 MHz`; danach bleibt der Identity-Miss
-`0x8C054008 -> 0x8C9000E8` offen.
+der private Identity-Miss offen.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
@@ -289,7 +289,7 @@ KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame; 24,2926 MHz
   -> Ziel mindestens 100 MHz ohne Sicht-/Audioregression
-  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
+  -> post-filmischen privaten Identity-Miss schliessen
 ```
 
 Fuer jeden Implementierungstask gilt:
@@ -309,7 +309,7 @@ historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 ist der
 serielle Runtime-/Dispatch-Overhead des sichtbaren Audio-/Videopfads:
 `24,2926 MHz` im letzten Vergleichslauf, Ziel mindestens `100 MHz` ohne
 Regression. Danach folgt der post-filmische Identity-Miss
-`0x8C054008 -> 0x8C9000E8`. KR-4981 bleibt das globale Produktgate und ist
+der private Identity-Miss. KR-4981 bleibt das globale Produktgate und ist
 bis Hauptmenue nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
@@ -339,7 +339,7 @@ Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
 beendet. Der erwartbare `product-exit -1`-Status entstand durch diesen Stop;
 es gab keinen Fehler, Hänger, keine Publikation und kein `game.exe`. Peak Root
 WS: `1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`. `uncategorized=0`
-galt für alle Top-8-Funktionen. `0x8C10E44E` isolierte `20` semantische
+galt für alle Top-8-Funktionen. Die dominante Hot-Callee isolierte `20` semantische
 Änderungen und `40` Stack-Widenings ausschließlich auf SavedEpoch-pending-ABI-
 Skalare; der Callee-Set-Stackvertrag war unvollständig. Der SavedEpoch-
 Lifecycle-Fix ist source-seitig abgeschlossen; offen bleibt die gemeinsame
@@ -372,8 +372,9 @@ Edges erneut vollstaendig.
 mit retained sticky loss, fail-closed SavedEpoch-Slot-Pending-Top in allen
 Truncation-/Publication-Checks und öffentlich getrennte Provenance-Replay-
 Capsule-/Keybyte-Limits neben dem semantischen Evaluation-Limit. Ein echter
-Evaluation-Cap belastet nur den Evaluation-Zähler; Analyzer-ABI `34`,
-Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13` sind aktiv;
+Evaluation-Cap belastet nur den Evaluation-Zähler; der damalige Source-Stand
+verwendete Analyzer-ABI `34`, Epoch-Schema `27` und lokales In-Process-
+Evaluation-Cache-Schema `13`;
 der bestätigte Incremental-Build endete mit Exit `0` nach ca. `48 s`, die EXE
 trug LastWriteTime `09.08.2026 09:08:11 +02:00`.
 
@@ -386,7 +387,7 @@ stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
 Publikation und kein Artefakt bzw. `game.exe`. Der Supervisor schrieb wegen
 `taskkill`-Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete
 den Child trotzdem. Admission `1024/1024`, projected context/match jeweils
-`0`; `0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+`0`; der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und `508`
 Ordinary-Stack-Deltas trotz vollständigem Stackvertrag. Der historische P0 ist
 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim
 vollstaendigen Stackvertrag/Gate.
@@ -487,7 +488,7 @@ Der NativeDisc-Kaltbuild-P0 ist erst geschlossen, wenn:
 5. Cacheinvalidierung nur semantisch betroffene Ebenen trifft;
 6. kein Performancepfad Analyse- oder AOT-Abdeckung reduziert;
 7. KR-4993 alle bestaetigten Source-Findings geschlossen, das Analyzer-ABI-
-   Finding unter dem aktuellen Analyzer-ABI 34 geschlossen und Limit-, Stale-, Cancellation- sowie
+   Finding unter dem aktuellen Analyzer-ABI 36 mit dem SDK-Linkabschluss geschlossen und Limit-, Stale-, Cancellation- sowie
    `IncompleteRoot`-Pfade fail-closed gehalten hat; und
 8. KR-4981 einen vollstaendigen Sonic-Kaltport in hoechstens acht Minuten
    erzeugt oder einen engeren typisierten Produktblocker belegt.

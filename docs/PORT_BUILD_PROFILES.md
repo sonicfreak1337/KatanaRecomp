@@ -36,17 +36,15 @@ erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
 internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
 und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
 ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
-Profilvertrag `2` und Portprojektvertrag `77` und erzeugt eine Linkmap. Ein
+Profilvertrag `4` und Portprojektvertrag `79` und erzeugt eine Linkmap. Ein
 Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
 CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
 Rueckfall.
 
-Solange die in KR-5001 bis KR-5004 abgeleiteten nativen Hooks fehlen, darf der
-Produktlink deshalb mit einer fehlenden Bindung scheitern. Der aktuelle
-vertikale Stand endet bereits beim Configure typisiert mit
-`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`; KR-5001 ersetzt diesen Marker erst,
-wenn Bootstrap und direkte Hook-/Callback-Emission wirklich existieren. Das
-ist die beabsichtigte fail-closed Grenze.
+KR-5000 stellt die Produktlinkgrenze, NativePort-Artefakte, read-only
+Content-Mappings und den validierenden Runner bereit. Der Produktlink oder
+Produktlauf darf bei unvollstaendiger Hook-/Hardware-Closure typisiert
+fail-closed enden; der explizite Bring-up-Schalter ist darauf begrenzt.
 
 ## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 
@@ -66,7 +64,7 @@ geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 Der historische RuntimeOnly-Produktstand erreicht `FirstVisibleGameFrame` ohne
 Skip oder kuenstlichen Moviepfad. Die identische Vergleichsreihe stieg von
 `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz` auf `24,2926 MHz`; das
-Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
+Native-AOT-Emissionsprofil ist `27` mit AOT-Partitionsschema `7`.
 
 Der letzte Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
 YUV-Makrobloecke sowie `470` Audiopuffer mit `345.450` Audiobildern. `100 MHz`

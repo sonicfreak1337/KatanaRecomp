@@ -81,7 +81,7 @@ Ein Treffer ist an
 `Analyse-/IR-Cache-Hit: ja` erkennbar. Dieser Whole-Export-Cache gilt fuer
 `port-executable` beziehungsweise `probe-port-executable`; der GDI-basierte
 NativeDiscBoot-Export behaelt seine Partitions- und Metadatencaches.
-Portprojektvertrag 76 bindet den aktuellen Spielprojektvertrag 5,
+Portprojektvertrag 79 bindet den aktuellen Spielprojektvertrag 5,
 GameProject-Artefaktformat 4, die `katana-game-project-v4`-Metadaten und den
 getrennten Game-Entry-Vertrag in diesen Schluessel und invalidiert damit aeltere
 Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze
@@ -125,11 +125,10 @@ Der private titelgebundene Artefaktprovider besitzt Descriptor und Payloads
 nach dem Laden selbst und stellt nur vorvalidierte, hashgebundene Slices
 bereit.
 
-Der aktuelle Source-Checkpoint `18f8537` verwendet
-GameEntryHandoff-Artefaktformat 2, Runtime-ABI 85, Block-ABI 5,
-Analyzer-ABI 23, PlatformServices-ABI 13,
-Backend-Interface-ABI 12, Portprojektvertrag 75, Native-AOT-Profil 13,
-Partitionsschema 5 und Plattformzustandsvertrag 2. Vorhandene private
+Der aktuelle KR-5000-Stand verwendet GameEntryHandoff-Artefaktformat 2,
+Runtime-ABI 92, Block-ABI 5, Analyzer-ABI 36, PlatformServices-ABI 14,
+Backend-Interface-ABI 16, Portprojektvertrag 79, Native-AOT-Profil 27,
+Partitionsschema 7 und Plattformzustandsvertrag 2. Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
 Evidenz und muessen fuer einen spaeteren DirectBoot-Produktlauf neu fuer den
 dann aktuellen ABI erzeugt werden. NativeDisc benoetigt keinen
@@ -223,6 +222,20 @@ laufen. Der aktuelle DirectBoot-Port, die NativeDisc-Referenz, das
 extrahierte Boot-Executable-Artefakt und installierte Nutzerdaten sind davon
 getrennt und werden nicht als Portexport-Abfall behandelt.
 
+## Historische Disc-Diagnoseinstallation
+
+Die folgende `--install-disc`-Beschreibung ist nur der historische
+Disc-Diagnosepfad. Ein nativer Produkt-Runner verlangt eine Executable und
+einen privaten `ContentRoot`; beide Pfade werden vor dem Start validiert. Fuer
+Native Ports gibt es keinen `--install-disc`-Produktflow.
+
+## Historische Disc-Diagnoseinstallation
+
+Die folgende `--install-disc`-Beschreibung ist nur der historische
+Disc-Diagnosepfad. Ein nativer Produkt-Runner verlangt eine Executable und
+einen privaten `ContentRoot`; beide Pfade werden vor dem Start validiert. Fuer
+Native Ports gibt es keinen `--install-disc`-Produktflow.
+
 ## Nutzerinstallation bleibt discbasiert
 
 Das verteilte Portbinary erwartet weiterhin die rechtmaessig vorhandene
@@ -290,7 +303,7 @@ bei v26 und provisorisch `+9,78 %`. Der v30-Sichtlauf ist kein
 Performancebenchmark; ein 600-Millionen-Gate liegt weiterhin nicht vor.
 
 Der historische v28-/v30-Blocker KR-4972 war
-`0x8C11088C -> 0x8C64784E`. Das unveraenderte Ziel springt in einen
+die geprüfte private Callback-Kante. Das unveraenderte Ziel springt in einen
 gemeinsamen Codepfad. Die damalige generische Analyse erkannte Ziel und
 gemeinsamen Body ueber begrenzte Tail-Jump- und Runtime-Frame-Provenienz; der
 damalige vollstaendige Spielprojektexport uebernahm den Seed aber noch nicht
@@ -304,7 +317,7 @@ Spielprojektdatei wie DirectBoot. Er zeigt ab 2,032 Sekunden sichtbar den
 Sega-Lizenzscreen, praesentiert 127 Hostframes und endet nach 6,701 Sekunden
 mit 11.080.283 Zentraldispatches und provisorisch 82,67 MHz exakt wie
 DirectBoot-v30 bei Zyklus `553.990.562` an
-`0x8C11088C -> 0x8C64784E`. Damit ist der naechste Gast-/AOT-Blocker gleich,
+die geprüfte private Callback-Kante. Damit ist der naechste Gast-/AOT-Blocker gleich,
 waehrend die alte DirectBoot-Schwarzausgabe auf den inzwischen in
 Runtime-ABI 64 entkoppelten Scanout-/Proofvertrag zurueckgefuehrt ist.
 DirectBoot erwartet weiterhin keinen Sega-Screen, weil es IP.BIN

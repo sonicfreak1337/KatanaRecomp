@@ -1,13 +1,13 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
 Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
-Vorrang. Aktuell gelten Runtime-ABI 91, Analyzer-ABI 35,
-Portprojektvertrag 77 und Native-Port-Profilvertrag 2. Der source-seitige
+Vorrang. Aktuell gelten Runtime-ABI 92, Analyzer-ABI 36,
+Portprojektvertrag 79 und Native-Port-Profilvertrag 4. Der source-seitige
 KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
 Diagnostik. Der damalige RuntimeOnly-Bring-up verwendete Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27 und lokales In-Process-Evaluation-Cache-
-Schema 13. Native-AOT-Emissionsprofil 25 und AOT-Partitionsschema 5 sind
+Schema 13. Native-AOT-Emissionsprofil 27 und AOT-Partitionsschema 7 sind
 aktuell. Der historische Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig und ist jetzt ausschliesslich internes
 Diagnoseorakel, kein Produktprofil. RuntimeOnly setzt `GuestCallAbi::Unknown`,
@@ -187,16 +187,16 @@ Portartefakt oder `game.exe`, keine Veröffentlichung. Peak Root WS:
 `1.260.388.352 B`, Peak Job WS: `1.387.151.360 B`; der erwartbare
 Supervisorstatus `product-exit -1` entstand durch den gezielten Stop.
 
-`0x8C10E44E` ist der dominante isolierte Befund: `20` echte semantische
+Die dominante Hot-Callee ist der isolierte Befund: `20` echte semantische
 Änderungen und `40` Stack-Widenings, ausschließlich SavedEpoch-pending-ABI-
 Skalare (`reg_epoch_pending=92`, `stack_epoch_pending=80`,
 `tail_epoch_pending=20`, `state_stack_epoch_pending=20`,
 `state_memory_epoch_pending=20`), bei erstem und terminalem Top-Frame mit
-Callee-Set-incomplete (`owner=0x8C10E44E`, `site=0x8C10E486`, `target=0`).
+Callee-Set-incomplete am Owner-/Site-/Target-Feld des unvollständigen Vertrags (`target=0`).
 Ordinary/direct-code/direct-PC/contextual, Callback-Loss-, Topologie-,
 Top-Domain-, Map-/Tail-Topologie- und Metadatenänderungen waren dort `0`.
-`0x8C09859C` zeigte `28` Änderungen und ebenfalls Callee-Set-incomplete an
-`0x8C0985B0`, jedoch gemischte Domänen. `0x8C64E55E` zeigte `48` Änderungen,
+Eine zweite Hot-Callee zeigte `28` Änderungen und ebenfalls Callee-Set-incomplete,
+jedoch gemischte Domänen. Eine weitere Hot-Callee zeigte `48` Änderungen,
 darunter `reg_epoch_pending=180`, bei vollständigem Stackvertrag.
 
 Der Diagnose-Unterauftrag ist abgeschlossen; KR-4981 und das globale
@@ -245,8 +245,8 @@ Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss,
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
 vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
-In-Process-Evaluation-Cache-Schema `13` sind aktiv.
+Evaluation-Zähler; der damalige Source-Stand verwendete Analyzer-ABI `34`,
+Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13`.
 
 Der erledigte Source-Unterauftrag umfasst eine begrenzte 17-Source-
 Provenienz-Live-in-Map für R0-R15 plus incoming stack, getrennte conditional /
@@ -277,7 +277,7 @@ der Supervisorlog im privaten Diagnosebereich,
 stdout/stderr tragen dasselbe Präfix.
 
 Admission war `1024/1024`, `projected_context_changed=0` und
-`projected_match_changed=0`. Der entscheidende Hotspot bleibt `0x8C641202`
+`projected_match_changed=0`. Der entscheidende Hotspot bleibt der sauberste Ordinary-Stack-Treiber
 mit `84/84` Attempts/Semantic Changes und `508` Ordinary-Stack-Deltas trotz
 vollstaendigem Stackvertrag. Die neue autoritative Hybridprojektion schliesst
 Contextual-MAY-Joins und Forward-Edges erneut vollstaendig. Die vollstaendige
@@ -327,12 +327,10 @@ Failure-Signale: Context-Stackvertrag invalid `629`, Memory invalid `755`,
 Candidate truncation `900`, ABI stack-base unresolved `852`, unresolved
 SavedEpoch alias sources `625`, tracks-current `625`, current watcher `291`;
 Top-Gründe local-stack-coordinate `594`, callee-top `110`, callee-set-incomplete
-`14`. `0x8C641202` ist der sauberste Ordinary-Stack-Treiber: `84/84`
+`14`. Der sauberste Ordinary-Stack-Treiber: `84/84`
 Attempts/semantic changes, vollständiger Stack-Read-Vertrag und `508`
 Stack-Ordinary-Widenings ohne Epoch-Topologie-Widening. Weitere incomplete
-local-stack-coordinate-Sites sind `0x8C098A82@0x8C098A8E`,
-`0x8C64E55E@0x8C64E5D0`, `0x8C64D9DE@0x8C64D9DE` und
-`0x8C64EEA4@0x8C64EEB0`.
+local-stack-coordinate-Sites sind mehrere weitere geprüfte lokale Stackkoordinaten.
 
 Gegenüber dem vorherigen Lauf (`322,632 s`, Candidate `237,116 s`, Wave `39`,
 `272` Contexts, `549` Lanes, `630` physische, `894` logische, `226` stale
@@ -360,17 +358,17 @@ Spill-through als P0-Folgepunkt vermutet; der aktuelle P0 ist nun die fehlende
 Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
 Stackvertrag/Gate. Dies ist ein historischer PlatformAbi-Befund.
 
-Der D2048-Top-8-Befund war: `0x8C10D19C` sem `36` mit reg ordinary `94`
+Der D2048-Top-8-Befund war: Top-1 sem `36` mit reg ordinary `94`
 (`mask B870`), reg metadata `4` (`mask 3860`) und state-memory Epoch-Topologie
-`12`; `0x8C606E60` sem `36` mit reg ordinary `12` (`mask C010`), Alias-Flags
-`16` und state-memory Topologie `2`; `0x8C09859C` sem `34` mit `48` Stack-
+`12`; Top-2 sem `36` mit reg ordinary `12` (`mask C010`), Alias-Flags
+`16` und state-memory Topologie `2`; Top-3 sem `34` mit `48` Stack-
 Events, incomplete Top-Chain, reg ordinary `8` (`mask 0F00`), Alias-Flags
-`10` und Stack-Key-Topologie `6`; `0x8C6648BC` sem `32` mit reg ordinary `80`
+`10` und Stack-Key-Topologie `6`; Top-4 sem `32` mit reg ordinary `80`
 (`mask FE31`), metadata `16` (`mask 1E00`), Alias `8` und state-memory
-Topologie `6`; `0x8C098A82` sem `28` mit reg ordinary `8` (`mask 0011`) und
-Alias `14`; `0x8C64E55E` sem `28`/Events `144` mit Alias `24`;
-`0x8C10C99C` sem `26` mit reg ordinary `40` (`mask 800F`), metadata `2`
-(`mask 0004`) und state-memory Topologie `12`; `0x8C604440` sem `22` mit reg
+Topologie `6`; Top-5 sem `28` mit reg ordinary `8` (`mask 0011`) und
+Alias `14`; Top-6 sem `28`/Events `144` mit Alias `24`;
+Top-7 sem `26` mit reg ordinary `40` (`mask 800F`), metadata `2`
+(`mask 0004`) und state-memory Topologie `12`; Top-8 sem `22` mit reg
 ordinary `14` (`mask 0070`) und metadata `12` (`mask 0050`). Kein Eintrag
 zeigt einen Stack-/Tail-/Memory-Ordinary-Payload als neuen Haupttreiber.
 
@@ -445,7 +443,7 @@ ist in diesem Bugfix nicht vorgesehen. Der Diagnoseexport sollte enden:
 
 - nach dem ersten vollstaendigen schweren Candidate-Resolution-Root; oder
 - frueher an den repositoryweiten Stall-, Nichtkonvergenz- oder
-  15-Minuten-Grenzen.
+  20-Minuten-Grenzen.
 
 D1 identifiziert mindestens:
 
@@ -697,7 +695,7 @@ KR-4993 implementiert keine neue Testinfrastruktur und startet keinen
 Produktlauf. Der vollstaendige Sol-Endreview des unmittelbar vorherigen
 Explosionsbug-Diffs wurde wiederverwendet; alle bestaetigten Source-Findings
 sind geschlossen; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI
-33 geschlossen. Nicht aktivierte KR-4988 bis KR-4991 wurden
+36 mit dem SDK-Linkabschluss geschlossen. Nicht aktivierte KR-4988 bis KR-4991 wurden
 nicht als geaendert oder reviewpflichtig behauptet.
 
 Pflichtumfang:

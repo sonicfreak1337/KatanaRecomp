@@ -1,4 +1,5 @@
 #include "katana/runtime/native_port.hpp"
+#include "katana/runtime/native_port_content.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -133,14 +134,31 @@ void validate_native_port_definition(
 
     std::set<std::string_view> image_ids;
     std::set<std::tuple<std::uint64_t, std::uint64_t>> image_ranges;
+    std::set<std::tuple<std::uint64_t, std::uint64_t>> physical_image_ranges;
     for (const auto& image : definition.images) {
         const auto end =
             static_cast<std::uint64_t>(image.guest_address) +
             image.byte_size;
+        const auto physical = canonical_physical_address(image.guest_address);
+        const auto physical_end =
+            static_cast<std::uint64_t>(physical) + image.byte_size;
+        const auto backing_offset =
+            physical >= native_port_main_memory_physical_base
+                ? (physical - native_port_main_memory_physical_base) &
+                      (native_port_main_memory_backing_size - 1u)
+                : native_port_main_memory_backing_size;
         if (!valid_identifier_component(image.image_id) ||
             !valid_content_relative_path(image.content_relative_path) ||
             !valid_native_port_sha256_identity(image.byte_identity) ||
             image.byte_size == 0u || end > 0x1'0000'0000ull ||
+            physical < native_port_main_memory_physical_base ||
+            physical_end >
+                static_cast<std::uint64_t>(
+                    native_port_main_memory_physical_base) +
+                    native_port_main_memory_physical_span ||
+            backing_offset >= native_port_main_memory_backing_size ||
+            image.byte_size >
+                native_port_main_memory_backing_size - backing_offset ||
             image.file_offset >
                 std::numeric_limits<std::uint64_t>::max() -
                     image.byte_size ||
@@ -154,6 +172,15 @@ void validate_native_port_definition(
                 invalid_definition("overlapping-image-bindings");
         }
         image_ranges.insert(range);
+        const auto physical_range = std::tuple{
+            static_cast<std::uint64_t>(backing_offset),
+            static_cast<std::uint64_t>(backing_offset) + image.byte_size};
+        for (const auto& existing : physical_image_ranges) {
+            if (std::get<0>(physical_range) < std::get<1>(existing) &&
+                std::get<0>(existing) < std::get<1>(physical_range))
+                invalid_definition("aliased-image-bindings");
+        }
+        physical_image_ranges.insert(physical_range);
     }
     if (definition.images.empty()) invalid_definition("missing-image-binding");
     const auto range_inside_image = [&](const std::uint32_t address,
@@ -297,10 +324,10 @@ void validate_native_port_definition(
             hook->requirement != NativePortHookRequirement::Required ||
             hook->original_policy !=
                 NativePortHookOriginalPolicy::ReplacesOriginal ||
-            resolution.instruction_address < hook->guest_address ||
-            static_cast<std::uint64_t>(resolution.instruction_address) + 2u >
-                static_cast<std::uint64_t>(hook->guest_address) +
-                    hook->covered_size)
+            // Hooks are dispatched only at their entry address.  A range
+            // inclusion would incorrectly certify a direct/mid-block entry
+            // to a later instruction as unreachable.
+            resolution.instruction_address != hook->guest_address)
             invalid_definition("hook-hardware-resolution");
     }
 }

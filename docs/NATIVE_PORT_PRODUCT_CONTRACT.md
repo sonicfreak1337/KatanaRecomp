@@ -110,7 +110,7 @@ belegt:
 - reale Kontrollfluss-, Funktions- und Adressbindungen;
 - den erwarteten No-Skip-Audio-/Videolebenszyklus;
 - relevante Render-, Audio-, YUV-, Callback- und Post-Movie-Grenzen;
-- den nachgelagerten Identity-Miss `0x8C054008 -> 0x8C9000E8`.
+- den nachgelagerten privaten Identity-Miss.
 
 Der dabei verwendete ARM7-/AICA- und CPU-PVR-Pfad ist ab jetzt nur historische
 Referenz und Diagnoseevidenz. Er wird weder zum Produktpfad erklaert noch
@@ -130,8 +130,8 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `91`, Analyzer-ABI `35`, Backend-
-Interface-ABI `14`, Portprojektvertrag `77` und Native-Port-Profilvertrag `2`.
+KR-5000 bindet diese Grenze an Runtime-ABI `92`, Analyzer-ABI `36`, Backend-
+Interface-ABI `16`, Portprojektvertrag `79` und Native-Port-Profilvertrag `4`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -142,6 +142,17 @@ ist kein Exportprofil. Das fertige Produktbinary wird per Linkmap auf
 Legacy-Runtime-, ARM7-/SkyEmu-, CPU-PVR-/TA- und Interpreterbestandteile
 auditiert.
 
+Der SDK-Linkabschluss trennt `port_export.cpp` als nicht installierte
+Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
+`native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
+NativePortDefinition, NativePortArtifact, NativePortContent, NativePortRuntime
+und Bootstrap sind implementiert. Read-only Content-Mappings, Hook- und
+Hardware-Closure, direkter nativer Dispatch sowie Linkaudit bleiben an die
+externe private Contentidentitaet gebunden. Der private Adapter wird erreicht;
+statisch rekompilierter Spielcode startet. Der erste nicht aufgeloeste
+Plattformzugriff endet typisiert als `UnresolvedHardwareAccess`, ohne
+Emulator-, Interpreter- oder Runtimefallback.
+
 Der unabhaengige `NativePortDefinition`-/`NativePortContext`-Vertrag bindet
 Originalimage, Bootstrap, direkte Hooksymbole und Hardwareaufloesungen an
 SHA-256-Identitaeten. Die Hardware-Closure akzeptiert jede erreichbare
@@ -150,15 +161,14 @@ deklarierte Native-Memory-Range ist fuer einen unvollstaendig aufgeloesten
 effektiven Adresssatz noch kein Beweis und bleibt gesperrt, bis Analyse und
 verifizierte Imagematerialisierung die komplette EA-/Zugriffs-/Breitenmenge
 gemeinsam binden. Separat materialisierte Module bleiben bis zu ihrem eigenen
-Audit fail-closed. Bis KR-5001 Bootstrap und direkte
-Hook-/Callback-Emission sowie den unabhaengigen privaten Definitionsprovider
-bereitstellt, endet der Produktconfigure bewusst mit
-`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` statt auf den historischen Launcher
-zurueckzufallen.
+Audit fail-closed. Der generierte Native-Produkt-Runner verlangt eine
+Executable und einen privaten ContentRoot, validiert beide Pfade und verwendet
+den expliziten Bring-up-Schalter nur bei unvollstaendiger Closure. Einen
+historischen Guest-Cycle-Budgetpfad oder einen stillen Fallback gibt es nicht.
 
 ## Verbindliche Taskreihenfolge
 
-1. `KR-5000`: Native Produktgrenze und Linkisolation durchsetzen.
+1. `KR-5000`: Native Produktgrenze und Linkisolation durchsetzen. [x]
 2. `KR-5001`: private SH-4-Spiel-/SDK-Grenzen und native Hookbindung
    vollstaendig ableiten.
 3. `KR-5002`: Audio-/Moviepfad nativ anbinden und ARM7/AICA aus dem

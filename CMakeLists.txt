@@ -304,6 +304,7 @@ list(
     "include/katana/runtime/game_project_artifact.hpp"
     "include/katana/runtime/gdi.hpp"
     "include/katana/runtime/native_aot_template.hpp"
+    "include/katana/runtime/native_port_artifact.hpp"
     "include/katana/runtime/packed_disc.hpp"
     "src/runtime/disc_install.cpp"
     "src/runtime/dreamcast_boot.cpp"
@@ -312,6 +313,7 @@ list(
     "src/runtime/game_project.cpp"
     "src/runtime/game_project_artifact.cpp"
     "src/runtime/gdi.cpp"
+    "src/runtime/native_port_artifact.cpp"
     "src/runtime/guest_program_range.cpp"
     "src/runtime/iso9660.cpp"
     "src/runtime/packed_disc.cpp"
@@ -560,6 +562,9 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/runtime/game_project_artifact.cpp
     src/runtime/executable_modules.cpp
     src/runtime/native_aot_template.cpp
+    # Private tooling artifact support. This remains outside the native-port
+    # product closure because it serializes title-project metadata only.
+    src/runtime/native_port_artifact.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp
@@ -632,7 +637,10 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/fpu.hpp
     include/katana/runtime/guest_program_range.hpp
     include/katana/runtime/memory.hpp
+    include/katana/runtime/native_aot_state.hpp
     include/katana/runtime/native_port.hpp
+    include/katana/runtime/native_port_aot_runtime.hpp
+    include/katana/runtime/native_port_content.hpp
     include/katana/runtime/runtime.hpp
 )
 set(KATANA_HISTORICAL_DEVICE_RUNTIME_SOURCES
@@ -731,10 +739,14 @@ add_library(
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
 )
+set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
+    src/runtime/native_port_content.cpp
+    src/runtime/native_port_runtime.cpp
+)
 add_library(
     katana_native_port_runtime
     STATIC
-    src/runtime/native_port_runtime.cpp
+    ${KATANA_NATIVE_PORT_RUNTIME_SOURCES}
 )
 
 add_library(KatanaRecomp::aot_runtime ALIAS katana_aot_runtime)
@@ -756,6 +768,25 @@ set_target_properties(katana_aot_runtime PROPERTIES EXPORT_NAME aot_runtime)
 set_target_properties(
     katana_native_port_runtime
     PROPERTIES EXPORT_NAME native_port_runtime
+)
+list(LENGTH KATANA_AOT_RUNTIME_SOURCES KATANA_AOT_RUNTIME_SOURCE_TU_COUNT)
+list(
+    LENGTH
+    KATANA_NATIVE_PORT_RUNTIME_SOURCES
+    KATANA_NATIVE_PORT_RUNTIME_SOURCE_TU_COUNT
+)
+math(
+    EXPR
+    KATANA_NATIVE_PORT_RUNTIME_TRANSITIVE_TU_COUNT
+    "${KATANA_AOT_RUNTIME_SOURCE_TU_COUNT} + ${KATANA_NATIVE_PORT_RUNTIME_SOURCE_TU_COUNT}"
+)
+# Generated native products use this build-tree-only property to make their
+# host-tool progress plan exact. Imported/prebuilt runtime targets contribute
+# zero compile edges in the consuming build and therefore do not use it.
+set_property(
+    TARGET katana_native_port_runtime
+    PROPERTY KATANA_SOURCE_TRANSLATION_UNIT_COUNT
+             "${KATANA_NATIVE_PORT_RUNTIME_TRANSITIVE_TU_COUNT}"
 )
 target_link_libraries(
     katana_aot_runtime
@@ -872,14 +903,10 @@ add_library(katana_core_objects OBJECT
     src/io/binary_reader.cpp
     src/io/executable_image.cpp
     src/io/elf32_sh_loader.cpp
-    src/io/project_manifest.cpp
     src/io/raw_binary_loader.cpp
     src/io/symbol_map.cpp
-    src/platform/dreamcast.cpp
-    src/platform/dreamcast_disc.cpp
     src/platform/firmware_diagnostics.cpp
     src/platform/firmware_profile.cpp
-    src/platform/phase6_gate.cpp
     src/analysis/abi.cpp
     src/analysis/disassembler.cpp
     src/analysis/analysis_index.cpp
@@ -913,21 +940,31 @@ add_library(katana_core_objects OBJECT
     src/codegen/cache.cpp
     src/codegen/cpp_emitter.cpp
     src/codegen/latent_aot_analysis_cache.cpp
-    src/codegen/latent_aot_registry.cpp
     src/codegen/metadata.cpp
     src/codegen/naming.cpp
     src/codegen/native_aot_profile.cpp
     src/codegen/partition.cpp
     src/codegen/probe.cpp
     src/codegen/project.cpp
-    src/codegen/port_export.cpp
     src/codegen/source_map.cpp
+)
+# Historical project loading, disc discovery and port export remain in one
+# build-tree-only tooling closure.  None of these objects may enter the
+# installed analyzer archive: they depend on the diagnostic Dreamcast runtime.
+add_library(katana_port_export_tooling_objects OBJECT
+    src/io/project_manifest.cpp
+    src/platform/dreamcast.cpp
+    src/platform/dreamcast_disc.cpp
+    src/platform/phase6_gate.cpp
+    src/codegen/latent_aot_registry.cpp
+    src/codegen/port_export.cpp
 )
 add_library(
     katana_core
     STATIC
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     $<TARGET_OBJECTS:katana_core_objects>
+    $<TARGET_OBJECTS:katana_port_export_tooling_objects>
 )
 # The installed analyzer archive contains analyzer/codegen objects plus the
 # product AOT dependency only. Historical Dreamcast device implementations
@@ -937,10 +974,18 @@ add_library(
     STATIC
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     $<TARGET_OBJECTS:katana_core_objects>
+    # These are generic analyzer support implementations.  They also exist in
+    # the historical runtime archive for in-tree tools, but the installed
+    # analyzer must not acquire that archive merely to report progress, hash
+    # inputs or serialize JSON.
+    src/progress.cpp
+    src/io/input_provenance.cpp
+    src/io/json_report.cpp
 )
 add_library(KatanaRecomp::analyzer ALIAS katana_analyzer_sdk)
 if(TARGET katana-source-identity)
     add_dependencies(katana_core_objects katana-source-identity)
+    add_dependencies(katana_port_export_tooling_objects katana-source-identity)
     add_dependencies(katana_core katana-source-identity)
     add_dependencies(katana_analyzer_sdk katana-source-identity)
 endif()
@@ -953,6 +998,16 @@ target_include_directories(
 )
 target_compile_definitions(
     katana_core_objects
+    PRIVATE KATANA_ANALYZER_ABI_VERSION=${KATANA_ANALYZER_ABI_VERSION}
+)
+target_include_directories(
+    katana_port_export_tooling_objects
+    PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
+)
+target_compile_definitions(
+    katana_port_export_tooling_objects
     PRIVATE KATANA_ANALYZER_ABI_VERSION=${KATANA_ANALYZER_ABI_VERSION}
 )
 foreach(katana_analyzer_target IN ITEMS katana_core katana_analyzer_sdk)
@@ -988,6 +1043,7 @@ target_link_libraries(
 )
 set_target_properties(katana_analyzer_sdk PROPERTIES EXPORT_NAME analyzer)
 katana_enable_warnings(katana_core_objects)
+katana_enable_warnings(katana_port_export_tooling_objects)
 katana_configure_runtime_archive(katana_analyzer_sdk TRUE)
 
 add_library(katana_phase9 STATIC
@@ -5402,7 +5458,21 @@ install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
     COMPONENT analyzer-sdk
-    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.in" EXCLUDE
+    FILES_MATCHING
+        PATTERN "*.hpp"
+        PATTERN "*.in" EXCLUDE
+        PATTERN "app/*" EXCLUDE
+        PATTERN "cli/*" EXCLUDE
+        PATTERN "codegen/port_export.hpp" EXCLUDE
+        PATTERN "codegen/latent_aot_registry.hpp" EXCLUDE
+        PATTERN "gui/*" EXCLUDE
+        PATTERN "io/project_manifest.hpp" EXCLUDE
+        PATTERN "phase9/*" EXCLUDE
+        PATTERN "platform/dreamcast.hpp" EXCLUDE
+        PATTERN "platform/dreamcast_disc.hpp" EXCLUDE
+        PATTERN "platform/phase6_gate.hpp" EXCLUDE
+        PATTERN "runtime/native_port_artifact.hpp" EXCLUDE
+        PATTERN "testing/*" EXCLUDE
 )
 install(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp

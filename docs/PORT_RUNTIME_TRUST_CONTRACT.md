@@ -2,13 +2,11 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle Source-Checkpoint `18f8537` verwendet Portprojektvertrag 75,
-Runtime-ABI 85, Analyzer-ABI 23, PlatformServices-ABI 13, Block-ABI 5,
-Backend-Interface-ABI 12, Native-AOT-Emissionsprofil 13 und
-Portpartitionsschema 5. Der Checkpoint ist kein P0-Abschluss; der
-abgebrochene NativeDisc-v24-Iterationslauf erzeugte kein Portartefakt und
-keinen Produktnachweis. Erst nach KR-4974 bis KR-4984 darf genau ein neuer
-privater NativeDisc-Lauf stattfinden. Keine der Vertrauensaussagen wird aus
+aktuelle KR-5000-Stand verwendet Portprojektvertrag 79, Runtime-ABI 92,
+Analyzer-ABI 36, PlatformServices-ABI 14, Block-ABI 5,
+Backend-Interface-ABI 16, Native-AOT-Emissionsprofil 27 und
+Portpartitionsschema 7. Historische Diagnose-/Bring-up-Evidenz bleibt an
+ihre damaligen Vertraege gebunden. Keine der Vertrauensaussagen wird aus
 der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.
 
 ## Eingabeidentitaet
@@ -288,7 +286,7 @@ Der historische, damals einmalig exportierte und gebaute v7-Port mit 1.873 Funkt
 37 Partitionen und drei latenten Modulen erreicht
 `KR_FIRST_GUEST_FRAME` und `KR_FIRST_PRESENTED_FRAME` am sichtbaren Sega-Bild.
 Die alte Zwei-Instruktions-JSR-Schleife ist beseitigt. Der Detail-Lauf endet
-bei `0x8C65E96A -> 0x8C652150` als typisierter Missing-AOT und weist
+am typisierten privaten Missing-AOT-Fall und weist
 7.422.352 Dispatch-Hits/1 Miss sowie 2.609.376 `RuntimeOnly`-Hits/1 Miss/0
 Fallbacks aus. Damit ist praktisch belegt, dass weder ein Interpreter noch ein
 stiller Fallback die Grenze uebernimmt.

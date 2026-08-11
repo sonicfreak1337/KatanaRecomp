@@ -15,12 +15,6 @@ class DemandBlockMaterializer;
 
 enum class IndirectDispatchKind : std::uint8_t { Call, TailJump, Return };
 enum class RuntimeDispatchClass : std::uint8_t { GuardedFallback, RuntimeOnly };
-enum class DynamicDispatchSiteClass : std::uint8_t {
-    NotDynamic,
-    Guarded,
-    RuntimeOnly,
-    Unresolved
-};
 
 struct IndirectDispatchContinuation {
     IndirectDispatchKind kind = IndirectDispatchKind::TailJump;

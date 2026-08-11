@@ -168,21 +168,28 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `77` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `79` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
 Legacy-Runtime, ARM7/SkyEmu, CPU-PVR/TA und Interpreterbestandteilen sein.
-Bis der KR-5001-Definitionsprovider, Bootstrap und direkte Hookcodegen
-vorliegen, endet Configure bewusst mit
-`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`.
+KR-5000 stellt NativePortDefinition/Artifact/Content/Runtime, Bootstrap,
+read-only Content-Mappings und den Linkaudit bereit. Unvollstaendige
+Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
+Schalter ist darauf begrenzt.
 
 `game.katana-install` enthaelt Recipe-Version 2, Jobgeneration,
 Descriptor-SHA-256, Boot-SHA-256, Contentidentitaet und pro Track Nummer, LBA,
 Typ, Sektorgroesse, Offset, Sektoranzahl und SHA-256. Sie enthaelt keine
 Discbytes, Tracknamen, absoluten Pfade oder privaten Hostinformationen.
 
-## Installation und Start
+## Native-Port-Start und historischer Disc-Diagnosepfad
+
+Ein `native-port` erwartet beim generierten Runner eine Executable und einen
+privaten ContentRoot. Beide Pfade werden validiert; `INSTALL_ORIGINAL_DISC.txt`
+beschreibt die Bereitstellung der privaten Originalinhalte. Fuer Native Ports
+existiert kein `--install-disc`-Produktflow. Der folgende Aufruf gehoert nur
+zum historischen Disc-Diagnosepfad:
 
 Jeder Nutzer stellt einmalig die eigene rechtmaessig vorhandene Originaldisc
 bereit:

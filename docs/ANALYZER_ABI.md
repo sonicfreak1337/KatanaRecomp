@@ -1,13 +1,13 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `35`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 91, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 14, Portprojektvertrag 77 und Native-Port-
-Profilvertrag 2.
+Der aktuelle oeffentliche Analyzervertrag ist Version `36`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 92, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 16, Portprojektvertrag 79 und Native-Port-
+Profilvertrag 4.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
-Version 35 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Version 36 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -16,16 +16,24 @@ Owner-Uebergaenge erhalten diesen Beweis nicht. Damit invalidieren Analyse-,
 IR-, Codegen- und Whole-Export-Caches den alten Bestand, der solche direkt vor
 einem Tail-Registrar geladenen Callbacks noch verlor.
 
-Analyzer-ABI 35 erweitert `DreamcastHardwareAudit` um die exakten erreichbaren
+Der vorherige Analyzer-ABI-35-Stand erweiterte `DreamcastHardwareAudit` um die exakten erreichbaren
 Instruktionsadressen nicht vollstaendig aufgeloester Speicherzugriffe. Das
 Native-Port-Hardwaregate darf dadurch nicht mehr einen blossen Summenzaehler
 als Vollstaendigkeitsbeweis verwenden. Das JSON-Schema steigt passend auf
 `katana.hardware-audit.v5`.
 
+Analyzer-ABI 36 schliesst zusaetzlich den inkompatiblen Analyzer-SDK-Linkbruch:
+`port_export.cpp` liegt in einer separaten, nicht installierten Tooling-
+Object-Closure; `port_export.hpp` und `native_port_artifact.hpp` sind aus der
+Analyzer-SDK-Headerinstallation ausgeschlossen. Damit gelangen Codegen-
+Tooling und das private Native-Port-Artefakt nicht mehr als Analyzer-SDK-
+Oberflaeche in installierte Consumer.
+
 Die davon getrennte oeffentliche Codegen-Grenze
 `PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`14` und Portprojektvertrag `77` versioniert. Analyzer-ABI `35` bindet das
-neue Hardwareaudit-Layout; die Zaehler ersetzen einander nicht.
+`16` und Portprojektvertrag `79` versioniert. Analyzer-ABI `36` bindet den
+aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
+ersetzen einander nicht.
 
 Analyzer-ABI 34 band die typisierten Executor-/RAM-Fortschrittsfelder,
 das Eviction-Ledger und den ganz-oder-gar-nicht-Vertrag persistierter

@@ -67,7 +67,7 @@ Daher gilt projektweit:
 
 ## Lauf- und Ressourcenvertrag
 
-- Kein Prozess und keine einzelne Phase laeuft laenger als 15 Minuten, ausser
+- Kein Prozess und keine einzelne Phase laeuft laenger als 20 Minuten, ausser
   der Nutzer hebt die Grenze fuer genau einen benannten Lauf auf.
 - Jeder potenziell lange Prozess besitzt spaetestens alle zehn Sekunden einen
   belastbaren Fortschrittsindikator.
@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `77` und Native-Port-Profilvertrag `2` machen
+Portprojektvertrag `79` und Native-Port-Profilvertrag `4` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -113,20 +113,35 @@ nichtinstallierbaren Buildbaum-Orakel. Der Post-Link-Audit verwirft diese
 Bestandteile. `historical-device-runtime` ist kein Exportprofil mehr.
 
 Abschluss: Die Produktlinkgrenze besitzt keine Rueckkante auf Geraetecode.
-Ein eigentliches Titelbinary wird erst in KR-5001 freigegeben; bis dahin
-endet Configure typisiert mit `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` statt
-den historischen Launcher zu linken.
+NativePortDefinition, NativePortArtifact, NativePortContent, NativePortRuntime
+und Bootstrap sind implementiert. Read-only Content-Mappings, Hook-/Hardware-
+Closure, direkter nativer Dispatch und Linkaudit sind aktiv. Ein privater
+Sonic-Adapter wird erreicht, statisch rekompilierter Spielcode startet, und
+der erste unaufgeloeste Plattformzugriff endet typisiert als
+`UnresolvedHardwareAccess` ohne Emulator-/Interpreter-/Runtimefallback.
+Der generierte Runner verlangt Executable plus privaten ContentRoot und
+validiert beide Pfade; der explizite Bring-up-Schalter gilt nur bei
+unvollstaendiger Closure. Ein historischer Guest-Cycle-Budgetpfad existiert
+nicht.
+Der SDK-Linkabschluss hält `port_export.cpp` in einer separaten, nicht
+installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie
+`native_port_artifact.hpp` aus der Analyzer-SDK-Headerinstallation aus.
+
+Der Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
+`katana_native_port_runtime` in einem inkrementellen 24-Worker-Build in
+`14,2 s` bestaetigt. Es wurden keine Tests und kein neuer Sonic-Export oder
+-Lauf ausgefuehrt.
 
 ## [ ] KR-5001 - Statische Spiel-/SDK-Hookkarte
 
 Prioritaet: P0 Bring-up
 
-Status: aktiv. `NativePortDefinition`, `NativePortContext`, direkte
-Linkersymbole, identitaetsgebundene Image-/Hookbindungen und das fail-closed
-Hardware-Closure-Gate sind vorbereitet. Als naechstes werden der unabhaengige
-private Definitionsprovider, Bootstrap, direkte erforderliche Hookcalls und
-Callback-Reentry in den statisch rekompilierten Code emittiert. Audio/Movie
-wird vor dem
+Status: aktiv, naechster Task nach KR-5000. Die native Hookkarte, ABI-/Closure-
+Grenzen und der private Adapterpfad werden auf dem implementierten
+NativePortDefinition-/Artifact-/Content-/Runtime-Stack vollstaendig verbunden.
+Unaufgeloeste Hardwarezugriffe bleiben typisiert und fail-closed; kein
+Emulator-, Interpreter- oder Runtimefallback. KR-5001 emittiert die direkte
+Hook-/Callback-Reentry in den statisch rekompilierten Code. Audio/Movie wird vor dem
 AICA-Kommandoring und Grafik vor dem PVR-Geraeteprotokoll gebunden; die
 hoechste belegbare Grenze gewinnt. Private Adressen bleiben ausserhalb des
 Repositorys.
@@ -180,7 +195,7 @@ Der letzte Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
 YUV-Makrobloecke und `470` Audiopuffer mit `345.450` Audiobildern. Die
 identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz` und
 `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`).
-`100 MHz`, der fail-closed Identity-Miss `0x8C054008 -> 0x8C9000E8` und
+`100 MHz`, der fail-closed private Identity-Miss und
 Memory-Card-Screen/Hauptmenue bleiben offen; der PlatformAbi-Default bleibt
 erhalten.
 
@@ -208,11 +223,11 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 91, PlatformServices-ABI 14, Backend-Interface-ABI 14,
+  Runtime-ABI 92, PlatformServices-ABI 14, Backend-Interface-ABI 16,
   PVR-State-Contract 3
-  Analyzer-ABI 35, Function-Analysis-Epoch-Schema 27,
+  Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
+  Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5
@@ -241,7 +256,7 @@ KR-4985, KR-4986, KR-4993, KR-4987, KR-4994 und KR-4995: source-seitig abgeschlo
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
   -> historische RuntimeOnly-Performancezielmarke mindestens 100 MHz
-  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
+  -> post-filmischen privaten Identity-Miss schliessen
   -> sichtbarer Start bis mindestens Memory-Card-Screen/Hauptmenue
 ```
 
@@ -427,7 +442,7 @@ Abhaengigkeit: KR-4986; source-seitige Aktivierung durch den freigegebenen
 KR-4987-Fixpass
 
 Status: Source-seitig abgeschlossen am historischen funktionalen Source-Checkpoint
-`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`; historischer Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
 Der gezielte `katana-recomp`-Build war laut Sol-Review in `42,4 s` erfolgreich.
 D9 ist beendet und wird nur als fail-closed, nicht erfolgreicher Lauf
 dokumentiert; kein Produkt- oder G1-Erfolg wird behauptet.
@@ -523,11 +538,11 @@ Konvergenzhebel; KR-4981 bleibt offen.
 Der Lauf `kr4981-20260809-024141-c4ffdf15` erreichte das vollständige
 `attempts=1024`-Gate und wurde nach `244,549 s` bei Wave `24` gezielt beendet.
 `uncategorized=0` für alle Top-8-Funktionen; kein Fehler, Hänger, Portartefakt
-oder Produktgate. Der Hauptbefund `0x8C10E44E` umfasst `20` semantische
+oder Produktgate. Der Hauptbefund der dominanten Hot-Callee umfasst `20` semantische
 Änderungen und `40` Stack-Widenings ausschließlich SavedEpoch-pending-ABI-
 Skalare (`92/80/20/20/20` für reg/stack/tail/state_stack/state_memory) bei
-unvollständigem Callee-Set-Stackvertrag. `0x8C09859C` zeigt `28` gemischte
-Änderungen mit demselben Vertragsgrund, `0x8C64E55E` `48` Änderungen bei
+unvollständigem Callee-Set-Stackvertrag. Eine zweite Hot-Callee zeigt `28` gemischte
+Änderungen mit demselben Vertragsgrund, eine weitere Hot-Callee `48` Änderungen bei
 vollständigem Stackvertrag und `reg_epoch_pending=180`.
 
 Dieser Diagnose-Unterauftrag ist abgeschlossen; KR-4981 bleibt offen. Der
@@ -566,8 +581,8 @@ Edges erneut vollstaendig.
 erkennt SavedEpoch-Slot-Pending-Top in allen Truncation-/Publication-Checks
 fail-closed und trennt Provenance-Replay-Capsule-/Keybyte-Limits öffentlich
 vom semantischen Evaluation-Limit. Ein echter Evaluation-Cap belastet nur den
-Evaluation-Zähler; Analyzer-ABI `34`, Epoch-Schema `27` und lokales
-In-Process-Evaluation-Cache-Schema `13` sind aktiv.
+Evaluation-Zähler; im historischen Stand waren Analyzer-ABI `34`,
+Epoch-Schema `27` und lokales In-Process-Evaluation-Cache-Schema `13` aktiv.
 
 Der historische PlatformAbi-Produktlauf `kr4981-20260809-091410-2766aaa6` endete nach ca.
 `275 s` gesamt (Candidate ca. `221 s`) mit `nonconvergence` nach drei
@@ -578,7 +593,7 @@ stale Discards `806`, Cache `589.178.706 B`; keine Budgets erschöpft, keine
 Publikation und kein Artefakt. Der Supervisor schrieb wegen `taskkill`-
 Zugriffsverweigerung keine Summary; der Kill-on-close-Job beendete den Child
 trotzdem. Admission `1024/1024`, projected context/match jeweils `0`.
-`0x8C641202` blieb bei `84/84` Attempts/Semantic Changes und `508`
+Der sauberste Ordinary-Stack-Treiber blieb bei `84/84` Attempts/Semantic Changes und `508`
 Ordinary-Stack-Deltas trotz vollständigem Stackvertrag.
 
 Der vorherige Produktlauf `kr4981-20260809-083308-4a3ff9be` endete nach
@@ -750,11 +765,11 @@ Abhaengigkeiten: KR-4985, KR-4986 und alle durch G1/G2 aktivierten Tasks bis
 KR-4991
 
 Status: Source-seitig abgeschlossen am historischen funktionalen Source-Checkpoint
-`099ae2cb2dfe7699f90338e9df0bad24a7888823`; Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
+`099ae2cb2dfe7699f90338e9df0bad24a7888823`; historischer Analyzer-ABI `34`, Function-Analysis-Epoch-Schema `19`.
 Der vollstaendige Sol-Endreview
 des unmittelbar vorherigen Explosionsbug-Diffs wurde wiederverwendet; alle
-bestaetigten Findings sind geschlossen; das Analyzer-ABI-Finding ist unter dem
-aktuellen Analyzer-ABI `34` geschlossen. Nicht aktivierte
+bestaetigten Findings sind geschlossen; das Analyzer-ABI-Finding ist mit dem
+SDK-Linkabschluss unter dem aktuellen Analyzer-ABI `36` geschlossen. Nicht aktivierte
 KR-4988 bis KR-4991 wurden nicht als geaendert oder reviewpflichtig behauptet.
 
 ### Ziel
@@ -763,7 +778,8 @@ Der vollstaendige Endreview der aktivierten/geaenderten Context-, Cache-,
 Evidence- und Budgetpfade sowie die Pruefung der unveraendert konservativen
 FullState-, Binding-, Dependency- und Scheduling-Fallbackgrenzen ist
 abgeschlossen; alle vorher bestaetigten Findings sind geschlossen; das
-Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
+Analyzer-ABI-Finding ist mit dem SDK-Linkabschluss unter dem aktuellen
+Analyzer-ABI `36` geschlossen.
 
 ### Umfang
 
@@ -842,7 +858,7 @@ Abhaengigkeit: RuntimeOnly-Build-/Export- und No-Skip-Movie-Gate bestanden;
 der aktuelle Performance-P0 ist der serielle Runtime-/Dispatch-Overhead bei
 `24,2926 MHz` im sichtbaren Audio-/Videopfad, mit einem Ziel von mindestens
 `100 MHz` ohne Regression. Danach liegt der Runtime-Blocker am Call
-`0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`). Memory-Card-Screen und
+der private Identity-Miss (`byte-identity-mismatch`). Memory-Card-Screen und
 Hauptmenue bleiben offen.
 
 ### Abgeschlossene Vorstufe

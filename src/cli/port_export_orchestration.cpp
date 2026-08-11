@@ -61,7 +61,9 @@ std::string port_export_workspace_key(
 }
 
 PortExportImplementationIdentities
-port_export_implementation_identities() {
+port_export_implementation_identities(
+    const std::string_view native_port_artifact_identity,
+    const std::uint32_t native_port_artifact_format_version) {
     if (!valid_cache_digest(
             katana::build_contract::analysis_component_identity) ||
         !valid_cache_digest(
@@ -160,7 +162,13 @@ port_export_implementation_identities() {
         std::to_string(
             katana::runtime::
                 game_project_artifact_format_version);
-    const std::array<std::string_view, 13u> whole_fields{
+    const auto native_port_artifact_format =
+        std::to_string(native_port_artifact_format_version);
+    const auto native_port_artifact_identity_field =
+        native_port_artifact_identity.empty()
+            ? std::string_view{"no-native-port-artifact-v1"}
+            : native_port_artifact_identity;
+    const std::array<std::string_view, 15u> whole_fields{
         identities.analysis,
         identities.analysis_cache,
         identities.codegen,
@@ -174,7 +182,9 @@ port_export_implementation_identities() {
         port_contract,
         native_port_profile_contract,
         game_project_contract,
-        game_project_artifact};
+        game_project_artifact,
+        native_port_artifact_format,
+        native_port_artifact_identity_field};
     identities.whole_export = combine(
         "katana-port-whole-export-components",
         whole_fields);
@@ -192,6 +202,8 @@ std::string port_export_cache_key(
     const std::string_view console_profile,
     const std::string_view game_project_identity,
     const std::string_view game_entry_handoff_artifact_identity,
+    const std::string_view native_port_artifact_identity,
+    const std::uint32_t native_port_artifact_format_version,
     const std::string_view latent_aot_entry_hint_identity,
     const std::string_view analysis_mode_identity,
     const std::string_view implementation_identity,
@@ -218,6 +230,8 @@ std::string port_export_cache_key(
     append(console_profile);
     append(game_project_identity);
     append(game_entry_handoff_artifact_identity);
+    append(native_port_artifact_identity);
+    append(native_port_artifact_format_version);
     append(latent_aot_entry_hint_identity);
     append(analysis_mode_identity);
     append(partition_options.maximum_functions);

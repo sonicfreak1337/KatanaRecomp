@@ -1861,7 +1861,14 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                 std::map<ReferenceKey, AggregatedReference> context_references;
                 for (const auto& access : access_set.accesses) {
                     const auto description = describe(access.address);
-                    if (description.region == DreamcastHardwareRegion::Unknown) continue;
+                    // Unknown is ordinary memory only inside the verified
+                    // linear main-RAM aperture. A statically resolved access
+                    // anywhere else is an unmapped native-product dependency,
+                    // not evidence that the hardware closure is complete.
+                    if (description.region ==
+                            DreamcastHardwareRegion::Unknown &&
+                        is_linear_loop_memory(description))
+                        continue;
                     HardwareAccessReference reference;
                     reference.instruction_address = lines[index].address;
                     reference.guest_address = access.address;

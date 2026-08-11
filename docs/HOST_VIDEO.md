@@ -4,9 +4,9 @@ KR-4701 fuehrte `katana-native-video` ein; der aktuelle Runtimevertrag steht
 auf Version 3. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Source-Checkpoint `18f8537` verwendet Runtime-ABI 85, Block-ABI 5,
-Analyzer-ABI 23, Backend-Interface-ABI 12, PlatformServices-ABI 13,
-Portprojektvertrag 75, Native-AOT-Profil 13 und Partitionsschema 5.
+Der aktuelle KR-5000-Stand verwendet Runtime-ABI 92, Block-ABI 5,
+Analyzer-ABI 36, Backend-Interface-ABI 16, PlatformServices-ABI 14,
+Portprojektvertrag 79, Native-AOT-Profil 27 und Partitionsschema 7.
 
 ## Vertrag
 
@@ -200,7 +200,7 @@ Der historische Sonic-PAL-NativeDisc-v32-Nachweis praesentiert mit diesem
 Vertrag 127 Hostframes und zeigt ab 2,032 Sekunden den Sega-Lizenzscreen.
 Derselbe Gastpfad endet nach 6,701 Sekunden bei Zyklus 553.990.562,
 11.080.283 Zentraldispatches und provisorisch 82,67 MHz an der
-Missing-AOT-Kante `0x8C11088C -> 0x8C64784E` wie DirectBoot-v30; dessen alter
+Missing-AOT-Kante an der geprüften privaten Callback-Kante wie DirectBoot-v30; der alte
 ABI-63-Build blieb mit null Hostframes schwarz. Die v32-Produkt-EXE war
 53.677.056 Bytes gross. Das belegt die allgemeine Presentationluecke, ist
 aber noch kein sichtbarer DirectBoot-Spielbildnachweis und keine aktuelle
