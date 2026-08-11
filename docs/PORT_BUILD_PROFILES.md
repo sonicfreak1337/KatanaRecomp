@@ -1,6 +1,6 @@
 # Portbuildprofile und Cachevertrag
 
-> v0.49.1: `native-port` wird in KR-5000 zum einzigen Produkt-/Releaseprofil.
+> v0.49.1: `native-port` ist seit KR-5000 das einzige Produkt-/Releaseprofil.
 > Die nachfolgende RuntimeOnly-Beschreibung bleibt historische Bring-up-
 > Referenz. Ein Produktartifact darf weder ARM7-/SkyEmu-, CPU-PVR- noch
 > Diagnoseinterpretercode linken und nicht auf diese Pfade zurueckfallen.
@@ -21,6 +21,31 @@ generierte AOT-Quellen und das Spielbinary. Wenn CMake/Hostcompiler IPO nicht
 bestaetigen, scheitert Configure fail-closed. Das Gate bleibt
 `RelWithDebInfo`; mit dem Microsoft-Linker erzwingt es
 `/INCREMENTAL:NO`, `/OPT:REF` und `/OPT:ICF`.
+
+## Runtimeprofil und Produktlinkgrenze
+
+`KATANA_PORT_RUNTIME_PROFILE` trennt die Runtimeauswahl vom Compilerprofil:
+
+```text
+native-port                Standard und einziger Produktpfad
+historical-device-runtime  explizite nicht verteilbare Referenz
+diagnostic-interpreter     nur fuer Diagnoseexporte
+```
+
+Normale Exporte akzeptieren nur die ersten beiden Werte; Diagnoseexporte
+erzwingen `diagnostic-interpreter`. Compilerbuildordner und Telemetrie sind an
+das Runtimeprofil gebunden. `native-port` linkt ausschliesslich
+`KatanaRecomp::native_port_runtime`, verlangt Native-Port-Profilvertrag `1`
+und Portprojektvertrag `76` und erzeugt eine Linkmap. Ein Post-Link-Audit
+verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-, CPU-PVR- oder
+Interpreterbestandteilen. Es existiert kein automatischer Rueckfall.
+
+Solange die in KR-5001 bis KR-5004 abgeleiteten nativen Hooks fehlen, darf der
+Produktlink deshalb mit einer fehlenden Bindung scheitern. Das ist die
+beabsichtigte fail-closed Grenze. Das historische Profil kann den alten Stand
+weiter als Referenz bauen, gilt aber nie als Produktnachweis. Das
+`katana-runtime-dependencies`-Manifest Version `2` bindet das tatsaechlich
+verwendete Runtimeprofil an die publizierte Distribution.
 
 ## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 
@@ -74,8 +99,10 @@ Windows-Toolchainvariablen ab.
 
 ## Runtimepaket
 
-Ein direkt konfiguriertes generiertes Projekt kann das installierte
-CMake-Paket `KatanaRecomp::runtime_core` per `find_package` verwenden. Eine
+Ein direkt konfiguriertes generiertes Produktprojekt verwendet aus dem
+installierten CMake-Paket standardmaessig
+`KatanaRecomp::native_port_runtime`. `KatanaRecomp::runtime_core` ist nur im
+expliziten historischen Nichtproduktprofil zulaessig. Eine
 installierte CLI erkennt dieses Paket im gemeinsamen Installationspraefix
 automatisch. `KATANA_RUNTIME_PREFIX=<Praefix>` waehlt explizit ein anderes
 installiertes Paket; der Pfad muss dessen `include/katana/runtime` und

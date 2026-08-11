@@ -28,8 +28,8 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 90, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
-In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
-Portprojektvertrag 75, PVR-State-Contract 3.
+In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
+Portprojektvertrag 76, Native-Port-Profilvertrag 1 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
@@ -226,7 +226,8 @@ Block-ABI:                       5
 Analyzer-ABI:                   34
 PlatformServices-ABI:           14
 Backend-Interface-ABI:          13
-Portprojektvertrag:             75
+Portprojektvertrag:             76
+Native-Port-Profilvertrag:       1
 Native-AOT-Emissionsprofil:     25
 AOT-Partitionsschema:            5
 ```

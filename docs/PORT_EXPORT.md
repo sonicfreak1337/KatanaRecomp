@@ -145,13 +145,19 @@ port/
     game.katana-install       Hash-, Boot- und Trackgeometrie-Recipe
     game.katana-install.json  Bindung von Recipe und AOT-Executable
   runtime/
-    runtime-dependencies.json
+    runtime-dependencies.json  statischer Link und tatsaechliches Runtimeprofil
   user-data/
     content/                  anfangs leer; lokaler Retailcache nach Installation
   generated/                 deterministische AOT-Quellen und Metadaten
   INSTALL_ORIGINAL_DISC.txt
   .gitignore
 ```
+
+Seit Portprojektvertrag `76` verwendet das Runtime-Abhaengigkeitsmanifest
+Schema `2`. Es bindet `native-port`, `historical-device-runtime` oder den
+reinen Diagnosepfad explizit an das publizierte Binary. Nur `native-port` ist
+ein Produktprofil; sein Post-Link-Audit muss frei von Legacy-Runtime, ARM7,
+CPU-PVR und Interpreterbestandteilen sein.
 
 `game.katana-install` enthaelt Recipe-Version 2, Jobgeneration,
 Descriptor-SHA-256, Boot-SHA-256, Contentidentitaet und pro Track Nummer, LBA,

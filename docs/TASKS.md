@@ -99,12 +99,16 @@ Abdeckung, Adressen und den erwarteten Lebenszyklus. Interpreter- und
 Softwarerasterizeroptimierung gehoeren nicht mehr zum aktiven P0. Dreamcast-
 MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 
-## [ ] KR-5000 - Native Produktgrenze und Linkisolation
+## [x] KR-5000 - Native Produktgrenze und Linkisolation
 
 Prioritaet: P0 Architektur
 
-Status: aktiv. Der Dokumentationsvertrag ist gesetzt; Buildprofil,
-Linkgrenze und typisierter Missing-Native-Hook-Fehler sind noch umzusetzen.
+Status: abgeschlossen. Portprojektvertrag `76` und Native-Port-Profilvertrag
+`1` machen `native-port` zum Standard. Das eigene minimale Runtimeziel linkt
+keine historische Geraeteruntime; eine post-link Linkmappruefung verwirft
+ARM7-/SkyEmu-, CPU-PVR-, Diagnoseinterpreter- und Legacy-Runtimebestandteile.
+Das alte Geraeteprofil ist nur explizit als `historical-device-runtime`
+waehlbar. Die konkrete typisierte Hookvollstaendigkeit folgt in `KR-5001`.
 
 Abschluss: Ein `native-port`-Artefakt kann keine ARM7-/SkyEmu-, CPU-PVR- oder
 Diagnoseinterpreter-Symbole linken und besitzt keinen Laufzeitfallback auf
@@ -114,7 +118,8 @@ diese Pfade.
 
 Prioritaet: P0 Bring-up
 
-Status: vorbereitet durch die private Adresskarte. Audio/Movie wird vor dem
+Status: aktiv nach abgeschlossenem KR-5000, vorbereitet durch die private
+Adresskarte. Audio/Movie wird vor dem
 AICA-Kommandoring und Grafik vor dem PVR-Geraeteprotokoll gebunden; die
 hoechste belegbare Grenze gewinnt. Private Adressen bleiben ausserhalb des
 Repositorys.

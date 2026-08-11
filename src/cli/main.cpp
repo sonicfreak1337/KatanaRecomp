@@ -5674,9 +5674,11 @@ std::string disc_install_manifest_document(
 }
 
 std::string runtime_dependency_manifest_document(
-    const katana::runtime::DiscInstallRecipe& recipe) {
-    return "{\"schema\":\"katana-runtime-dependencies\",\"version\":1,"
-           "\"linkage\":\"static\",\"job_generation\":\"" +
+    const katana::runtime::DiscInstallRecipe& recipe,
+    const std::string_view runtime_profile) {
+    return "{\"schema\":\"katana-runtime-dependencies\",\"version\":2,"
+           "\"linkage\":\"static\",\"runtime_profile\":\"" +
+           std::string(runtime_profile) + "\",\"job_generation\":\"" +
            recipe.job_generation + "\",\"files\":[]}\n";
 }
 
@@ -5737,6 +5739,7 @@ void copy_validated_port_distribution(
     const std::filesystem::path& destination,
     const std::string_view target_name,
     const katana::runtime::DiscInstallRecipe& expected_recipe,
+    const std::string_view expected_runtime_profile,
     const bool copy_files = true) {
     if (!safe_regular_port_directory_exists(source, "Portquelle")) return;
     if (copy_files &&
@@ -5818,7 +5821,9 @@ void copy_validated_port_distribution(
             "an Recipe und Hostprogramm gebunden.");
     if (read_port_distribution_text(
             source / "runtime" / "runtime-dependencies.json") !=
-        runtime_dependency_manifest_document(expected_recipe))
+        runtime_dependency_manifest_document(
+            expected_recipe,
+            expected_runtime_profile))
         throw std::runtime_error(
             "Portdistributions-Runtimevertrag ist nicht die sichere "
             "statische Dateiliste.");
@@ -6991,6 +6996,22 @@ int export_port_project(const std::filesystem::path& source_path,
                 "Port-Ausgabe muss ausserhalb des KatanaRecomp-Quellbaums liegen.");
         }
     }
+    const auto port_runtime_profile =
+        configured_environment_value("KATANA_PORT_RUNTIME_PROFILE")
+            .value_or(diagnostic_partial
+                          ? "diagnostic-interpreter"
+                          : "native-port");
+    if (diagnostic_partial) {
+        if (port_runtime_profile != "diagnostic-interpreter")
+            throw std::invalid_argument(
+                "Diagnoseports brauchen KATANA_PORT_RUNTIME_PROFILE="
+                "diagnostic-interpreter.");
+    } else if (port_runtime_profile != "native-port" &&
+               port_runtime_profile != "historical-device-runtime") {
+        throw std::invalid_argument(
+            "KATANA_PORT_RUNTIME_PROFILE muss native-port oder explizit "
+            "historical-device-runtime sein.");
+    }
     katana::cli::PortBuildTelemetryOptions telemetry_options;
     telemetry_options.jsonl_path =
         normalized_telemetry_jsonl_path;
@@ -6999,6 +7020,7 @@ int export_port_project(const std::filesystem::path& source_path,
     telemetry_options.build_profile =
         configured_environment_value("KATANA_PORT_BUILD_PROFILE")
             .value_or("bringup");
+    telemetry_options.runtime_profile = port_runtime_profile;
     telemetry_options.host_compile_jobs_requested =
         host_compile_budget.requested;
     telemetry_options.host_compile_jobs_effective =
@@ -7370,7 +7392,8 @@ int export_port_project(const std::filesystem::path& source_path,
                     absolute_output,
                     workspace,
                     target_name,
-                    *verified_install_recipe);
+                    *verified_install_recipe,
+                    port_runtime_profile);
             } else {
                 // Der Workspace-Schluessel ist targetgebunden. Eine gueltige
                 // Distribution fuer ein anderes Target darf deshalb weder als
@@ -7382,6 +7405,7 @@ int export_port_project(const std::filesystem::path& source_path,
                     {},
                     existing_target,
                     *verified_install_recipe,
+                    port_runtime_profile,
                     false);
             }
         }
@@ -7621,16 +7645,19 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto build_path =
             report.output_root /
             ("build-" + host_compiler + '-' + host_linker + '-' +
-             build_profile + '-' + generator_identity);
+             build_profile + '-' + port_runtime_profile + '-' +
+             generator_identity);
         static_cast<void>(
             safe_regular_port_directory_exists(build_path, "Inkrementeller Hostbuild-Cache"));
         if (!runtime_binding.build_targets_file.empty()) {
             const auto runtime_build_root =
                 runtime_binding.build_targets_file.parent_path();
             const auto runtime_target =
-                diagnostic_partial
+                port_runtime_profile == "diagnostic-interpreter"
                     ? std::string_view("katana_runtime")
-                    : std::string_view("katana_runtime_core");
+                    : (port_runtime_profile == "native-port"
+                           ? std::string_view("katana_native_port_runtime")
+                           : std::string_view("katana_runtime_core"));
             auto runtime_build =
                 std::string("cmake --build ") +
                 shell_quote(runtime_build_root) +
@@ -7806,6 +7833,8 @@ int export_port_project(const std::filesystem::path& source_path,
         configure +=
             " -DCMAKE_BUILD_TYPE=" + host_build_configuration +
             " -DKATANA_PORT_BUILD_PROFILE=" + build_profile;
+        configure +=
+            " -DKATANA_PORT_RUNTIME_PROFILE=" + port_runtime_profile;
         configure +=
             " -DKATANA_HOST_COMPILE_JOBS_REQUESTED=" +
             std::to_string(host_compile_budget.requested) +
@@ -8295,7 +8324,9 @@ int export_port_project(const std::filesystem::path& source_path,
             "Port-Runtimemanifest");
         std::ofstream runtime_manifest(runtime_manifest_path,
                                        std::ios::binary | std::ios::trunc);
-        runtime_manifest << runtime_dependency_manifest_document(recipe);
+        runtime_manifest << runtime_dependency_manifest_document(
+            recipe,
+            port_runtime_profile);
         if (!runtime_manifest)
             throw std::runtime_error(
                 "Runtime-Abhaengigkeitsmanifest konnte nicht geschrieben werden.");
@@ -8313,7 +8344,8 @@ int export_port_project(const std::filesystem::path& source_path,
             report.output_root,
             publish_transaction.stage,
             target_name,
-            recipe);
+            recipe,
+            port_runtime_profile);
         packaging_progress.advance(1u);
         ensure_safe_port_directory_chain(
             publish_transaction.stage,
@@ -8376,6 +8408,7 @@ int export_port_project(const std::filesystem::path& source_path,
                   << "Hostlinker: " << host_linker << '\n'
                   << "Hostkonfiguration: " << host_build_configuration << '\n'
                   << "Buildprofil: " << build_profile << '\n'
+                  << "Runtimeprofil: " << port_runtime_profile << '\n'
                    << "Inkrementeller Hostbuild-Cache: " << build_path.string() << '\n'
                    << "Optimierter Hostbuild erfolgreich: " << target_name << '\n';
         phase_timings.transition("complete");

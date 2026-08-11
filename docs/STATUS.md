@@ -42,6 +42,13 @@ Aktive Reihenfolge: `KR-5000` Produktlinkgrenze, `KR-5001` Hookkarte,
 native Plattformdienste und `KR-5005` No-Skip-Lauf bis Hauptmenue. Der
 vollstaendige Vertrag steht in `NATIVE_PORT_PRODUCT_CONTRACT.md`.
 
+`KR-5000` ist source-seitig abgeschlossen. Das Standardprofil `native-port`
+linkt nur `KatanaRecomp::native_port_runtime`, prueft Profilvertrag `1` und
+Portprojektvertrag `76` und auditiert die fertige Linkmap fail-closed auf
+historische Runtime-, ARM7-, CPU-PVR- und Interpreterbestandteile. Das
+explizite `historical-device-runtime`-Profil ist keine Produktabnahme. Aktiv
+ist jetzt `KR-5001`, die private statische Spiel-/SDK-Hookkarte.
+
 Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
@@ -50,7 +57,8 @@ Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
 Checkpoint. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`13`, PVR-State-Contract `3` und Portprojektvertrag `75`.
+`13`, PVR-State-Contract `3`, Portprojektvertrag `76` und Native-Port-
+Profilvertrag `1`.
 Die oeffentlichen SDK-Layouts `PortExportOptions` und
 `LatentAotDiscoveryOptions` wurden inkompatibel erweitert; Backend-Interface-
 ABI `13` ist deshalb aktuell und bestehende generierte Ports muessen neu

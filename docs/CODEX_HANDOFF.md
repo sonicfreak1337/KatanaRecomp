@@ -27,13 +27,21 @@ nutzbar; ARM7/AICA und CPU-PVR werden nicht weiter fuer den Produktpfad
 optimiert. `0.50.0` wird exakt durch das erste rein nativ erreichte Sonic-
 Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 
+`KR-5000` ist source-seitig abgeschlossen. `native-port` ist Standard und
+linkt das eigene minimale `KatanaRecomp::native_port_runtime`; Profilvertrag
+`1`, Portprojektvertrag `76` und ein post-link Linkmap-Audit verhindern einen
+stillen Rueckfall auf Legacy-Runtime, ARM7, CPU-PVR oder Interpreter.
+`historical-device-runtime` ist ausdruecklich nur Nichtproduktreferenz. Der
+aktive Task ist `KR-5001`.
+
 ## Historischer RuntimeOnly-Bring-up
 
 Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
 Checkpoint. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`13`, PVR-State-Contract `3` und Portprojektvertrag `75`.
+`13`, PVR-State-Contract `3`, Portprojektvertrag `76` und Native-Port-
+Profilvertrag `1`.
 Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
 `PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
 Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert

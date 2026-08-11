@@ -73,7 +73,7 @@ Ein Treffer ist an
 `Analyse-/IR-Cache-Hit: ja` erkennbar. Dieser Whole-Export-Cache gilt fuer
 `port-executable` beziehungsweise `probe-port-executable`; der GDI-basierte
 NativeDiscBoot-Export behaelt seine Partitions- und Metadatencaches.
-Portprojektvertrag 75 bindet den aktuellen Spielprojektvertrag 5,
+Portprojektvertrag 76 bindet den aktuellen Spielprojektvertrag 5,
 GameProject-Artefaktformat 4, die `katana-game-project-v4`-Metadaten und den
 getrennten Game-Entry-Vertrag in diesen Schluessel und invalidiert damit aeltere
 Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze

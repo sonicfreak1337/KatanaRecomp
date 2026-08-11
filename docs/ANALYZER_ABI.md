@@ -2,7 +2,8 @@
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `34`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 90, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 13 und Portprojektvertrag 75.
+Backend-Interface-ABI 13, Portprojektvertrag 76 und Native-Port-
+Profilvertrag 1.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.

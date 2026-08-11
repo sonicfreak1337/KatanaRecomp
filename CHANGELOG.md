@@ -22,6 +22,15 @@
   Dreamcast-MHz sind kein Produkt- oder Versionsgate des nativen Ports. Die
   neue Reihenfolge bilden KR-5000 bis KR-5005.
 
+- KR-5000 schliesst die native Produktlinkgrenze. Portprojektvertrag `76` und
+  Native-Port-Profilvertrag `1` machen `native-port` zum Standard und binden
+  ein eigenes minimales Runtimeziel. Ein post-link Linkmap-Audit verwirft
+  Legacy-Runtime-, ARM7-/SkyEmu-, CPU-PVR- und Interpreterbestandteile;
+  `historical-device-runtime` bleibt explizite Nichtproduktreferenz. Das
+  Runtime-Abhaengigkeitsmanifest Version `2` nennt das tatsaechlich gebaute
+  Profil, und Portbuildtelemetrie sowie inkrementelle Buildordner trennen die
+  Profile ebenfalls.
+
 - Der aktuelle Runtime-Performance-Zwischenstand haelt den natuerlichen
   No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische
   Vergleichspfad stieg von `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz`

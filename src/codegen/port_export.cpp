@@ -13042,6 +13042,10 @@ std::string root_cmake(const bool diagnostic_partial) {
            std::to_string(
                katana::build_contract::port_project_contract_version) +
            "\")\n"
+           "set(KATANA_PORT_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT_VERSION \"" +
+           std::to_string(
+               katana::build_contract::native_port_profile_contract_version) +
+           "\")\n"
            "set(KATANA_RUNTIME_ROOT \"\" CACHE PATH \"KatanaRecomp source root\")\n"
            "set(KATANA_RUNTIME_PREFIX \"\" CACHE PATH "
            "\"Installed KatanaRecomp runtime package prefix\")\n"
@@ -13050,6 +13054,25 @@ std::string root_cmake(const bool diagnostic_partial) {
            "set(KATANA_PORT_DIAGNOSTIC_RUNTIME " +
            std::string(diagnostic_partial ? "ON" : "OFF") +
            ")\n"
+           "set(KATANA_PORT_RUNTIME_PROFILE \"" +
+           std::string(diagnostic_partial ? "diagnostic-interpreter"
+                                          : "native-port") +
+           "\" CACHE STRING \"Runtime profile: native-port, "
+           "historical-device-runtime or diagnostic-interpreter\")\n"
+           "set_property(CACHE KATANA_PORT_RUNTIME_PROFILE PROPERTY STRINGS "
+           "native-port historical-device-runtime diagnostic-interpreter)\n"
+           "if(KATANA_PORT_DIAGNOSTIC_RUNTIME)\n"
+           "  if(NOT KATANA_PORT_RUNTIME_PROFILE STREQUAL "
+           "\"diagnostic-interpreter\")\n"
+           "    message(FATAL_ERROR \"Diagnostic exports require the "
+           "diagnostic-interpreter runtime profile\")\n"
+           "  endif()\n"
+           "elseif(NOT KATANA_PORT_RUNTIME_PROFILE STREQUAL \"native-port\" AND\n"
+           "       NOT KATANA_PORT_RUNTIME_PROFILE STREQUAL "
+           "\"historical-device-runtime\")\n"
+           "  message(FATAL_ERROR \"Product exports require native-port; "
+           "historical-device-runtime is an explicit non-product reference\")\n"
+           "endif()\n"
            "set(KATANA_PORT_BUILD_PROFILE \"bringup\" CACHE STRING "
            "\"Port build profile: bringup or gate\")\n"
            "set_property(CACHE KATANA_PORT_BUILD_PROFILE PROPERTY STRINGS bringup gate)\n"
@@ -13122,9 +13145,13 @@ std::string root_cmake(const bool diagnostic_partial) {
            "    endif()\n"
            "  endif()\n"
            "endif()\n"
-           "if(KATANA_PORT_DIAGNOSTIC_RUNTIME)\n"
+           "if(KATANA_PORT_RUNTIME_PROFILE STREQUAL \"diagnostic-interpreter\")\n"
            "  set(KATANA_PORT_NAMESPACED_RUNTIME_TARGET KatanaRecomp::runtime)\n"
            "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_runtime)\n"
+           "elseif(KATANA_PORT_RUNTIME_PROFILE STREQUAL \"native-port\")\n"
+           "  set(KATANA_PORT_NAMESPACED_RUNTIME_TARGET "
+           "KatanaRecomp::native_port_runtime)\n"
+           "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_native_port_runtime)\n"
            "else()\n"
            "  set(KATANA_PORT_NAMESPACED_RUNTIME_TARGET KatanaRecomp::runtime_core)\n"
            "  set(KATANA_PORT_SOURCE_RUNTIME_TARGET katana_runtime_core)\n"
@@ -13254,6 +13281,23 @@ std::string root_cmake(const bool diagnostic_partial) {
            "  endif()\n"
            "endfunction()\n"
            "katana_require_runtime_contract(\"${KATANA_PORT_RUNTIME_TARGET}\")\n"
+           "if(KATANA_PORT_RUNTIME_PROFILE STREQUAL \"native-port\")\n"
+           "  get_target_property(KATANA_PORT_RESOLVED_NATIVE_TARGET "
+           "\"${KATANA_PORT_RUNTIME_TARGET}\" ALIASED_TARGET)\n"
+           "  if(NOT KATANA_PORT_RESOLVED_NATIVE_TARGET)\n"
+           "    set(KATANA_PORT_RESOLVED_NATIVE_TARGET "
+           "\"${KATANA_PORT_RUNTIME_TARGET}\")\n"
+           "  endif()\n"
+           "  get_target_property(KATANA_PORT_ACTUAL_NATIVE_PROFILE_CONTRACT "
+           "\"${KATANA_PORT_RESOLVED_NATIVE_TARGET}\" "
+           "KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION)\n"
+           "  if(NOT KATANA_PORT_ACTUAL_NATIVE_PROFILE_CONTRACT STREQUAL "
+           "KATANA_PORT_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT_VERSION)\n"
+           "    message(FATAL_ERROR \"KATANA_MISSING_NATIVE_PORT_RUNTIME "
+           "expected=${KATANA_PORT_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT_VERSION} "
+           "actual=${KATANA_PORT_ACTUAL_NATIVE_PROFILE_CONTRACT}\")\n"
+           "  endif()\n"
+           "endif()\n"
            "add_subdirectory(generated)\n"
            "include(\"${CMAKE_CURRENT_SOURCE_DIR}/generated/katana-port.cmake\")\n";
 }
@@ -13295,6 +13339,77 @@ std::string product_gate_runner() {
            "exit $process.ExitCode\n";
 }
 
+std::string native_port_link_audit() {
+    return R"cmake(cmake_minimum_required(VERSION 3.25)
+
+foreach(KATANA_NATIVE_REQUIRED IN ITEMS
+        KATANA_NATIVE_PORT_BINARY
+        KATANA_NATIVE_PORT_MAP)
+    if(NOT DEFINED ${KATANA_NATIVE_REQUIRED} OR
+       "${${KATANA_NATIVE_REQUIRED}}" STREQUAL "")
+        message(FATAL_ERROR "${KATANA_NATIVE_REQUIRED} is required")
+    endif()
+endforeach()
+
+if(NOT EXISTS "${KATANA_NATIVE_PORT_BINARY}")
+    message(FATAL_ERROR
+        "KATANA_NATIVE_PORT_LINK_VIOLATION missing-binary=${KATANA_NATIVE_PORT_BINARY}")
+endif()
+if(NOT EXISTS "${KATANA_NATIVE_PORT_MAP}")
+    message(FATAL_ERROR
+        "KATANA_NATIVE_PORT_LINK_VIOLATION missing-map=${KATANA_NATIVE_PORT_MAP}")
+endif()
+
+file(READ "${KATANA_NATIVE_PORT_MAP}" KATANA_NATIVE_PORT_MAP_REPORT)
+string(TOLOWER
+       "${KATANA_NATIVE_PORT_MAP_REPORT}"
+       KATANA_NATIVE_PORT_MAP_REPORT_LOWER)
+
+set(KATANA_NATIVE_PORT_FORBIDDEN_TOKENS
+    katana_runtime_core
+    katana_runtime.lib
+    libkatana_runtime.a
+    katana_diagnostic_interpreter
+    aica_arm7_core.cpp
+    pvr.cpp
+    dreamcast_boot.cpp
+    gdrom_controller.cpp
+    maple_mmio.cpp
+    system_asic.cpp
+    dynamic_interpreter.cpp
+    controlled_fallback.cpp
+    interpreter_boundary.cpp
+    aicaarm7core
+    pvrsoftwarerenderer
+    arm7_exec_instruction
+)
+
+set(KATANA_NATIVE_PORT_VIOLATIONS)
+foreach(KATANA_NATIVE_PORT_TOKEN IN LISTS
+        KATANA_NATIVE_PORT_FORBIDDEN_TOKENS)
+    string(FIND
+           "${KATANA_NATIVE_PORT_MAP_REPORT_LOWER}"
+           "${KATANA_NATIVE_PORT_TOKEN}"
+           KATANA_NATIVE_PORT_TOKEN_OFFSET)
+    if(NOT KATANA_NATIVE_PORT_TOKEN_OFFSET EQUAL -1)
+        list(APPEND
+             KATANA_NATIVE_PORT_VIOLATIONS
+             "${KATANA_NATIVE_PORT_TOKEN}")
+    endif()
+endforeach()
+
+if(KATANA_NATIVE_PORT_VIOLATIONS)
+    list(REMOVE_DUPLICATES KATANA_NATIVE_PORT_VIOLATIONS)
+    list(JOIN KATANA_NATIVE_PORT_VIOLATIONS "," KATANA_NATIVE_PORT_REPORT)
+    message(FATAL_ERROR
+        "KATANA_NATIVE_PORT_LINK_VIOLATION forbidden=${KATANA_NATIVE_PORT_REPORT}")
+endif()
+
+message(STATUS
+    "native-port link audit passed for ${KATANA_NATIVE_PORT_BINARY}")
+)cmake";
+}
+
 std::string port_cmake(const std::string& target_name) {
     return "add_executable(" + target_name +
            " \"${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp\")\n"
@@ -13334,6 +13449,28 @@ std::string port_cmake(const std::string& target_name) {
            " PRIVATE \"${CMAKE_CURRENT_LIST_DIR}/include\")\n"
            "target_link_libraries(" +
            target_name + " PRIVATE katana_generated ${KATANA_PORT_RUNTIME_TARGET})\n"
+           "if(KATANA_PORT_RUNTIME_PROFILE STREQUAL \"native-port\")\n"
+           "  target_compile_definitions(" +
+           target_name + " PRIVATE KATANA_NATIVE_PORT_PRODUCT=1)\n"
+           "  set(KATANA_NATIVE_PORT_LINK_MAP "
+           "\"${CMAKE_CURRENT_BINARY_DIR}/" +
+           target_name + "-$<CONFIG>-native-port.map\")\n"
+           "  if(MSVC)\n"
+           "    target_link_options(" +
+           target_name + " PRIVATE \"/MAP:${KATANA_NATIVE_PORT_LINK_MAP}\")\n"
+           "  else()\n"
+           "    target_link_options(" +
+           target_name + " PRIVATE \"-Wl,-Map,${KATANA_NATIVE_PORT_LINK_MAP}\")\n"
+           "  endif()\n"
+           "  add_custom_command(TARGET " +
+           target_name + " POST_BUILD\n"
+           "    COMMAND \"${CMAKE_COMMAND}\"\n"
+           "      \"-DKATANA_NATIVE_PORT_BINARY=$<TARGET_FILE:" +
+           target_name + ">\"\n"
+           "      \"-DKATANA_NATIVE_PORT_MAP=${KATANA_NATIVE_PORT_LINK_MAP}\"\n"
+           "      -P \"${CMAKE_CURRENT_LIST_DIR}/verify-native-port-link.cmake\"\n"
+           "    VERBATIM)\n"
+           "endif()\n"
            "set(KATANA_PORT_HOST_STACK_RESERVE_BYTES \"16777216\" CACHE STRING\n"
            "    \"Windows host-stack reserve for bounded native AOT chaining\")\n"
            "if(MSVC AND KATANA_PORT_HOST_STACK_RESERVE_BYTES)\n"
@@ -13381,7 +13518,12 @@ port_metadata(const PortExportOptions& options,
            << ",\"diagnostic_partial\":" << (options.diagnostic_partial ? "true" : "false")
            << ",\"execution_profile\":"
            << katana::io::quote_json(options.diagnostic_partial ? "diagnostic-interpreter"
-                                                                : "native-aot-product")
+                                                                : "native-aot-runtime-selectable")
+           << ",\"runtime_profile_default\":"
+           << katana::io::quote_json(options.diagnostic_partial
+                                         ? "diagnostic-interpreter"
+                                         : "native-port")
+           << ",\"legacy_device_runtime_product_allowed\":false"
            << ",\"runtime_interpreter_enabled\":" << (options.diagnostic_partial ? "true" : "false")
            << ",\"unbound_code_policy\":"
            << katana::io::quote_json(options.diagnostic_partial ? "diagnostic-interpreter"
@@ -15068,6 +15210,8 @@ static PortExportResult export_dreamcast_port_project_impl(
     for (auto& artifact : dispatch_artifacts)
         artifacts.push_back(std::move(artifact));
     artifacts.push_back({"katana-port.cmake", port_cmake(options.target_name)});
+    artifacts.push_back(
+        {"verify-native-port-link.cmake", native_port_link_audit()});
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,
                                        emitted_program.size(),

@@ -128,6 +128,14 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
+KR-5000 bindet diese Grenze an Portprojektvertrag `76` und Native-Port-
+Profilvertrag `1`. `native-port` waehlt ein eigenes minimales Runtimeziel;
+`historical-device-runtime` ist nur explizite Nichtproduktreferenz. Das
+fertige Produktbinary wird per Linkmap auf Legacy-Runtime-, ARM7-/SkyEmu-,
+CPU-PVR- und Interpreterbestandteile auditiert. Das publizierte Runtime-
+Abhaengigkeitsmanifest Version `2` nennt zusaetzlich das tatsaechlich gebaute
+Runtimeprofil.
+
 ## Verbindliche Taskreihenfolge
 
 1. `KR-5000`: Native Produktgrenze und Linkisolation durchsetzen.

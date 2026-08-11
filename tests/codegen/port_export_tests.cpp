@@ -1,3 +1,4 @@
+#include "katana/build_contract.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
@@ -3717,6 +3718,7 @@ int run_test(const int argc, char* argv[]) {
                              "metadata/cfg.dot",
                              "metadata/callgraph.json",
                              "metadata/callgraph.dot",
+                             "verify-native-port-link.cmake",
                              "katana-port.cmake"}) {
         require(generated_before.contains(path),
                 "Portexport verliert Artefakt: " + std::string(path));
@@ -4247,7 +4249,13 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("metadata/port-project.json")
                     .find("\"dispatch_paths_without_validation\":0") != std::string::npos &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"execution_profile\":\"native-aot-product\"") !=
+                    .find("\"execution_profile\":\"native-aot-runtime-selectable\"") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"runtime_profile_default\":\"native-port\"") !=
+                std::string::npos &&
+            generated_before.at("metadata/port-project.json")
+                    .find("\"legacy_device_runtime_product_allowed\":false") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"runtime_interpreter_enabled\":false") != std::string::npos &&
@@ -4392,7 +4400,20 @@ int run_test(const int argc, char* argv[]) {
                           "\"13\")") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_PROJECT_CONTRACT_VERSION "
-                          "\"75\")") != std::string::npos &&
+                          "\"" +
+                          std::to_string(
+                              katana::build_contract::port_project_contract_version) +
+                          "\")") != std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("set(KATANA_PORT_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT_VERSION "
+                          "\"" +
+                          std::to_string(
+                              katana::build_contract::
+                                  native_port_profile_contract_version) +
+                          "\")") != std::string::npos &&
+            read_text(output / "CMakeLists.txt")
+                    .find("KatanaRecomp::native_port_runtime") !=
+                std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("katana_require_runtime_contract("
                           "\"${KATANA_PORT_RUNTIME_TARGET}\")") !=

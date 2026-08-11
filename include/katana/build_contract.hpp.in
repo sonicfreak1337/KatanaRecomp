@@ -18,5 +18,7 @@ inline constexpr std::uint32_t backend_interface_abi_version =
     @KATANA_BACKEND_INTERFACE_ABI_VERSION@u;
 inline constexpr std::uint32_t port_project_contract_version =
     @KATANA_PORT_PROJECT_CONTRACT_VERSION@u;
+inline constexpr std::uint32_t native_port_profile_contract_version =
+    @KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION@u;
 
 } // namespace katana::build_contract

@@ -798,6 +798,8 @@ function Read-PortMetadata {
     foreach ($field in @(
         'status',
         'execution_profile',
+        'runtime_profile_default',
+        'legacy_device_runtime_product_allowed',
         'diagnostic_partial',
         'runtime_interpreter_enabled',
         'project_identity'
@@ -809,13 +811,17 @@ function Read-PortMetadata {
     if ($metadata.status -isnot [string] -or
         [string]$metadata.status -cne 'success' -or
         $metadata.execution_profile -isnot [string] -or
-        [string]$metadata.execution_profile -cne 'native-aot-product' -or
+        [string]$metadata.execution_profile -cne 'native-aot-runtime-selectable' -or
+        $metadata.runtime_profile_default -isnot [string] -or
+        [string]$metadata.runtime_profile_default -cne 'native-port' -or
+        -not (Test-JsonBoolean $metadata.legacy_device_runtime_product_allowed) -or
+        [bool]$metadata.legacy_device_runtime_product_allowed -or
         -not (Test-JsonBoolean $metadata.diagnostic_partial) -or
         [bool]$metadata.diagnostic_partial -or
         -not (Test-JsonBoolean $metadata.runtime_interpreter_enabled) -or
         [bool]$metadata.runtime_interpreter_enabled -or
         -not (Test-LowerSha256 $metadata.project_identity)) {
-        Throw-ProbeFailure 'port-not-native-aot-product'
+        Throw-ProbeFailure 'port-not-runtime-selectable-static-aot'
     }
     return $metadata
 }
@@ -985,15 +991,19 @@ function Get-RuntimeInventory {
         'schema',
         'version',
         'linkage',
+        'runtime_profile',
         'job_generation',
         'files'
     ) @() 'invalid-runtime-manifest'
     if ($manifest.schema -isnot [string] -or
         [string]$manifest.schema -cne 'katana-runtime-dependencies' -or
         -not (Test-IntegralJsonNumber $manifest.version) -or
-        [decimal]$manifest.version -ne 1 -or
+        [decimal]$manifest.version -ne 2 -or
         $manifest.linkage -isnot [string] -or
         [string]$manifest.linkage -cne 'static' -or
+        $manifest.runtime_profile -isnot [string] -or
+        ([string]$manifest.runtime_profile -cne 'native-port' -and
+         [string]$manifest.runtime_profile -cne 'historical-device-runtime') -or
         -not (Test-LowerSha256 $manifest.job_generation) -or
         [string]$manifest.job_generation -cne [string]$Metadata.project_identity -or
         $manifest.files -isnot [array] -or
@@ -2407,7 +2417,9 @@ function Invoke-PortBindingSelfTest {
         $metadataText = [ordered]@{
             schema = 'katana-port-project'
             status = 'success'
-            execution_profile = 'native-aot-product'
+            execution_profile = 'native-aot-runtime-selectable'
+            runtime_profile_default = 'native-port'
+            legacy_device_runtime_product_allowed = $false
             diagnostic_partial = $false
             runtime_interpreter_enabled = $false
             project_identity = $identity
@@ -2418,8 +2430,9 @@ function Invoke-PortBindingSelfTest {
             $encoding)
         $runtimeManifestText = [ordered]@{
             schema = 'katana-runtime-dependencies'
-            version = 1
+            version = 2
             linkage = 'static'
+            runtime_profile = 'native-port'
             job_generation = $identity
             files = @()
         } | ConvertTo-Json -Compress

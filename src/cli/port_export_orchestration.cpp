@@ -148,6 +148,10 @@ port_export_implementation_identities() {
         std::to_string(
             katana::codegen::
                 port_project_contract_version);
+    const auto native_port_profile_contract =
+        std::to_string(
+            katana::build_contract::
+                native_port_profile_contract_version);
     const auto game_project_contract =
         std::to_string(
             katana::runtime::
@@ -156,7 +160,7 @@ port_export_implementation_identities() {
         std::to_string(
             katana::runtime::
                 game_project_artifact_format_version);
-    const std::array<std::string_view, 12u> whole_fields{
+    const std::array<std::string_view, 13u> whole_fields{
         identities.analysis,
         identities.analysis_cache,
         identities.codegen,
@@ -168,6 +172,7 @@ port_export_implementation_identities() {
         block_abi,
         platform_abi,
         port_contract,
+        native_port_profile_contract,
         game_project_contract,
         game_project_artifact};
     identities.whole_export = combine(
@@ -227,6 +232,9 @@ std::string port_export_cache_key(
             platform_services_abi_version);
     append(katana::codegen::backend_interface_abi_version);
     append(katana::codegen::port_project_contract_version);
+    append(
+        katana::build_contract::
+            native_port_profile_contract_version);
     append(
         katana::codegen::
             port_partition_emission_schema_version);

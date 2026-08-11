@@ -196,8 +196,8 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und No-Skip-Sonic-Lauf belegen echten ARM7, fortschreitenden Sofdec-Audiotakt, Player-Status 5 und sichtbare Movie-Bildpublikation |
-| KR-5000 | Native Produktgrenze und Linkisolation | aktiv P0; Architekturvertrag dokumentiert, `native-port`-Profil und Ausschluss historischer Geraetesymbole offen |
-| KR-5001 | Statische Spiel-/SDK-Hookkarte | geplant P0 nach KR-5000; hoechste belegte Audio-/Movie-, Grafik- und Plattformgrenzen aus privater Adresskarte binden |
+| KR-5000 | Native Produktgrenze und Linkisolation | [x] source-seitig abgeschlossen; Portprojektvertrag 76, Native-Port-Profilvertrag 1, separates Produktlinkziel und post-link Legacy-Audit; historisches Geraeteprofil nur explizit als Nichtproduktpfad |
+| KR-5001 | Statische Spiel-/SDK-Hookkarte | aktiv P0; hoechste belegte Audio-/Movie-, Grafik- und Plattformgrenzen aus privater Adresskarte binden |
 | KR-5002 | Nativer Audio-/Moviepfad | geplant P0 nach KR-5001; kein ARM7/AICA-Firmwarepfad im Produkt, No-Skip-Lifecycle ueber native Hostdienste |
 | KR-5003 | Nativer GPU-Pfad | geplant P0 nach KR-5001; native GPU-API und kein CPU-PVR im Produktlink |
 | KR-5004 | Native Disc-, Eingabe- und Save-Dienste | geplant P0 nach KR-5001; lokale Originalinstallation und native PC-Plattformdienste |

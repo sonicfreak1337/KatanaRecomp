@@ -50,6 +50,7 @@ struct PortBuildTelemetryOptions final {
     // which built this telemetry observer is recorded separately from the
     // resolved child toolchain and must never be presented as that toolchain.
     std::string build_profile;
+    std::string runtime_profile;
     std::string job_kind = "port-build";
 
     // GPU reporting is intentionally identity/capability telemetry only.

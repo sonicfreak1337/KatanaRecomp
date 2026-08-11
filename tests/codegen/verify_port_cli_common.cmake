@@ -615,7 +615,8 @@ foreach(expected_contract
         RUNTIME_ABI_VERSION
         BLOCK_ABI_VERSION
         PLATFORM_SERVICES_ABI_VERSION
-        PROJECT_CONTRACT_VERSION)
+        PROJECT_CONTRACT_VERSION
+        NATIVE_PORT_PROFILE_CONTRACT_VERSION)
   string(REGEX MATCH
          "set\\(KATANA_PORT_EXPECTED_${expected_contract} \"([^\"]+)\"\\)"
          expected_contract_match
@@ -638,6 +639,7 @@ set(fake_runtime_config
 function(write_fake_runtime_config runtime_abi)
   file(WRITE "${fake_runtime_config}"
     "add_library(KatanaRecomp::runtime_core INTERFACE IMPORTED)\n"
+    "add_library(KatanaRecomp::native_port_runtime INTERFACE IMPORTED)\n"
     "set_target_properties(KatanaRecomp::runtime_core PROPERTIES\n"
     "  IMPORTED_CONFIGURATIONS RELWITHDEBINFO\n"
     "  KATANA_PROJECT_VERSION \"${expected_PROJECT_VERSION}\"\n"
@@ -646,7 +648,18 @@ function(write_fake_runtime_config runtime_abi)
     "  KATANA_PLATFORM_SERVICES_ABI_VERSION "
       "\"${expected_PLATFORM_SERVICES_ABI_VERSION}\"\n"
     "  KATANA_PORT_PROJECT_CONTRACT_VERSION "
-      "\"${expected_PROJECT_CONTRACT_VERSION}\")\n")
+      "\"${expected_PROJECT_CONTRACT_VERSION}\")\n"
+    "set_target_properties(KatanaRecomp::native_port_runtime PROPERTIES\n"
+    "  IMPORTED_CONFIGURATIONS RELWITHDEBINFO\n"
+    "  KATANA_PROJECT_VERSION \"${expected_PROJECT_VERSION}\"\n"
+    "  KATANA_RUNTIME_ABI_VERSION \"${runtime_abi}\"\n"
+    "  KATANA_BLOCK_ABI_VERSION \"${expected_BLOCK_ABI_VERSION}\"\n"
+    "  KATANA_PLATFORM_SERVICES_ABI_VERSION "
+      "\"${expected_PLATFORM_SERVICES_ABI_VERSION}\"\n"
+    "  KATANA_PORT_PROJECT_CONTRACT_VERSION "
+      "\"${expected_PROJECT_CONTRACT_VERSION}\"\n"
+    "  KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION "
+      "\"${expected_NATIVE_PORT_PROFILE_CONTRACT_VERSION}\")\n")
 endfunction()
 
 write_fake_runtime_config("${stale_runtime_abi}")

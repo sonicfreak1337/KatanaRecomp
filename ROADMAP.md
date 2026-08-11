@@ -132,6 +132,12 @@ Der erste aktive Implementierungspunkt ist die hoechste belegte SH-4-Spiel-/
 SDK-Grenze vor AICA-Kommandoring und PVR/TA-Geraeteprotokoll. Fehlende native
 Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 
+`KR-5000` ist source-seitig abgeschlossen: `native-port` ist der Standard,
+besitzt ein eigenes minimales Linktarget und prueft das fertige Binary per
+Linkmap auf historische Runtime-, ARM7-, CPU-PVR- und Interpreterbestandteile.
+`historical-device-runtime` bleibt ein ausdrueckliches Nichtproduktprofil.
+Der aktive Implementierungspunkt ist jetzt `KR-5001`.
+
 ## Historischer RuntimeOnly-Bring-up
 
 Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
@@ -407,13 +413,13 @@ als alte optionale Offload-Aufgaben gestrichen.
 
 ## v0.49.1-Kritischer Pfad
 
-1. **Native Produktlinkgrenze**
+1. **[x] Native Produktlinkgrenze**
    - eigenes `native-port`-Produktprofil;
    - kein ARM7-Interpreter, CPU-PVR, Diagnoseinterpreter oder vollstaendiges
      Geraetemodell im Produktlink;
    - fehlende native Bindungen enden typisiert und fail-closed.
 
-2. **Statische Spiel-/SDK-Hookkarte**
+2. **[ ] Statische Spiel-/SDK-Hookkarte**
    - private Bring-up-Adressen werden zu Funktions- und Datengrenzen
      zusammengefuehrt;
    - Audio/Movie vor dem AICA-Kommandoring, Grafik vor dem PVR-

@@ -713,6 +713,7 @@ int main() {
         katana::cli::PortBuildTelemetryOptions options;
         options.jsonl_path = complete_path;
         options.build_profile = "Release";
+        options.runtime_profile = "native-port";
         options.job_kind = "native-disc";
         options.require_phase_timings = true;
         options.gpu_identity =
@@ -836,6 +837,9 @@ int main() {
                 "\"toolchain\"") == std::string::npos &&
             complete_lines.front().find(
                 "\"requested_environment\"") !=
+                std::string::npos &&
+            complete_lines.front().find(
+                "\"runtime_profile\":\"native-port\"") !=
                 std::string::npos &&
             complete_lines.front().find(
                 "\"numeric_value\"") == std::string::npos &&

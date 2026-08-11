@@ -1340,6 +1340,11 @@ struct CapturedResourceRecord final {
             ? compiled_build_profile()
             : options.build_profile,
         "configured-profile");
+    const auto runtime_profile = safe_identifier(
+        options.runtime_profile,
+        options.runtime_profile.empty()
+            ? "unspecified"
+            : "configured-runtime-profile");
     const auto job_kind =
         safe_identifier(options.job_kind, "port-build");
     const auto gpu_identity = safe_display_label(
@@ -1385,6 +1390,8 @@ struct CapturedResourceRecord final {
         ",\"cplusplus_quality\":\"compiler-predefined-macro-raw\"";
     output += ",\"build_profile\":";
     append_json_string(output, build_profile);
+    output += ",\"runtime_profile\":";
+    append_json_string(output, runtime_profile);
     output += "},\"job\":{\"kind\":";
     append_json_string(output, job_kind);
     output += ",\"requested_environment\":";

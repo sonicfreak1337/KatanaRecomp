@@ -658,9 +658,19 @@ add_library(
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
 )
+add_library(
+    katana_native_port_runtime
+    STATIC
+    src/runtime/native_port.cpp
+)
 
 add_library(KatanaRecomp::runtime ALIAS katana_runtime)
 add_library(KatanaRecomp::runtime_core ALIAS katana_runtime_core)
+add_library(
+    KatanaRecomp::native_port_runtime
+    ALIAS
+    katana_native_port_runtime
+)
 add_library(
     KatanaRecomp::diagnostic_interpreter
     ALIAS
@@ -668,6 +678,10 @@ add_library(
 )
 set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
 set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)
+set_target_properties(
+    katana_native_port_runtime
+    PROPERTIES EXPORT_NAME native_port_runtime
+)
 target_link_libraries(
     katana_runtime_core
     PUBLIC
@@ -675,6 +689,11 @@ target_link_libraries(
 )
 target_link_libraries(
     katana_runtime
+    PUBLIC
+        Threads::Threads
+)
+target_link_libraries(
+    katana_native_port_runtime
     PUBLIC
         Threads::Threads
 )
@@ -697,6 +716,19 @@ endfunction()
 
 katana_stamp_runtime_contract(katana_runtime)
 katana_stamp_runtime_contract(katana_runtime_core)
+katana_stamp_runtime_contract(katana_native_port_runtime)
+set_target_properties(
+    katana_native_port_runtime
+    PROPERTIES
+        KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION
+            "${KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION}"
+)
+set_property(
+    TARGET katana_native_port_runtime
+    APPEND
+    PROPERTY EXPORT_PROPERTIES
+        KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION
+)
 
 # A static runtime built with sanitizers carries sanitizer-dependent ABI details
 # into every object file. In particular, MSVC's ASan-enabled STL emits
@@ -739,9 +771,11 @@ function(katana_configure_runtime_archive target)
 endfunction()
 
 target_link_libraries(katana_diagnostic_interpreter PUBLIC katana_runtime_core)
+katana_configure_runtime_objects(katana_native_port_runtime)
 katana_configure_runtime_archive(katana_runtime_core)
 katana_configure_runtime_archive(katana_diagnostic_interpreter)
 katana_configure_runtime_archive(katana_runtime)
+katana_configure_runtime_archive(katana_native_port_runtime)
 
 if(MSVC)
     set_source_files_properties(
@@ -5199,6 +5233,7 @@ add_test(
         -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_RUNTIME_ABI_VERSION}
         -DKATANA_EXPECTED_ANALYZER_ABI=${KATANA_ANALYZER_ABI_VERSION}
         -DKATANA_EXPECTED_PORT_PROJECT_CONTRACT=${KATANA_PORT_PROJECT_CONTRACT_VERSION}
+        -DKATANA_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT=${KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION}
         -P ${CMAKE_SOURCE_DIR}/tests/build/package_contract_tests.cmake
 )
 set_tests_properties(katana-package-contract-tests PROPERTIES LABELS "build;gate" TIMEOUT 180)
@@ -5215,7 +5250,7 @@ write_basic_package_version_file(
 )
 
 install(
-    TARGETS katana_runtime katana_runtime_core
+    TARGETS katana_runtime katana_runtime_core katana_native_port_runtime
     EXPORT KatanaRuntimeTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
