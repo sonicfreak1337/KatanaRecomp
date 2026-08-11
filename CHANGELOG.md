@@ -22,16 +22,39 @@
   Dreamcast-MHz sind kein Produkt- oder Versionsgate des nativen Ports. Die
   neue Reihenfolge bilden KR-5000 bis KR-5005.
 
-- KR-5000 schliesst die native Produktlinkgrenze. Portprojektvertrag `76` und
-  Native-Port-Profilvertrag `1` machen `native-port` zum Standard und binden
-  ein eigenes minimales Runtimeziel. Ein post-link Linkmap-Audit verwirft
-  Legacy-Runtime-, ARM7-/SkyEmu-, CPU-PVR- und Interpreterbestandteile;
-  `historical-device-runtime` bleibt explizite Nichtproduktreferenz. Das
-  Runtime-Abhaengigkeitsmanifest Version `2` nennt das tatsaechlich gebaute
-  Profil, und Portbuildtelemetrie sowie inkrementelle Buildordner trennen die
-  Profile ebenfalls.
+- Der Native-Port-Architekturreview schliesst KR-5000 als physische Source-,
+  Link- und Installgrenze. Ein expliziter AOT-Quellabschluss und
+  `native_port_runtime` bilden das einzige installierte Produkt-SDK;
+  Runtime-, ARM7/AICA-, PVR/TA-, ASIC-, GD-ROM-, Maple-, Firmware- und
+  Interpretertargets bleiben nicht installierbarer Diagnosebestand. Der alte
+  Geraetepfad ist kein Portexportprofil mehr.
 
-- Der aktuelle Runtime-Performance-Zwischenstand haelt den natuerlichen
+- `NativePortDefinition`, `NativePortContext`, identitaetsgebundene Image-,
+  Bootstrap- und direkte Hooksymbolvertraege sowie eine vollstaendig
+  ersetzende Hooksemantik schaffen die unabhaengige Produkt-ABI. Das
+  Hardware-Closure-Gate konsumiert exakte unresolved-memory-Sites, lehnt
+  nicht separat auditierte Latent-/Overlaymodule ab und schreibt
+  `native-hardware-closure.v1`. Bis KR-5001 den echten Bootstrap-/Direkthook-
+  Codegen emittiert, stoppt Configure mit
+  `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`; es gibt keinen Legacy-Fallback.
+
+- Runtime-ABI `91`, Analyzer-ABI `35`, Backend-Interface-ABI `14`,
+  Portprojektvertrag `77`, Native-Port-Profilvertrag `2`, Hardwareaudit-Schema
+  `v5`, Hardwareaudit-Set-Schema `v2`
+  und Port-
+  Metadatencache-Schema `3` versionieren
+  die inkompatiblen Layout-, SDK-, Persistenz- und Exportaenderungen. Der
+  historische GameProject-Vertrag `5` samt Artefaktformat `4` bleibt
+  unveraendert und enthaelt bewusst keine Native-Port-Definition; deren
+  unabhaengiger privater Provider folgt mit KR-5001.
+  Backend-Interface-ABI `14` bindet den neuen unabhaengigen
+  `PortExportOptions::native_port_definition`-Zeiger; er wird nicht in den
+  alten Dreamcast-Spielprojektvertrag eingebaut. Der korrekte SkyEmu-MIT-
+  Hinweis und die vendorte Lizenz bleiben im Repository
+  beziehungsweise dem klar benannten internen Diagnosepaket; das installierte
+  Analyzer-SDK enthaelt keine historischen Geraeteobjekte.
+
+- Der historische Runtime-Performance-Zwischenstand haelt den natuerlichen
   No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische
   Vergleichspfad stieg von `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz`
   auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der letzte Lauf lieferte

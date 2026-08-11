@@ -103,23 +103,30 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 
 Prioritaet: P0 Architektur
 
-Status: abgeschlossen. Portprojektvertrag `76` und Native-Port-Profilvertrag
-`1` machen `native-port` zum Standard. Das eigene minimale Runtimeziel linkt
-keine historische Geraeteruntime; eine post-link Linkmappruefung verwirft
-ARM7-/SkyEmu-, CPU-PVR-, Diagnoseinterpreter- und Legacy-Runtimebestandteile.
-Das alte Geraeteprofil ist nur explizit als `historical-device-runtime`
-waehlbar. Die konkrete typisierte Hookvollstaendigkeit folgt in `KR-5001`.
+Status: physische Source-, Link- und Installgrenze abgeschlossen.
+Portprojektvertrag `77` und Native-Port-Profilvertrag `2` machen
+`native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
+exportiert nur `aot_runtime`, `native_port_runtime` und die native
+Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
+Firmwareboot, PlatformServices und Diagnoseinterpreter bleiben im
+nichtinstallierbaren Buildbaum-Orakel. Der Post-Link-Audit verwirft diese
+Bestandteile. `historical-device-runtime` ist kein Exportprofil mehr.
 
-Abschluss: Ein `native-port`-Artefakt kann keine ARM7-/SkyEmu-, CPU-PVR- oder
-Diagnoseinterpreter-Symbole linken und besitzt keinen Laufzeitfallback auf
-diese Pfade.
+Abschluss: Die Produktlinkgrenze besitzt keine Rueckkante auf Geraetecode.
+Ein eigentliches Titelbinary wird erst in KR-5001 freigegeben; bis dahin
+endet Configure typisiert mit `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` statt
+den historischen Launcher zu linken.
 
 ## [ ] KR-5001 - Statische Spiel-/SDK-Hookkarte
 
 Prioritaet: P0 Bring-up
 
-Status: aktiv nach abgeschlossenem KR-5000, vorbereitet durch die private
-Adresskarte. Audio/Movie wird vor dem
+Status: aktiv. `NativePortDefinition`, `NativePortContext`, direkte
+Linkersymbole, identitaetsgebundene Image-/Hookbindungen und das fail-closed
+Hardware-Closure-Gate sind vorbereitet. Als naechstes werden der unabhaengige
+private Definitionsprovider, Bootstrap, direkte erforderliche Hookcalls und
+Callback-Reentry in den statisch rekompilierten Code emittiert. Audio/Movie
+wird vor dem
 AICA-Kommandoring und Grafik vor dem PVR-Geraeteprotokoll gebunden; die
 hoechste belegbare Grenze gewinnt. Private Adressen bleiben ausserhalb des
 Repositorys.
@@ -158,16 +165,16 @@ freigegeben.
 
 ## Historischer RuntimeOnly-Bring-up
 
-Der opt-in Modus `port --analysis-mode runtime-only` ist nur fuer den
-vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
-Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
+Der historische Modus `port --analysis-mode runtime-only` war nur mit
+`--game-project` zulaessig und bleibt jetzt ausschliesslich internes
+Diagnoseorakel. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
 die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt nativen
 AOT-Code und nutzt RuntimeOnly-Dispatch ueber eine exakte statische
 Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv; kein
 Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad. Der Whole-Export-
 Cache ist modegebunden.
 
-Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag und der natuerliche
+Der historische RuntimeOnly-Build-/Export-Unterauftrag und der natuerliche
 No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` sind abgeschlossen.
 Der letzte Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
 YUV-Makrobloecke und `470` Audiopuffer mit `345.450` Audiobildern. Die
@@ -177,19 +184,21 @@ identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz` und
 Memory-Card-Screen/Hauptmenue bleiben offen; der PlatformAbi-Default bleibt
 erhalten.
 
-## Historischer RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Geraetestand
 
 Der vorherige bereinigte Source-Checkpoint hob Runtime-ABI `87` auf `88` und
 PlatformServices-ABI `13` auf `14`. Der funktionale Checkpoint `efc531b` hebt
 Runtime-ABI wegen der PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
 `e1d8ade` hebt ihn wegen der oeffentlichen AICA-/ARM7-Fortsetzung weiter auf
-`90`; Backend-Interface-ABI `13` und PVR-State-Contract `3` bleiben aktuell.
+`90`; Backend-Interface-ABI `13` und PVR-State-Contract `3` gehoeren zu
+diesem historischen Geraetestand.
 
 Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit `1.228.800`
 geaenderten Pixeln; der Audiohash `8399287713367543391` blieb zwischen
 YUV-Lauf und Audio-Umbau identisch. Der Hostprozess nutzte nur etwa `1,64`
-Kerne beziehungsweise `6,8 %` der 24-Thread-Kapazitaet; der aktuelle P0 ist
-der serielle Runtime-/Dispatch-Overhead bis mindestens `100 MHz`.
+Kerne beziehungsweise `6,8 %` der 24-Thread-Kapazitaet; der serielle
+Runtime-/Dispatch-Overhead bleibt ein historischer Diagnosebefund und ist kein
+aktives Native-Port-Produktgate.
 
 ## Historische Candidate-Evidenz
 
@@ -199,9 +208,9 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 90, PlatformServices-ABI 14, Backend-Interface-ABI 13,
+  Runtime-ABI 91, PlatformServices-ABI 14, Backend-Interface-ABI 14,
   PVR-State-Contract 3
-  Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
+  Analyzer-ABI 35, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
 

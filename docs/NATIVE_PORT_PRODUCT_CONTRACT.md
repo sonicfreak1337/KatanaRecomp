@@ -54,12 +54,14 @@ Produktlauf typisiert und fail-closed. Er wird nicht durch Emulation gerettet.
 
 ### Grafik
 
-- Grafikarbeit wird an der hoechsten belegten NINJA-/Kamui-/Render- oder
-  notfalls TA-Uebergabe abgefangen und in eine native GPU-API uebersetzt.
+- Grafikarbeit wird an der hoechsten belegten NINJA-/Kamui-/Spielrenderer-
+  Grenze abgefangen und in eine native GPU-API uebersetzt.
 - Transformation, Rasterisierung, Texturierung, Blending und Present laufen
   auf der PC-GPU.
 - Ein CPU-PVR darf nur noch in einem getrennten Diagnose-/Referenzprofil
   existieren und darf nicht in ein Produktbinary gelinkt werden.
+- Das Interpretieren von TA-Paketen ist PVR-HLE und deshalb ebenfalls kein
+  zulaessiger Produktfallback. TA bleibt ausschliesslich Diagnoseevidenz.
 
 ### Audio und Movie
 
@@ -128,13 +130,31 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Portprojektvertrag `76` und Native-Port-
-Profilvertrag `1`. `native-port` waehlt ein eigenes minimales Runtimeziel;
-`historical-device-runtime` ist nur explizite Nichtproduktreferenz. Das
-fertige Produktbinary wird per Linkmap auf Legacy-Runtime-, ARM7-/SkyEmu-,
-CPU-PVR- und Interpreterbestandteile auditiert. Das publizierte Runtime-
-Abhaengigkeitsmanifest Version `2` nennt zusaetzlich das tatsaechlich gebaute
-Runtimeprofil.
+KR-5000 bindet diese Grenze an Runtime-ABI `91`, Analyzer-ABI `35`, Backend-
+Interface-ABI `14`, Portprojektvertrag `77` und Native-Port-Profilvertrag `2`.
+Der historische
+GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
+enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
+exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
+Produktheader-Allowlist; der
+historische Geraetepfad bleibt ein nicht installierbares Buildbaum-Orakel und
+ist kein Exportprofil. Das fertige Produktbinary wird per Linkmap auf
+Legacy-Runtime-, ARM7-/SkyEmu-, CPU-PVR-/TA- und Interpreterbestandteile
+auditiert.
+
+Der unabhaengige `NativePortDefinition`-/`NativePortContext`-Vertrag bindet
+Originalimage, Bootstrap, direkte Hooksymbole und Hardwareaufloesungen an
+SHA-256-Identitaeten. Die Hardware-Closure akzeptiert jede erreichbare
+Hardwarestelle nur nach vollstaendig ersetzendem Required-Hook. Eine
+deklarierte Native-Memory-Range ist fuer einen unvollstaendig aufgeloesten
+effektiven Adresssatz noch kein Beweis und bleibt gesperrt, bis Analyse und
+verifizierte Imagematerialisierung die komplette EA-/Zugriffs-/Breitenmenge
+gemeinsam binden. Separat materialisierte Module bleiben bis zu ihrem eigenen
+Audit fail-closed. Bis KR-5001 Bootstrap und direkte
+Hook-/Callback-Emission sowie den unabhaengigen privaten Definitionsprovider
+bereitstellt, endet der Produktconfigure bewusst mit
+`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` statt auf den historischen Launcher
+zurueckzufallen.
 
 ## Verbindliche Taskreihenfolge
 

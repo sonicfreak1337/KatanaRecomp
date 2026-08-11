@@ -58,17 +58,15 @@ spielbezogene Installerlogik gehoeren nicht in diesen Kern.
 
 ### KatanaRuntime
 
-Die installierbare Runtime stellt die gemeinsamen Dreamcast-Grenzen bereit:
+Die installierbare Produktruntime stellt nur statisches SH-4-AOT, ordinary
+guest memory, den unabhaengigen Native-Port-Kontext und native Hostgrenzen
+bereit. `KatanaRecomp::native_port_runtime` bindet
+`KatanaRecomp::aot_runtime`; weder Target enthaelt ARM7/AICA, PVR/TA, ASIC,
+GD-ROM, Maple, Firmwareboot oder Interpreter.
 
-- CPU-Zustand und sein Vertrag an Runtime- und Architekturgrenzen;
-- Haupt-RAM, VRAM, AICA-RAM, OCRAM, MMIO, MMU und Aliase;
-- Scheduler, Gastzeit, Interrupts, Exceptions und BIOS-Dienste;
-- GD-ROM, PVR/TA, AICA, Maple, Eingabe, Video, Audio, Save und VMU.
-
-`KatanaRecomp::runtime_core` ist der interpreterfreie Produktvertrag.
-`KatanaRecomp::runtime` enthaelt zusaetzlich den expliziten
-Diagnoseinterpreter und darf nicht versehentlich in einen normalen Port
-gelinkt werden.
+`KatanaRecomp::runtime_core` und `KatanaRecomp::runtime` bleiben nur im
+Buildbaum als historisches Diagnoseorakel. Sie werden nicht installiert und
+sind kein Portprofil.
 
 ### Externes Spielprojekt
 

@@ -1,6 +1,6 @@
 # P1-Buildgraph, Pakete und Testmatrix
 
-Stand: v0.49
+Stand: v0.49.1
 
 ## Zielgraph
 
@@ -10,22 +10,29 @@ Build-Vertrag ausschliesslich `build-current/` und werden beim Wechsel von
 Compiler oder Profil frisch konfiguriert.
 
 ```text
-KatanaRecomp::runtime_core  (interpreterfreier Produktvertrag, runtime-sdk)
-          ^
-          |
-KatanaRecomp::analyzer (Decoder, IO, Plattformanalyse, CFG, IR, Codegen)
-          ^
-          |
-     katana-recomp      (CLI-Werkzeug)
+Produkt-SDK:
+KatanaRecomp::native_port_runtime
+          -> KatanaRecomp::aot_runtime
+          -> keine Dreamcast-Geraeteruntime
+
+Werkzeug-/Analyzerbuild:
+internes historisches Geraeteorakel
+          -> KatanaRecomp::analyzer
+          -> katana-recomp
 ```
 
-Ein normaler Port darf `find_package(KatanaRecomp CONFIG REQUIRED)` und
-`KatanaRecomp::runtime_core` verwenden, ohne Analyzer- oder
-Diagnoseinterpreterquellen zu kompilieren. `KatanaRecomp::runtime` bleibt der
-explizite Diagnosevertrag. Das
-`runtime-sdk` enthaelt nur Runtimeheader, den generierten Buildvertrag, die
-Runtimebibliothek und das CMake-Paket. `analyzer-sdk` ergaenzt
-`KatanaRecomp::analyzer` und alle Analyseheader. Ein Out-of-Tree-Consumer wird
+Ein normaler Port darf `find_package(KatanaRecomp CONFIG REQUIRED)` und nur
+`KatanaRecomp::native_port_runtime` verwenden. Die installierten Runtime-
+Targets enthalten weder `KatanaRecomp::runtime` noch
+`KatanaRecomp::runtime_core`; diese existieren ausschliesslich im Buildbaum
+fuer Analyzer und historische Diagnose. Das `runtime-sdk` enthaelt den
+nativen/AOT-Vertrag ueber eine explizite Produktheader-Allowlist, die beiden
+Produktarchive, den generierten Buildvertrag und das CMake-Paket. Historische
+Dreamcast-Geraete-, Firmware-, PlatformServices- und Interpreterheader werden
+nicht als Produkt-SDK installiert. `analyzer-sdk` ergaenzt das selbsttragende
+`KatanaRecomp::analyzer` und alle Analyseheader. Auch dieses Archiv bindet nur
+die Produkt-AOT-Runtime; historische Geraeteobjekte und SkyEmu bleiben aus
+dem installierten SDK ausgeschlossen. Ein Out-of-Tree-Consumer wird
 als `katana-package-contract-tests` installiert, konfiguriert und gebaut. Ein
 zweiter Consumer prueft den eigenen
 [`Analyzer-ABI-Vertrag`](ANALYZER_ABI.md) einschliesslich absichtlich

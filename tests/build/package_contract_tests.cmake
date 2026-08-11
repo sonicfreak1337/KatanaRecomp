@@ -28,12 +28,18 @@ if(NOT KATANA_RESULT EQUAL 0)
 endif()
 
 if(NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/abi.hpp" OR
-   NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/io/input_provenance.hpp" OR
+   NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/native_port.hpp" OR
    NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/build_contract.hpp")
     message(FATAL_ERROR "runtime-sdk is missing public product headers")
 endif()
 if(EXISTS "${KATANA_INSTALL_DIR}/include/katana/analysis")
     message(FATAL_ERROR "runtime-sdk unexpectedly contains analyzer headers")
+endif()
+if(EXISTS "${KATANA_INSTALL_DIR}/include/katana/io/input_provenance.hpp" OR
+   EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/aica.hpp" OR
+   EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/pvr.hpp" OR
+   EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/platform_services.hpp")
+    message(FATAL_ERROR "runtime-sdk unexpectedly contains diagnostic headers")
 endif()
 
 set(KATANA_ANALYZER_INSTALL_COMMAND

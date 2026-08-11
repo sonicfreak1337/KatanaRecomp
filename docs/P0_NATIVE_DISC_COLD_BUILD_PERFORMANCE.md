@@ -1,19 +1,20 @@
 # P0 NativeDisc-Kaltbuild: Architektur- und Produktplan
 
-Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle Bring-up-
-Meilenstein verwendet Runtime-ABI 90, PlatformServices-ABI 14, Analyzer-ABI 34,
-Function-Analysis-Epoch-Schema 27
-und lokales In-Process-Evaluation-Cache-Schema 13, PVR-State-Contract 3. Das aktuelle
-Native-AOT-Emissionsprofil ist 25; das AOT-Partitionsschema ist 5. Der opt-in
-Modus `port --analysis-mode runtime-only` ist fuer den vollstaendigen NativeDisc-
-Produktport mit `--game-project` zulaessig; der Default bleibt `platform`.
+Status: historischer RuntimeOnly-/PlatformAbi-Performancevertrag. Ab v0.49.1
+hat `NATIVE_PORT_PRODUCT_CONTRACT.md` Vorrang; aktive Sourcewerte sind
+Runtime-ABI 91, Analyzer-ABI 35, Portprojektvertrag 77 und Native-Port-
+Profilvertrag 2. Das aktuelle Native-AOT-Emissionsprofil ist 25; das AOT-
+Partitionsschema ist 5. Die folgenden Angaben beschreiben das interne
+Diagnoseorakel und sind keine Produktarchitektur. Der historische opt-in
+Modus `port --analysis-mode runtime-only` war nur mit `--game-project`
+zulaessig und ist jetzt kein Produkt-/Releaseprofil.
 RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht die blockierende SuperHC-
 FunctionValue-/Candidate-Resolution, erzeugt weiterhin nativen AOT-Code und
 nutzt RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
 Der Whole-Export-Cache ist modegebunden; kein Interpreter, JIT, Runtime-
 Decoder oder geratener Zielpfad wird verwendet.
 
-Der aktuelle No-Skip-RuntimeOnly-Lauf erreichte `FirstVisibleGameFrame`; ein
+Der historische No-Skip-RuntimeOnly-Lauf erreichte `FirstVisibleGameFrame`; ein
 privates Portartefakt oder dessen Hash gehoert nicht in diesen Plan. Der
 bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
 `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces; allgemeine Fixes bleiben.

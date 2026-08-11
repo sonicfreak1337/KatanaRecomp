@@ -3,7 +3,9 @@
 1. Start `katana-recomp-gui` from the build or internal package directory.
    MSVC AddressSanitizer Debug builds place their matching runtime DLL beside
    the executable automatically, so a normal PowerShell is sufficient. Keep
-   the packaged `runtime-sdk/` beside the executable; alternatively set
+   the packaged `diagnostic-runtime-sdk/` beside the executable only for the
+   historical internal GUI oracle; native product exports require the
+   installed product SDK instead. Alternatively set
    `KATANA_RUNTIME_ROOT` to a compatible KatanaRecomp runtime source/SDK root.
 2. Select exactly one `.gdi` source and an output directory. The GUI creates
    any manifest needed by the shared core internally; users do not open or

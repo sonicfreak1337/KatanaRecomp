@@ -742,6 +742,49 @@ bool is_memory_access_instruction(const sh4::InstructionKind kind) noexcept {
     return effects.access != ir::MemoryAccessKind::None || kind == sh4::InstructionKind::Prefetch;
 }
 
+bool is_syntactic_memory_read(sh4::InstructionKind kind) noexcept;
+
+struct MemoryAccessShape final {
+    std::uint8_t access_mask = 0u;
+    std::uint8_t width_mask = 0u;
+};
+
+MemoryAccessShape memory_access_shape(
+    const sh4::DecodedInstruction& instruction) noexcept {
+    if (instruction.kind == sh4::InstructionKind::Prefetch)
+        return {hardware_audit_access_prefetch,
+                hardware_audit_width_cache_line_32};
+    const auto operation =
+        ir::lowering_operation_for_instruction(instruction.kind);
+    const auto effects = ir::instruction_memory_effects(
+        operation,
+        instruction.destination_register,
+        instruction.source_register);
+    std::uint8_t access_mask = 0u;
+    if (effects.access == ir::MemoryAccessKind::Read ||
+        is_syntactic_memory_read(instruction.kind))
+        access_mask |= hardware_audit_access_read;
+    if (effects.access == ir::MemoryAccessKind::Write)
+        access_mask |= hardware_audit_access_write;
+    std::uint8_t width_mask = 0u;
+    switch (effects.width) {
+    case ir::OperandWidth::Bits8:
+        width_mask = hardware_audit_width_u8;
+        break;
+    case ir::OperandWidth::Bits16:
+        width_mask = hardware_audit_width_u16;
+        break;
+    case ir::OperandWidth::Bits32:
+    case ir::OperandWidth::Bits64:
+        // SH-4 FMOV.SZ=1 is represented as two 32-bit bus words.
+        width_mask = hardware_audit_width_u32;
+        break;
+    default:
+        break;
+    }
+    return {access_mask, width_mask};
+}
+
 std::optional<std::uint32_t> displaced(const std::optional<std::uint32_t>& base,
                                        const std::uint32_t offset = 0u) {
     if (!base.has_value()) return std::nullopt;
@@ -1786,7 +1829,12 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
     };
     using ReferenceKey = std::tuple<std::uint32_t, std::uint32_t, HardwareAccessKind, std::uint8_t>;
 
-    std::map<std::uint32_t, bool> complete_memory_sites;
+    struct MemorySiteAggregate final {
+        bool complete = true;
+        std::uint8_t access_mask = 0u;
+        std::uint8_t width_mask = 0u;
+    };
+    std::map<std::uint32_t, MemorySiteAggregate> complete_memory_sites;
     std::map<ReferenceKey, AggregatedReference> aggregated_references;
     if (analysis.instruction_arena) {
         for (const auto& span : analysis.block_spans) {
@@ -1797,9 +1845,19 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                 if (!is_memory_access_instruction(lines[index].instruction.kind)) continue;
                 const auto access_set =
                     effective_accesses(lines[index], trace[index].before, gbr_trace[index]);
-                const auto [site, inserted] =
-                    complete_memory_sites.emplace(lines[index].address, access_set.complete);
-                if (!inserted) site->second = site->second && access_set.complete;
+                const auto shape =
+                    memory_access_shape(lines[index].instruction);
+                const auto [site, inserted] = complete_memory_sites.emplace(
+                    lines[index].address,
+                    MemorySiteAggregate{access_set.complete,
+                                        shape.access_mask,
+                                        shape.width_mask});
+                if (!inserted) {
+                    site->second.complete =
+                        site->second.complete && access_set.complete;
+                    site->second.access_mask |= shape.access_mask;
+                    site->second.width_mask |= shape.width_mask;
+                }
                 std::map<ReferenceKey, AggregatedReference> context_references;
                 for (const auto& access : access_set.accesses) {
                     const auto description = describe(access.address);
@@ -1839,10 +1897,15 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
     }
     result.memory_access_sites = complete_memory_sites.size();
     for (const auto& site : complete_memory_sites) {
-        if (site.second)
+        if (site.second.complete)
             ++result.resolved_memory_access_sites;
-        else
+        else {
             ++result.unresolved_memory_access_sites;
+            result.unresolved_memory_instruction_sites.push_back(
+                {site.first,
+                 site.second.access_mask,
+                 site.second.width_mask});
+        }
     }
     for (const auto& entry : aggregated_references) {
         for (std::size_t occurrence = 0u; occurrence < entry.second.multiplicity; ++occurrence)
@@ -2032,6 +2095,8 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
            << "Memory access sites: " << audit.memory_access_sites
            << " (constant=" << audit.resolved_memory_access_sites
            << ", dynamic=" << audit.unresolved_memory_access_sites << ")\n"
+           << "Unresolved memory instructions: "
+           << audit.unresolved_memory_instruction_sites.size() << "\n"
            << "Hardware addresses: " << audit.addresses.size()
            << " (implemented=" << audit.implemented_addresses
            << ", partial=" << audit.partial_addresses << ", known_gap=" << audit.known_gap_addresses
@@ -2112,7 +2177,7 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
 std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                                        const bool include_accesses) {
     std::ostringstream output;
-    io::write_json_report_header(output, "katana.hardware-audit.v4", "dreamcast_hardware_audit");
+    io::write_json_report_header(output, "katana.hardware-audit.v5", "dreamcast_hardware_audit");
     output << ",\"scope\":" << io::quote_json(audit.scope)
            << ",\"image_bytes\":" << audit.image_bytes
            << ",\"reachable_instructions\":" << audit.reachable_instructions
@@ -2121,6 +2186,20 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
            << ",\"memory_access_sites\":" << audit.memory_access_sites
            << ",\"resolved_memory_access_sites\":" << audit.resolved_memory_access_sites
            << ",\"unresolved_memory_access_sites\":" << audit.unresolved_memory_access_sites
+           << ",\"unresolved_memory_instruction_sites\":[";
+    for (std::size_t index = 0u;
+         index < audit.unresolved_memory_instruction_sites.size();
+         ++index) {
+        if (index != 0u) output << ',';
+        const auto& site = audit.unresolved_memory_instruction_sites[index];
+        output << "{\"instruction_address\":"
+               << io::quote_json(hex8(site.instruction_address))
+               << ",\"access_mask\":"
+               << static_cast<unsigned>(site.access_mask)
+               << ",\"width_mask\":"
+               << static_cast<unsigned>(site.width_mask) << '}';
+    }
+    output << "]"
            << ",\"implemented_addresses\":" << audit.implemented_addresses
            << ",\"partial_addresses\":" << audit.partial_addresses
            << ",\"known_gap_addresses\":" << audit.known_gap_addresses

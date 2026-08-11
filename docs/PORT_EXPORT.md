@@ -1,5 +1,9 @@
 # Port-Projektexport und Originaldisc-Installation
 
+> v0.49.1: Die folgenden Executable-/Discschritte bleiben Eingabe- und
+> Diagnosewerkzeuge. Das einzige Produktprofil ist `native-port`; historische
+> RuntimeOnly-, Handoff- und Dreamcast-Geraetepfade werden nicht gelinkt.
+
 ## v0.49: Executable-First als Bring-up-Standard
 
 Der Entwicklungsworkflow trennt die einmalige private Discverarbeitung von
@@ -54,9 +58,9 @@ Weitere Details stehen in
 
 ## RuntimeOnly-NativeDisc-Bring-up
 
-Der `port`-Aufruf akzeptiert den opt-in Modus
-`--analysis-mode runtime-only` nur zusammen mit `--game-project` fuer den
-vollstaendigen NativeDisc-Produktport. Der Default bleibt `platform`.
+Der historische `port`-Aufruf akzeptierte den opt-in Modus
+`--analysis-mode runtime-only` nur zusammen mit `--game-project`. Er bleibt
+jetzt internes Diagnoseorakel und ist kein Produkt-/Releaseprofil.
 RuntimeOnly setzt fuer die Bootanalyse konservativ `GuestCallAbi::Unknown` und
 umgeht damit die blockierende SuperHC-FunctionValue-/Candidate-Resolution;
 Analyse und Codegen erzeugen weiterhin nativen AOT-Code. Indirekte Aufrufe
@@ -65,7 +69,7 @@ Stop-on-miss und typed abort bleiben aktiv; Interpreter, JIT, Runtime-Decoder
 und geratenen Ziele sind ausgeschlossen.
 
 Der Whole-Export-Cache bindet den Analysemodus und verwendet keinen Eintrag
-des anderen Modus. Der aktuelle saubere RuntimeOnly-Produktlauf erreichte
+des anderen Modus. Der historische saubere RuntimeOnly-Lauf erreichte
 `FirstVisibleGameFrame` ohne Fatal- oder Runtimefehler. Die identische
 Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz`
 auf `24,2926 MHz`.
@@ -122,14 +126,25 @@ noch geloescht.
 
 Fuer den executable-first CLI-Pfad transportiert
 `--game-project <datei.katana-game-project>` ein `GameProjectArtifact`
-Format 1. Es bindet Identitaet, exakte Funktionsgrenzen, Jump- und
+Format 4. Es bindet Identitaet, exakte Funktionsgrenzen, Jump- und
 Callbacktabellen, Runtime-AOT-Templates, Symbole, Codeidentitaeten und
-optionale Bootkonfiguration durch Payload- und Gesamtartefakt-SHA-256. Native
-Hooks und private Handoffprovider werden nicht serialisiert. Die
-vollstaendige Definition steuert Analyse und AOT; ohne native Hooks bindet der
-generierte Produktport nur eine reduzierte Runtimeidentitaet samt
-Bootkonfiguration und optionalem `--game-entry-handoff`. Beide
-Artefaktidentitaeten sind Teil des Whole-Export-Schluessels.
+optionale Bootkonfiguration durch Payload- und Gesamtartefakt-SHA-256. Dieser
+historische Dreamcast-Vertrag serialisiert ausdruecklich keine
+`NativePortDefinition`; deren unabhaengiger privater Provider ist Teil von
+KR-5001. Private Funktionsimplementierungen und Retailbytes
+bleiben ausserhalb des Artefakts. Alle Artefaktidentitaeten sind Teil des
+Whole-Export-Schluessels.
+
+`metadata/native-hardware-closure.json` bindet den erreichbaren Analyseumfang
+an den Native-Port-Vertrag. Jede bekannte Hardwarestelle, unbekannte
+Instruktion und nicht vollstaendig aufgeloeste Speicherstelle braucht aktuell
+einen vollstaendig ersetzenden Required-Hook. Eine deklarierte Native-Memory-
+Range allein ist kein EA-Beweis und bleibt fuer solche Sites gesperrt; die
+Zugriffs-/Breitenmasken werden dennoch exakt berichtet und fuer den spaeteren
+vollstaendigen Beweis validiert. Nicht separat auditierte
+Runtime-/Overlaymodule halten das Gate fail-closed. Das Hardwareaudit selbst
+verwendet Schema `katana.hardware-audit.v5`; der Port-Metadatencache Schema
+`3`.
 
 `--console-profile` waehlt die nachgebildete Konsolenkonfiguration explizit:
 `japan-ntsc`, `north-america-ntsc`, `europe-pal` oder `vga`. Ohne Option gilt
@@ -153,11 +168,14 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `76` verwendet das Runtime-Abhaengigkeitsmanifest
-Schema `2`. Es bindet `native-port`, `historical-device-runtime` oder den
-reinen Diagnosepfad explizit an das publizierte Binary. Nur `native-port` ist
-ein Produktprofil; sein Post-Link-Audit muss frei von Legacy-Runtime, ARM7,
-CPU-PVR und Interpreterbestandteilen sein.
+Seit Portprojektvertrag `77` ist `native-port` das einzige Produktprofil;
+`diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
+historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
+`aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
+Legacy-Runtime, ARM7/SkyEmu, CPU-PVR/TA und Interpreterbestandteilen sein.
+Bis der KR-5001-Definitionsprovider, Bootstrap und direkte Hookcodegen
+vorliegen, endet Configure bewusst mit
+`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`.
 
 `game.katana-install` enthaelt Recipe-Version 2, Jobgeneration,
 Descriptor-SHA-256, Boot-SHA-256, Contentidentitaet und pro Track Nummer, LBA,

@@ -233,11 +233,17 @@ nur ueber ein ausdrueckliches lokales Opt-in serialisiert werden.
 
 ## Dreamcast-Hardwareaudit
 
-Ein einzelner Bericht verwendet `katana.hardware-audit.v4`; die
-Mehrquellen-Huelle bleibt `katana.hardware-audit-set.v1`. Version 4 praezisiert
+Ein einzelner Bericht verwendet `katana.hardware-audit.v5`; die
+Mehrquellen-Huelle steigt auf `katana.hardware-audit-set.v2`, weil sie die
+erweiterten Einzelberichte einbettet. Version 4 praezisierte
 die zuvor als `initial_boot_executable` verstandene Scope-Semantik inkompatibel
 zu `executable_image` beziehungsweise `native_disc_aot_boot_graph` und traegt
-daher bewusst eine neue fachliche Schemaversion. Sie erkennt
+daher bewusst eine neue fachliche Schemaversion. Version 5 ergaenzt fuer jede
+nicht vollstaendig aufgeloeste Speicherinstruktion die exakte Adresse sowie
+Zugriffs- und Breitenmasken. Das Native-Port-Hardwaregate vergleicht diese
+Form mit dem Native-Port-Vertrag, statt einen blossen Summenzaehler zu
+vertrauen. Unvollstaendige effektive Adressmengen bleiben trotz deklarierter
+Native-Memory-Range hookpflichtig. Der Audit erkennt weiterhin
 skalierbar ueber Dominatoren echte Natural Loops und klassifiziert sie als
 `counter`, `ram_poll`, `mmio_poll`, `mixed` oder `unknown`. Jeder Loop traegt
 Backedge-, Block-, Counter- und Zugriffsevidenz; Zugriffe unterscheiden

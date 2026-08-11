@@ -140,7 +140,9 @@ theme fallback and layout arithmetic at 100, 150, 200 and 300 percent DPI.
 The internal package candidate contains `katana-recomp`,
 `katana-recomp-gui`, the application logo, its machine-readable asset manifest
 and internal workflow documentation. It also contains a minimal source-based
-`runtime-sdk/` with runtime headers, sources and CMake contract. The application
+`diagnostic-runtime-sdk/` with historical runtime headers, sources and CMake
+contract. It is an internal, non-product oracle and does not expose the
+installed native-port targets. The application
 discovers this directory beside the executable or accepts an explicit
 `KATANA_RUNTIME_ROOT`; no compiled-in developer source path is used.
 

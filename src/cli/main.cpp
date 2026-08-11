@@ -1036,7 +1036,7 @@ int audit_disc_hardware_set(const std::filesystem::path& root,
         strict_failures += katana::cli::hardware_audit_failed(audit, false, true) ? 1u : 0u;
     }
     if (json) {
-        std::cout << "{\"schema\":\"katana.hardware-audit-set.v1\",\"status\":"
+        std::cout << "{\"schema\":\"katana.hardware-audit-set.v2\",\"status\":"
                   << katana::io::quote_json(failures == 0u ? "success" : "partial")
                   << ",\"jobs\":" << jobs << ",\"disc_count\":" << results.size()
                   << ",\"load_failures\":" << failures << ",\"results\":[";
@@ -7006,11 +7006,10 @@ int export_port_project(const std::filesystem::path& source_path,
             throw std::invalid_argument(
                 "Diagnoseports brauchen KATANA_PORT_RUNTIME_PROFILE="
                 "diagnostic-interpreter.");
-    } else if (port_runtime_profile != "native-port" &&
-               port_runtime_profile != "historical-device-runtime") {
+    } else if (port_runtime_profile != "native-port") {
         throw std::invalid_argument(
-            "KATANA_PORT_RUNTIME_PROFILE muss native-port oder explizit "
-            "historical-device-runtime sein.");
+            "Produktports brauchen KATANA_PORT_RUNTIME_PROFILE=native-port; "
+            "der historische Geraetepfad ist kein Exportprofil.");
     }
     katana::cli::PortBuildTelemetryOptions telemetry_options;
     telemetry_options.jsonl_path =
@@ -7655,9 +7654,7 @@ int export_port_project(const std::filesystem::path& source_path,
             const auto runtime_target =
                 port_runtime_profile == "diagnostic-interpreter"
                     ? std::string_view("katana_runtime")
-                    : (port_runtime_profile == "native-port"
-                           ? std::string_view("katana_native_port_runtime")
-                           : std::string_view("katana_runtime_core"));
+                    : std::string_view("katana_native_port_runtime");
             auto runtime_build =
                 std::string("cmake --build ") +
                 shell_quote(runtime_build_root) +

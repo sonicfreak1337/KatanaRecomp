@@ -1,13 +1,13 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `34`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 90, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 13, Portprojektvertrag 76 und Native-Port-
-Profilvertrag 1.
+Der aktuelle oeffentliche Analyzervertrag ist Version `35`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 91, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 14, Portprojektvertrag 77 und Native-Port-
+Profilvertrag 2.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
-Version 34 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Version 35 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -16,7 +16,18 @@ Owner-Uebergaenge erhalten diesen Beweis nicht. Damit invalidieren Analyse-,
 IR-, Codegen- und Whole-Export-Caches den alten Bestand, der solche direkt vor
 einem Tail-Registrar geladenen Callbacks noch verlor.
 
-Analyzer-ABI 34 bindet die typisierten Executor-/RAM-Fortschrittsfelder,
+Analyzer-ABI 35 erweitert `DreamcastHardwareAudit` um die exakten erreichbaren
+Instruktionsadressen nicht vollstaendig aufgeloester Speicherzugriffe. Das
+Native-Port-Hardwaregate darf dadurch nicht mehr einen blossen Summenzaehler
+als Vollstaendigkeitsbeweis verwenden. Das JSON-Schema steigt passend auf
+`katana.hardware-audit.v5`.
+
+Die davon getrennte oeffentliche Codegen-Grenze
+`PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
+`14` und Portprojektvertrag `77` versioniert. Analyzer-ABI `35` bindet das
+neue Hardwareaudit-Layout; die Zaehler ersetzen einander nicht.
+
+Analyzer-ABI 34 band die typisierten Executor-/RAM-Fortschrittsfelder,
 das Eviction-Ledger und den ganz-oder-gar-nicht-Vertrag persistierter
 Resolution-/Presentation-Roots. Ein unvollstaendiger Root verwirft die
 optionale Epoch typisiert als `incomplete-root`; ein spaeteres TerminalFull

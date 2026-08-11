@@ -585,6 +585,7 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/runtime/trace.cpp
     src/runtime/wait_loop_trace.cpp
     src/runtime/memory.cpp
+    src/runtime/native_port.cpp
     src/runtime/runtime.cpp
 )
 if(WIN32)
@@ -592,6 +593,55 @@ if(WIN32)
         src/runtime/host_video_d3d11.cpp
     )
 endif()
+
+# Static SH-4 execution support shared by generated native ports and the
+# historical diagnostic runtime. This is an explicit source closure: it
+# contains CPU/memory/block semantics only and deliberately excludes AICA,
+# PVR/TA, ASIC, GD-ROM, Maple, firmware boot and interpreter sources.
+set(KATANA_AOT_RUNTIME_SOURCES
+    src/runtime/block_abi.cpp
+    src/runtime/block_table.cpp
+    src/runtime/block_dispatch.cpp
+    src/runtime/block_guards.cpp
+    src/runtime/cache_control.cpp
+    src/runtime/code_invalidation.cpp
+    src/runtime/crash_report.cpp
+    src/runtime/exception.cpp
+    src/runtime/fpu.cpp
+    src/runtime/guest_program_range.cpp
+    src/runtime/memory.cpp
+    src/runtime/native_port.cpp
+    src/runtime/runtime.cpp
+)
+
+# Keep the installed native product SDK deliberately smaller than the
+# build-tree diagnostic runtime surface.  Historical Dreamcast device,
+# firmware and interpreter headers remain available to the analyzer and the
+# opt-in diagnostic package, but are not part of the distributable product
+# runtime contract.
+set(KATANA_PRODUCT_RUNTIME_HEADERS
+    include/katana/runtime/abi.hpp
+    include/katana/runtime/block_abi.hpp
+    include/katana/runtime/block_guards.hpp
+    include/katana/runtime/block_table.hpp
+    include/katana/runtime/cache_control.hpp
+    include/katana/runtime/code_invalidation.hpp
+    include/katana/runtime/crash_capsule.hpp
+    include/katana/runtime/crash_report.hpp
+    include/katana/runtime/exception.hpp
+    include/katana/runtime/fpu.hpp
+    include/katana/runtime/guest_program_range.hpp
+    include/katana/runtime/memory.hpp
+    include/katana/runtime/native_port.hpp
+    include/katana/runtime/runtime.hpp
+)
+set(KATANA_HISTORICAL_DEVICE_RUNTIME_SOURCES
+    ${KATANA_RUNTIME_CORE_SOURCES}
+)
+list(REMOVE_ITEM
+    KATANA_HISTORICAL_DEVICE_RUNTIME_SOURCES
+    ${KATANA_AOT_RUNTIME_SOURCES}
+)
 
 set(KATANA_SH4_DECODER_SOURCES
     src/decoder/decoder.cpp
@@ -604,7 +654,12 @@ set(KATANA_DIAGNOSTIC_INTERPRETER_SOURCES
     src/runtime/dynamic_interpreter.cpp
 )
 
-add_library(katana_runtime_core_objects OBJECT ${KATANA_RUNTIME_CORE_SOURCES})
+add_library(katana_aot_runtime_objects OBJECT ${KATANA_AOT_RUNTIME_SOURCES})
+add_library(
+    katana_historical_device_runtime_objects
+    OBJECT
+    ${KATANA_HISTORICAL_DEVICE_RUNTIME_SOURCES}
+)
 add_library(katana_sh4_decoder_objects OBJECT ${KATANA_SH4_DECODER_SOURCES})
 add_library(
     katana_diagnostic_interpreter_objects
@@ -612,14 +667,19 @@ add_library(
     ${KATANA_DIAGNOSTIC_INTERPRETER_SOURCES}
 )
 
-function(katana_configure_runtime_objects target)
+function(katana_configure_runtime_objects target uses_third_party)
     target_include_directories(
         ${target}
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_BINARY_DIR}/generated/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     )
+    if(uses_third_party)
+        target_include_directories(
+            ${target}
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+        )
+    endif()
     katana_enable_warnings(${target})
     if(MSVC)
         target_compile_options(${target} PRIVATE /fp:strict)
@@ -631,19 +691,31 @@ function(katana_configure_runtime_objects target)
     endif()
 endfunction()
 
-katana_configure_runtime_objects(katana_runtime_core_objects)
-katana_configure_runtime_objects(katana_sh4_decoder_objects)
-katana_configure_runtime_objects(katana_diagnostic_interpreter_objects)
+katana_configure_runtime_objects(katana_aot_runtime_objects FALSE)
+katana_configure_runtime_objects(katana_historical_device_runtime_objects TRUE)
+katana_configure_runtime_objects(katana_sh4_decoder_objects FALSE)
+katana_configure_runtime_objects(katana_diagnostic_interpreter_objects FALSE)
 target_link_libraries(
-    katana_runtime_core_objects
+    katana_aot_runtime_objects
+    PRIVATE
+        Threads::Threads
+)
+target_link_libraries(
+    katana_historical_device_runtime_objects
     PRIVATE
         Threads::Threads
 )
 
 add_library(
+    katana_aot_runtime
+    STATIC
+    $<TARGET_OBJECTS:katana_aot_runtime_objects>
+)
+add_library(
     katana_runtime_core
     STATIC
-    $<TARGET_OBJECTS:katana_runtime_core_objects>
+    $<TARGET_OBJECTS:katana_aot_runtime_objects>
+    $<TARGET_OBJECTS:katana_historical_device_runtime_objects>
 )
 add_library(
     katana_diagnostic_interpreter
@@ -654,16 +726,18 @@ add_library(
 add_library(
     katana_runtime
     STATIC
-    $<TARGET_OBJECTS:katana_runtime_core_objects>
+    $<TARGET_OBJECTS:katana_aot_runtime_objects>
+    $<TARGET_OBJECTS:katana_historical_device_runtime_objects>
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
 )
 add_library(
     katana_native_port_runtime
     STATIC
-    src/runtime/native_port.cpp
+    src/runtime/native_port_runtime.cpp
 )
 
+add_library(KatanaRecomp::aot_runtime ALIAS katana_aot_runtime)
 add_library(KatanaRecomp::runtime ALIAS katana_runtime)
 add_library(KatanaRecomp::runtime_core ALIAS katana_runtime_core)
 add_library(
@@ -678,9 +752,15 @@ add_library(
 )
 set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)
 set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)
+set_target_properties(katana_aot_runtime PROPERTIES EXPORT_NAME aot_runtime)
 set_target_properties(
     katana_native_port_runtime
     PROPERTIES EXPORT_NAME native_port_runtime
+)
+target_link_libraries(
+    katana_aot_runtime
+    PUBLIC
+        Threads::Threads
 )
 target_link_libraries(
     katana_runtime_core
@@ -695,7 +775,7 @@ target_link_libraries(
 target_link_libraries(
     katana_native_port_runtime
     PUBLIC
-        Threads::Threads
+        katana_aot_runtime
 )
 
 function(katana_stamp_runtime_contract target)
@@ -716,6 +796,7 @@ endfunction()
 
 katana_stamp_runtime_contract(katana_runtime)
 katana_stamp_runtime_contract(katana_runtime_core)
+katana_stamp_runtime_contract(katana_aot_runtime)
 katana_stamp_runtime_contract(katana_native_port_runtime)
 set_target_properties(
     katana_native_port_runtime
@@ -736,8 +817,8 @@ set_property(
 # compiled with the same sanitizer profile; keeping these flags PRIVATE makes
 # an otherwise valid installed SDK fail at link time. Export the profile as
 # target usage requirements so build-tree and installed consumers inherit it
-# through KatanaRecomp::runtime or KatanaRecomp::runtime_core.
-function(katana_configure_runtime_archive target)
+# through every archive target that owns runtime objects.
+function(katana_configure_runtime_archive target links_host_platform)
     target_include_directories(
         ${target}
         PUBLIC
@@ -765,17 +846,18 @@ function(katana_configure_runtime_archive target)
             )
         endif()
     endif()
-    if(WIN32)
+    if(WIN32 AND links_host_platform)
         target_link_libraries(${target} PUBLIC bcrypt d3d11 dxgi gdi32 user32 winmm)
     endif()
 endfunction()
 
 target_link_libraries(katana_diagnostic_interpreter PUBLIC katana_runtime_core)
-katana_configure_runtime_objects(katana_native_port_runtime)
-katana_configure_runtime_archive(katana_runtime_core)
-katana_configure_runtime_archive(katana_diagnostic_interpreter)
-katana_configure_runtime_archive(katana_runtime)
-katana_configure_runtime_archive(katana_native_port_runtime)
+katana_configure_runtime_archive(katana_aot_runtime FALSE)
+katana_configure_runtime_objects(katana_native_port_runtime FALSE)
+katana_configure_runtime_archive(katana_runtime_core TRUE)
+katana_configure_runtime_archive(katana_diagnostic_interpreter TRUE)
+katana_configure_runtime_archive(katana_runtime TRUE)
+katana_configure_runtime_archive(katana_native_port_runtime FALSE)
 
 if(MSVC)
     set_source_files_properties(
@@ -784,8 +866,7 @@ if(MSVC)
     )
 endif()
 
-add_library(katana_core STATIC
-    $<TARGET_OBJECTS:katana_sh4_decoder_objects>
+add_library(katana_core_objects OBJECT
     src/decoder/decoder_validation.cpp
     src/decoder/isa_coverage.cpp
     src/io/binary_reader.cpp
@@ -842,35 +923,72 @@ add_library(katana_core STATIC
     src/codegen/port_export.cpp
     src/codegen/source_map.cpp
 )
+add_library(
+    katana_core
+    STATIC
+    $<TARGET_OBJECTS:katana_sh4_decoder_objects>
+    $<TARGET_OBJECTS:katana_core_objects>
+)
+# The installed analyzer archive contains analyzer/codegen objects plus the
+# product AOT dependency only. Historical Dreamcast device implementations
+# remain build-tree-only and are never folded into an installed archive.
+add_library(
+    katana_analyzer_sdk
+    STATIC
+    $<TARGET_OBJECTS:katana_sh4_decoder_objects>
+    $<TARGET_OBJECTS:katana_core_objects>
+)
+add_library(KatanaRecomp::analyzer ALIAS katana_analyzer_sdk)
 if(TARGET katana-source-identity)
+    add_dependencies(katana_core_objects katana-source-identity)
     add_dependencies(katana_core katana-source-identity)
+    add_dependencies(katana_analyzer_sdk katana-source-identity)
 endif()
 
 target_include_directories(
-    katana_core
-    PUBLIC
+    katana_core_objects
+    PRIVATE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+target_compile_definitions(
+    katana_core_objects
+    PRIVATE KATANA_ANALYZER_ABI_VERSION=${KATANA_ANALYZER_ABI_VERSION}
+)
+foreach(katana_analyzer_target IN ITEMS katana_core katana_analyzer_sdk)
+    target_include_directories(
+        ${katana_analyzer_target}
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    target_compile_definitions(
+        ${katana_analyzer_target}
+        PUBLIC KATANA_ANALYZER_ABI_VERSION=${KATANA_ANALYZER_ABI_VERSION}
+    )
+    set_property(
+        TARGET ${katana_analyzer_target}
+        PROPERTY INTERFACE_KATANA_ANALYZER_ABI_VERSION
+                 ${KATANA_ANALYZER_ABI_VERSION}
+    )
+    set_property(
+        TARGET ${katana_analyzer_target}
+        APPEND
+        PROPERTY COMPATIBLE_INTERFACE_STRING KATANA_ANALYZER_ABI_VERSION
+    )
+endforeach()
 
 target_link_libraries(katana_core PUBLIC katana_runtime_core)
-target_compile_definitions(
-    katana_core
-    PUBLIC KATANA_ANALYZER_ABI_VERSION=${KATANA_ANALYZER_ABI_VERSION}
+target_link_libraries(
+    katana_analyzer_sdk
+    PUBLIC
+        katana_aot_runtime
+        Threads::Threads
 )
-set_property(
-    TARGET katana_core
-    PROPERTY INTERFACE_KATANA_ANALYZER_ABI_VERSION
-             ${KATANA_ANALYZER_ABI_VERSION}
-)
-set_property(
-    TARGET katana_core
-    APPEND
-    PROPERTY COMPATIBLE_INTERFACE_STRING KATANA_ANALYZER_ABI_VERSION
-)
-set_target_properties(katana_core PROPERTIES EXPORT_NAME analyzer)
-katana_enable_warnings(katana_core)
+set_target_properties(katana_analyzer_sdk PROPERTIES EXPORT_NAME analyzer)
+katana_enable_warnings(katana_core_objects)
+katana_configure_runtime_archive(katana_analyzer_sdk TRUE)
 
 add_library(katana_phase9 STATIC
     src/phase9/homebrew.cpp
@@ -5250,7 +5368,7 @@ write_basic_package_version_file(
 )
 
 install(
-    TARGETS katana_runtime katana_runtime_core katana_native_port_runtime
+    TARGETS katana_aot_runtime katana_native_port_runtime
     EXPORT KatanaRuntimeTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime-sdk
@@ -5258,7 +5376,7 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(
-    TARGETS katana_core
+    TARGETS katana_analyzer_sdk
     EXPORT KatanaAnalyzerTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT analyzer-sdk
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT analyzer-sdk
@@ -5271,19 +5389,8 @@ install(
     COMPONENT tools
 )
 install(
-    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/runtime
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
-    COMPONENT runtime-sdk
-    FILES_MATCHING PATTERN "*.hpp"
-)
-install(
-    FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/io/input_provenance.hpp
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana/io
-    COMPONENT runtime-sdk
-)
-install(
-    FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/progress.hpp
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
+    FILES ${KATANA_PRODUCT_RUNTIME_HEADERS}
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana/runtime
     COMPONENT runtime-sdk
 )
 install(

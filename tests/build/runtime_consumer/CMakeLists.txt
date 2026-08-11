@@ -18,12 +18,18 @@ endif()
 if(NOT TARGET KatanaRecomp::native_port_runtime)
     message(FATAL_ERROR "runtime SDK is missing KatanaRecomp::native_port_runtime")
 endif()
+if(NOT TARGET KatanaRecomp::aot_runtime)
+    message(FATAL_ERROR "runtime SDK is missing KatanaRecomp::aot_runtime")
+endif()
+if(TARGET KatanaRecomp::runtime OR TARGET KatanaRecomp::runtime_core)
+    message(FATAL_ERROR "runtime SDK exported the historical device runtime")
+endif()
 
 add_executable(katana-runtime-consumer main.cpp)
 target_compile_features(katana-runtime-consumer PRIVATE cxx_std_20)
 target_link_libraries(
     katana-runtime-consumer
-    PRIVATE KatanaRecomp::runtime KatanaRecomp::native_port_runtime
+    PRIVATE KatanaRecomp::native_port_runtime
 )
 target_compile_definitions(
     katana-runtime-consumer

@@ -100,6 +100,20 @@ struct HardwareInstructionDiagnostic {
     std::vector<std::uint32_t> delay_slot_owners;
 };
 
+inline constexpr std::uint8_t hardware_audit_access_read = 1u << 0u;
+inline constexpr std::uint8_t hardware_audit_access_write = 1u << 1u;
+inline constexpr std::uint8_t hardware_audit_access_prefetch = 1u << 2u;
+inline constexpr std::uint8_t hardware_audit_width_u8 = 1u << 0u;
+inline constexpr std::uint8_t hardware_audit_width_u16 = 1u << 1u;
+inline constexpr std::uint8_t hardware_audit_width_u32 = 1u << 2u;
+inline constexpr std::uint8_t hardware_audit_width_cache_line_32 = 1u << 3u;
+
+struct UnresolvedMemoryInstructionSite final {
+    std::uint32_t instruction_address = 0u;
+    std::uint8_t access_mask = 0u;
+    std::uint8_t width_mask = 0u;
+};
+
 struct HardwareLoopAccessEvidence {
     std::uint32_t instruction_address = 0u;
     std::uint32_t guest_address = 0u;
@@ -134,6 +148,11 @@ struct DreamcastHardwareAudit {
     std::size_t memory_access_sites = 0u;
     std::size_t resolved_memory_access_sites = 0u;
     std::size_t unresolved_memory_access_sites = 0u;
+    // Exact reachable instruction sites whose complete effective-address set
+    // could not be proven. Native-port admission consumes the addresses,
+    // rather than trusting only the aggregate count.
+    std::vector<UnresolvedMemoryInstructionSite>
+        unresolved_memory_instruction_sites;
     std::size_t implemented_addresses = 0u;
     std::size_t partial_addresses = 0u;
     std::size_t known_gap_addresses = 0u;

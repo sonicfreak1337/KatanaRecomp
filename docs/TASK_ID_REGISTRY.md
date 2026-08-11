@@ -71,13 +71,15 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Der aktuelle Source-Stand ist der Runtime-Performance-Checkpoint; Runtime-ABI
-90, PlatformServices-ABI 14, Analyzer-ABI 34, Backend-Interface-ABI 13,
+Der aktuelle Source-Stand ist der Native-Port-Architekturreview-Checkpoint;
+Runtime-ABI 91, PlatformServices-ABI 14, Analyzer-ABI 35,
+Backend-Interface-ABI 14, Portprojektvertrag 77 und Native-Port-
+Profilvertrag 2,
 PVR-State-Contract 3, Function-Analysis-Epoch-Schema 27,
-lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
-`port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
-vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-Der aktuelle No-Skip-Lauf erreicht `FirstVisibleGameFrame`; `341`
+lokales In-Process-Evaluation-Cache-Schema 13. Der historische opt-in Modus
+`port --analysis-mode runtime-only` war nur mit `--game-project` zulaessig
+und ist jetzt ausschliesslich internes Diagnoseorakel. Der historische
+No-Skip-Lauf erreicht `FirstVisibleGameFrame`; `341`
 Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und `470`
 Audiopuffer belegen den natuerlichen Pfad. Die Vergleichsreihe reicht bis
 `24,2926 MHz`; `100 MHz`, Identity-Miss, Memory-Card-Screen und Hauptmenue
@@ -196,7 +198,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und No-Skip-Sonic-Lauf belegen echten ARM7, fortschreitenden Sofdec-Audiotakt, Player-Status 5 und sichtbare Movie-Bildpublikation |
-| KR-5000 | Native Produktgrenze und Linkisolation | [x] source-seitig abgeschlossen; Portprojektvertrag 76, Native-Port-Profilvertrag 1, separates Produktlinkziel und post-link Legacy-Audit; historisches Geraeteprofil nur explizit als Nichtproduktpfad |
+| KR-5000 | Native Produktgrenze und Linkisolation | [x] physische Source-/Link-/Installgrenze abgeschlossen; Portprojektvertrag 77, Profilvertrag 2, nur AOT-/Native-Runtime im Produkt-SDK, historischer Geraetepfad ausschliesslich nichtinstallierbares Buildbaum-Orakel |
 | KR-5001 | Statische Spiel-/SDK-Hookkarte | aktiv P0; hoechste belegte Audio-/Movie-, Grafik- und Plattformgrenzen aus privater Adresskarte binden |
 | KR-5002 | Nativer Audio-/Moviepfad | geplant P0 nach KR-5001; kein ARM7/AICA-Firmwarepfad im Produkt, No-Skip-Lifecycle ueber native Hostdienste |
 | KR-5003 | Nativer GPU-Pfad | geplant P0 nach KR-5001; native GPU-API und kein CPU-PVR im Produktlink |

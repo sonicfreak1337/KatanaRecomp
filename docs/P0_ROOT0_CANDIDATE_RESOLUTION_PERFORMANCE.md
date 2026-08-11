@@ -1,20 +1,23 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
-Status: Source-seitiger KR-4985/KR-4986/KR-4987/KR-4994-Fix abgeschlossen;
+Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
+Vorrang. Aktuell gelten Runtime-ABI 91, Analyzer-ABI 35,
+Portprojektvertrag 77 und Native-Port-Profilvertrag 2. Der source-seitige
+KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
-Diagnostik. Der aktuelle RuntimeOnly-Bring-up verwendet Analyzer-ABI 34,
+Diagnostik. Der damalige RuntimeOnly-Bring-up verwendete Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27 und lokales In-Process-Evaluation-Cache-
 Schema 13. Native-AOT-Emissionsprofil 25 und AOT-Partitionsschema 5 sind
-aktuell. Der opt-in Modus `port --analysis-mode runtime-only` ist nur mit
-`--game-project` fuer den vollstaendigen NativeDisc-Produktport zulaessig;
-der Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`,
+aktuell. Der historische Modus `port --analysis-mode runtime-only` war nur mit
+`--game-project` zulaessig und ist jetzt ausschliesslich internes
+Diagnoseorakel, kein Produktprofil. RuntimeOnly setzt `GuestCallAbi::Unknown`,
 umgeht die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt
 weiterhin nativen AOT-Code und nutzt RuntimeOnly-Dispatch ueber eine exakte
 statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv;
 kein Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad.
 
-Der aktuelle RuntimeOnly-Build-/Export-Gate ist bestanden. Der letzte saubere
-RuntimeOnly-Produktlauf erreichte `FirstVisibleGameFrame` ohne Skip; Candidate-
+Das historische RuntimeOnly-Build-/Export-Gate war bestanden. Der letzte saubere
+RuntimeOnly-Diagnoselauf erreichte `FirstVisibleGameFrame` ohne Skip; Candidate-
 Resolution bleibt im RuntimeOnly-Bring-up deferred und ist nicht der aktuelle
 Produktblocker. Die identische Vergleichsreihe stieg bis `24,2926 MHz`, aber
 `100 MHz` und Memory-Card-Screen/Hauptmenue bleiben offen.

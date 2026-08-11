@@ -28,30 +28,31 @@ bestaetigen, scheitert Configure fail-closed. Das Gate bleibt
 
 ```text
 native-port                Standard und einziger Produktpfad
-historical-device-runtime  explizite nicht verteilbare Referenz
 diagnostic-interpreter     nur fuer Diagnoseexporte
 ```
 
-Normale Exporte akzeptieren nur die ersten beiden Werte; Diagnoseexporte
-erzwingen `diagnostic-interpreter`. Compilerbuildordner und Telemetrie sind an
-das Runtimeprofil gebunden. `native-port` linkt ausschliesslich
-`KatanaRecomp::native_port_runtime`, verlangt Native-Port-Profilvertrag `1`
-und Portprojektvertrag `76` und erzeugt eine Linkmap. Ein Post-Link-Audit
-verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-, CPU-PVR- oder
-Interpreterbestandteilen. Es existiert kein automatischer Rueckfall.
+Normale Exporte akzeptieren ausschliesslich `native-port`; Diagnoseexporte
+erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
+internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
+und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
+ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
+Profilvertrag `2` und Portprojektvertrag `77` und erzeugt eine Linkmap. Ein
+Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
+CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
+Rueckfall.
 
 Solange die in KR-5001 bis KR-5004 abgeleiteten nativen Hooks fehlen, darf der
-Produktlink deshalb mit einer fehlenden Bindung scheitern. Das ist die
-beabsichtigte fail-closed Grenze. Das historische Profil kann den alten Stand
-weiter als Referenz bauen, gilt aber nie als Produktnachweis. Das
-`katana-runtime-dependencies`-Manifest Version `2` bindet das tatsaechlich
-verwendete Runtimeprofil an die publizierte Distribution.
+Produktlink deshalb mit einer fehlenden Bindung scheitern. Der aktuelle
+vertikale Stand endet bereits beim Configure typisiert mit
+`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`; KR-5001 ersetzt diesen Marker erst,
+wenn Bootstrap und direkte Hook-/Callback-Emission wirklich existieren. Das
+ist die beabsichtigte fail-closed Grenze.
 
 ## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 
-Der opt-in Portmodus `--analysis-mode runtime-only` ist nur fuer den
-vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
-Default bleibt `platform`. RuntimeOnly verwendet fuer die Bootanalyse
+Der historische Portmodus `--analysis-mode runtime-only` war nur mit
+`--game-project` zulaessig und bleibt jetzt ausschliesslich internes
+Diagnoseorakel. RuntimeOnly verwendet fuer die Bootanalyse
 `GuestCallAbi::Unknown`, erzeugt weiterhin nativen AOT-Code und bindet
 RuntimeOnly-Dispatch an eine exakte statische Guest->Host-Tabelle. Der
 Whole-Export-Cache ist an diesen Modus gebunden.
@@ -101,8 +102,9 @@ Windows-Toolchainvariablen ab.
 
 Ein direkt konfiguriertes generiertes Produktprojekt verwendet aus dem
 installierten CMake-Paket standardmaessig
-`KatanaRecomp::native_port_runtime`. `KatanaRecomp::runtime_core` ist nur im
-expliziten historischen Nichtproduktprofil zulaessig. Eine
+`KatanaRecomp::native_port_runtime`. `KatanaRecomp::runtime` und
+`KatanaRecomp::runtime_core` werden nicht mehr installiert oder exportiert.
+Eine
 installierte CLI erkennt dieses Paket im gemeinsamen Installationspraefix
 automatisch. `KATANA_RUNTIME_PREFIX=<Praefix>` waehlt explizit ein anderes
 installiertes Paket; der Pfad muss dessen `include/katana/runtime` und
@@ -115,11 +117,14 @@ dem Repository gestartete CLI den erkannten Quellbaum. Dieser wird mit
 `add_subdirectory(... EXCLUDE_FROM_ALL)` eingebunden und baut dadurch nicht
 den gesamten Analyzer als normalen Portbestandteil. Ein neben der CLI
 liegendes `runtime-sdk` darf entweder dieselbe installierte Paketstruktur oder
-einen Quellbaum-SDK enthalten. Generierte AOT-TUs inkludieren die schmale
-`katana/runtime/aot_runtime_abi.hpp` und verwenden eine gemeinsame PCH.
-Der Produkt-Launcher erhaelt zusaetzlich den kleinen oeffentlichen
-`katana/io/input_provenance.hpp`-Vertrag aus demselben Runtimepaket; weitere
-Analyzerheader gehoeren nicht zum `runtime-sdk`.
+einen Quellbaum-SDK enthalten. Generierte AOT-TUs verwenden die explizite
+Produktheader-Allowlist und eine gemeinsame PCH. Der alte
+`katana/runtime/aot_runtime_abi.hpp`-Vertrag bleibt bis zur direkten
+KR-5001-Hook-/Bootstrap-Emission eine Buildbaum-Diagnoseschnittstelle und wird
+nicht im Produkt-SDK installiert; deshalb ist der Produktconfigure in diesem
+Zwischenstand absichtlich gesperrt. Analyzer-, Fortschritts-,
+Input-Provenienz- und historische Geraeteheader gehoeren nicht zum
+`runtime-sdk`.
 
 `KATANA_RUNTIME_BUILD_TARGETS=<Buildtree>/KatanaRuntimeBuildTargets.cmake`
 bindet stattdessen die bereits konfigurierte lokale Runtime und aktualisiert

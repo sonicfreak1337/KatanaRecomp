@@ -132,17 +132,22 @@ Der erste aktive Implementierungspunkt ist die hoechste belegte SH-4-Spiel-/
 SDK-Grenze vor AICA-Kommandoring und PVR/TA-Geraeteprotokoll. Fehlende native
 Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 
-`KR-5000` ist source-seitig abgeschlossen: `native-port` ist der Standard,
-besitzt ein eigenes minimales Linktarget und prueft das fertige Binary per
-Linkmap auf historische Runtime-, ARM7-, CPU-PVR- und Interpreterbestandteile.
-`historical-device-runtime` bleibt ein ausdrueckliches Nichtproduktprofil.
-Der aktive Implementierungspunkt ist jetzt `KR-5001`.
+`KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
+Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
+historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
+kein Portprofil. Portprojektvertrag `77`, Native-Port-Profilvertrag `2` und
+der erweiterte Linkmap-Audit sperren jede Rueckkante. Der unabhaengige
+`NativePortDefinition`-/`NativePortContext`-Vertrag sowie eine fail-closed
+Hardware-Closure sind vorhanden. Der Produktconfigure endet bis zum echten
+privaten Definitionsprovider und Bootstrap-/Direkthook-Codegen bewusst mit
+`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`; dieser vertikale Pfad ist der
+aktive `KR-5001` und darf nicht den historischen Launcher wiederverwenden.
 
 ## Historischer RuntimeOnly-Bring-up
 
-Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
-vollstaendigen NativeDisc-Produktport mit `--game-project` freigegeben; der
-Default bleibt `platform`. RuntimeOnly setzt fuer die Bootanalyse konservativ
+Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit
+`--game-project` freigegeben. Er ist jetzt internes Diagnoseorakel und kein
+Produkt-/Releaseprofil. Fuer seine Bootanalyse setzt RuntimeOnly konservativ
 `GuestCallAbi::Unknown`, ueberspringt die blockierende SuperHC-
 FunctionValue-/Candidate-Resolution und erzeugt weiterhin nativen AOT-Code.
 RuntimeOnly-Dispatch verwendet eine exakte statische Guest->Host-Tabelle;
@@ -150,7 +155,7 @@ Stop-on-miss und typed abort bleiben aktiv, ohne Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist
 modegebunden.
 
-Der aktuelle RuntimeOnly-Lauf erreichte ohne Skip, Start-Impuls oder
+Der letzte historische RuntimeOnly-Lauf erreichte ohne Skip, Start-Impuls oder
 kuenstlichen Moviepfad das Milestone `FirstVisibleGameFrame`. Der erste Frame
 ist durch Digest `16866779858248182758` bei Gastzyklus `622122619` belegt;
 `341` Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und
@@ -158,23 +163,24 @@ ist durch Digest `16866779858248182758` bei Gastzyklus `622122619` belegt;
 Memory-Card-Gate und das Hauptmenue bleiben offen. Der Default-PlatformAbi-
 Pfad bleibt unveraendert.
 
-## Historischer RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Geraetestand
 
 Der vorherige bereinigte Runtime-/Codegen-Checkpoint hob Runtime-ABI `87` auf
 `88` und PlatformServices-ABI `13` auf `14`. `efc531b` hebt Runtime-ABI wegen
 der vollstaendigen PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
 `e1d8ade` hebt ihn wegen der oeffentlichen AICA-/ARM7-Fortsetzung weiter auf
-`90`; Backend-Interface-ABI `13` und PVR-State-Contract `3` bleiben aktuell.
+`90`; Backend-Interface-ABI `13` und PVR-State-Contract `3` gehoeren zu
+diesem historischen Geraetestand.
 
-Der letzte identische Produktvergleich stieg von `23,7959 MHz` ueber
+Der letzte identische Diagnosevergleich stieg von `23,7959 MHz` ueber
 `24,1885 MHz` und `24,2825 MHz` auf `24,2926 MHz`, insgesamt `+0,4967 MHz`
 beziehungsweise `+2,09 %`. Die PVR-Fullevidenz endete nach vier bewiesenen
 Frames mit `1.228.800` geaenderten Pixeln; der Audiohash
 `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau identisch.
 Der Hostprozess nutzte nur etwa `1,64` Kerne beziehungsweise `6,8 %` der
-24-Thread-Kapazitaet. Der aktuelle Performance-P0 ist damit der serielle
-Runtime-/Dispatch-Overhead bis mindestens `100 MHz`; danach bleibt der
-post-filmische Identity-Miss `0x8C054008 -> 0x8C9000E8` offen.
+24-Thread-Kapazitaet. Der serielle Runtime-/Dispatch-Overhead und der
+post-filmische Identity-Miss `0x8C054008 -> 0x8C9000E8` bleiben historische
+Diagnosebefunde, sind aber keine aktiven Produktgates des nativen Pfads.
 
 ## Historischer Candidate-Evidenzstand
 
@@ -185,10 +191,10 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 aktueller funktionaler Source-Stand:
-  aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 90, PlatformServices-ABI 14, Backend-Interface-ABI 13,
+  aktueller Native-Port-Architekturreview-Checkpoint
+  Runtime-ABI 91, PlatformServices-ABI 14, Backend-Interface-ABI 14,
   PVR-State-Contract 3
-  Analyzer-ABI 34
+  Analyzer-ABI 35
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5

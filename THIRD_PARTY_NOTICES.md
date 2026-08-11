@@ -1,6 +1,14 @@
 # Third-Party and Tooling Notices
 
-KatanaRecomp currently vendors and links no third-party source library.
+KatanaRecomp vendors the SkyEmu ARM7TDMI source header for the historical
+Dreamcast AICA ARM7 diagnostic/analyzer path. It is compiled only into
+non-product diagnostic/analyzer artifacts and is not linked by the
+native-port product runtime.
+
+SkyEmu is Copyright (c) 2021 Skyler "Sky" Saleh and licensed under the MIT
+License. The exact vendored license text is retained in
+`third_party/skyemu/LICENSE`; the vendored source provenance is recorded in
+`third_party/skyemu/README.md`.
 
 The project is built with a C++20 compiler and the compiler's standard and
 operating-system libraries. CMake and Ninja orchestrate builds. Optional local

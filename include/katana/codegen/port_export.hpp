@@ -11,6 +11,7 @@
 #include "katana/ir/ir.hpp"
 #include "katana/progress.hpp"
 #include "katana/runtime/game_project.hpp"
+#include "katana/runtime/native_port.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -31,7 +32,7 @@ namespace katana::codegen {
 inline constexpr std::uint32_t port_project_contract_version =
     build_contract::port_project_contract_version;
 inline constexpr std::uint32_t port_partition_emission_schema_version = 5u;
-inline constexpr std::uint32_t port_metadata_cache_schema_version = 2u;
+inline constexpr std::uint32_t port_metadata_cache_schema_version = 3u;
 
 using PortExportProgressCallback =
     std::function<void(std::string_view phase)>;
@@ -88,6 +89,11 @@ struct PortExportOptions {
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.
     const katana::runtime::GameProjectDefinition* game_project = nullptr;
+    // Independent native product definition. It is deliberately not nested
+    // in the historical Dreamcast GameProjectDefinition. The caller owns the
+    // definition and every referenced span for the complete export call.
+    const katana::runtime::NativePortDefinition* native_port_definition =
+        nullptr;
     // Exact private payloads for descriptor-only runtime images. Every
     // descriptor requires one uniquely identified payload and extra payloads
     // are rejected.

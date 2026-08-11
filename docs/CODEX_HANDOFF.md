@@ -27,30 +27,34 @@ nutzbar; ARM7/AICA und CPU-PVR werden nicht weiter fuer den Produktpfad
 optimiert. `0.50.0` wird exakt durch das erste rein nativ erreichte Sonic-
 Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 
-`KR-5000` ist source-seitig abgeschlossen. `native-port` ist Standard und
-linkt das eigene minimale `KatanaRecomp::native_port_runtime`; Profilvertrag
-`1`, Portprojektvertrag `76` und ein post-link Linkmap-Audit verhindern einen
-stillen Rueckfall auf Legacy-Runtime, ARM7, CPU-PVR oder Interpreter.
-`historical-device-runtime` ist ausdruecklich nur Nichtproduktreferenz. Der
-aktive Task ist `KR-5001`.
+`KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
+Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
+`KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geräteverbund
+ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
+Profilvertrag `2`, Portprojektvertrag `77` und der Linkmap-Audit verhindern
+Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
+Interpreter. Aktiv ist `KR-5001`: unabhaengiger privater
+Definitionsprovider, Bootstrap und direkte Hook-/Callback-Emission. Bis sie
+existieren, muss der Produktconfigure mit
+`KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` enden; niemals den historischen
+Launcher als Fallback aktivieren.
 
 ## Historischer RuntimeOnly-Bring-up
 
-Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
-Checkpoint. Aktuell gelten Runtime-ABI `90`,
-PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
+Funktionaler Source-Stand: aktueller Native-Port-Architekturreview-
+Checkpoint. Aktuell gelten Runtime-ABI `91`,
+PlatformServices-ABI `14`, Analyzer-ABI `35`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`13`, PVR-State-Contract `3`, Portprojektvertrag `76` und Native-Port-
-Profilvertrag `1`.
-Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
-`PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
-Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
-werden.
+`14`, PVR-State-Contract `3`, Portprojektvertrag `77` und Native-Port-
+Profilvertrag `2`.
+Die unabhaengige `PortExportOptions::native_port_definition`-Grenze hebt das
+Backend-Interface-ABI auf `14`; bestehende generierte Ports muessen neu
+exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
-Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
-vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
-Default bleibt `platform`. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
+Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit
+`--game-project` zulaessig. Er ist jetzt internes Diagnoseorakel und kein
+Produkt-/Releaseprofil. RuntimeOnly setzt `GuestCallAbi::Unknown`, umgeht
 die blockierende SuperHC-FunctionValue-/Candidate-Resolution, erzeugt
 weiterhin nativen AOT-Code und verwendet RuntimeOnly-Dispatch ueber eine
 exakte statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
@@ -67,9 +71,9 @@ Resolution-Abschnitte in diesem Handoff sind historische PlatformAbi-
 Diagnostik und keine Aussage, dass der aktuelle Bring-up kein `game.exe`
 erzeugt.
 
-### Historischer RuntimeOnly-Produktstand
+### Historischer RuntimeOnly-Geraetestand
 
-Der aktuelle 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame` mit
+Der letzte historische 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame` mit
 First-Frame-Digest `16866779858248182758` bei Zyklus `622122619`.
 `341` Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und
 `470` Audiopuffer mit `345.450` Audiobildern belegen den natuerlichen
@@ -94,7 +98,7 @@ Der alte Lauf endete fail-closed am generischen Fehler `missing-aot`.
 Das historische Memory-Card-Gate blieb offen; Candidate-Resolution und
 PlatformAbi-Optimierungen bleiben deferred.
 
-Die aktuellen generischen Source-Deltas umfassen zusaetzlich die vollstaendige
+Die erhaltenen historischen Source-Deltas umfassen zusaetzlich die vollstaendige
 Holly-RenderDone-Fanout und resetfeste TA-Lifetime-/Resetmetriken. Die Cross-
 Shard-Codecopy-Abhaengigkeit, der togglebare direkte AOT-Bytecopy-Batch und das
 begrenzte Post-Root-Drain bleiben erhalten. Stop-on-miss und typed abort bleiben

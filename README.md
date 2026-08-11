@@ -25,26 +25,39 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 90, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 91, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
+Analyzer-ABI 35, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 76, Native-Port-Profilvertrag 1 sowie PVR-State-Contract 3.
+Portprojektvertrag 77, Native-Port-Profilvertrag 2 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
+
+Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
+installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
+`KatanaRecomp::native_port_runtime` und eine explizite Allowlist nativer
+AOT-Header; Runtime-, PlatformServices-, Firmware-, Interpreter-, ARM7-,
+AICA-, PVR-, ASIC-, GD-ROM- und Maple-Oberflaechen bleiben ausserhalb des
+Produkt-SDK und im Buildbaum als internes Diagnoseorakel.
+`NativePortDefinition`, `NativePortContext`, direkte Linkersymbole, ein
+identitaetsgebundenes Image-/Hookmanifest und die fail-closed
+Hardware-Closure bilden den neuen Produktvertrag. Solange der unabhaengige
+private Definitionsprovider, der generierte Bootstrap und die direkten
+Hookcalls aus `KR-5001` fehlen, endet
+ein Produktconfigure bewusst mit `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING`.
+Der historische Dreamcast-Launcher wird niemals als nativer Fallback gelinkt.
 
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
 Runtime-Performance-Checkpoint. Die
 oeffentlichen AICA-/ARM7-Handoff-Layouts sind deshalb auf Runtime-ABI 90
-versioniert; PlatformServices-ABI 14 und Backend-Interface-ABI 13 bleiben
-aktuell.
-Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
-`PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
-Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
-werden.
+versioniert; PlatformServices-ABI 14 und Backend-Interface-ABI 13 gehoeren zu
+diesem historischen Checkpoint. Die damalige Erweiterung von
+`PortExportOptions` und `LatentAotDiscoveryOptions` fuehrte Backend-
+Interface-ABI `13` ein; der jetzt unabhaengige
+`PortExportOptions::native_port_definition`-Vertrag hebt ihn auf `14`.
 
-Der neue opt-in-Modus `port --analysis-mode runtime-only` ist nur fuer den
-vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
-Default bleibt `platform`. RuntimeOnly setzt fuer die Bootanalyse konservativ
+Der historische opt-in-Modus `port --analysis-mode runtime-only` war nur mit
+`--game-project` zugelassen. Ab v0.49.1 ist er ausschliesslich internes
+Diagnoseorakel und kein Produkt-/Releaseprofil. Fuer seine Bootanalyse setzt er
 `GuestCallAbi::Unknown`, ueberspringt die blockierende SuperHC-
 FunctionValue-/Candidate-Resolution, erzeugt weiterhin nativen AOT-Code und
 verwendet RuntimeOnly-Dispatch mit exakter statischer Guest->Host-Tabelle.
@@ -52,7 +65,7 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der aktuelle 70-s-No-Skip-RuntimeOnly-Produktlauf erreichte das erforderliche
+Der historische 70-s-No-Skip-RuntimeOnly-Diagnoselauf erreichte das damalige
 Milestone `FirstVisibleGameFrame` ohne Start-Impuls, Movie-Skip,
 Framebuffer-Hack oder kuenstlichen Moviepfad. Der erste Frame ist durch Digest
 `16866779858248182758` bei Gastzyklus `622122619` belegt. Es gab `341`
@@ -63,7 +76,7 @@ Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit `1.228.800`
 geaenderten Pixeln; danach wurde keine fortlaufende Vollbild-Evidenz behauptet.
 Der Audiohash `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau
 identisch. Es gab keine Fatal- oder Runtimefehler. Die Vergleichsreihe der
-identischen Produktarbeit stieg von `23,7959 MHz` ueber `24,1885 MHz` und
+identischen historischen Diagnoselast stieg von `23,7959 MHz` ueber `24,1885 MHz` und
 `24,2825 MHz` auf `24,2926 MHz`, insgesamt `+0,4967 MHz` beziehungsweise
 `+2,09 %`.
 
@@ -75,11 +88,10 @@ Sofdec-Audiotakt erreicht nun `0x2D0` und `0x890` bei der Einheit `0xAC44`
 (`44.100`). Im No-Skip-Lauf gingen beide Readinesspfade auf `1`, der
 Movie-Lifecycle auf Status `5`, und YUV-/PVR-/FB_R-Publikation wurde sichtbar.
 Der Hostprozess nutzte dabei nur etwa `1,64` Kerne beziehungsweise `6,8 %`
-der 24-Thread-Kapazitaet; der Performance-P0 liegt daher weiter beim
-seriellen Runtime-/Dispatch-Overhead. `100 MHz` und der anschliessende
-Identity-Miss `0x8C054008 -> 0x8C9000E8` sind offen; Memory-Card-Screen und
-Hauptmenue wurden noch nicht erreicht. Der sichtbare Audio-/Videopfad darf
-bei der weiteren Performancearbeit nicht regressieren.
+der 24-Thread-Kapazitaet; der damalige Performanceblocker lag daher beim
+seriellen Runtime-/Dispatch-Overhead. `100 MHz`, der anschliessende
+Identity-Miss `0x8C054008 -> 0x8C9000E8` und das nicht erreichte Hauptmenue
+sind historische Evidenz, aber keine aktiven Produktgates mehr.
 Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
@@ -87,7 +99,7 @@ Bring-up-Meilensteins.
 
 ## Historischer RuntimeOnly-Bring-up-Stand
 
-Der aktuelle Lauf belegt den natuerlichen Audio-/Videopfad bis zum ersten
+Der letzte historische Lauf belegt den natuerlichen Audio-/Videopfad bis zum ersten
 sichtbaren Spielbild; der Bring-up ist damit sichtbar, aber noch kein
 Hauptmenue-/Memory-Card-Gate. `PVR-State-Contract 3` fuehrt die Sentinel-
 Semantik fuer abgeschlossene Fullevidenz in Snapshot, Persistenz und
@@ -99,7 +111,7 @@ einen `run_cycles`-Batch, nutzt direkte AICA-Sound-RAM-Spans und persistente
 Scratchpuffer, committed den 32-Byte-Channel-2-DMA-Pfad fuer PVR-Geraete
 wortweise und beobachtet PVR-YUV-Konfigurationswechsel einmal je Guest-Write.
 
-Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
+Die erhaltene historische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren
 direkten AOT-Bytecopy-Batch in `port_export.cpp` und ein begrenztes
 Post-Root-Drain fuer haengenbleibende Host-Build-Helfer in `main.cpp`.
@@ -115,7 +127,7 @@ werden nicht zu Requeue- oder Per-Context-Messwerten verrechnet.
 KR-4985, KR-4986, KR-4993, KR-4987, KR-4994 und KR-4995 sind source-seitig
 abgeschlossen. KR-4988 bis KR-4991 bleiben bis zu ihren Gates inaktiv. Der
 Candidate-Resolution-P0 bleibt als historischer PlatformAbi-Folgepunkt
-dokumentiert; er ist nicht der aktuelle RuntimeOnly-Buildblocker. Der
+dokumentiert; er ist kein aktiver Native-Port-Buildblocker. Der
 verbindliche Performanceplan steht in
 [`docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](docs/P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md),
 der uebergeordnete Kaltbuildvertrag in
@@ -221,13 +233,13 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    90
+Runtime-ABI:                    91
 Block-ABI:                       5
-Analyzer-ABI:                   34
+Analyzer-ABI:                   35
 PlatformServices-ABI:           14
-Backend-Interface-ABI:          13
-Portprojektvertrag:             76
-Native-Port-Profilvertrag:       1
+Backend-Interface-ABI:          14
+Portprojektvertrag:             77
+Native-Port-Profilvertrag:       2
 Native-AOT-Emissionsprofil:     25
 AOT-Partitionsschema:            5
 ```
@@ -406,18 +418,23 @@ cmake --preset msvc-relwithdebinfo
 cmake --build --preset msvc-relwithdebinfo --target katana-recomp
 ```
 
-Das installierbare CMake-Ziel lautet `KatanaRecomp::runtime_core`. Ein direkt
-konfiguriertes Portprojekt kann es per `find_package` verwenden. Die
-installierte CLI erkennt das Runtimepaket im gemeinsamen Installationspraefix
-automatisch; `KATANA_RUNTIME_PREFIX` waehlt ein anderes installiertes Paket.
+Die installierbaren Produktziele lauten
+`KatanaRecomp::native_port_runtime` und dessen transitive AOT-Basis
+`KatanaRecomp::aot_runtime`. Ein direkt konfiguriertes natives Portprojekt
+kann sie per `find_package` verwenden; `KatanaRecomp::runtime` und
+`KatanaRecomp::runtime_core` bleiben ausschliesslich im internen Diagnose-
+Buildbaum. Die installierte CLI erkennt das Runtimepaket im gemeinsamen
+Installationspraefix automatisch; `KATANA_RUNTIME_PREFIX` waehlt ein anderes
+installiertes Paket.
 `KATANA_RUNTIME_BUILD_TARGETS` kann den
 `KatanaRuntimeBuildTargets.cmake`-Export eines lokalen Buildtrees direkt
 binden. Single-Config-Baeume muessen als `RelWithDebInfo`, `Release` oder
 `MinSizeRel` konfiguriert sein; bei Multi-Config-Baeumen baut die CLI eine
 vorhandene optimierte Konfiguration.
 `KATANA_RUNTIME_ROOT` bleibt der explizite Quellbaum-Fallback und wird
-`EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die schmale
-`katana/runtime/aot_runtime_abi.hpp` sowie eine PCH.
+`EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die native
+Produktheader-Allowlist sowie eine PCH; der historische
+`aot_runtime_abi.hpp`-Vertrag wird nicht als Produkt-SDK installiert.
 
 Profile und Toolchainauswahl:
 [Portbuildprofile](docs/PORT_BUILD_PROFILES.md)

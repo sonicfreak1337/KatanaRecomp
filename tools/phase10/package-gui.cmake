@@ -39,16 +39,18 @@ foreach(required_file IN LISTS required_files)
 endforeach()
 
 file(REMOVE_RECURSE "${output_root}")
+set(diagnostic_sdk_root "${output_root}/diagnostic-runtime-sdk")
 file(MAKE_DIRECTORY
     "${output_root}/assets"
     "${output_root}/docs"
-    "${output_root}/runtime-sdk/cmake"
-    "${output_root}/runtime-sdk/include/katana/io"
-    "${output_root}/runtime-sdk/include/katana/sh4"
-    "${output_root}/runtime-sdk/include/katana"
-    "${output_root}/runtime-sdk/src/decoder"
-    "${output_root}/runtime-sdk/src/io"
-    "${output_root}/runtime-sdk/src"
+    "${diagnostic_sdk_root}/cmake"
+    "${diagnostic_sdk_root}/include/katana/io"
+    "${diagnostic_sdk_root}/include/katana/sh4"
+    "${diagnostic_sdk_root}/include/katana"
+    "${diagnostic_sdk_root}/src/decoder"
+    "${diagnostic_sdk_root}/src/io"
+    "${diagnostic_sdk_root}/third_party"
+    "${diagnostic_sdk_root}/src"
 )
 file(COPY "${cli}" "${gui}" DESTINATION "${output_root}")
 if(WIN32)
@@ -62,39 +64,43 @@ if(WIN32)
 endif()
 file(COPY "${logo}" "${icon}" "${asset_manifest}" DESTINATION "${output_root}/assets")
 file(COPY "${source_root}/include/katana/runtime" DESTINATION
-    "${output_root}/runtime-sdk/include/katana")
+    "${diagnostic_sdk_root}/include/katana")
 file(COPY "${source_root}/include/katana/sh4" DESTINATION
-    "${output_root}/runtime-sdk/include/katana")
-file(COPY "${source_root}/src/runtime" DESTINATION "${output_root}/runtime-sdk/src")
+    "${diagnostic_sdk_root}/include/katana")
+file(COPY "${source_root}/src/runtime" DESTINATION "${diagnostic_sdk_root}/src")
+file(COPY "${source_root}/third_party/skyemu" DESTINATION
+    "${diagnostic_sdk_root}/third_party")
+file(COPY "${source_root}/THIRD_PARTY_NOTICES.md" DESTINATION
+    "${diagnostic_sdk_root}")
 file(COPY "${source_root}/include/katana/build_contract.hpp.in" DESTINATION
-    "${output_root}/runtime-sdk/include/katana")
+    "${diagnostic_sdk_root}/include/katana")
 file(COPY "${source_root}/include/katana/progress.hpp" DESTINATION
-    "${output_root}/runtime-sdk/include/katana")
+    "${diagnostic_sdk_root}/include/katana")
 file(COPY "${source_root}/src/progress.cpp" DESTINATION
-    "${output_root}/runtime-sdk/src")
+    "${diagnostic_sdk_root}/src")
 file(COPY "${source_root}/cmake/KatanaVersions.cmake" DESTINATION
-    "${output_root}/runtime-sdk/cmake")
-file(COPY "${source_root}/VERSION" DESTINATION "${output_root}/runtime-sdk")
+    "${diagnostic_sdk_root}/cmake")
+file(COPY "${source_root}/VERSION" DESTINATION "${diagnostic_sdk_root}")
 file(COPY
     "${source_root}/include/katana/io/input_output_error.hpp"
     "${source_root}/include/katana/io/input_provenance.hpp"
     "${source_root}/include/katana/io/json_report.hpp"
-    DESTINATION "${output_root}/runtime-sdk/include/katana/io"
+    DESTINATION "${diagnostic_sdk_root}/include/katana/io"
 )
 file(COPY
     "${source_root}/src/decoder/decoder.cpp"
     "${source_root}/src/decoder/instruction_metadata.cpp"
-    DESTINATION "${output_root}/runtime-sdk/src/decoder"
+    DESTINATION "${diagnostic_sdk_root}/src/decoder"
 )
 file(COPY
     "${source_root}/src/io/input_provenance.cpp"
     "${source_root}/src/io/json_report.cpp"
-    DESTINATION "${output_root}/runtime-sdk/src/io"
+    DESTINATION "${diagnostic_sdk_root}/src/io"
 )
-file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
+file(WRITE "${diagnostic_sdk_root}/CMakeLists.txt"
 "cmake_minimum_required(VERSION 3.25)\n"
 "include(\"\${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaVersions.cmake\")\n"
-"project(KatanaRuntimeSdk VERSION \${KATANA_PROJECT_VERSION} LANGUAGES CXX)\n"
+"project(KatanaDiagnosticRuntimeSdk VERSION \${KATANA_PROJECT_VERSION} LANGUAGES CXX)\n"
 "find_package(Threads REQUIRED)\n"
 "set(CMAKE_CXX_STANDARD 20)\n"
 "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
@@ -109,8 +115,7 @@ file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/controlled_fallback.cpp\"\n"
 "  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/interpreter_boundary.cpp\"\n"
 "  \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/dynamic_interpreter.cpp\")\n"
-"set(runtime_native_port_source \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/native_port.cpp\")\n"
-"list(REMOVE_ITEM runtime_core_sources \${runtime_diagnostic_sources} \${runtime_native_port_source})\n"
+"list(REMOVE_ITEM runtime_core_sources \${runtime_diagnostic_sources})\n"
 "if(NOT WIN32)\n"
 "  list(REMOVE_ITEM runtime_core_sources \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_video_d3d11.cpp\")\n"
 "endif()\n"
@@ -122,7 +127,7 @@ file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "add_library(katana_runtime_diagnostic_objects OBJECT \${runtime_diagnostic_sources} \${decoder_sources})\n"
 "foreach(runtime_object_target IN ITEMS katana_runtime_core_objects katana_runtime_diagnostic_objects)\n"
 "  target_compile_features(\${runtime_object_target} PUBLIC cxx_std_20)\n"
-"  target_include_directories(\${runtime_object_target} PRIVATE \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\")\n"
+"  target_include_directories(\${runtime_object_target} PRIVATE \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\" \"\${CMAKE_CURRENT_SOURCE_DIR}/third_party\")\n"
 "  if(MSVC)\n"
 "    target_compile_options(\${runtime_object_target} PRIVATE /W4 /permissive- /EHsc /utf-8 /fp:strict)\n"
 "  else()\n"
@@ -132,13 +137,10 @@ file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "target_link_libraries(katana_runtime_core_objects PRIVATE Threads::Threads)\n"
 "add_library(katana_runtime_core STATIC $<TARGET_OBJECTS:katana_runtime_core_objects>)\n"
 "add_library(katana_runtime STATIC $<TARGET_OBJECTS:katana_runtime_core_objects> $<TARGET_OBJECTS:katana_runtime_diagnostic_objects>)\n"
-"add_library(katana_native_port_runtime STATIC \${runtime_native_port_source})\n"
 "add_library(KatanaRecomp::runtime_core ALIAS katana_runtime_core)\n"
 "add_library(KatanaRecomp::runtime ALIAS katana_runtime)\n"
-"add_library(KatanaRecomp::native_port_runtime ALIAS katana_native_port_runtime)\n"
 "set_target_properties(katana_runtime_core PROPERTIES EXPORT_NAME runtime_core)\n"
 "set_target_properties(katana_runtime PROPERTIES EXPORT_NAME runtime)\n"
-"set_target_properties(katana_native_port_runtime PROPERTIES EXPORT_NAME native_port_runtime)\n"
 "function(katana_configure_runtime_archive target)\n"
 "  target_compile_features(\${target} PUBLIC cxx_std_20)\n"
 "  target_include_directories(\${target} PUBLIC \"\${CMAKE_CURRENT_SOURCE_DIR}/include\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include\")\n"
@@ -156,9 +158,6 @@ file(WRITE "${output_root}/runtime-sdk/CMakeLists.txt"
 "endfunction()\n"
 "katana_configure_runtime_archive(katana_runtime_core)\n"
 "katana_configure_runtime_archive(katana_runtime)\n"
-"katana_configure_runtime_archive(katana_native_port_runtime)\n"
-"set_target_properties(katana_native_port_runtime PROPERTIES\n"
-"  KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION \"\${KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION}\")\n"
 )
 file(COPY
     "${source_root}/docs/PHASE10_GUI_ARCHITECTURE.md"
@@ -262,14 +261,16 @@ set(entries
     "assets/asset-manifest.json"
     "docs/PHASE10_GUI_ARCHITECTURE.md"
     "docs/PHASE10_GUI_WORKFLOW.md"
-    "runtime-sdk/CMakeLists.txt"
-    "runtime-sdk/VERSION"
-    "runtime-sdk/cmake/KatanaVersions.cmake"
+    "diagnostic-runtime-sdk/CMakeLists.txt"
+    "diagnostic-runtime-sdk/VERSION"
+    "diagnostic-runtime-sdk/THIRD_PARTY_NOTICES.md"
+    "diagnostic-runtime-sdk/cmake/KatanaVersions.cmake"
 )
 file(GLOB_RECURSE runtime_entries
     RELATIVE "${output_root}"
-    "${output_root}/runtime-sdk/include/*"
-    "${output_root}/runtime-sdk/src/*"
+    "${diagnostic_sdk_root}/include/*"
+    "${diagnostic_sdk_root}/src/*"
+    "${diagnostic_sdk_root}/third_party/*"
 )
 list(APPEND entries ${runtime_entries})
 if(WIN32)

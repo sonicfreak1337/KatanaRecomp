@@ -1,5 +1,11 @@
 # Executable-First-Entwicklung
 
+> v0.49.1: Dieses Dokument beschreibt die wiederverwendbare Artefakt- und
+> Analysebasis sowie den historischen Dreamcast-Diagnosepfad. Ein
+> Produktbinary verwendet ausschliesslich den nativen Vertrag aus
+> `NATIVE_PORT_PRODUCT_CONTRACT.md`; RuntimeOnly, Handoff und Geraetestate sind
+> kein Produktfallback.
+
 Seit v0.49 ist die private `.gdi` nicht mehr der normale Eingang jeder
 Bring-up-Iteration. Sie wird einmalig fuer Extraktion und spaeter fuer die
 Nutzerinstallation verwendet. Analyse, Codegen und Warmbuild arbeiten danach
@@ -46,7 +52,9 @@ katana-recomp port-executable `
 ```
 
 Eine zusammen mit `runtime-sdk` installierte CLI findet
-`KatanaRecomp::runtime_core` im gemeinsamen Installationspraefix automatisch.
+`KatanaRecomp::native_port_runtime` im gemeinsamen Installationspraefix
+automatisch. `runtime` und `runtime_core` sind nicht installierbarer
+Diagnosebestand.
 Fuer ein anderes installiertes SDK kann `KATANA_RUNTIME_PREFIX` gesetzt
 werden; `KATANA_RUNTIME_ROOT` waehlt stattdessen bewusst den lokalen
 Quellbaum-Fallback.

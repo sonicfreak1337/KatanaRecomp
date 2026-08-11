@@ -42,39 +42,49 @@ Aktive Reihenfolge: `KR-5000` Produktlinkgrenze, `KR-5001` Hookkarte,
 native Plattformdienste und `KR-5005` No-Skip-Lauf bis Hauptmenue. Der
 vollstaendige Vertrag steht in `NATIVE_PORT_PRODUCT_CONTRACT.md`.
 
-`KR-5000` ist source-seitig abgeschlossen. Das Standardprofil `native-port`
-linkt nur `KatanaRecomp::native_port_runtime`, prueft Profilvertrag `1` und
-Portprojektvertrag `76` und auditiert die fertige Linkmap fail-closed auf
-historische Runtime-, ARM7-, CPU-PVR- und Interpreterbestandteile. Das
-explizite `historical-device-runtime`-Profil ist keine Produktabnahme. Aktiv
-ist jetzt `KR-5001`, die private statische Spiel-/SDK-Hookkarte.
+`KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
+Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
+`KatanaRecomp::native_port_runtime` und die explizite native
+Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
+nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
+Profilvertrag `2`, Portprojektvertrag `77` und der Post-Link-Audit sperren
+ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
+
+Aktiv ist `KR-5001`: Der neue unabhaengige `NativePortDefinition`-/
+`NativePortContext`-Vertrag, direkte Hooksymbole, Imagebindungen und das
+fail-closed Hardware-Closure-Gate sind vorhanden. Der generierte native
+Definitionsprovider, Bootstrap und direkte Hook-/Callbackpfad fehlen noch;
+daher endet ein
+Produktconfigure ehrlich mit `KATANA_NATIVE_BOOTSTRAP_CODEGEN_PENDING` statt
+den historischen Dreamcast-Launcher zu verwenden.
 
 Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
-Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
-Checkpoint. Aktuell gelten Runtime-ABI `90`,
-PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
+Funktionaler Source-Stand: aktueller Native-Port-Architekturreview-
+Checkpoint. Aktuell gelten Runtime-ABI `91`,
+PlatformServices-ABI `14`, Analyzer-ABI `35`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`13`, PVR-State-Contract `3`, Portprojektvertrag `76` und Native-Port-
-Profilvertrag `1`.
-Die oeffentlichen SDK-Layouts `PortExportOptions` und
-`LatentAotDiscoveryOptions` wurden inkompatibel erweitert; Backend-Interface-
-ABI `13` ist deshalb aktuell und bestehende generierte Ports muessen neu
-exportiert werden.
+`14`, PVR-State-Contract `3`, Portprojektvertrag `77` und Native-Port-
+Profilvertrag `2`. Der historische GameProject-Vertrag bleibt auf `5` mit
+Artefaktformat `4` und transportiert die unabhaengige Native-Port-Definition
+ausdruecklich nicht.
+Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
+Backend-Interface-ABI `14` versioniert; bestehende generierte Ports muessen
+neu exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
-Der opt-in Modus `port --analysis-mode runtime-only` gilt nur fuer den
-vollstaendigen NativeDisc-Produktport mit `--game-project`; der Default bleibt
-`platform`. RuntimeOnly setzt fuer die Bootanalyse `GuestCallAbi::Unknown`,
+Der historische Modus `port --analysis-mode runtime-only` war nur mit
+`--game-project` zulaessig und bleibt jetzt ausschliesslich internes
+Diagnoseorakel. RuntimeOnly setzt fuer die Bootanalyse `GuestCallAbi::Unknown`,
 umgeht damit die blockierende SuperHC-FunctionValue-/Candidate-Resolution,
 erzeugt weiterhin nativen AOT-Code und nutzt RuntimeOnly-Dispatch mit einer
 exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-## Historischer RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Geraetestand
 
 Der letzte identische 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame`
 mit First-Frame-Digest `16866779858248182758` bei Zyklus `622122619`.
@@ -114,10 +124,11 @@ Source-, Diagnose- und Produktevidenz duerfen nicht als derselbe Fortschritt
 ausgegeben werden. Die aktuellen Dokumentationscommits veraendern keine
 Recompiler-, Runtime- oder Produktsemantik.
 
-## Aktueller Bring-up; historischer Candidate-P0
+## Historischer RuntimeOnly- und Candidate-Stand
 
-Der aktuelle RuntimeOnly-P0 ist kein Analyzer-Implementierungstask: Der
-Build-/Export-Gate ist bestanden, die sichtbare Runtime-Abnahme steht aus.
+Der alte RuntimeOnly-P0 ist kein aktiver Implementierungstask: Sein
+Build-/Export-Gate war bestanden; die neue Abnahme laeuft nur ueber KR-5001
+bis KR-5005.
 Der Candidate-Resolution-P0 darunter beschreibt weiterhin den konservativen
 PlatformAbi-Pfad und bleibt fuer diesen Bring-up zurueckgestellt.
 
