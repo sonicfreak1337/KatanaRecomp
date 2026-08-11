@@ -2554,6 +2554,22 @@ void Memory::write_bytes_at(const std::uint32_t address,
                             const std::span<const std::uint8_t> bytes,
                             const GuestMemoryAccessContext& context,
                             const CodeWriteSource source) {
+    write_bytes_at_impl(address, bytes, context, source, false);
+}
+
+void Memory::write_dma_words(const std::uint32_t address,
+                             const std::span<const std::uint8_t> bytes,
+                             const CodeWriteSource source) {
+    write_bytes_at_impl(
+        address, bytes, GuestMemoryAccessContext{address}, source, true);
+}
+
+void Memory::write_bytes_at_impl(
+    const std::uint32_t address,
+    const std::span<const std::uint8_t> bytes,
+    const GuestMemoryAccessContext& context,
+    const CodeWriteSource source,
+    const bool prefer_device_word_writes) {
     if (bytes.empty()) return;
     if (bytes.size() > address_space_size - static_cast<std::uint64_t>(address)) {
         throw MemoryAccessError(MemoryAccessErrorReason::AddressOverflow,
@@ -2625,26 +2641,61 @@ void Memory::write_bytes_at(const std::uint32_t address,
             const auto index = committed;
             const auto current = address + static_cast<std::uint32_t>(index);
             const auto& write = pending[index];
-            if (write.mapped->linear != nullptr)
+            constexpr std::size_t word_size = sizeof(std::uint32_t);
+            const bool word_write =
+                prefer_device_word_writes &&
+                (current & static_cast<std::uint32_t>(word_size - 1u)) == 0u &&
+                word_size <= bytes.size() - committed &&
+                pending[index + 1u].mapped == write.mapped &&
+                pending[index + 2u].mapped == write.mapped &&
+                pending[index + 3u].mapped == write.mapped &&
+                pending[index + 1u].offset == write.offset + 1u &&
+                pending[index + 2u].offset == write.offset + 2u &&
+                pending[index + 3u].offset == write.offset + 3u;
+            const auto commit_size = word_write ? word_size : std::size_t{1u};
+            if (word_write) {
+                const auto value =
+                    static_cast<std::uint32_t>(bytes[index]) |
+                    (static_cast<std::uint32_t>(bytes[index + 1u]) << 8u) |
+                    (static_cast<std::uint32_t>(bytes[index + 2u]) << 16u) |
+                    (static_cast<std::uint32_t>(bytes[index + 3u]) << 24u);
+                if (write.mapped->linear != nullptr)
+                    write.mapped->linear->write_u32(write.offset, value);
+                else
+                    mmio_boundary(write.mapped->info,
+                                  current,
+                                  MemoryAccessWidth::Word,
+                                  MemoryAccessOperation::Write,
+                                  [&] {
+                                      write.mapped->device->write_u32(
+                                          write.offset, value);
+                                  });
+            } else if (write.mapped->linear != nullptr) {
                 write.mapped->linear->write_u8(write.offset, bytes[index]);
-            else
+            } else {
                 mmio_boundary(write.mapped->info,
                               current,
                               MemoryAccessWidth::Byte,
                               MemoryAccessOperation::Write,
-                              [&] { write.mapped->device->write_u8(write.offset, bytes[index]); });
-            if (write.mapped->mmio)
-                notify_interrupt_source_state_maybe_changed();
-            ++committed;
+                              [&] {
+                                  write.mapped->device->write_u8(
+                                      write.offset, bytes[index]);
+                              });
+            }
+            if (write.mapped->mmio) notify_interrupt_source_state_maybe_changed();
+            committed += commit_size;
             if (access_observers_active()) {
-                ++performance_counters_.observed_accesses;
-                notify_access(MemoryAccessEvent{MemoryAccessOperation::Write,
-                                                current,
-                                                MemoryAccessWidth::Byte,
-                                                bytes[index],
-                                                write.mapped->info.name});
+                performance_counters_.observed_accesses += commit_size;
+                for (std::size_t byte = 0u; byte < commit_size; ++byte) {
+                    notify_access(MemoryAccessEvent{
+                        MemoryAccessOperation::Write,
+                        current + static_cast<std::uint32_t>(byte),
+                        MemoryAccessWidth::Byte,
+                        bytes[index + byte],
+                        write.mapped->info.name});
+                }
             } else {
-                ++performance_counters_.unobserved_accesses;
+                performance_counters_.unobserved_accesses += commit_size;
             }
         }
     } catch (...) {

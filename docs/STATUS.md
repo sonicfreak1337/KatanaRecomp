@@ -26,10 +26,11 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Funktionaler RuntimeOnly-Source-Stand: `e1d8ade`. Aktuell gelten Runtime-ABI `90`,
+Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
+Checkpoint. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`13` und Portprojektvertrag `75`.
+`13`, PVR-State-Contract `3` und Portprojektvertrag `75`.
 Die oeffentlichen SDK-Layouts `PortExportOptions` und
 `LatentAotDiscoveryOptions` wurden inkompatibel erweitert; Backend-Interface-
 ABI `13` ist deshalb aktuell und bestehende generierte Ports muessen neu
@@ -45,23 +46,21 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
-Fehler nach dem Sonic-Team-Film. Die erzeugte `game.exe` hat
-SHA-256
-`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
+## Aktueller RuntimeOnly-Produktstand
 
-## Aktueller RuntimeOnly-v25/v29-Produktstand
+Der letzte identische 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame`
+mit First-Frame-Digest `16866779858248182758` bei Zyklus `622122619`.
+Er brachte `341` Renderrequests/-completions/-frames, `15.680`
+YUV-Makrobloecke sowie `470` Audiopuffer mit `345.450` Audiobildern. Die
+PVR-Fullevidenz endete nach vier bewiesenen Frames mit `1.228.800`
+geaenderten Pixeln; der Audiohash `8399287713367543391` blieb zwischen
+YUV-Lauf und Audio-Umbau identisch.
 
-Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
-gemessen. Erfasst wurden `56.000` YUV-Makrobloecke, `579`
-Renderabschluesse und `761` Audiopuffer.
-
-Der No-Skip-Sichtpfad zeigt SEGA, PAL, Presented by Sega und danach den
-Sonic-Team-Film sichtbar von etwa `60 s` bis `145 s`. Beide Readinesspfade
-schalten auf `1`, der Player erreicht Status `5`, und der Gast publiziert den
-Moviebuffer selbst ueber FB_R. Der aktuelle P0 liegt erst nach dem Film:
-`0x8C054008 -> 0x8C9000E8` endet fail-closed mit
-`byte-identity-mismatch`. Memory-Card-Screen und Hauptmenue bleiben offen.
+Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
+und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der
+Hostprozess nutzte nur etwa `1,64` Kerne beziehungsweise `6,8 %` der
+24-Thread-Kapazitaet. `100 MHz`, der post-filmische Identity-Miss
+`0x8C054008 -> 0x8C9000E8` und das Memory-Card-/Hauptmenue-Gate bleiben offen.
 
 Der Default-PlatformAbi-Pfad bleibt erhalten. Ordinary-/Inventory-Stack-
 Alias-Capture und Lane-Fusion bleiben deferred PlatformAbi-Optimierungsbefunde
@@ -305,7 +304,7 @@ Ordinary-/Registermetadaten-/Alias-/Watcher-/Loss- und MemoryEpoch-Lifecycle-
 Ursache, nicht ein weiterer SavedEpoch-Pending-Patch. KR-4981 bleibt
 fail-closed offen.
 
-## Aktueller Source- und Laufstand
+## Historischer Candidate-Resolution-Source- und Laufstand
 
 Der historische Candidate-Resolution-Source-Stand ist `49b0f72a9f49d60a4eb6e0481460cd57c5625735`.
 Er erlaubt strukturelle Contextual-Hybrid-Projektion mit retained sticky loss;
@@ -369,7 +368,7 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> No-Skip-Sonic-Team-Film sichtbar, aber nur 19,577 MHz
+  -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
   -> denselben realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz
   -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
@@ -442,9 +441,10 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 D9 ist historisch beendet und fail-closed; Root 0 konvergierte ohne
 Portartefakt und Produkterfolg. KR-4994 und KR-4995 sind source-seitig
 abgeschlossen; die PlatformAbi-Candidate-Resolution bleibt deferred. KR-4981
-bleibt das globale sichtbare Produktgate. Movie-Bildpublikation und
-Player-Status 5 sind bestanden; offen sind mindestens 100 MHz auf demselben
-Pfad, danach der Identity-Miss 0x8C054008 -> 0x8C9000E8 und das Hauptmenue.
+bleibt das globale sichtbare Produktgate. `FirstVisibleGameFrame`,
+Movie-Bildpublikation und der Audiohash sind bestanden; offen sind mindestens
+`100 MHz`, danach der Identity-Miss `0x8C054008 -> 0x8C9000E8` und das
+Hauptmenue.
 ```
 
 Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist

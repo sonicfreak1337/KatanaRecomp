@@ -65,18 +65,17 @@ Produktabnahme offen` ist ausdruecklich kein Produkt-Erfolg: Der frische
 Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
-Der aktuelle Source-Stand ist der bereinigte RuntimeOnly-v25/v29-
-Produktstand `e1d8ade`; Runtime-ABI 90, PlatformServices-ABI 14, Analyzer-ABI 34,
-Backend-Interface-ABI 13, Function-Analysis-Epoch-Schema 27,
+Der aktuelle Source-Stand ist der Runtime-Performance-Checkpoint; Runtime-ABI
+90, PlatformServices-ABI 14, Analyzer-ABI 34, Backend-Interface-ABI 13,
+PVR-State-Contract 3, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der opt-in Modus
 `port --analysis-mode runtime-only` ist nur mit `--game-project` fuer den
 vollstaendigen NativeDisc-Produktport zulaessig; der Default bleibt `platform`.
-Der aktuelle No-Skip-RuntimeOnly-v25/v29-Lauf rendert den Sonic-Team-Film
-sichtbar bis zum Fade. Player-Status `5`, `56.000` YUV-Makrobloecke, `579`
-Renderabschluesse und gastgesteuertes FB_R schliessen den bisherigen
-Movie-Renderblocker. KR-4981 bleibt fuer Memory-Card-Screen und Hauptmenue
-offen; der aktuelle Runtime-P0 ist der danach fail-closed abgelehnte Call
-`0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`).
+Der aktuelle No-Skip-Lauf erreicht `FirstVisibleGameFrame`; `341`
+Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und `470`
+Audiopuffer belegen den natuerlichen Pfad. Die Vergleichsreihe reicht bis
+`24,2926 MHz`; `100 MHz`, Identity-Miss, Memory-Card-Screen und Hauptmenue
+bleiben offen.
 
 Historisch erzeugte v56 kein Portartefakt und
 meldete `1/1191` committed Roots. Die einmalige D1-Nachauswertung lieferte
@@ -176,7 +175,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly-v25/v29 rendert SEGA, PAL, Presented by Sega und den No-Skip-Sonic-Team-Film mit Player-Status 5; Memory-Card-Screen/Hauptmenue offen, naechster Blocker `0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`) |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly erreicht `FirstVisibleGameFrame` und den natuerlichen Audio-/Videopfad bis `24,2926 MHz`; mindestens `100 MHz`, Memory-Card-Screen/Hauptmenue und der nachgelagerte Identity-Miss `0x8C054008 -> 0x8C9000E8` bleiben offen |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |

@@ -3,7 +3,7 @@
 Status: Aktiver uebergeordneter Performancevertrag. Der aktuelle Bring-up-
 Meilenstein verwendet Runtime-ABI 90, PlatformServices-ABI 14, Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27
-und lokales In-Process-Evaluation-Cache-Schema 13. Das aktuelle
+und lokales In-Process-Evaluation-Cache-Schema 13, PVR-State-Contract 3. Das aktuelle
 Native-AOT-Emissionsprofil ist 25; das AOT-Partitionsschema ist 5. Der opt-in
 Modus `port --analysis-mode runtime-only` ist fuer den vollstaendigen NativeDisc-
 Produktport mit `--game-project` zulaessig; der Default bleibt `platform`.
@@ -13,11 +13,9 @@ nutzt RuntimeOnly-Dispatch ueber eine exakte statische Guest->Host-Tabelle.
 Der Whole-Export-Cache ist modegebunden; kein Interpreter, JIT, Runtime-
 Decoder oder geratener Zielpfad wird verwendet.
 
-Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
-Fehler nach dem Sonic-Team-Film. Die erzeugte `game.exe` hat
-SHA-256
-`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
-Der bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
+Der aktuelle No-Skip-RuntimeOnly-Lauf erreichte `FirstVisibleGameFrame`; ein
+privates Portartefakt oder dessen Hash gehoert nicht in diesen Plan. Der
+bereinigte Runtime-/Codegen-Checkpoint entfernt Sonic-spezifische
 `SA_PRIVATE_*`-Dumps und Diagnose-Stacktraces; allgemeine Fixes bleiben.
 
 Die folgenden Candidate-Resolution- und D1/D9-Befunde sind historische
@@ -27,14 +25,18 @@ Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind deferred.
 Der historische Candidate-Detailplan steht in
 [`P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md`](P0_ROOT0_CANDIDATE_RESOLUTION_PERFORMANCE.md).
 
-Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
-gemessen.
+Der letzte identische 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame`.
+`341` Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und
+`470` Audiopuffer mit `345.450` Audiobildern belegen den natuerlichen
+Audio-/Videopfad. Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit
+`1.228.800` geaenderten Pixeln; der Audiohash `8399287713367543391` blieb
+zwischen YUV-Lauf und Audio-Umbau identisch.
 
-Der Sichtpfad zeigt ohne Skip den Sonic-Team-Film bis zum Fade. `56.000`
-YUV-Makrobloecke, `579` Renderabschluesse, Player-Status `5` und der
-gastgesteuerte FB_R-Wechsel belegen den echten Moviepfad. Der aktuelle
-Runtime-P0 liegt danach am fail-closed AOT-Ziel `0x8C9000E8`; zugleich ist die
-gemessene Videoleistung von `19,577 MHz` der naechste Performancehebel.
+Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
+und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der aktuelle
+Runtime-P0 ist weiterhin der serielle Runtime-/Dispatch-Overhead bis
+mindestens `100 MHz`; danach bleibt der Identity-Miss
+`0x8C054008 -> 0x8C9000E8` offen.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv
@@ -284,7 +286,8 @@ fail-closed gebundenem Artefakt zulaessig. Ein grosser unstrukturierter
 ```text
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> No-Skip-Sonic-Team-Film sichtbar; 19,577 MHz, Ziel mindestens 100 MHz
+  -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame; 24,2926 MHz
+  -> Ziel mindestens 100 MHz ohne Sicht-/Audioregression
   -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
 ```
 
@@ -301,11 +304,12 @@ kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen;
 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure bleibt ein
-historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 sind die im
-sichtbaren No-Skip-Sonic-Team-Film gemessenen `19,577 MHz`; Ziel sind
-mindestens `100 MHz` ohne Audio-/Videoregression. Danach folgt der
-post-filmische Identity-Miss `0x8C054008 -> 0x8C9000E8`. KR-4981 bleibt das
-globale Produktgate und ist bis Hauptmenue nicht bestanden.
+historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 ist der
+serielle Runtime-/Dispatch-Overhead des sichtbaren Audio-/Videopfads:
+`24,2926 MHz` im letzten Vergleichslauf, Ziel mindestens `100 MHz` ohne
+Regression. Danach folgt der post-filmische Identity-Miss
+`0x8C054008 -> 0x8C9000E8`. KR-4981 bleibt das globale Produktgate und ist
+bis Hauptmenue nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.
 
 ### Lauf nach Candidate-Domain-Top-Fix

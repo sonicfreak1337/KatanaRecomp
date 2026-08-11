@@ -3213,13 +3213,51 @@ void PvrYuvConverterMemoryDevice::write_u8(const std::uint32_t offset,
                                             const std::uint8_t value) {
     if (offset >= aperture_size)
         throw std::out_of_range("PVR-YUV-Aperturoffset ist ungueltig.");
+    append_input(std::span<const std::uint8_t>(&value, 1u));
+}
+
+void PvrYuvConverterMemoryDevice::write_u16(const std::uint32_t offset,
+                                             const std::uint16_t value) {
+    if (offset > aperture_size - sizeof(value))
+        throw std::out_of_range("PVR-YUV-Aperturoffset ist ungueltig.");
+    const std::array bytes{
+        static_cast<std::uint8_t>(value),
+        static_cast<std::uint8_t>(value >> 8u),
+    };
+    append_input(bytes);
+}
+
+void PvrYuvConverterMemoryDevice::write_u32(const std::uint32_t offset,
+                                             const std::uint32_t value) {
+    if (offset > aperture_size - sizeof(value))
+        throw std::out_of_range("PVR-YUV-Aperturoffset ist ungueltig.");
+    const std::array bytes{
+        static_cast<std::uint8_t>(value),
+        static_cast<std::uint8_t>(value >> 8u),
+        static_cast<std::uint8_t>(value >> 16u),
+        static_cast<std::uint8_t>(value >> 24u),
+    };
+    append_input(bytes);
+}
+
+void PvrYuvConverterMemoryDevice::append_input(
+    std::span<const std::uint8_t> bytes) {
+    // Observe register changes once per guest write, while retaining the
+    // word-batched input path instead of refreshing once per byte.
     refresh_configuration();
-    if (frame_macroblock_ == configured_macroblock_count())
-        restart_frame_from_registers();
-    const bool yuv422 = (configuration_ & 0x01000000u) != 0u;
-    const auto macroblock_size = yuv422 ? 512u : 384u;
-    input_.push_back(value);
-    if (input_.size() == macroblock_size) convert_macroblock();
+    while (!bytes.empty()) {
+        if (frame_macroblock_ == configured_macroblock_count())
+            restart_frame_from_registers();
+        const bool yuv422 = (configuration_ & 0x01000000u) != 0u;
+        const auto macroblock_size = yuv422 ? 512u : 384u;
+        if (input_.size() > macroblock_size)
+            throw std::logic_error("PVR-YUV-Eingabepuffer ist ueberfuellt.");
+        const auto accepted =
+            std::min(bytes.size(), macroblock_size - input_.size());
+        input_.insert(input_.end(), bytes.begin(), bytes.begin() + accepted);
+        bytes = bytes.subspan(accepted);
+        if (input_.size() == macroblock_size) convert_macroblock();
+    }
 }
 
 void PvrYuvConverterMemoryDevice::set_guest_memory_access_memory(Memory* const memory) noexcept {
@@ -3442,13 +3480,35 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     if (base + stride * height > vram.size())
         throw std::out_of_range("PVR-Renderziel liegt ausserhalb des VRAM.");
     const auto render_pixel_count = static_cast<std::size_t>(width) * height;
+    const bool collect_render_evidence =
+        next_evidence_scan_generation_ !=
+            std::numeric_limits<std::uint64_t>::max() ||
+        !pending_render_evidence_.empty();
     Memory* const trace_memory =
-        guest_memory_access_memory_ != nullptr &&
+        collect_render_evidence && guest_memory_access_memory_ != nullptr &&
                 guest_memory_access_memory_->has_guest_memory_access_sink()
             ? guest_memory_access_memory_
             : nullptr;
-    std::vector<std::uint32_t> original_pixels(render_pixel_count, 0u);
-    std::vector<std::uint8_t> touched_pixels(render_pixel_count, 0u);
+    struct RenderScratch final {
+        std::vector<std::uint32_t> original_pixels;
+        std::vector<std::uint8_t> touched_pixels;
+        std::vector<float> depth;
+        std::vector<std::uint8_t> shadow_eligible;
+        std::vector<std::uint8_t> volume_material_eligible;
+        std::vector<Rgba8> secondary_accumulation;
+        std::vector<std::uint8_t> modifier_volume_result;
+        std::vector<std::uint8_t> modifier_area_one;
+    };
+    static thread_local RenderScratch scratch;
+    auto& original_pixels = scratch.original_pixels;
+    auto& touched_pixels = scratch.touched_pixels;
+    if (collect_render_evidence) {
+        original_pixels.assign(render_pixel_count, 0u);
+        touched_pixels.assign(render_pixel_count, 0u);
+    } else {
+        original_pixels.clear();
+        touched_pixels.clear();
+    }
     const auto read_packed_pixel = [&](const std::uint32_t offset) {
         const auto backing = dreamcast_vram_32bit_to_linear_offset(
             offset & static_cast<std::uint32_t>(dreamcast_vram_size - 1u));
@@ -3460,7 +3520,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
                                  const Rgba8 color,
                                  PvrRasterCounters& counters) {
         ++counters.pixel_writes;
-        if (touched_pixels[pixel_index] == 0u) {
+        if (collect_render_evidence && touched_pixels[pixel_index] == 0u) {
             touched_pixels[pixel_index] = 1u;
             original_pixels[pixel_index] = read_packed_pixel(offset);
         }
@@ -3474,14 +3534,18 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
             color.g,
             color.b));
     };
-    std::vector<float> depth(render_pixel_count,
-                             -std::numeric_limits<float>::infinity());
-    std::vector<std::uint8_t> shadow_eligible(static_cast<std::size_t>(width) * height, 0u);
-    std::vector<std::uint8_t> volume_material_eligible(shadow_eligible.size(), 0u);
-    std::vector<Rgba8> secondary_accumulation(
-        shadow_eligible.size(), Rgba8{0u, 0u, 0u, 0u});
-    std::vector<std::uint8_t> modifier_volume_result(render_pixel_count, 0u);
-    std::vector<std::uint8_t> modifier_area_one(render_pixel_count, 0u);
+    auto& depth = scratch.depth;
+    auto& shadow_eligible = scratch.shadow_eligible;
+    auto& volume_material_eligible = scratch.volume_material_eligible;
+    auto& secondary_accumulation = scratch.secondary_accumulation;
+    auto& modifier_volume_result = scratch.modifier_volume_result;
+    auto& modifier_area_one = scratch.modifier_area_one;
+    depth.assign(render_pixel_count, -std::numeric_limits<float>::infinity());
+    shadow_eligible.assign(render_pixel_count, 0u);
+    volume_material_eligible.assign(render_pixel_count, 0u);
+    secondary_accumulation.assign(render_pixel_count, Rgba8{0u, 0u, 0u, 0u});
+    modifier_volume_result.assign(render_pixel_count, 0u);
+    modifier_area_one.assign(render_pixel_count, 0u);
 
     const auto edge = [](const PvrVertex& a, const PvrVertex& b, const float x, const float y) {
         return (x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x);
@@ -4811,25 +4875,27 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
     evidence.pixel_bytes = static_cast<std::uint8_t>(pixel_bytes);
     evidence.render_to_texture = (write_start & 0x01000000u) != 0u;
     evidence.pixel_writes = frame_pixel_writes;
-    for (std::size_t pixel_index = 0u; pixel_index < render_pixel_count; ++pixel_index) {
-        if (touched_pixels[pixel_index] == 0u) continue;
-        const auto y = pixel_index / width;
-        const auto x = pixel_index % width;
-        const auto offset = static_cast<std::uint32_t>(
-            base + static_cast<std::uint64_t>(y) * stride +
-            static_cast<std::uint64_t>(x) * pixel_bytes);
-        const auto packed_value = read_packed_pixel(offset);
-        if (packed_value == original_pixels[pixel_index]) continue;
-        ++evidence.changed_pixels;
-        std::uint32_t changed_byte_mask = 0u;
-        for (std::size_t byte = 0u; byte < pixel_bytes; ++byte) {
-            const auto shift = static_cast<unsigned>(byte * 8u);
-            if (((packed_value >> shift) & 0xFFu) !=
-                ((original_pixels[pixel_index] >> shift) & 0xFFu))
-                changed_byte_mask |= 1u << byte;
+    if (collect_render_evidence) {
+        for (std::size_t pixel_index = 0u; pixel_index < render_pixel_count; ++pixel_index) {
+            if (touched_pixels[pixel_index] == 0u) continue;
+            const auto y = pixel_index / width;
+            const auto x = pixel_index % width;
+            const auto offset = static_cast<std::uint32_t>(
+                base + static_cast<std::uint64_t>(y) * stride +
+                static_cast<std::uint64_t>(x) * pixel_bytes);
+            const auto packed_value = read_packed_pixel(offset);
+            if (packed_value == original_pixels[pixel_index]) continue;
+            ++evidence.changed_pixels;
+            std::uint32_t changed_byte_mask = 0u;
+            for (std::size_t byte = 0u; byte < pixel_bytes; ++byte) {
+                const auto shift = static_cast<unsigned>(byte * 8u);
+                if (((packed_value >> shift) & 0xFFu) !=
+                    ((original_pixels[pixel_index] >> shift) & 0xFFu))
+                    changed_byte_mask |= 1u << byte;
+            }
+            evidence.changed_pixel_values.push_back(
+                PvrChangedPixelEvidence{offset, packed_value, changed_byte_mask});
         }
-        evidence.changed_pixel_values.push_back(
-            PvrChangedPixelEvidence{offset, packed_value, changed_byte_mask});
     }
     const auto frame_changed_pixels = evidence.changed_pixels;
     last_render_generation_ = evidence.generation;
@@ -4837,7 +4903,7 @@ void PvrSoftwareRenderer::render(const PvrTaFrame& frame,
         render_generation == std::numeric_limits<std::uint64_t>::max()
             ? 0u
             : render_generation + 1u;
-    if (!evidence.changed_pixel_values.empty()) {
+    if (collect_render_evidence && !evidence.changed_pixel_values.empty()) {
         const auto evidence_bytes =
             evidence.changed_pixel_values.size() * sizeof(PvrChangedPixelEvidence);
         while (!pending_render_evidence_.empty() &&
@@ -4877,7 +4943,11 @@ void PvrSoftwareRenderer::set_texture_memory_mode_control(
 void PvrSoftwareRenderer::observe_vram_write(const std::uint32_t address,
                                              const std::size_t size,
                                              const bool bytes_changed) {
-    if (!bytes_changed || size == 0u) return;
+    const bool evidence_complete =
+        next_evidence_scan_generation_ ==
+            std::numeric_limits<std::uint64_t>::max() &&
+        pending_render_evidence_.empty();
+    if (evidence_complete || !bytes_changed || size == 0u) return;
     const auto physical = address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
     const auto write_begin = static_cast<std::uint64_t>(physical);
     const auto write_size = static_cast<std::uint64_t>(size);
@@ -4984,6 +5054,19 @@ void PvrSoftwareRenderer::reset_guest_frame_evidence(
     queued_scanout_frame_.reset();
 }
 
+void PvrSoftwareRenderer::complete_guest_frame_evidence() noexcept {
+    pending_render_evidence_.clear();
+    pending_render_evidence_bytes_ = 0u;
+    next_evidence_scan_generation_ =
+        std::numeric_limits<std::uint64_t>::max();
+    std::fill(direct_dirty_words_.begin(),
+              direct_dirty_words_.end(),
+              std::uint64_t{0u});
+    direct_dirty_byte_count_ = 0u;
+    pending_direct_first_write_generation_ = 0u;
+    pending_direct_last_write_generation_ = 0u;
+}
+
 namespace {
 
 PvrFrame capture_decoded_pvr_scanout(
@@ -5056,6 +5139,14 @@ void PvrSoftwareRenderer::observe_vblank_scanout(const PvrRegisterFile& register
     // suppress a newer real scanout. The host queue is latest-wins and bounded to
     // one frame.
     if (queued_guest_frame_proof_) {
+        queued_scanout_frame_ = std::move(frame);
+        return;
+    }
+    const bool evidence_complete =
+        next_evidence_scan_generation_ ==
+            std::numeric_limits<std::uint64_t>::max() &&
+        pending_render_evidence_.empty();
+    if (evidence_complete) {
         queued_scanout_frame_ = std::move(frame);
         return;
     }
@@ -5421,7 +5512,10 @@ void PvrSoftwareRenderer::validate_state_restore(
     std::size_t evidence_bytes = 0u;
     std::uint64_t previous_generation = 0u;
     bool scan_generation_found =
-        state.next_evidence_scan_generation == 0u;
+        state.next_evidence_scan_generation == 0u ||
+        (state.next_evidence_scan_generation ==
+             std::numeric_limits<std::uint64_t>::max() &&
+         state.pending_render_evidence.empty());
     for (const auto& evidence : state.pending_render_evidence) {
         if (evidence.generation == 0u ||
             evidence.generation <= previous_generation ||
@@ -5468,7 +5562,9 @@ void PvrSoftwareRenderer::validate_state_restore(
     if (evidence_bytes != state.pending_render_evidence_bytes ||
         !scan_generation_found ||
         (state.pending_render_evidence.empty() &&
-         state.next_evidence_scan_generation != 0u))
+         state.next_evidence_scan_generation != 0u &&
+         state.next_evidence_scan_generation !=
+             std::numeric_limits<std::uint64_t>::max()))
         throw std::invalid_argument(
             "PVR-Renderer-Handoff besitzt inkonsistente Evidenzindizes.");
 

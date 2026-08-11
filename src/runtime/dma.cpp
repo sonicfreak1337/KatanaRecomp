@@ -772,10 +772,14 @@ bool Sh4Dmac::transfer_one(const std::size_t index, const std::size_t size) noex
                         static_cast<std::uint8_t>(
                             word_value >> (byte * 8u));
             }
-            memory_.write_bytes(
-                value.destination,
-                std::span<const std::uint8_t>(bytes).first(size),
-                CodeWriteSource::Dma);
+            const auto payload =
+                std::span<const std::uint8_t>(bytes).first(size);
+            if (channel2_external_memory_to_device && size == 32u)
+                memory_.write_dma_words(
+                    value.destination, payload, CodeWriteSource::Dma);
+            else
+                memory_.write_bytes(
+                    value.destination, payload, CodeWriteSource::Dma);
         }
     } catch (const std::exception&) {
         set_fault(index, DmaFaultReason::MemoryAccess, size);

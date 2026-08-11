@@ -763,6 +763,8 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
     [[nodiscard]] std::size_t size() const noexcept override;
     [[nodiscard]] std::uint8_t read_u8(std::uint32_t offset) const override;
     void write_u8(std::uint32_t offset, std::uint8_t value) override;
+    void write_u16(std::uint32_t offset, std::uint16_t value) override;
+    void write_u32(std::uint32_t offset, std::uint32_t value) override;
     void set_guest_memory_access_memory(Memory* memory) noexcept;
     void restart_frame_from_registers();
     void reset() noexcept;
@@ -782,6 +784,7 @@ class PvrYuvConverterMemoryDevice final : public MemoryDevice {
 
   private:
     void refresh_configuration();
+    void append_input(std::span<const std::uint8_t> bytes);
     [[nodiscard]] std::uint64_t configured_macroblock_count() const noexcept;
     void convert_macroblock();
     std::shared_ptr<PvrRegisterFile> registers_;
@@ -897,6 +900,7 @@ class PvrSoftwareRenderer final {
                             std::size_t size,
                             bool bytes_changed = true);
     void reset_guest_frame_evidence(std::span<const std::uint8_t> vram = {});
+    void complete_guest_frame_evidence() noexcept;
     void observe_vblank_scanout(const PvrRegisterFile& registers,
                                 std::span<const std::uint8_t> vram);
     [[nodiscard]] std::optional<PvrGuestFrameProof> take_guest_frame_proof();
@@ -946,7 +950,7 @@ class PvrSoftwareRenderer final {
     std::size_t last_render_jobs_ = 1u;
 };
 
-inline constexpr std::uint32_t dreamcast_pvr_state_contract_version = 2u;
+inline constexpr std::uint32_t dreamcast_pvr_state_contract_version = 3u;
 
 struct DreamcastPvrStateSnapshot {
     std::uint32_t contract_version = dreamcast_pvr_state_contract_version;

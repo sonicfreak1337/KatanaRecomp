@@ -421,11 +421,29 @@ void AicaRegisterFile::record_voice_error(const AicaVoiceError error,
 
 std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame_count,
                                                          const std::uint32_t sample_rate) {
-    if (!ram_) throw std::runtime_error("AICA-Audiopfad besitzt kein gemeinsames Sound-RAM.");
     if (sample_rate == 0u || frame_count > std::numeric_limits<std::size_t>::max() / 2u)
         throw std::invalid_argument("AICA-Audioausgabe besitzt eine ungueltige Geometrie.");
     std::vector<std::int16_t> output(frame_count * 2u, 0);
-    std::vector<std::size_t> active_channels;
+    render_audio_into(output, sample_rate);
+    return output;
+}
+
+void AicaRegisterFile::render_audio_into(
+    const std::span<std::int16_t> output,
+    const std::uint32_t sample_rate) {
+    if (!ram_) throw std::runtime_error("AICA-Audiopfad besitzt kein gemeinsames Sound-RAM.");
+    if (sample_rate == 0u || (output.size() & 1u) != 0u)
+        throw std::invalid_argument("AICA-Audioausgabe besitzt eine ungueltige Geometrie.");
+    const auto frame_count = output.size() / 2u;
+    std::fill(output.begin(), output.end(), std::int16_t{0});
+    struct RenderScratch final {
+        std::vector<std::size_t> active_channels;
+        std::vector<std::vector<std::int64_t>> job_accumulations;
+        std::vector<std::int64_t> accumulation;
+    };
+    static thread_local RenderScratch scratch;
+    auto& active_channels = scratch.active_channels;
+    active_channels.clear();
     active_channels.reserve(channels_.size());
     for (std::size_t channel = 0u; channel < channels_.size(); ++channel) {
         if (channels_[channel].active) active_channels.push_back(channel);
@@ -434,7 +452,7 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
         last_render_jobs_ = 1u;
         ++rendered_buffers_;
         rendered_frames_ += frame_count;
-        return output;
+        return;
     }
 
     struct ChannelResult {
@@ -445,15 +463,22 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
     for (const auto channel : active_channels)
         channel_results[channel].runtime = channels_[channel];
 
+    constexpr std::size_t serial_voice_threshold = 4u;
     const auto requested_jobs =
-        std::min(active_channels.size(), detail::runtime_parallel_job_capacity());
-    std::vector<std::vector<std::int64_t>> job_accumulations(
-        requested_jobs, std::vector<std::int64_t>(frame_count * 2u, 0));
+        active_channels.size() <= serial_voice_threshold
+            ? std::size_t{1u}
+            : std::min(active_channels.size(),
+                       detail::runtime_parallel_job_capacity());
+    auto& job_accumulations = scratch.job_accumulations;
+    job_accumulations.resize(requested_jobs);
+    for (auto& accumulation : job_accumulations)
+        accumulation.assign(output.size(), std::int64_t{0});
     const auto read16 = [this](const std::size_t offset) {
         return static_cast<std::uint16_t>(registers_[offset]) |
                static_cast<std::uint16_t>(registers_[offset + 1u] << 8u);
     };
-    const auto ram_size = static_cast<std::uint64_t>(ram_->size());
+    const auto ram_bytes = ram_->bytes();
+    const auto ram_size = static_cast<std::uint64_t>(ram_bytes.size());
     const auto master = static_cast<double>(registers_[aica_common_register_base] & 0x0Fu) / 15.0;
     const auto rendered_frame_base = rendered_frames_;
     const auto run_job = [&](const std::size_t job,
@@ -543,7 +568,7 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
                         return std::nullopt;
                     }
                     const auto packed =
-                        ram_->read_u8(static_cast<std::uint32_t>(byte_offset));
+                        ram_bytes[static_cast<std::size_t>(byte_offset)];
                     const auto nibble = static_cast<std::uint8_t>(
                         (runtime.adpcm_position & 1u) == 0u
                             ? packed & 0x0Fu
@@ -601,9 +626,12 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
                         runtime.active = false;
                         break;
                     }
-                    sample = std::bit_cast<std::int16_t>(
-                        ram_->read_u16(
-                            static_cast<std::uint32_t>(address)));
+                    const auto byte = static_cast<std::size_t>(address);
+                    const auto packed = static_cast<std::uint16_t>(
+                        static_cast<std::uint16_t>(ram_bytes[byte]) |
+                        (static_cast<std::uint16_t>(ram_bytes[byte + 1u])
+                         << 8u));
+                    sample = std::bit_cast<std::int16_t>(packed);
                 } else if (format == 1u) {
                     const auto address =
                         static_cast<std::uint64_t>(sample_base) + position;
@@ -621,9 +649,8 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
                     sample = static_cast<std::int16_t>(
                         static_cast<std::int16_t>(
                             std::bit_cast<std::int8_t>(
-                                ram_->read_u8(
-                                    static_cast<std::uint32_t>(
-                                        address)))) *
+                                ram_bytes[static_cast<std::size_t>(
+                                    address)])) *
                         256);
                 } else {
                     if (runtime.adpcm_position > position) reset_adpcm();
@@ -645,13 +672,22 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
             }
         }
     };
-    const auto render_jobs =
-        detail::run_runtime_parallel_work(active_channels.size(), run_job);
+    std::size_t render_jobs = 1u;
+    if (requested_jobs == 1u)
+        run_job(0u, 1u);
+    else
+        render_jobs =
+            detail::run_runtime_parallel_work(requested_jobs, run_job);
 
-    std::vector<std::int64_t> accumulation(frame_count * 2u, 0);
-    for (std::size_t job = 0u; job < render_jobs; ++job) {
-        for (std::size_t sample = 0u; sample < accumulation.size(); ++sample)
-            accumulation[sample] += job_accumulations[job][sample];
+    std::span<const std::int64_t> mixed = job_accumulations.front();
+    if (render_jobs > 1u) {
+        auto& accumulation = scratch.accumulation;
+        accumulation.assign(output.size(), std::int64_t{0});
+        for (std::size_t job = 0u; job < render_jobs; ++job) {
+            for (std::size_t sample = 0u; sample < accumulation.size(); ++sample)
+                accumulation[sample] += job_accumulations[job][sample];
+        }
+        mixed = accumulation;
     }
     for (const auto channel : active_channels) {
         channels_[channel] = channel_results[channel].runtime;
@@ -665,12 +701,11 @@ std::vector<std::int16_t> AicaRegisterFile::render_audio(const std::size_t frame
     }
     for (std::size_t index = 0u; index < output.size(); ++index)
         output[index] = static_cast<std::int16_t>(
-            std::clamp<std::int64_t>(accumulation[index], -32768, 32767));
+            std::clamp<std::int64_t>(mixed[index], -32768, 32767));
     last_render_jobs_ = render_jobs;
     if (render_jobs > 1u) ++parallel_rendered_buffers_;
     ++rendered_buffers_;
     rendered_frames_ += frame_count;
-    return output;
 }
 
 std::size_t AicaRegisterFile::active_channel_count() const noexcept {

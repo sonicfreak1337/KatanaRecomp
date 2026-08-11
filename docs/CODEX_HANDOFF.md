@@ -7,10 +7,11 @@ aelteren Prozessbeschreibungen.
 
 ## Aktueller RuntimeOnly-Bring-up
 
-Funktionaler RuntimeOnly-Source-Stand: `e1d8ade`. Aktuell gelten Runtime-ABI `90`,
+Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
+Checkpoint. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`13` und Portprojektvertrag `75`.
+`13`, PVR-State-Contract `3` und Portprojektvertrag `75`.
 Die inkompatible Erweiterung der oeffentlichen SDK-Layouts
 `PortExportOptions` und `LatentAotDiscoveryOptions` hebt das Backend-
 Interface-ABI auf `13`; bestehende generierte Ports muessen neu exportiert
@@ -36,19 +37,27 @@ Resolution-Abschnitte in diesem Handoff sind historische PlatformAbi-
 Diagnostik und keine Aussage, dass der aktuelle Bring-up kein `game.exe`
 erzeugt.
 
-### Aktueller RuntimeOnly-v25/v29-Produktstand
+### Aktueller RuntimeOnly-Produktstand
 
-Der aktuelle No-Skip-Sonic-PAL-Lauf rendert den Sonic-Team-Film sichtbar von
-etwa `60 s` bis zum Fade bei etwa `145 s`. `56.000` YUV-Makrobloecke, `579`
-Renderabschluesse, gastgesteuertes FB_R und Player-Status `5` belegen den
-vollstaendigen Moviepfad ohne Start-Impuls, Skip oder private Bildbruecke.
-Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
-gemessen.
+Der aktuelle 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame` mit
+First-Frame-Digest `16866779858248182758` bei Zyklus `622122619`.
+`341` Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke und
+`470` Audiopuffer mit `345.450` Audiobildern belegen den natuerlichen
+Audio-/Videopfad ohne Skip oder private Bildbruecke. Die PVR-Fullevidenz
+endete nach vier bewiesenen Frames mit `1.228.800` geaenderten Pixeln.
 
-Der Lauf endet erst nach dem Film fail-closed am RuntimeOnly-Call
-`0x8C054008 -> 0x8C9000E8` mit `byte-identity-mismatch`. Das ist der naechste
-enge AOT-Blocker; Memory-Card-Screen und Hauptmenue bleiben KR-4981. Der
-Sichtpfad darf bei der folgenden Performance-/AOT-Arbeit nicht regressieren.
+Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
+und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der
+Audiohash `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau
+identisch. `100 MHz`, der Identity-Miss `0x8C054008 -> 0x8C9000E8` sowie
+Memory-Card-Screen und Hauptmenue bleiben offen.
+
+Der Runtime-Performance-Stand haelt ARM7-RAM/Registerlocks ueber einen
+`run_cycles`-Batch, nutzt direkte AICA-Sound-RAM-Spans und persistente
+Scratchpuffer, committed PVR-Geraete bei 32-Byte-Channel-2-DMA wortweise und
+beobachtet PVR-YUV-Konfigurationswechsel einmal je Guest-Write. Die Snapshot-
+und Persistenz-Sentinel-Semantik steht unter PVR-State-Contract `3`; Runtime-
+ABI `90` bleibt unveraendert.
 
 Historische v16-Evidenz (nicht aktueller Produktstand):
 Der alte Lauf endete fail-closed am generischen Fehler `missing-aot`.

@@ -65,19 +65,16 @@ Stop-on-miss und typed abort bleiben aktiv; Interpreter, JIT, Runtime-Decoder
 und geratenen Ziele sind ausgeschlossen.
 
 Der Whole-Export-Cache bindet den Analysemodus und verwendet keinen Eintrag
-des anderen Modus. Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte
-`45,608 s` ohne Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256
-`b695021ba967a9d201c15b77cee38fc65f93e6e1533356b4fb51578d1b715fb9`.
+des anderen Modus. Der aktuelle saubere RuntimeOnly-Produktlauf erreichte
+`FirstVisibleGameFrame` ohne Fatal- oder Runtimefehler. Die identische
+Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz`
+auf `24,2926 MHz`.
 
-Der Lauf verarbeitete `1.839.534.869` Gastzyklen; post-entry wurden
-`35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s` gemessen. Der
-Diagnose-Overhead ist keine Speed-Abnahme.
-
-Der Sichtpfad zeigte SEGA und Presented by Sega, blieb danach aber schwarz;
-Memory-Card-Screen und Hauptmenue wurden nicht erreicht. Decode, Readiness und
-Render-Engine laufen; der offene Runtime-P0 liegt in Gast-Presentation/
-Framebuffer-Promotion oder PVR-/Scanout-Semantik. Stop-on-miss und typed abort
-bleiben aktiv.
+Der Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
+YUV-Makrobloecke und `470` Audiopuffer mit `345.450` Audiobildern. Der
+serielle Runtime-/Dispatch-Overhead bis mindestens `100 MHz`, der weitere
+Identity-Miss und Memory-Card-Screen/Hauptmenue bleiben offen. Stop-on-miss
+und typed abort bleiben aktiv.
 
 ## Opt-in Portbuild-Telemetrie
 

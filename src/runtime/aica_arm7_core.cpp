@@ -74,6 +74,8 @@ constexpr std::uint32_t arm_irq_disable_mask = 1u << 7u;
 struct AicaArm7Core::Impl final {
     std::weak_ptr<AicaRegisterFile> registers;
     std::weak_ptr<LinearMemoryDevice> ram;
+    AicaRegisterFile* active_registers = nullptr;
+    std::span<std::uint8_t> active_ram;
     arm7_t cpu{};
     std::uint64_t bus_cycles = 0u;
     std::uint64_t executed_cycles = 0u;
@@ -121,49 +123,52 @@ struct AicaArm7Core::Impl final {
         enabled = next_enabled;
         fiq_line = false;
         faulted = false;
-    }
-
-    [[nodiscard]] std::shared_ptr<LinearMemoryDevice> lock_ram() noexcept {
-        auto value = ram.lock();
-        if (!value || value->size() < required_arm_ram_size) faulted = true;
-        return value;
-    }
-
-    [[nodiscard]] std::shared_ptr<AicaRegisterFile> lock_registers() noexcept {
-        auto value = registers.lock();
-        if (!value) faulted = true;
-        return value;
+        active_registers = nullptr;
+        active_ram = {};
     }
 
     template <typename Value>
     [[nodiscard]] Value read_memory(const std::uint32_t source_address) noexcept {
         ++bus_cycles;
         const auto address = source_address & arm_address_mask;
-        try {
-            if (address < arm_register_base) {
-                const auto memory = lock_ram();
-                if (!memory) return 0u;
-                if constexpr (sizeof(Value) == 1u) {
-                    return memory->read_u8(address & arm_ram_mask);
-                } else if constexpr (sizeof(Value) == 2u) {
-                    return memory->read_u16((address & arm_ram_mask) & ~1u);
-                } else {
-                    return memory->read_u32((address & arm_ram_mask) & ~3u);
-                }
+        if (address < arm_register_base) {
+            if (active_ram.size() < required_arm_ram_size) {
+                faulted = true;
+                return 0u;
             }
-            const auto register_file = lock_registers();
-            if (!register_file) return 0u;
+            auto offset = address & arm_ram_mask;
+            if constexpr (sizeof(Value) == 1u) {
+                return active_ram[offset];
+            } else if constexpr (sizeof(Value) == 2u) {
+                offset &= ~1u;
+                return static_cast<Value>(
+                    static_cast<std::uint16_t>(active_ram[offset]) |
+                    (static_cast<std::uint16_t>(active_ram[offset + 1u]) << 8u));
+            } else {
+                offset &= ~3u;
+                return static_cast<Value>(
+                    static_cast<std::uint32_t>(active_ram[offset]) |
+                    (static_cast<std::uint32_t>(active_ram[offset + 1u]) << 8u) |
+                    (static_cast<std::uint32_t>(active_ram[offset + 2u]) << 16u) |
+                    (static_cast<std::uint32_t>(active_ram[offset + 3u]) << 24u));
+            }
+        }
+        if (active_registers == nullptr) {
+            faulted = true;
+            return 0u;
+        }
+        try {
             const auto offset = address & arm_register_mask;
             if constexpr (sizeof(Value) == 1u) {
                 return static_cast<Value>(
-                    register_file->read_arm(offset, MemoryAccessWidth::Byte));
+                    active_registers->read_arm(offset, MemoryAccessWidth::Byte));
             } else if constexpr (sizeof(Value) == 2u) {
                 return static_cast<Value>(
-                    register_file->read_arm(offset & ~1u, MemoryAccessWidth::Halfword));
+                    active_registers->read_arm(offset & ~1u, MemoryAccessWidth::Halfword));
             } else {
                 // AICA's ARM-side 32-bit register accesses use the low 16-bit port.
                 return static_cast<Value>(
-                    register_file->read_arm(offset & ~1u, MemoryAccessWidth::Halfword));
+                    active_registers->read_arm(offset & ~1u, MemoryAccessWidth::Halfword));
             }
         } catch (...) {
             faulted = true;
@@ -175,27 +180,39 @@ struct AicaArm7Core::Impl final {
     void write_memory(const std::uint32_t target_address, const Value value) noexcept {
         ++bus_cycles;
         const auto address = target_address & arm_address_mask;
-        try {
-            if (address < arm_register_base) {
-                const auto memory = lock_ram();
-                if (!memory) return;
-                if constexpr (sizeof(Value) == 1u)
-                    memory->write_u8(address & arm_ram_mask, value);
-                else if constexpr (sizeof(Value) == 2u)
-                    memory->write_u16((address & arm_ram_mask) & ~1u, value);
-                else
-                    memory->write_u32((address & arm_ram_mask) & ~3u, value);
+        if (address < arm_register_base) {
+            if (active_ram.size() < required_arm_ram_size) {
+                faulted = true;
                 return;
             }
-            const auto register_file = lock_registers();
-            if (!register_file) return;
+            auto offset = address & arm_ram_mask;
+            if constexpr (sizeof(Value) == 1u) {
+                active_ram[offset] = static_cast<std::uint8_t>(value);
+            } else if constexpr (sizeof(Value) == 2u) {
+                offset &= ~1u;
+                active_ram[offset] = static_cast<std::uint8_t>(value);
+                active_ram[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            } else {
+                offset &= ~3u;
+                active_ram[offset] = static_cast<std::uint8_t>(value);
+                active_ram[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+                active_ram[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+                active_ram[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+            }
+            return;
+        }
+        if (active_registers == nullptr) {
+            faulted = true;
+            return;
+        }
+        try {
             const auto offset = address & arm_register_mask;
             if constexpr (sizeof(Value) == 1u)
-                register_file->write_arm(offset, value, MemoryAccessWidth::Byte);
+                active_registers->write_arm(offset, value, MemoryAccessWidth::Byte);
             else if constexpr (sizeof(Value) == 2u)
-                register_file->write_arm(offset & ~1u, value, MemoryAccessWidth::Halfword);
+                active_registers->write_arm(offset & ~1u, value, MemoryAccessWidth::Halfword);
             else
-                register_file->write_arm(
+                active_registers->write_arm(
                     offset & ~1u,
                     static_cast<std::uint16_t>(value),
                     MemoryAccessWidth::Halfword);
@@ -284,6 +301,16 @@ struct AicaArm7Core::Impl final {
         }
         const auto target = requested_cycles - cycle_debt;
         cycle_debt = 0u;
+        const auto register_guard = registers.lock();
+        const auto ram_guard = ram.lock();
+        if (!register_guard || !ram_guard ||
+            ram_guard->size() < required_arm_ram_size) {
+            faulted = true;
+            enabled = false;
+            return;
+        }
+        active_registers = register_guard.get();
+        active_ram = ram_guard->writable_bytes().first(required_arm_ram_size);
         std::uint64_t consumed = 0u;
         while (consumed < target && enabled && !faulted) {
             cpu.i_cycles = 0u;
@@ -300,6 +327,8 @@ struct AicaArm7Core::Impl final {
         }
         executed_cycles += consumed;
         cycle_debt = consumed > target ? consumed - target : 0u;
+        active_registers = nullptr;
+        active_ram = {};
         cpu.i_cycles = 0u;
         cpu.executed_instructions = executed_instructions;
     }

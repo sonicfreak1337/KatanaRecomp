@@ -4,6 +4,32 @@
 
 ### Geaendert
 
+- Der aktuelle Runtime-Performance-Zwischenstand haelt den natuerlichen
+  No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische
+  Vergleichspfad stieg von `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz`
+  auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der letzte Lauf lieferte
+  `341` Renderrequests/-completions/-frames, `15.680` YUV-Makrobloecke sowie
+  `470` Audiopuffer mit `345.450` Audiobildern; `100 MHz` und das weitere
+  Bring-up bis Memory-Card-Screen/Hauptmenue bleiben offen. Die PVR-
+  Fullevidenz endet nach vier bewiesenen Frames mit `1.228.800` geaenderten
+  Pixeln, und der Audiohash `8399287713367543391` blieb beim Audio-Umbau
+  identisch.
+
+- ARM7 haelt Weak-Ownership, sperrt RAM/Register einmal je `run_cycles`-
+  Batch und arbeitet danach mit direkten RAM-Spans. AICA verwendet direkte
+  Sound-RAM-Spans, persistente thread_local-Scratchpuffer, serielle Mischung
+  bis vier aktive Stimmen und einen wiederverwendeten Ausgabevektor. PVR-
+  Scratchkapazitaet bleibt erhalten; schwere Render-/Scanoutevidenz endet am
+  echten `FirstVisibleGameFrame`. Der PVR-State-Contract steigt auf `3`, weil
+  die Sentinel-Semantik fuer abgeschlossene Evidenz in Snapshot, Persistenz
+  und generiertem Produktpfad synchronisiert wird; Runtime-ABI `90` bleibt
+  unveraendert.
+
+- Channel-2-DMA validiert weiterhin die vollstaendige Byte-Range und committed
+  PVR-Geraete fuer 32-Byte-Transfers wortweise. Der PVR-YUV-Pfad akzeptiert
+  16-/32-Bit-Writes und beobachtet Konfigurationswechsel einmal je Guest-Write;
+  der Generator verwendet dafuer den wiederverwendeten Audio-Ausgabevektor.
+
 - Der No-Skip-Sonic-PAL-Lauf
   `katana-visible-accept-20260811T035207101Z` belegt erstmals den echten
   sichtbaren Moviepfad: `game.exe` mit SHA-256
@@ -52,8 +78,8 @@
 
 - Die PVR-TA-Metrik trennt Frames der aktuellen Parsergeneration von
   monotonen Lifetime-Frames und zaehlt Resetgeneration sowie Lifetime-Resets.
-  Der PVR-State-Contract steigt auf `2`; Probe, Persistenz und generierte
-  Produktevidenz verwenden denselben Vertrag.
+  Der damalige PVR-State-Contract stieg auf `2`; Probe, Persistenz und
+  generierte Produktevidenz verwendeten denselben historischen Vertrag.
 
 - Ein noch frueherer RuntimeOnly-v25/v29-Sonic-PAL-Lauf dauerte `45,539 s` ohne
   Fatalfehler oder Crash. Die erzeugte `game.exe` hat SHA-256

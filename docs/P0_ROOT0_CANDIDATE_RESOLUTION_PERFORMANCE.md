@@ -14,16 +14,17 @@ statische Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv;
 kein Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad.
 
 Der aktuelle RuntimeOnly-Build-/Export-Gate ist bestanden. Der letzte saubere
-RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s`; nach Presented by Sega blieb
-der Kontaktbogen schwarz und Memory-Card-Screen sowie Hauptmenue wurden nicht
-erreicht. Candidate-Resolution bleibt im RuntimeOnly-Bring-up deferred und
-ist nicht der aktuelle Produktblocker.
+RuntimeOnly-Produktlauf erreichte `FirstVisibleGameFrame` ohne Skip; Candidate-
+Resolution bleibt im RuntimeOnly-Bring-up deferred und ist nicht der aktuelle
+Produktblocker. Die identische Vergleichsreihe stieg bis `24,2926 MHz`, aber
+`100 MHz` und Memory-Card-Screen/Hauptmenue bleiben offen.
 
-Der aktuelle Runtime-P0 liegt in Gast-Presentation/Framebuffer-Promotion oder
-allgemeiner PVR-/Scanout-Semantik, nicht in fehlender Movie-Decodierung. Die
-fruehere StartRender-/Frame-Finalize-Diagnose ist verworfen; StartRender wurde
+Der aktuelle Runtime-P0 liegt im seriellen Runtime-/Dispatch-Overhead bis
+mindestens `100 MHz`, nicht in fehlender Movie-Decodierung. Die fruehere
+StartRender-/Frame-Finalize-Diagnose ist verworfen; StartRender wurde
 beobachtet. Dieses Dokument bewahrt die Candidate-Resolution-Diagnostik und
-deren historische Gates, behauptet aber keinen RuntimeOnly-Produktblocker.
+deren historische Gates, behauptet aber keinen RuntimeOnly-Candidate-
+Resolution-Produktblocker.
 
 Dieses Dokument ergaenzt
 [`P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md)

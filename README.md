@@ -6,10 +6,11 @@ Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 90, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
-Portprojektvertrag 75.
+Portprojektvertrag 75, PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
-Der aktuelle funktionale RuntimeOnly-Source-Stand ist `e1d8ade`. Die
+Der aktuelle funktionale RuntimeOnly-Source-Stand ist der Runtime-
+Performance-Checkpoint. Die
 oeffentlichen AICA-/ARM7-Handoff-Layouts sind deshalb auf Runtime-ABI 90
 versioniert; PlatformServices-ABI 14 und Backend-Interface-ABI 13 bleiben
 aktuell.
@@ -28,48 +29,52 @@ Stop-on-miss und typed abort bleiben aktiv; es gibt keinen Interpreter, JIT,
 Runtime-Decoder oder geratenen Zielpfad. Der Whole-Export-Cache ist an den
 Analysemodus gebunden.
 
-Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
-nachgelagerten AOT-Fehler. Die erzeugte `game.exe` hat SHA-256
-`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
-Ohne Start-Impuls, Movie-Skip, automatischen Framebuffer-Flip oder private
-Bildbruecke rendert der Port den Sonic-Team-Film sichtbar von etwa `60 s`
-bis zum Fade bei etwa `145 s`. Der Player erreicht Status `5`; beide zuvor
-stehenden Freigabepfade schalten auf `1` und laufen danach weiter.
+Der aktuelle 70-s-No-Skip-RuntimeOnly-Produktlauf erreichte das erforderliche
+Milestone `FirstVisibleGameFrame` ohne Start-Impuls, Movie-Skip,
+Framebuffer-Hack oder kuenstlichen Moviepfad. Der erste Frame ist durch Digest
+`16866779858248182758` bei Gastzyklus `622122619` belegt. Es gab `341`
+Renderrequests, Rendercompletions und Rendererframes, `15.680`
+YUV-Makrobloecke sowie `470` Audiopuffer mit `345.450` Audiobildern.
 
-Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
-gemessen. Erfasst wurden `56.000` YUV-Makrobloecke, `579`
-Renderabschluesse und `761` Audiopuffer. `FB_R_SOF1` schaltete gastgesteuert
-auf den Moviebuffer; der
-sichtbare Film ist damit erstmals als echter Produktpfad belegt.
+Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit `1.228.800`
+geaenderten Pixeln; danach wurde keine fortlaufende Vollbild-Evidenz behauptet.
+Der Audiohash `8399287713367543391` blieb zwischen YUV-Lauf und Audio-Umbau
+identisch. Es gab keine Fatal- oder Runtimefehler. Die Vergleichsreihe der
+identischen Produktarbeit stieg von `23,7959 MHz` ueber `24,1885 MHz` und
+`24,2825 MHz` auf `24,2926 MHz`, insgesamt `+0,4967 MHz` beziehungsweise
+`+2,09 %`.
 
-`e1d8ade` bindet einen echten AICA-ARM7TDMI-Kern, Sound-/Main-Interrupts,
+Der fruehere Checkpoint `e1d8ade` bindet einen echten AICA-ARM7TDMI-Kern,
+Sound-/Main-Interrupts,
 REG_L/REG_M, portable Fortsetzung und die Common-Monitorregister fuer MIDI-
 Leerstand, Channel-Lifecycle und Current Address. Der zuvor bei null stehende
 Sofdec-Audiotakt erreicht nun `0x2D0` und `0x890` bei der Einheit `0xAC44`
 (`44.100`). Im No-Skip-Lauf gingen beide Readinesspfade auf `1`, der
 Movie-Lifecycle auf Status `5`, und YUV-/PVR-/FB_R-Publikation wurde sichtbar.
-Der naechste P0 liegt erst nach dem Sonic-Team-Film: Der Call an
-`0x8C054008 -> 0x8C9000E8` endet fail-closed mit
-`byte-identity-mismatch`. Memory-Card-Screen und Hauptmenue bleiben offen.
-Parallel ist die gemessene Filmleistung von `19,577 MHz` ein echter
-Performance-P0. Vor dem weiteren Bring-up wird der vollstaendige reale
-Sicht-/Audiopfad auf mindestens `100 MHz` angehoben; der sichtbare Film darf
-dabei nicht regressieren.
+Der Hostprozess nutzte dabei nur etwa `1,64` Kerne beziehungsweise `6,8 %`
+der 24-Thread-Kapazitaet; der Performance-P0 liegt daher weiter beim
+seriellen Runtime-/Dispatch-Overhead. `100 MHz` und der anschliessende
+Identity-Miss `0x8C054008 -> 0x8C9000E8` sind offen; Memory-Card-Screen und
+Hauptmenue wurden noch nicht erreicht. Der sichtbare Audio-/Videopfad darf
+bei der weiteren Performancearbeit nicht regressieren.
 Der Default-PlatformAbi-Pfad
 bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
 Bring-up-Meilensteins.
 
-## Aktueller RuntimeOnly-v25/v29-Produktstand
+## Aktueller RuntimeOnly-Produktstand
 
-Der aktuelle beaufsichtigte Sonic-PAL-Lauf rendert ohne Skip den vollstaendigen
-Sonic-Team-Film bis zum Fade. `56.000` YUV-Makrobloecke, `579` erfolgreiche
-Renderabschluesse, der gastgesteuerte FB_R-Wechsel und Player-Status `5`
-belegen den echten Decode-/Publish-/Scanoutpfad. Der Lauf endet erst danach
-am neuen fail-closed RuntimeOnly-Ziel `0x8C9000E8` mit
-`byte-identity-mismatch`; Memory-Card-Screen und Hauptmenue wurden noch nicht
-erreicht. Die oeffentlichen Layoutaenderungen sind durch Runtime-ABI 90
-versioniert.
+Der aktuelle Lauf belegt den natuerlichen Audio-/Videopfad bis zum ersten
+sichtbaren Spielbild; der Bring-up ist damit sichtbar, aber noch kein
+Hauptmenue-/Memory-Card-Gate. `PVR-State-Contract 3` fuehrt die Sentinel-
+Semantik fuer abgeschlossene Fullevidenz in Snapshot, Persistenz und
+generiertem Produktpfad. Das oeffentliche Runtime-Layout bleibt kompatibel;
+Runtime-ABI 90 wird nicht angehoben.
+
+Der zugehoerige Runtime-Performance-Stand haelt ARM7-RAM/Registerlocks ueber
+einen `run_cycles`-Batch, nutzt direkte AICA-Sound-RAM-Spans und persistente
+Scratchpuffer, committed den 32-Byte-Channel-2-DMA-Pfad fuer PVR-Geraete
+wortweise und beobachtet PVR-YUV-Konfigurationswechsel einmal je Guest-Write.
 
 Die aktuelle generische Source-Wiring umfasst eine Cross-Shard-
 Codecopy-Abhaengigkeit in `control_flow_analysis.cpp`, einen togglebaren

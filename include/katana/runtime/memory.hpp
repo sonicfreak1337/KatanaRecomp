@@ -19,6 +19,7 @@ namespace katana::runtime {
 struct CrashCapsule;
 class LinearMemoryDevice;
 class ExecutableDiscLoadTransactionCoordinator;
+class Sh4Dmac;
 
 enum class MemoryRegionAccess { ReadOnly, ReadWrite };
 
@@ -980,6 +981,15 @@ class Memory {
 
   private:
     friend class ExecutableDiscLoadTransactionCoordinator;
+    friend class Sh4Dmac;
+    void write_dma_words(std::uint32_t address,
+                         std::span<const std::uint8_t> bytes,
+                         CodeWriteSource source);
+    void write_bytes_at_impl(std::uint32_t address,
+                             std::span<const std::uint8_t> bytes,
+                             const GuestMemoryAccessContext& context,
+                             CodeWriteSource source,
+                             bool prefer_device_word_writes);
     [[nodiscard]] bool commit_prevalidated_linear_transaction_bytes(
         std::uint32_t address,
         std::span<const std::uint8_t> bytes,

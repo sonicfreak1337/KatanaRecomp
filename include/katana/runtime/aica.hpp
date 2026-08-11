@@ -97,6 +97,8 @@ class AicaRegisterFile final {
     [[nodiscard]] std::uint64_t write_count() const noexcept;
     [[nodiscard]] std::vector<std::int16_t> render_audio(std::size_t frame_count,
                                                          std::uint32_t sample_rate);
+    void render_audio_into(std::span<std::int16_t> interleaved_stereo,
+                           std::uint32_t sample_rate);
     [[nodiscard]] std::size_t active_channel_count() const noexcept;
     [[nodiscard]] std::uint64_t rendered_buffer_count() const noexcept;
     [[nodiscard]] std::uint64_t rendered_frame_count() const noexcept;

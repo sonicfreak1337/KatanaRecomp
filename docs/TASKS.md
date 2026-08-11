@@ -88,33 +88,29 @@ Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben aktiv; kein
 Interpreter, JIT, Runtime-Decoder oder geratener Zielpfad. Der Whole-Export-
 Cache ist modegebunden.
 
-Der aktuelle No-Skip-RuntimeOnly-v25/v29-Produktlauf lief bis zum ersten
-Fehler nach dem Sonic-Team-Film. Die erzeugte `game.exe` hat
-SHA-256
-`8f9b80be31f7644a3a4afd986a5c1df9c2c8b3386d9a454c08d8cb4e5af3ee41`.
-
-Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag ist damit abgeschlossen;
-der No-Skip-Sichtpfad rendert nun den Sonic-Team-Film mit Player-Status `5`,
-`56.000` YUV-Makrobloecken und gastgesteuertem FB_R. Die dort gemessenen
-`19,577 MHz` sind der aktive Performance-P0; Ziel sind mindestens `100 MHz`
-ohne Sicht-/Audioregression. Danach folgt der fail-closed Call
-`0x8C054008 -> 0x8C9000E8` mit `byte-identity-mismatch`. KR-4981 bleibt bis
-Memory-Card-Screen und Hauptmenue offen; der PlatformAbi-Default bleibt
+Der aktuelle RuntimeOnly-Build-/Export-Unterauftrag und der natuerliche
+No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` sind abgeschlossen.
+Der letzte Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
+YUV-Makrobloecke und `470` Audiopuffer mit `345.450` Audiobildern. Die
+identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz` und
+`24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`).
+`100 MHz`, der fail-closed Identity-Miss `0x8C054008 -> 0x8C9000E8` und
+Memory-Card-Screen/Hauptmenue bleiben offen; der PlatformAbi-Default bleibt
 erhalten.
 
-## Aktueller RuntimeOnly-v25/v29-Produktstand
+## Aktueller RuntimeOnly-Produktstand
 
 Der vorherige bereinigte Source-Checkpoint hob Runtime-ABI `87` auf `88` und
 PlatformServices-ABI `13` auf `14`. Der funktionale Checkpoint `efc531b` hebt
 Runtime-ABI wegen der PVR-Completion- und TA-Metrikvertraege weiter auf `89`;
 `e1d8ade` hebt ihn wegen der oeffentlichen AICA-/ARM7-Fortsetzung weiter auf
-`90`; Backend-Interface-ABI `13` bleibt aktuell.
+`90`; Backend-Interface-ABI `13` und PVR-State-Contract `3` bleiben aktuell.
 
-Post-entry wurden `19,577 MHz` aus `2.536.286.549` Zyklen in `129,554 s`
-gemessen. `579` Renderabschluesse, `56.000` YUV-Makrobloecke und `761`
-Audiopuffer laufen bis zum vollstaendig sichtbaren Sonic-Team-Film. Der
-nachgelagerte AOT-Fehler ist
-der neue enge KR-4981-Blocker.
+Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit `1.228.800`
+geaenderten Pixeln; der Audiohash `8399287713367543391` blieb zwischen
+YUV-Lauf und Audio-Umbau identisch. Der Hostprozess nutzte nur etwa `1,64`
+Kerne beziehungsweise `6,8 %` der 24-Thread-Kapazitaet; der aktuelle P0 ist
+der serielle Runtime-/Dispatch-Overhead bis mindestens `100 MHz`.
 
 ## Historische Candidate-Evidenz
 
@@ -123,8 +119,9 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Aktueller funktionaler Source-Stand:
-  e1d8ade
-  Runtime-ABI 90, PlatformServices-ABI 14, Backend-Interface-ABI 13
+  aktueller Runtime-Performance-Checkpoint
+  Runtime-ABI 90, PlatformServices-ABI 14, Backend-Interface-ABI 13,
+  PVR-State-Contract 3
   Analyzer-ABI 34, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 25, AOT-Partitionsschema 5
@@ -154,7 +151,7 @@ Messwert abgeleitet werden.
 ```text
 KR-4985, KR-4986, KR-4993, KR-4987, KR-4994 und KR-4995: source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> No-Skip-Sonic-Team-Film sichtbar, aber nur 19,577 MHz
+  -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
   -> realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz anheben
   -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
   -> sichtbarer Start bis mindestens Memory-Card-Screen/Hauptmenue
@@ -702,11 +699,11 @@ Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
   publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
-- KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate ist
-  bestanden und der Sonic-Team-Film rendert ohne Skip. Die nur `19,577 MHz`
-  im Film sind der aktive Performance-P0; danach liegt der funktionale Blocker
-  am Identity-Miss `0x8C054008 -> 0x8C9000E8`. Memory-Card-Screen und
-  Hauptmenue bleiben offen.
+- KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate und
+  `FirstVisibleGameFrame` sind bestanden. Der aktuelle Performance-P0 liegt
+  bei `24,2926 MHz` auf dem sichtbaren Pfad, mit Ziel mindestens `100 MHz`;
+  danach liegt der funktionale Blocker am Identity-Miss
+  `0x8C054008 -> 0x8C9000E8`. Memory-Card-Screen und Hauptmenue bleiben offen.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -753,9 +750,9 @@ FB_W->FB_R-Flip oder titelbezogener Runtime-Hack ist kein Fix.
 Prioritaet: P0 Produkt- und Performancegate
 
 Abhaengigkeit: RuntimeOnly-Build-/Export- und No-Skip-Movie-Gate bestanden;
-der aktuelle Performance-P0 sind `19,577 MHz` im Sonic-Team-Film bei einem
-Ziel von mindestens `100 MHz` ohne Regression. Danach liegt der Runtime-
-Blocker am Call
+der aktuelle Performance-P0 ist der serielle Runtime-/Dispatch-Overhead bei
+`24,2926 MHz` im sichtbaren Audio-/Videopfad, mit einem Ziel von mindestens
+`100 MHz` ohne Regression. Danach liegt der Runtime-Blocker am Call
 `0x8C054008 -> 0x8C9000E8` (`byte-identity-mismatch`). Memory-Card-Screen und
 Hauptmenue bleiben offen.
 

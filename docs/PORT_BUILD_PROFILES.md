@@ -32,16 +32,15 @@ maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
 durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
 geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 
-Der letzte saubere RuntimeOnly-v25/v29-Produktlauf dauerte `45,608 s` ohne
-Fatalfehler oder Crash. Die aktuelle `game.exe` besitzt den dokumentierten
-Produkt-Hash; das Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema
-`5`.
+Der aktuelle RuntimeOnly-Produktstand erreicht `FirstVisibleGameFrame` ohne
+Skip oder kuenstlichen Moviepfad. Die identische Vergleichsreihe stieg von
+`23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz` auf `24,2926 MHz`; das
+Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
 
-Post-entry wurden `35,8803 MHz` aus `1.424.301.606` Zyklen in `39,6959 s`
-gemessen; der Diagnose-Overhead ist keine Speed-Abnahme. Der Sichtpfad zeigte
-SEGA und Presented by Sega, blieb danach aber schwarz; Memory-Card-Screen und
-Hauptmenue bleiben offen. Der aktuelle Runtime-P0 liegt in Gast-Presentation/
-Framebuffer-Promotion oder PVR-/Scanout-Semantik.
+Der letzte Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
+YUV-Makrobloecke sowie `470` Audiopuffer mit `345.450` Audiobildern. `100 MHz`
+und das weitere Bring-up bis Memory-Card-Screen/Hauptmenue bleiben offen; der
+serielle Runtime-/Dispatch-Overhead ist der aktuelle Performance-P0.
 
 ## Compiler und Linker
 
