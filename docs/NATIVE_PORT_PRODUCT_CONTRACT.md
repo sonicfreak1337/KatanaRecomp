@@ -130,8 +130,8 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `92`, Analyzer-ABI `36`, Backend-
-Interface-ABI `16`, Portprojektvertrag `79` und Native-Port-Profilvertrag `4`.
+KR-5000 bindet diese Grenze an Runtime-ABI `93`, Analyzer-ABI `36`, Backend-
+Interface-ABI `17`, Portprojektvertrag `80` und Native-Port-Profilvertrag `5`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -166,11 +166,22 @@ Executable und einen privaten ContentRoot, validiert beide Pfade und verwendet
 den expliziten Bring-up-Schalter nur bei unvollstaendiger Closure. Einen
 historischen Guest-Cycle-Budgetpfad oder einen stillen Fallback gibt es nicht.
 
+KR-5001 erzeugt automatisch `metadata/native-hook-requirements.json` als
+deterministische Hookanforderungskarte. Function-/Instruction-Replacement ist
+nur bei exaktem Grenz-, Eigentuemerschafts-, Entry-, Resume-, Seed-, Guarded-,
+Kontext- und CFG-Proof zulaessig; bekannte Hardware- und unbekannte
+Instruktionsstellen bleiben hookpflichtig. Die Hardware-Closure ist Schema
+`v2`. Gewoehnliche dynamische Speicherzugriffe laufen ausschliesslich ueber
+range-geprueften Native Memory und enden ausserhalb typisiert. Der
+`GuestInstructionOrigin` bleibt in `MemoryAccessError`, Emitter und
+Native-Dispatch auch ohne Tracesink erhalten. Ein moeglicher Diagnosebypass
+ohne `NativePortDefinition` ist geschlossen.
+
 ## Verbindliche Taskreihenfolge
 
 1. `KR-5000`: Native Produktgrenze und Linkisolation durchsetzen. [x]
 2. `KR-5001`: private SH-4-Spiel-/SDK-Grenzen und native Hookbindung
-   vollstaendig ableiten.
+   vollstaendig ableiten. [x]
 3. `KR-5002`: Audio-/Moviepfad nativ anbinden und ARM7/AICA aus dem
    Produktprofil entfernen.
 4. `KR-5003`: Grafikpfad an eine native GPU-API anbinden und CPU-PVR aus dem

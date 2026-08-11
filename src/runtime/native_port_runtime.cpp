@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace katana::runtime {
@@ -255,10 +256,14 @@ bool NativePortAotServices::prefetch(
         if (context_ != nullptr)
             context_->stop_reason =
                 NativePortStopReason::UnresolvedHardwareAccess;
+        std::ostringstream detail;
+        detail << "native-prefetch-unresolved:address=0x" << std::hex
+               << address << ";site=0x" << instruction.source_pc
+               << ";runtime-pc=0x" << instruction.runtime_pc << std::dec
+               << ";instruction-valid=" << (instruction.valid ? 1 : 0);
         throw NativePortContractError(
             NativePortContractFailure::UnresolvedHardwareAccess,
-            instruction.valid ? "native-prefetch-unresolved-site"
-                              : "native-prefetch-unresolved-address");
+            detail.str());
     }
     katana::runtime::prefetch(cpu, address);
     return true;

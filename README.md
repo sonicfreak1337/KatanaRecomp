@@ -25,11 +25,11 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 92, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 93, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 79, Native-Port-Profilvertrag 4 sowie PVR-State-Contract 3.
+Portprojektvertrag 80, Native-Port-Profilvertrag 5 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
@@ -54,6 +54,15 @@ Closure. Einen historischen Guest-Cycle-Budgetpfad gibt es nicht. Das
 identitaetsgebundene Image-/Hookmanifest bleibt Teil des Produktvertrags.
 Der historische Dreamcast-Launcher wird niemals als nativer Fallback gelinkt.
 
+KR-5001 ist source-seitig abgeschlossen: Die deterministische
+`metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
+`v2` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
+Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
+range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert. Der
+`GuestInstructionOrigin` bleibt in `MemoryAccessError`, Emitter und
+Native-Dispatch auch ohne Tracesink erhalten. Aktiv ist jetzt KR-5002 fuer
+Audio/Movie.
+
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
 Runtime-Performance-Checkpoint. Die
 oeffentlichen AICA-/ARM7-Handoff-Layouts sind deshalb auf Runtime-ABI 90
@@ -61,7 +70,8 @@ versioniert; PlatformServices-ABI 14 und Backend-Interface-ABI 13 gehoeren zu
 diesem historischen Checkpoint. Die damalige Erweiterung von
 `PortExportOptions` und `LatentAotDiscoveryOptions` fuehrte Backend-
 Interface-ABI `13` ein; der jetzt unabhaengige
-`PortExportOptions::native_port_definition`-Vertrag hebt ihn auf `14`.
+`PortExportOptions::native_port_definition`-Vertrag wurde inzwischen auf
+Backend-Interface-ABI `17` weiterentwickelt.
 
 Der historische opt-in-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zugelassen. Ab v0.49.1 ist er ausschliesslich internes
@@ -365,8 +375,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
-Der aktuelle KR-5000-Stand verwendet Runtime-ABI 92 und
-Portprojektvertrag 79. Davon getrennt verwendet `GameProject` Vertrag 5 und
+Der aktuelle KR-5000-Stand verwendet Runtime-ABI 93 und
+Portprojektvertrag 80. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

@@ -101,13 +101,15 @@ class MemoryAccessError final : public std::runtime_error {
                       MemoryAccessOperation operation,
                       std::uint32_t address,
                       MemoryAccessWidth width,
-                      std::string region_name = {});
+                      std::string region_name = {},
+                      GuestInstructionOrigin instruction = {});
 
     [[nodiscard]] MemoryAccessErrorReason reason() const noexcept;
     [[nodiscard]] MemoryAccessOperation operation() const noexcept;
     [[nodiscard]] std::uint32_t address() const noexcept;
     [[nodiscard]] MemoryAccessWidth width() const noexcept;
     [[nodiscard]] const std::string& region_name() const noexcept;
+    [[nodiscard]] GuestInstructionOrigin instruction() const noexcept;
 
   private:
     MemoryAccessErrorReason reason_;
@@ -115,6 +117,7 @@ class MemoryAccessError final : public std::runtime_error {
     std::uint32_t address_ = 0u;
     MemoryAccessWidth width_ = MemoryAccessWidth::Byte;
     std::string region_name_;
+    GuestInstructionOrigin instruction_;
 };
 
 class MmioDeviceError final : public std::runtime_error {

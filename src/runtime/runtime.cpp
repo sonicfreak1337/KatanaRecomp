@@ -309,7 +309,27 @@ decltype(auto) with_guest_virtual_address(const std::uint32_t virtual_address,
                                 error.operation(),
                                 virtual_address,
                                 error.width(),
-                                error.region_name());
+                                error.region_name(),
+                                error.instruction());
+    }
+}
+
+template <typename Function>
+decltype(auto) with_guest_instruction_origin(
+    const std::uint32_t virtual_address,
+    const GuestInstructionOrigin origin,
+    Function&& function) {
+    try {
+        return with_guest_virtual_address(
+            virtual_address, std::forward<Function>(function));
+    } catch (const MemoryAccessError& error) {
+        if (error.instruction().valid) throw;
+        throw MemoryAccessError(error.reason(),
+                                error.operation(),
+                                error.address(),
+                                error.width(),
+                                error.region_name(),
+                                origin);
     }
 }
 
@@ -490,15 +510,22 @@ std::int32_t guest_read_s16(CpuState& cpu, const std::uint32_t address) {
 std::uint8_t guest_read_u8_at(CpuState& cpu,
                               const GuestInstructionOrigin origin,
                               const std::uint32_t virtual_address) {
-    std::uint32_t direct_physical = 0u;
-    std::uint8_t direct_value = 0u;
-    if (direct_untranslated_data_physical(
-            cpu, virtual_address, MemoryAccessWidth::Byte, direct_physical) &&
-        cpu.memory.try_read_direct_linear_u8(direct_physical, direct_value))
-        return direct_value;
-    const auto physical_address = translate_guest_address(
-        cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Byte);
-    return with_guest_virtual_address(virtual_address, [&] {
+    return with_guest_instruction_origin(virtual_address, origin, [&] {
+        std::uint32_t direct_physical = 0u;
+        std::uint8_t direct_value = 0u;
+        if (direct_untranslated_data_physical(
+                cpu,
+                virtual_address,
+                MemoryAccessWidth::Byte,
+                direct_physical) &&
+            cpu.memory.try_read_direct_linear_u8(
+                direct_physical, direct_value))
+            return direct_value;
+        const auto physical_address = translate_guest_address(
+            cpu,
+            virtual_address,
+            MemoryAccessOperation::Read,
+            MemoryAccessWidth::Byte);
         return cpu.memory.read_u8_at(
             physical_address,
             GuestMemoryAccessContext{
@@ -513,15 +540,22 @@ std::uint8_t guest_read_u8_at(CpuState& cpu,
 std::uint16_t guest_read_u16_at(CpuState& cpu,
                                 const GuestInstructionOrigin origin,
                                 const std::uint32_t virtual_address) {
-    std::uint32_t direct_physical = 0u;
-    std::uint16_t direct_value = 0u;
-    if (direct_untranslated_data_physical(
-            cpu, virtual_address, MemoryAccessWidth::Halfword, direct_physical) &&
-        cpu.memory.try_read_direct_linear_u16(direct_physical, direct_value))
-        return direct_value;
-    const auto physical_address = translate_guest_address(
-        cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Halfword);
-    return with_guest_virtual_address(virtual_address, [&] {
+    return with_guest_instruction_origin(virtual_address, origin, [&] {
+        std::uint32_t direct_physical = 0u;
+        std::uint16_t direct_value = 0u;
+        if (direct_untranslated_data_physical(
+                cpu,
+                virtual_address,
+                MemoryAccessWidth::Halfword,
+                direct_physical) &&
+            cpu.memory.try_read_direct_linear_u16(
+                direct_physical, direct_value))
+            return direct_value;
+        const auto physical_address = translate_guest_address(
+            cpu,
+            virtual_address,
+            MemoryAccessOperation::Read,
+            MemoryAccessWidth::Halfword);
         return cpu.memory.read_u16_at(
             physical_address,
             GuestMemoryAccessContext{
@@ -536,15 +570,22 @@ std::uint16_t guest_read_u16_at(CpuState& cpu,
 std::uint32_t guest_read_u32_at(CpuState& cpu,
                                 const GuestInstructionOrigin origin,
                                 const std::uint32_t virtual_address) {
-    std::uint32_t direct_physical = 0u;
-    std::uint32_t direct_value = 0u;
-    if (direct_untranslated_data_physical(
-            cpu, virtual_address, MemoryAccessWidth::Word, direct_physical) &&
-        cpu.memory.try_read_direct_linear_u32(direct_physical, direct_value))
-        return direct_value;
-    const auto physical_address = translate_guest_address(
-        cpu, virtual_address, MemoryAccessOperation::Read, MemoryAccessWidth::Word);
-    return with_guest_virtual_address(virtual_address, [&] {
+    return with_guest_instruction_origin(virtual_address, origin, [&] {
+        std::uint32_t direct_physical = 0u;
+        std::uint32_t direct_value = 0u;
+        if (direct_untranslated_data_physical(
+                cpu,
+                virtual_address,
+                MemoryAccessWidth::Word,
+                direct_physical) &&
+            cpu.memory.try_read_direct_linear_u32(
+                direct_physical, direct_value))
+            return direct_value;
+        const auto physical_address = translate_guest_address(
+            cpu,
+            virtual_address,
+            MemoryAccessOperation::Read,
+            MemoryAccessWidth::Word);
         return cpu.memory.read_u32_at(
             physical_address,
             GuestMemoryAccessContext{
@@ -618,14 +659,21 @@ void guest_write_u8_at(CpuState& cpu,
                        const std::uint32_t virtual_address,
                        const std::uint8_t value,
                        const CodeWriteSource source) {
-    std::uint32_t direct_physical = 0u;
-    if (direct_untranslated_data_physical(
-            cpu, virtual_address, MemoryAccessWidth::Byte, direct_physical) &&
-        cpu.memory.try_write_direct_linear_u8(direct_physical, value, source))
-        return;
-    const auto physical_address = translate_guest_address(
-        cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Byte);
-    with_guest_virtual_address(virtual_address, [&] {
+    with_guest_instruction_origin(virtual_address, origin, [&] {
+        std::uint32_t direct_physical = 0u;
+        if (direct_untranslated_data_physical(
+                cpu,
+                virtual_address,
+                MemoryAccessWidth::Byte,
+                direct_physical) &&
+            cpu.memory.try_write_direct_linear_u8(
+                direct_physical, value, source))
+            return;
+        const auto physical_address = translate_guest_address(
+            cpu,
+            virtual_address,
+            MemoryAccessOperation::Write,
+            MemoryAccessWidth::Byte);
         cpu.memory.write_u8_at(
             physical_address,
             value,
@@ -644,14 +692,21 @@ void guest_write_u16_at(CpuState& cpu,
                         const std::uint32_t virtual_address,
                         const std::uint16_t value,
                         const CodeWriteSource source) {
-    std::uint32_t direct_physical = 0u;
-    if (direct_untranslated_data_physical(
-            cpu, virtual_address, MemoryAccessWidth::Halfword, direct_physical) &&
-        cpu.memory.try_write_direct_linear_u16(direct_physical, value, source))
-        return;
-    const auto physical_address = translate_guest_address(
-        cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Halfword);
-    with_guest_virtual_address(virtual_address, [&] {
+    with_guest_instruction_origin(virtual_address, origin, [&] {
+        std::uint32_t direct_physical = 0u;
+        if (direct_untranslated_data_physical(
+                cpu,
+                virtual_address,
+                MemoryAccessWidth::Halfword,
+                direct_physical) &&
+            cpu.memory.try_write_direct_linear_u16(
+                direct_physical, value, source))
+            return;
+        const auto physical_address = translate_guest_address(
+            cpu,
+            virtual_address,
+            MemoryAccessOperation::Write,
+            MemoryAccessWidth::Halfword);
         cpu.memory.write_u16_at(
             physical_address,
             value,
@@ -670,14 +725,21 @@ void guest_write_u32_at(CpuState& cpu,
                         const std::uint32_t virtual_address,
                         const std::uint32_t value,
                         const CodeWriteSource source) {
-    std::uint32_t direct_physical = 0u;
-    if (direct_untranslated_data_physical(
-            cpu, virtual_address, MemoryAccessWidth::Word, direct_physical) &&
-        cpu.memory.try_write_direct_linear_u32(direct_physical, value, source))
-        return;
-    const auto physical_address = translate_guest_address(
-        cpu, virtual_address, MemoryAccessOperation::Write, MemoryAccessWidth::Word);
-    with_guest_virtual_address(virtual_address, [&] {
+    with_guest_instruction_origin(virtual_address, origin, [&] {
+        std::uint32_t direct_physical = 0u;
+        if (direct_untranslated_data_physical(
+                cpu,
+                virtual_address,
+                MemoryAccessWidth::Word,
+                direct_physical) &&
+            cpu.memory.try_write_direct_linear_u32(
+                direct_physical, value, source))
+            return;
+        const auto physical_address = translate_guest_address(
+            cpu,
+            virtual_address,
+            MemoryAccessOperation::Write,
+            MemoryAccessWidth::Word);
         cpu.memory.write_u32_at(
             physical_address,
             value,

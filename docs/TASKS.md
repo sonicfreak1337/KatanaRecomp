@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `79` und Native-Port-Profilvertrag `4` machen
+Portprojektvertrag `80` und Native-Port-Profilvertrag `5` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -132,25 +132,27 @@ Der Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
 `14,2 s` bestaetigt. Es wurden keine Tests und kein neuer Sonic-Export oder
 -Lauf ausgefuehrt.
 
-## [ ] KR-5001 - Statische Spiel-/SDK-Hookkarte
+## [x] KR-5001 - Statische Spiel-/SDK-Hookkarte
 
 Prioritaet: P0 Bring-up
 
-Status: aktiv, naechster Task nach KR-5000. Die native Hookkarte, ABI-/Closure-
-Grenzen und der private Adapterpfad werden auf dem implementierten
-NativePortDefinition-/Artifact-/Content-/Runtime-Stack vollstaendig verbunden.
-Unaufgeloeste Hardwarezugriffe bleiben typisiert und fail-closed; kein
-Emulator-, Interpreter- oder Runtimefallback. KR-5001 emittiert die direkte
-Hook-/Callback-Reentry in den statisch rekompilierten Code. Audio/Movie wird vor dem
-AICA-Kommandoring und Grafik vor dem PVR-Geraeteprotokoll gebunden; die
-hoechste belegbare Grenze gewinnt. Private Adressen bleiben ausserhalb des
-Repositorys.
+Status: source-seitig abgeschlossen. Die deterministische
+`metadata/native-hook-requirements.json`-Karte wird automatisch erzeugt und
+verlangt fuer Function-/Instruction-Replacement exakte Grenzen, Eigentumer,
+Entrys, Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge. Bekannte Hardware- und
+unbekannte Instruktionsstellen bleiben hookpflichtig. Gewoehnliche dynamische
+Speicherzugriffe laufen nur ueber range-geprueften Native Memory und enden
+ausserhalb typisiert. `MemoryAccessError`, Emitter und Native-Dispatch
+transportieren die exakte `GuestInstructionOrigin` auch ohne Tracesink. Die
+Hardware-Closure ist Schema `v2`; der moegliche Diagnosebypass ohne
+NativePortDefinition ist geschlossen. Private Adressen bleiben ausserhalb
+des Repositorys.
 
 ## [ ] KR-5002 - Nativer Audio-/Moviepfad
 
 Prioritaet: P0 Produkt
 
-Status: wartet auf KR-5001. Kein ARM7- oder AICA-Firmwarepfad im Produkt;
+Status: aktiv nach KR-5001. Kein ARM7- oder AICA-Firmwarepfad im Produkt;
 Opening und Ton laufen vollstaendig ueber native Hostdienste, ohne Skip oder
 erzwungenen Playerstatus.
 
@@ -158,7 +160,7 @@ erzwungenen Playerstatus.
 
 Prioritaet: P0 Produkt
 
-Status: wartet auf KR-5001. Renderarbeit laeuft ueber eine native GPU-API;
+Status: geplant nach KR-5002. Renderarbeit laeuft ueber eine native GPU-API;
 der CPU-PVR-Softwarerasterizer ist aus dem Produktlink entfernt. Diese Aufgabe
 ist kein optionaler GPU-Offload des alten Emulationspfads.
 
@@ -166,7 +168,7 @@ ist kein optionaler GPU-Offload des alten Emulationspfads.
 
 Prioritaet: P0 Produkt
 
-Status: wartet auf KR-5001. Originaldaten bleiben lokal; Dateizugriff,
+Status: geplant nach KR-5002. Originaldaten bleiben lokal; Dateizugriff,
 Controller und atomare Speicherstaende verwenden native PC-Dienste.
 
 ## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
@@ -223,8 +225,8 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 92, PlatformServices-ABI 14, Backend-Interface-ABI 16,
-  PVR-State-Contract 3
+  Runtime-ABI 93, PlatformServices-ABI 14, Backend-Interface-ABI 17,
+  PVR-State-Contract 3, Portprojektvertrag 80, Native-Port-Profilvertrag 5
   Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7

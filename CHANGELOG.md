@@ -38,16 +38,16 @@
   validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
   Closure.
 
-- Runtime-ABI `92`, Analyzer-ABI `36`, Backend-Interface-ABI `16`,
-  Portprojektvertrag `79`, Native-Port-Profilvertrag `4`, Hardwareaudit-Schema
+- Runtime-ABI `93`, Analyzer-ABI `36`, Backend-Interface-ABI `17`,
+  Portprojektvertrag `80`, Native-Port-Profilvertrag `5`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
   die inkompatiblen Layout-, SDK-, Persistenz- und Exportaenderungen. Der
   historische GameProject-Vertrag `5` samt Artefaktformat `4` bleibt
   unveraendert und enthaelt bewusst keine Native-Port-Definition; deren
-  unabhaengiger privater Provider folgt mit KR-5001.
-  Backend-Interface-ABI `16` bindet den neuen unabhaengigen
+  unabhaengiger privater Provider wurde mit KR-5001 angebunden.
+  Backend-Interface-ABI `17` bindet den erweiterten unabhaengigen
   `PortExportOptions::native_port_definition`-Zeiger; er wird nicht in den
   alten Dreamcast-Spielprojektvertrag eingebaut. Der korrekte SkyEmu-MIT-
   Hinweis und die vendorte Lizenz bleiben im Repository
@@ -65,6 +65,17 @@
   inkrementellen 24-Worker-Build in `14,2 s` bestaetigt. In diesem
   Dokumentations-/Source-Checkpoint wurden keine Tests oder neuen
   Sonic-Laeufe ausgefuehrt; der naechste aktive Task ist KR-5001.
+
+- KR-5001 schliesst die deterministische Native-Hookanforderungskarte
+  `metadata/native-hook-requirements.json` und die Hardware-Closure mit
+  Schema `v2`. Function-/Instruction-Replacement wird nur bei exaktem
+  Grenz-, Eigentuemerschafts-, Entry-, Resume-, Seed-, Guarded-, Kontext- und
+  CFG-Proof akzeptiert; bekannte Hardware- und unbekannte Instruktionsstellen
+  bleiben andernfalls hookpflichtig. Gewoehnliche dynamische Speicherzugriffe
+  laufen ausschliesslich ueber range-geprueften nativen Speicher und enden
+  ausserhalb typisiert. `MemoryAccessError` und Native-Dispatch tragen die
+  exakte `GuestInstructionOrigin` auch ohne Tracesink. KR-5001 ist
+  source-seitig abgeschlossen; KR-5002 ist der naechste aktive Task.
 
 - Der historische Runtime-Performance-Zwischenstand haelt den natuerlichen
   No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische

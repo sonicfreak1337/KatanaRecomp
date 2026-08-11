@@ -2,8 +2,8 @@
 
 Historischer Einfuehrungsstand: KR-4716
 
-Aktueller KR-5000-Stand: Runtime-ABI 92, Block-ABI 5, Analyzer-ABI 36,
-PlatformServices-ABI 14, Backend-Interface-ABI 16, Portprojektvertrag 79,
+Aktueller KR-5001-Stand: Runtime-ABI 93, Block-ABI 5, Analyzer-ABI 36,
+PlatformServices-ABI 14, Backend-Interface-ABI 17, Portprojektvertrag 80,
 Native-AOT-Emissionsprofil 27 und Portpartitionsschema 7. Historische
 Checkpoint- und Laufangaben bleiben an ihre damaligen Vertraege gebunden;
 der naechste aktive Task ist KR-5001.

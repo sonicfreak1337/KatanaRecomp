@@ -32,9 +32,9 @@ Code endet an einer typisierten Runtimegrenze. Der begrenzte
 Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 `diagnostic_partial` erzeugten Diagnoseports.
 
-Der aktuelle KR-5000-Stand verwendet Runtime-ABI 92, Block-ABI 5,
-Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 16,
-Portprojektvertrag 79, Native-Port-Profilvertrag 4, Native-AOT-Profil 27 und
+Der aktuelle KR-5001-Stand verwendet Runtime-ABI 93, Block-ABI 5,
+Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 17,
+Portprojektvertrag 80, Native-Port-Profilvertrag 5, Native-AOT-Profil 27 und
 Partitionsschema 7. Die historischen Checkpoint- und Laufangaben dieses
 Dokuments bleiben an ihre damaligen Vertraege gebunden. Der aktuelle native
 Produktpfad ist durch KR-5000 physisch von den historischen Diagnosegeraeten
@@ -113,7 +113,7 @@ MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
 Der aktuelle Handoff-Quellvertrag besteht aus Handoff-Artefaktformat 2,
-Runtime-ABI 92, Portprojektvertrag 79 und Plattformzustandsvertrag 2.
+Runtime-ABI 93, Portprojektvertrag 80 und Plattformzustandsvertrag 2.
 Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
 Evidenz und muessen vor einem weiteren DirectBoot-Produktlauf fuer den dann

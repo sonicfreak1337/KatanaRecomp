@@ -168,13 +168,17 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `79` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `80` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
 Legacy-Runtime, ARM7/SkyEmu, CPU-PVR/TA und Interpreterbestandteilen sein.
 KR-5000 stellt NativePortDefinition/Artifact/Content/Runtime, Bootstrap,
-read-only Content-Mappings und den Linkaudit bereit. Unvollstaendige
+read-only Content-Mappings und den Linkaudit bereit. KR-5001 erzeugt die
+deterministische `metadata/native-hook-requirements.json`-Karte und
+Hardware-Closure Schema `v2`; Replacement-Proofs bleiben an exakte
+Grenzen/Eigentuemer/Entrys/Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge
+gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
 Schalter ist darauf begrenzt.
 

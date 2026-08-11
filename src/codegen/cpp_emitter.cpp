@@ -3094,12 +3094,16 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     emit_indent(output, indent + 1);
     output << "try {\n";
     emit_indent(output, indent + 2);
-    output << "const auto guest_origin = cpu.memory.has_guest_memory_access_sink()\n";
-    emit_indent(output, indent + 3);
-    output << "? katana::runtime::GuestInstructionOrigin{" << hex32(instruction.source_address)
-           << ", " << relocated_code_address(instruction.source_address) << ", true}\n";
-    emit_indent(output, indent + 3);
-    output << ": katana::runtime::GuestInstructionOrigin{};\n";
+    // The source/runtime PC is part of the fail-closed native product
+    // contract, not merely optional tracing metadata. Keeping it exact even
+    // without an installed access sink lets an unmapped dynamic address name
+    // the precise hook requirement instead of collapsing to an address-only
+    // failure. These are compile-time constants and add no mutable hot-path
+    // state.
+    output << "const katana::runtime::GuestInstructionOrigin guest_origin{"
+           << hex32(instruction.source_address) << ", "
+           << relocated_code_address(instruction.source_address)
+           << ", true};\n";
     emit_simple_instruction(output,
                             instruction,
                             indent + 2,

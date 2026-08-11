@@ -47,7 +47,7 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `4`, Portprojektvertrag `79` und der Post-Link-Audit sperren
+Profilvertrag `5`, Portprojektvertrag `80` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
 `KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
@@ -60,8 +60,14 @@ Emulator-/Interpreter-/Runtimefallback. Der generierte Runner verlangt
 Executable plus privaten ContentRoot und validiert beide Pfade; der
 Bring-up-Schalter gilt nur bei unvollstaendiger Closure.
 
-Aktiv ist `KR-5001` als naechster Task: native Hookkarte, ABI- und
-Closure-Verbindung auf diesem Stack. Danach folgen KR-5002 bis KR-5004;
+`KR-5001` ist source-seitig abgeschlossen: Die deterministische
+`metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
+`v2` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
+Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
+range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert, und
+`MemoryAccessError`/Native-Dispatch tragen `GuestInstructionOrigin` auch ohne
+Tracesink. Aktuell ist `KR-5002` als naechster Task fuer Audio/Movie aktiv.
+Danach folgen KR-5003 und KR-5004;
 erst anschliessend ist KR-5005 als einziger Sonic-Produktlauf freigegeben.
 
 Der KR-5000-Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
@@ -74,18 +80,18 @@ Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller Native-Port-Architekturreview-
-Checkpoint. Aktuell gelten Runtime-ABI `92`,
+Checkpoint. Aktuell gelten Runtime-ABI `93`,
 PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`16`, PVR-State-Contract `3`, Portprojektvertrag `79` und Native-Port-
-Profilvertrag `4`. Der historische GameProject-Vertrag bleibt auf `5` mit
+`17`, PVR-State-Contract `3`, Portprojektvertrag `80` und Native-Port-
+Profilvertrag `5`. Der historische GameProject-Vertrag bleibt auf `5` mit
 Artefaktformat `4` und transportiert die unabhaengige Native-Port-Definition
 ausdruecklich nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
 `port_export.hpp` sowie `native_port_artifact.hpp` aus der Analyzer-
 Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
-Backend-Interface-ABI `16` versioniert; bestehende generierte Ports muessen
+Backend-Interface-ABI `17` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 

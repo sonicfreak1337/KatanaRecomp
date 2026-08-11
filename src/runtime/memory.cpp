@@ -236,10 +236,11 @@ MemoryAccessError::MemoryAccessError(const MemoryAccessErrorReason reason,
                                      const MemoryAccessOperation operation,
                                      const std::uint32_t address,
                                      const MemoryAccessWidth width,
-                                     std::string region_name)
+                                     std::string region_name,
+                                     const GuestInstructionOrigin instruction)
     : std::runtime_error(access_error_message(reason, operation, address, width, region_name)),
       reason_(reason), operation_(operation), address_(address), width_(width),
-      region_name_(std::move(region_name)) {}
+      region_name_(std::move(region_name)), instruction_(instruction) {}
 
 MemoryAccessErrorReason MemoryAccessError::reason() const noexcept {
     return reason_;
@@ -259,6 +260,10 @@ MemoryAccessWidth MemoryAccessError::width() const noexcept {
 
 const std::string& MemoryAccessError::region_name() const noexcept {
     return region_name_;
+}
+
+GuestInstructionOrigin MemoryAccessError::instruction() const noexcept {
+    return instruction_;
 }
 
 std::uint16_t MemoryDevice::read_u16(const std::uint32_t offset) const {

@@ -320,14 +320,18 @@ void validate_native_port_definition(
                 return candidate.guest_address ==
                        resolution.hook_guest_address;
             });
+        // Runtime validation can prove only structural containment. Export
+        // admission separately proves the exact function boundary and rejects
+        // every external, guarded, seeded or resume entry into the covered
+        // interior before it may certify an interior hardware instruction.
         if (hook == definition.hooks.end() ||
             hook->requirement != NativePortHookRequirement::Required ||
             hook->original_policy !=
                 NativePortHookOriginalPolicy::ReplacesOriginal ||
-            // Hooks are dispatched only at their entry address.  A range
-            // inclusion would incorrectly certify a direct/mid-block entry
-            // to a later instruction as unreachable.
-            resolution.instruction_address != hook->guest_address)
+            resolution.instruction_address < hook->guest_address ||
+            static_cast<std::uint64_t>(resolution.instruction_address) + 2u >
+                static_cast<std::uint64_t>(hook->guest_address) +
+                    hook->covered_size)
             invalid_definition("hook-hardware-resolution");
     }
 }

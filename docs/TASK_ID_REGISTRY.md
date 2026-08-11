@@ -72,9 +72,9 @@ Sonic-PAL-NativeDisc-Lauf ueber 600 Millionen Post-Entry-Zyklen und der
 Sichtnachweis stehen noch aus.
 
 Der aktuelle Source-Stand ist der Native-Port-Architekturreview-Checkpoint;
-Runtime-ABI 92, PlatformServices-ABI 14, Analyzer-ABI 36,
-Backend-Interface-ABI 16, Portprojektvertrag 79 und Native-Port-
-Profilvertrag 4,
+Runtime-ABI 93, PlatformServices-ABI 14, Analyzer-ABI 36,
+Backend-Interface-ABI 17, Portprojektvertrag 80 und Native-Port-
+Profilvertrag 5,
 PVR-State-Contract 3, Function-Analysis-Epoch-Schema 27,
 lokales In-Process-Evaluation-Cache-Schema 13. Der historische opt-in Modus
 `port --analysis-mode runtime-only` war nur mit `--game-project` zulaessig
@@ -198,11 +198,11 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding mit dem SDK-Linkabschluss unter dem aktuellen Analyzer-ABI 36 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und No-Skip-Sonic-Lauf belegen echten ARM7, fortschreitenden Sofdec-Audiotakt, Player-Status 5 und sichtbare Movie-Bildpublikation |
-| KR-5000 | Native Produktgrenze und Linkisolation | [x] physische Source-/Link-/Installgrenze abgeschlossen; Runtime-ABI 92, Backend-ABI 16, Portprojektvertrag 79, Profilvertrag 4, NativePortDefinition/Artifact/Content/Runtime/Bootstrap, read-only Content-Mappings, Hook-/Hardware-Closure, direkter Dispatch und Linkaudit implementiert; erster Plattformfehler typisiert `UnresolvedHardwareAccess`, kein Fallback |
-| KR-5001 | Statische Spiel-/SDK-Hookkarte | aktiv P0; native Hookkarte, ABI- und Closure-Verbindung auf dem implementierten Native-Port-Stack |
-| KR-5002 | Nativer Audio-/Moviepfad | geplant P0 nach KR-5001; kein ARM7/AICA-Firmwarepfad im Produkt, No-Skip-Lifecycle ueber native Hostdienste |
-| KR-5003 | Nativer GPU-Pfad | geplant P0 nach KR-5001; native GPU-API und kein CPU-PVR im Produktlink |
-| KR-5004 | Native Disc-, Eingabe- und Save-Dienste | geplant P0 nach KR-5001; lokale Originalinstallation und native PC-Plattformdienste |
+| KR-5000 | Native Produktgrenze und Linkisolation | [x] physische Source-/Link-/Installgrenze abgeschlossen; Runtime-ABI 93, Backend-ABI 17, Portprojektvertrag 80, Profilvertrag 5, NativePortDefinition/Artifact/Content/Runtime/Bootstrap, read-only Content-Mappings, Hook-/Hardware-Closure, direkter Dispatch und Linkaudit implementiert; erster Plattformfehler typisiert `UnresolvedHardwareAccess`, kein Fallback |
+| KR-5001 | Statische Spiel-/SDK-Hookkarte | [x] source-seitig abgeschlossen; deterministische Hookanforderungskarte, exakte Replacement-Proofs, GuestInstructionOrigin-Transport und Hardware-Closure Schema v2 |
+| KR-5002 | Nativer Audio-/Moviepfad | aktiv P0 nach KR-5001; kein ARM7/AICA-Firmwarepfad im Produkt, No-Skip-Lifecycle ueber native Hostdienste |
+| KR-5003 | Nativer GPU-Pfad | geplant P0 nach KR-5002; native GPU-API und kein CPU-PVR im Produktlink |
+| KR-5004 | Native Disc-, Eingabe- und Save-Dienste | geplant P0 nach KR-5002; lokale Originalinstallation und native PC-Plattformdienste |
 | KR-5005 | Nativer No-Skip-Sonic-Produktlauf | P0 Alpha-Gate nach KR-5000 bis KR-5004; Opening, 60 Hz, Memory-Card-Screen und Hauptmenue rein nativ |
 
 ## Aktuelle Meilensteinzuordnung
