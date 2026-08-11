@@ -131,7 +131,7 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
   zurueckfallen.
 
 KR-5000 bindet diese Grenze an Runtime-ABI `96`, Analyzer-ABI `36`, Backend-
-Interface-ABI `20`, Portprojektvertrag `83` und Native-Port-Profilvertrag `8`.
+Interface-ABI `20`, Portprojektvertrag `84` und Native-Port-Profilvertrag `8`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK

@@ -140,7 +140,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `83`, Native-Port-Profilvertrag `8` und
+kein Portprofil. Portprojektvertrag `84`, Native-Port-Profilvertrag `8` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -189,6 +189,18 @@ vollstaendige originale SFD-Opening-Stream lief ohne Skip bis EOS und endete
 4.709.760 Audioframes und 3.257 GPU-Presents. Der naechste aktive Task ist
 `KR-5005`.
 
+KR-5005 verwendet ab Portprojektvertrag `84` einen echten schnellen
+Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
+und einem gemessenen Vierer-Ninja-Pool; eine gemeinsame MSVC-PDB ist
+ausgeschlossen, und 4.096 Dispatch-Eintraege pro Shard vermeiden Hunderte
+triviale Compiler-/Linkobjekte. Runtime, Titeladapter und Bootstrap bleiben
+optimiert. Der finale `gate`-Build bleibt davon getrennt voll optimiert.
+Der reale Sonic-Mikrovergleich sank fuer vier identische TUs von `16,542 s`
+mit `/O1` auf `4,560 s` mit `/Od`. Der anschliessende kalte Vollport schrieb
+233 Host-TUs, beendete Export und Packaging in `408,278 s` bei `337,205 s`
+Hostbuildzeit und bestand den Post-Link-Audit. Die sichtbare Produktabnahme
+folgt im laufenden KR-5005-Port.
+
 ## Historischer RuntimeOnly-Bring-up
 
 Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit
@@ -234,7 +246,7 @@ letzte reale Produktevidenz:
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
   Runtime-ABI 96, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 83, Native-Port-Profilvertrag 8
+  PVR-State-Contract 3, Portprojektvertrag 84, Native-Port-Profilvertrag 8
   Analyzer-ABI 36
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13

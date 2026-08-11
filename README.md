@@ -29,7 +29,7 @@ Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 96, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 83, Native-Port-Profilvertrag 8 sowie PVR-State-Contract 3.
+Portprojektvertrag 84, Native-Port-Profilvertrag 8 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
@@ -288,7 +288,7 @@ Block-ABI:                       5
 Analyzer-ABI:                   36
 PlatformServices-ABI:           14
 Backend-Interface-ABI:          20
-Portprojektvertrag:             83
+Portprojektvertrag:             84
 Native-Port-Profilvertrag:       8
 Native-AOT-Emissionsprofil:     27
 AOT-Partitionsschema:            7
@@ -407,7 +407,7 @@ Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
 Der aktuelle KR-5004-Stand verwendet Runtime-ABI 96 und
-Portprojektvertrag 83. Davon getrennt verwendet `GameProject` Vertrag 5 und
+Portprojektvertrag 84. Davon getrennt verwendet `GameProject` Vertrag 5 und
 Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
@@ -492,6 +492,12 @@ vorhandene optimierte Konfiguration.
 `EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die native
 Produktheader-Allowlist sowie eine PCH; der historische
 `aot_runtime_abi.hpp`-Vertrag wird nicht als Produkt-SDK installiert.
+Der normale Portexport verwendet fuer Bring-up standardmaessig den schnellen
+Release-Hostbuild: nur generierte AOT-TUs werden mit `/Od /Ob0` und einem
+eigenen, auf MSVC standardmaessig vier Worker breiten Ninja-Pool kompiliert.
+Runtime, Titeladapter und Bootstrap bleiben optimiert; der separate
+`gate`-Build erzeugt das voll optimierte Produkt. Eine gemeinsame `/Zi`-/`/FS`-
+PDB ist im AOT-Pfad ausgeschlossen.
 
 Profile und Toolchainauswahl:
 [Portbuildprofile](docs/PORT_BUILD_PROFILES.md)

@@ -39,7 +39,7 @@
   Closure.
 
 - Runtime-ABI `96`, Analyzer-ABI `36`, Backend-Interface-ABI `20`,
-  Portprojektvertrag `83`, Native-Port-Profilvertrag `8`, Hardwareaudit-Schema
+  Portprojektvertrag `84`, Native-Port-Profilvertrag `8`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
@@ -65,6 +65,17 @@
   inkrementellen 24-Worker-Build in `14,2 s` bestaetigt. In diesem
   Dokumentations-/Source-Checkpoint wurden keine Tests oder neuen
   Sonic-Laeufe ausgefuehrt; der naechste aktive Task ist KR-5002.
+
+- Portprojektvertrag `84` macht den schnellsten Hostbuild zum
+  Bring-up-Standard: generierte AOT-TUs verwenden `/Od /Ob0`, eingebettete
+  statt gemeinsam serialisierter MSVC-Debuginformation, einen separaten
+  Vierer-Ninja-Pool und 4.096 Dispatch-Eintraege pro Shard. Runtime,
+  Titeladapter und Bootstrap bleiben optimiert; das Gateprofil bleibt voll
+  optimiert. Derselbe Vier-TU-Sonic-Vergleich sank von `16,542 s` mit `/O1`
+  auf `4,560 s` mit `/Od`. Der anschliessende vollstaendige kalte native
+  Sonic-Export erzeugte mit 233 Host-TUs in `408,278 s` ein
+  `473.506.304` Byte grosses Produktbinary; davon entfielen `337,205 s` auf
+  den Hostbuild. Der Post-Link-Audit blieb erfolgreich.
 
 - KR-5001 schliesst die deterministische Native-Hookanforderungskarte
   `metadata/native-hook-requirements.json` und die Hardware-Closure mit

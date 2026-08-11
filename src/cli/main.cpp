@@ -7917,7 +7917,9 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto host_build_configuration =
             configured_environment_value(
                 "KATANA_PORT_HOST_BUILD_CONFIGURATION")
-                .value_or("RelWithDebInfo");
+                .value_or(build_profile == "bringup"
+                              ? "Release"
+                              : "RelWithDebInfo");
         if (host_build_configuration != "RelWithDebInfo" &&
             host_build_configuration != "Release")
             throw std::invalid_argument(
@@ -7972,11 +7974,15 @@ int export_port_project(const std::filesystem::path& source_path,
                 "Windows-Portbuilds verfuegbar.");
 #endif
         const auto generator_identity = use_ninja ? "ninja" : "vs";
+        const auto configuration_identity =
+            host_build_configuration == "Release"
+                ? "release"
+                : "relwithdebinfo";
         const auto build_path =
             report.output_root /
             ("build-" + host_compiler + '-' + host_linker + '-' +
-             build_profile + '-' + port_runtime_profile + '-' +
-             generator_identity);
+             build_profile + '-' + configuration_identity + '-' +
+             port_runtime_profile + '-' + generator_identity);
         static_cast<void>(
             safe_regular_port_directory_exists(build_path, "Inkrementeller Hostbuild-Cache"));
         if (!runtime_binding.build_targets_file.empty()) {
@@ -8161,6 +8167,11 @@ int export_port_project(const std::filesystem::path& source_path,
         configure +=
             " -DCMAKE_BUILD_TYPE=" + host_build_configuration +
             " -DKATANA_PORT_BUILD_PROFILE=" + build_profile;
+#ifdef _WIN32
+        if (host_compiler == "msvc")
+            configure +=
+                " -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded";
+#endif
         configure +=
             " -DKATANA_PORT_RUNTIME_PROFILE=" + port_runtime_profile;
         if (native_adapter_source_dir.has_value())

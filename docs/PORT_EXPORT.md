@@ -168,7 +168,7 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `83` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `84` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von

@@ -13494,7 +13494,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << std::setfill('0') << address;
         return output.str();
     };
-    constexpr std::size_t blocks_per_shard = 512u;
+    // The table is declarative and each entry is tiny.  Larger shards keep
+    // full-game native ports from paying hundreds of compiler invocations
+    // without increasing the optimizer's heavy AOT-function workload.
+    constexpr std::size_t blocks_per_shard = 4096u;
     const auto shard_count =
         (blocks.size() - 1u) / blocks_per_shard + 1u;
     const auto shard_suffix = [](const std::size_t index) {

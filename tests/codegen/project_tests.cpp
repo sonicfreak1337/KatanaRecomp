@@ -119,11 +119,19 @@ int main() {
             "Serielle und parallele Ausgabe oder Cachetreffer sind nicht deterministisch.");
     require(serial_snapshot.at("CMakeLists.txt").find("code/unit-00000.cpp") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/bigobj") != std::string::npos &&
-                serial_snapshot.at("CMakeLists.txt").find("/FS") != std::string::npos &&
-                serial_snapshot.at("CMakeLists.txt")
-                        .find("/MP${KATANA_HOST_COMPILE_JOBS}") !=
+                serial_snapshot.at("CMakeLists.txt").find("KATANA_AOT_COMPILE_JOBS") !=
                     std::string::npos &&
-                serial_snapshot.at("CMakeLists.txt").find("PRIVATE /bigobj /FS /MP)") ==
+                serial_snapshot.at("CMakeLists.txt").find("JOB_POOL_COMPILE") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt").find("/Od /Ob0") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("MSVC_DEBUG_INFORMATION_FORMAT") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("/MP${KATANA_AOT_COMPILE_JOBS}") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt").find("PRIVATE /bigobj /FS") ==
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
                         .find("CMAKE_GENERATOR MATCHES \"^Visual Studio\"") !=

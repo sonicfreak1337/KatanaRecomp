@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `83` und Native-Port-Profilvertrag `8` machen
+Portprojektvertrag `84` und Native-Port-Profilvertrag `8` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -214,6 +214,17 @@ Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
 `nativeportplatformservices`; ein eigenstaendiges `platformservices` bleibt
 verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
 oder Interpreter-Symbole.
+
+Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `84` auf einem eigenen
+schnellen AOT-Profil: Bring-up verwendet fuer generierte Spiel-TUs `/Od /Ob0`,
+keine gemeinsame MSVC-PDB, einen gemessenen Vierer-Ninja-Pool und 4.096
+Dispatch-Eintraege pro Shard. Runtime, Titeladapter und Bootstrap bleiben
+optimiert; `gate` bleibt der voll optimierte Produktbuild. Im identischen
+Sonic-A/B brauchten vier schwere TUs mit `/O1` `16,542 s`, mit `/Od` nur
+`4,560 s`. Der anschliessende kalte Vollport kompilierte 233 Host-TUs,
+bestand den Post-Link-Audit und beendete Export und Packaging in `408,278 s`
+bei `337,205 s` Hostbuildzeit. Der sichtbare Laufnachweis bleibt offen.
+
 Abnahme:
 korrektes Opening mit Bild
 und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
@@ -266,7 +277,7 @@ letzte reale Produktevidenz:
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
   Runtime-ABI 96, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 83, Native-Port-Profilvertrag 8
+  PVR-State-Contract 3, Portprojektvertrag 84, Native-Port-Profilvertrag 8
   Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7

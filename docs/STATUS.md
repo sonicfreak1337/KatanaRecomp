@@ -47,7 +47,7 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `8`, Portprojektvertrag `83` und der Post-Link-Audit sperren
+Profilvertrag `8`, Portprojektvertrag `84` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
 `KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
@@ -127,7 +127,7 @@ Funktionaler Source-Stand: aktueller KR-5004-Architekturreview-Checkpoint.
 Aktuell gelten Runtime-ABI `96`,
 PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`20`, PVR-State-Contract `3`, Portprojektvertrag `83` und Native-Port-
+`20`, PVR-State-Contract `3`, Portprojektvertrag `84` und Native-Port-
 Profilvertrag `8`. Der historische GameProject-Vertrag bleibt auf `5` mit
 Artefaktformat `4` und transportiert die unabhaengige Native-Port-Definition
 ausdruecklich nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als

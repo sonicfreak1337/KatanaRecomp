@@ -9,10 +9,31 @@ KatanaRecomp v0.49 trennt den schnellen Bring-up-Build vom finalen Gatebuild.
 
 ## Bring-up
 
-`KATANA_PORT_BUILD_PROFILE=bringup` verwendet einen optimierten
-`RelWithDebInfo`-Build ohne LTCG/IPO. Mit dem Microsoft-Linker bleiben
-schnelle Debugsymbole und inkrementelles Linking aktiv; fuer LLD wird kein
-inkrementeller Link versprochen. Nur das angeforderte Spieltarget wird gebaut.
+`KATANA_PORT_BUILD_PROFILE=bringup` verwendet standardmaessig `Release`, aber
+kompiliert ausschliesslich die sehr grossen generierten AOT-Einheiten mit
+`/Od /Ob0`. Runtime, Titeladapter und Produktbootstrap bleiben normal
+optimiert. Das ist der schnelle Iterationsbuild; das voll optimierte Produkt
+ist weiterhin das Gateprofil.
+
+MSVC-AOT-Compiles schreiben keine gemeinsame Program Database. Ein expliziter
+`RelWithDebInfo`-Bring-up verwendet eingebettete `/Z7`-Informationen statt
+`/Zi` plus `/FS`. Ninja begrenzt nur den schweren `katana_generated`-Pool auf
+standardmaessig vier Compiler, waehrend Runtime, Adapter, Tools und Link den
+vollen Hostworker-Vertrag behalten. `KATANA_AOT_COMPILE_JOBS` kann bei einem
+direkt konfigurierten Projekt zwischen `1` und `KATANA_HOST_COMPILE_JOBS`
+gesetzt werden. Native Dispatchquellen enthalten 4.096 statt 512 Eintraege
+pro Shard, damit ein Vollspielport nicht Hunderte triviale Compilerstarts und
+Linkobjekte bezahlt.
+
+Die Auswahl beruht auf dem realen 12C/24T-Sonic-Vollport: vier identische
+schwere AOT-Einheiten brauchten mit vier Workern und `/O1` `16,542 s`, mit
+`/Od` nur `4,560 s`; zwoelf `/O1`-Worker verschlechterten den Durchsatz auf
+`67,456 s` fuer zwoelf Einheiten. Der alte `/O2 + /Zi + /FS`-Pfad lag bei
+median `148,606 s` pro grosser Einheit und war kein zulaessiger
+Bring-up-Standard. Der darauffolgende kalte Vollport kompilierte 233 Host-TUs,
+bestand den Post-Link-Audit und beendete den kompletten Export in `408,278 s`;
+der eigentliche Hostbuild benoetigte `337,205 s`. Das erzeugte Produktbinary
+ist `473.506.304` Byte gross.
 
 ## Gate
 
@@ -36,7 +57,7 @@ erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
 internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
 und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
 ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
-Profilvertrag `8` und Portprojektvertrag `83` und erzeugt eine Linkmap. Ein
+Profilvertrag `8` und Portprojektvertrag `84` und erzeugt eine Linkmap. Ein
 Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
 CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
 Rueckfall.
@@ -98,6 +119,7 @@ KATANA_HOST_BUILD_GENERATOR=Ninja
 KATANA_HOST_BUILD_MAKE_PROGRAM=<optionaler Ninja-Pfad>
 KATANA_HOST_BUILD_JOBS=<Hostbuild-Worker>
 KATANA_PORT_CODEGEN_JOBS=<Codegen-Worker>
+KATANA_AOT_COMPILE_JOBS=<direkter CMake-Override fuer schwere AOT-TUs>
 ```
 
 Compiler, Linker, Profil und Generator besitzen getrennte Buildordner. Ein
