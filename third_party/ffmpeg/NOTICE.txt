@@ -1,0 +1,24 @@
+FFmpeg native media dependency
+================================
+
+KatanaRecomp's Windows native-port runtime dynamically links the FFmpeg
+libavformat, libavcodec, libavutil, libswresample and libswscale shared
+libraries. It does not invoke or redistribute the ffmpeg, ffplay or ffprobe
+command-line programs.
+
+Pinned binary build:
+  FFmpeg n8.1.2-34-g9b6c8969e0
+  BtbN FFmpeg-Builds release autobuild-2026-07-31-14-10
+  Asset ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-shared-8.1.zip
+  SHA-256 c222a490dde4e7059f45495deef6bfb98dbcacc2b43df5b607546252037aa95c
+
+Corresponding upstream sources and build recipe:
+  https://github.com/FFmpeg/FFmpeg/tree/9b6c8969e0
+  https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-07-31-14-10
+
+The selected shared build is licensed under GNU LGPL version 3 or later and
+has GPL and nonfree components disabled. KatanaRecomp verifies the linked
+component ABI majors, license strings and configuration flags before opening a
+media source. The complete LGPLv3 text is distributed as FFmpeg-LGPL.txt next
+to native product binaries. The DLLs remain replaceable by ABI-compatible
+LGPL builds.

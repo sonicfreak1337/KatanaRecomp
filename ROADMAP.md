@@ -135,7 +135,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `80`, Native-Port-Profilvertrag `5` und
+kein Portprofil. Portprojektvertrag `81`, Native-Port-Profilvertrag `6` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -144,8 +144,8 @@ rekompilierter Spielcode startet, und der erste unaufgeloeste Plattformzugriff
 endet typisiert als `UnresolvedHardwareAccess` ohne Emulator-/Interpreter- oder
 Runtimefallback. Der generierte Runner verlangt Executable plus privaten
 ContentRoot und validiert beide Pfade; der Bring-up-Schalter gilt nur bei
-unvollstaendiger Closure. Der aktive Folgetask ist `KR-5001` native
-Hookkarte/ABI/Closure, nicht ein historischer Launcherpfad.
+unvollstaendiger Closure. KR-5001 und seine Hookkarten-/Closure-Verbindung
+sind source-seitig abgeschlossen; der aktive Folgetask ist KR-5002.
 
 `KR-5001` ist source-seitig abgeschlossen. Die deterministische
 `metadata/native-hook-requirements.json`-Karte verlangt fuer Function- und
@@ -156,7 +156,14 @@ nur ueber range-geprueften Native Memory und enden ausserhalb typisiert.
 `MemoryAccessError`, Emitter und Native-Dispatch transportieren
 `GuestInstructionOrigin` auch ohne Tracesink. Die Hardware-Closure steht auf
 Schema `v2`; ein Diagnosebypass ohne `NativePortDefinition` ist geschlossen.
-Aktiv ist jetzt `KR-5002` fuer den nativen Audio-/Moviepfad.
+Aktiv ist jetzt `KR-5002` fuer den nativen Audio-/Moviepfad. WinMM PCM und
+ein in-process LGPL-Shared-FFmpeg/libav-Provider arbeiten ohne Dreamcast-
+Geraetefallback. Hash-/handlegebundene, reparse-sichere und waehrend Decode
+exklusiv gesperrte Bytequellen, strikte Timestamps/EOS und bounded Queues
+bilden den Dienstvertrag. Headerloser Sofdec-PS-Inhalt wird nur ueber ein
+bounded virtuelles Praefix fuer den Demuxer erkannt; `Ready` bis `Stopped` ist
+der oeffentliche `NativePortMovieSession`-Lebenszyklus. Der relevante
+24-Worker-Inkrementalbuild war in etwa `4,5 s` erfolgreich.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -202,8 +209,8 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 93, PlatformServices-ABI 14, Backend-Interface-ABI 17,
-  PVR-State-Contract 3, Portprojektvertrag 80, Native-Port-Profilvertrag 5
+  Runtime-ABI 94, PlatformServices-ABI 14, Backend-Interface-ABI 18,
+  PVR-State-Contract 3, Portprojektvertrag 81, Native-Port-Profilvertrag 6
   Analyzer-ABI 36
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13

@@ -89,6 +89,12 @@ Task implementieren
 - Das reale Produkt und sein Bootfortschritt bleiben autoritativ; ein Review
   darf keine fehlende Produktabdeckung durch erfundene Erfolge oder stilles
   Weglassen von Arbeit kaschieren.
+- Geeignete frei verfuegbare Bibliotheken und Komponenten werden bevorzugt
+  vollstaendig integriert, um bewiesene Funktion wiederzuverwenden und
+  Eigenaufwand zu vermeiden. Lizenz, Redistributierbarkeit, Produktgrenze,
+  Packaging und Fail-Closed-Verhalten muessen sauber geprueft sein;
+  Eigenimplementierung ist nur zulaessig, wenn keine passende freie Loesung
+  existiert oder deren Lizenz beziehungsweise Architektur unbrauchbar ist.
 
 Der vollstaendige verbindliche Vertrag steht in
 `docs/NATIVE_PORT_PRODUCT_CONTRACT.md`. Er hat Vorrang vor aelteren

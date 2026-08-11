@@ -10,6 +10,14 @@ License. The exact vendored license text is retained in
 `third_party/skyemu/LICENSE`; the vendored source provenance is recorded in
 `third_party/skyemu/README.md`.
 
+The Windows native-port media runtime dynamically links a pinned FFmpeg
+`n8.1.2-34-g9b6c8969e0` LGPL shared build for Sofdec MPEG-PS, CRI ADX, audio
+resampling and decoded video conversion. GPL and nonfree FFmpeg components are
+excluded and rejected again at runtime. Katana distributes only the required
+shared-library closure, its LGPLv3 license and the reproducible source/build
+provenance in `third_party/ffmpeg/NOTICE.txt`; it never launches or packages
+the FFmpeg command-line programs.
+
 The project is built with a C++20 compiler and the compiler's standard and
 operating-system libraries. CMake and Ninja orchestrate builds. Optional local
 quality gates use clang-format, clang-tidy, Microsoft.CodeCoverage.Console, or

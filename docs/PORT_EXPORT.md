@@ -182,6 +182,14 @@ gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
 Schalter ist darauf begrenzt.
 
+KR-5002 bindet fuer Audio/Movie den in-process LGPL-Shared-FFmpeg/libav-
+Provider und WinMM PCM ein. Die installierbare Runtime-Closure umfasst genau
+die benoetigten fuenf FFmpeg-DLLs plus Lizenz-/Notice-Dateien; Header-, ABI- und
+Lizenzpruefungen bleiben aktiv. Ein User-Override wird nicht veraendert, und
+der automatische Cache wird auf diese Closure bereinigt. Der generierte
+NativePortMovieSession-Vertrag reicht von `Ready` bis `Stopped`; kein
+Dreamcast-Geraetefallback.
+
 `game.katana-install` enthaelt Recipe-Version 2, Jobgeneration,
 Descriptor-SHA-256, Boot-SHA-256, Contentidentitaet und pro Track Nummer, LBA,
 Typ, Sektorgroesse, Offset, Sektoranzahl und SHA-256. Sie enthaelt keine

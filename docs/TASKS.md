@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `80` und Native-Port-Profilvertrag `5` machen
+Portprojektvertrag `81` und Native-Port-Profilvertrag `6` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -148,19 +148,27 @@ Hardware-Closure ist Schema `v2`; der moegliche Diagnosebypass ohne
 NativePortDefinition ist geschlossen. Private Adressen bleiben ausserhalb
 des Repositorys.
 
-## [ ] KR-5002 - Nativer Audio-/Moviepfad
+## [x] KR-5002 - Nativer Audio-/Moviepfad
 
 Prioritaet: P0 Produkt
 
-Status: aktiv nach KR-5001. Kein ARM7- oder AICA-Firmwarepfad im Produkt;
-Opening und Ton laufen vollstaendig ueber native Hostdienste, ohne Skip oder
-erzwungenen Playerstatus.
+Status: source-seitig abgeschlossen. Native Audio-/Movie-Dienste verwenden
+WinMM PCM und einen in-process LGPL-Shared-FFmpeg/libav-Provider ohne
+Dreamcast-Geraetefallback. Bytequellen sind hash-/handlegebunden,
+reparse-sicher und waehrend Decode exklusiv gesperrt; Timestamps, EOS und
+bounded Queues bleiben strikt. Headerloser Sofdec-PS-Inhalt wird nur ueber ein
+bounded virtuelles Praefix fuer den Demuxer erkannt; `NativePortMovieSession`
+reicht von `Ready` bis `Stopped`. Der relevante 24-Worker-Inkrementalbuild war
+in etwa `4,5 s` erfolgreich. Keine neuen Tests/Testmatrix und kein alter
+Voll-Exporter wurden aktiviert.
 
 ## [ ] KR-5003 - Nativer GPU-Pfad
 
 Prioritaet: P0 Produkt
 
-Status: geplant nach KR-5002. Renderarbeit laeuft ueber eine native GPU-API;
+Status: aktiv nach KR-5002. Renderarbeit laeuft ueber eine native GPU-API;
+Standardaufloesung ist 1920x1080; Renderaufloesung, Output-Aspekt und Game-,
+UI- sowie Kameraviewports bleiben getrennt fuer spaetere 4K-/21:9-Pfade.
 der CPU-PVR-Softwarerasterizer ist aus dem Produktlink entfernt. Diese Aufgabe
 ist kein optionaler GPU-Offload des alten Emulationspfads.
 
@@ -225,8 +233,8 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 93, PlatformServices-ABI 14, Backend-Interface-ABI 17,
-  PVR-State-Contract 3, Portprojektvertrag 80, Native-Port-Profilvertrag 5
+  Runtime-ABI 94, PlatformServices-ABI 14, Backend-Interface-ABI 18,
+  PVR-State-Contract 3, Portprojektvertrag 81, Native-Port-Profilvertrag 6
   Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7

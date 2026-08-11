@@ -1,0 +1,83 @@
+if(NOT WIN32)
+    return()
+endif()
+
+function(_katana_ffmpeg_import component dll_name library_name)
+    if(TARGET KatanaFfmpeg::${component})
+        return()
+    endif()
+    add_library(KatanaFfmpeg::${component} SHARED IMPORTED)
+    set_target_properties(
+        KatanaFfmpeg::${component}
+        PROPERTIES
+            IMPORTED_LOCATION "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/${dll_name}"
+            IMPORTED_IMPLIB "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/katana-ffmpeg/${library_name}"
+    )
+endfunction()
+_katana_ffmpeg_import(avutil avutil-60.dll avutil.lib)
+_katana_ffmpeg_import(swresample swresample-6.dll swresample.lib)
+_katana_ffmpeg_import(swscale swscale-9.dll swscale.lib)
+_katana_ffmpeg_import(avcodec avcodec-62.dll avcodec.lib)
+_katana_ffmpeg_import(avformat avformat-62.dll avformat.lib)
+set_property(TARGET KatanaFfmpeg::swresample PROPERTY INTERFACE_LINK_LIBRARIES KatanaFfmpeg::avutil)
+set_property(TARGET KatanaFfmpeg::swscale PROPERTY INTERFACE_LINK_LIBRARIES KatanaFfmpeg::avutil)
+set_property(TARGET KatanaFfmpeg::avcodec PROPERTY INTERFACE_LINK_LIBRARIES "KatanaFfmpeg::avutil;KatanaFfmpeg::swresample")
+set_property(TARGET KatanaFfmpeg::avformat PROPERTY INTERFACE_LINK_LIBRARIES "KatanaFfmpeg::avcodec;KatanaFfmpeg::avutil")
+
+if(NOT TARGET KatanaFfmpeg::runtime)
+    add_library(KatanaFfmpeg::runtime INTERFACE IMPORTED)
+    set_property(
+        TARGET KatanaFfmpeg::runtime
+        PROPERTY INTERFACE_LINK_LIBRARIES
+            "KatanaFfmpeg::avformat;KatanaFfmpeg::avcodec;KatanaFfmpeg::avutil;KatanaFfmpeg::swresample;KatanaFfmpeg::swscale"
+    )
+endif()
+
+function(katana_deploy_ffmpeg_runtime target)
+    if(NOT TARGET "${target}")
+        message(FATAL_ERROR "katana_deploy_ffmpeg_runtime target does not exist: ${target}")
+    endif()
+    get_filename_component(
+        _katana_ffmpeg_package_prefix
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../.."
+        ABSOLUTE
+    )
+    add_custom_command(
+        TARGET "${target}"
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${target}>
+            $<TARGET_FILE_DIR:${target}>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_katana_ffmpeg_package_prefix}/@CMAKE_INSTALL_DATADIR@/KatanaRecomp/licenses/FFmpeg-LGPL.txt"
+            "$<TARGET_FILE_DIR:${target}>/FFmpeg-LGPL.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_katana_ffmpeg_package_prefix}/@CMAKE_INSTALL_DATADIR@/KatanaRecomp/licenses/FFmpeg-NOTICE.txt"
+            "$<TARGET_FILE_DIR:${target}>/FFmpeg-NOTICE.txt"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
+    )
+endfunction()
+
+if(NOT TARGET katana_ffmpeg_runtime_files)
+    add_custom_target(
+        katana_ffmpeg_runtime_files
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/$<CONFIG>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/avformat-62.dll"
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/avcodec-62.dll"
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/avutil-60.dll"
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/swresample-6.dll"
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/swscale-9.dll"
+            "${CMAKE_BINARY_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/KatanaRecomp/licenses/FFmpeg-LGPL.txt"
+            "${CMAKE_BINARY_DIR}/FFmpeg-LGPL.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/KatanaRecomp/licenses/FFmpeg-NOTICE.txt"
+            "${CMAKE_BINARY_DIR}/FFmpeg-NOTICE.txt"
+        COMMENT "Deploy pinned FFmpeg LGPL runtime closure"
+        VERBATIM
+    )
+endif()
+add_dependencies(KatanaFfmpeg::runtime katana_ffmpeg_runtime_files)

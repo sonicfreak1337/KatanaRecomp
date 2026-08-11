@@ -130,8 +130,8 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `93`, Analyzer-ABI `36`, Backend-
-Interface-ABI `17`, Portprojektvertrag `80` und Native-Port-Profilvertrag `5`.
+KR-5000 bindet diese Grenze an Runtime-ABI `94`, Analyzer-ABI `36`, Backend-
+Interface-ABI `18`, Portprojektvertrag `81` und Native-Port-Profilvertrag `6`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -176,6 +176,18 @@ range-geprueften Native Memory und enden ausserhalb typisiert. Der
 `GuestInstructionOrigin` bleibt in `MemoryAccessError`, Emitter und
 Native-Dispatch auch ohne Tracesink erhalten. Ein moeglicher Diagnosebypass
 ohne `NativePortDefinition` ist geschlossen.
+
+KR-5002 bindet native Audio-/Movie-Dienste ohne Dreamcast-Geraetefallback.
+PCM-Ausgabe verwendet WinMM; Bytequellen sind hash- und handlegebunden,
+reparse-sicher und waehrend des Decodes exklusiv gesperrt. Timestamps, EOS und
+bounded Queues bleiben strikt. Der in-process FFmpeg/libav-Provider ist als
+LGPL-Shared-Komponente eingebunden, verwendet kein `ffmpeg.exe` und prueft
+Header-, ABI- und Lizenzvertrag der installierbaren Fuenf-DLL-Closure. Ein
+User-Override wird nicht veraendert; der automatische Cache wird auf diese
+Closure begrenzt. Headerloser Sofdec-PS-Inhalt wird nur ueber ein virtuelles,
+bounded Praefix fuer den Demuxer erkannt; die Originalquelle bleibt
+unveraendert. Der oeffentliche `NativePortMovieSession`-Lebenszyklus reicht
+von `Ready` bis `Stopped`.
 
 ## Verbindliche Taskreihenfolge
 

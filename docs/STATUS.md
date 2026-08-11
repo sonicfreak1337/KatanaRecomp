@@ -47,7 +47,7 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `5`, Portprojektvertrag `80` und der Post-Link-Audit sperren
+Profilvertrag `6`, Portprojektvertrag `81` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
 `KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
@@ -66,9 +66,24 @@ Bring-up-Schalter gilt nur bei unvollstaendiger Closure.
 Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
 range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert, und
 `MemoryAccessError`/Native-Dispatch tragen `GuestInstructionOrigin` auch ohne
-Tracesink. Aktuell ist `KR-5002` als naechster Task fuer Audio/Movie aktiv.
-Danach folgen KR-5003 und KR-5004;
+Tracesink. `KR-5002` ist source-seitig abgeschlossen: Native Audio-/Movie-
+Dienste verwenden WinMM PCM und einen in-process LGPL-Shared-FFmpeg/libav-
+Provider ohne Dreamcast-Geraetefallback. Bytequellen sind hash-/handlegebunden,
+reparse-sicher und waehrend Decode exklusiv gesperrt; Timestamps, EOS und
+bounded Queues bleiben strikt. Headerloser Sofdec-PS-Inhalt wird nur ueber ein
+bounded virtuelles Praefix fuer den Demuxer erkannt; `NativePortMovieSession`
+reicht von `Ready` bis `Stopped`. Der relevante 24-Worker-Inkrementalbuild war
+in etwa `4,5 s` erfolgreich. Aktuell ist `KR-5003` fuer native GPU aktiv;
+danach folgt KR-5004;
 erst anschliessend ist KR-5005 als einziger Sonic-Produktlauf freigegeben.
+
+Das installierte Runtime-SDK wurde in einem frischen Prefix von einem
+externen Consumer konfiguriert, gelinkt und gestartet. Die installierbare
+Closure umfasst genau die fuenf benoetigten FFmpeg-DLLs sowie LGPL-/Notice-
+Dateien und enthaelt keine absoluten Worktree- oder Dependency-Cache-Pfade.
+Der private Provider decodierte den gebundenen Sofdec-/ADX-Inhalt vollstaendig
+bis EOS; private Dateinamen, Pfade und Digests bleiben ausserhalb des
+Repositorys.
 
 Der KR-5000-Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
 `katana_native_port_runtime` in einem inkrementellen 24-Worker-Build in
@@ -79,19 +94,19 @@ Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
-Funktionaler Source-Stand: aktueller Native-Port-Architekturreview-
-Checkpoint. Aktuell gelten Runtime-ABI `93`,
+Funktionaler Source-Stand: aktueller KR-5002-Architekturreview-Checkpoint.
+Aktuell gelten Runtime-ABI `94`,
 PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`17`, PVR-State-Contract `3`, Portprojektvertrag `80` und Native-Port-
-Profilvertrag `5`. Der historische GameProject-Vertrag bleibt auf `5` mit
+`18`, PVR-State-Contract `3`, Portprojektvertrag `81` und Native-Port-
+Profilvertrag `6`. Der historische GameProject-Vertrag bleibt auf `5` mit
 Artefaktformat `4` und transportiert die unabhaengige Native-Port-Definition
 ausdruecklich nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
 `port_export.hpp` sowie `native_port_artifact.hpp` aus der Analyzer-
 Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
-Backend-Interface-ABI `17` versioniert; bestehende generierte Ports muessen
+Backend-Interface-ABI `18` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
 

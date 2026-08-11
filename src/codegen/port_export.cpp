@@ -14949,6 +14949,13 @@ std::string port_cmake(const std::string& target_name) {
            target_name + " PRIVATE KATANA_NATIVE_PORT_PRODUCT=1)\n"
            "  target_link_libraries(" +
            target_name + " PRIVATE katana_native_title_adapter)\n"
+           "  if(WIN32)\n"
+           "    if(NOT COMMAND katana_deploy_ffmpeg_runtime)\n"
+           "      message(FATAL_ERROR \"Native media runtime deployment contract is missing\")\n"
+           "    endif()\n"
+           "    katana_deploy_ffmpeg_runtime(" +
+           target_name + ")\n"
+           "  endif()\n"
            "  get_target_property(KATANA_NATIVE_RUNTIME_PLAN_TARGET "
            "\"${KATANA_PORT_RUNTIME_TARGET}\" ALIASED_TARGET)\n"
            "  if(NOT KATANA_NATIVE_RUNTIME_PLAN_TARGET)\n"

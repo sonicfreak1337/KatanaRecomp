@@ -18,6 +18,12 @@ endif()
 find_package(Threads REQUIRED)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
+if(WIN32)
+    include(${CMAKE_CURRENT_LIST_DIR}/cmake/KatanaFfmpegDependency.cmake)
+    set(KATANA_NATIVE_PORT_FFMPEG_SOURCE src/runtime/native_port_ffmpeg_codec.cpp)
+else()
+    set(KATANA_NATIVE_PORT_FFMPEG_SOURCE src/runtime/native_port_ffmpeg_codec_stub.cpp)
+endif()
 
 set(
     KATANA_GIT_COMMIT
@@ -639,8 +645,12 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/memory.hpp
     include/katana/runtime/native_aot_state.hpp
     include/katana/runtime/native_port.hpp
+    include/katana/runtime/native_port_audio.hpp
     include/katana/runtime/native_port_aot_runtime.hpp
+    include/katana/runtime/native_port_codec.hpp
     include/katana/runtime/native_port_content.hpp
+    include/katana/runtime/native_port_ffmpeg_codec.hpp
+    include/katana/runtime/native_port_movie.hpp
     include/katana/runtime/runtime.hpp
 )
 set(KATANA_HISTORICAL_DEVICE_RUNTIME_SOURCES
@@ -740,7 +750,11 @@ add_library(
     $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
 )
 set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
+    src/runtime/native_port_audio.cpp
+    src/runtime/native_port_codec.cpp
     src/runtime/native_port_content.cpp
+    ${KATANA_NATIVE_PORT_FFMPEG_SOURCE}
+    src/runtime/native_port_movie.cpp
     src/runtime/native_port_runtime.cpp
 )
 add_library(
@@ -808,6 +822,31 @@ target_link_libraries(
     PUBLIC
         katana_aot_runtime
 )
+if(WIN32)
+    target_include_directories(
+        katana_native_port_runtime
+        SYSTEM PRIVATE "${KATANA_FFMPEG_INCLUDE_DIR}"
+    )
+    target_link_libraries(
+        katana_native_port_runtime
+        PUBLIC
+            "$<BUILD_INTERFACE:KatanaFfmpegBuild>"
+            "$<INSTALL_INTERFACE:KatanaFfmpeg::runtime>"
+    )
+    add_dependencies(katana_native_port_runtime katana_ffmpeg_runtime_files)
+endif()
+if(WIN32)
+    target_link_libraries(
+        katana_native_port_runtime
+        PUBLIC
+            bcrypt
+            mfplat
+            mfreadwrite
+            mfuuid
+            ole32
+            winmm
+    )
+endif()
 
 function(katana_stamp_runtime_contract target)
     set_target_properties(
@@ -5417,6 +5456,11 @@ configure_package_config_file(
     ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfig.cmake
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
 )
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaFfmpegTargets.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/KatanaFfmpegTargets.cmake
+    @ONLY
+)
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfigVersion.cmake
     VERSION ${PROJECT_VERSION}
@@ -5431,6 +5475,30 @@ install(
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT runtime-sdk
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+if(WIN32)
+    install(
+        FILES ${KATANA_FFMPEG_RUNTIME_FILES}
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        COMPONENT runtime-sdk
+    )
+    install(
+        FILES ${KATANA_FFMPEG_IMPORT_LIBRARIES}
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/katana-ffmpeg
+        COMPONENT runtime-sdk
+    )
+    install(
+        FILES ${KATANA_FFMPEG_ROOT}/LICENSE.txt
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/KatanaRecomp/licenses
+        RENAME FFmpeg-LGPL.txt
+        COMPONENT runtime-sdk
+    )
+    install(
+        FILES ${KATANA_FFMPEG_NOTICE_FILE}
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/KatanaRecomp/licenses
+        RENAME FFmpeg-NOTICE.txt
+        COMPONENT runtime-sdk
+    )
+endif()
 install(
     TARGETS katana_analyzer_sdk
     EXPORT KatanaAnalyzerTargets
@@ -5501,10 +5569,19 @@ configure_file(
     ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildProfile.txt
     @ONLY
 )
+set(KATANA_RUNTIME_BUILD_EXPORT_TARGETS katana_aot_runtime katana_native_port_runtime)
+if(WIN32)
+    list(APPEND KATANA_RUNTIME_BUILD_EXPORT_TARGETS KatanaFfmpegBuild)
+endif()
 export(
-    EXPORT KatanaRuntimeTargets
-    FILE ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildTargets.cmake
+    TARGETS ${KATANA_RUNTIME_BUILD_EXPORT_TARGETS}
+    FILE ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildTargetsImpl.cmake
     NAMESPACE KatanaRecomp::
+)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/KatanaRuntimeBuildTargets.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/KatanaRuntimeBuildTargets.cmake
+    @ONLY
 )
 install(
     EXPORT KatanaAnalyzerTargets
@@ -5517,6 +5594,7 @@ install(
     FILES
         ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/KatanaRecompConfigVersion.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/KatanaFfmpegTargets.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/KatanaRecomp
     COMPONENT runtime-sdk
 )

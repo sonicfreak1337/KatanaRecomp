@@ -36,7 +36,7 @@ erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
 internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
 und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
 ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
-Profilvertrag `5` und Portprojektvertrag `80` und erzeugt eine Linkmap. Ein
+Profilvertrag `6` und Portprojektvertrag `81` und erzeugt eine Linkmap. Ein
 Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
 CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
 Rueckfall.
@@ -45,6 +45,12 @@ KR-5000 stellt die Produktlinkgrenze, NativePort-Artefakte, read-only
 Content-Mappings und den validierenden Runner bereit. Der Produktlink oder
 Produktlauf darf bei unvollstaendiger Hook-/Hardware-Closure typisiert
 fail-closed enden; der explizite Bring-up-Schalter ist darauf begrenzt.
+
+KR-5002 fuehrt die installierbare Media-Closure ein: WinMM PCM und ein
+in-process LGPL-Shared-FFmpeg/libav-Provider ohne `ffmpeg.exe`. Der Provider
+prueft Header, ABI und Lizenz der fuenf benoetigten DLLs und deployt nur diese
+Closure samt Notices; ein User-Override wird nicht veraendert, der automatische
+Cache wird auf die benoetigte Closure begrenzt.
 
 ## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 
