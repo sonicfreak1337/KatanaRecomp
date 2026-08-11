@@ -86,6 +86,10 @@ Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 24-Worker-Build in `14,2 s` bestaetigt. Dieser historische Abschnitt ist kein
 aktueller Taskstatus; KR-5003 und KR-5004 sind abgeschlossen, KR-5005 ist
 jetzt der aktive Alpha-Gate-Task.
+Der Linkaudit-Zwischenfix maskiert nur das vollständige erlaubte Fragment
+`nativeportplatformservices`; ein eigenständiges `platformservices` bleibt
+verboten. Der bestätigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geräte-
+oder Interpreter-Symbole.
 
 ## Historischer RuntimeOnly-Bring-up
 

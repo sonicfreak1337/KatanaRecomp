@@ -97,6 +97,9 @@ transportiert, absolute Quellen und sichere Dateinamen werden fail-closed
 geprueft. Der frische Konfigurationsnachweis erzeugte korrekte absolute
 Pfade fuer Lizenz, Notice, Buildkonfiguration und Redistribution-Source;
 KR-5005 selbst bleibt als Produktgate offen.
+Der anschliessende Linkaudit-Zwischenfix maskiert ausschliesslich den
+vollstaendigen erlaubten Composite-Identifier `nativeportplatformservices`;
+ein eigenstaendiges oder anderes `platformservices` bleibt verboten.
 
 Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
 Runtime-Performance-Checkpoint. Die

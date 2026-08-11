@@ -95,6 +95,11 @@ bei Parent-Projekten ueber globale CMake-Properties und validiert Quellen sowie
 sichere Dateinamen fail-closed. Die frische Konfiguration erzeugte korrekte
 absolute Pfade fuer Lizenz, Notice, Buildkonfiguration und Redistribution-
 Source; das Produktgate bleibt offen.
+Der anschliessende Linkaudit-Fix maskiert ausschliesslich das vollständige
+Composite-Fragment `nativeportplatformservices`, damit `NativePortPlatformServices`
+nicht als falscher Teilstringtreffer abgelehnt wird; ein eigenstaendiges
+`platformservices` bleibt verboten. Der Audit-Nachweis war Exit `0` ohne
+Legacy-Geraete-/Interpreter-Symbole.
 
 Das installierte Runtime-SDK wurde in einem frischen Prefix von einem
 externen Consumer konfiguriert, gelinkt und gestartet. Die installierbare

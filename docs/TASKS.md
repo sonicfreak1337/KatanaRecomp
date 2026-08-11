@@ -210,6 +210,11 @@ die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
 fail-closed; die frische Konfiguration erzeugte korrekte absolute Pfade fuer
 Lizenz, Notice, Buildkonfiguration und Redistribution-Source. Abnahme:
+Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
+`nativeportplatformservices`; ein eigenstaendiges `platformservices` bleibt
+verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
+oder Interpreter-Symbole.
+Abnahme:
 korrektes Opening mit Bild
 und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
 rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`

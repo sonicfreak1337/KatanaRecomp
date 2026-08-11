@@ -14804,6 +14804,9 @@ constexpr std::array<std::string_view, )cpp"
     for (const auto token : forbidden)
         source << "    std::string_view{\"" << token << "\"},\n";
     source << R"cpp(};
+constexpr std::array<std::string_view, 1> allowed_forbidden_fragments{
+    std::string_view{"nativeportplatformservices"},
+};
 
 [[nodiscard]] bool safe_regular_file(const std::filesystem::path& path) {
     std::error_code error;
@@ -14816,6 +14819,18 @@ void lower_ascii(std::string& text) {
     for (auto& character : text)
         if (character >= 'A' && character <= 'Z')
             character = static_cast<char>(character - 'A' + 'a');
+}
+
+void mask_allowed_forbidden_fragments(std::string& text) {
+    for (const auto token : allowed_forbidden_fragments) {
+        std::size_t offset = 0u;
+        while ((offset = text.find(token, offset)) != std::string::npos) {
+            std::fill(text.begin() + static_cast<std::ptrdiff_t>(offset),
+                      text.begin() + static_cast<std::ptrdiff_t>(offset + token.size()),
+                      '#');
+            offset += token.size();
+        }
+    }
 }
 } // namespace
 
@@ -14848,6 +14863,8 @@ int main(const int argc, char* argv[]) {
         maximum_token_size = std::max(maximum_token_size, token.size());
     for (const auto token : forbidden_tokens)
         maximum_token_size = std::max(maximum_token_size, token.size());
+    for (const auto token : allowed_forbidden_fragments)
+        maximum_token_size = std::max(maximum_token_size, token.size());
     std::vector<bool> required_seen(required_tokens.size(), false);
     std::vector<bool> forbidden_seen(forbidden_tokens.size(), false);
     std::vector<char> chunk(scan_chunk_bytes);
@@ -14865,6 +14882,7 @@ int main(const int argc, char* argv[]) {
             if (!required_seen[index] &&
                 scan.find(required_tokens[index]) != std::string::npos)
                 required_seen[index] = true;
+        mask_allowed_forbidden_fragments(scan);
         for (std::size_t index = 0u; index < forbidden_tokens.size(); ++index)
             if (!forbidden_seen[index] &&
                 scan.find(forbidden_tokens[index]) != std::string::npos)

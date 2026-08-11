@@ -133,6 +133,13 @@
   Lizenz, Notice, Buildkonfiguration und Redistribution-Source. Das KR-5005-
   Produktgate bleibt offen.
 
+- KR-5005-Linkaudit-Zwischenfix: Der erlaubte native Klassenname
+  `NativePortPlatformServices` wird nun nur ueber das enge Composite-Fragment
+  `nativeportplatformservices` vor der unveraenderten Verbotsliste maskiert.
+  Ein echtes oder unabhaengiges `platformservices` bleibt verboten. Das
+  Audit-Tool bestaetigte den reinen nativen Produktlink mit Exit `0` und ohne
+  Legacy-Geraete-/Interpreter-Symbole; KR-5005 bleibt offen.
+
 - Der KR-5002-FFmpeg-Review ist vollstaendig geschlossen: die fuenf DLLs,
   Lizenz, Notice, Buildkonfiguration und Quellbindung werden einzeln in
   `runtime-dependencies.json` Schema `v3` gefuehrt. Oeffentliche Pakete
