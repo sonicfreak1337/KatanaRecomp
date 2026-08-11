@@ -1,6 +1,13 @@
 # AICA-ARM7-Strategie
 
-## Aktueller Vertrag
+> Historischer Bring-up-Vertrag: Seit `v0.49.1` ist dieser ARM7-Pfad kein
+> Bestandteil des nativen Produktziels. Er darf nur als nicht verteilbare
+> Diagnose-/Referenzimplementierung erhalten bleiben und nicht in ein
+> `native-port`-Produktbinary gelinkt werden. Der aktive Audio-/Moviepfad wird
+> vor dem AICA-Kommandoring nativ gebunden; siehe
+> `NATIVE_PORT_PRODUCT_CONTRACT.md`.
+
+## Historischer RuntimeOnly-Vertrag
 
 Seit `e1d8ade` ist der echte AICA-ARM7TDMI-Pfad Bestandteil des RuntimeOnly-
 Bring-ups. Der oeffentliche Runtime-Vertrag steht auf ABI `90`, der portable

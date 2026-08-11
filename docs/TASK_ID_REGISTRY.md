@@ -56,6 +56,12 @@
 
 ## v0.49 Sonic-Adventure-Produktaufgaben
 
+Ab `v0.49.1` ist KR-5000 bis KR-5005 die aktive native Produktreihenfolge.
+`v0.50.0 Alpha` wird erst durch ein rein nativ erreichtes Sonic-Hauptmenue
+freigegeben. Die folgenden RuntimeOnly-, Candidate-, AICA- und PVR-Angaben
+bleiben historische Bring-up-Evidenz und definieren nicht mehr den
+Produktpfad. Dreamcast-MHz sind kein Produkt- oder Versionsgate mehr.
+
 Der historische Quellstatus fuer KR-4951 bis KR-4973 in dieser Tabelle
 bezieht sich auf `b01586a` mit Runtime-ABI 73, Block-ABI 5, Analyzer-ABI 6,
 PlatformServices-ABI 13, Backend-Interface-ABI 12, Portprojektvertrag 62,
@@ -87,8 +93,8 @@ positiver Schedulerhebel ist belegt. KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen; die fehlende
 Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollstaendigen
 Stackvertrag/Gate bleibt als historischer PlatformAbi-Befund dokumentiert.
-KR-4981 bleibt das globale sichtbare Produktgate und ist nach dem
-RuntimeOnly-Build-/Export-Gate noch offen.
+KR-4981 ist das historische RuntimeOnly-Gate und wird durch KR-5005
+abgeloest.
 
 Der fruehere D-Lauf dauerte `460,6 s` gesamt, Candidate Resolution ca.
 `325,8 s`; der identifizierte Kindprozess wurde nach belegter
@@ -175,7 +181,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4978 | Inkrementeller CFG-/Seed-/Candidate-Contract-Fixpunkt | abgeschlossen und re-reviewed |
 | KR-4979 | Priorisierter Analyseexecutor und begrenzter Speicherhaushalt | implementiert und P0/P1-re-reviewed; v56 belegt offene Candidate-Resolution-Produktakzeptanz, Schliessung ueber gegateten Kernpfad bis KR-4991 und KR-4993 |
 | KR-4980 | Schichtweiser persistenter NativeDisc-Buildcache | quellseitig implementiert und P0/P1-re-reviewed in `3c018be`; Produktmessung offen |
-| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | P0 globales Produktgate; RuntimeOnly erreicht `FirstVisibleGameFrame` und den natuerlichen Audio-/Videopfad bis `24,2926 MHz`; mindestens `100 MHz`, Memory-Card-Screen/Hauptmenue und der nachgelagerte Identity-Miss `0x8C054008 -> 0x8C9000E8` bleiben offen |
+| KR-4981 | Einmaliges 24-Thread-Sonic-Produktzeitgate | historisches RuntimeOnly-Produktgate; `FirstVisibleGameFrame` und `24,2926 MHz` belegt, durch den nativen Produktvertrag abgeloest von KR-5005 |
 | KR-4982 | GPU-Offload-Entscheidungsgate und repraesentativer Prototyp | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4983 | Deterministische capability-gated GPU-Beschleunigung | vorerst gestrichen; nur mit neuer ausdruecklicher Nutzerfreigabe |
 | KR-4984 | Unabhaengige Gesamtpruefung und P0/P1-Schliessung vor NativeDisc-Produktlauf | historisches Sourcegate vor v56, dreifach re-reviewed; Candidate-Resolution-P0 folgt im gegateten Kernpfad bis KR-4991 und KR-4993 |
@@ -190,6 +196,12 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] source-seitig abgeschlossen; vollstaendiger Endreview wiederverwendet, Analyzer-ABI-Finding unter dem aktuellen Analyzer-ABI 34 geschlossen; globale Produktabnahme bleibt KR-4981 |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; bounded-merge/Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge, Normalisierung, Key/Persistenz, ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen; Runtime-ABI 90/AICA-Handoff 2, vorhandener Test und No-Skip-Sonic-Lauf belegen echten ARM7, fortschreitenden Sofdec-Audiotakt, Player-Status 5 und sichtbare Movie-Bildpublikation |
+| KR-5000 | Native Produktgrenze und Linkisolation | aktiv P0; Architekturvertrag dokumentiert, `native-port`-Profil und Ausschluss historischer Geraetesymbole offen |
+| KR-5001 | Statische Spiel-/SDK-Hookkarte | geplant P0 nach KR-5000; hoechste belegte Audio-/Movie-, Grafik- und Plattformgrenzen aus privater Adresskarte binden |
+| KR-5002 | Nativer Audio-/Moviepfad | geplant P0 nach KR-5001; kein ARM7/AICA-Firmwarepfad im Produkt, No-Skip-Lifecycle ueber native Hostdienste |
+| KR-5003 | Nativer GPU-Pfad | geplant P0 nach KR-5001; native GPU-API und kein CPU-PVR im Produktlink |
+| KR-5004 | Native Disc-, Eingabe- und Save-Dienste | geplant P0 nach KR-5001; lokale Originalinstallation und native PC-Plattformdienste |
+| KR-5005 | Nativer No-Skip-Sonic-Produktlauf | P0 Alpha-Gate nach KR-5000 bis KR-5004; Opening, 60 Hz, Memory-Card-Screen und Hauptmenue rein nativ |
 
 ## Aktuelle Meilensteinzuordnung
 

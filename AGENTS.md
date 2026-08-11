@@ -67,14 +67,32 @@ Task implementieren
 ## Unveraenderte Produktgrenzen
 
 - KatanaRecomp bleibt ein statischer SH-4-Recompiler.
+- KatanaRecomp erzeugt native PC-Ports und keinen Emulator. Der Produktpfad
+  besteht aus statisch rekompiliertem SH-4-Code sowie nativer PC-Grafik,
+  -Audio, -Datei-, -Eingabe- und Save-Anbindung.
 - Kein allgemeiner Interpreter, kein JIT und kein Emulationsfallback im
-  normalen Produktpfad.
+  normalen Produktpfad. Das gilt auch fuer Geraeteprozessoren: Ein AICA-ARM7-
+  Interpreter und zyklusweise Gastfirmwareausfuehrung sind im Produkt
+  verboten.
+- Kein CPU-PVR-Softwarerasterizer und kein vollstaendiger emulierter
+  Dreamcast-Geraeteverbund im Produkt. Grafik laeuft ueber eine native GPU-
+  API; Audio und Movie ueber native Hostdienste.
+- Plattformgrenzen werden an der hoechsten sicher identifizierten Spiel-/SDK-
+  Schnittstelle durch native Hooks ersetzt. Kleine ABI-/Datenadapter sind
+  erlaubt, Chip- oder Konsolenemulation nicht.
+- Historische Geraetemodelle duerfen nur in einem expliziten, nicht
+  verteilbaren Diagnoseprofil erhalten bleiben und duerfen nicht in ein
+  Produktbinary gelinkt werden. Es gibt keinen Laufzeitfallback darauf.
 - Keine Sonic-spezifischen Adresshacks, Retailbytes oder aus kommerziellen
   Dateien kopierten beziehungsweise ungebunden erzeugten Inhalte im
   generischen Katana-Kern.
 - Das reale Produkt und sein Bootfortschritt bleiben autoritativ; ein Review
   darf keine fehlende Produktabdeckung durch erfundene Erfolge oder stilles
   Weglassen von Arbeit kaschieren.
+
+Der vollstaendige verbindliche Vertrag steht in
+`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`. Er hat Vorrang vor aelteren
+RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen.
 
 ## Laufzeit und Ressourcen
 
@@ -115,21 +133,22 @@ Die ausfuehrlichen Projektvertraege in `ROADMAP.md`, `docs/CODEX_HANDOFF.md`,
 sie diesem repositoryweiten Arbeitsvertrag nicht widersprechen. Eine
 aktuelle ausdrueckliche Nutzeranweisung hat Vorrang.
 
-## Aktueller Bring-up-Pfad
+## Aktueller nativer Portpfad
 
-- Der aktuelle Produkt-Bring-up verwendet opt-in
-  `port --analysis-mode runtime-only` mit einem hashgebundenen GameProject.
-  Der RuntimeOnly-Build-/Export-Gate ist bestanden; das aktuelle Produktgate
-  ist der beaufsichtigte reale Sonic-Lauf bis mindestens zum Memory-Card-
-  Screen. Die ausdrueckliche Nutzerfreigabe fuer diesen Lauf liegt vor.
-- RuntimeOnly bleibt statisches AOT: exakte Guest->Host-Bindung,
-  Stop-on-miss und typed abort bleiben aktiv. Ein Interpreter, JIT,
-  Runtime-Decoder, geratenes Ziel oder Sonic-spezifischer Adresshack im
-  generischen Kern ist auch fuer den Bring-up unzulaessig.
-- Bestaetigte AOT-Coverage-, Binding- und Laufzeit-Performancefehler auf dem
-  Bring-up-Pfad werden als allgemeine Katana-Probleme im vollstaendigen
-  betroffenen Pfad geschlossen. Optimierungen bleiben nach Moeglichkeit
-  abschaltbar, sodass der exakte skalare AOT-Pfad als Fallback erhalten bleibt.
+- RuntimeOnly und seine exakte Guest->Host-Tabelle bleiben als statische AOT-
+  Grundlage nutzbar. Der dortige ARM7-/AICA- und CPU-PVR-Geraetepfad ist nur
+  historische Bring-up-Evidenz und kein Produktpfad mehr.
+- Die aktuelle Reihenfolge ist `KR-5000` bis `KR-5005`: Produktlinkgrenze,
+  native Hookkarte, nativer Audio-/Moviepfad, nativer GPU-Pfad, native
+  Plattformdienste und anschliessend der echte No-Skip-Sonic-Lauf bis
+  mindestens Hauptmenue.
+- Der erste aktive Arbeitspunkt ist die hoechste verifizierbare SH-4-Spiel-/
+  SDK-Hookgrenze vor AICA-Kommandoring und PVR/TA-Geraeteprotokoll. Die
+  privaten Titeladressen bleiben im externen Sonic-Spielprojekt.
+- Der Checkpoint `001f3c2` mit sichtbarem Movie und `24,2926 MHz` ist
+  historische Funktions- und Grenzenevidenz. Er ist keine Abnahme des nativen
+  Produktpfads und wird nicht durch weitere Interpreter- oder
+  Softwarerasterizeroptimierung fortgesetzt.
 - Der historische Candidate-Resolution-Pfad KR-4985 bis KR-4991, KR-4993 und
   sein bedingter KR-4992-Zweig bleiben fuer den PlatformAbi-Default
   dokumentiert, sind aber deferred und blockieren den RuntimeOnly-Bring-up
@@ -138,5 +157,6 @@ aktuelle ausdrueckliche Nutzeranweisung hat Vorrang.
 - Fuer jeden aktuellen Bring-up-Task gilt weiterhin der projektweite
   Dreischritt: **implementieren -> betroffene Pfade reviewen und Findings
   schliessen -> direkt auf main pushen**.
-- KR-4982 und KR-4983 bleiben gestrichen und duerfen nur durch eine neue
-  ausdrueckliche Nutzeranweisung reaktiviert werden.
+- KR-4982 und KR-4983 bleiben als alte optionale Offload-Aufgaben gestrichen.
+  Der neue native GPU-Produktpfad ist die semantisch getrennte Aufgabe
+  KR-5003 und kein optionales Beschleunigungsfeature eines Emulators.

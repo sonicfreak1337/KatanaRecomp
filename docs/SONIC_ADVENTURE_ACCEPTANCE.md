@@ -1,20 +1,45 @@
 # Sonic Adventure als private Produkt- und Integrationstestbench
 
 Dieses Dokument begrenzt die lokale Sonic-Adventure-Nutzung innerhalb der
-KatanaRecomp-Entwicklung. KatanaRecomp ist ein allgemeines Dreamcast-
-Recompiler-Framework, eine Dreamcast-Runtime und ein Runtime-SDK. Es ist weder
-ein Sonic-Adventure-Port noch dessen Installer oder Enhancement-Projekt.
+KatanaRecomp-Entwicklung. KatanaRecomp ist ein allgemeines statisches SH-4-
+Recompiler-Framework und Native-Port-SDK. Es ist kein Dreamcast-Emulator und
+enthaelt weder einen Sonic-Adventure-Port noch dessen Installer oder
+Enhancement-Projekt.
 
 Die repositoryweiten Arbeitsregeln in `../AGENTS.md` sind verbindlich. Sonic
 ist der massgebliche Produkt- und Integrationstest; neue synthetische Tests,
 Fixtures, Regressionen oder Testmatrizen werden aus Retailbefunden nicht mehr
 abgeleitet.
 
+## Verbindliches v0.50.0-Alpha-Gate
+
+`v0.49.1` bleibt Pre-Alpha, bis der lokal erzeugte Sonic-PAL-Port ueber einen
+rein nativen PC-Pfad das Hauptmenue erreicht. Genau dieser Nachweis gibt
+`v0.50.0 Alpha` frei.
+
+Das Gate verlangt gleichzeitig:
+
+- statisch rekompilierten SH-4-Spielcode ohne Interpreter, JIT oder
+  Runtime-Dekodierung;
+- Bild ueber eine native PC-GPU-API und Ton/Movie ueber native Hostdienste;
+- native Datei-, Eingabe- und Savepfade;
+- Opening ohne Skip, Ersatzframe oder erzwungenen Playerstatus;
+- 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue;
+- kein gelinkter ARM7-Interpreter, CPU-PVR-Softwarerasterizer oder
+  vollstaendiger Dreamcast-Geraeteverbund;
+- keinen Laufzeitfallback auf historische Geraetemodelle.
+
+Ein durch die historische RuntimeOnly-Geraeteausfuehrung erreichtes Bild oder
+Menue erfuellt dieses Gate nicht. Dreamcast-MHz sind kein Alpha-Gate; bewertet
+werden reale Ladezeit, Framezeit, Audio-Stabilitaet, Hostauslastung und
+Eingabelatenz. Der vollstaendige Vertrag steht in
+`NATIVE_PORT_PRODUCT_CONTRACT.md`.
+
 ## Grundregel
 
 - Sonic Adventure dient privat und read-only als autoritativer End-to-End-
-  Produkt- und Integrationstest fuer Analyse, Codegen, Hostbuild, Runtime und
-  Dreamcast-Plattformdienste.
+  Produkt- und Integrationstest fuer Analyse, Codegen, Hostbuild, native
+  Runtime und native Plattformdienste.
 - Der projektweite Taskablauf bleibt:
 
   ```text
@@ -129,11 +154,12 @@ Nachweis begruendet keine neue Matrixpflicht.
 
 ## Framework-Alpha
 
-Das Katana-Alpha-Gate bewertet versionierte Frameworkvertraege,
-reproduzierbare Builds, redigierte Diagnosen, die Abwesenheit proprietaerer
-Daten und vor allem den realen Sonic-Produktpfad. Neue synthetische oder frei
-lizenzierte Regressionen sind keine Voraussetzung und werden nicht als
-Ersatzabnahme aufgebaut.
+Das Katana-Alpha-Gate ist das erste rein nativ erreichte Sonic-Hauptmenue.
+Zusaetzlich bleiben versionierte Frameworkvertraege, reproduzierbare Builds,
+redigierte Diagnosen und die Abwesenheit proprietaerer Daten verbindlich.
+Neue synthetische oder frei lizenzierte Regressionen sind keine Voraussetzung
+und werden nicht als Ersatzabnahme aufgebaut. Ein emulationsnaher
+RuntimeOnly-Erfolg kann `v0.50.0 Alpha` nicht freigeben.
 
 ## Vertagter Direct-Scanout-Befund vom 27.07.2026
 

@@ -1,6 +1,10 @@
 # Projektstatus
 
-Aktuelle interne Version: `v0.49.0`
+Aktuelle interne Version: `v0.49.1`
+
+`v0.50.0` bleibt die erste Alpha und wird erst freigegeben, wenn der rein
+native Sonic-Port ohne ARM7, CPU-PVR oder andere emulatoraehnliche
+Produktzustaende das Hauptmenue erreicht.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -26,6 +30,22 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
+Der aktive P0 ist ab `v0.49.1` der native Sonic-Port und nicht die
+Beschleunigung der historischen Dreamcast-Geraetemodelle. Verbindlich sind
+statisches SH-4-AOT sowie native PC-GPU-, Audio-/Movie-, Datei-, Eingabe- und
+Savepfade. ARM7-Interpreter und CPU-PVR sind aus dem Produktprofil zu
+entfernen; fehlende Hooks enden fail-closed statt auf Emulation
+zurueckzufallen.
+
+Aktive Reihenfolge: `KR-5000` Produktlinkgrenze, `KR-5001` Hookkarte,
+`KR-5002` nativer Audio-/Moviepfad, `KR-5003` nativer GPU-Pfad, `KR-5004`
+native Plattformdienste und `KR-5005` No-Skip-Lauf bis Hauptmenue. Der
+vollstaendige Vertrag steht in `NATIVE_PORT_PRODUCT_CONTRACT.md`.
+
+Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
+Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
+AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
+
 Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
 Checkpoint. Aktuell gelten Runtime-ABI `90`,
 PlatformServices-ABI `14`, Analyzer-ABI `34`, Function-Analysis-Epoch-Schema
@@ -46,7 +66,7 @@ exakten statischen Guest->Host-Tabelle. Stop-on-miss und typed abort bleiben
 aktiv; Interpreter, JIT, Runtime-Decoder und geratene Ziele sind ausgeschlossen.
 Der Whole-Export-Cache ist modegebunden.
 
-## Aktueller RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Produktstand
 
 Der letzte identische 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame`
 mit First-Frame-Digest `16866779858248182758` bei Zyklus `622122619`.
@@ -366,24 +386,26 @@ und kein weiterer SavedEpoch-/Provenienzumbau.
 ## Aktueller kritischer Pfad
 
 ```text
-KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
-  -> RuntimeOnly-Build-/Export-Gate bestanden
-  -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
-  -> denselben realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz
-  -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
-  -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
+KR-5000  native Produktgrenze und Linkisolation
+  -> KR-5001  statische Spiel-/SDK-Hookkarte
+  -> KR-5002  nativer Audio-/Moviepfad
+  -> KR-5003  nativer GPU-Pfad
+  -> KR-5004  native Disc-/Eingabe-/Save-Dienste
+  -> KR-5005  No-Skip-Sonic rein nativ bis Hauptmenue
+  -> v0.50.0 Alpha
 ```
 
-KR-4992 bleibt ein optionaler Folgezweig nach einem verfehlten KR-4981 und
-positivem Restkosten-/RAM-Gate. KR-4982 und KR-4983 bleiben gestrichen.
+Der fruehere RuntimeOnly-Pfad und KR-4981 bleiben historische Evidenz.
+KR-4982 und KR-4983 bleiben als optionale GPU-Offload-Aufgaben des alten
+Pfads gestrichen; KR-5003 ist der neue native GPU-Produktpfad.
 
 D1 und D2 sind reale Sonic-Diagnoseexporte, keine Testmatrix. D1/G1 bleibt
 wegen der historischen, nichtterminalen Root-0-Evidenz unentschieden; D2/G2
 ist abgeschlossen und negativ, ohne positiven Schedulerhebel. D9 ist beendet
 und Root 0 konvergierte fail-closed, ohne Portartefakt oder Produkterfolg.
 Dieser D9-Befund ist historische PlatformAbi-Diagnostik. KR-4988 bis KR-4991
-bleiben inaktiv; KR-4994 und KR-4995 sind source-seitig abgeschlossen. KR-4981 bleibt als
-sichtbares Produktgate nach dem RuntimeOnly-Build-/Export-Gate offen.
+bleiben inaktiv; KR-4994 und KR-4995 sind source-seitig abgeschlossen.
+KR-4981 ist kein aktives Produktgate mehr und wird durch KR-5005 abgeloest.
 
 ## Quellseitig vorhandene Hauptvertraege
 
@@ -408,17 +430,13 @@ abgenommen, weil v56 kein Portartefakt erzeugte.
 
 ## Offene Produktabnahmen
 
-- Candidate-Resolution ohne Context-/Evaluationslimit und ohne
-  `incomplete-root`;
-- vollstaendiger aktueller NativeDisc-Port;
-- bekannter historischer Missing-AOT-Pfad durch statisches AOT passiert oder
-  engerer typisierter Blocker;
-- korrekter terminaler Produktbericht und Child-Exitcode;
-- frischer ABI-passender CompletePlatform-Capture und ProductHandoff;
-- NativeDisc-/DirectBoot-Paritaet am Game Entry;
-- sichtbarer Spielframe statt technischer Hilfsmetrik;
-- vollstaendiger Kaltport in hoechstens acht Minuten;
-- mindestens 200 MHz im normalen Produktpfad;
+- `native-port`-Link ohne ARM7-, CPU-PVR- oder Diagnoseinterpreter-Symbole;
+- vollstaendige statische Hookbindung ohne Emulationsfallback;
+- nativer Audio-/Moviepfad und nativer GPU-Pfad;
+- native Disc-, Eingabe- und Save-Dienste;
+- korrektes Opening, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue;
+- reales Framepacing, stabile Audioausgabe und brauchbare Eingabelatenz;
+- inkrementeller Portbuild ohne historischen Vollreexport;
 - externes Spielprojekt ohne Retaildaten oder Sonic-Sonderfaelle im
   Katana-Kern.
 
@@ -438,13 +456,9 @@ Evidenz und erzeugen keine neue Pflicht fuer den aktuellen Arbeitsablauf.
 ## Naechster Schritt
 
 ```text
-D9 ist historisch beendet und fail-closed; Root 0 konvergierte ohne
-Portartefakt und Produkterfolg. KR-4994 und KR-4995 sind source-seitig
-abgeschlossen; die PlatformAbi-Candidate-Resolution bleibt deferred. KR-4981
-bleibt das globale sichtbare Produktgate. `FirstVisibleGameFrame`,
-Movie-Bildpublikation und der Audiohash sind bestanden; offen sind mindestens
-`100 MHz`, danach der Identity-Miss `0x8C054008 -> 0x8C9000E8` und das
-Hauptmenue.
+KR-5000: `native-port`-Produktprofil und Linkisolation durchsetzen.
+Danach KR-5001: hoechste belegte SH-4-Spiel-/SDK-Grenzen aus der privaten
+Adresskarte binden. Keine weitere ARM7- oder CPU-PVR-Optimierung.
 ```
 
 Ein zweiter D1-Lauf gehoert nicht zu diesem Dokumentationspass. D2/G2 ist

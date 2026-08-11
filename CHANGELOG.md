@@ -4,6 +4,24 @@
 
 ### Geaendert
 
+- Die interne Pre-Alpha-Version steigt auf `0.49.1`. `0.50.0` bleibt die
+  erste Alpha und wird exakt durch das erste rein nativ erreichte Sonic-
+  Hauptmenue freigegeben.
+
+- Der Produktvertrag ist auf einen ausschliesslich nativen PC-Port
+  praezisiert: statisches SH-4-AOT, native GPU-Grafik, native Audio-/Movie-
+  Dienste sowie native Datei-, Eingabe- und Savepfade. ARM7-Interpreter,
+  CPU-PVR-Softwarerasterizer und vollstaendige Dreamcast-Geraeteemulation
+  sind im Produktbinary verboten. Alte Geraetemodelle duerfen nur hinter
+  einem nicht verteilbaren Diagnoseprofil verbleiben.
+
+- Der Checkpoint `001f3c2` und sein No-Skip-Lauf bei `24,2926 MHz` werden als
+  historische Bring-up-Evidenz eingeordnet. AOT-Abdeckung, Adresskarte und
+  Lebenszyklusbefunde werden fuer native Spiel-/SDK-Hooks wiederverwendet;
+  ARM7/AICA und CPU-PVR werden nicht weiter als Produktpfad optimiert.
+  Dreamcast-MHz sind kein Produkt- oder Versionsgate des nativen Ports. Die
+  neue Reihenfolge bilden KR-5000 bis KR-5005.
+
 - Der aktuelle Runtime-Performance-Zwischenstand haelt den natuerlichen
   No-Skip-Audio-/Videopfad bis `FirstVisibleGameFrame` stabil. Der identische
   Vergleichspfad stieg von `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz`

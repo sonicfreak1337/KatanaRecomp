@@ -5,7 +5,29 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
-## Aktueller RuntimeOnly-Bring-up
+## Verbindlicher v0.49.1-Native-Port
+
+KatanaRecomp baut einen nativen PC-Port und keinen Emulator. Der Produktpfad
+verwendet statisch rekompilierten SH-4-Code, eine native GPU-API, native
+Audio-/Movieausgabe sowie native Datei-, Eingabe- und Save-Dienste. ARM7-
+Interpreter, CPU-PVR-Softwarerasterizer und vollstaendige Dreamcast-
+Geraetemodelle duerfen nicht in das Produktbinary gelangen.
+
+Der aktuelle Auftrag ist nicht, die historischen Geraetemodelle schneller zu
+machen. Er lautet: `KR-5000` bis `KR-5005` aus
+`NATIVE_PORT_PRODUCT_CONTRACT.md` in Reihenfolge umsetzen. Zuerst wird die
+hoechste statisch belegbare Spiel-/SDK-Grenze vor AICA-Kommandoring und
+PVR/TA-Protokoll gebunden; danach werden Audio/Movie, GPU und die restlichen
+Plattformdienste nativ umgesetzt. XenonRecomp ist das Architekturvorbild,
+nicht ein Emulator.
+
+`001f3c2` und der Lauf bei `24,2926 MHz` sind historische Bring-up-Evidenz.
+AOT-Abdeckung, private Adresskarte und beobachteter No-Skip-Lifecycle bleiben
+nutzbar; ARM7/AICA und CPU-PVR werden nicht weiter fuer den Produktpfad
+optimiert. `0.50.0` wird exakt durch das erste rein nativ erreichte Sonic-
+Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
+
+## Historischer RuntimeOnly-Bring-up
 
 Funktionaler RuntimeOnly-Source-Stand: aktueller Runtime-Performance-
 Checkpoint. Aktuell gelten Runtime-ABI `90`,
@@ -37,7 +59,7 @@ Resolution-Abschnitte in diesem Handoff sind historische PlatformAbi-
 Diagnostik und keine Aussage, dass der aktuelle Bring-up kein `game.exe`
 erzeugt.
 
-### Aktueller RuntimeOnly-Produktstand
+### Historischer RuntimeOnly-Produktstand
 
 Der aktuelle 70-s-No-Skip-Lauf erreichte `FirstVisibleGameFrame` mit
 First-Frame-Digest `16866779858248182758` bei Zyklus `622122619`.
@@ -73,14 +95,15 @@ unveraendert.
 ## Pflichtlekture vor jeder Aenderung
 
 1. `AGENTS.md`
-2. `ROADMAP.md`
-3. `docs/STATUS.md`
-4. `docs/TASKS.md`
-5. `docs/TASK_ID_REGISTRY.md`
-6. `CHANGELOG.md`
-7. `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
-8. der fuer den Task relevante Detailplan
-9. betroffene Header, Implementierungen und vorhandene Tests, sofern deren
+2. `docs/NATIVE_PORT_PRODUCT_CONTRACT.md`
+3. `ROADMAP.md`
+4. `docs/STATUS.md`
+5. `docs/TASKS.md`
+6. `docs/TASK_ID_REGISTRY.md`
+7. `CHANGELOG.md`
+8. `docs/SONIC_ADVENTURE_ACCEPTANCE.md`
+9. der fuer den Task relevante Detailplan
+10. betroffene Header, Implementierungen und vorhandene Tests, sofern deren
    bestehender Vertrag durch den Task beruehrt wird
 
 ## Projektweiter Taskablauf
@@ -546,8 +569,9 @@ Candidate-Resolution-Gesamtzeit,
 Limitfreiheit, terminale IncompleteRoot-/Retentionwerte, Coverage und G1
 sind ohne vollstaendigen schweren Root und den historischen Root 1 nicht
 entscheidbar. D2/G2 ist abgeschlossen und negativ; ein positiver
-Schedulerhebel ist nicht belegt. KR-4981 bleibt das globale
-Produktgate; der aktuelle D-Lauf ist abgeschlossen und nicht bestanden. Ein
+Schedulerhebel ist nicht belegt. KR-4981 bleibt historische RuntimeOnly-
+Evidenz und ist durch das native Alpha-Gate KR-5005 abgeloest. Der aktuelle
+D-Lauf ist abgeschlossen und nicht bestanden. Ein
 weiterer Lauf ist nicht automatisch freigegeben. Ein zweiter D1-Lauf gehoert
 nicht zu diesem Dokumentationspass.
 

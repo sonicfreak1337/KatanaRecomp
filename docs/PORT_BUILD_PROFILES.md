@@ -1,5 +1,10 @@
 # Portbuildprofile und Cachevertrag
 
+> v0.49.1: `native-port` wird in KR-5000 zum einzigen Produkt-/Releaseprofil.
+> Die nachfolgende RuntimeOnly-Beschreibung bleibt historische Bring-up-
+> Referenz. Ein Produktartifact darf weder ARM7-/SkyEmu-, CPU-PVR- noch
+> Diagnoseinterpretercode linken und nicht auf diese Pfade zurueckfallen.
+
 KatanaRecomp v0.49 trennt den schnellen Bring-up-Build vom finalen Gatebuild.
 
 ## Bring-up
@@ -17,7 +22,7 @@ bestaetigen, scheitert Configure fail-closed. Das Gate bleibt
 `RelWithDebInfo`; mit dem Microsoft-Linker erzwingt es
 `/INCREMENTAL:NO`, `/OPT:REF` und `/OPT:ICF`.
 
-## RuntimeOnly und Windows-Hostbuild
+## Historischer RuntimeOnly-Pfad und Windows-Hostbuild
 
 Der opt-in Portmodus `--analysis-mode runtime-only` ist nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
@@ -32,15 +37,15 @@ maximal zwei physische Linkpaesse. Ein fehlender optionaler Pass wird nur
 durch vorhandenen erfolgreichen Build-, Artefakt- oder Up-to-date-Nachweis
 geschlossen; mehr als zwei physische Paesse bleiben fail-closed.
 
-Der aktuelle RuntimeOnly-Produktstand erreicht `FirstVisibleGameFrame` ohne
+Der historische RuntimeOnly-Produktstand erreicht `FirstVisibleGameFrame` ohne
 Skip oder kuenstlichen Moviepfad. Die identische Vergleichsreihe stieg von
 `23,7959 MHz` ueber `24,1885 MHz` und `24,2825 MHz` auf `24,2926 MHz`; das
 Native-AOT-Emissionsprofil ist `25` mit AOT-Partitionsschema `5`.
 
 Der letzte Lauf brachte `341` Renderrequests/-completions/-frames, `15.680`
 YUV-Makrobloecke sowie `470` Audiopuffer mit `345.450` Audiobildern. `100 MHz`
-und das weitere Bring-up bis Memory-Card-Screen/Hauptmenue bleiben offen; der
-serielle Runtime-/Dispatch-Overhead ist der aktuelle Performance-P0.
+und das weitere Bring-up bis Memory-Card-Screen/Hauptmenue blieben offen. Die
+Messung ist keine Abnahmebasis des nativen Produktpfads.
 
 ## Compiler und Linker
 

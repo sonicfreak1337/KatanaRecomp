@@ -77,7 +77,81 @@ Daher gilt projektweit:
   nicht als Performancefix erhoeht. Der aktuelle P0 muss durch weniger
   notwendige Arbeit geschlossen werden.
 
-## Aktueller RuntimeOnly-Bring-up
+## Verbindlicher v0.49.1-Native-Portpfad
+
+Der Produktport ist kein Emulator. Statisches SH-4-AOT wird an validierten
+Spiel-/SDK-Grenzen mit nativer PC-Grafik, -Audio/-Movie, -Datei-, -Eingabe-
+und Savefunktion verbunden. ARM7-Interpreter, CPU-PVR-Softwarerasterizer und
+vollstaendige Dreamcast-Geraetemodelle duerfen nicht in das Produktbinary
+gelangen. Details: `NATIVE_PORT_PRODUCT_CONTRACT.md`.
+
+```text
+KR-5000  native Produktgrenze und Linkisolation
+  -> KR-5001  private statische Spiel-/SDK-Hookkarte
+  -> KR-5002  nativer Audio-/Moviepfad
+  -> KR-5003  nativer GPU-Pfad
+  -> KR-5004  native Disc-/Eingabe-/Save-Dienste
+  -> KR-5005  No-Skip-Sonic rein nativ bis Hauptmenue; v0.50.0 Alpha
+```
+
+`001f3c2` und `24,2926 MHz` bleiben historische Bring-up-Evidenz fuer AOT-
+Abdeckung, Adressen und den erwarteten Lebenszyklus. Interpreter- und
+Softwarerasterizeroptimierung gehoeren nicht mehr zum aktiven P0. Dreamcast-
+MHz sind kein Produkt- oder Versionsgate des nativen Ports.
+
+## [ ] KR-5000 - Native Produktgrenze und Linkisolation
+
+Prioritaet: P0 Architektur
+
+Status: aktiv. Der Dokumentationsvertrag ist gesetzt; Buildprofil,
+Linkgrenze und typisierter Missing-Native-Hook-Fehler sind noch umzusetzen.
+
+Abschluss: Ein `native-port`-Artefakt kann keine ARM7-/SkyEmu-, CPU-PVR- oder
+Diagnoseinterpreter-Symbole linken und besitzt keinen Laufzeitfallback auf
+diese Pfade.
+
+## [ ] KR-5001 - Statische Spiel-/SDK-Hookkarte
+
+Prioritaet: P0 Bring-up
+
+Status: vorbereitet durch die private Adresskarte. Audio/Movie wird vor dem
+AICA-Kommandoring und Grafik vor dem PVR-Geraeteprotokoll gebunden; die
+hoechste belegbare Grenze gewinnt. Private Adressen bleiben ausserhalb des
+Repositorys.
+
+## [ ] KR-5002 - Nativer Audio-/Moviepfad
+
+Prioritaet: P0 Produkt
+
+Status: wartet auf KR-5001. Kein ARM7- oder AICA-Firmwarepfad im Produkt;
+Opening und Ton laufen vollstaendig ueber native Hostdienste, ohne Skip oder
+erzwungenen Playerstatus.
+
+## [ ] KR-5003 - Nativer GPU-Pfad
+
+Prioritaet: P0 Produkt
+
+Status: wartet auf KR-5001. Renderarbeit laeuft ueber eine native GPU-API;
+der CPU-PVR-Softwarerasterizer ist aus dem Produktlink entfernt. Diese Aufgabe
+ist kein optionaler GPU-Offload des alten Emulationspfads.
+
+## [ ] KR-5004 - Native Disc-, Eingabe- und Save-Dienste
+
+Prioritaet: P0 Produkt
+
+Status: wartet auf KR-5001. Originaldaten bleiben lokal; Dateizugriff,
+Controller und atomare Speicherstaende verwenden native PC-Dienste.
+
+## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
+
+Prioritaet: P0 Alpha-Gate
+
+Status: wartet auf KR-5000 bis KR-5004. Abnahme: korrektes Opening mit Bild
+und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
+rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`
+freigegeben.
+
+## Historischer RuntimeOnly-Bring-up
 
 Der opt-in Modus `port --analysis-mode runtime-only` ist nur fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` zulaessig; der
@@ -98,7 +172,7 @@ identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz` und
 Memory-Card-Screen/Hauptmenue bleiben offen; der PlatformAbi-Default bleibt
 erhalten.
 
-## Aktueller RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Produktstand
 
 Der vorherige bereinigte Source-Checkpoint hob Runtime-ABI `87` auf `88` und
 PlatformServices-ABI `13` auf `14`. Der funktionale Checkpoint `efc531b` hebt
@@ -146,13 +220,13 @@ Zaehlscope-Dimensionen ausgibt, duerfen daraus weder `37.664` vermeintlich
 physiklose Evaluationen noch `2,547` logische Evaluationen je Context als
 Messwert abgeleitet werden.
 
-## Verbindliche Reihenfolge
+## Historische RuntimeOnly-Reihenfolge
 
 ```text
 KR-4985, KR-4986, KR-4993, KR-4987, KR-4994 und KR-4995: source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
-  -> realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz anheben
+  -> historische RuntimeOnly-Performancezielmarke mindestens 100 MHz
   -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
   -> sichtbarer Start bis mindestens Memory-Card-Screen/Hauptmenue
 ```
@@ -170,7 +244,10 @@ Schedulerhebel. D9 ist historisch beendet und Root 0 konvergierte fail-closed
 ohne Portartefakt oder Produkterfolg. KR-4988 bis KR-4991 bleiben inaktiv;
 KR-4994 und KR-4995 sind source-seitig abgeschlossen. Die PlatformAbi-Candidate-Resolution
 bleibt deferred und ist kein RuntimeOnly-Buildblocker. KR-4981 bleibt als
-sichtbares Produktgate offen. KR-4982 und KR-4983 bleiben gestrichen.
+historisches RuntimeOnly-Gate dokumentiert und wird durch das native Alpha-
+Gate KR-5005 abgeloest. KR-4982 und KR-4983 bleiben als alte optionale
+Offload-Aufgaben gestrichen; der native GPU-Produktpfad ist die neue,
+semantisch getrennte Aufgabe KR-5003.
 
 ---
 
@@ -699,11 +776,9 @@ Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI `34` geschlossen.
   publizieren noch aktuelle Arbeit durch einen veralteten Fehler beenden;
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
-- KR-4981 bleibt das globale Produktgate; RuntimeOnly-Build-/Export-Gate und
-  `FirstVisibleGameFrame` sind bestanden. Der aktuelle Performance-P0 liegt
-  bei `24,2926 MHz` auf dem sichtbaren Pfad, mit Ziel mindestens `100 MHz`;
-  danach liegt der funktionale Blocker am Identity-Miss
-  `0x8C054008 -> 0x8C9000E8`. Memory-Card-Screen und Hauptmenue bleiben offen.
+- KR-4981 bleibt historische RuntimeOnly-Evidenz. Das aktive Produktgate ist
+  KR-5005: rein nativer Pfad ohne ARM7/CPU-PVR bis zum Hauptmenue und damit
+  Freigabe von `v0.50.0 Alpha`.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von
@@ -826,7 +901,7 @@ sonst ungenutzter Kerne fuer verwerfbare spaetere Rootarbeit einsetzen.
 Auch diese Aufgaben folgen dem repositoryweiten Dreischritt und erzeugen
 keine neuen Tests oder Testmatrizen.
 
-## Geplante Produktlaeufe
+## Historisch geplante RuntimeOnly-Produktlaeufe
 
 ### Lauf A - KR-4981
 
@@ -844,10 +919,10 @@ keine neuen Tests oder Testmatrizen.
 - Subsystemdigests vergleichen;
 - normaler Sonic-Lauf bis zum naechsten Produktmeilenstein.
 
-### Lauf C - sichtbares Spielbild und Echtzeit
+### Lauf C - historisches sichtbares Spielbild und RuntimeOnly-Echtzeit
 
 - mindestens FirstGameFramebufferWrite oder FirstTaFrame;
-- danach mindestens 200 MHz bei gleicher Gastarbeit;
+- die damalige Zielmarke lag danach bei 200 MHz gleicher Gastarbeit;
 - Controller und stabiler mehrminuetiger Lauf folgen erst nach sichtbarem
   Spielfortschritt.
 

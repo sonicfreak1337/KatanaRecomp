@@ -1,8 +1,16 @@
 # Katana Runtime
 
-Die Katana-Runtime ist seit KR-2101 eine eigene statische Bibliothek. Generierter
-C++-Code enthaelt keine Implementierung von Speicher, CPU-Zustand oder
-ungeloesten Kontrollflusspfaden mehr.
+> v0.49.1-Produktgrenze: Dieses Dokument enthaelt umfangreiche historische
+> Dreamcast-Runtime- und Geraetevertraege. Sie bleiben Diagnose- und Bring-up-
+> Referenz, definieren aber nicht mehr den Produktpfad. Das Produkt ist ein
+> nativer PC-Port; ARM7-Interpreter, CPU-PVR und vollstaendige Geraetemodelle
+> duerfen nicht in `native-port` gelinkt werden. Verbindlich ist
+> `NATIVE_PORT_PRODUCT_CONTRACT.md`.
+
+Die historische Katana-Runtime ist seit KR-2101 eine eigene statische
+Bibliothek. Generierter C++-Code enthaelt keine Implementierung von Speicher,
+CPU-Zustand oder ungeloesten Kontrollflusspfaden mehr. KR-5000 trennt daraus
+das native Produktprofil mit ausschliesslich erforderlichen Hostdiensten ab.
 
 ## ABI
 

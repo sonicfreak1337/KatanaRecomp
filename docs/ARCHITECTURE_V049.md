@@ -1,5 +1,19 @@
 # KatanaRecomp-v0.49-Architektur
 
+## v0.49.1: native Produktarchitektur
+
+Ab `v0.49.1` ist verbindlich klargestellt: KatanaRecomp erzeugt native PC-
+Ports und keinen Emulator. Statisch rekompilierter SH-4-Code ruft an
+validierten Spiel-/SDK-Grenzen native PC-Dienste auf. Grafik laeuft ueber die
+Host-GPU, Audio/Movie ueber native Hostdienste und Disc/Eingabe/Save ueber
+native Plattform-APIs.
+
+ARM7-Interpreter, CPU-PVR-Softwarerasterizer und ein vollstaendiger emulierter
+Dreamcast-Geraeteverbund sind nur noch historische Bring-up-/Diagnosepfade und
+duerfen nicht in das Produktbinary gelinkt werden. Der vollstaendige
+Vorrangvertrag steht in `NATIVE_PORT_PRODUCT_CONTRACT.md`; widersprechende
+aeltere Abschnitte dieses Dokuments beschreiben nur den historischen Stand.
+
 KatanaRecomp ist ein statischer Recompiler fuer Dreamcast-SH-4-Programme. Der
 Produktpfad ist:
 

@@ -1,6 +1,29 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.49.0`
+Aktuelle Pre-Alpha-Version: `0.49.1`
+
+`0.49.1` ist die native Produktarchitektur-Runde. `0.50.0` bleibt
+ausdruecklich die erste Alpha und wird erst freigegeben, wenn Sonic ohne
+emulatoraehnliche Produktzustaende ueber den rein nativen PC-Pfad das
+Hauptmenue erreicht.
+
+## Verbindlicher nativer Produktpfad
+
+KatanaRecomp erzeugt native PC-Ports und keinen Emulator. Der ausgelieferte
+Port besteht aus statisch rekompiliertem SH-4-Spielcode und nativen PC-
+Diensten fuer GPU-Grafik, Audio/Movie, Dateien, Eingabe und Speicherstaende.
+Ein ARM7-Interpreter, ein CPU-PVR-Softwarerasterizer oder ein vollstaendig
+emulierter Dreamcast-Geraeteverbund sind kein Bestandteil des Produktpfads.
+
+Der bisherige RuntimeOnly-Stand bis `001f3c2` bleibt historische Bring-up-
+Evidenz fuer AOT-Abdeckung, Adressen, Kontrollfluss und den echten No-Skip-
+Movielebenszyklus. Seine AICA-/ARM7- und CPU-PVR-Geraetepfade werden nicht
+weiter als Produktarchitektur optimiert. Die gewonnenen Grenzen werden
+stattdessen XenonRecomp-artig an der hoechsten belegten Spiel-/SDK-
+Schnittstelle auf native Hostimplementierungen gebunden.
+
+Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
+[`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
 Aktueller Bring-up-Stand dieses Meilensteins: Runtime-ABI 90, Block-ABI 5,
 PlatformServices-ABI 14,
@@ -9,8 +32,8 @@ In-Process-Evaluation-Cache-Schema 13, Application-Contract 8 und
 Portprojektvertrag 75, PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `25`, AOT-Partitionsschema: `5`.
 
-Der aktuelle funktionale RuntimeOnly-Source-Stand ist der Runtime-
-Performance-Checkpoint. Die
+Der letzte funktionale, jetzt historische RuntimeOnly-Source-Stand ist der
+Runtime-Performance-Checkpoint. Die
 oeffentlichen AICA-/ARM7-Handoff-Layouts sind deshalb auf Runtime-ABI 90
 versioniert; PlatformServices-ABI 14 und Backend-Interface-ABI 13 bleiben
 aktuell.
@@ -62,7 +85,7 @@ bleibt erhalten; Ordinary-/Inventory-Stack-Alias-Capture und Lane-Fusion sind
 spaetere, deferred PlatformAbi-Optimierungsbefunde und nicht Teil dieses
 Bring-up-Meilensteins.
 
-## Aktueller RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Bring-up-Stand
 
 Der aktuelle Lauf belegt den natuerlichen Audio-/Videopfad bis zum ersten
 sichtbaren Spielbild; der Bring-up ist damit sichtbar, aber noch kein
@@ -524,6 +547,7 @@ cmake/     Paket- und ABI-Versionierung
 Wichtige Dokumente:
 
 - [Roadmap](ROADMAP.md)
+- [Verbindlicher Native-Port-Produktvertrag](docs/NATIVE_PORT_PRODUCT_CONTRACT.md)
 - [v0.49-Architektur](docs/ARCHITECTURE_V049.md)
 - [Executable-First-Entwicklung](docs/EXECUTABLE_FIRST_DEVELOPMENT.md)
 - [Portbuildprofile](docs/PORT_BUILD_PROFILES.md)
@@ -532,7 +556,8 @@ Wichtige Dokumente:
 - [Runtime](docs/RUNTIME.md)
 - [Indirect Control Flow](docs/INDIRECT_CONTROL_FLOW.md)
 - [Sonic-Acceptancevertrag](docs/SONIC_ADVENTURE_ACCEPTANCE.md)
-- [v0.49.0-Releasehinweise](docs/releases/v0.49.0.md)
+- [v0.49.1-Releasehinweise](docs/releases/v0.49.1.md)
+- [v0.49.0-Releasehinweise](docs/releases/v0.49.0.md) (historisch)
 
 ## Rechtlicher Rahmen
 

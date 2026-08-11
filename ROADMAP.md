@@ -2,24 +2,26 @@
 
 Status: Pre-Alpha
 
-Aktuelle Phase: `v0.49.0` - Sonic-Adventure-Produktbring-up,
-vollstaendiger statischer AOT-Port und produktiver Dreamcast-Handoff
+Aktuelle Phase: `v0.49.1` - Sonic-Adventure-Native-Port,
+statisches SH-4-AOT und native PC-Plattformdienste
 
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Produktziel
 
-KatanaRecomp ist ein statischer SH-4-Recompiler. KatanaRuntime ist die
-gemeinsam installierbare Dreamcast-Laufzeitbibliothek. Ein konkretes Spiel
-wird in einem getrennten, hashgebundenen Recomp-Projekt gebaut.
+KatanaRecomp ist ein statischer SH-4-Recompiler fuer native PC-Ports. Ein
+konkretes Spiel wird in einem getrennten, hashgebundenen Recomp-Projekt
+gebaut. Die Produktruntime stellt native Hostdienste bereit; sie ist kein
+Dreamcast-Emulator.
 
 ```text
 KatanaRecomp
   -> analysiert SH-4 statisch
   -> erzeugt natives C++/Hostprogramm
 
-KatanaRuntime
-  -> stellt gemeinsame Dreamcast-Plattformvertraege bereit
+Katana Native Runtime
+  -> bindet validierte Spiel-/SDK-Grenzen an native PC-APIs
+  -> nutzt Host-CPU, GPU, Audio, Dateisystem, Eingabe und Speicher
 
 SonicAdventureRecomp
   -> bindet generierten Spielcode und lokal installierte Originaldaten
@@ -91,6 +93,11 @@ Daraus folgen verbindlich:
 - kein allgemeiner SH-4-Interpreter im normalen Produktport;
 - kein JIT;
 - kein Emulationsfallback;
+- kein ARM7-Interpreter oder zyklusweise Geraetefirmware im Produkt;
+- kein CPU-PVR-Softwarerasterizer oder vollstaendiger emulierter Dreamcast-
+  Geraeteverbund im Produkt;
+- Grafik ueber eine native GPU-API, Audio/Movie ueber native Hostdienste und
+  Disc/Eingabe/Save ueber native PC-Plattformdienste;
 - keine stillen No-op-Stubs oder erfundenen Hardwareerfolge;
 - keine Sonic-spezifischen Adresshacks im generischen Katana-Kern;
 - keine Retail-, BIOS- oder Assetdaten im Repository oder verteilbaren Paket;
@@ -101,7 +108,31 @@ Daraus folgen verbindlich:
 - Produktlaeufe werden nach gleicher Gastarbeit verglichen, nicht nach einer
   beliebigen Hostzeit.
 
-## Aktueller RuntimeOnly-Bring-up
+Der vollstaendige native Produktvertrag in
+[`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md)
+hat Vorrang vor allen aelteren RuntimeOnly-, AICA-, PVR- und
+Performancebeschreibungen.
+
+## Aktueller v0.49.1-Native-Portpfad
+
+Die neue verbindliche Reihenfolge lautet:
+
+```text
+KR-5000  Native Produktgrenze und Linkisolation
+  -> KR-5001  Statische Spiel-/SDK-Hookkarte
+  -> KR-5002  Nativer Audio-/Moviepfad
+  -> KR-5003  Nativer GPU-Pfad
+  -> KR-5004  Native Disc-, Eingabe- und Save-Dienste
+  -> KR-5005  Nativer No-Skip-Sonic-Produktlauf
+                rein nativ bis Hauptmenue; v0.50.0 Alpha
+```
+
+Die private Adress- und Funktionskarte aus dem Bring-up wird weiterverwendet.
+Der erste aktive Implementierungspunkt ist die hoechste belegte SH-4-Spiel-/
+SDK-Grenze vor AICA-Kommandoring und PVR/TA-Geraeteprotokoll. Fehlende native
+Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
+
+## Historischer RuntimeOnly-Bring-up
 
 Der opt-in CLI-Modus `port --analysis-mode runtime-only` ist fuer den
 vollstaendigen NativeDisc-Produktport mit `--game-project` freigegeben; der
@@ -121,7 +152,7 @@ ist durch Digest `16866779858248182758` bei Gastzyklus `622122619` belegt;
 Memory-Card-Gate und das Hauptmenue bleiben offen. Der Default-PlatformAbi-
 Pfad bleibt unveraendert.
 
-## Aktueller RuntimeOnly-Produktstand
+## Historischer RuntimeOnly-Produktstand
 
 Der vorherige bereinigte Runtime-/Codegen-Checkpoint hob Runtime-ABI `87` auf
 `88` und PlatformServices-ABI `13` auf `14`. `efc531b` hebt Runtime-ABI wegen
@@ -287,7 +318,7 @@ lesbar/gespuelt, aber ohne terminalen Datensatz und ohne atomare Publikation.
 D1/G1 ist daher strikt fail-closed und unentschieden; KR-4988 bis KR-4991
 bleiben inaktiv.
 
-## Aktueller P0: RuntimeOnly-Bring-up bis Memory-Card/Hauptmenue
+## Historischer RuntimeOnly-P0 bis FirstVisibleGameFrame
 
 Der No-Skip-Sicht- und Audiopfad erreicht `FirstVisibleGameFrame`; die
 identische Vergleichsreihe stieg von `23,7959 MHz` auf `24,2926 MHz`
@@ -335,7 +366,7 @@ Der Detailvertrag steht in
 der uebergeordnete Kaltbuildvertrag in
 [`docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md`](docs/P0_NATIVE_DISC_COLD_BUILD_PERFORMANCE.md).
 
-## Aktueller Taskpfad
+## Historischer RuntimeOnly-Taskpfad
 
 | ID | Aufgabe | Ergebnis |
 |---|---|---|
@@ -347,7 +378,7 @@ der uebergeordnete Kaltbuildvertrag in
 | KR-4990 | Inkrementelle Contextual-Dependency-Views | nur bei positivem Kosten-/Reusegate werden unveraenderte View-Shards behalten |
 | KR-4991 | Versionierte monotone Context-Worklist | nur bei positivem G2 startet kausal freigesetzte Arbeit ohne globale Jacobi-Barriere |
 | KR-4993 | Abschlussreview der Candidate-Resolution-Pfade | [x] vollstaendiger Source-Endreview wiederverwendet; das Analyzer-ABI-Finding ist unter dem aktuellen Analyzer-ABI 34 geschlossen, Produktlimits bleiben KR-4981 vorbehalten |
-| KR-4981 | Einmaliges Sonic-Produktzeitgate | globales Produktgate; RuntimeOnly erreicht ohne Skip `FirstVisibleGameFrame` und den natuerlichen Audio-/Videopfad, liegt aber bei 24,2926 MHz statt mindestens 100 MHz und hat Memory-Card-Screen/Hauptmenue noch nicht erreicht; danach bleibt der Identity-Miss `0x8C054008 -> 0x8C9000E8` offen |
+| KR-4981 | Einmaliges Sonic-Produktzeitgate | historisches RuntimeOnly-Gate; `FirstVisibleGameFrame` und 24,2926 MHz belegt, durch das native Alpha-Gate KR-5005 abgeloest |
 | KR-4992 | Begrenzte Spekulation spaeterer Roots | nur nach einem verfehlten KR-4981 und positivem Restkosten-/RAM-Gate |
 | KR-4994 | Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier | [x] source-seitig abgeschlossen; begrenzter Pending-Carrier plus kanonisches absorbierendes Top fuer abgeschnittene Candidate-Domains ueber Merge/Normalisierung/Key/Persistenz/ABI-Promotion und Harvest; der Hybrid-Join-Befund bleibt historisch auf dem PlatformAbi-Pfad |
 | KR-4995 | AICA-ARM7-Ausfuehrung und Sound-Interrupt-Lifecycle | [x] in `e1d8ade` source-seitig abgeschlossen und mit Sonic produktseitig durch fortschreitenden Sofdec-Audiotakt, Readiness 1, Player-Status 5 und sichtbare Movie-Bildpublikation belegt |
@@ -358,7 +389,7 @@ Die Reihenfolge ist normativ:
 KR-4985/KR-4986/KR-4993/KR-4987/KR-4994/KR-4995 source-seitig abgeschlossen
   -> RuntimeOnly-Build-/Export-Gate bestanden
   -> No-Skip-Sonic-Audio-/Videopfad bis FirstVisibleGameFrame, 24,2926 MHz
-  -> denselben realen Audio-/Videopfad ohne Regression auf mindestens 100 MHz
+  -> historische RuntimeOnly-Performancezielmarke mindestens 100 MHz
   -> post-filmischen Identity-Miss 0x8C054008 -> 0x8C9000E8 schliessen
   -> beaufsichtigter Start bis mindestens Memory-Card-Screen/Hauptmenue
   -> PlatformAbi-Candidate-Resolution bleibt deferred und ist kein RuntimeOnly-
@@ -370,69 +401,68 @@ D1/G1 bleibt historisch unentschieden; D2/G2 ist abgeschlossen und negativ:
 kein positiver Schedulerhebel. D9 ist historisch beendet und Root 0
 konvergierte fail-closed ohne Portartefakt oder Produkterfolg. KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen; die
-PlatformAbi-Optimierungsbefunde bleiben deferred. KR-4981 bleibt als sichtbares
-Produktgate offen. KR-4982 und KR-4983 bleiben gestrichen.
+PlatformAbi-Optimierungsbefunde bleiben deferred. KR-4981 ist historische
+RuntimeOnly-Evidenz und durch KR-5005 abgeloest. KR-4982 und KR-4983 bleiben
+als alte optionale Offload-Aufgaben gestrichen.
 
-## Weiterer v0.49-Kritischer Pfad
+## v0.49.1-Kritischer Pfad
 
-Nach erfolgreicher Candidate-Resolution gilt:
+1. **Native Produktlinkgrenze**
+   - eigenes `native-port`-Produktprofil;
+   - kein ARM7-Interpreter, CPU-PVR, Diagnoseinterpreter oder vollstaendiges
+     Geraetemodell im Produktlink;
+   - fehlende native Bindungen enden typisiert und fail-closed.
 
-1. **NativeDisc-AOT-Produktnachweis**
-   - aktueller Port wird vollstaendig erzeugt;
-   - bekannte historische AOT-Grenzen werden durch statisches natives AOT
-     passiert oder durch einen engeren typisierten Blocker ersetzt;
-   - kein Interpreter, JIT oder Runtime-Dekoder uebernimmt fehlenden Code.
+2. **Statische Spiel-/SDK-Hookkarte**
+   - private Bring-up-Adressen werden zu Funktions- und Datengrenzen
+     zusammengefuehrt;
+   - Audio/Movie vor dem AICA-Kommandoring, Grafik vor dem PVR-
+     Geraeteprotokoll und Plattformdienste an ihren Bibliotheksgrenzen;
+   - Titelbindung bleibt im externen privaten Spielprojekt.
 
-2. **Produktgate und sichtbarer Fortschritt**
-   - relative Post-Entry-Gastarbeit;
-   - typisierte Fehlercodes;
-   - echter sichtbarer Frame statt technischer Hilfsmetrik.
-
-3. **CompletePlatform-/DirectBoot-Paritaet**
-   - frischer ABI-passender Handoff;
-   - atomarer Prepare-/Commitvertrag;
-   - VMU-/Save-Autoritaet bleibt erhalten;
-   - NativeDisc und DirectBoot stimmen am Game Entry normativ ueberein.
+3. **Native Hostimplementierungen**
+   - Audio/Movie ueber native Decoder-, Mixer- und Ausgabedienste;
+   - Grafik ueber eine native GPU-API;
+   - Disc, Eingabe und Save ueber native PC-Plattformdienste;
+   - keine Skips, erfundenen Statuswerte oder Ersatzframes.
 
 4. **Externes Spielprojekt und inkrementeller Build**
    - generierter Titelcode und Originaldaten bleiben lokal;
-   - Runtime-only- und Hook-only-Aenderungen vermeiden unnoetigen
-     SH-4-Neuexport;
-   - kein Sonic-Sonderfall im Katana-Kern.
+   - Hook-/Runtimeaenderungen vermeiden unnoetigen SH-4-Neuexport;
+   - der historische Exporter ist keine produktive Buildoption.
 
-5. **Xenon-artiger Hotpath**
-   - statisches AOT ohne Materializerarbeit im Normalfall;
-   - direkte native Calls und Returns ueber bewiesene Grenzen;
-   - IR-basierte Registerlokalisierung;
-   - ereignisgetriebene Safepoints;
-   - mindestens 200 MHz, Zielreserve 250 MHz unpaced.
+5. **Xenon-artiger nativer Hotpath**
+   - statisches AOT und direkte native Calls ueber bewiesene Grenzen;
+   - native GPU-/Audiowarteschlangen statt emulierter Geraeteschritte;
+   - reale Framezeit, Audio-Stabilitaet und Hostauslastung sind die primaeren
+     Produktmetriken.
 
 ## Produktmeilensteine
 
 ### B0 - Game Entry korrekt
 
 - Haupt-Executable aus der eigenen GDI identifiziert und hashgebunden;
-- vollstaendiger Post-IP.BIN-Handoff;
-- NativeDisc und DirectBoot besitzen gleiche normative Subsystemdigests.
+- statisch rekompilierter Einstieg ohne Interpreter/JIT;
+- native Hooktabelle ist identitaetsgebunden und vollstaendig.
 
-### B1 - Soundworker fortgeschritten
+### B1 - Nativer Audio-/Moviepfad
 
-- Gastwriter beziehungsweise engerer allgemeiner Blocker belegt;
-- kein direktes Hostsetzen eines Completion-Flags;
-- AICA-/G2-/DMA-/IRQ-/Schedulerkante bleibt typisiert.
+- mwSnd-/CRI-/ADXT-/Sofdec-Grenzen rufen native Hostdienste;
+- Opening laeuft ohne Skip und mit echtem Ton;
+- kein ARM7-Interpreter oder AICA-Firmwarepfad ist gelinkt.
 
-### B2 - Sichtbares Spielbild
+### B2 - Nativer GPU-Pfad
 
-- Haupt-Executable erzeugt Direct-FB- oder TA-Ausgabe;
-- aktiver Scanout liest den echten Gastbereich;
-- Host praesentiert den Frame;
+- echte Spielrenderarbeit wird von der PC-GPU ausgefuehrt und praesentiert;
+- kein CPU-PVR-Softwarerasterizer ist gelinkt;
 - ein uniformer Clear- oder Fehlerframe gilt nicht als Spielfortschritt.
 
-### B3 - Echtzeit
+### B3 - Native Echtzeit
 
-- mindestens 200 MHz effektive Gastgeschwindigkeit;
-- Zielreserve mindestens 250 MHz unpaced;
-- billige Produktdiagnose verwendet denselben schnellen Pfad.
+- stabiles 60-Hz-Framepacing ohne Audio-Unterlaeufe;
+- reale Framezeit, CPU-/GPU-Zeit, Hostauslastung und Eingabelatenz sind
+  innerhalb des Produktbudgets;
+- billige Produktdiagnose verwendet denselben nativen Pfad.
 
 ### B4 - Titelbild und Eingabe
 
@@ -467,20 +497,23 @@ Nach erfolgreicher Candidate-Resolution gilt:
 - neue Test-, Konformitaets- oder Threadmatrizen;
 - weitere Controller-Haertung.
 
-## v0.49 Definition of Done
+## v0.49.1 Definition of Done
 
-`v0.49.0` ist erst abgeschlossen, wenn:
+`v0.49.1` ist abgeschlossen und gibt `v0.50.0 Alpha` erst frei, wenn:
 
 - Recompiler, Runtime und externes Spielprojekt getrennt gebaut werden
   koennen;
 - die Haupt-Executable aus der Original-GDI lokal installiert wird;
-- Candidate-Resolution ohne Context-/Evaluationslimit und ohne
-  `incomplete-root` abschliesst;
-- DirectBoot einen vollstaendigen, produktsicheren Post-IP.BIN-Handoff nutzt;
-- Soundfortschritt und erster sichtbarer Spiel-/TA-Frame erreicht werden;
-- NativeDisc und DirectBoot ab Game Entry normativ uebereinstimmen;
-- der normale Produktport mindestens 200 MHz erreicht;
-- VMU/Saves durch den Handoff nicht zurueckgesetzt werden;
+- das Produktbinary weder ARM7-Interpreter noch CPU-PVR oder einen
+  vollstaendigen Dreamcast-Geraeteverbund enthaelt;
+- Audio/Movie, GPU-Grafik, Disc, Eingabe und Save nativ gebunden sind;
+- Opening und Memory-Card-Pfad ohne Skip oder Ersatzpfad durchlaufen;
+- Sonic ueber diesen rein nativen Pfad das Hauptmenue erreicht;
+- VMU/Saves nativ und atomar erhalten bleiben;
+- normale Iterationen inkrementell ohne historischen Vollreexport bauen;
 - keine Sonic-Sonderfaelle oder Retailbytes im generischen Katana-Kern
   liegen;
 - keine neue Testsuite oder Testmatrix den Sonic-Produktnachweis ersetzt.
+
+Dreamcast-MHz sind kein Versionsgate mehr. Reale Ladezeit, Framezeit,
+Audio-Stabilitaet, Hostauslastung und Eingabelatenz bewerten den nativen Port.
