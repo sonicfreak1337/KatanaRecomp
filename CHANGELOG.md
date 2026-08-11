@@ -39,7 +39,7 @@
   Closure.
 
 - Runtime-ABI `96`, Analyzer-ABI `36`, Backend-Interface-ABI `20`,
-  Portprojektvertrag `84`, Native-Port-Profilvertrag `8`, Hardwareaudit-Schema
+  Portprojektvertrag `85`, Native-Port-Profilvertrag `8`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
@@ -66,7 +66,7 @@
   Dokumentations-/Source-Checkpoint wurden keine Tests oder neuen
   Sonic-Laeufe ausgefuehrt; der naechste aktive Task ist KR-5002.
 
-- Portprojektvertrag `84` macht den schnellsten Hostbuild zum
+- Portprojektvertrag `85` macht den schnellsten Hostbuild zum
   Bring-up-Standard: generierte AOT-TUs verwenden `/Od /Ob0`, eingebettete
   statt gemeinsam serialisierter MSVC-Debuginformation, einen separaten
   Vierer-Ninja-Pool und 4.096 Dispatch-Eintraege pro Shard. Runtime,
@@ -76,6 +76,13 @@
   Sonic-Export erzeugte mit 233 Host-TUs in `408,278 s` ein
   `473.506.304` Byte grosses Produktbinary; davon entfielen `337,205 s` auf
   den Hostbuild. Der Post-Link-Audit blieb erfolgreich.
+
+- Portprojektvertrag `85` trennt die verifizierte Titelinitialisierung von
+  der laufenden AOT-Integritaetsueberwachung. Der private Bootstrap darf das
+  identity-bound initiale RAM-Abbild fertigstellen, bevor Immutable-Write-
+  Guard und AOT-Bruecken aktiviert werden. Danach sind Pointer-, Stop- und
+  Bridgevertrag unveraenderbar und jeder Laufzeitschreibzugriff bleibt
+  fail-closed. Bootstrapfehler melden ihren exakten Titel-Fehlercode.
 
 - KR-5001 schliesst die deterministische Native-Hookanforderungskarte
   `metadata/native-hook-requirements.json` und die Hardware-Closure mit

@@ -131,7 +131,7 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
   zurueckfallen.
 
 KR-5000 bindet diese Grenze an Runtime-ABI `96`, Analyzer-ABI `36`, Backend-
-Interface-ABI `20`, Portprojektvertrag `84` und Native-Port-Profilvertrag `8`.
+Interface-ABI `20`, Portprojektvertrag `85` und Native-Port-Profilvertrag `8`.
 Der historische
 GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
 enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -165,6 +165,14 @@ Audit fail-closed. Der generierte Native-Produkt-Runner verlangt eine
 Executable und einen privaten ContentRoot, validiert beide Pfade und verwendet
 den expliziten Bring-up-Schalter nur bei unvollstaendiger Closure. Einen
 historischen Guest-Cycle-Budgetpfad oder einen stillen Fallback gibt es nicht.
+
+Der Titelbootstrap laeuft genau einmal nach der verifizierten
+Imagematerialisierung und vor jedem rekompilierten Spieleintritt. Er darf das
+identity-bound initiale RAM-Abbild und nativen Titelzustand fertigstellen;
+weder AOT-Bruecken noch Gastcode sind in dieser Phase verfuegbar. Nach
+erfolgreicher Rueckkehr werden Kontextpointer und Stopzustand validiert, erst
+dann werden Immutable-Write-Guard und AOT-Bruecken aktiviert. Spaetere
+Code-/Read-only-Writes bleiben dadurch weiterhin typisierte Produktfehler.
 
 KR-5001 erzeugt automatisch `metadata/native-hook-requirements.json` als
 deterministische Hookanforderungskarte. Function-/Instruction-Replacement ist

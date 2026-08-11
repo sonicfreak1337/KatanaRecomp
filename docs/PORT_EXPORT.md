@@ -168,7 +168,7 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `84` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `85` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
@@ -181,6 +181,12 @@ Grenzen/Eigentuemer/Entrys/Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge
 gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
 Schalter ist darauf begrenzt.
+
+Der identity-bound Titelbootstrap materialisiert initialen RAM-/Titelzustand
+vor Aktivierung der Laufzeit-Immutable-Guards. In dieser Phase stehen keine
+AOT-Bruecken und kein Gastcode zur Verfuegung. Erst eine erfolgreiche
+Rueckkehr mit unveraenderten Kontextdiensten aktiviert den statischen
+Dispatch; Fehler enthalten den exakten Bootstrapcode.
 
 KR-5002 bindet fuer Audio/Movie den in-process LGPL-Shared-FFmpeg/libav-
 Provider und WinMM PCM ein. Die installierbare Runtime-Closure umfasst genau

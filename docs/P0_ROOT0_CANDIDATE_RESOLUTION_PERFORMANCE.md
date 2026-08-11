@@ -2,7 +2,7 @@
 
 Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
 Vorrang. Aktuell gelten Runtime-ABI 96, Analyzer-ABI 36,
-Portprojektvertrag 84 und Native-Port-Profilvertrag 8. Der source-seitige
+Portprojektvertrag 85 und Native-Port-Profilvertrag 8. Der source-seitige
 KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
 Diagnostik. Der damalige RuntimeOnly-Bring-up verwendete Analyzer-ABI 34,

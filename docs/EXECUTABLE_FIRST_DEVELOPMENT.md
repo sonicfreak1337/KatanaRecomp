@@ -81,7 +81,7 @@ Ein Treffer ist an
 `Analyse-/IR-Cache-Hit: ja` erkennbar. Dieser Whole-Export-Cache gilt fuer
 `port-executable` beziehungsweise `probe-port-executable`; der GDI-basierte
 NativeDiscBoot-Export behaelt seine Partitions- und Metadatencaches.
-Portprojektvertrag 84 bindet den aktuellen Spielprojektvertrag 5,
+Portprojektvertrag 85 bindet den aktuellen Spielprojektvertrag 5,
 GameProject-Artefaktformat 4, die `katana-game-project-v4`-Metadaten und den
 getrennten Game-Entry-Vertrag in diesen Schluessel und invalidiert damit aeltere
 Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze
@@ -127,7 +127,7 @@ bereit.
 
 Der aktuelle KR-5000-Stand verwendet GameEntryHandoff-Artefaktformat 2,
 Runtime-ABI 96, Block-ABI 5, Analyzer-ABI 36, PlatformServices-ABI 14,
-Backend-Interface-ABI 20, Portprojektvertrag 84, Native-AOT-Profil 27,
+Backend-Interface-ABI 20, Portprojektvertrag 85, Native-AOT-Profil 27,
 Partitionsschema 7 und Plattformzustandsvertrag 2. Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
 Evidenz und muessen fuer einen spaeteren DirectBoot-Produktlauf neu fuer den

@@ -31,7 +31,7 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `8`, Portprojektvertrag `84` und der Linkmap-Audit verhindern
+Profilvertrag `8`, Portprojektvertrag `85` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
 NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
@@ -97,7 +97,7 @@ Funktionaler Source-Stand: aktueller KR-5004-Architekturreview-Checkpoint.
 Aktuell gelten Runtime-ABI `96`,
 PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`20`, PVR-State-Contract `3`, Portprojektvertrag `84` und Native-Port-
+`20`, PVR-State-Contract `3`, Portprojektvertrag `85` und Native-Port-
 Profilvertrag `8`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie

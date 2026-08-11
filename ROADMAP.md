@@ -140,7 +140,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `84`, Native-Port-Profilvertrag `8` und
+kein Portprofil. Portprojektvertrag `85`, Native-Port-Profilvertrag `8` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -189,7 +189,7 @@ vollstaendige originale SFD-Opening-Stream lief ohne Skip bis EOS und endete
 4.709.760 Audioframes und 3.257 GPU-Presents. Der naechste aktive Task ist
 `KR-5005`.
 
-KR-5005 verwendet ab Portprojektvertrag `84` einen echten schnellen
+KR-5005 verwendet ab Portprojektvertrag `85` einen echten schnellen
 Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
 und einem gemessenen Vierer-Ninja-Pool; eine gemeinsame MSVC-PDB ist
 ausgeschlossen, und 4.096 Dispatch-Eintraege pro Shard vermeiden Hunderte
@@ -200,6 +200,13 @@ mit `/O1` auf `4,560 s` mit `/Od`. Der anschliessende kalte Vollport schrieb
 233 Host-TUs, beendete Export und Packaging in `408,278 s` bei `337,205 s`
 Hostbuildzeit und bestand den Post-Link-Audit. Die sichtbare Produktabnahme
 folgt im laufenden KR-5005-Port.
+
+Der erste Lauf dieses Binaries lokalisierte zudem eine generische
+Bootstrapluecke: identity-bound Titel-RAM musste vor den Laufzeit-
+Immutable-Guards materialisiert werden, AOT-Bruecken durften dabei aber noch
+nicht aktiv sein. Portprojektvertrag `85` schliesst diese Reihenfolge
+fail-closed; nach erfolgreichem Bootstrap beginnt erst der ueberwachte
+statische AOT-Lauf.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -246,7 +253,7 @@ letzte reale Produktevidenz:
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
   Runtime-ABI 96, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 84, Native-Port-Profilvertrag 8
+  PVR-State-Contract 3, Portprojektvertrag 85, Native-Port-Profilvertrag 8
   Analyzer-ABI 36
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13

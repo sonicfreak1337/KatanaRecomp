@@ -141,8 +141,11 @@ struct NativePortBootstrap final {
     std::uint32_t status_register = 0u;
     std::uint32_t fpscr = 0u;
     // Required title-owned symbol called after verified image mapping and
-    // before the first recompiled game entry.  It initializes native title
-    // state only; it must not boot firmware or construct guest devices.
+    // before the first recompiled game entry. It may finish the initial
+    // identity-bound RAM image and native title state while runtime write
+    // guards are deliberately inactive. AOT bridges and guest execution are
+    // unavailable until it returns successfully; it must not boot firmware
+    // or construct guest devices.
     std::string_view symbol;
 };
 

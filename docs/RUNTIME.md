@@ -16,7 +16,7 @@ das native Produktprofil mit ausschliesslich erforderlichen Hostdiensten ab.
 
 Der aktuelle KR-5004-Stand verwendet Runtime-ABI `96`, Block-ABI `5`,
 Analyzer-ABI `36`, PlatformServices-ABI `14`, Backend-Interface-ABI `20`,
-Portprojektvertrag `84`, Native-AOT-Emissionsprofil `27` und
+Portprojektvertrag `85`, Native-AOT-Emissionsprofil `27` und
 Portpartitionsschema `7`. Historische Runtime-/Diagnoseangaben bleiben an
 ihre damaligen Vertraege gebunden; der naechste aktive Task ist KR-5001.
 
