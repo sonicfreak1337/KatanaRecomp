@@ -119,6 +119,52 @@ macro(katana_append_component_file material relative_path)
         "${katana_component_digest};")
 endmacro()
 
+macro(katana_append_component_region material relative_path region_name)
+    set(katana_component_absolute
+        "${KATANA_COMPONENT_IDENTITY_ROOT}/${relative_path}")
+    if(NOT EXISTS "${katana_component_absolute}" OR
+       IS_DIRECTORY "${katana_component_absolute}")
+        message(FATAL_ERROR
+            "Component identity region input is missing: ${relative_path}")
+    endif()
+    file(READ "${katana_component_absolute}" katana_component_region_source)
+    set(katana_component_region_begin
+        "// KATANA_COMPONENT_IDENTITY_REGION_BEGIN ${region_name}")
+    set(katana_component_region_end
+        "// KATANA_COMPONENT_IDENTITY_REGION_END ${region_name}")
+    string(FIND "${katana_component_region_source}"
+        "${katana_component_region_begin}" katana_component_region_begin_index)
+    string(FIND "${katana_component_region_source}"
+        "${katana_component_region_end}" katana_component_region_end_index)
+    if(katana_component_region_begin_index LESS 0 OR
+       katana_component_region_end_index LESS 0 OR
+       katana_component_region_end_index LESS_EQUAL
+           katana_component_region_begin_index)
+        message(FATAL_ERROR
+            "Component identity region is missing or malformed: "
+            "${relative_path}|${region_name}")
+    endif()
+    string(LENGTH "${katana_component_region_begin}"
+        katana_component_region_begin_length)
+    math(EXPR katana_component_region_content_begin
+        "${katana_component_region_begin_index} + ${katana_component_region_begin_length}")
+    math(EXPR katana_component_region_content_length
+        "${katana_component_region_end_index} - ${katana_component_region_content_begin}")
+    string(SUBSTRING "${katana_component_region_source}"
+        ${katana_component_region_content_begin}
+        ${katana_component_region_content_length}
+        katana_component_region_content)
+    string(SHA256 katana_component_region_digest
+        "${katana_component_region_content}")
+    set(katana_component_region_key "${relative_path}|${region_name}")
+    string(LENGTH "${katana_component_region_key}"
+        katana_component_region_key_length)
+    string(APPEND ${material}
+        "region:${katana_component_region_key_length}:"
+        "${katana_component_region_key}:"
+        "${katana_component_region_digest};")
+endmacro()
+
 set(katana_toolchain_material
     "compiler-id=${KATANA_COMPONENT_COMPILER_ID};"
     "compiler-version=${KATANA_COMPONENT_COMPILER_VERSION};"
@@ -195,6 +241,37 @@ endforeach()
 string(SHA256 KATANA_CODEGEN_COMPONENT_IDENTITY
        "${katana_codegen_material}")
 
+# Partition source cache entries depend only on the native request builder and
+# C++ emitter closure. Export orchestration, manifests, packaging and metadata
+# must not evict every expensive AOT partition when emitted block code is
+# unchanged.
+set(katana_partition_codegen_material
+    "katana-partition-codegen-component-v1;${katana_toolchain_material}")
+katana_expand_component_dependency_closure(
+    KATANA_PARTITION_CODEGEN_IDENTITY_CLOSURE
+    FALSE
+    ${KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS})
+foreach(katana_component_file
+        IN LISTS KATANA_PARTITION_CODEGEN_IDENTITY_CLOSURE)
+    katana_append_component_file(
+        katana_partition_codegen_material "${katana_component_file}")
+endforeach()
+foreach(katana_component_region
+        IN LISTS KATANA_PARTITION_CODEGEN_IDENTITY_REGIONS)
+    if(NOT katana_component_region MATCHES
+       "^([^|]+)[|]([A-Za-z0-9_-]+)$")
+        message(FATAL_ERROR
+            "Malformed partition codegen identity region: "
+            "${katana_component_region}")
+    endif()
+    katana_append_component_region(
+        katana_partition_codegen_material
+        "${CMAKE_MATCH_1}"
+        "${CMAKE_MATCH_2}")
+endforeach()
+string(SHA256 KATANA_PARTITION_CODEGEN_COMPONENT_IDENTITY
+       "${katana_partition_codegen_material}")
+
 set(katana_orchestration_material
     "katana-orchestration-component-v1;${katana_toolchain_material}")
 katana_expand_component_dependency_closure(
@@ -224,6 +301,8 @@ inline constexpr std::string_view ir_component_identity =
     \"${KATANA_IR_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view codegen_component_identity =
     \"${KATANA_CODEGEN_COMPONENT_IDENTITY}\";
+inline constexpr std::string_view partition_codegen_component_identity =
+    \"${KATANA_PARTITION_CODEGEN_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view orchestration_component_identity =
     \"${KATANA_ORCHESTRATION_COMPONENT_IDENTITY}\";
 

@@ -298,6 +298,8 @@ class NativePortDesktopHost final : public NativePortHostServices {
     [[nodiscard]] NativePortLifecycleState poll_lifecycle() override;
     void begin_frame(std::uint64_t frame_index) override;
     void present_frame(std::uint64_t frame_index) override;
+    [[nodiscard]] std::uint64_t presented_frames()
+        const noexcept override;
 
     [[nodiscard]] NativePortGraphicsDevice& graphics() noexcept;
     [[nodiscard]] const NativePortGraphicsDevice& graphics() const noexcept;

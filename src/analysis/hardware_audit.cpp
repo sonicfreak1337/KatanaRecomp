@@ -734,6 +734,47 @@ struct EffectiveAccessSet {
     bool complete = false;
 };
 
+std::uint32_t project_runtime_image_access(
+    const io::ExecutableImage& image,
+    const std::uint32_t instruction_address,
+    const std::uint32_t address,
+    const std::uint8_t width) noexcept {
+    if (width == 0u) return address;
+    const auto instruction =
+        static_cast<std::uint64_t>(instruction_address);
+    for (const auto& alias : image.address_aliases()) {
+        const auto source_begin =
+            static_cast<std::uint64_t>(alias.source_start);
+        const auto source_end = source_begin + alias.size;
+        if (instruction < source_begin || instruction + 2u > source_end)
+            continue;
+
+        std::optional<std::uint64_t> offset;
+        const auto access_begin = static_cast<std::uint64_t>(address);
+        if (access_begin >= source_begin &&
+            access_begin + width <= source_end) {
+            offset = access_begin - source_begin;
+        } else if (address < 0xE0000000u &&
+                   alias.source_start < 0xE0000000u) {
+            const auto access_physical =
+                static_cast<std::uint64_t>(address & 0x1FFFFFFFu);
+            const auto source_physical =
+                static_cast<std::uint64_t>(
+                    alias.source_start & 0x1FFFFFFFu);
+            if (access_physical >= source_physical &&
+                access_physical + width <=
+                    source_physical + alias.size)
+                offset = access_physical - source_physical;
+        }
+        if (!offset.has_value()) return address;
+        const auto projected =
+            static_cast<std::uint64_t>(alias.runtime_start) + *offset;
+        if (projected + width > 0x1'0000'0000ull) return address;
+        return static_cast<std::uint32_t>(projected);
+    }
+    return address;
+}
+
 bool is_memory_access_instruction(const sh4::InstructionKind kind) noexcept {
     const auto operation = ir::lowering_operation_for_instruction(kind);
     const auto effects = ir::instruction_memory_effects(operation);
@@ -1569,10 +1610,17 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     const auto access_set = effective_accesses(
                         block.lines[line_index], trace[line_index].before, gbr_trace[line_index]);
                     for (const auto& access : access_set.accesses) {
-                        const auto description = describe(access.address);
+                        const auto projected_address =
+                            project_runtime_image_access(
+                                image,
+                                block.lines[line_index].address,
+                                access.address,
+                                access.width);
+                        const auto description =
+                            describe(projected_address);
                         HardwareLoopAccessEvidence evidence;
                         evidence.instruction_address = block.lines[line_index].address;
-                        evidence.guest_address = access.address;
+                        evidence.guest_address = projected_address;
                         evidence.canonical_address = loop_canonical_address(description);
                         evidence.region = description.region;
                         evidence.kind = access.kind;
@@ -1860,7 +1908,13 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                 }
                 std::map<ReferenceKey, AggregatedReference> context_references;
                 for (const auto& access : access_set.accesses) {
-                    const auto description = describe(access.address);
+                    const auto projected_address =
+                        project_runtime_image_access(
+                            image,
+                            lines[index].address,
+                            access.address,
+                            access.width);
+                    const auto description = describe(projected_address);
                     // Unknown is ordinary memory only inside the verified
                     // linear main-RAM aperture. A statically resolved access
                     // anywhere else is an unmapped native-product dependency,
@@ -1871,7 +1925,7 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                         continue;
                     HardwareAccessReference reference;
                     reference.instruction_address = lines[index].address;
-                    reference.guest_address = access.address;
+                    reference.guest_address = projected_address;
                     reference.canonical_address = description.canonical;
                     reference.region = description.region;
                     reference.kind = access.kind;

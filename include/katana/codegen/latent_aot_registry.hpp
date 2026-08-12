@@ -1,5 +1,6 @@
 #pragma once
 
+#include "katana/analysis/hardware_audit.hpp"
 #include "katana/ir/ir.hpp"
 #include "katana/progress.hpp"
 #include "katana/runtime/disc.hpp"
@@ -136,6 +137,7 @@ struct PreparedLatentAotModule {
     // discovery; source bytes do not.
     std::vector<PreparedLatentAotBlockIdentity> block_identities;
     std::vector<katana::ir::Function> program;
+    katana::analysis::DreamcastHardwareAudit hardware_audit;
 };
 
 struct LatentAotDiscovery {

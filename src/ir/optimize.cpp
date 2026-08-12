@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -17,6 +18,74 @@ namespace {
 
 using Constants = std::array<std::optional<std::uint32_t>, 16>;
 using Aliases = std::array<std::optional<std::uint8_t>, 16>;
+
+struct DispatchabilityIndex {
+    std::unordered_set<std::uint32_t> block_entries;
+    std::unordered_set<std::uint32_t> instruction_continuations;
+};
+
+DispatchabilityIndex make_dispatchability_index(
+    const OptimizationDispatchabilityContract& contract) {
+    DispatchabilityIndex result;
+    result.block_entries.reserve(contract.entries.size());
+    result.instruction_continuations.reserve(contract.entries.size());
+    std::unordered_set<std::uint32_t> addresses;
+    addresses.reserve(contract.entries.size());
+    for (const auto& entry : contract.entries) {
+        if (entry.address == 0u || (entry.address & 1u) != 0u ||
+            !addresses.insert(entry.address).second)
+            throw std::invalid_argument(
+                "Externer IR-Dispatch-Eintritt ist ungueltig oder "
+                "doppelt deklariert.");
+        switch (entry.kind) {
+        case ExternalDispatchEntryKind::BlockEntry:
+            result.block_entries.insert(entry.address);
+            break;
+        case ExternalDispatchEntryKind::InstructionContinuation:
+            result.instruction_continuations.insert(entry.address);
+            break;
+        default:
+            throw std::invalid_argument(
+                "Externer IR-Dispatch-Eintritt besitzt eine ungueltige "
+                "Art.");
+        }
+    }
+    return result;
+}
+
+void require_dispatchability_contract(
+    const std::span<const Function> program,
+    const DispatchabilityIndex& contract) {
+    if (contract.block_entries.empty() &&
+        contract.instruction_continuations.empty())
+        return;
+
+    std::unordered_set<std::uint32_t> found_blocks;
+    std::unordered_set<std::uint32_t> found_continuations;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            if (contract.block_entries.contains(block.start_address))
+                found_blocks.insert(block.start_address);
+            for (const auto& instruction : block.instructions) {
+                if (!contract.instruction_continuations.contains(
+                        instruction.source_address))
+                    continue;
+                if (instruction.delay_slot.role == DelaySlotRole::Slot)
+                    throw std::invalid_argument(
+                        "Externe IR-Instruktionsfortsetzung liegt in einem "
+                        "Delay Slot.");
+                found_continuations.insert(instruction.source_address);
+            }
+        }
+    }
+    if (found_blocks.size() != contract.block_entries.size())
+        throw std::invalid_argument(
+            "Extern erreichbarer IR-Blockeintritt fehlt.");
+    if (found_continuations.size() !=
+        contract.instruction_continuations.size())
+        throw std::invalid_argument(
+            "Extern erreichbare IR-Instruktionsfortsetzung fehlt.");
+}
 
 void canonicalize(Instruction& instruction) {
     instruction.widths = operation_operand_widths(instruction.operation);
@@ -380,13 +449,27 @@ OptimizationResult eliminate_dead_block_code(BasicBlock& block) {
     return result;
 }
 
-OptimizationResult simplify_function_cfg(Function& function) {
+OptimizationResult simplify_function_cfg(
+    Function& function,
+    const DispatchabilityIndex& dispatchability) {
     std::unordered_map<std::uint32_t, const BasicBlock*> block_by_address;
     block_by_address.reserve(function.blocks.size());
     for (const auto& block : function.blocks)
         block_by_address.emplace(block.start_address, &block);
     std::unordered_set<std::uint32_t> reachable;
     std::vector<std::uint32_t> worklist = {function.entry_address};
+    for (const auto& block : function.blocks) {
+        if (dispatchability.block_entries.contains(
+                block.start_address))
+            worklist.push_back(block.start_address);
+        if (std::any_of(
+                block.instructions.begin(), block.instructions.end(),
+                [&](const auto& instruction) {
+                    return dispatchability.instruction_continuations
+                        .contains(instruction.source_address);
+                }))
+            worklist.push_back(block.start_address);
+    }
     while (!worklist.empty()) {
         const auto address = worklist.back();
         worklist.pop_back();
@@ -503,9 +586,20 @@ OptimizationResult eliminate_dead_code(Function& function) {
 }
 
 OptimizationResult simplify_cfg(Function& function) {
+    return simplify_cfg(function, OptimizationDispatchabilityContract{});
+}
+
+OptimizationResult simplify_cfg(
+    Function& function,
+    const OptimizationDispatchabilityContract& dispatchability) {
     require_valid_function(function);
-    const auto result = simplify_function_cfg(function);
+    const auto index = make_dispatchability_index(dispatchability);
+    const std::span<const Function> single_function(&function, 1u);
+    require_dispatchability_contract(single_function, index);
+    const auto result = simplify_function_cfg(
+        function, index);
     require_valid_function(function);
+    require_dispatchability_contract(single_function, index);
     return result;
 }
 
@@ -522,6 +616,19 @@ OptimizationResult simplify_load_store(Function& function) {
 OptimizationPipelineReport optimize_program(std::vector<Function>& program,
                                             const OptimizationOptions& options,
                                             const katana::ProgressReporter& progress) {
+    return optimize_program(
+        program, options, progress,
+        OptimizationDispatchabilityContract{});
+}
+
+OptimizationPipelineReport optimize_program(
+    std::vector<Function>& program,
+    const OptimizationOptions& options,
+    const katana::ProgressReporter& progress,
+    const OptimizationDispatchabilityContract& dispatchability) {
+    const auto dispatchability_index =
+        make_dispatchability_index(dispatchability);
+    require_dispatchability_contract(program, dispatchability_index);
     OptimizationPipelineReport report;
     const auto enabled_passes =
         static_cast<std::size_t>(options.constant_folding) +
@@ -543,13 +650,18 @@ OptimizationPipelineReport optimize_program(std::vector<Function>& program,
         return report;
     }
 
-    using Pass = OptimizationResult (*)(Function&);
     const auto run_pass =
-        [&program, &options, &report, &optimization_progress](
+        [&program,
+         &options,
+         &report,
+         &optimization_progress,
+         &dispatchability_index](
             const char* name,
             const bool enabled,
-            const Pass pass) {
+            const auto& pass) {
             if (!enabled) return;
+            require_dispatchability_contract(
+                program, dispatchability_index);
             OptimizationPassReport pass_report;
             pass_report.name = name;
             if (options.capture_dumps) {
@@ -559,6 +671,8 @@ OptimizationPipelineReport optimize_program(std::vector<Function>& program,
                 pass_report.changes += pass(function).changes;
                 optimization_progress.advance(1u);
             }
+            require_dispatchability_contract(
+                program, dispatchability_index);
             if (options.capture_dumps) {
                 pass_report.after = emit_ir_text(program);
             }
@@ -569,7 +683,16 @@ OptimizationPipelineReport optimize_program(std::vector<Function>& program,
     run_pass("constant-folding", options.constant_folding, fold_constants);
     run_pass("copy-propagation", options.copy_propagation, propagate_copies);
     run_pass("dead-code-elimination", options.dead_code_elimination, eliminate_dead_code);
-    run_pass("cfg-simplification", options.cfg_simplification, simplify_cfg);
+    run_pass(
+        "cfg-simplification",
+        options.cfg_simplification,
+        [&](Function& function) {
+            require_valid_function(function);
+            const auto result = simplify_function_cfg(
+                function, dispatchability_index);
+            require_valid_function(function);
+            return result;
+        });
     run_pass("load-store-simplification", options.load_store_simplification, simplify_load_store);
     optimization_progress.complete();
     return report;

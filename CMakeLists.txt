@@ -283,6 +283,20 @@ file(
     "include/katana/io/*.hpp"
     "include/katana/platform/*.hpp"
 )
+set(
+    KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS
+    "include/katana/codegen/backend.hpp"
+    "include/katana/codegen/cpp_emitter.hpp"
+    "include/katana/codegen/native_aot_profile.hpp"
+    "src/codegen/backend.cpp"
+    "src/codegen/cpp_emitter.cpp"
+    "src/codegen/native_aot_profile.cpp"
+)
+set(
+    KATANA_PARTITION_CODEGEN_IDENTITY_REGIONS
+    "src/codegen/port_export.cpp|select-functions"
+    "src/codegen/port_export.cpp|emit-partitions"
+)
 list(
     REMOVE_ITEM
     KATANA_CODEGEN_IDENTITY_INPUTS
@@ -338,11 +352,13 @@ list(REMOVE_DUPLICATES KATANA_ANALYSIS_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_IR_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_CODEGEN_IDENTITY_INPUTS)
+list(REMOVE_DUPLICATES KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_ORCHESTRATION_IDENTITY_INPUTS)
 list(SORT KATANA_ANALYSIS_IDENTITY_INPUTS)
 list(SORT KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS)
 list(SORT KATANA_IR_IDENTITY_INPUTS)
 list(SORT KATANA_CODEGEN_IDENTITY_INPUTS)
+list(SORT KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS)
 list(SORT KATANA_ORCHESTRATION_IDENTITY_INPUTS)
 file(
     GLOB_RECURSE
@@ -380,6 +396,7 @@ foreach(
         KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS
         KATANA_IR_IDENTITY_INPUTS
         KATANA_CODEGEN_IDENTITY_INPUTS
+        KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS
         KATANA_ORCHESTRATION_IDENTITY_INPUTS
 )
     list(

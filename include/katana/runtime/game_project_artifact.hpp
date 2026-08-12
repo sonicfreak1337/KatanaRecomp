@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t game_project_artifact_format_version = 4u;
+inline constexpr std::uint32_t game_project_artifact_format_version = 5u;
 inline constexpr std::uint64_t game_project_artifact_maximum_size =
     96u * 1024u * 1024u;
 

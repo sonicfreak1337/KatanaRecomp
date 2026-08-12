@@ -14,9 +14,9 @@ das native Produktprofil mit ausschliesslich erforderlichen Hostdiensten ab.
 
 ## ABI
 
-Der aktuelle KR-5004-Stand verwendet Runtime-ABI `96`, Block-ABI `5`,
+Der aktuelle KR-5005-Stand verwendet Runtime-ABI `97`, Block-ABI `5`,
 Analyzer-ABI `36`, PlatformServices-ABI `14`, Backend-Interface-ABI `20`,
-Portprojektvertrag `85`, Native-AOT-Emissionsprofil `27` und
+Portprojektvertrag `86`, Native-AOT-Emissionsprofil `29` und
 Portpartitionsschema `7`. Historische Runtime-/Diagnoseangaben bleiben an
 ihre damaligen Vertraege gebunden; der naechste aktive Task ist KR-5001.
 
@@ -732,9 +732,9 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der aktuelle KR-5004-Stand verwendet Runtime-ABI 96,
+umgebenden Wrappers. Der aktuelle KR-5005-Stand verwendet Runtime-ABI 97,
 Block-ABI 5, Analyzer-ABI 36, Backend-Interface-ABI 20,
-PlatformServices-ABI 14, Portvertrag 84, Native-AOT-Emissionsprofil 27 und
+PlatformServices-ABI 14, Portvertrag 86, Native-AOT-Emissionsprofil 29 und
 Portpartitionsschema 7. Der Host-Video-Vertrag steht auf Version 3; die
 Beobachtungsgrenze steht auf Systemreplay-Schema 8, Runtime-Probe-Schema 5
 und Device-Schema 6.

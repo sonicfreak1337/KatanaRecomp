@@ -49,6 +49,8 @@ resolved_edge_evidence(const ResolvedControlFlowEdge& edge) noexcept {
 [[nodiscard]] std::vector<BasicBlock>
 build_basic_blocks(std::span<const katana::sh4::DisassemblyLine> lines,
                    std::span<const ResolvedControlFlowEdge> resolved_edges = {},
-                   std::span<const std::uint32_t> additional_leaders = {});
+                   std::span<const std::uint32_t> additional_leaders = {},
+                   std::span<const std::uint32_t>
+                       normal_entry_leaders = {});
 
 } // namespace katana::analysis

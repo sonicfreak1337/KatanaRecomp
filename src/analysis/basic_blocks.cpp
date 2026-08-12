@@ -51,7 +51,9 @@ std::size_t find_controlling_instruction(const BasicBlock& block) {
 std::vector<BasicBlock>
 build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
                    const std::span<const ResolvedControlFlowEdge> resolved_edges,
-                   const std::span<const std::uint32_t> additional_leaders) {
+                   const std::span<const std::uint32_t> additional_leaders,
+                   const std::span<const std::uint32_t>
+                       explicit_normal_entry_leaders) {
     if (lines.empty()) {
         return {};
     }
@@ -102,6 +104,13 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
             target != address_to_index.end()) {
             leaders.insert(target->second);
             normal_entry_leaders.insert(target->second);
+        }
+    }
+    for (const auto address : explicit_normal_entry_leaders) {
+        if (const auto leader = address_to_index.find(address);
+            leader != address_to_index.end()) {
+            leaders.insert(leader->second);
+            normal_entry_leaders.insert(leader->second);
         }
     }
     for (const auto address : additional_leaders) {

@@ -75,6 +75,13 @@ containing_function_range(
                                                            : nullptr;
 }
 
+[[nodiscard]] bool exact_function_range_strictly_contains(
+    const std::span<const ExactFunctionRange> ranges,
+    const std::uint32_t address) noexcept {
+    const auto* range = containing_function_range(ranges, address);
+    return range != nullptr && address != range->start;
+}
+
 void enqueue(std::deque<PendingAddress>& pending,
              std::unordered_set<PendingAddress, PendingAddressHash>& scheduled,
              const std::uint32_t address,
@@ -917,7 +924,9 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
             if (line.target_address.has_value()) {
                 enqueue(pending, scheduled, *line.target_address, address, std::nullopt, evidence);
                 if ((*line.target_address & 1u) == 0u &&
-                    validate_committed_code_address(image, *line.target_address).valid()) {
+                    validate_committed_code_address(image, *line.target_address).valid() &&
+                    !exact_function_range_strictly_contains(
+                        exact_function_ranges, *line.target_address)) {
                     add_function_evidence(function_candidates,
                                           *line.target_address,
                                           FunctionOrigin::DirectCall,
@@ -1755,7 +1764,9 @@ RecursiveAnalysisSnapshot RecursiveAnalysisSession::analyze(
                               work.evidence);
                 if (((*line.target_address & 1u) == 0u) &&
                     validate_committed_code_address(
-                        image, *line.target_address).valid())
+                        image, *line.target_address).valid() &&
+                    !exact_function_range_strictly_contains(
+                        *staged->exact_ranges, *line.target_address))
                     update_function_candidate(
                         *line.target_address, FunctionOrigin::DirectCall,
                         AnalysisConfidence::High, work.evidence);

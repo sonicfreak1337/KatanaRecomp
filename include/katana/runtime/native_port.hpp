@@ -16,7 +16,7 @@ class NativePortPlatformServices;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 1u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 7u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;
@@ -41,8 +41,23 @@ enum class NativePortHookKind : std::uint8_t {
 
 enum class NativePortHookRequirement : std::uint8_t {
     Required,
+    // Executable only in the explicitly incomplete bring-up product. It may
+    // observe or stop at a boundary, but can never discharge hardware closure
+    // or witness product acceptance.
+    BringUpProbe,
     DiagnosticOnly
 };
+
+[[nodiscard]] constexpr bool native_port_hook_is_executable(
+    const NativePortHookRequirement requirement) noexcept {
+    return requirement == NativePortHookRequirement::Required ||
+           requirement == NativePortHookRequirement::BringUpProbe;
+}
+
+[[nodiscard]] constexpr bool native_port_hook_closes_product_contract(
+    const NativePortHookRequirement requirement) noexcept {
+    return requirement == NativePortHookRequirement::Required;
+}
 
 enum class NativePortHookOriginalPolicy : std::uint8_t {
     ReplacesOriginal,
@@ -94,44 +109,55 @@ struct NativePortHookBinding final {
     std::string_view code_identity;
 };
 
-enum class NativePortHardwareResolutionKind : std::uint8_t {
-    // The complete effective-address set at this instruction was proven to
-    // remain inside an ordinary native memory binding.
-    NativeMemory,
-    // The instruction is unreachable after the named covering native hook.
-    ReplacedByHook
-};
-
-enum class NativePortMemoryAccess : std::uint8_t {
-    Read = 1u << 0u,
-    Write = 1u << 1u,
-    Prefetch = 1u << 2u,
-};
-
-[[nodiscard]] constexpr std::uint8_t
-native_port_memory_access_mask(const NativePortMemoryAccess access) noexcept {
-    return static_cast<std::uint8_t>(access);
-}
-
-inline constexpr std::uint8_t native_port_memory_width_u8 = 1u << 0u;
-inline constexpr std::uint8_t native_port_memory_width_u16 = 1u << 1u;
-inline constexpr std::uint8_t native_port_memory_width_u32 = 1u << 2u;
-inline constexpr std::uint8_t native_port_memory_width_cache_line_32 =
-    1u << 3u;
-
+// Hardware instructions may be discharged only by a required, complete
+// native replacement hook. Ordinary dynamic RAM accesses use the generated
+// range guard and typed failure path; they are not a declarative proof.
 struct NativePortHardwareResolution final {
     std::uint32_t instruction_address = 0u;
-    NativePortHardwareResolutionKind kind =
-        NativePortHardwareResolutionKind::NativeMemory;
     std::uint32_t hook_guest_address = 0u;
-    // NativeMemory is an explicit, bounded proof over one verified image,
-    // access class and width set. It is not a blanket waiver for a dynamic
-    // effective address. ReplacedByHook leaves these fields empty/zero.
-    std::string_view native_memory_image_id;
-    std::uint32_t native_memory_guest_address = 0u;
-    std::uint32_t native_memory_byte_size = 0u;
-    std::uint8_t native_memory_access_mask = 0u;
-    std::uint8_t native_memory_width_mask = 0u;
+};
+
+enum class NativePortBootstrapWritePolicy : std::uint8_t {
+    // Ordinary title data may change, but executable/read-only bytes remain
+    // bound to the verified images used by static code generation.
+    WritableDataOnly,
+    // A checkpoint may intentionally materialize identity-bound executable or
+    // read-only bytes. Both the complete pre- and post-range identities are
+    // mandatory, so this is an explicit transition rather than an unguarded
+    // code patch.
+    IdentityBoundImmutableMaterialization,
+};
+
+// A title bootstrap may materialize only these ordinary-RAM ranges. Complete
+// pre- and post-bootstrap identities bind the transition. Every changed byte
+// outside the declared ranges is rejected; executable/read-only changes also
+// require the explicit identity-bound policy.
+struct NativePortBootstrapWriteBinding final {
+    std::uint32_t guest_address = 0u;
+    std::uint32_t byte_size = 0u;
+    std::string_view pre_write_identity;
+    std::string_view post_write_identity;
+    NativePortBootstrapWritePolicy policy =
+        NativePortBootstrapWritePolicy::WritableDataOnly;
+};
+
+// A checkpoint may resume in the middle of one or more still-live caller
+// frames.  These are typed control-flow roots, not synthetic functions:
+// `function_entry` owns the complete statically analyzed body while
+// `resume_address` is an externally reachable block/architectural resume
+// within that body.  Private title tooling may derive the pairs from a
+// verified checkpoint stack or disassembly; the generic exporter proves the
+// relationship against its own post-image CFG before admitting it.
+struct NativePortAotContinuationBinding final {
+    std::uint32_t function_entry = 0u;
+    std::uint32_t resume_address = 0u;
+};
+
+enum class NativePortBootstrapTimePolicy : std::uint8_t {
+    // The checkpoint has no emulated scheduler/device epoch. Every retained
+    // title time boundary must be supplied by a native provider from a fresh
+    // monotonic host epoch before post-entry dispatch begins.
+    NativeHostEpoch,
 };
 
 struct NativePortBootstrap final {
@@ -140,13 +166,39 @@ struct NativePortBootstrap final {
     std::uint32_t vector_base = 0u;
     std::uint32_t status_register = 0u;
     std::uint32_t fpscr = 0u;
+    // The title bootstrap must leave PC at this exact post-checkpoint entry.
+    // Static analysis/codegen uses only the post-AOT roots below, never the
+    // loader's pre-checkpoint entry points.  `post_aot_roots` contains true
+    // function entries; mid-function checkpoint PCs and suspended caller
+    // returns belong in `post_aot_continuations`.
+    std::uint32_t post_entry_point = 0u;
+    std::span<const std::uint32_t> post_aot_roots;
+    std::span<const NativePortAotContinuationBinding>
+        post_aot_continuations;
+    NativePortBootstrapTimePolicy time_policy =
+        NativePortBootstrapTimePolicy::NativeHostEpoch;
     // Required title-owned symbol called after verified image mapping and
     // before the first recompiled game entry. It may finish the initial
     // identity-bound RAM image and native title state while runtime write
-    // guards are deliberately inactive. AOT bridges and guest execution are
-    // unavailable until it returns successfully; it must not boot firmware
-    // or construct guest devices.
+    // guards are deliberately inactive. Generated code snapshots the complete
+    // native RAM backing and validates declared post identities before the
+    // runtime guard is installed. AOT bridges and guest execution are
+    // unavailable until it returns successfully; it must not boot firmware or
+    // construct guest devices.
     std::string_view symbol;
+    std::string_view post_cpu_state_identity;
+    std::span<const NativePortBootstrapWriteBinding> writes;
+};
+
+// The generic runtime never embeds a title address. The private title adapter
+// binds one stable milestone name and marks it reached only at that exact
+// native gameplay boundary (for example, its main menu).
+struct NativePortAcceptanceBinding final {
+    std::string_view milestone_id;
+    // Only this identity-bound private hook may report the milestone. The
+    // runtime additionally requires a successfully completed native GPU
+    // presentation after bootstrap before accepting the witness.
+    std::uint32_t witness_hook_guest_address = 0u;
 };
 
 struct NativePortDefinition final {
@@ -156,6 +208,13 @@ struct NativePortDefinition final {
     std::string_view project_version;
     NativePortExecutableIdentity executable;
     NativePortBootstrap bootstrap;
+    NativePortAcceptanceBinding acceptance;
+    // Checkpoint-resident runtime images are title-owned snapshots whose
+    // source addresses differ from their live fixed-address destinations.
+    // This contract deliberately does not model later overlay lifecycles:
+    // those require a separate identity-bound native load/unload provider and
+    // must never be installed as global mappings by this bootstrap profile.
+    std::span<const std::string_view> checkpoint_runtime_image_ids;
     std::span<const NativePortImageBinding> images;
     std::span<const NativePortHookBinding> hooks;
     std::span<const NativePortHardwareResolution> hardware_resolutions;
@@ -179,9 +238,30 @@ class NativePortHostServices {
     [[nodiscard]] virtual NativePortLifecycleState poll_lifecycle() = 0;
     virtual void begin_frame(std::uint64_t frame_index) = 0;
     virtual void present_frame(std::uint64_t frame_index) = 0;
+    [[nodiscard]] virtual std::uint64_t presented_frames()
+        const noexcept = 0;
 };
 
-struct NativePortContext;
+class NativePortContext;
+
+enum class NativePortImmutableRangeKind : std::uint8_t {
+    Executable = 1u << 0u,
+    ReadOnlyImage = 1u << 1u,
+};
+
+[[nodiscard]] constexpr std::uint8_t native_port_immutable_range_mask(
+    const NativePortImmutableRangeKind kind) noexcept {
+    return static_cast<std::uint8_t>(kind);
+}
+
+struct NativePortImmutableRange final {
+    std::uint32_t physical_address = 0u;
+    std::uint32_t byte_size = 0u;
+    std::uint8_t kind_mask = 0u;
+
+    [[nodiscard]] bool operator==(
+        const NativePortImmutableRange&) const = default;
+};
 
 // The generated product owns these two bridges. Native title hooks can invoke
 // the exact displaced original entry or re-enter statically recompiled game
@@ -220,7 +300,15 @@ enum class NativePortStopReason : std::uint8_t {
     ForbiddenHardwareOperation,
 };
 
-struct NativePortContext final {
+enum class NativePortBootstrapPhase : std::uint8_t {
+    NotStarted,
+    Running,
+    Completed,
+    Failed,
+};
+
+class NativePortContext final {
+  public:
     CpuState* cpu = nullptr;
     NativePortHostServices* host = nullptr;
     NativePortGraphicsDevice* graphics = nullptr;
@@ -230,6 +318,26 @@ struct NativePortContext final {
     std::uint64_t frame_index = 0u;
     std::uint64_t host_deadline_nanoseconds = 0u;
     NativePortStopReason stop_reason = NativePortStopReason::None;
+    NativePortBootstrapPhase bootstrap_phase =
+        NativePortBootstrapPhase::NotStarted;
+
+    // Generated product code binds the private acceptance witness before
+    // bootstrap dispatch. Title code can report it only while that exact hook
+    // is executing and only after a new native frame was presented.
+    void bind_acceptance(const NativePortAcceptanceBinding& binding) noexcept;
+    [[nodiscard]] std::uint32_t begin_hook_dispatch(
+        std::uint32_t guest_address) noexcept;
+    void end_hook_dispatch(std::uint32_t previous_guest_address) noexcept;
+    [[nodiscard]] bool report_acceptance(
+        std::string_view milestone_id) noexcept;
+    [[nodiscard]] bool acceptance_reached() const noexcept;
+
+  private:
+    std::string_view acceptance_milestone_id_;
+    std::uint32_t acceptance_witness_hook_guest_address_ = 0u;
+    std::uint32_t active_hook_guest_address_ = 0u;
+    std::uint64_t acceptance_presented_frame_baseline_ = 0u;
+    bool acceptance_reached_ = false;
 };
 
 enum class NativePortContractFailure : std::uint8_t {

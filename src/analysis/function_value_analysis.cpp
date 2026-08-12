@@ -6020,6 +6020,37 @@ void make_unknown_preserving_provenance(AbstractValue& value) {
     synchronize_inventory_provenance(value);
 }
 
+// An unknown guest-call ABI invalidates every ordinary register fact.  It does
+// not, however, make a bounded code address that was loaded from the program's
+// own literal pool cease to be useful AOT inventory.  Retain only the two
+// decode-validated code-candidate domains across that boundary: they are
+// consumed as guarded/incomplete discovery candidates and never as semantic
+// register values or as proof that a dynamic target set is complete.
+void make_unknown_preserving_code_inventory(AbstractValue& value) {
+    auto inventory_code_pointer_values =
+        std::move(value.inventory_code_pointer_values);
+    auto inventory_pc_relative_code_literal_values =
+        std::move(value.inventory_pc_relative_code_literal_values);
+    const auto inventory_code_pointer_values_truncated =
+        value.inventory_code_pointer_values_truncated;
+    const auto inventory_pc_relative_code_literal_values_truncated =
+        value.inventory_pc_relative_code_literal_values_truncated;
+    make_unknown(value);
+    value.inventory_code_pointer_values =
+        std::move(inventory_code_pointer_values);
+    value.inventory_pc_relative_code_literal_values =
+        std::move(inventory_pc_relative_code_literal_values);
+    value.inventory_code_pointer_values_truncated =
+        inventory_code_pointer_values_truncated;
+    value.inventory_pc_relative_code_literal_values_truncated =
+        inventory_pc_relative_code_literal_values_truncated;
+    value.inventory_code_pointer =
+        !value.inventory_code_pointer_values.empty();
+    value.inventory_pc_relative_code_literal =
+        !value.inventory_pc_relative_code_literal_values.empty();
+    synchronize_inventory_provenance(value);
+}
+
 // Materializing a domain carrier is a may-read, never a proof that a concrete
 // cell was selected. Preserve any existing direct candidate facts and make the
 // result guarded/incomplete without inventing ordinary scalar values.
@@ -12744,7 +12775,7 @@ void apply_call(AbstractState& state,
         mark_unknown_memory_read(memory_read_observation);
         state.memory_definitely_written_ranges.clear();
         for (std::size_t index = 0u; index < state.size(); ++index) {
-            make_unknown(state[index]);
+            make_unknown_preserving_code_inventory(state[index]);
             state.stack_offsets[index].reset();
             clear_inventory_stack_coordinates(
                 state, static_cast<std::uint8_t>(index));
@@ -24286,7 +24317,7 @@ inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
 // projection/root identity. Contextual MAY-joins are additionally closed
 // through the authoritative hybrid ingress projection before they become a
 // lane or edge identity.
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 27u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 28u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;

@@ -5371,8 +5371,10 @@ void maybe_crash_port_publish_for_test(
     std::_Exit(86);
 }
 
-void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
-                                         const std::filesystem::path& build_root) {
+bool remove_new_failed_port_host_build_state(
+    const std::filesystem::path& port_root,
+    const std::filesystem::path& build_root,
+    const bool reusable_state_existed_before_configure) {
     const auto normalized_port = std::filesystem::absolute(port_root).lexically_normal();
     const auto normalized_build = std::filesystem::absolute(build_root).lexically_normal();
     const auto build_name = normalized_build.filename().generic_string();
@@ -5380,9 +5382,10 @@ void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
         !build_name.starts_with("build-"))
         throw std::runtime_error(
             "Fehlgeschlagener Hostbuild besitzt keinen sicher abgeleiteten Buildpfad.");
-    if (!safe_regular_port_directory_exists(normalized_build,
-                                            "Fehlgeschlagener CMake-Configure-Zustand"))
-        return;
+    if (!safe_regular_port_directory_exists(
+            normalized_build,
+            "Fehlgeschlagener CMake-Configure-Zustand"))
+        return false;
     std::error_code canonical_error;
     const auto resolved_port = std::filesystem::canonical(normalized_port, canonical_error);
     if (canonical_error)
@@ -5392,9 +5395,17 @@ void remove_failed_port_host_build_state(const std::filesystem::path& port_root,
     if (canonical_error || resolved_build.parent_path() != resolved_port)
         throw std::runtime_error(
             "Configure-Bereinigung wuerde den sicheren Portbuildpfad verlassen.");
+    // CMake and Ninja keep the expensive object graph below this directory.
+    // A failed reconfigure has not produced a runnable product and the next
+    // successful configure deterministically regenerates its control files;
+    // deleting a previously valid tree here merely turns a cheap correction
+    // into a full cold build.  Only discard a directory first created by this
+    // failed invocation, where no reusable object state can exist.
+    if (reusable_state_existed_before_configure) return false;
     remove_safe_port_tree(
         normalized_build,
-        "Fehlgeschlagener CMake-Configure-Zustand");
+        "Fehlgeschlagener neuer CMake-Configure-Zustand");
+    return true;
 }
 
 #ifdef _WIN32
@@ -6585,6 +6596,8 @@ int extract_boot_executable_artifact(
 
 using RuntimeImagePayloadArgument =
     std::pair<std::string, std::filesystem::path>;
+using NativeBootstrapWritePayloadArgument =
+    std::pair<std::uint32_t, std::filesystem::path>;
 
 using LatentAotEntryHintArgument = katana::codegen::LatentAotEntryHint;
 using LatentAotDiscoveryModeArgument =
@@ -6627,6 +6640,24 @@ std::uint32_t parse_native_aot_resume_entry(const std::string_view text) {
         conversion.ptr != text.data() + text.size() || (address & 1u) != 0u)
         throw std::invalid_argument(
             "--native-aot-resume-entry besitzt keine gerade 32-Bit-Hexadresse.");
+    return address;
+}
+
+std::uint32_t parse_native_bootstrap_write_address(
+    const std::string_view text) {
+    if (text.size() < 3u || text.size() > 10u ||
+        !(text.starts_with("0x") || text.starts_with("0X")))
+        throw std::invalid_argument(
+            "--native-bootstrap-write-payload erwartet eine "
+            "32-Bit-Hexadresse mit 0x-Praefix.");
+    std::uint32_t address = 0u;
+    const auto conversion = std::from_chars(
+        text.data() + 2u, text.data() + text.size(), address, 16);
+    if (conversion.ec != std::errc{} ||
+        conversion.ptr != text.data() + text.size())
+        throw std::invalid_argument(
+            "--native-bootstrap-write-payload besitzt keine "
+            "32-Bit-Hexadresse.");
     return address;
 }
 
@@ -6976,6 +7007,8 @@ int export_port_project(const std::filesystem::path& source_path,
                             game_entry_handoff_path = std::nullopt,
                         const std::vector<RuntimeImagePayloadArgument>&
                             runtime_image_payload_arguments = {},
+                        const std::vector<NativeBootstrapWritePayloadArgument>&
+                            bootstrap_write_payload_arguments = {},
                         const std::vector<LatentAotEntryHintArgument>&
                             latent_aot_entry_hints = {},
                          const LatentAotDiscoveryModeArgument
@@ -7090,6 +7123,13 @@ int export_port_project(const std::filesystem::path& source_path,
             require_native_port_definition_path_disjoint_from_path(
                 native_definition_path, payload_path,
                 "ein Runtime-Image-Payload");
+        }
+        for (const auto& [guest_address, payload_path] :
+             bootstrap_write_payload_arguments) {
+            static_cast<void>(guest_address);
+            require_native_port_definition_path_disjoint_from_path(
+                native_definition_path, payload_path,
+                "ein Bootstrap-Write-Payload");
         }
     }
     std::optional<std::filesystem::path>
@@ -7411,6 +7451,10 @@ int export_port_project(const std::filesystem::path& source_path,
         runtime_image_payload_storage;
     std::vector<katana::codegen::GameProjectRuntimeImagePayload>
         runtime_image_payloads;
+    std::vector<std::vector<std::uint8_t>>
+        bootstrap_write_payload_storage;
+    std::vector<katana::codegen::NativePortBootstrapWritePayload>
+        bootstrap_write_payloads;
     std::optional<std::string> whole_export_cache_key;
     std::string whole_export_source_kind;
     std::uint32_t whole_export_source_contract_version = 0u;
@@ -7431,6 +7475,11 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--runtime-image-payload braucht einen vollstaendigen "
             "Produktport mit --game-project.");
+    if (!bootstrap_write_payload_arguments.empty() &&
+        (!verified_native_port || diagnostic_partial))
+        throw std::invalid_argument(
+            "--native-bootstrap-write-payload braucht einen "
+            "vollstaendigen Produktport mit --native-port-definition.");
     phase_timings.transition("analysis-codegen");
     std::cout << "KATANA_PORT_PHASE analysis-codegen\n";
     std::cout << std::flush;
@@ -7629,7 +7678,59 @@ int export_port_project(const std::filesystem::path& source_path,
         resolved_game_project.has_value()
             ? &*resolved_game_project
             : nullptr,
-        runtime_image_payloads);
+        runtime_image_payloads,
+        verified_native_port
+            ? &verified_native_port->definition()
+            : nullptr);
+    bootstrap_write_payload_storage.reserve(
+        bootstrap_write_payload_arguments.size());
+    for (std::size_t index = 0u;
+         index < bootstrap_write_payload_arguments.size();
+         ++index) {
+        const auto& [guest_address, payload_path] =
+            bootstrap_write_payload_arguments[index];
+        if (std::any_of(
+                bootstrap_write_payload_arguments.begin(),
+                bootstrap_write_payload_arguments.begin() +
+                    static_cast<std::ptrdiff_t>(index),
+                [&](const auto& previous) {
+                    return previous.first == guest_address;
+                }))
+            throw std::invalid_argument(
+                "--native-bootstrap-write-payload wurde fuer dieselbe "
+                "Gastadresse mehrfach angegeben.");
+        if (!verified_native_port)
+            throw std::invalid_argument(
+                "--native-bootstrap-write-payload besitzt keine "
+                "Native-Port-Definition.");
+        const auto& definition = verified_native_port->definition();
+        const auto descriptor = std::find_if(
+            definition.bootstrap.writes.begin(),
+            definition.bootstrap.writes.end(),
+            [&](const auto& candidate) {
+                return candidate.guest_address == guest_address;
+            });
+        if (descriptor == definition.bootstrap.writes.end())
+            throw std::invalid_argument(
+                "--native-bootstrap-write-payload verweist auf keine "
+                "deklarierte Bootstrap-Write-Range.");
+        bootstrap_write_payload_storage.push_back(
+            load_runtime_image_payload(
+                payload_path, descriptor->byte_size, source_root));
+    }
+    bootstrap_write_payloads.reserve(
+        bootstrap_write_payload_arguments.size());
+    for (std::size_t index = 0u;
+         index < bootstrap_write_payload_arguments.size();
+         ++index)
+        bootstrap_write_payloads.push_back(
+            {bootstrap_write_payload_arguments[index].first,
+             bootstrap_write_payload_storage[index]});
+    katana::codegen::validate_native_port_bootstrap_write_payloads(
+        verified_native_port
+            ? &verified_native_port->definition()
+            : nullptr,
+        bootstrap_write_payloads);
     const auto game_project_definition_identity =
         resolved_game_project.has_value()
             ? katana::runtime::game_project_definition_identity(
@@ -7789,6 +7890,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 : nullptr;
         export_options.game_project_runtime_image_payloads =
             runtime_image_payloads;
+        export_options.native_port_bootstrap_write_payloads =
+            bootstrap_write_payloads;
         export_options.native_aot_resume_entries =
             native_aot_resume_entries;
         export_options.latent_aot_entry_hints =
@@ -7983,8 +8086,14 @@ int export_port_project(const std::filesystem::path& source_path,
             ("build-" + host_compiler + '-' + host_linker + '-' +
              build_profile + '-' + configuration_identity + '-' +
              port_runtime_profile + '-' + generator_identity);
-        static_cast<void>(
-            safe_regular_port_directory_exists(build_path, "Inkrementeller Hostbuild-Cache"));
+        const auto host_build_directory_existed_before_configure =
+            safe_regular_port_directory_exists(
+                build_path, "Inkrementeller Hostbuild-Cache");
+        const auto reusable_host_build_state_existed_before_configure =
+            host_build_directory_existed_before_configure &&
+            safe_regular_port_file_exists(
+                build_path / "CMakeCache.txt",
+                "Inkrementeller Hostbuild-CMakeCache");
         if (!runtime_binding.build_targets_file.empty()) {
             const auto runtime_build_root =
                 runtime_binding.build_targets_file.parent_path();
@@ -8118,14 +8227,14 @@ int export_port_project(const std::filesystem::path& source_path,
         if (compiler_launcher)
             require_launcher_component(
                 *compiler_launcher, "Compiler-Cache-Launcher");
-        auto instrumented_compiler_launcher =
+        // Keep the Ninja command graph invariant when a compiler cache is
+        // enabled, disabled or moved. The launcher resolves
+        // KATANA_COMPILER_CACHE from the build process environment at
+        // execution time; embedding the cache executable in every compile
+        // edge would itself force a full rebuild when cache policy changes.
+        const auto instrumented_compiler_launcher =
             cli_component + ";__host-build-tool;" +
-            event_component + ";compile;";
-        if (compiler_launcher)
-            instrumented_compiler_launcher +=
-                "--chain;" + *compiler_launcher;
-        else
-            instrumented_compiler_launcher += "--direct";
+            event_component + ";compile;--direct";
         const auto instrumented_linker_launcher =
             cli_component + ";__host-build-tool;" +
             event_component + ";link;--direct";
@@ -8269,13 +8378,21 @@ int export_port_project(const std::filesystem::path& source_path,
                     );
         } catch (const std::exception& process_error) {
             try {
-                remove_failed_port_host_build_state(report.output_root, build_path);
+                const auto removed = remove_new_failed_port_host_build_state(
+                    report.output_root,
+                    build_path,
+                    reusable_host_build_state_existed_before_configure);
+                if (!removed &&
+                    reusable_host_build_state_existed_before_configure)
+                    std::cerr
+                        << "KATANA_PORT_HOST_CACHE_PRESERVED stage=configure "
+                           "reason=process-error\n";
             } catch (const std::exception& cleanup_error) {
                 throw katana::cli::Error(
                     katana::cli::ExitCode::BuildFailure,
                     std::string(
                         "Port-Hostbuild-Prozess konnte nicht sicher ausgefuehrt "
-                        "und sein unvollstaendiger CMake-Zustand nicht "
+                        "und sein neuer unvollstaendiger CMake-Zustand nicht "
                         "bereinigt werden: ") +
                         process_error.what() + ' ' +
                         cleanup_error.what());
@@ -8284,8 +8401,10 @@ int export_port_project(const std::filesystem::path& source_path,
                 katana::cli::ExitCode::BuildFailure,
                 std::string(
                     "Port-Hostbuild-Prozess konnte nicht sicher ausgefuehrt "
-                    "werden; der unvollstaendige CMake-Zustand wurde "
-                    "entfernt: ") +
+                    "werden; ") +
+                    (reusable_host_build_state_existed_before_configure
+                         ? "der vorhandene inkrementelle Hostcache blieb erhalten: "
+                         : "der neue unvollstaendige Zustand wurde entfernt: ") +
                     process_error.what());
         }
         if (!configure_result.process_tree_quiescent)
@@ -8305,21 +8424,29 @@ int export_port_project(const std::filesystem::path& source_path,
                     : std::string(
                           "Port-Hostbuild konnte nicht konfiguriert werden");
             try {
-                remove_failed_port_host_build_state(
+                const auto removed = remove_new_failed_port_host_build_state(
                     report.output_root,
-                    build_path);
+                    build_path,
+                    reusable_host_build_state_existed_before_configure);
+                if (!removed &&
+                    reusable_host_build_state_existed_before_configure)
+                    std::cerr
+                        << "KATANA_PORT_HOST_CACHE_PRESERVED stage=configure "
+                           "reason=configure-failure\n";
             } catch (const std::exception& cleanup_error) {
                 throw katana::cli::Error(
                     katana::cli::ExitCode::BuildFailure,
                     failure +
-                        "; unvollstaendiger CMake-Zustand konnte nicht "
+                        "; neuer unvollstaendiger CMake-Zustand konnte nicht "
                         "bereinigt werden: " +
                         cleanup_error.what());
             }
             throw katana::cli::Error(
                 katana::cli::ExitCode::BuildFailure,
                 failure +
-                    "; unvollstaendiger CMake-Zustand wurde entfernt.");
+                    (reusable_host_build_state_existed_before_configure
+                         ? "; vorhandener inkrementeller Hostcache blieb erhalten."
+                         : "; neuer unvollstaendiger CMake-Zustand wurde entfernt."));
         }
 #ifdef _WIN32
         try {
@@ -8327,7 +8454,15 @@ int export_port_project(const std::filesystem::path& source_path,
                 build_path, host_build_configuration);
         } catch (const std::exception& configuration_error) {
             try {
-                remove_failed_port_host_build_state(report.output_root, build_path);
+                const auto removed = remove_new_failed_port_host_build_state(
+                    report.output_root,
+                    build_path,
+                    reusable_host_build_state_existed_before_configure);
+                if (!removed &&
+                    reusable_host_build_state_existed_before_configure)
+                    std::cerr
+                        << "KATANA_PORT_HOST_CACHE_PRESERVED stage=configure "
+                           "reason=configuration-contract\n";
             } catch (const std::exception& cleanup_error) {
                 throw katana::cli::Error(
                     katana::cli::ExitCode::BuildFailure,
@@ -8337,7 +8472,10 @@ int export_port_project(const std::filesystem::path& source_path,
             }
             throw katana::cli::Error(
                 katana::cli::ExitCode::BuildFailure,
-                std::string("Unsicherer Port-Hostbuild-Configure wurde verworfen: ") +
+                std::string("Unsicherer Port-Hostbuild-Configure wurde abgelehnt; ") +
+                    (reusable_host_build_state_existed_before_configure
+                         ? "der vorhandene inkrementelle Hostcache blieb erhalten: "
+                         : "der neue unvollstaendige Zustand wurde entfernt: ") +
                     configuration_error.what());
         }
         const auto windows_configured_host_tools =
@@ -8862,6 +9000,8 @@ void print_usage(std::ostream& output) {
                "[--analysis-mode <platform|runtime-only>] "
                "[--native-aot-resume-entry <0xAdresse>]... "
                "[--runtime-image-payload <Image-ID>=<private-Datei>] "
+              "[--native-bootstrap-write-payload "
+              "<0xGastadresse>=<private-Datei>] "
               "[--telemetry-jsonl <Datei>] "
               "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
@@ -8876,6 +9016,8 @@ void print_usage(std::ostream& output) {
                "[--native-port-definition <private .katana-native-port>] "
                "[--analysis-mode <platform|runtime-only>] "
                "[--runtime-image-payload <Image-ID>=<private-Datei>]... "
+              "[--native-bootstrap-write-payload "
+              "<0xGastadresse>=<private-Datei>]... "
               "[--game-entry-handoff <privates-Artefakt>] "
               "[--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp probe-port-executable <boot.katana-executable> --output "
@@ -9004,13 +9146,27 @@ int main(const int argc, char* argv[]) {
                 (mode != "--direct" && mode != "--chain"))
                 return 125;
             std::vector<const char*> arguments;
-            arguments.reserve(static_cast<std::size_t>(argc - 6));
+            arguments.reserve(static_cast<std::size_t>(argc - 5));
+            auto real_tool = std::string(argv[5]);
+            if (mode == "--direct" &&
+                *kind == katana::cli::HostBuildToolKind::Compile) {
+                const auto transparent_cache =
+                    configured_environment_value("KATANA_COMPILER_CACHE");
+                if (transparent_cache &&
+                    *transparent_cache != real_tool) {
+                    if (transparent_cache->find_first_of(";\r\n\"") !=
+                        std::string::npos)
+                        return 125;
+                    arguments.push_back(argv[5]);
+                    real_tool = *transparent_cache;
+                }
+            }
             for (int index = 6; index < argc; ++index)
                 arguments.push_back(argv[index]);
             return katana::cli::run_host_build_tool_launcher(
                 *kind,
                 std::filesystem::path(argv[2]),
-                argv[5],
+                real_tool,
                 arguments);
         }
         // Test-only product entry which exercises the exact process-tree
@@ -9373,6 +9529,8 @@ int main(const int argc, char* argv[]) {
                 telemetry_jsonl_path;
             std::vector<RuntimeImagePayloadArgument>
                 runtime_image_payload_arguments;
+            std::vector<NativeBootstrapWritePayloadArgument>
+                bootstrap_write_payload_arguments;
             std::vector<LatentAotEntryHintArgument>
                 latent_aot_entry_hints;
             std::vector<std::uint32_t> native_aot_resume_entries;
@@ -9433,6 +9591,24 @@ int main(const int argc, char* argv[]) {
                         std::string(binding.substr(0u, separator)),
                         std::filesystem::path(
                             std::string(binding.substr(separator + 1u))));
+                } else if (
+                    option == "--native-bootstrap-write-payload" &&
+                    (port_command == "port" ||
+                     port_command == "port-executable")) {
+                    const std::string_view binding =
+                        argv[argument + 1u];
+                    const auto separator = binding.find('=');
+                    if (separator == 0u ||
+                        separator == std::string_view::npos ||
+                        separator + 1u >= binding.size())
+                        throw std::invalid_argument(
+                            "--native-bootstrap-write-payload erwartet "
+                            "<0xGastadresse>=<private-Datei>.");
+                    bootstrap_write_payload_arguments.emplace_back(
+                        parse_native_bootstrap_write_address(
+                            binding.substr(0u, separator)),
+                        std::filesystem::path(std::string(
+                            binding.substr(separator + 1u))));
                 } else if (option == "--latent-aot-entry" &&
                            port_command == "port") {
                     latent_aot_entry_hints.push_back(
@@ -9514,6 +9690,7 @@ int main(const int argc, char* argv[]) {
                                        native_port_definition_path,
                                        game_entry_handoff_path,
                                        runtime_image_payload_arguments,
+                                       bootstrap_write_payload_arguments,
                                        latent_aot_entry_hints,
                                        latent_aot_discovery_mode,
                                        native_aot_resume_entries,

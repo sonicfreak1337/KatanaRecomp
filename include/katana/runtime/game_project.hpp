@@ -16,14 +16,15 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 5u;
+inline constexpr std::uint32_t game_project_contract_version = 6u;
 
 enum class RequiredProductMilestone : std::uint8_t {
     BootExecutableEntry,
     GameCodeProgressed,
     FirstGameFramebufferWrite,
     FirstTaFrame,
-    FirstVisibleGameFrame
+    FirstVisibleGameFrame,
+    MainMenuPresented
 };
 
 enum class GameProjectControlTransferKind : std::uint8_t {

@@ -57,6 +57,15 @@ struct GameProjectRuntimeImagePayload {
     std::span<const std::uint8_t> bytes;
 };
 
+// Export-time-only post-bootstrap bytes. They authenticate and construct the
+// exact executable view used by static analysis; neither paths nor bytes are
+// copied into the generated product. Runtime materialization is independently
+// revalidated against the same NativePortBootstrapWriteBinding identities.
+struct NativePortBootstrapWritePayload {
+    std::uint32_t guest_address = 0u;
+    std::span<const std::uint8_t> bytes;
+};
+
 enum class PortAnalysisMode : std::uint8_t {
     PlatformAbi,
     ConservativeRuntimeOnly,
@@ -99,6 +108,8 @@ struct PortExportOptions {
     // are rejected.
     std::span<const GameProjectRuntimeImagePayload>
         game_project_runtime_image_payloads;
+    std::span<const NativePortBootstrapWritePayload>
+        native_port_bootstrap_write_payloads;
     // Opt-in exact mid-block continuation entries for static AOT. Each entry
     // is accepted only when it is an instruction fallthrough inside the
     // hash-bound immutable boot image at which generated code can yield.
@@ -153,6 +164,11 @@ struct PreparedPortProgram {
         precomputed_control_flow_graph = nullptr;
     const katana::analysis::AnalysisGraph*
         precomputed_call_graph = nullptr;
+    // Immutable source view before any explicitly bound native bootstrap
+    // materialization changes the analysis/AOT image. Native prepared callers
+    // with bootstrap writes must provide it; the wrapper overloads do so.
+    // Appended so existing aggregate callers retain their field mapping.
+    const katana::io::ExecutableImage* pre_bootstrap_image = nullptr;
 };
 
 // Validates the one-to-one descriptor/payload binding, including identifier,
@@ -160,7 +176,12 @@ struct PreparedPortProgram {
 // private provider before admitting a whole-export cache hit.
 void validate_game_project_runtime_image_payloads(
     const katana::runtime::GameProjectDefinition* game_project,
-    std::span<const GameProjectRuntimeImagePayload> payloads);
+    std::span<const GameProjectRuntimeImagePayload> payloads,
+    const katana::runtime::NativePortDefinition* native_port);
+
+void validate_native_port_bootstrap_write_payloads(
+    const katana::runtime::NativePortDefinition* native_port,
+    std::span<const NativePortBootstrapWritePayload> payloads);
 
 [[nodiscard]] PortExportResult
 export_dreamcast_port_project(const PreparedPortProgram& prepared,

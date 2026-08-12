@@ -4,6 +4,7 @@
 #include "native_aot_resume.hpp"
 
 #include "katana/build_contract.hpp"
+#include "katana/component_identity.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
@@ -172,6 +173,7 @@ std::size_t port_codegen_jobs(const std::size_t partition_count) {
     return configured_port_codegen_jobs(partition_count);
 }
 
+// KATANA_COMPONENT_IDENTITY_REGION_BEGIN select-functions
 std::vector<katana::ir::Function>
 select_functions(const std::span<const katana::ir::Function> program,
                  const TranslationUnitPartition& partition) {
@@ -188,6 +190,7 @@ select_functions(const std::span<const katana::ir::Function> program,
     });
     return selected;
 }
+// KATANA_COMPONENT_IDENTITY_REGION_END select-functions
 
 std::string game_project_export_identity(
     const katana::runtime::GameProjectDefinition& definition) {
@@ -210,7 +213,29 @@ std::string native_port_export_identity(
              << definition->bootstrap.vector_base << ':'
              << definition->bootstrap.status_register << ':'
              << definition->bootstrap.fpscr << ':'
-             << definition->bootstrap.symbol << ';';
+             << definition->bootstrap.post_entry_point << ':'
+             << static_cast<unsigned>(
+                    definition->bootstrap.time_policy)
+             << ':'
+             << definition->bootstrap.symbol << ':'
+             << definition->bootstrap.post_cpu_state_identity << ':'
+             << definition->acceptance.milestone_id << ':'
+             << definition->acceptance.witness_hook_guest_address << ';';
+    for (const auto root : definition->bootstrap.post_aot_roots)
+        material << "post-aot-root:" << root << ';';
+    for (const auto& continuation :
+         definition->bootstrap.post_aot_continuations)
+        material << "post-aot-continuation:"
+                 << continuation.function_entry << ':'
+                 << continuation.resume_address << ';';
+    for (const auto image_id : definition->checkpoint_runtime_image_ids)
+        material << "checkpoint-runtime-image:" << image_id << ';';
+    for (const auto& write : definition->bootstrap.writes)
+        material << "bootstrap-write:" << write.guest_address << ':'
+                 << write.byte_size << ':' << write.pre_write_identity << ':'
+                 << write.post_write_identity << ':'
+                 << static_cast<unsigned>(write.policy)
+                 << ';';
     for (const auto& image : definition->images)
         material << "image:" << image.image_id << ':'
                  << image.content_relative_path << ':' << image.byte_identity
@@ -225,18 +250,46 @@ std::string native_port_export_identity(
                  << hook.symbol << ':' << hook.code_identity << ';';
     for (const auto& resolution : definition->hardware_resolutions)
         material << "hardware:" << resolution.instruction_address << ':'
-                 << static_cast<unsigned>(resolution.kind) << ':'
-                 << resolution.hook_guest_address << ':'
-                 << resolution.native_memory_image_id << ':'
-                 << resolution.native_memory_guest_address << ':'
-                 << resolution.native_memory_byte_size << ':'
-                 << static_cast<unsigned>(
-                        resolution.native_memory_access_mask)
-                 << ':'
-                 << static_cast<unsigned>(
-                        resolution.native_memory_width_mask)
+                 << resolution.hook_guest_address
                  << ';';
     return katana::io::sha256_bytes(material.str());
+}
+
+[[nodiscard]] bool native_port_replacement_function_strictly_contains(
+    const katana::runtime::NativePortDefinition& definition,
+    const std::uint32_t address) noexcept {
+    using HookKind = katana::runtime::NativePortHookKind;
+    using HookRequirement = katana::runtime::NativePortHookRequirement;
+    using OriginalPolicy =
+        katana::runtime::NativePortHookOriginalPolicy;
+    return std::any_of(
+        definition.hooks.begin(), definition.hooks.end(),
+        [&](const auto& hook) {
+            if (hook.kind != HookKind::FunctionEntry ||
+                !katana::runtime::native_port_hook_is_executable(
+                    hook.requirement) ||
+                hook.original_policy != OriginalPolicy::ReplacesOriginal)
+                return false;
+            const auto end = static_cast<std::uint64_t>(
+                                 hook.guest_address) +
+                hook.covered_size;
+            return address > hook.guest_address &&
+                   static_cast<std::uint64_t>(address) < end;
+        });
+}
+
+[[nodiscard]] std::string_view native_port_hook_requirement_name(
+    const katana::runtime::NativePortHookRequirement requirement) {
+    using Requirement = katana::runtime::NativePortHookRequirement;
+    switch (requirement) {
+    case Requirement::Required:
+        return "Required";
+    case Requirement::BringUpProbe:
+        return "BringUpProbe";
+    case Requirement::DiagnosticOnly:
+        return "DiagnosticOnly";
+    }
+    throw std::invalid_argument("native-port-hook-requirement");
 }
 
 std::string boot_analysis_semantic_contract_identity(
@@ -472,7 +525,8 @@ void add_game_project_symbol(katana::io::ExecutableImage& image,
 
 void apply_game_project_symbols(
     katana::io::ExecutableImage& image,
-    const katana::runtime::GameProjectDefinition& definition) {
+    const katana::runtime::GameProjectDefinition& definition,
+    const bool function_symbols_are_roots = true) {
     for (const auto& function : definition.function_boundaries) {
         if (function.symbol.empty()) continue;
         add_game_project_symbol(
@@ -480,14 +534,18 @@ void apply_game_project_symbols(
             {std::string(function.symbol),
              function.start,
              function.size,
-             katana::io::SymbolKind::Function,
+             function_symbols_are_roots
+                 ? katana::io::SymbolKind::Function
+                 : katana::io::SymbolKind::Unknown,
              katana::io::SymbolBinding::Weak});
     }
     for (const auto& symbol : definition.symbols) {
         const auto kind = [&] {
             switch (symbol.kind) {
             case katana::runtime::GameProjectSymbolKind::Function:
-                return katana::io::SymbolKind::Function;
+                return function_symbols_are_roots
+                           ? katana::io::SymbolKind::Function
+                           : katana::io::SymbolKind::Unknown;
             case katana::runtime::GameProjectSymbolKind::Object:
                 return katana::io::SymbolKind::Object;
             case katana::runtime::GameProjectSymbolKind::Unknown:
@@ -505,12 +563,266 @@ void apply_game_project_symbols(
     }
 }
 
+bool game_project_runtime_image_is_active(
+    const katana::runtime::NativePortDefinition* const native_port,
+    const std::string_view image_id) noexcept {
+    if (native_port == nullptr) return true;
+    return std::find(
+               native_port->checkpoint_runtime_image_ids.begin(),
+               native_port->checkpoint_runtime_image_ids.end(),
+               image_id) !=
+           native_port->checkpoint_runtime_image_ids.end();
+}
+
+void validate_native_runtime_image_contract(
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const katana::runtime::NativePortDefinition* const native_port) {
+    if (native_port == nullptr) return;
+    if (game_project == nullptr) {
+        if (!native_port->checkpoint_runtime_image_ids.empty())
+            throw std::invalid_argument(
+                "native-active-runtime-image-without-game-project");
+        return;
+    }
+    for (const auto image_id : native_port->checkpoint_runtime_image_ids) {
+        const auto descriptor = std::find_if(
+            game_project->runtime_images.begin(),
+            game_project->runtime_images.end(),
+            [&](const auto& candidate) {
+                return candidate.image_id == image_id;
+            });
+        if (descriptor == game_project->runtime_images.end())
+            throw std::invalid_argument(
+                "native-active-runtime-image-id-missing");
+    }
+}
+
+std::vector<std::uint32_t> native_post_aot_roots(
+    const katana::runtime::NativePortDefinition& native_port,
+    const katana::runtime::GameProjectDefinition* const game_project) {
+    validate_native_runtime_image_contract(game_project, &native_port);
+    std::vector<std::uint32_t> roots(
+        native_port.bootstrap.post_aot_roots.begin(),
+        native_port.bootstrap.post_aot_roots.end());
+    if (game_project != nullptr) {
+        for (const auto& runtime_image : game_project->runtime_images) {
+            if (!game_project_runtime_image_is_active(
+                    &native_port, runtime_image.image_id))
+                continue;
+            for (const auto entry_offset : runtime_image.entry_offsets)
+                roots.push_back(runtime_image.source_start + entry_offset);
+        }
+    }
+    std::sort(roots.begin(), roots.end());
+    roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+    return roots;
+}
+
+std::vector<katana::ir::ExternalDispatchEntry>
+native_optimization_dispatch_entries(
+    const std::span<const katana::ir::Function> program,
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const PortExportOptions& options) {
+    using Entry = katana::ir::ExternalDispatchEntry;
+    using Kind = katana::ir::ExternalDispatchEntryKind;
+    std::map<std::uint32_t, Kind> entries;
+    const auto add = [&](const std::uint32_t address,
+                         const Kind kind) {
+        if (address == 0u) return;
+        const auto [existing, inserted] = entries.emplace(address, kind);
+        if (!inserted && kind == Kind::BlockEntry)
+            existing->second = Kind::BlockEntry;
+    };
+
+    for (const auto address :
+         katana::ir::architectural_safepoint_block_leaders(analysis))
+        add(address, Kind::BlockEntry);
+    for (const auto& guarded : analysis.guarded_aot_entries) {
+        add(guarded.guest_address, Kind::BlockEntry);
+        add(guarded.shared_body_address, Kind::BlockEntry);
+    }
+    for (const auto address : options.native_aot_resume_entries)
+        add(address, Kind::InstructionContinuation);
+
+    if (options.native_port_definition != nullptr) {
+        const auto& definition = *options.native_port_definition;
+        for (const auto root :
+             native_post_aot_roots(definition, options.game_project))
+            add(root, Kind::BlockEntry);
+        for (const auto& continuation :
+             definition.bootstrap.post_aot_continuations)
+            add(continuation.resume_address, Kind::BlockEntry);
+
+        // Hooks never become analysis roots. Once ordinary reachability has
+        // materialized a hook address, preserve that existing execution
+        // boundary through optimization. An absent hook remains absent and
+        // fails the later native admission proof.
+        for (const auto& hook : definition.hooks) {
+            if (!katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
+                continue;
+            bool block_entry = false;
+            bool instruction_continuation = false;
+            for (const auto& function : program) {
+                for (const auto& block : function.blocks) {
+                    block_entry = block_entry ||
+                                  block.start_address ==
+                                      hook.guest_address;
+                    const auto internal =
+                        detail::native_aot_internal_resume_entries(block);
+                    instruction_continuation =
+                        instruction_continuation ||
+                        std::binary_search(internal.begin(), internal.end(),
+                                           hook.guest_address);
+                }
+            }
+            if (block_entry)
+                add(hook.guest_address, Kind::BlockEntry);
+            else if (instruction_continuation)
+                add(hook.guest_address,
+                    Kind::InstructionContinuation);
+        }
+    }
+
+    std::vector<Entry> result;
+    result.reserve(entries.size());
+    for (const auto& [address, kind] : entries)
+        result.push_back({address, kind});
+    return result;
+}
+
+void apply_native_port_post_aot_view(
+    katana::io::ExecutableImage& image,
+    const katana::runtime::NativePortDefinition* const native_port,
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const std::span<const NativePortBootstrapWritePayload> payloads) {
+    validate_native_port_bootstrap_write_payloads(native_port, payloads);
+    if (native_port == nullptr) return;
+
+    struct BoundPayload final {
+        const katana::runtime::NativePortBootstrapWriteBinding* binding =
+            nullptr;
+        std::span<const std::uint8_t> bytes;
+        std::uint32_t physical_begin = 0u;
+    };
+    std::vector<BoundPayload> bound;
+    bound.reserve(native_port->bootstrap.writes.size());
+    for (const auto& write : native_port->bootstrap.writes) {
+        const auto payload = std::find_if(
+            payloads.begin(), payloads.end(), [&](const auto& candidate) {
+                return candidate.guest_address == write.guest_address;
+            });
+        bound.push_back(
+            {&write,
+             payload->bytes,
+             katana::runtime::canonical_physical_address(
+                 write.guest_address)});
+    }
+
+    const auto patch_projected_range =
+        [&](const std::uint32_t source_address,
+            const std::uint32_t projected_address,
+            const std::size_t byte_size) {
+            if (byte_size == 0u) return;
+            const auto projected_physical =
+                static_cast<std::uint64_t>(
+                    katana::runtime::canonical_physical_address(
+                        projected_address));
+            const auto projected_end = projected_physical + byte_size;
+            for (const auto& payload : bound) {
+                const auto payload_begin =
+                    static_cast<std::uint64_t>(payload.physical_begin);
+                const auto payload_end =
+                    payload_begin + payload.bytes.size();
+                const auto overlap_begin =
+                    std::max(projected_physical, payload_begin);
+                const auto overlap_end =
+                    std::min(projected_end, payload_end);
+                if (overlap_begin >= overlap_end) continue;
+                const auto source_offset = static_cast<std::size_t>(
+                    overlap_begin - projected_physical);
+                const auto payload_offset = static_cast<std::size_t>(
+                    overlap_begin - payload_begin);
+                const auto extent = static_cast<std::size_t>(
+                    overlap_end - overlap_begin);
+                image.write_bytes(
+                    source_address +
+                        static_cast<std::uint32_t>(source_offset),
+                    payload.bytes.subspan(payload_offset, extent));
+            }
+        };
+
+    // Split every committed segment at alias boundaries. Aliased source bytes
+    // are populated from their active runtime destination in the checkpoint;
+    // unaliased bytes retain their ordinary SH-4 physical projection.
+    const auto aliases = image.address_aliases();
+    for (const auto& segment : image.segments()) {
+        if (segment.bytes.empty()) continue;
+        const auto segment_begin =
+            static_cast<std::uint64_t>(segment.virtual_address);
+        const auto segment_end = segment_begin + segment.bytes.size();
+        std::vector<std::uint64_t> boundaries{segment_begin, segment_end};
+        for (const auto& alias : aliases) {
+            const auto alias_begin =
+                static_cast<std::uint64_t>(alias.source_start);
+            const auto alias_end = alias_begin + alias.size;
+            if (alias_begin < segment_end && segment_begin < alias_end) {
+                boundaries.push_back(std::max(segment_begin, alias_begin));
+                boundaries.push_back(std::min(segment_end, alias_end));
+            }
+        }
+        std::sort(boundaries.begin(), boundaries.end());
+        boundaries.erase(
+            std::unique(boundaries.begin(), boundaries.end()),
+            boundaries.end());
+        for (std::size_t index = 1u; index < boundaries.size(); ++index) {
+            const auto begin = boundaries[index - 1u];
+            const auto end = boundaries[index];
+            if (begin == end) continue;
+            auto projected = static_cast<std::uint32_t>(begin);
+            const auto alias = std::find_if(
+                aliases.begin(), aliases.end(), [&](const auto& candidate) {
+                    const auto candidate_begin =
+                        static_cast<std::uint64_t>(candidate.source_start);
+                    return begin >= candidate_begin &&
+                           end <= candidate_begin + candidate.size;
+                });
+            if (alias != aliases.end())
+                projected = alias->runtime_start +
+                    static_cast<std::uint32_t>(
+                        begin - alias->source_start);
+            patch_projected_range(
+                static_cast<std::uint32_t>(begin), projected,
+                static_cast<std::size_t>(end - begin));
+        }
+    }
+
+    const auto post_roots = native_post_aot_roots(*native_port, game_project);
+    for (const auto root : post_roots) {
+        const auto resolved = image.resolve_segment_address(root, 2u);
+        const auto* segment = resolved.has_value()
+                                  ? image.find_segment(*resolved, 2u)
+                                  : nullptr;
+        if (!resolved.has_value() || segment == nullptr ||
+            !segment->permissions.executable)
+            throw std::invalid_argument(
+                "Post-Bootstrap-AOT-Root liegt nicht in der gebundenen "
+                "ausfuehrbaren Post-Image-Ansicht.");
+    }
+    image.replace_entry_points(post_roots);
+}
+
 void apply_game_project_runtime_images(
     katana::io::ExecutableImage& image,
     const katana::runtime::GameProjectDefinition& definition,
-    const std::span<const GameProjectRuntimeImagePayload> payloads) {
+    const std::span<const GameProjectRuntimeImagePayload> payloads,
+    const katana::runtime::NativePortDefinition* const native_port) {
+    validate_native_runtime_image_contract(&definition, native_port);
     std::size_t index = 0u;
     for (const auto& runtime_image : definition.runtime_images) {
+        if (!game_project_runtime_image_is_active(
+                native_port, runtime_image.image_id))
+            continue;
         const auto payload = std::find_if(
             payloads.begin(),
             payloads.end(),
@@ -589,31 +901,36 @@ std::uint32_t read_game_project_pointer(
 
 katana::analysis::AnalysisOverrides game_project_analysis_overrides(
     const katana::runtime::GameProjectDefinition& definition,
-    const katana::io::ExecutableImage& image) {
+    const katana::io::ExecutableImage& image,
+    const bool function_metadata_are_roots = true) {
     katana::analysis::AnalysisOverrides overrides;
     overrides.mode = katana::analysis::AnalysisDirectiveMode::Override;
     overrides.source_path = "external-game-project";
-    for (const auto& function : definition.function_boundaries)
-        overrides.functions.push_back(
-            {function.start, 0u, function.size});
-    for (const auto& hook : definition.mid_function_hooks)
-        overrides.functions.push_back({hook.instruction_address, 0u});
-    for (const auto& symbol : definition.symbols) {
-        if (symbol.kind == katana::runtime::GameProjectSymbolKind::Function)
-            overrides.functions.push_back({symbol.address, 0u});
-    }
-    for (const auto& table : definition.callback_tables) {
-        for (std::uint32_t index = 0u; index < table.entry_count; ++index) {
-            const auto address64 =
-                static_cast<std::uint64_t>(table.table_address) +
-                static_cast<std::uint64_t>(index) * table.entry_stride +
-                table.pointer_offset;
-            if (address64 > std::numeric_limits<std::uint32_t>::max())
-                throw std::invalid_argument(
-                    "Game-Project-Callbacktabelle laeuft ueber.");
-            const auto target = read_game_project_pointer(
-                image, static_cast<std::uint32_t>(address64));
-            if (target != 0u) overrides.functions.push_back({target, 0u});
+    if (function_metadata_are_roots) {
+        for (const auto& function : definition.function_boundaries)
+            overrides.functions.push_back(
+                {function.start, 0u, function.size});
+        for (const auto& hook : definition.mid_function_hooks)
+            overrides.functions.push_back({hook.instruction_address, 0u});
+        for (const auto& symbol : definition.symbols) {
+            if (symbol.kind ==
+                katana::runtime::GameProjectSymbolKind::Function)
+                overrides.functions.push_back({symbol.address, 0u});
+        }
+        for (const auto& table : definition.callback_tables) {
+            for (std::uint32_t index = 0u; index < table.entry_count; ++index) {
+                const auto address64 =
+                    static_cast<std::uint64_t>(table.table_address) +
+                    static_cast<std::uint64_t>(index) * table.entry_stride +
+                    table.pointer_offset;
+                if (address64 > std::numeric_limits<std::uint32_t>::max())
+                    throw std::invalid_argument(
+                        "Game-Project-Callbacktabelle laeuft ueber.");
+                const auto target = read_game_project_pointer(
+                    image, static_cast<std::uint32_t>(address64));
+                if (target != 0u)
+                    overrides.functions.push_back({target, 0u});
+            }
         }
     }
     std::sort(
@@ -634,34 +951,40 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 return left.address == right.address;
             }),
         overrides.functions.end());
-    for (const auto& table : definition.jump_tables) {
-        const auto encoding = [&] {
-            switch (table.encoding) {
-            case katana::runtime::GameProjectTableEncoding::Absolute32:
-                return katana::analysis::JumpTableOverrideEncoding::Absolute32;
-            case katana::runtime::GameProjectTableEncoding::SignedRelative16:
+    if (function_metadata_are_roots) {
+        for (const auto& table : definition.jump_tables) {
+            const auto encoding = [&] {
+                switch (table.encoding) {
+                case katana::runtime::GameProjectTableEncoding::Absolute32:
+                    return katana::analysis::JumpTableOverrideEncoding::
+                        Absolute32;
+                case katana::runtime::GameProjectTableEncoding::
+                    SignedRelative16:
+                    return katana::analysis::JumpTableOverrideEncoding::
+                        SignedRelative16;
+                case katana::runtime::GameProjectTableEncoding::
+                    SignedRelative32:
+                    return katana::analysis::JumpTableOverrideEncoding::
+                        SignedRelative32;
+                }
                 return katana::analysis::JumpTableOverrideEncoding::
-                    SignedRelative16;
-            case katana::runtime::GameProjectTableEncoding::SignedRelative32:
-                return katana::analysis::JumpTableOverrideEncoding::
-                    SignedRelative32;
-            }
-            return katana::analysis::JumpTableOverrideEncoding::Absolute32;
-        }();
-        const auto transfer =
-            table.transfer ==
-                    katana::runtime::GameProjectControlTransferKind::Call
-                ? katana::analysis::JumpTableOverrideTransfer::Call
-                : katana::analysis::JumpTableOverrideTransfer::Jump;
-        overrides.jump_tables.push_back(
-            {table.dispatch_address,
-             table.table_address,
-             table.entry_count,
-             0u,
-             table.entry_stride,
-             table.relative_base,
-             encoding,
-             transfer});
+                    Absolute32;
+            }();
+            const auto transfer =
+                table.transfer ==
+                        katana::runtime::GameProjectControlTransferKind::Call
+                    ? katana::analysis::JumpTableOverrideTransfer::Call
+                    : katana::analysis::JumpTableOverrideTransfer::Jump;
+            overrides.jump_tables.push_back(
+                {table.dispatch_address,
+                 table.table_address,
+                 table.entry_count,
+                 0u,
+                 table.entry_stride,
+                 table.relative_base,
+                 encoding,
+                 transfer});
+        }
     }
     return overrides;
 }
@@ -672,7 +995,8 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
     const katana::io::ExecutableImage& image) {
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (game_project != nullptr)
-        overrides = game_project_analysis_overrides(*game_project, image);
+        overrides = game_project_analysis_overrides(
+            *game_project, image, native_port == nullptr);
     if (native_port == nullptr) return overrides;
 
     if (!overrides.has_value()) {
@@ -681,10 +1005,51 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
             katana::analysis::AnalysisDirectiveMode::Override;
     }
     overrides->source_path = "external-port-contract";
-    overrides->functions.push_back(
-        {native_port->bootstrap.entry_point, 0u});
-    for (const auto& hook : native_port->hooks)
-        overrides->functions.push_back({hook.guest_address, 0u});
+    const auto post_roots = native_post_aot_roots(*native_port, game_project);
+    for (const auto root : post_roots) {
+        std::uint32_t size = 0u;
+        if (game_project != nullptr) {
+            const auto boundary = std::find_if(
+                game_project->function_boundaries.begin(),
+                game_project->function_boundaries.end(),
+                [&](const auto& candidate) {
+                    return candidate.start == root;
+                });
+            if (boundary != game_project->function_boundaries.end())
+                size = boundary->size;
+        }
+        overrides->functions.push_back({root, 0u, size});
+    }
+
+    for (const auto& continuation :
+         native_port->bootstrap.post_aot_continuations) {
+        if (game_project == nullptr)
+            throw std::invalid_argument(
+                "Post-Bootstrap-AOT-Continuation benoetigt eine exakte "
+                "Game-Project-Funktionsgrenze.");
+        const auto boundary = std::find_if(
+            game_project->function_boundaries.begin(),
+            game_project->function_boundaries.end(),
+            [&](const auto& candidate) {
+                return candidate.start == continuation.function_entry;
+            });
+        if (boundary == game_project->function_boundaries.end())
+            throw std::invalid_argument(
+                "Post-Bootstrap-AOT-Continuation besitzt keine exakte "
+                "Game-Project-Funktionsgrenze.");
+        overrides->functions.push_back(
+            {boundary->start, 0u, boundary->size});
+        // The resume is a decode/block root, not an independent function.
+        // Exact ownership in control-flow and function discovery keeps it in
+        // the declared owner while guaranteeing that the block is emitted.
+        overrides->functions.push_back(
+            {continuation.resume_address, 0u, 0u});
+    }
+
+    // Required hooks are consumers of the post-bootstrap reachable graph,
+    // never additional product roots. A hook absent from this closure is
+    // rejected during native admission instead of silently reviving stale or
+    // pre-checkpoint code.
 
     std::sort(
         overrides->functions.begin(),
@@ -725,10 +1090,174 @@ std::span<const std::uint8_t> game_project_image_bytes(
         segment->bytes.data() + *offset, size);
 }
 
+std::uint32_t project_image_source_to_runtime(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t source_address,
+    const std::size_t width) noexcept {
+    const auto source_end =
+        static_cast<std::uint64_t>(source_address) + width;
+    for (const auto& alias : image.address_aliases()) {
+        const auto alias_begin =
+            static_cast<std::uint64_t>(alias.source_start);
+        const auto alias_end = alias_begin + alias.size;
+        if (source_address < alias_begin || source_end > alias_end)
+            continue;
+        return alias.runtime_start +
+            (source_address - alias.source_start);
+    }
+    return source_address;
+}
+
+void validate_native_post_aot_program_contract(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::ir::Function> program,
+    const katana::runtime::NativePortDefinition* const native_port,
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const std::span<const NativePortBootstrapWritePayload> payloads) {
+    validate_native_port_bootstrap_write_payloads(native_port, payloads);
+    if (native_port == nullptr) return;
+
+    const auto expected_roots = native_post_aot_roots(
+        *native_port, game_project);
+    auto image_roots = std::vector<std::uint32_t>(
+        image.entry_points().begin(), image.entry_points().end());
+    std::sort(image_roots.begin(), image_roots.end());
+    if (image_roots != expected_roots)
+        throw std::invalid_argument(
+            "Executable-Image besitzt nicht exakt die deklarierten "
+            "Post-Bootstrap-AOT-Roots.");
+
+    const auto payload_for =
+        [&](const std::uint32_t source_address,
+            const std::size_t width)
+            -> std::optional<std::span<const std::uint8_t>> {
+            const auto runtime_address = project_image_source_to_runtime(
+                image, source_address, width);
+            const auto physical = static_cast<std::uint64_t>(
+                katana::runtime::canonical_physical_address(
+                    runtime_address));
+            for (const auto& binding :
+                 native_port->bootstrap.writes) {
+                const auto begin = static_cast<std::uint64_t>(
+                    katana::runtime::canonical_physical_address(
+                        binding.guest_address));
+                const auto end = begin + binding.byte_size;
+                if (physical < begin || physical + width > end) continue;
+                const auto payload = std::find_if(
+                    payloads.begin(), payloads.end(),
+                    [&](const auto& candidate) {
+                        return candidate.guest_address ==
+                               binding.guest_address;
+                    });
+                if (payload == payloads.end()) return std::nullopt;
+                return payload->bytes.subspan(
+                    static_cast<std::size_t>(physical - begin), width);
+            }
+            return std::nullopt;
+        };
+
+    std::set<std::uint32_t> emitted_entries;
+    std::set<std::uint32_t> checked_instructions;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            emitted_entries.insert(block.start_address);
+            checked_instructions.insert(block.start_address);
+            for (const auto& instruction : block.instructions)
+                checked_instructions.insert(instruction.source_address);
+        }
+    }
+    for (const auto root : expected_roots) {
+        if (!emitted_entries.contains(root))
+            throw std::invalid_argument(
+                "Post-Bootstrap-AOT-Root besitzt keinen emittierten "
+                "statischen Block.");
+    }
+    for (const auto& continuation :
+         native_port->bootstrap.post_aot_continuations) {
+        std::set<std::uint32_t> owners;
+        std::set<std::uint32_t> instruction_owners;
+        for (const auto& function : program) {
+            for (const auto& block : function.blocks) {
+                const auto internal_resumes =
+                    detail::native_aot_internal_resume_entries(block);
+                if (block.start_address == continuation.resume_address ||
+                    std::binary_search(
+                        internal_resumes.begin(), internal_resumes.end(),
+                        continuation.resume_address))
+                    owners.insert(function.entry_address);
+                if (std::any_of(
+                        block.instructions.begin(),
+                        block.instructions.end(),
+                        [&](const auto& instruction) {
+                            return instruction.source_address ==
+                                   continuation.resume_address;
+                        }))
+                    instruction_owners.insert(function.entry_address);
+            }
+        }
+        if (owners.size() != 1u ||
+            *owners.begin() != continuation.function_entry) {
+            std::ostringstream detail;
+            detail << "Post-Bootstrap-AOT-Continuation 0x" << std::hex
+                   << continuation.resume_address << " erwartet Owner 0x"
+                   << continuation.function_entry << ", resumierbare Owner=";
+            for (const auto owner : owners) detail << "0x" << owner << ',';
+            detail << " Instruktionsowner=";
+            for (const auto owner : instruction_owners)
+                detail << "0x" << owner << ',';
+            detail << " deklarierter-Owner=";
+            for (const auto& function : program) {
+                if (function.entry_address !=
+                    continuation.function_entry)
+                    continue;
+                detail << "blocks:" << std::dec << function.blocks.size()
+                       << ":";
+                for (const auto& block : function.blocks)
+                    detail << "0x" << std::hex << block.start_address
+                           << ',';
+            }
+            detail << " innere-Owner-Ingress=";
+            for (const auto inner_owner : owners) {
+                detail << "[0x" << std::hex << inner_owner << ':';
+                for (const auto& function : program) {
+                    if (std::find(function.direct_callees.begin(),
+                                  function.direct_callees.end(),
+                                  inner_owner) !=
+                        function.direct_callees.end())
+                        detail << "call@0x" << function.entry_address
+                               << ',';
+                    for (const auto& block : function.blocks) {
+                        if (std::find(block.successors.begin(),
+                                      block.successors.end(),
+                                      inner_owner) !=
+                            block.successors.end())
+                            detail << "edge@0x" << block.start_address
+                                   << ',';
+                    }
+                }
+                detail << ']';
+            }
+            throw std::invalid_argument(detail.str());
+        }
+    }
+    for (const auto address : checked_instructions) {
+        const auto expected = payload_for(address, 2u);
+        if (!expected.has_value()) continue;
+        const auto actual = game_project_image_bytes(image, address, 2u);
+        if (!std::equal(actual.begin(), actual.end(), expected->begin()))
+            throw std::invalid_argument(
+                "Dispatchbarer AOT-Block wurde nicht aus der gebundenen "
+                "Post-Bootstrap-Byteansicht erzeugt.");
+    }
+}
+
 void validate_game_project_image_contract(
     const katana::runtime::GameProjectDefinition& definition,
     const katana::io::ExecutableImage& image,
-    const std::span<const GameProjectRuntimeImagePayload> payloads) {
+    const std::span<const GameProjectRuntimeImagePayload> payloads,
+    const katana::runtime::NativePortDefinition* const native_port,
+    const std::span<const NativePortBootstrapWritePayload>
+        bootstrap_payloads) {
     for (const auto& function : definition.function_boundaries) {
         const auto resolved =
             image.resolve_segment_address(function.start, function.size);
@@ -789,6 +1318,9 @@ void validate_game_project_image_contract(
                 "Executable-Image ueberein.");
     }
     for (const auto& runtime_image : definition.runtime_images) {
+        if (!game_project_runtime_image_is_active(
+                native_port, runtime_image.image_id))
+            continue;
         const auto payload = std::find_if(
             payloads.begin(),
             payloads.end(),
@@ -800,13 +1332,53 @@ void validate_game_project_image_contract(
                 "game-project-runtime-image-payload-missing");
         const auto bytes = game_project_image_bytes(
             image, runtime_image.source_start, runtime_image.byte_size);
-        if (!std::equal(bytes.begin(),
-                        bytes.end(),
-                        payload->bytes.begin(),
-                        payload->bytes.end()))
-            throw std::invalid_argument(
-                "Game-Project-Runtime-Image stimmt nicht mit seinen "
-                "exportierten Analysebytes ueberein.");
+        for (std::size_t offset = 0u; offset < bytes.size(); ++offset) {
+            auto expected = payload->bytes[offset];
+            bool checkpoint_materialized = native_port == nullptr;
+            if (native_port != nullptr) {
+                const auto runtime_address =
+                    runtime_image.runtime_start +
+                    static_cast<std::uint32_t>(offset);
+                const auto runtime_physical =
+                    static_cast<std::uint64_t>(
+                        katana::runtime::canonical_physical_address(
+                            runtime_address));
+                for (const auto& binding : native_port->bootstrap.writes) {
+                    const auto binding_begin =
+                        static_cast<std::uint64_t>(
+                            katana::runtime::canonical_physical_address(
+                                binding.guest_address));
+                    const auto binding_end =
+                        binding_begin + binding.byte_size;
+                    if (runtime_physical < binding_begin ||
+                        runtime_physical >= binding_end)
+                        continue;
+                    const auto bootstrap_payload = std::find_if(
+                        bootstrap_payloads.begin(),
+                        bootstrap_payloads.end(),
+                        [&](const auto& candidate) {
+                            return candidate.guest_address ==
+                                   binding.guest_address;
+                        });
+                    if (bootstrap_payload == bootstrap_payloads.end())
+                        throw std::invalid_argument(
+                            "native-bootstrap-write-payload-missing");
+                    expected = bootstrap_payload->bytes[
+                        static_cast<std::size_t>(
+                            runtime_physical - binding_begin)];
+                    checkpoint_materialized = true;
+                    break;
+                }
+            }
+            if (!checkpoint_materialized)
+                throw std::invalid_argument(
+                    "Checkpoint-gebundenes Runtime-Image wird nicht "
+                    "vollstaendig durch Post-Bootstrap-Bytes materialisiert.");
+            if (bytes[offset] != expected)
+                throw std::invalid_argument(
+                    "Game-Project-Runtime-Image stimmt nicht mit der "
+                    "gebundenen Post-Bootstrap-Analyseansicht ueberein.");
+        }
         for (const auto entry_offset : runtime_image.entry_offsets) {
             const auto source_entry =
                 runtime_image.source_start + entry_offset;
@@ -13135,7 +13707,8 @@ std::string native_product_generated_header(
 std::string native_product_main(
     const std::string& entry_namespace,
     const bool hardware_closure_complete,
-    const std::size_t hardware_gap_count) {
+    const std::size_t hardware_gap_count,
+    const bool has_bringup_probes) {
     return "#include \"../generated/include/katana_port.hpp\"\n"
            "#include \"katana/runtime/native_port_content.hpp\"\n"
            "#include \"katana/runtime/native_port_graphics.hpp\"\n\n"
@@ -13153,16 +13726,21 @@ std::string native_product_main(
            "        constexpr std::size_t hardware_gap_count = " +
            std::to_string(hardware_gap_count) +
            "u;\n"
-           "        const bool explicit_bringup = !hardware_closure_complete &&\n"
+           "        constexpr bool has_bringup_probes = " +
+           std::string(has_bringup_probes ? "true" : "false") +
+           ";\n"
+           "        constexpr bool product_contract_complete =\n"
+           "            hardware_closure_complete && !has_bringup_probes;\n"
+           "        const bool explicit_bringup = !product_contract_complete &&\n"
            "            argc == 4 && std::string_view(argv[1]) ==\n"
            "                \"--bringup-incomplete-hardware-closure\" &&\n"
            "            std::string_view(argv[2]) == \"--content-root\";\n"
-           "        const bool closed_product = hardware_closure_complete &&\n"
+           "        const bool closed_product = product_contract_complete &&\n"
            "            argc == 3 &&\n"
            "            std::string_view(argv[1]) == \"--content-root\";\n"
            "        if (!explicit_bringup && !closed_product) {\n"
            "            std::cerr << \"usage: game \"\n"
-           "                      << (hardware_closure_complete\n"
+           "                      << (product_contract_complete\n"
            "                              ? \"\"\n"
            "                              : \"--bringup-incomplete-hardware-closure \")\n"
            "                      << \"--content-root <verified-native-content>\\n\";\n"
@@ -13171,7 +13749,8 @@ std::string native_product_main(
            "        if (explicit_bringup)\n"
            "            std::cerr << \"KATANA_NATIVE_PORT_BRINGUP \"\n"
            "                      << \"unresolved_hardware_sites=\"\n"
-           "                      << hardware_gap_count << '\\n';\n"
+           "                      << hardware_gap_count\n"
+           "                      << \" probes=\" << has_bringup_probes << '\\n';\n"
            "        const auto content_root_argument =\n"
            "            explicit_bringup ? 3 : 2;\n"
            "        const auto& definition = " +
@@ -13217,12 +13796,26 @@ std::string native_product_main(
            "        context.graphics = &host.graphics();\n"
            "        context.platform = &platform;\n"
            "        katana_native_bootstrap_dispatch(context);\n"
-           "        return context.stop_reason ==\n"
-           "                       katana::runtime::NativePortStopReason::None ||\n"
-           "                   context.stop_reason ==\n"
-           "                       katana::runtime::NativePortStopReason::HostRequested\n"
-           "                   ? 0\n"
-           "                   : 1;\n"
+           "        const bool normal_stop =\n"
+           "            context.stop_reason ==\n"
+           "                katana::runtime::NativePortStopReason::None ||\n"
+           "            context.stop_reason ==\n"
+           "                katana::runtime::NativePortStopReason::HostRequested;\n"
+           "        if (normal_stop && context.acceptance_reached() &&\n"
+           "            context.bootstrap_phase ==\n"
+           "                katana::runtime::NativePortBootstrapPhase::Completed) {\n"
+           "            std::cout << \"KATANA_NATIVE_PRODUCT_GATE status=accepted milestone=\"\n"
+           "                      << definition.acceptance.milestone_id << '\\n';\n"
+           "            return 0;\n"
+           "        }\n"
+           "        std::cerr << \"KATANA_NATIVE_PRODUCT_GATE status=not-reached milestone=\"\n"
+           "                  << definition.acceptance.milestone_id\n"
+           "                  << \" stop_reason=\"\n"
+           "                  << static_cast<unsigned>(context.stop_reason)\n"
+           "                  << \" bootstrap_phase=\"\n"
+           "                  << static_cast<unsigned>(context.bootstrap_phase)\n"
+           "                  << '\\n';\n"
+           "        return 1;\n"
            "    } catch (const katana::runtime::NativePortContractError& error) {\n"
            "        std::cerr << \"KATANA_NATIVE_PORT_CONTRACT failure=\"\n"
            "                  << static_cast<unsigned>(error.failure())\n"
@@ -13239,7 +13832,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const std::string& entry_namespace,
     const std::span<const katana::ir::Function> program,
     const std::span<const std::uint32_t> requested_resume_entries,
-    const katana::runtime::NativePortDefinition& definition) {
+    const katana::runtime::NativePortDefinition& definition,
+    const katana::io::ExecutableImage& image) {
     struct DispatchBlock final {
         std::uint32_t owner = 0u;
         std::uint32_t address = 0u;
@@ -13274,8 +13868,21 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     executable_fragments.reserve(block_count);
     const auto append_executable_instruction =
         [&](const std::uint32_t address) {
+            auto runtime_address = address;
+            for (const auto& alias : image.address_aliases()) {
+                const auto begin =
+                    static_cast<std::uint64_t>(alias.source_start);
+                const auto end = begin + alias.size;
+                if (address < begin ||
+                    static_cast<std::uint64_t>(address) + 2u > end)
+                    continue;
+                runtime_address = alias.runtime_start +
+                    (address - alias.source_start);
+                break;
+            }
             const auto physical =
-                katana::runtime::canonical_physical_address(address);
+                katana::runtime::canonical_physical_address(
+                    runtime_address);
             if ((address & 1u) != 0u ||
                 static_cast<std::uint64_t>(physical) + 2u >
                     0x1'0000'0000ull)
@@ -13312,6 +13919,14 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                     throw std::runtime_error(
                         "Nativer Produkt-Resume-Entry liegt ausserhalb "
                         "seines IR-Blocks.");
+                // A fully replacing FunctionEntry hook owns the only legal
+                // external entry into its interval. Internal IR block and
+                // auto-resume labels may remain useful to compile the dormant
+                // original body, but exposing them through the product
+                // dispatcher would let a callback/return bypass the hook.
+                if (native_port_replacement_function_strictly_contains(
+                        definition, address))
+                    return;
                 if (!dispatch_addresses.insert(address).second) return;
                 if (end - address >
                     std::numeric_limits<std::uint32_t>::max())
@@ -13327,6 +13942,35 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 detail::native_aot_internal_resume_entries(block);
             for (const auto resume : internal_resumes) append(resume);
         }
+    }
+    // Make the whole-function replacement guarantee observable at the final
+    // product-dispatch boundary: the hook entry remains dispatchable, while
+    // no address strictly inside its covered interval may survive. This is
+    // checked after collecting block starts and generated continuations.
+    for (const auto& hook : definition.hooks) {
+        if (hook.kind !=
+                katana::runtime::NativePortHookKind::FunctionEntry ||
+            !katana::runtime::native_port_hook_is_executable(
+                hook.requirement) ||
+            hook.original_policy !=
+                katana::runtime::NativePortHookOriginalPolicy::
+                    ReplacesOriginal)
+            continue;
+        if (!dispatch_addresses.contains(hook.guest_address))
+            throw std::runtime_error(
+                "Nativer Function-Replacement-Hook verlor seinen Entry.");
+        const auto hook_end = static_cast<std::uint64_t>(
+                                  hook.guest_address) +
+            hook.covered_size;
+        if (std::any_of(
+                blocks.begin(), blocks.end(), [&](const auto& block) {
+                    return block.address > hook.guest_address &&
+                           static_cast<std::uint64_t>(block.address) <
+                               hook_end;
+                }))
+            throw std::runtime_error(
+                "Nativer Function-Replacement-Hook besitzt einen "
+                "externen Interior-Dispatchentry.");
     }
     for (const auto resume : requested_resume_entries) {
         if (!dispatch_addresses.contains(resume))
@@ -13416,12 +14060,13 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     for (const auto& range : executable_ranges)
         append_immutable_events(
             range.physical_address, range.byte_size, range.kind_mask);
-    for (const auto& image : definition.images) {
-        if (image.writable) continue;
+    for (const auto& binding : definition.images) {
+        if (binding.writable) continue;
         const auto physical =
-            katana::runtime::canonical_physical_address(image.guest_address);
+            katana::runtime::canonical_physical_address(
+                binding.guest_address);
         append_immutable_events(
-            physical, image.byte_size, read_only_image_range_kind);
+            physical, binding.byte_size, read_only_image_range_kind);
     }
     std::sort(
         immutable_events.begin(), immutable_events.end(),
@@ -13587,15 +14232,17 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     output
         << "#include \"../include/katana_port.hpp\"\n"
         << "#include \"../include/native-port-dispatch-internal.hpp\"\n"
+        << "#include \"katana/runtime/native_port_content.hpp\"\n"
         << "#include <algorithm>\n#include <array>\n#include <chrono>\n"
            "#include <optional>\n#include <sstream>\n#include <stdexcept>\n"
-           "#include <string>\n#include <thread>\n#include <utility>\n\n";
+           "#include <string>\n#include <string_view>\n#include <thread>\n"
+           "#include <utility>\n\n";
     output << "extern \"C\" katana::runtime::NativePortBootstrapResult "
            << definition.bootstrap.symbol
            << "(katana::runtime::NativePortContext&) noexcept;\n";
     for (const auto& hook : definition.hooks) {
-        if (hook.requirement !=
-            katana::runtime::NativePortHookRequirement::Required)
+        if (!katana::runtime::native_port_hook_is_executable(
+                hook.requirement))
             continue;
         output << "extern \"C\" katana::runtime::NativePortHookResult "
                << hook.symbol
@@ -13664,12 +14311,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "               ? find_exact_entry(source ^ 0x20000000u)\n"
               "               : nullptr;\n"
               "}\n"
-              "bool required_hook_address(const std::uint32_t address) noexcept {\n"
+              "bool native_hook_address(const std::uint32_t address) noexcept {\n"
               "    auto source = normalized_source_address(address);\n"
               "    switch (source) {\n";
     for (const auto& hook : definition.hooks) {
-        if (hook.requirement ==
-            katana::runtime::NativePortHookRequirement::Required)
+        if (katana::runtime::native_port_hook_is_executable(
+                hook.requirement))
             output << "    case 0x" << symbol(hook.guest_address)
                    << "u: return true;\n";
     }
@@ -13680,8 +14327,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    source ^= 0x20000000u;\n"
               "    switch (source) {\n";
     for (const auto& hook : definition.hooks) {
-        if (hook.requirement ==
-            katana::runtime::NativePortHookRequirement::Required)
+        if (katana::runtime::native_port_hook_is_executable(
+                hook.requirement))
             output << "    case 0x" << symbol(hook.guest_address)
                    << "u: return true;\n";
     }
@@ -13690,7 +14337,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "}\n"
               "bool native_chainable_entry(const std::uint32_t address) noexcept {\n"
               "    try {\n"
-              "        return !required_hook_address(address) &&\n"
+              "        return !native_hook_address(address) &&\n"
               "               find_entry(address) != nullptr;\n"
               "    } catch (...) {\n"
               "        return false;\n"
@@ -13704,6 +14351,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "using HookResult = katana::runtime::NativePortHookResult;\n"
               "using HookAction = katana::runtime::NativePortHookAction;\n"
               "using HookKind = katana::runtime::NativePortHookKind;\n"
+              "using HookRequirement = katana::runtime::NativePortHookRequirement;\n"
               "using DirectHookFunction = HookResult (*)(\n"
               "    katana::runtime::NativePortContext&) noexcept;\n"
               "[[nodiscard]] bool native_unresolved_memory_exception(\n"
@@ -13735,32 +14383,39 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "struct HookDispatch {\n"
               "    bool present = false;\n"
               "    HookKind kind = HookKind::FunctionEntry;\n"
+              "    HookRequirement requirement = HookRequirement::Required;\n"
               "    katana::runtime::NativePortHookOriginalPolicy original_policy =\n"
               "        katana::runtime::NativePortHookOriginalPolicy::ReplacesOriginal;\n"
               "    DirectHookFunction function = nullptr;\n"
+              "    std::uint32_t guest_address = 0u;\n"
+              "    std::uint32_t covered_size = 0u;\n"
               "};\n"
-              "HookDispatch find_required_hook(\n"
+              "HookDispatch find_native_hook(\n"
               "    const std::uint32_t address) noexcept {\n"
               "    auto source =\n"
               "        runtime_dispatch_detail::normalized_source_address(address);\n"
               "    const auto invoke = [&](const std::uint32_t candidate) noexcept {\n"
               "        switch (candidate) {\n";
     for (const auto& hook : definition.hooks) {
-        if (hook.requirement !=
-            katana::runtime::NativePortHookRequirement::Required)
+        if (!katana::runtime::native_port_hook_is_executable(
+                hook.requirement))
             continue;
         output << "        case 0x" << symbol(hook.guest_address)
                << "u: return HookDispatch{true, HookKind::"
                << (hook.kind == katana::runtime::NativePortHookKind::FunctionEntry
                        ? "FunctionEntry"
                        : "Instruction")
+               << ", HookRequirement::"
+               << native_port_hook_requirement_name(hook.requirement)
                << ", katana::runtime::NativePortHookOriginalPolicy::"
                << (hook.original_policy ==
                            katana::runtime::NativePortHookOriginalPolicy::
                                MayContinueOriginal
                        ? "MayContinueOriginal"
                        : "ReplacesOriginal")
-               << ", &" << hook.symbol << "};\n";
+               << ", &" << hook.symbol << ", 0x"
+               << symbol(hook.guest_address) << "u, "
+               << hook.covered_size << "u};\n";
     }
     output << "        default: return HookDispatch{};\n"
               "        }\n"
@@ -13871,19 +14526,23 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "                *bypass_hook) == source;\n"
               "        if (bypass) bypass_hook.reset();\n"
               "        if (!bypass) {\n"
-              "            const auto hook = find_required_hook(target);\n"
+              "            const auto hook = find_native_hook(target);\n"
               "            if (hook.present) {\n"
               "                if (hook.function == nullptr)\n"
               "                    throw std::runtime_error(\"native-hook-function\");\n"
+              "                const auto previous_hook =\n"
+              "                    context.begin_hook_dispatch(hook.guest_address);\n"
               "                const auto hook_result = hook.function(context);\n"
+              "                context.end_hook_dispatch(previous_hook);\n"
               "                require_native_aot_integrity(\n"
               "                    context, *runtime_dispatch_detail::active_services);\n"
+              "                const katana::runtime::NativePortHookBinding\n"
+              "                    hook_binding{hook.guest_address, hook.covered_size,\n"
+              "                        hook.kind,\n"
+              "                        hook.requirement,\n"
+              "                        hook.original_policy, {}, {}};\n"
               "                if (!katana::runtime::valid_native_port_hook_result(\n"
-              "                        hook_result) ||\n"
-              "                    (hook.original_policy ==\n"
-              "                         katana::runtime::NativePortHookOriginalPolicy::\n"
-              "                             ReplacesOriginal &&\n"
-              "                     hook_result.action == HookAction::ContinueOriginal))\n"
+              "                        hook_binding, hook_result))\n"
               "                    throw katana::runtime::NativePortContractError(\n"
               "                        katana::runtime::NativePortContractFailure::\n"
               "                            InvalidHookResult,\n"
@@ -14053,7 +14712,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "void dispatch_jump(katana::runtime::CpuState& cpu,\n"
               "                   const std::uint32_t target) {\n"
               "    require_active_context(cpu);\n"
-              "    if (!runtime_dispatch_detail::required_hook_address(target) &&\n"
+              "    if (!runtime_dispatch_detail::native_hook_address(target) &&\n"
               "        runtime_dispatch_detail::find_entry(target) == nullptr)\n"
               "        fail_missing_entry(target);\n"
               "    cpu.pc = target;\n"
@@ -14084,15 +14743,53 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << range.byte_size << "u, "
                << static_cast<unsigned>(range.kind_mask) << "u},\n";
     output << "}};\n"
+           << "constexpr std::array<std::string_view, "
+           << definition.checkpoint_runtime_image_ids.size()
+           << "u> native_checkpoint_runtime_image_ids{{\n";
+    for (const auto image_id : definition.checkpoint_runtime_image_ids)
+        output << "    " << katana::io::quote_json(image_id) << ",\n";
+    output << "}};\n"
            << "constexpr std::array<katana::runtime::NativePortImageBinding, "
            << definition.images.size() << "u> native_images{{\n";
-    for (const auto& image : definition.images)
-        output << "    {" << katana::io::quote_json(image.image_id) << ", "
-               << katana::io::quote_json(image.content_relative_path) << ", "
-               << katana::io::quote_json(image.byte_identity) << ", "
-               << image.file_offset << "u, 0x" << symbol(image.guest_address)
-               << "u, " << image.byte_size << "u, "
-               << (image.writable ? "true" : "false") << "},\n";
+    for (const auto& binding : definition.images)
+        output << "    {" << katana::io::quote_json(binding.image_id) << ", "
+               << katana::io::quote_json(binding.content_relative_path)
+               << ", " << katana::io::quote_json(binding.byte_identity)
+               << ", " << binding.file_offset << "u, 0x"
+               << symbol(binding.guest_address) << "u, "
+               << binding.byte_size << "u, "
+               << (binding.writable ? "true" : "false") << "},\n";
+    output << "}};\n"
+           << "constexpr std::array<std::uint32_t, "
+           << definition.bootstrap.post_aot_roots.size()
+           << "u> native_post_aot_roots{{\n";
+    for (const auto root : definition.bootstrap.post_aot_roots)
+        output << "    0x" << symbol(root) << "u,\n";
+    output << "}};\n"
+           << "constexpr std::array<katana::runtime::NativePortAotContinuationBinding, "
+           << definition.bootstrap.post_aot_continuations.size()
+           << "u> native_post_aot_continuations{{\n";
+    for (const auto& continuation :
+         definition.bootstrap.post_aot_continuations)
+        output << "    {0x" << symbol(continuation.function_entry)
+               << "u, 0x" << symbol(continuation.resume_address)
+               << "u},\n";
+    output << "}};\n"
+           << "constexpr std::array<katana::runtime::NativePortBootstrapWriteBinding, "
+           << definition.bootstrap.writes.size()
+           << "u> native_bootstrap_writes{{\n";
+    for (const auto& write : definition.bootstrap.writes)
+        output << "    {0x" << symbol(write.guest_address) << "u, "
+               << write.byte_size << "u, "
+               << katana::io::quote_json(write.pre_write_identity) << ", "
+               << katana::io::quote_json(write.post_write_identity)
+               << ", katana::runtime::NativePortBootstrapWritePolicy::"
+               << (write.policy ==
+                           katana::runtime::NativePortBootstrapWritePolicy::
+                               WritableDataOnly
+                       ? "WritableDataOnly"
+                       : "IdentityBoundImmutableMaterialization")
+               << "},\n";
     output << "}};\n"
            << "constexpr std::array<katana::runtime::NativePortHookBinding, "
            << definition.hooks.size() << "u> native_hooks{{\n";
@@ -14104,10 +14801,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                        ? "FunctionEntry"
                        : "Instruction")
                << ", katana::runtime::NativePortHookRequirement::"
-               << (hook.requirement ==
-                           katana::runtime::NativePortHookRequirement::Required
-                       ? "Required"
-                       : "DiagnosticOnly")
+               << native_port_hook_requirement_name(hook.requirement)
                << ", katana::runtime::NativePortHookOriginalPolicy::"
                << (hook.original_policy ==
                            katana::runtime::NativePortHookOriginalPolicy::
@@ -14123,19 +14817,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     for (const auto& resolution : definition.hardware_resolutions)
         output
             << "    {0x" << symbol(resolution.instruction_address)
-            << "u, katana::runtime::NativePortHardwareResolutionKind::"
-            << (resolution.kind ==
-                        katana::runtime::NativePortHardwareResolutionKind::
-                            NativeMemory
-                    ? "NativeMemory"
-                    : "ReplacedByHook")
-            << ", 0x" << symbol(resolution.hook_guest_address) << "u, "
-            << katana::io::quote_json(resolution.native_memory_image_id)
-            << ", 0x" << symbol(resolution.native_memory_guest_address)
-            << "u, " << resolution.native_memory_byte_size << "u, "
-            << static_cast<unsigned>(resolution.native_memory_access_mask)
-            << "u, "
-            << static_cast<unsigned>(resolution.native_memory_width_mask)
+            << "u, 0x" << symbol(resolution.hook_guest_address)
             << "u},\n";
     output << "}};\n"
            << "const katana::runtime::NativePortDefinition& "
@@ -14158,10 +14840,22 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
            << symbol(definition.bootstrap.stack_pointer) << "u, 0x"
            << symbol(definition.bootstrap.vector_base) << "u, 0x"
            << symbol(definition.bootstrap.status_register) << "u, 0x"
-           << symbol(definition.bootstrap.fpscr) << "u, "
+           << symbol(definition.bootstrap.fpscr) << "u, 0x"
+           << symbol(definition.bootstrap.post_entry_point)
+           << "u, native_post_aot_roots, native_post_aot_continuations, "
+              "katana::runtime::NativePortBootstrapTimePolicy::NativeHostEpoch, "
            << katana::io::quote_json(definition.bootstrap.symbol)
-           << "},\n"
-              "        native_images, native_hooks, native_hardware_resolutions};\n"
+           << ", "
+           << katana::io::quote_json(
+                  definition.bootstrap.post_cpu_state_identity)
+           << ", native_bootstrap_writes},\n"
+              "        {"
+           << katana::io::quote_json(definition.acceptance.milestone_id)
+           << ", 0x"
+           << symbol(definition.acceptance.witness_hook_guest_address)
+           << "u},\n"
+              "        native_checkpoint_runtime_image_ids, native_images, "
+              "native_hooks, native_hardware_resolutions};\n"
               "    return definition;\n"
               "}\n\n"
               "void run_native_port(katana::runtime::NativePortContext& context) {\n"
@@ -14170,6 +14864,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        throw katana::runtime::NativePortContractError(\n"
               "            katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
               "            \"native-context\");\n"
+              "    if (context.bootstrap_phase !=\n"
+              "            katana::runtime::NativePortBootstrapPhase::NotStarted ||\n"
+              "        context.acceptance_reached())\n"
+              "        throw katana::runtime::NativePortContractError(\n"
+              "            katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
+              "            \"title-bootstrap-reentry\");\n"
               "    context.aot = {};\n"
               "    const auto* const bootstrap_cpu = context.cpu;\n"
               "    const auto* const bootstrap_host = context.host;\n"
@@ -14192,29 +14892,100 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        throw katana::runtime::NativePortContractError(\n"
               "            katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
               "            \"native-host-boundary-before-bootstrap\");\n"
-              "    const auto bootstrap = "
+              "    const auto bootstrap_frame_index = context.frame_index;\n"
+              "    const auto bootstrap_deadline =\n"
+              "        context.host_deadline_nanoseconds;\n";
+    for (std::size_t index = 0u;
+         index < image.address_aliases().size();
+         ++index)
+        output << "    std::optional<katana::runtime::"
+                  "ScopedCodeAddressMapping> active_code_mapping_"
+               << index << ";\n";
+    output <<
+              "    context.bootstrap_phase =\n"
+              "        katana::runtime::NativePortBootstrapPhase::Running;\n"
+              "    try {\n"
+              "        const auto memory_before =\n"
+              "            katana::runtime::capture_native_port_main_memory(\n"
+              "                *context.cpu);\n"
+              "        const auto bootstrap = "
            << definition.bootstrap.symbol << "(context);\n"
-              "    if (!bootstrap.ready || bootstrap.error_code != 0u) {\n"
-              "        std::ostringstream detail;\n"
-              "        detail << \"title-bootstrap:error-code=\"\n"
-              "               << bootstrap.error_code\n"
-              "               << \";ready=\" << (bootstrap.ready ? 1 : 0);\n"
-              "        throw katana::runtime::NativePortContractError(\n"
-              "            katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
-              "            detail.str());\n"
+              "        if (!bootstrap.ready || bootstrap.error_code != 0u) {\n"
+              "            std::ostringstream detail;\n"
+              "            detail << \"title-bootstrap:error-code=\"\n"
+              "                   << bootstrap.error_code\n"
+              "                   << \";ready=\"\n"
+              "                   << (bootstrap.ready ? 1 : 0);\n"
+              "            throw katana::runtime::NativePortContractError(\n"
+              "                katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
+              "                detail.str());\n"
+              "        }\n"
+              "        if (context.cpu != bootstrap_cpu ||\n"
+              "            context.host != bootstrap_host ||\n"
+              "            context.graphics != bootstrap_graphics ||\n"
+              "            context.platform != bootstrap_platform ||\n"
+              "            context.aot.invoke_original != nullptr ||\n"
+              "            context.aot.invoke_callback != nullptr ||\n"
+              "            context.stop_reason !=\n"
+              "                katana::runtime::NativePortStopReason::None ||\n"
+              "            context.bootstrap_phase !=\n"
+              "                katana::runtime::NativePortBootstrapPhase::Running ||\n"
+              "            context.frame_index != bootstrap_frame_index ||\n"
+              "            context.host_deadline_nanoseconds !=\n"
+              "                bootstrap_deadline ||\n"
+              "            context.acceptance_reached())\n"
+              "            throw katana::runtime::NativePortContractError(\n"
+              "                katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
+              "                \"title-bootstrap-context-contract\");\n"
+              "        katana::runtime::\n"
+              "            validate_native_port_bootstrap_memory_transition(\n"
+              "                *context.cpu, memory_before,\n"
+              "                native_bootstrap_writes,\n"
+              "                native_immutable_ranges);\n"
+              "        const auto cpu_identity =\n"
+              "            katana::runtime::native_port_cpu_state_identity(\n"
+              "                *context.cpu);\n"
+              "        if (cpu_identity != native_port_definition()\n"
+              "                                .bootstrap\n"
+              "                                .post_cpu_state_identity) {\n"
+              "            std::ostringstream detail;\n"
+              "            detail << \"title-bootstrap-cpu-identity:actual=\"\n"
+              "                   << cpu_identity;\n"
+              "            throw katana::runtime::NativePortContractError(\n"
+              "                katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
+              "                detail.str());\n"
+              "        }\n"
+              "        if (context.cpu->pc != native_port_definition()\n"
+              "                                   .bootstrap\n"
+              "                                   .post_entry_point) {\n"
+              "            std::ostringstream detail;\n"
+              "            detail << \"title-bootstrap-post-entry:actual=0x\"\n"
+              "                   << std::hex << context.cpu->pc;\n"
+              "            throw katana::runtime::NativePortContractError(\n"
+              "                katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
+              "                detail.str());\n"
+              "        }\n";
+    for (std::size_t index = 0u;
+         index < image.address_aliases().size();
+         ++index) {
+        const auto& alias = image.address_aliases()[index];
+        output << "        active_code_mapping_" << index
+               << ".emplace(katana::runtime::CodeAddressMapping{0x"
+               << symbol(alias.source_start) << "u, 0x"
+               << symbol(alias.runtime_start) << "u, " << alias.size
+               << "u});\n";
+    }
+    output <<
+              "        context.bootstrap_phase =\n"
+              "            katana::runtime::NativePortBootstrapPhase::Completed;\n"
+              "    } catch (...) {\n"
+              "        context.bootstrap_phase =\n"
+              "            katana::runtime::NativePortBootstrapPhase::Failed;\n"
+              "        throw;\n"
               "    }\n"
-              "    if (context.cpu != bootstrap_cpu || context.host != bootstrap_host ||\n"
-              "        context.graphics != bootstrap_graphics ||\n"
-              "        context.platform != bootstrap_platform ||\n"
-              "        context.aot.invoke_original != nullptr ||\n"
-              "        context.aot.invoke_callback != nullptr ||\n"
-              "        context.stop_reason !=\n"
-              "            katana::runtime::NativePortStopReason::None)\n"
-              "        throw katana::runtime::NativePortContractError(\n"
-              "            katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
-              "            \"title-bootstrap-context-contract\");\n"
               "    context.aot.invoke_original = &katana_native_invoke_original;\n"
               "    context.aot.invoke_callback = &katana_native_invoke_callback;\n"
+              "    context.bind_acceptance(native_port_definition().acceptance);\n"
               "    katana::runtime::NativePortImmutableWriteGuard "
               "immutable_guard(native_immutable_ranges);\n"
               "    katana::runtime::NativePortAotServices services(\n"
@@ -14254,7 +15025,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            return " << entry_namespace << "::bridge_failure(\n"
               "                context, katana::runtime::NativePortStopReason::HookAbort, 2u);\n"
               "        const auto hook = " << entry_namespace
-           << "::find_required_hook(guest_address);\n"
+           << "::find_native_hook(guest_address);\n"
               "        if (!hook.present || hook.original_policy !=\n"
               "                katana::runtime::NativePortHookOriginalPolicy::\n"
               "                    MayContinueOriginal)\n"
@@ -14667,14 +15438,26 @@ std::string product_gate_runner(const bool native_product,
                "    }\n"
                "    $process.WaitForExit()\n"
                "}\n"
-               "[Console]::Out.Write($standardOutput.GetAwaiter().GetResult())\n"
-               "[Console]::Error.Write($standardError.GetAwaiter().GetResult())\n"
+               "$capturedOutput = $standardOutput.GetAwaiter().GetResult()\n"
+               "$capturedError = $standardError.GetAwaiter().GetResult()\n"
+               "[Console]::Out.Write($capturedOutput)\n"
+               "[Console]::Error.Write($capturedError)\n"
                "if ($timedOut) {\n"
                "    [Console]::Error.WriteLine("
                "'KATANA_NATIVE_PRODUCT_GATE status=host-watchdog-hang')\n"
                "    exit 124\n"
                "}\n"
-               "exit $process.ExitCode\n";
+               "if ($process.ExitCode -ne 0) { exit $process.ExitCode }\n"
+               "$acceptedLines = @(\n"
+               "    $capturedOutput -split \"`r?`n\" |\n"
+               "        Where-Object { $_ -match '^KATANA_NATIVE_PRODUCT_GATE status=accepted milestone=[A-Za-z0-9_.-]+$' }\n"
+               ")\n"
+               "if ($acceptedLines.Count -ne 1) {\n"
+               "    [Console]::Error.WriteLine(\n"
+               "        'KATANA_NATIVE_PRODUCT_GATE status=acceptance-marker-missing')\n"
+               "    exit 125\n"
+               "}\n"
+               "exit 0\n";
     }
     return "param(\n"
            "    [Parameter(Mandatory = $true)][string]$Executable,\n"
@@ -14764,8 +15547,8 @@ std::string native_port_link_audit_source(
         };
         append_symbol(definition->bootstrap.symbol);
         for (const auto& hook : definition->hooks) {
-            if (hook.requirement ==
-                katana::runtime::NativePortHookRequirement::Required)
+            if (katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
                 append_symbol(hook.symbol);
         }
     }
@@ -14826,6 +15609,8 @@ std::string native_port_link_audit_source(
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14846,6 +15631,44 @@ constexpr std::array<std::string_view, )cpp"
 constexpr std::array<std::string_view, 1> allowed_forbidden_fragments{
     std::string_view{"nativeportplatformservices"},
 };
+constexpr std::array<std::string_view, 4> allowed_first_party_owners{
+    std::string_view{"katana_native_port_runtime"},
+    std::string_view{"katana_aot_runtime"},
+    std::string_view{"katana_generated"},
+    std::string_view{"katana_native_title_adapter"},
+};
+#ifdef _WIN32
+constexpr std::array<std::string_view, 10> allowed_platform_owners{
+    std::string_view{"msvcprt"},
+    std::string_view{"msvcrt"},
+    std::string_view{"vcruntime"},
+    std::string_view{"libcpmt"},
+    std::string_view{"libcmt"},
+    std::string_view{"libvcruntime"},
+    std::string_view{"libucrt"},
+    std::string_view{"oldnames"},
+    std::string_view{"legacy_stdio_definitions"},
+    std::string_view{"uuid"},
+};
+constexpr std::array<std::string_view, 1> allowed_direct_objects{
+    std::string_view{"main.cpp.obj"},
+};
+#else
+constexpr std::array<std::string_view, 9> allowed_platform_owners{
+    std::string_view{"libstdc++"},
+    std::string_view{"libc++"},
+    std::string_view{"libc++abi"},
+    std::string_view{"libgcc"},
+    std::string_view{"libgcc_eh"},
+    std::string_view{"libunwind"},
+    std::string_view{"libc"},
+    std::string_view{"libm"},
+    std::string_view{"libpthread"},
+};
+constexpr std::array<std::string_view, 1> allowed_direct_objects{
+    std::string_view{"main.cpp.o"},
+};
+#endif
 
 [[nodiscard]] bool safe_regular_file(const std::filesystem::path& path) {
     std::error_code error;
@@ -14870,6 +15693,323 @@ void mask_allowed_forbidden_fragments(std::string& text) {
             offset += token.size();
         }
     }
+}
+
+[[nodiscard]] std::optional<std::size_t> allowed_owner_index(
+    std::string_view owner) noexcept {
+    if (owner.starts_with("lib")) owner.remove_prefix(3u);
+    for (std::size_t index = 0u;
+         index < allowed_first_party_owners.size();
+         ++index)
+        if (owner == allowed_first_party_owners[index]) return index;
+    return std::nullopt;
+}
+
+template <std::size_t Size>
+[[nodiscard]] bool contains_exact(
+    const std::array<std::string_view, Size>& values,
+    const std::string_view value) noexcept {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+[[nodiscard]] bool allowed_platform_owner(
+    const std::string_view owner) noexcept {
+    return contains_exact(allowed_platform_owners, owner);
+}
+
+[[nodiscard]] std::string_view object_basename(
+    const std::string_view token) noexcept {
+    const auto slash = token.find_last_of("/\\");
+    return token.substr(slash == std::string_view::npos ? 0u : slash + 1u);
+}
+
+bool audit_map_owners(const std::filesystem::path& map) {
+    std::ifstream input(map);
+    if (!input) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner-map-unreadable\n";
+        return false;
+    }
+    std::array<bool, allowed_first_party_owners.size()> seen{};
+    bool failed = false;
+    bool structural_owner_seen = false;
+    std::string line;
+    while (std::getline(input, line)) {
+        lower_ascii(line);
+        const auto end = line.find_last_not_of(" \t\r");
+        if (end == std::string::npos) continue;
+        const auto begin = line.find_last_of(" \t", end);
+        const auto token = std::string_view(line).substr(
+            begin == std::string::npos ? 0u : begin + 1u,
+            end - (begin == std::string::npos ? 0u : begin + 1u) + 1u);
+        const auto colon = token.find(':');
+        if (colon != std::string_view::npos &&
+            token.find(".obj", colon) != std::string_view::npos) {
+            const auto owner = token.substr(0u, colon);
+            structural_owner_seen = true;
+            const auto allowed = allowed_owner_index(owner);
+            if (allowed) {
+                seen[*allowed] = true;
+            } else if (!allowed_platform_owner(owner)) {
+                std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner="
+                          << owner << '\n';
+                failed = true;
+            }
+            continue;
+        }
+        const auto archive = token.find(".a(");
+        if (archive != std::string_view::npos) {
+            const auto slash = token.find_last_of("/\\", archive);
+            const auto owner = token.substr(
+                slash == std::string_view::npos ? 0u : slash + 1u,
+                archive - (slash == std::string_view::npos ? 0u : slash + 1u));
+            structural_owner_seen = true;
+            const auto allowed = allowed_owner_index(owner);
+            if (allowed) {
+                seen[*allowed] = true;
+            } else if (!allowed_platform_owner(owner)) {
+                std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner="
+                          << owner << '\n';
+                failed = true;
+            }
+            continue;
+        }
+        const auto object = object_basename(token);
+        if (!object.ends_with(".obj") && !object.ends_with(".o")) continue;
+        structural_owner_seen = true;
+        if (contains_exact(allowed_direct_objects, object)) continue;
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION direct-object="
+                  << object << '\n';
+        failed = true;
+    }
+    if (input.bad()) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner-map-read-failed\n";
+        return false;
+    }
+    if (!structural_owner_seen) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner-closure-unparsed\n";
+        failed = true;
+    }
+    for (std::size_t index = 0u; index < seen.size(); ++index) {
+        if (seen[index]) continue;
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner-missing="
+                  << allowed_first_party_owners[index] << '\n';
+        failed = true;
+    }
+    return !failed;
+}
+
+)cpp";
+    source << R"cpp(
+class BinaryView final {
+  public:
+    explicit BinaryView(const std::filesystem::path& path)
+        : input_(path, std::ios::binary) {
+        std::error_code error;
+        size_ = std::filesystem::file_size(path, error);
+        valid_ = !error && input_.is_open();
+    }
+
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] std::uint64_t size() const noexcept { return size_; }
+
+    [[nodiscard]] bool read(const std::uint64_t offset,
+                            char* const destination,
+                            const std::size_t size) {
+        if (!valid_ || offset > size_ || size > size_ - offset ||
+            offset > static_cast<std::uint64_t>(
+                         std::numeric_limits<std::streamoff>::max()))
+            return false;
+        input_.clear();
+        input_.seekg(static_cast<std::streamoff>(offset));
+        input_.read(destination, static_cast<std::streamsize>(size));
+        return input_.good() ||
+               input_.gcount() == static_cast<std::streamsize>(size);
+    }
+
+    [[nodiscard]] std::optional<std::uint16_t> u16(
+        const std::uint64_t offset) {
+        std::array<unsigned char, 2u> bytes{};
+        if (!read(offset, reinterpret_cast<char*>(bytes.data()), bytes.size()))
+            return std::nullopt;
+        return static_cast<std::uint16_t>(bytes[0]) |
+               static_cast<std::uint16_t>(bytes[1]) << 8u;
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> u32(
+        const std::uint64_t offset) {
+        std::array<unsigned char, 4u> bytes{};
+        if (!read(offset, reinterpret_cast<char*>(bytes.data()), bytes.size()))
+            return std::nullopt;
+        return static_cast<std::uint32_t>(bytes[0]) |
+               static_cast<std::uint32_t>(bytes[1]) << 8u |
+               static_cast<std::uint32_t>(bytes[2]) << 16u |
+               static_cast<std::uint32_t>(bytes[3]) << 24u;
+    }
+
+    [[nodiscard]] std::optional<std::string> c_string(
+        const std::uint64_t offset,
+        const std::size_t maximum_size) {
+        std::string result;
+        result.reserve(maximum_size);
+        for (std::size_t index = 0u; index < maximum_size; ++index) {
+            char byte = 0;
+            if (!read(offset + index, &byte, 1u)) return std::nullopt;
+            if (byte == 0) return result.empty() ? std::nullopt
+                                                 : std::optional(result);
+            const auto value = static_cast<unsigned char>(byte);
+            if (value < 0x20u || value > 0x7eu) return std::nullopt;
+            result.push_back(byte);
+        }
+        return std::nullopt;
+    }
+
+  private:
+    std::ifstream input_;
+    std::uint64_t size_ = 0u;
+    bool valid_ = false;
+};
+
+struct PeSection final {
+    std::uint32_t virtual_address = 0u;
+    std::uint32_t virtual_size = 0u;
+    std::uint32_t raw_offset = 0u;
+    std::uint32_t raw_size = 0u;
+};
+
+[[nodiscard]] bool allowed_windows_import(const std::string_view name) {
+    constexpr std::array exact{
+        std::string_view{"kernel32.dll"}, std::string_view{"user32.dll"},
+        std::string_view{"bcrypt.dll"}, std::string_view{"d3d11.dll"},
+        std::string_view{"dxgi.dll"}, std::string_view{"mfplat.dll"},
+        std::string_view{"mfreadwrite.dll"}, std::string_view{"mfuuid.dll"},
+        std::string_view{"ole32.dll"}, std::string_view{"winmm.dll"},
+        std::string_view{"advapi32.dll"}, std::string_view{"shell32.dll"},
+        std::string_view{"gdi32.dll"}, std::string_view{"combase.dll"},
+        std::string_view{"oleaut32.dll"}, std::string_view{"ucrtbase.dll"},
+        std::string_view{"vcruntime140.dll"},
+        std::string_view{"vcruntime140_1.dll"},
+        std::string_view{"msvcp140.dll"},
+        std::string_view{"msvcp140_1.dll"},
+        std::string_view{"msvcp140_2.dll"},
+        std::string_view{"msvcp140_atomic_wait.dll"}};
+    return std::find(exact.begin(), exact.end(), name) != exact.end() ||
+           name.starts_with("api-ms-win-") ||
+           name.starts_with("ext-ms-win-");
+}
+
+)cpp";
+    source << R"cpp(
+bool audit_pe_imports(const std::filesystem::path& binary) {
+#ifndef _WIN32
+    static_cast<void>(binary);
+    return true;
+#else
+    BinaryView input(binary);
+    const auto dos_magic = input.u16(0u);
+    const auto pe_offset = input.u32(0x3cu);
+    if (!input.valid() || !dos_magic || *dos_magic != 0x5a4du ||
+        !pe_offset || input.u32(*pe_offset) != 0x00004550u) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION invalid-pe\n";
+        return false;
+    }
+    const auto section_count = input.u16(*pe_offset + 6u);
+    const auto optional_size = input.u16(*pe_offset + 20u);
+    const auto optional_offset = static_cast<std::uint64_t>(*pe_offset) + 24u;
+    const auto optional_magic = input.u16(optional_offset);
+    if (!section_count || *section_count == 0u || *section_count > 96u ||
+        !optional_size || !optional_magic ||
+        (*optional_magic != 0x10bu && *optional_magic != 0x20bu)) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION invalid-pe-optional\n";
+        return false;
+    }
+    const auto directory_offset = optional_offset +
+        (*optional_magic == 0x20bu ? 112u : 96u);
+    const auto directory_count = input.u32(
+        optional_offset + (*optional_magic == 0x20bu ? 108u : 92u));
+    const auto import_rva = input.u32(directory_offset + 8u);
+    const auto import_size = input.u32(directory_offset + 12u);
+    if (!directory_count || *directory_count < 2u || !import_rva ||
+        !import_size || *import_rva == 0u || *import_size < 20u) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION missing-import-table\n";
+        return false;
+    }
+    std::vector<PeSection> sections;
+    sections.reserve(*section_count);
+    const auto section_offset = optional_offset + *optional_size;
+    for (std::uint16_t index = 0u; index < *section_count; ++index) {
+        const auto offset = section_offset + index * 40u;
+        const auto virtual_size = input.u32(offset + 8u);
+        const auto virtual_address = input.u32(offset + 12u);
+        const auto raw_size = input.u32(offset + 16u);
+        const auto raw_offset = input.u32(offset + 20u);
+        if (!virtual_size || !virtual_address || !raw_size || !raw_offset) {
+            std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION invalid-pe-section\n";
+            return false;
+        }
+        sections.push_back(
+            {*virtual_address, *virtual_size, *raw_offset, *raw_size});
+    }
+    const auto rva_offset = [&](const std::uint32_t rva)
+        -> std::optional<std::uint64_t> {
+        for (const auto& section : sections) {
+            const auto span = std::max(section.virtual_size, section.raw_size);
+            if (rva < section.virtual_address ||
+                static_cast<std::uint64_t>(rva) >=
+                    static_cast<std::uint64_t>(section.virtual_address) + span)
+                continue;
+            const auto delta = rva - section.virtual_address;
+            if (delta >= section.raw_size) return std::nullopt;
+            return static_cast<std::uint64_t>(section.raw_offset) + delta;
+        }
+        return std::nullopt;
+    };
+    const auto import_offset = rva_offset(*import_rva);
+    if (!import_offset) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION invalid-import-rva\n";
+        return false;
+    }
+    bool failed = false;
+    bool terminated = false;
+    const auto maximum_descriptors =
+        std::min<std::uint32_t>(*import_size / 20u + 1u, 4096u);
+    for (std::uint32_t index = 0u; index < maximum_descriptors; ++index) {
+        const auto descriptor = *import_offset + index * 20u;
+        const auto original_thunk = input.u32(descriptor);
+        const auto timestamp = input.u32(descriptor + 4u);
+        const auto forwarder = input.u32(descriptor + 8u);
+        const auto name_rva = input.u32(descriptor + 12u);
+        const auto first_thunk = input.u32(descriptor + 16u);
+        if (!original_thunk || !timestamp || !forwarder || !name_rva ||
+            !first_thunk) {
+            std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION invalid-import-descriptor\n";
+            return false;
+        }
+        if (*original_thunk == 0u && *timestamp == 0u && *forwarder == 0u &&
+            *name_rva == 0u && *first_thunk == 0u) {
+            terminated = true;
+            break;
+        }
+        const auto name_offset = rva_offset(*name_rva);
+        const auto name = name_offset
+            ? input.c_string(*name_offset, 260u)
+            : std::nullopt;
+        if (!name) {
+            std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION invalid-import-name\n";
+            return false;
+        }
+        auto lowered = *name;
+        lower_ascii(lowered);
+        if (allowed_windows_import(lowered)) continue;
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION import="
+                  << lowered << '\n';
+        failed = true;
+    }
+    if (!terminated) {
+        std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION unterminated-import-table\n";
+        failed = true;
+    }
+    return !failed;
+#endif
 }
 } // namespace
 
@@ -14935,7 +16075,7 @@ int main(const int argc, char* argv[]) {
         std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION map-read-failed\n";
         return 6;
     }
-    bool failed = false;
+    bool failed = !audit_map_owners(map) || !audit_pe_imports(binary);
     for (std::size_t index = 0u; index < required_tokens.size(); ++index) {
         if (required_seen[index]) continue;
         std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION missing="
@@ -14958,7 +16098,72 @@ int main(const int argc, char* argv[]) {
 }
 
 std::string port_cmake(const std::string& target_name) {
-    return "add_executable(" + target_name +
+    return "function(katana_verify_native_first_party_target_closure root)\n"
+           "  set(KATANA_NATIVE_CLOSURE_QUEUE \"${root}\")\n"
+           "  set(KATANA_NATIVE_CLOSURE_SEEN \"\")\n"
+           "  while(KATANA_NATIVE_CLOSURE_QUEUE)\n"
+           "    list(POP_FRONT KATANA_NATIVE_CLOSURE_QUEUE KATANA_NATIVE_CLOSURE_CURRENT)\n"
+           "    if(NOT TARGET \"${KATANA_NATIVE_CLOSURE_CURRENT}\")\n"
+           "      continue()\n"
+           "    endif()\n"
+           "    get_target_property(KATANA_NATIVE_CLOSURE_RESOLVED\n"
+           "      \"${KATANA_NATIVE_CLOSURE_CURRENT}\" ALIASED_TARGET)\n"
+           "    if(NOT KATANA_NATIVE_CLOSURE_RESOLVED)\n"
+           "      set(KATANA_NATIVE_CLOSURE_RESOLVED \"${KATANA_NATIVE_CLOSURE_CURRENT}\")\n"
+           "    endif()\n"
+           "    list(FIND KATANA_NATIVE_CLOSURE_SEEN\n"
+           "      \"${KATANA_NATIVE_CLOSURE_RESOLVED}\" KATANA_NATIVE_CLOSURE_INDEX)\n"
+           "    if(NOT KATANA_NATIVE_CLOSURE_INDEX EQUAL -1)\n"
+           "      continue()\n"
+           "    endif()\n"
+           "    list(APPEND KATANA_NATIVE_CLOSURE_SEEN\n"
+           "      \"${KATANA_NATIVE_CLOSURE_RESOLVED}\")\n"
+           "    string(TOLOWER \"${KATANA_NATIVE_CLOSURE_RESOLVED}\"\n"
+           "      KATANA_NATIVE_CLOSURE_LOWER)\n"
+           "    string(TOLOWER \"${root}\" KATANA_NATIVE_CLOSURE_ROOT_LOWER)\n"
+           "    if(NOT KATANA_NATIVE_CLOSURE_LOWER STREQUAL\n"
+           "           KATANA_NATIVE_CLOSURE_ROOT_LOWER AND\n"
+           "       NOT KATANA_NATIVE_CLOSURE_LOWER MATCHES\n"
+           "         \"^(katana_native_title_adapter|katana_native_port_runtime|katana_aot_runtime|katana_generated|katanarecomp::native_port_runtime|katanarecomp::aot_runtime|katanarecomp::katanaffmpegbuild|katanaffmpegbuild|katanaffmpeg::(runtime|avformat|avcodec|avutil|swresample|swscale)|threads::threads)$\")\n"
+           "      message(FATAL_ERROR\n"
+           "        \"Unapproved target in native product closure: ${KATANA_NATIVE_CLOSURE_RESOLVED}\")\n"
+           "    endif()\n"
+           "    get_target_property(KATANA_NATIVE_CLOSURE_LINKS\n"
+           "      \"${KATANA_NATIVE_CLOSURE_RESOLVED}\" LINK_LIBRARIES)\n"
+           "    get_target_property(KATANA_NATIVE_CLOSURE_INTERFACE\n"
+           "      \"${KATANA_NATIVE_CLOSURE_RESOLVED}\" INTERFACE_LINK_LIBRARIES)\n"
+           "    foreach(KATANA_NATIVE_CLOSURE_DEP IN LISTS\n"
+           "            KATANA_NATIVE_CLOSURE_LINKS KATANA_NATIVE_CLOSURE_INTERFACE)\n"
+           "      if(KATANA_NATIVE_CLOSURE_DEP STREQUAL \"\" OR\n"
+           "         KATANA_NATIVE_CLOSURE_DEP MATCHES \"-NOTFOUND$\")\n"
+           "        continue()\n"
+           "      endif()\n"
+           "      if(KATANA_NATIVE_CLOSURE_DEP MATCHES\n"
+           "           \"^\\\\$<(BUILD_INTERFACE|LINK_ONLY):([^>]+)>$\")\n"
+           "        set(KATANA_NATIVE_CLOSURE_DEP \"${CMAKE_MATCH_2}\")\n"
+           "      elseif(KATANA_NATIVE_CLOSURE_DEP MATCHES\n"
+           "             \"^\\\\$<INSTALL_INTERFACE:\")\n"
+           "        continue()\n"
+           "      endif()\n"
+           "      string(TOLOWER \"${KATANA_NATIVE_CLOSURE_DEP}\"\n"
+           "        KATANA_NATIVE_CLOSURE_DEP_LOWER)\n"
+           "      if(KATANA_NATIVE_CLOSURE_DEP_LOWER MATCHES\n"
+           "           \"katana_runtime_core|katanarecomp::runtime$|katana_diagnostic_interpreter|katanarecomp::diagnostic_interpreter|katana_analyzer\")\n"
+           "        message(FATAL_ERROR\n"
+           "          \"Forbidden dependency in native product closure: ${KATANA_NATIVE_CLOSURE_DEP}\")\n"
+           "      endif()\n"
+           "      if(TARGET \"${KATANA_NATIVE_CLOSURE_DEP}\")\n"
+           "        list(APPEND KATANA_NATIVE_CLOSURE_QUEUE\n"
+           "          \"${KATANA_NATIVE_CLOSURE_DEP}\")\n"
+           "      elseif(NOT KATANA_NATIVE_CLOSURE_DEP_LOWER MATCHES\n"
+           "          \"^(threads::threads|bcrypt|mfplat|mfreadwrite|mfuuid|ole32|d3d11|dxgi|user32|winmm)$\")\n"
+           "        message(FATAL_ERROR\n"
+           "          \"Unapproved raw link item in native product closure: ${KATANA_NATIVE_CLOSURE_DEP}\")\n"
+           "      endif()\n"
+           "    endforeach()\n"
+           "  endwhile()\n"
+           "endfunction()\n"
+           "add_executable(" + target_name +
            " \"${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp\")\n"
            "target_compile_features(" +
            target_name +
@@ -15006,6 +16211,8 @@ std::string port_cmake(const std::string& target_name) {
            target_name + " PRIVATE KATANA_NATIVE_PORT_PRODUCT=1)\n"
            "  target_link_libraries(" +
            target_name + " PRIVATE katana_native_title_adapter)\n"
+           "  katana_verify_native_first_party_target_closure(" +
+           target_name + ")\n"
            "  if(WIN32)\n"
            "    if(NOT COMMAND katana_deploy_ffmpeg_runtime)\n"
            "      message(FATAL_ERROR \"Native media runtime deployment contract is missing\")\n"
@@ -15354,22 +16561,33 @@ struct DiscExportContext {
     std::string boot_sha256;
 };
 
-std::string prepared_boot_sha256(const PreparedPortProgram& prepared) {
+std::string executable_image_range_sha256(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t address,
+    const std::size_t byte_size) {
     const auto* boot_segment =
-        prepared.image.find_segment(prepared.boot_address, prepared.boot_size);
+        image.find_segment(address, byte_size);
     if (boot_segment == nullptr)
         throw std::runtime_error(
             "Portvertrag kann das analysierte Bootprogramm nicht binden.");
     const auto boot_offset =
-        boot_segment->byte_offset(prepared.boot_address);
+        boot_segment->byte_offset(address);
     if (!boot_offset || *boot_offset > boot_segment->bytes.size() ||
-        prepared.boot_size > boot_segment->bytes.size() - *boot_offset)
+        byte_size > boot_segment->bytes.size() - *boot_offset)
         throw std::runtime_error(
             "Portvertrag findet keine vollstaendigen Bootbytes.");
     return katana::io::sha256_bytes(std::string_view(
         reinterpret_cast<const char*>(
             boot_segment->bytes.data() + *boot_offset),
-        prepared.boot_size));
+        byte_size));
+}
+
+std::string prepared_boot_sha256(const PreparedPortProgram& prepared) {
+    const auto& source_image = prepared.pre_bootstrap_image != nullptr
+                                   ? *prepared.pre_bootstrap_image
+                                   : prepared.image;
+    return executable_image_range_sha256(
+        source_image, prepared.boot_address, prepared.boot_size);
 }
 
 DiscExportContext prepare_disc_export_context(
@@ -15534,7 +16752,8 @@ std::size_t configured_port_codegen_jobs(
 
 void validate_game_project_runtime_image_payloads(
     const katana::runtime::GameProjectDefinition* const game_project,
-    const std::span<const GameProjectRuntimeImagePayload> payloads) {
+    const std::span<const GameProjectRuntimeImagePayload> payloads,
+    const katana::runtime::NativePortDefinition* const native_port) {
     if (game_project == nullptr) {
         if (!payloads.empty())
             throw std::invalid_argument(
@@ -15572,9 +16791,53 @@ void validate_game_project_runtime_image_payloads(
                 "game-project-runtime-image-payload-byte-identity-mismatch");
     }
     for (const auto& descriptor : game_project->runtime_images) {
-        if (!payload_ids.contains(descriptor.image_id))
+        if (game_project_runtime_image_is_active(
+                native_port, descriptor.image_id) &&
+            !payload_ids.contains(descriptor.image_id))
             throw std::invalid_argument(
                 "game-project-runtime-image-payload-missing");
+    }
+}
+
+void validate_native_port_bootstrap_write_payloads(
+    const katana::runtime::NativePortDefinition* const native_port,
+    const std::span<const NativePortBootstrapWritePayload> payloads) {
+    if (native_port == nullptr) {
+        if (!payloads.empty())
+            throw std::invalid_argument(
+                "native-bootstrap-write-payload-without-definition");
+        return;
+    }
+    katana::runtime::validate_native_port_definition(*native_port);
+    std::set<std::uint32_t> payload_addresses;
+    for (const auto& payload : payloads) {
+        if (!payload_addresses.insert(payload.guest_address).second)
+            throw std::invalid_argument(
+                "native-bootstrap-write-payload-address-duplicate");
+        const auto binding = std::find_if(
+            native_port->bootstrap.writes.begin(),
+            native_port->bootstrap.writes.end(),
+            [&](const auto& candidate) {
+                return candidate.guest_address == payload.guest_address;
+            });
+        if (binding == native_port->bootstrap.writes.end())
+            throw std::invalid_argument(
+                "native-bootstrap-write-payload-extra");
+        if (payload.bytes.size() != binding->byte_size)
+            throw std::invalid_argument(
+                "native-bootstrap-write-payload-size-mismatch");
+        const auto digest = katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(payload.bytes.data()),
+            payload.bytes.size()));
+        if (binding->post_write_identity !=
+            std::string("sha256:") + digest)
+            throw std::invalid_argument(
+                "native-bootstrap-write-payload-identity-mismatch");
+    }
+    for (const auto& binding : native_port->bootstrap.writes) {
+        if (!payload_addresses.contains(binding.guest_address))
+            throw std::invalid_argument(
+                "native-bootstrap-write-payload-missing");
     }
 }
 
@@ -15786,10 +17049,77 @@ struct NativePortHardwareClosure final {
     std::size_t unknown_instruction_sites = 0u;
     std::size_t unresolved_memory_sites = 0u;
     std::size_t replaced_by_hook = 0u;
-    std::size_t proven_native_memory = 0u;
     std::size_t guarded_native_memory = 0u;
     std::vector<Gap> gaps;
 };
+
+katana::analysis::DreamcastHardwareAudit combine_native_hardware_audits(
+    const katana::analysis::DreamcastHardwareAudit& primary,
+    const std::span<const PreparedLatentAotModule> modules) {
+    auto combined = primary;
+    combined.scope = "native-product-complete-aot-scope";
+    for (const auto& module : modules) {
+        const auto& audit = module.hardware_audit;
+        combined.image_bytes += audit.image_bytes;
+        combined.reachable_instructions += audit.reachable_instructions;
+        combined.reachable_functions += audit.reachable_functions;
+        combined.unknown_instructions += audit.unknown_instructions;
+        combined.memory_access_sites += audit.memory_access_sites;
+        combined.resolved_memory_access_sites +=
+            audit.resolved_memory_access_sites;
+        combined.unresolved_memory_access_sites +=
+            audit.unresolved_memory_access_sites;
+        combined.instruction_diagnostics.insert(
+            combined.instruction_diagnostics.end(),
+            audit.instruction_diagnostics.begin(),
+            audit.instruction_diagnostics.end());
+        combined.references.insert(
+            combined.references.end(),
+            audit.references.begin(),
+            audit.references.end());
+        combined.addresses.insert(
+            combined.addresses.end(),
+            audit.addresses.begin(),
+            audit.addresses.end());
+        combined.loops.insert(
+            combined.loops.end(), audit.loops.begin(), audit.loops.end());
+        combined.unresolved_memory_instruction_sites.insert(
+            combined.unresolved_memory_instruction_sites.end(),
+            audit.unresolved_memory_instruction_sites.begin(),
+            audit.unresolved_memory_instruction_sites.end());
+    }
+    std::sort(
+        combined.references.begin(), combined.references.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.instruction_address,
+                            left.guest_address,
+                            left.kind,
+                            left.width) <
+                   std::tie(right.instruction_address,
+                            right.guest_address,
+                            right.kind,
+                            right.width);
+        });
+    std::map<std::uint32_t, katana::analysis::UnresolvedMemoryInstructionSite>
+        unresolved;
+    for (const auto& site :
+         combined.unresolved_memory_instruction_sites) {
+        auto& merged = unresolved[site.instruction_address];
+        merged.instruction_address = site.instruction_address;
+        merged.access_mask |= site.access_mask;
+        merged.width_mask |= site.width_mask;
+    }
+    combined.unresolved_memory_instruction_sites.clear();
+    combined.unresolved_memory_instruction_sites.reserve(
+        unresolved.size());
+    for (const auto& [address, site] : unresolved) {
+        static_cast<void>(address);
+        combined.unresolved_memory_instruction_sites.push_back(site);
+    }
+    combined.unresolved_memory_access_sites =
+        combined.unresolved_memory_instruction_sites.size();
+    return combined;
+}
 
 struct NativePortProgramIndex final {
     std::map<std::uint32_t, std::set<std::uint32_t>> instruction_owners;
@@ -15808,7 +17138,8 @@ struct NativePortProgramIndex final {
 
 NativePortProgramIndex build_native_port_program_index(
     const std::span<const katana::ir::Function> program,
-    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const katana::runtime::GameProjectDefinition* const game_project) {
     NativePortProgramIndex index;
     for (const auto& candidate : analysis.recursive.functions) {
         index.function_entries.insert(candidate.address);
@@ -15858,6 +17189,20 @@ NativePortProgramIndex build_native_port_program_index(
             index.incoming_edge_sources[continuation.target_address].insert(
                 owner);
     }
+    if (game_project != nullptr) {
+        // Game-project boundaries are identity-bound metadata, not product
+        // analysis roots. Admit their exact size only when ordinary analysis
+        // has already made the entry reachable. This lets native SDK/provider
+        // replacements prove a whole-function boundary without resurrecting
+        // pre-bootstrap or otherwise unreachable title code.
+        for (const auto& boundary : game_project->function_boundaries) {
+            if (boundary.size == 0u ||
+                !index.function_entries.contains(boundary.start))
+                continue;
+            index.exact_function_sizes[boundary.start].insert(
+                boundary.size);
+        }
+    }
     return index;
 }
 
@@ -15895,9 +17240,10 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
     using HookKind = katana::runtime::NativePortHookKind;
     using HookRequirement = katana::runtime::NativePortHookRequirement;
     using OriginalPolicy = katana::runtime::NativePortHookOriginalPolicy;
-    if (hook.requirement != HookRequirement::Required ||
+    if (!katana::runtime::native_port_hook_is_executable(
+            hook.requirement) ||
         hook.original_policy != OriginalPolicy::ReplacesOriginal)
-        return {false, "hook-not-required-replacement"};
+        return {false, "hook-not-executable-replacement"};
     const auto block_entries = index.block_entry_counts.contains(
                                    hook.guest_address)
                                    ? index.block_entry_counts.at(
@@ -15989,6 +17335,11 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
     if (std::any_of(index.seed_entries.begin(),
                     index.seed_entries.end(), is_interior))
         return {false, "function-hook-interior-seed-entry"};
+    // Auto-generated resume labels are an internal compilation detail. The
+    // native product dispatcher filters every block/resume strictly inside a
+    // proven whole-function replacement, so those dormant labels are not an
+    // alternate product entry. Explicitly requested continuations remain an
+    // external contract and are rejected below.
     const auto interior_resume = std::upper_bound(
         native_resume_entries.begin(), native_resume_entries.end(),
         hook.guest_address);
@@ -16052,25 +17403,6 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     const NativePortProgramIndex& program_index,
     const std::span<const std::uint32_t> native_resume_entries) {
     NativePortHardwareClosure result;
-    static_assert(
-        katana::analysis::hardware_audit_access_read ==
-            katana::runtime::native_port_memory_access_mask(
-                katana::runtime::NativePortMemoryAccess::Read) &&
-        katana::analysis::hardware_audit_access_write ==
-            katana::runtime::native_port_memory_access_mask(
-                katana::runtime::NativePortMemoryAccess::Write) &&
-        katana::analysis::hardware_audit_access_prefetch ==
-            katana::runtime::native_port_memory_access_mask(
-                katana::runtime::NativePortMemoryAccess::Prefetch));
-    static_assert(
-        katana::analysis::hardware_audit_width_u8 ==
-            katana::runtime::native_port_memory_width_u8 &&
-        katana::analysis::hardware_audit_width_u16 ==
-            katana::runtime::native_port_memory_width_u16 &&
-        katana::analysis::hardware_audit_width_u32 ==
-            katana::runtime::native_port_memory_width_u32 &&
-        katana::analysis::hardware_audit_width_cache_line_32 ==
-            katana::runtime::native_port_memory_width_cache_line_32);
     result.definition_present = definition != nullptr;
     if (definition == nullptr) {
         result.gaps.push_back({0u, "native-port-definition-missing"});
@@ -16088,64 +17420,68 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
         known_hardware_instructions.insert(reference.instruction_address);
     result.known_hardware_sites = known_hardware_instructions.size();
 
+    const auto proven_hooks =
+        [&](const std::uint32_t instruction_address) {
+            std::vector<const katana::runtime::NativePortHookBinding*>
+                candidates;
+            for (const auto& hook : definition->hooks) {
+                const auto proof = prove_native_port_hook_coverage(
+                    program_index,
+                    native_resume_entries,
+                    hook,
+                    instruction_address);
+                if (proof.valid) candidates.push_back(&hook);
+            }
+            return candidates;
+        };
     const auto admit = [&](const std::uint32_t instruction_address,
-                           const bool native_memory_allowed,
-                           const std::uint8_t required_access_mask,
-                           const std::uint8_t required_width_mask,
                            const std::string_view missing_reason) {
         const auto found = resolutions.find(instruction_address);
-        if (found == resolutions.end()) {
-            result.gaps.push_back({instruction_address,
-                                   std::string(missing_reason)});
-            return;
-        }
-        const auto& resolution = *found->second;
-        consumed_resolutions.insert(instruction_address);
-        if (resolution.kind ==
-            katana::runtime::NativePortHardwareResolutionKind::NativeMemory) {
-            if (!native_memory_allowed) {
+        if (found != resolutions.end()) {
+            const auto& resolution = *found->second;
+            consumed_resolutions.insert(instruction_address);
+            const auto hook = std::find_if(
+                definition->hooks.begin(),
+                definition->hooks.end(),
+                [&](const auto& candidate) {
+                    return candidate.guest_address ==
+                           resolution.hook_guest_address;
+                });
+            if (hook == definition->hooks.end()) {
                 result.gaps.push_back(
                     {instruction_address,
-                     "native-memory-effective-address-proof-unavailable"});
-                return;
+                     "hardware-hook-binding-missing"});
+                return false;
             }
-            if ((resolution.native_memory_access_mask &
-                 required_access_mask) != required_access_mask ||
-                (resolution.native_memory_width_mask &
-                 required_width_mask) != required_width_mask) {
+            const auto proof = prove_native_port_hook_coverage(
+                program_index,
+                native_resume_entries,
+                *hook,
+                instruction_address);
+            if (!proof.valid) {
                 result.gaps.push_back(
                     {instruction_address,
-                     "native-memory-shape-mismatch"});
-                return;
+                     std::string("hardware-hook-proof-invalid:") +
+                         proof.reason});
+                return false;
             }
-            ++result.proven_native_memory;
-            return;
+            ++result.replaced_by_hook;
+            return true;
         }
-        const auto hook = std::find_if(
-            definition->hooks.begin(),
-            definition->hooks.end(),
-            [&](const auto& candidate) {
-                return candidate.guest_address ==
-                       resolution.hook_guest_address;
-            });
-        if (hook == definition->hooks.end()) {
+        const auto candidates = proven_hooks(instruction_address);
+        if (candidates.empty()) {
             result.gaps.push_back(
-                {instruction_address, "hardware-hook-binding-missing"});
-            return;
+                {instruction_address, std::string(missing_reason)});
+            return false;
         }
-        const auto proof = prove_native_port_hook_coverage(
-            program_index,
-            native_resume_entries,
-            *hook,
-            instruction_address);
-        if (!proof.valid) {
+        if (candidates.size() != 1u) {
             result.gaps.push_back(
                 {instruction_address,
-                 std::string("hardware-hook-proof-invalid:") +
-                     proof.reason});
-            return;
+                 "hardware-hook-proof-ambiguous"});
+            return false;
         }
         ++result.replaced_by_hook;
+        return true;
     };
 
     std::set<std::uint32_t> hook_required_instructions =
@@ -16157,18 +17493,16 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                                       unknown_instruction_addresses.end());
     result.unknown_instruction_sites = unknown_instruction_addresses.size();
     for (const auto address : hook_required_instructions)
-        admit(address, false, 0u, 0u, "native-hook-missing");
+        admit(address, "native-hook-missing");
     result.unresolved_memory_sites =
         audit.unresolved_memory_instruction_sites.size();
     for (const auto& site :
          audit.unresolved_memory_instruction_sites) {
         if (hook_required_instructions.contains(site.instruction_address))
             continue;
-        if (resolutions.contains(site.instruction_address)) {
+        if (resolutions.contains(site.instruction_address) ||
+            !proven_hooks(site.instruction_address).empty()) {
             admit(site.instruction_address,
-                  false,
-                  site.access_mask,
-                  site.width_mask,
                   "dynamic-memory-access-requires-resolution");
             continue;
         }
@@ -16208,7 +17542,7 @@ std::string native_port_hardware_closure_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hardware-closure.v2",
+        "katana.native-port-hardware-closure.v3",
         "native-port-hardware-closure");
     output << ",\"definition_present\":"
            << (closure.definition_present ? "true" : "false")
@@ -16219,8 +17553,6 @@ std::string native_port_hardware_closure_json(
            << ",\"unresolved_memory_sites\":"
            << closure.unresolved_memory_sites
            << ",\"replaced_by_hook\":" << closure.replaced_by_hook
-           << ",\"proven_native_memory\":"
-           << closure.proven_native_memory
            << ",\"guarded_native_memory\":"
            << closure.guarded_native_memory
            << ",\"dynamic_memory_policy\":"
@@ -16585,12 +17917,7 @@ std::string native_port_hook_requirements_json(
         } else {
             const auto& value = *resolution->second;
             output << "{\"kind\":"
-                   << katana::io::quote_json(
-                          value.kind == katana::runtime::
-                                            NativePortHardwareResolutionKind::
-                                                NativeMemory
-                              ? "native-memory"
-                              : "replaced-by-hook")
+                   << katana::io::quote_json("replaced-by-hook")
                    << ",\"hook_guest_address\":"
                    << value.hook_guest_address << '}';
         }
@@ -16880,6 +18207,12 @@ static PortExportResult export_dreamcast_port_project_impl(
                 prepared.analysis));
     }
     katana::ir::require_valid_program(prepared.program);
+    validate_native_post_aot_program_contract(
+        prepared.image,
+        prepared.program,
+        options.native_port_definition,
+        options.game_project,
+        options.native_port_bootstrap_write_payloads);
     require_guarded_aot_program_entries(
         prepared.program,
         prepared.analysis.guarded_aot_entries,
@@ -16943,7 +18276,8 @@ static PortExportResult export_dreamcast_port_project_impl(
     }
     validate_game_project_runtime_image_payloads(
         options.game_project,
-        options.game_project_runtime_image_payloads);
+        options.game_project_runtime_image_payloads,
+        options.native_port_definition);
     if (options.game_project != nullptr) {
         report_progress(options, "game-project-validation");
         const auto& game_project = *options.game_project;
@@ -16962,7 +18296,9 @@ static PortExportResult export_dreamcast_port_project_impl(
         validate_game_project_image_contract(
             game_project,
             prepared.image,
-            options.game_project_runtime_image_payloads);
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition,
+            options.native_port_bootstrap_write_payloads);
         if (!disc_context.has_value())
             throw std::invalid_argument(
                 "Game-Project-Export braucht eine validierte Disc- oder "
@@ -16980,18 +18316,13 @@ static PortExportResult export_dreamcast_port_project_impl(
             throw std::invalid_argument(
                 "Game-Project-Bootdateiidentitaet passt nicht zum "
                 "Executable-Image.");
-        const auto boot_bytes = game_project_image_bytes(
-            prepared.image, prepared.boot_address, prepared.boot_size);
         const auto boot_byte_identity =
-            std::string("sha256:") +
-            katana::io::sha256_bytes(std::string_view(
-                reinterpret_cast<const char*>(boot_bytes.data()),
-                boot_bytes.size()));
+            std::string("sha256:") + disc_context->boot_sha256;
         if (boot_byte_identity !=
             game_project.identity.boot_byte_identity)
             throw std::invalid_argument(
-                "Game-Project-Bootbyteidentitaet passt nicht zum "
-                "Executable-Image.");
+                "Game-Project-Bootbyteidentitaet passt nicht zur "
+                "validierten Installationsquelle.");
         if (game_project.boot_config.has_value()) {
             if (prepared.direct_boot_executable)
                 katana::runtime::validate_dreamcast_post_bios_cpu_state(
@@ -17009,43 +18340,84 @@ static PortExportResult export_dreamcast_port_project_impl(
                            (size == 0u || candidate.size == size);
                 });
         };
-        for (const auto& function : game_project.function_boundaries) {
-            if (!has_function(function.start, function.size))
-                throw std::invalid_argument(
-                    "Game-Project-Funktionsgrenze fehlt mit ihrer exakten "
-                    "Groesse in der vorbereiteten Analyse.");
-        }
-        for (const auto& hook : game_project.mid_function_hooks) {
-            if (!has_function(hook.instruction_address))
-                throw std::invalid_argument(
-                    "Game-Project-Mid-Function-Hook besitzt keinen "
-                    "exportierten nativen Entry.");
-        }
-        for (const auto& table : game_project.jump_tables) {
-            const auto analyzed = std::find_if(
-                prepared.analysis.jump_tables.begin(),
-                prepared.analysis.jump_tables.end(),
-                [&](const auto& candidate) {
-                    return candidate.dispatch_address ==
-                               table.dispatch_address &&
-                           candidate.table_address ==
-                               table.table_address &&
-                           candidate.requested_entries ==
-                               table.entry_count &&
-                           candidate.resolved;
-                });
-            if (analyzed == prepared.analysis.jump_tables.end())
-                throw std::invalid_argument(
-                    "Game-Project-Jump-Table ist in der vorbereiteten Analyse "
-                    "nicht vollstaendig aufgeloest.");
+        if (options.native_port_definition == nullptr) {
+            for (const auto& function : game_project.function_boundaries) {
+                if (!has_function(function.start, function.size))
+                    throw std::invalid_argument(
+                        "Game-Project-Funktionsgrenze fehlt mit ihrer "
+                        "exakten Groesse in der vorbereiteten Analyse.");
+            }
+            for (const auto& hook : game_project.mid_function_hooks) {
+                if (!has_function(hook.instruction_address))
+                    throw std::invalid_argument(
+                        "Game-Project-Mid-Function-Hook besitzt keinen "
+                        "exportierten nativen Entry.");
+            }
+            for (const auto& table : game_project.jump_tables) {
+                const auto analyzed = std::find_if(
+                    prepared.analysis.jump_tables.begin(),
+                    prepared.analysis.jump_tables.end(),
+                    [&](const auto& candidate) {
+                        return candidate.dispatch_address ==
+                                   table.dispatch_address &&
+                               candidate.table_address ==
+                                   table.table_address &&
+                               candidate.requested_entries ==
+                                   table.entry_count &&
+                               candidate.resolved;
+                    });
+                if (analyzed == prepared.analysis.jump_tables.end())
+                    throw std::invalid_argument(
+                        "Game-Project-Jump-Table ist in der vorbereiteten "
+                        "Analyse nicht vollstaendig aufgeloest.");
+            }
         }
     }
     const auto* const native_port_definition =
         options.native_port_definition;
+    const auto product_entry_address =
+        native_port_definition != nullptr
+            ? native_port_definition->bootstrap.post_entry_point
+            : prepared.entry_address;
+    const auto product_entry_owner = [&]() -> std::uint32_t {
+        std::set<std::uint32_t> owners;
+        for (const auto& function : prepared.program) {
+            if (std::any_of(
+                    function.blocks.begin(), function.blocks.end(),
+                    [&](const auto& block) {
+                        if (block.start_address == product_entry_address)
+                            return true;
+                        const auto resumes =
+                            detail::native_aot_internal_resume_entries(
+                                block);
+                        return std::binary_search(
+                            resumes.begin(), resumes.end(),
+                            product_entry_address);
+                    }))
+                owners.insert(function.entry_address);
+        }
+        if (owners.size() != 1u)
+            throw std::invalid_argument(
+                "Produkt-AOT-Einstieg besitzt keinen eindeutigen "
+                "statischen Funktionsowner.");
+        return *owners.begin();
+    }();
     if (native_port_definition != nullptr) {
         report_progress(options, "native-port-definition-validation");
         katana::runtime::validate_native_port_definition(
             *native_port_definition);
+        if (options.game_project != nullptr &&
+            native_port_definition->acceptance.milestone_id !=
+                katana::runtime::required_product_milestone_name(
+                    options.game_project->required_product_milestone))
+            throw std::invalid_argument(
+                "Native-Port-Acceptance stimmt nicht mit dem "
+                "Game-Project-Produktmeilenstein ueberein.");
+        if (!native_port_definition->bootstrap.writes.empty() &&
+            prepared.pre_bootstrap_image == nullptr)
+            throw std::invalid_argument(
+                "Native Post-Bootstrap-Export braucht eine unveraenderliche "
+                "Pre-Bootstrap-Identitaetsansicht.");
         if (native_port_definition->bootstrap.entry_point !=
             prepared.entry_address)
             throw std::invalid_argument(
@@ -17066,9 +18438,12 @@ static PortExportResult export_dreamcast_port_project_impl(
                     "Native-Port-Hook stimmt nicht mit seiner exakten "
                     "Codeidentitaet ueberein.");
         }
+        const auto& source_image = prepared.pre_bootstrap_image != nullptr
+                                       ? *prepared.pre_bootstrap_image
+                                       : prepared.image;
         for (const auto& image : native_port_definition->images) {
             const auto bytes = game_project_image_bytes(
-                prepared.image, image.guest_address, image.byte_size);
+                source_image, image.guest_address, image.byte_size);
             const auto identity =
                 "sha256:" +
                 katana::io::sha256_bytes(std::string_view(
@@ -17096,18 +18471,13 @@ static PortExportResult export_dreamcast_port_project_impl(
             throw std::invalid_argument(
                 "Native-Port-Bootdateiidentitaet passt nicht zum "
                 "Executable-Image.");
-        const auto boot_bytes = game_project_image_bytes(
-            prepared.image, prepared.boot_address, prepared.boot_size);
         const auto boot_byte_identity =
-            std::string("sha256:") +
-            katana::io::sha256_bytes(std::string_view(
-                reinterpret_cast<const char*>(boot_bytes.data()),
-                boot_bytes.size()));
+            std::string("sha256:") + prepared_boot_sha256(prepared);
         if (boot_byte_identity !=
             native_port_definition->executable.executable_byte_identity)
             throw std::invalid_argument(
-                "Native-Port-Bootbyteidentitaet passt nicht zum "
-                "Executable-Image.");
+                "Native-Port-Bootbyteidentitaet passt nicht zur "
+                "Pre-Bootstrap-Identitaetsansicht.");
     }
     require_unique_loaded_module_template_ids(
         options.game_project, latent_aot.modules);
@@ -17174,8 +18544,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         explicit_native_aot_resume_entries;
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
-            if (hook.requirement !=
-                katana::runtime::NativePortHookRequirement::Required)
+            if (!katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
                 continue;
             if (hook.kind ==
                     katana::runtime::NativePortHookKind::FunctionEntry &&
@@ -17209,7 +18579,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                 }
                 if (block_entries != 1u || resume_entries != 0u)
                     throw std::invalid_argument(
-                        "Erforderlicher Instruction-Replacement-Hook besitzt "
+                        "Ausfuehrbarer Instruction-Replacement-Hook besitzt "
                         "keinen eindeutigen statischen AOT-Funktionsentry.");
                 // The program-index proof below additionally establishes the
                 // unique emitted function and instruction ownership.  Never
@@ -17284,16 +18654,18 @@ static PortExportResult export_dreamcast_port_project_impl(
         native_admission_hardware_audit.emplace(
             katana::analysis::audit_dreamcast_hardware(
                 prepared.image, prepared.analysis));
-    const auto& native_hardware_audit =
+    const auto& primary_native_hardware_audit =
         native_admission_hardware_audit.has_value()
             ? *native_admission_hardware_audit
             : hardware_audit;
+    const auto native_hardware_audit = combine_native_hardware_audits(
+        primary_native_hardware_audit, latent_aot.modules);
     const auto native_port_program_index = build_native_port_program_index(
-        emitted_program, prepared.analysis);
+        emitted_program, prepared.analysis, options.game_project);
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
-            if (hook.requirement !=
-                    katana::runtime::NativePortHookRequirement::Required ||
+            if (!katana::runtime::native_port_hook_is_executable(
+                    hook.requirement) ||
                 hook.original_policy !=
                     katana::runtime::NativePortHookOriginalPolicy::
                         ReplacesOriginal)
@@ -17306,14 +18678,18 @@ static PortExportResult export_dreamcast_port_project_impl(
             if (!proof.valid)
                 throw std::invalid_argument(
                     std::string("Native-Port-Replacement-Hook besitzt keinen ") +
-                    "vollstaendigen statischen Beweis: " + proof.reason);
+                    "vollstaendigen statischen Beweis: symbol=" +
+                    std::string(hook.symbol) + ";address=" +
+                    guarded_aot_address(hook.guest_address) +
+                    ";size=" + std::to_string(hook.covered_size) +
+                    ";reason=" + proof.reason);
         }
     }
     const auto native_hardware_closure =
         evaluate_native_port_hardware_closure(
             native_hardware_audit,
             native_port_definition,
-            latent_aot.modules.empty(),
+            true,
             native_port_program_index,
             native_aot_resume_entries);
     if (!options.diagnostic_partial && blocking_diagnostics != 0u) {
@@ -17369,6 +18745,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         composite_callback_architectural_boundaries.insert(
             proof.descriptor.continuation_address);
     }
+    // KATANA_COMPONENT_IDENTITY_REGION_BEGIN emit-partitions
     report_progress(options, "partition-codegen");
     const auto partitions = partition_translation_units(emitted_program, options.partition_options);
     if (partitions.empty()) throw std::runtime_error("Portcodegen erzeugte keine Partition.");
@@ -17398,22 +18775,20 @@ static PortExportResult export_dreamcast_port_project_impl(
     }
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
-            if (hook.requirement ==
-                katana::runtime::NativePortHookRequirement::Required)
+            if (katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
                 external_hook_entries.insert(hook.guest_address);
         }
     }
     const auto is_runtime_image_source_address =
         [&](const std::uint32_t address) {
-            if (options.game_project == nullptr)
-                return false;
             return std::any_of(
-                options.game_project->runtime_images.begin(),
-                options.game_project->runtime_images.end(),
+                prepared.image.address_aliases().begin(),
+                prepared.image.address_aliases().end(),
                 [&](const auto& runtime_image) {
                     const auto begin =
                         static_cast<std::uint64_t>(runtime_image.source_start);
-                    const auto end = begin + runtime_image.byte_size;
+                    const auto end = begin + runtime_image.size;
                     return address >= begin &&
                            static_cast<std::uint64_t>(address) < end;
                 });
@@ -17471,21 +18846,34 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::string("cpp-port-partition-v") +
         std::to_string(port_partition_emission_schema_version) + ':' +
         std::string(port_namespace) + ':' +
-        std::to_string(prepared.entry_address) + ':' +
+        std::to_string(product_entry_address) + ':' +
         std::to_string(options.partition_options.maximum_functions) + ':' +
         std::to_string(options.partition_options.maximum_instructions) + ':' +
         std::to_string(native_aot_emission_profile_version) + ':' +
-        std::to_string(options.diagnostic_partial) + ':' + options.console_profile);
+        std::to_string(options.diagnostic_partial) + ':' +
+        std::to_string(native_port_definition != nullptr) + ':' +
+        options.console_profile);
     const auto partition_manifest_hash = katana::io::sha256_bytes(
-        options.target_name + ':' + std::to_string(port_project_contract_version));
-    std::ostringstream partition_override_identity;
-    partition_override_identity
+        std::string("katana-port-partition-manifest-v2:") +
+        options.target_name);
+    // Every game-/native-definition property that can alter one partition is
+    // already reduced into partition_linkage_identity below: external callees,
+    // guarded calls, native owners and architectural boundaries. Bootstrap,
+    // acceptance, packaging and unrelated hook metadata must not invalidate
+    // all AOT sources. Metadata keeps the complete definition identity.
+    const auto partition_overrides_hash = katana::io::sha256_bytes(
+        "katana-port-partition-linkage-reduction-v2");
+    const auto metadata_manifest_hash = katana::io::sha256_bytes(
+        options.target_name + ':' +
+        std::to_string(port_project_contract_version));
+    std::ostringstream metadata_override_identity;
+    metadata_override_identity
         << (options.game_project != nullptr
                 ? game_project_export_identity(*options.game_project)
                 : "no-external-game-project-overrides-v2")
         << ':' << native_port_export_identity(native_port_definition);
-    const auto partition_overrides_hash =
-        katana::io::sha256_bytes(partition_override_identity.str());
+    const auto metadata_overrides_hash =
+        katana::io::sha256_bytes(metadata_override_identity.str());
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 9u);
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
@@ -17624,9 +19012,11 @@ static PortExportResult export_dreamcast_port_project_impl(
             std::unique(partition_architectural_boundaries.begin(),
                         partition_architectural_boundaries.end()),
             partition_architectural_boundaries.end());
-        const auto contains_program_entry =
-            std::any_of(functions.begin(), functions.end(), [&prepared](const auto& function) {
-                return function.entry_address == prepared.entry_address;
+        const auto contains_program_entry = std::any_of(
+            functions.begin(),
+            functions.end(),
+            [&](const auto& function) {
+                return function.entry_address == product_entry_owner;
             });
         std::ostringstream partition_linkage_identity;
         partition_linkage_identity << "entry=" << contains_program_entry << ';';
@@ -17664,7 +19054,9 @@ static PortExportResult export_dreamcast_port_project_impl(
                  2u,
                  native_aot_emission_profile_version,
                  options.tool_version,
-                 options.codegen_implementation_identity});
+                 std::string(
+                     katana::build_contract::
+                         partition_codegen_component_identity)});
             if (auto cached = partition_cache->load_integrity_bounded(
                     cache_key,
                     cache_artifact_name,
@@ -17678,7 +19070,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         NativeAotBackendRequestOptions request_options;
         request_options.symbol_namespace = port_namespace;
         request_options.emit_run_functions = false;
-        request_options.metadata_entry_address = prepared.entry_address;
+        request_options.metadata_entry_address = product_entry_address;
         request_options.runtime_binding =
             native_port_definition != nullptr &&
                     !options.diagnostic_partial
@@ -17715,6 +19107,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         }
         return ProjectArtifact{relative_path, std::move(content)};
     };
+    // KATANA_COMPONENT_IDENTITY_REGION_END emit-partitions
     const auto codegen_jobs = port_codegen_jobs(partitions.size());
     partition_preparation_progress.complete();
     auto source_progress = options.progress.begin(
@@ -17819,7 +19212,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                                partition.function_indices.end(),
                                [&](const auto index) {
                                    return emitted_program[index].entry_address ==
-                                          prepared.entry_address;
+                                          product_entry_owner;
                                });
         });
     if (entry_partition == partitions.end()) {
@@ -17939,14 +19332,14 @@ static PortExportResult export_dreamcast_port_project_impl(
              katana::io::sha256_bytes(metadata_ir_identity.str()),
              katana::io::sha256_bytes(
                  options.target_name + ':' + options.console_profile + ':' +
-                 std::to_string(prepared.entry_address) + ':' +
+                 std::to_string(product_entry_address) + ':' +
                  std::to_string(prepared.direct_boot_executable) + ':' +
                  std::to_string(port_metadata_cache_schema_version)),
              "port-metadata",
              backend_interface_abi_version,
              katana::runtime::abi_version,
-             partition_manifest_hash,
-             partition_overrides_hash,
+             metadata_manifest_hash,
+             metadata_overrides_hash,
              2u,
              native_aot_emission_profile_version,
              options.tool_version,
@@ -17990,7 +19383,9 @@ static PortExportResult export_dreamcast_port_project_impl(
         auto source_map_image = prepared.image;
         if (options.game_project != nullptr)
             apply_game_project_symbols(
-                source_map_image, *options.game_project);
+                source_map_image,
+                *options.game_project,
+                native_port_definition == nullptr);
         for (const auto& module : latent_aot.modules) {
             katana::io::ImageSegment segment{
                 "latent-aot-module",
@@ -18064,7 +19459,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                                         entry_namespace,
                                         emitted_program,
                                         native_aot_resume_entries,
-                                        *native_port_definition)
+                                        *native_port_definition,
+                                        prepared.image)
                                   : runtime_dispatch_artifacts(
                                         entry_namespace,
                                         emitted_program,
@@ -18095,7 +19491,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                          port_metadata(options,
                                        emitted_program.size(),
                                        partitions,
-                                       prepared.entry_address,
+                                       product_entry_address,
                                        prepared.boot_size,
                                        prepared.direct_boot_executable,
                                        prepared.project_identity,
@@ -18229,7 +19625,15 @@ static PortExportResult export_dreamcast_port_project_impl(
             ? native_product_main(
                   entry_namespace,
                   native_hardware_closure.complete,
-                  native_hardware_closure.gaps.size())
+                  native_hardware_closure.gaps.size(),
+                  std::any_of(
+                      native_port_definition->hooks.begin(),
+                      native_port_definition->hooks.end(),
+                      [](const auto& hook) {
+                          return hook.requirement ==
+                              katana::runtime::NativePortHookRequirement::
+                                  BringUpProbe;
+                      }))
             : handwritten_main(
                   entry_namespace,
                   prepared.hle_bios_abi,
@@ -18558,9 +19962,22 @@ PreparedBootAnalysisRun prepare_boot_analysis(
             guarded_aot_inventory_failure_message(analysis));
     }
     report_progress(options, "ir-lowering");
-    const auto architectural_safepoints =
+    auto architectural_safepoints =
         katana::ir::architectural_safepoint_block_leaders(
             analysis);
+    if (options.native_port_definition != nullptr) {
+        for (const auto& continuation :
+             options.native_port_definition->bootstrap
+                 .post_aot_continuations)
+            architectural_safepoints.push_back(
+                continuation.resume_address);
+        std::sort(architectural_safepoints.begin(),
+                  architectural_safepoints.end());
+        architectural_safepoints.erase(
+            std::unique(architectural_safepoints.begin(),
+                        architectural_safepoints.end()),
+            architectural_safepoints.end());
+    }
     auto program = katana::ir::lower_program(
         analysis,
         architectural_safepoints,
@@ -18664,17 +20081,32 @@ PortExportResult export_dreamcast_port_project(
         external_port_overrides;
     validate_game_project_runtime_image_payloads(
         options.game_project,
-        options.game_project_runtime_image_payloads);
+        options.game_project_runtime_image_payloads,
+        options.native_port_definition);
     if (options.game_project != nullptr) {
         apply_game_project_runtime_images(
             image,
             *options.game_project,
-            options.game_project_runtime_image_payloads);
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition);
+    }
+    const auto pre_bootstrap_image = image;
+    apply_native_port_post_aot_view(
+        image,
+        options.native_port_definition,
+        options.game_project,
+        options.native_port_bootstrap_write_payloads);
+    if (options.game_project != nullptr) {
         validate_game_project_image_contract(
             *options.game_project,
             image,
-            options.game_project_runtime_image_payloads);
-        apply_game_project_symbols(image, *options.game_project);
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition,
+            options.native_port_bootstrap_write_payloads);
+        apply_game_project_symbols(
+            image,
+            *options.game_project,
+            options.native_port_definition == nullptr);
     }
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
@@ -18692,11 +20124,15 @@ PortExportResult export_dreamcast_port_project(
     auto& program = prepared_analysis.artifact.lowered_program;
     report_progress(options, "ir-optimization");
     const auto& emission_contract = native_aot_emission_contract(NativeAotEmissionProfile::Product);
+    const auto external_dispatch_entries =
+        native_optimization_dispatch_entries(
+            program, analysis, options);
     static_cast<void>(
         katana::ir::optimize_program(
             program,
             emission_contract.optimization_options,
-            options.progress));
+            options.progress,
+            {external_dispatch_entries}));
     report_progress(options, "input-provenance");
     std::vector<katana::io::InputProvenance> inputs;
     const auto& descriptor = disc.source->descriptor();
@@ -18732,7 +20168,8 @@ PortExportResult export_dreamcast_port_project(
          false,
          &prepared_analysis.hardware_audit,
          &prepared_analysis.artifact.control_flow_graph,
-         &prepared_analysis.artifact.call_graph},
+         &prepared_analysis.artifact.call_graph,
+         &pre_bootstrap_image},
         output_root,
         options,
         disc.source);
@@ -18811,17 +20248,32 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         external_port_overrides;
     validate_game_project_runtime_image_payloads(
         options.game_project,
-        options.game_project_runtime_image_payloads);
+        options.game_project_runtime_image_payloads,
+        options.native_port_definition);
     if (options.game_project != nullptr) {
         apply_game_project_runtime_images(
             image,
             *options.game_project,
-            options.game_project_runtime_image_payloads);
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition);
+    }
+    const auto pre_bootstrap_image = image;
+    apply_native_port_post_aot_view(
+        image,
+        options.native_port_definition,
+        options.game_project,
+        options.native_port_bootstrap_write_payloads);
+    if (options.game_project != nullptr) {
         validate_game_project_image_contract(
             *options.game_project,
             image,
-            options.game_project_runtime_image_payloads);
-        apply_game_project_symbols(image, *options.game_project);
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition,
+            options.native_port_bootstrap_write_payloads);
+        apply_game_project_symbols(
+            image,
+            *options.game_project,
+            options.native_port_definition == nullptr);
     }
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
@@ -18841,10 +20293,14 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
     report_progress(options, "ir-optimization");
     const auto& emission_contract =
         native_aot_emission_contract(NativeAotEmissionProfile::Product);
+    const auto external_dispatch_entries =
+        native_optimization_dispatch_entries(
+            program, analysis, options);
     static_cast<void>(katana::ir::optimize_program(
         program,
         emission_contract.optimization_options,
-        options.progress));
+        options.progress,
+        {external_dispatch_entries}));
 
     report_progress(options, "input-provenance");
     std::vector<katana::io::InputProvenance> inputs;
@@ -18893,7 +20349,8 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
          true,
          &prepared_analysis.hardware_audit,
          &prepared_analysis.artifact.control_flow_graph,
-         &prepared_analysis.artifact.call_graph},
+         &prepared_analysis.artifact.call_graph,
+         &pre_bootstrap_image},
         output_root,
         options,
         {},

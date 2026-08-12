@@ -20,7 +20,7 @@ inline constexpr std::uint32_t latent_aot_analysis_address_layout_schema = 1u;
 // negative entries remain enabled.
 inline constexpr bool latent_aot_positive_product_cache_enabled = false;
 inline constexpr std::uint32_t latent_aot_analysis_ir_schema = 3u;
-inline constexpr std::uint32_t latent_aot_analysis_optimizer_schema = 1u;
+inline constexpr std::uint32_t latent_aot_analysis_optimizer_schema = 2u;
 inline constexpr std::string_view latent_aot_analysis_implementation_id =
     "katana-latent-aot-analysis-v10";
 

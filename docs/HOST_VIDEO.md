@@ -4,11 +4,14 @@ KR-4701 fuehrte `katana-native-video` ein; der aktuelle Runtimevertrag steht
 auf Version 3. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der aktuelle KR-5004-Stand verwendet Runtime-ABI 96, Block-ABI 5,
+Der aktuelle KR-5005-Stand verwendet Runtime-ABI 97, Block-ABI 5,
 Analyzer-ABI 36, Backend-Interface-ABI 20, PlatformServices-ABI 14,
-Portprojektvertrag 85, Native-AOT-Profil 27 und Partitionsschema 7. Der
+Portprojektvertrag 86, Native-AOT-Profil 29 und Partitionsschema 7. Der
 native GPU-Pfad ist hardware-only D3D11; WARP/REF/GDI/CPU-Rasterizer,
 PVR/TA und historische Geraeteruntime sind keine Produktabhaengigkeiten.
+Provider-Ausgabe und Draw-IR bleiben als native Porttypen backendneutral;
+D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist
+spaeter geplant und aktuell kein Produktgate.
 
 ## Vertrag
 

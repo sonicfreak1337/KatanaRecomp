@@ -12,29 +12,10 @@ namespace katana::runtime {
 
 using NativePortStaticEntryQuery = bool (*)(std::uint32_t address) noexcept;
 
-enum class NativePortImmutableRangeKind : std::uint8_t {
-    Executable = 1u << 0u,
-    ReadOnlyImage = 1u << 1u,
-};
-
-[[nodiscard]] constexpr std::uint8_t native_port_immutable_range_mask(
-    const NativePortImmutableRangeKind kind) noexcept {
-    return static_cast<std::uint8_t>(kind);
-}
-
 // Exact immutable instruction bytes and non-writable content ranges emitted
 // with a native product. This compact product view deliberately replaces the
 // historical runtime's mutable-code/device catalogs: native products cannot
 // decode, recompile or silently make a read-only image writable.
-struct NativePortImmutableRange final {
-    std::uint32_t physical_address = 0u;
-    std::uint32_t byte_size = 0u;
-    std::uint8_t kind_mask = 0u;
-
-    [[nodiscard]] bool operator==(
-        const NativePortImmutableRange&) const = default;
-};
-
 class NativePortImmutableWriteGuard final {
   public:
     explicit NativePortImmutableWriteGuard(

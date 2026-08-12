@@ -1300,10 +1300,89 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     std::sort(block_leaders.begin(), block_leaders.end());
     block_leaders.erase(std::unique(block_leaders.begin(), block_leaders.end()),
                         block_leaders.end());
+    std::vector<std::uint32_t> normal_entry_leaders;
+    for (const auto& seed : analysis.seed_facts) {
+        if (seed.origins.empty())
+            normal_entry_leaders.push_back(seed.target_address);
+    }
+    std::sort(normal_entry_leaders.begin(), normal_entry_leaders.end());
+    normal_entry_leaders.erase(
+        std::unique(normal_entry_leaders.begin(),
+                    normal_entry_leaders.end()),
+        normal_entry_leaders.end());
     const auto source_blocks = katana::analysis::build_basic_blocks(
-        analysis.recursive.instructions, analysis.resolved_edges, block_leaders);
+        analysis.recursive.instructions, analysis.resolved_edges,
+        block_leaders, normal_entry_leaders);
+    for (const auto address : normal_entry_leaders) {
+        const auto decoded = std::any_of(
+            analysis.recursive.instructions.begin(),
+            analysis.recursive.instructions.end(),
+            [&](const auto& line) { return line.address == address; });
+        if (!decoded) continue;
+        const auto materialized = std::any_of(
+            source_blocks.begin(), source_blocks.end(),
+            [&](const auto& block) {
+                return block.start_address == address;
+            });
+        if (!materialized)
+            throw std::invalid_argument(
+                "Deklarierter Normal-Entry wurde nicht als Basic Block "
+                "materialisiert: " + std::to_string(address));
+    }
+
+    auto function_discovery_boundaries = function_boundaries;
+    const auto append_exactly_owned_block_entry =
+        [&](const std::uint32_t address) {
+            const auto owner = std::find_if(
+                function_boundaries.begin(), function_boundaries.end(),
+                [&](const auto& boundary) {
+                    if (boundary.size == 0u ||
+                        address <= boundary.entry_address)
+                        return false;
+                    return static_cast<std::uint64_t>(address) <
+                           static_cast<std::uint64_t>(
+                               boundary.entry_address) + boundary.size;
+                });
+            if (owner != function_boundaries.end())
+                function_discovery_boundaries.push_back({address, 0u});
+        };
+    // Candidate-only dispatch entries and explicit continuation leaders are
+    // physical block roots. When an exact external boundary owns them, pass
+    // that ownership fact into function discovery instead of letting the
+    // later supplemental-component pass manufacture nested functions.
+    for (const auto address : candidate_leaders)
+        append_exactly_owned_block_entry(address);
+    for (const auto address : additional_block_leaders)
+        append_exactly_owned_block_entry(address);
+
     const auto functions = katana::analysis::discover_functions_from_blocks(
-        source_blocks, function_boundaries, analysis.resolved_edges);
+        source_blocks, function_discovery_boundaries,
+        analysis.resolved_edges);
+    for (const auto address : additional_block_leaders) {
+        const auto owner = std::find_if(
+            function_boundaries.begin(), function_boundaries.end(),
+            [&](const auto& boundary) {
+                return boundary.size != 0u &&
+                       address > boundary.entry_address &&
+                       static_cast<std::uint64_t>(address) <
+                           static_cast<std::uint64_t>(
+                               boundary.entry_address) + boundary.size;
+            });
+        if (owner == function_boundaries.end()) continue;
+        const auto function = std::find_if(
+            functions.begin(), functions.end(), [&](const auto& candidate) {
+                return candidate.entry_address == owner->entry_address;
+            });
+        if (function == functions.end() ||
+            std::find(function->block_addresses.begin(),
+                      function->block_addresses.end(), address) ==
+                function->block_addresses.end())
+            throw std::invalid_argument(
+                "Exakter Funktionsowner hat einen deklarierten "
+                "Normal-Entry nicht uebernommen: " +
+                std::to_string(address) + " -> " +
+                std::to_string(owner->entry_address));
+    }
 
     std::set<std::uint32_t> owned_blocks;
     for (const auto& function : functions)

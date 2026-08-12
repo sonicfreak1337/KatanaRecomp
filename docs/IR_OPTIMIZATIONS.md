@@ -35,9 +35,14 @@ Privileg- und unbekannte Effekte bilden harte Grenzen.
 ## CFG-Simplifizierung
 
 `simplify_cfg` berechnet die vom Funktionseintritt erreichbaren Bloecke und entfernt
-den nicht erreichbaren Rest. Nachfolgerlisten werden sortiert und dedupliziert;
-Blockreihenfolgen werden nach Startadresse kanonisiert. Kontrollinstruktionen und
-ihre Delay Slots werden nicht umgeschrieben.
+den nicht erreichbaren Rest. Extern erreichbare Blockeintritte, etwa eine
+identitaetsgebundene Return-Continuation eines nativen Checkpoints, sowie sichere
+Instruktionsfortsetzungen koennen ueber einen transienten
+`OptimizationDispatchabilityContract` uebergeben werden. Der jeweilige Ownerblock
+wird dadurch eine zusaetzliche CFG-Wurzel und bleibt auch ohne interne Kante
+erhalten. Nachfolgerlisten
+werden sortiert und dedupliziert; Blockreihenfolgen werden nach Startadresse
+kanonisiert. Kontrollinstruktionen und ihre Delay Slots werden nicht umgeschrieben.
 
 ## Load-Store-Vereinfachung
 
@@ -60,7 +65,12 @@ wenn der passende Store direkt vor dem Load steht.
 4. CFG-Simplifizierung
 5. Load-Store-Vereinfachung
 
-Jeder Pass kann ueber `OptimizationOptions` einzeln abgeschaltet werden. Mit
+Jeder Pass kann ueber `OptimizationOptions` einzeln abgeschaltet werden. Der
+optionale Dispatchability-Vertrag von `optimize_program` wird vor und nach jedem
+Passlauf validiert und an die CFG-Simplifizierung weitergereicht. Der Vertrag
+schliesst native Checkpoint-Continuations, Guarded-AOT-Einstiege,
+architektonische Safepoints und bereits erreichbare Hookgrenzen ein, ohne daraus
+neue Analysewurzeln zu erzeugen. Mit
 `capture_dumps` enthaelt der Bericht fuer jeden aktiven Pass eine deterministische
 Text-IR vor und nach seiner Ausfuehrung. `enabled=false` laesst das gesamte Programm
 bytegenau unveraendert.

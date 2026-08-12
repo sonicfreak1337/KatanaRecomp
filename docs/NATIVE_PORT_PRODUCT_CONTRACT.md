@@ -130,11 +130,10 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `96`, Analyzer-ABI `36`, Backend-
-Interface-ABI `20`, Portprojektvertrag `85` und Native-Port-Profilvertrag `8`.
-Der historische
-GameProject-Vertrag bleibt unveraendert auf `5`/Artefaktformat `4` und
-enthaelt keine Native-Port-Definition. Das installierte Produkt-SDK
+KR-5000 bindet diese Grenze an Runtime-ABI `97`, Analyzer-ABI `36`, Backend-
+Interface-ABI `20`, Portprojektvertrag `86` und Native-Port-Profilvertrag `10`.
+Der aktuelle GameProject-Vertrag steht auf `6`/Artefaktformat `5` und
+enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
 Produktheader-Allowlist; der
 historische Geraetepfad bleibt ein nicht installierbares Buildbaum-Orakel und
@@ -211,6 +210,12 @@ Budgets, Lebensdauern und Ownerthread-Regeln bleiben fail-closed; Titel werden
 vor Besitzkopie auf 1024 Bytes begrenzt, endliche Vertices vollstaendig
 geprueft und Resize im offenen Frame an das Renderziel zurueckgebunden.
 
+Die Provider- und Draw-IR-Grenze bleibt backendneutral: native Bildansichten,
+Draw-Pakete, Viewports und Renderkonfiguration werden nicht an D3D11-Typen
+gekoppelt. D3D11 ist zunaechst das Windows-Backend; Steam-Deck-/Linux-
+Unterstuetzung bleibt eine spaetere, nicht aktuelle Prioritaet und ist kein
+gegenwaertiges Produkt- oder Alpha-Gate.
+
 KR-5004 bindet native Datei-, Eingabe- und Save-Dienste ohne GD-ROM-, Maple-
 oder VMU-Geraetevertrag. `NativePortPlatformServices` liest ausschliesslich
 exakt SHA-256-identitaetsgebundene read-only Dateien/Ranges, stellt XInput fuer
@@ -244,6 +249,13 @@ Buildkonfiguration und Source einzeln in `runtime-dependencies.json` Schema
 `v3`. Ohne vollstaendige Source bleibt `redistribution_ready=false`; die
 exakte 2-GB-Quellclosure liegt nicht im Repository, und DEVELOPMENT-ONLY-
 Builds sind nicht redistributierbar.
+
+Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
+Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
+durch Analyse, CFG, Optimierung und Export. Die Bootstrap-Zeitgrenze verwendet
+eine frische monotone Host-Epoche; Acceptance darf erst nach erfolgreichem
+Bootstrap und nativer Frame-Presentation bezeugt werden. Bring-up-Probes sind
+begrenzt, aber kein Ersatz fuer vollstaendige Hook-/Hardware-Closure.
 
 ## Verbindliche Taskreihenfolge
 

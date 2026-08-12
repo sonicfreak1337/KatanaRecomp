@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `85` und Native-Port-Profilvertrag `8` machen
+Portprojektvertrag `86` und Native-Port-Profilvertrag `10` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -205,7 +205,14 @@ dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 
 Prioritaet: P0 Alpha-Gate
 
-Status: aktiv nach KR-5000 bis KR-5004. Ein KR-5005-Zwischenfix transportiert
+Status: aktiv nach KR-5000 bis KR-5004. Der aktuelle KR-5005-Source-Snapshot
+verankert identity-bound Bootstrap-Materialisierung, echte Post-Bootstrap-AOT-
+Roots und resumierbare Continuations in Analyse, CFG, Optimierung und Export;
+Bring-up-Probes bleiben beobachtend bzw. begrenzend und koennen keine
+Produkt-Closure bescheinigen. Provider- und Draw-IR sind backendneutral
+angelegt, D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
+Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
+Ein KR-5005-Zwischenfix transportiert
 die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
 fail-closed; die frische Konfiguration erzeugte korrekte absolute Pfade fuer
@@ -215,7 +222,7 @@ Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
 verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
 oder Interpreter-Symbole.
 
-Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `85` auf einem eigenen
+Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `86` auf einem eigenen
 schnellen AOT-Profil: Bring-up verwendet fuer generierte Spiel-TUs `/Od /Ob0`,
 keine gemeinsame MSVC-PDB, einen gemessenen Vierer-Ninja-Pool und 4.096
 Dispatch-Eintraege pro Shard. Runtime, Titeladapter und Bootstrap bleiben
@@ -227,7 +234,7 @@ bei `337,205 s` Hostbuildzeit. Der sichtbare Laufnachweis bleibt offen.
 
 Der erste Start belegte eine native Bootstrapluecke statt eines Sonic-
 Analysefehlers: initiales identity-bound Titel-RAM wurde unter bereits
-aktiven Laufzeitguards geschrieben. Portprojektvertrag `85` materialisiert
+aktiven Laufzeitguards geschrieben. Portprojektvertrag `86` materialisiert
 diesen Zustand jetzt vor Guard/AOT-Aktivierung, sperrt Gastcallbacks bis zur
 erfolgreichen Rueckkehr und validiert danach Pointer, Stopzustand und
 Brueckenvertrag fail-closed.
@@ -282,12 +289,12 @@ letzte reale Produktevidenz:
   historische NativeDisc-/DirectBoot-Ports mit aelteren ABI-Vertraegen
 
 Aktueller funktionaler Source-Stand:
-  aktueller Runtime-Performance-Checkpoint
-  Runtime-ABI 96, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 85, Native-Port-Profilvertrag 8
+  aktueller KR-5005-Architekturreview-Checkpoint
+  Runtime-ABI 97, PlatformServices-ABI 14, Backend-Interface-ABI 20,
+  PVR-State-Contract 3, Portprojektvertrag 86, Native-Port-Profilvertrag 10
   Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 27, AOT-Partitionsschema 7
+  Native-AOT-Emissionsprofil 29, AOT-Partitionsschema 7
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

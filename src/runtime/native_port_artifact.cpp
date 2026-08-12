@@ -229,7 +229,38 @@ serialize_definition(const NativePortDefinition& definition) {
     writer.u32(definition.bootstrap.vector_base);
     writer.u32(definition.bootstrap.status_register);
     writer.u32(definition.bootstrap.fpscr);
+    writer.u32(definition.bootstrap.post_entry_point);
+    writer.u32(checked_count(
+        definition.bootstrap.post_aot_roots.size()));
+    for (const auto root : definition.bootstrap.post_aot_roots)
+        writer.u32(root);
+    writer.u32(checked_count(
+        definition.bootstrap.post_aot_continuations.size()));
+    for (const auto& continuation :
+         definition.bootstrap.post_aot_continuations) {
+        writer.u32(continuation.function_entry);
+        writer.u32(continuation.resume_address);
+    }
+    writer.enumeration(definition.bootstrap.time_policy);
     writer.string(definition.bootstrap.symbol);
+    writer.string(definition.bootstrap.post_cpu_state_identity,
+                  artifact_maximum_identity_size);
+    writer.u32(checked_count(definition.bootstrap.writes.size()));
+    for (const auto& write : definition.bootstrap.writes) {
+        writer.u32(write.guest_address);
+        writer.u32(write.byte_size);
+        writer.string(write.pre_write_identity,
+                      artifact_maximum_identity_size);
+        writer.string(write.post_write_identity,
+                      artifact_maximum_identity_size);
+        writer.enumeration(write.policy);
+    }
+    writer.string(definition.acceptance.milestone_id);
+    writer.u32(definition.acceptance.witness_hook_guest_address);
+    writer.u32(checked_count(
+        definition.checkpoint_runtime_image_ids.size()));
+    for (const auto image_id : definition.checkpoint_runtime_image_ids)
+        writer.string(image_id);
 
     writer.u32(checked_count(definition.images.size()));
     for (const auto& image : definition.images) {
@@ -256,13 +287,7 @@ serialize_definition(const NativePortDefinition& definition) {
     writer.u32(checked_count(definition.hardware_resolutions.size()));
     for (const auto& resolution : definition.hardware_resolutions) {
         writer.u32(resolution.instruction_address);
-        writer.enumeration(resolution.kind);
         writer.u32(resolution.hook_guest_address);
-        writer.string(resolution.native_memory_image_id);
-        writer.u32(resolution.native_memory_guest_address);
-        writer.u32(resolution.native_memory_byte_size);
-        writer.u8(resolution.native_memory_access_mask);
-        writer.u8(resolution.native_memory_width_mask);
     }
     return std::move(writer).finish();
 }
@@ -434,11 +459,30 @@ void NativePortArtifact::rebuild_definition() {
         image_byte_identities_.size() != images_.size() ||
         hook_symbols_.size() != hooks_.size() ||
         hook_code_identities_.size() != hooks_.size() ||
-        hardware_resolution_image_ids_.size() !=
-            hardware_resolutions_.size())
+        bootstrap_write_pre_identities_.size() !=
+            bootstrap_writes_.size() ||
+        bootstrap_write_post_identities_.size() !=
+            bootstrap_writes_.size())
         artifact_error("Native-port artifact ownership is inconsistent.");
 
     bootstrap_.symbol = bootstrap_symbol_;
+    bootstrap_.post_aot_roots = bootstrap_post_aot_roots_;
+    bootstrap_.post_aot_continuations =
+        bootstrap_post_aot_continuations_;
+    bootstrap_.post_cpu_state_identity =
+        bootstrap_post_cpu_state_identity_;
+    for (std::size_t index = 0u; index < bootstrap_writes_.size(); ++index)
+        bootstrap_writes_[index].pre_write_identity =
+            bootstrap_write_pre_identities_[index];
+    for (std::size_t index = 0u; index < bootstrap_writes_.size(); ++index)
+        bootstrap_writes_[index].post_write_identity =
+            bootstrap_write_post_identities_[index];
+    bootstrap_.writes = bootstrap_writes_;
+    checkpoint_runtime_image_id_views_.clear();
+    checkpoint_runtime_image_id_views_.reserve(
+        checkpoint_runtime_image_ids_.size());
+    for (const auto& image_id : checkpoint_runtime_image_ids_)
+        checkpoint_runtime_image_id_views_.push_back(image_id);
     for (std::size_t index = 0u; index < images_.size(); ++index) {
         images_[index].image_id = image_ids_[index];
         images_[index].content_relative_path = image_paths_[index];
@@ -448,10 +492,6 @@ void NativePortArtifact::rebuild_definition() {
         hooks_[index].symbol = hook_symbols_[index];
         hooks_[index].code_identity = hook_code_identities_[index];
     }
-    for (std::size_t index = 0u; index < hardware_resolutions_.size(); ++index)
-        hardware_resolutions_[index].native_memory_image_id =
-            hardware_resolution_image_ids_[index];
-
     definition_ = {};
     definition_.contract_version = contract_version_;
     definition_.project_id = project_id_;
@@ -459,6 +499,11 @@ void NativePortArtifact::rebuild_definition() {
     definition_.executable = {executable_content_identity_, executable_name_,
                               executable_byte_identity_};
     definition_.bootstrap = bootstrap_;
+    definition_.acceptance = {
+        acceptance_milestone_id_,
+        acceptance_witness_hook_guest_address_};
+    definition_.checkpoint_runtime_image_ids =
+        checkpoint_runtime_image_id_views_;
     definition_.images = images_;
     definition_.hooks = hooks_;
     definition_.hardware_resolutions = hardware_resolutions_;
@@ -510,7 +555,52 @@ NativePortArtifact::load(const std::filesystem::path& path) {
     result->bootstrap_.vector_base = reader.u32();
     result->bootstrap_.status_register = reader.u32();
     result->bootstrap_.fpscr = reader.u32();
+    result->bootstrap_.post_entry_point = reader.u32();
+    const auto post_aot_root_count = reader.count();
+    result->bootstrap_post_aot_roots_.reserve(post_aot_root_count);
+    for (std::uint32_t index = 0u; index < post_aot_root_count; ++index)
+        result->bootstrap_post_aot_roots_.push_back(reader.u32());
+    const auto post_aot_continuation_count = reader.count();
+    result->bootstrap_post_aot_continuations_.reserve(
+        post_aot_continuation_count);
+    for (std::uint32_t index = 0u;
+         index < post_aot_continuation_count;
+         ++index) {
+        result->bootstrap_post_aot_continuations_.push_back(
+            {reader.u32(), reader.u32()});
+    }
+    result->bootstrap_.time_policy =
+        reader.enumeration<NativePortBootstrapTimePolicy>();
     result->bootstrap_symbol_ = reader.string();
+    result->bootstrap_post_cpu_state_identity_ =
+        reader.string(artifact_maximum_identity_size);
+    const auto bootstrap_write_count = reader.count();
+    result->bootstrap_write_pre_identities_.reserve(
+        bootstrap_write_count);
+    result->bootstrap_write_post_identities_.reserve(
+        bootstrap_write_count);
+    result->bootstrap_writes_.reserve(bootstrap_write_count);
+    for (std::uint32_t index = 0u; index < bootstrap_write_count; ++index) {
+        NativePortBootstrapWriteBinding write;
+        write.guest_address = reader.u32();
+        write.byte_size = reader.u32();
+        result->bootstrap_write_pre_identities_.push_back(
+            reader.string(artifact_maximum_identity_size));
+        result->bootstrap_write_post_identities_.push_back(
+            reader.string(artifact_maximum_identity_size));
+        write.policy =
+            reader.enumeration<NativePortBootstrapWritePolicy>();
+        result->bootstrap_writes_.push_back(write);
+    }
+    result->acceptance_milestone_id_ = reader.string();
+    result->acceptance_witness_hook_guest_address_ = reader.u32();
+    const auto checkpoint_runtime_image_count = reader.count();
+    result->checkpoint_runtime_image_ids_.reserve(
+        checkpoint_runtime_image_count);
+    for (std::uint32_t index = 0u;
+         index < checkpoint_runtime_image_count;
+         ++index)
+        result->checkpoint_runtime_image_ids_.push_back(reader.string());
 
     const auto image_count = reader.count();
     result->image_ids_.reserve(image_count);
@@ -549,19 +639,11 @@ NativePortArtifact::load(const std::filesystem::path& path) {
     }
 
     const auto resolution_count = reader.count();
-    result->hardware_resolution_image_ids_.reserve(resolution_count);
     result->hardware_resolutions_.reserve(resolution_count);
     for (std::uint32_t index = 0u; index < resolution_count; ++index) {
         NativePortHardwareResolution resolution;
         resolution.instruction_address = reader.u32();
-        resolution.kind =
-            reader.enumeration<NativePortHardwareResolutionKind>();
         resolution.hook_guest_address = reader.u32();
-        result->hardware_resolution_image_ids_.push_back(reader.string());
-        resolution.native_memory_guest_address = reader.u32();
-        resolution.native_memory_byte_size = reader.u32();
-        resolution.native_memory_access_mask = reader.u8();
-        resolution.native_memory_width_mask = reader.u8();
         result->hardware_resolutions_.push_back(resolution);
     }
 

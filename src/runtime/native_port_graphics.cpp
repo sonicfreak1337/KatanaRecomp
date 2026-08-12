@@ -1604,6 +1604,10 @@ void NativePortDesktopHost::present_frame(const std::uint64_t frame_index) {
     graphics_.present();
 }
 
+std::uint64_t NativePortDesktopHost::presented_frames() const noexcept {
+    return graphics_.snapshot().presented_frames;
+}
+
 NativePortGraphicsDevice& NativePortDesktopHost::graphics() noexcept {
     return graphics_;
 }

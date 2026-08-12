@@ -13,7 +13,7 @@ namespace katana::runtime {
 // This private tooling artifact has an independent wire contract.  It owns
 // only static NativePortDefinition data; retail image bytes and every process
 // local hook/bootstrap callback remain outside the artifact.
-inline constexpr std::uint32_t native_port_artifact_format_version = 1u;
+inline constexpr std::uint32_t native_port_artifact_format_version = 7u;
 inline constexpr std::uint64_t native_port_artifact_maximum_size =
     16u * 1024u * 1024u;
 
@@ -56,7 +56,18 @@ class NativePortArtifact final {
     std::string executable_name_;
     std::string executable_byte_identity_;
     NativePortBootstrap bootstrap_;
+    std::vector<std::uint32_t> bootstrap_post_aot_roots_;
+    std::vector<NativePortAotContinuationBinding>
+        bootstrap_post_aot_continuations_;
     std::string bootstrap_symbol_;
+    std::string bootstrap_post_cpu_state_identity_;
+    std::vector<std::string> bootstrap_write_pre_identities_;
+    std::vector<std::string> bootstrap_write_post_identities_;
+    std::vector<NativePortBootstrapWriteBinding> bootstrap_writes_;
+    std::string acceptance_milestone_id_;
+    std::uint32_t acceptance_witness_hook_guest_address_ = 0u;
+    std::vector<std::string> checkpoint_runtime_image_ids_;
+    std::vector<std::string_view> checkpoint_runtime_image_id_views_;
 
     std::vector<std::string> image_ids_;
     std::vector<std::string> image_paths_;
@@ -67,7 +78,6 @@ class NativePortArtifact final {
     std::vector<std::string> hook_code_identities_;
     std::vector<NativePortHookBinding> hooks_;
 
-    std::vector<std::string> hardware_resolution_image_ids_;
     std::vector<NativePortHardwareResolution> hardware_resolutions_;
 
     NativePortDefinition definition_;

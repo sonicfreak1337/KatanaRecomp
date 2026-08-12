@@ -73,6 +73,8 @@ port_export_implementation_identities(
         !valid_cache_digest(
             katana::build_contract::codegen_component_identity) ||
         !valid_cache_digest(
+            katana::build_contract::partition_codegen_component_identity) ||
+        !valid_cache_digest(
             katana::build_contract::orchestration_component_identity))
         throw std::runtime_error(
             "Exporter besitzt keine gueltigen buildgebundenen "

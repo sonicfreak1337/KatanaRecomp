@@ -35,6 +35,25 @@ void canonicalize_addresses(std::vector<std::uint32_t>& values) {
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+struct ExactFunctionOwnershipRange final {
+    std::uint32_t entry = 0u;
+    std::uint64_t end = 0u;
+};
+
+const ExactFunctionOwnershipRange* exact_function_owner(
+    const std::span<const ExactFunctionOwnershipRange> ranges,
+    const std::uint32_t address) noexcept {
+    const auto after = std::upper_bound(
+        ranges.begin(), ranges.end(), address,
+        [](const auto candidate, const auto& range) {
+            return candidate < range.entry;
+        });
+    if (after == ranges.begin()) return nullptr;
+    const auto& range = *std::prev(after);
+    return static_cast<std::uint64_t>(address) < range.end ? &range
+                                                           : nullptr;
+}
+
 } // namespace
 
 std::vector<FunctionInfo>
@@ -72,6 +91,9 @@ discover_functions_from_blocks(
     std::unordered_map<std::uint32_t, std::uint64_t> exact_ends;
     exact_ends.reserve(seed_boundaries.size());
 
+    std::vector<ExactFunctionOwnershipRange> exact_ranges;
+    exact_ranges.reserve(seed_boundaries.size());
+
     for (const auto& boundary : seed_boundaries) {
         if (boundary.size != 0u) {
             const auto end = static_cast<std::uint64_t>(boundary.entry_address) +
@@ -87,11 +109,33 @@ discover_functions_from_blocks(
             if (!inserted && existing->second != end)
                 throw std::invalid_argument(
                     "Explizite Funktionsgrenzen widersprechen sich.");
-        }
-        if (block_by_start.contains(boundary.entry_address)) {
-            known_entries.insert(boundary.entry_address);
+            if (inserted)
+                exact_ranges.push_back({boundary.entry_address, end});
         }
     }
+    std::sort(exact_ranges.begin(), exact_ranges.end(),
+              [](const auto& left, const auto& right) {
+                  return left.entry < right.entry;
+              });
+    for (std::size_t index = 1u; index < exact_ranges.size(); ++index) {
+        if (exact_ranges[index].entry < exact_ranges[index - 1u].end)
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenzen ueberlappen sich.");
+    }
+
+    std::unordered_map<std::uint32_t, std::set<std::uint32_t>>
+        interior_entries_by_owner;
+    const auto classify_entry = [&](const std::uint32_t address) {
+        if (!block_by_start.contains(address)) return;
+        const auto* owner = exact_function_owner(exact_ranges, address);
+        if (owner != nullptr && owner->entry != address) {
+            interior_entries_by_owner[owner->entry].insert(address);
+            return;
+        }
+        known_entries.insert(address);
+    };
+    for (const auto& boundary : seed_boundaries)
+        classify_entry(boundary.entry_address);
 
     for (const auto& block : blocks) {
         if (block.lines.empty()) {
@@ -103,14 +147,25 @@ discover_functions_from_blocks(
         if (control.instruction.control_flow == katana::sh4::ControlFlowKind::Call &&
             control.target_address.has_value() &&
             block_by_start.contains(*control.target_address)) {
-            known_entries.insert(*control.target_address);
+            classify_entry(*control.target_address);
         }
     }
     for (const auto& edge : resolved_edges) {
-        if (edge.kind == ResolvedControlFlowKind::Call &&
-            control_flow_evidence_complete(resolved_edge_evidence(edge)) &&
-            block_by_start.contains(edge.target_address)) {
-            known_entries.insert(edge.target_address);
+        if (edge.kind != ResolvedControlFlowKind::Call ||
+            !block_by_start.contains(edge.target_address))
+            continue;
+        const auto* owner = exact_function_owner(
+            exact_ranges, edge.target_address);
+        if (owner != nullptr && owner->entry != edge.target_address) {
+            // Guarded or partial indirect-call evidence still denotes a real
+            // externally reachable block when it lands inside an exact
+            // function. It must be emitted under that owner, but it must
+            // never manufacture a nested function boundary.
+            interior_entries_by_owner[owner->entry].insert(
+                edge.target_address);
+        } else if (control_flow_evidence_complete(
+                       resolved_edge_evidence(edge))) {
+            classify_entry(edge.target_address);
         }
     }
 
@@ -147,6 +202,11 @@ discover_functions_from_blocks(
         std::unordered_set<std::uint32_t> visited_blocks;
 
         pending_blocks.push_back(entry);
+        if (const auto interior = interior_entries_by_owner.find(entry);
+            interior != interior_entries_by_owner.end())
+            pending_blocks.insert(pending_blocks.end(),
+                                  interior->second.begin(),
+                                  interior->second.end());
 
         while (!pending_blocks.empty()) {
             const auto block_address = pending_blocks.front();
@@ -159,6 +219,10 @@ discover_functions_from_blocks(
             if (block_address != entry && known_entries.contains(block_address)) {
                 continue;
             }
+            if (const auto* owner = exact_function_owner(
+                    exact_ranges, block_address);
+                owner != nullptr && owner->entry != entry)
+                continue;
             if (exact_end != exact_ends.end() &&
                 (block_address < entry ||
                  static_cast<std::uint64_t>(block_address) >=
@@ -185,11 +249,21 @@ discover_functions_from_blocks(
             const auto flow = control.instruction.control_flow;
 
             if (flow == katana::sh4::ControlFlowKind::Call && control.target_address.has_value()) {
-                function.direct_callees.push_back(*control.target_address);
-
-                if (block_by_start.contains(*control.target_address) &&
-                    !processed_entries.contains(*control.target_address)) {
-                    pending_entries.push_back(*control.target_address);
+                const auto target = *control.target_address;
+                const auto* target_owner = exact_function_owner(
+                    exact_ranges, target);
+                if (target_owner != nullptr &&
+                    target_owner->entry == entry) {
+                    if (block_by_start.contains(target))
+                        pending_blocks.push_back(target);
+                } else {
+                    const auto callee = target_owner != nullptr
+                                            ? target_owner->entry
+                                            : target;
+                    function.direct_callees.push_back(callee);
+                    if (block_by_start.contains(callee) &&
+                        !processed_entries.contains(callee))
+                        pending_entries.push_back(callee);
                 }
             }
 
@@ -200,12 +274,26 @@ discover_functions_from_blocks(
             const auto [edge_begin, edge_end] = edges_by_instruction.equal_range(control.address);
             for (auto edge = edge_begin; edge != edge_end; ++edge) {
                 if (edge->second->kind == ResolvedControlFlowKind::Call) {
-                    function.direct_callees.push_back(edge->second->target_address);
+                    const auto target = edge->second->target_address;
+                    const auto* target_owner = exact_function_owner(
+                        exact_ranges, target);
                     function.indirect_call_sites.push_back(control.address);
-                    if (control_flow_evidence_complete(resolved_edge_evidence(*edge->second)) &&
-                        block_by_start.contains(edge->second->target_address) &&
-                        !processed_entries.contains(edge->second->target_address)) {
-                        pending_entries.push_back(edge->second->target_address);
+                    if (target_owner != nullptr &&
+                        target_owner->entry == entry) {
+                        if (control_flow_evidence_complete(
+                                resolved_edge_evidence(*edge->second)) &&
+                            block_by_start.contains(target))
+                            pending_blocks.push_back(target);
+                    } else {
+                        const auto callee = target_owner != nullptr
+                                                ? target_owner->entry
+                                                : target;
+                        function.direct_callees.push_back(callee);
+                        if (control_flow_evidence_complete(
+                                resolved_edge_evidence(*edge->second)) &&
+                            block_by_start.contains(callee) &&
+                            !processed_entries.contains(callee))
+                            pending_entries.push_back(callee);
                     }
                 }
             }
@@ -216,7 +304,12 @@ discover_functions_from_blocks(
                     (successor < entry ||
                      static_cast<std::uint64_t>(successor) >=
                          exact_end->second);
-                if (crosses_exact_boundary) {
+                const auto* successor_owner = exact_function_owner(
+                    exact_ranges, successor);
+                const bool crosses_exact_owner =
+                    successor_owner != nullptr &&
+                    successor_owner->entry != entry;
+                if (crosses_exact_boundary || crosses_exact_owner) {
                     if (flow ==
                             katana::sh4::ControlFlowKind::
                                 UnconditionalBranch ||

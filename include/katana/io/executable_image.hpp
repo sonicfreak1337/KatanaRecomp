@@ -104,6 +104,10 @@ class ExecutableImage {
 
     void add_segment(ImageSegment segment);
     void add_entry_point(std::uint32_t address);
+    // Replaces loader-owned roots with one explicit execution-phase root set.
+    // This is used when a verified checkpoint changes the executable view
+    // before the first recompiled instruction is dispatched.
+    void replace_entry_points(std::span<const std::uint32_t> addresses);
     void add_symbol(ImageSymbol symbol);
     void add_relocation(ImageRelocation relocation);
     void add_address_alias(ImageAddressAlias alias);
@@ -133,6 +137,8 @@ class ExecutableImage {
     [[nodiscard]] const ImageSegment* find_segment(std::uint32_t address,
                                                    std::size_t width = 1u) const noexcept;
     [[nodiscard]] std::uint32_t read_u32_le(std::uint32_t address) const;
+    void write_bytes(std::uint32_t address,
+                     std::span<const std::uint8_t> bytes);
     void write_u32_le(std::uint32_t address, std::uint32_t value);
 
   private:

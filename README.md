@@ -25,12 +25,14 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 96, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 97, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 85, Native-Port-Profilvertrag 8 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `27`, AOT-Partitionsschema: `7`.
+Portprojektvertrag 86, Native-Port-Profilvertrag 10 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`.
+Der aktuelle GameProject-Vertrag ist `6` mit Artefaktformat `5`; der native
+Port-Definitionsvertrag ist `7` und bleibt davon getrennt.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
 installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
@@ -89,7 +91,10 @@ Validierung, User-Data-Save-Root und Digest-Domaenen bleiben fail-closed.
 Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
 sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
-Der naechste aktive Task ist KR-5005.
+Der naechste aktive Task ist KR-5005. Die Provider- und Draw-IR-Grenzen des
+nativen Grafikpfads sind backendneutral beschrieben; D3D11 ist zunaechst das
+Windows-Backend. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
+nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
 
 Der KR-5005-Zwischenfix schliesst die CMake-Deploymentgrenze fuer FFmpeg im
 Parent-Projekt: Die verifizierte Closure wird unabhaengig vom Caller-Scope
@@ -283,14 +288,14 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    96
+Runtime-ABI:                    97
 Block-ABI:                       5
 Analyzer-ABI:                   36
 PlatformServices-ABI:           14
 Backend-Interface-ABI:          20
-Portprojektvertrag:             84
-Native-Port-Profilvertrag:       8
-Native-AOT-Emissionsprofil:     27
+Portprojektvertrag:             86
+Native-Port-Profilvertrag:      10
+Native-AOT-Emissionsprofil:     29
 AOT-Partitionsschema:            7
 ```
 
@@ -405,17 +410,17 @@ Der vollstaendige Discpfad bleibt erhalten:
 bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
-Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der dokumentierte
-Der aktuelle KR-5004-Stand verwendet Runtime-ABI 96 und
-Portprojektvertrag 85. Davon getrennt verwendet `GameProject` Vertrag 5 und
-Artefaktformat 4. `CompletePlatform` erfasst und restauriert den kanonischen
+Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
+KR-5005-Stand verwendet Runtime-ABI 97 und
+Portprojektvertrag 86. Davon getrennt verwendet `GameProject` Vertrag 6 und
+Artefaktformat 5. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
 Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-
 Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
 ist nicht automatisch freigegeben.
 
-`GameProjectArtifact` Format 4 transportiert fuer Spielprojektvertrag 5 die deklarativen,
+`GameProjectArtifact` Format 5 transportiert fuer Spielprojektvertrag 6 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
 Funktionsgrenzen, Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole,
 Codeidentitaeten und Direct-Boot-Konfiguration. Native Hookzeiger und private

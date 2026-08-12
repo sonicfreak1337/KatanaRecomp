@@ -48,6 +48,22 @@ namespace {
         NativePortContractFailure::InvalidDefinition, detail);
 }
 
+[[nodiscard]] bool valid_bootstrap_write_policy(
+    const NativePortBootstrapWritePolicy policy) noexcept {
+    switch (policy) {
+    case NativePortBootstrapWritePolicy::WritableDataOnly:
+    case NativePortBootstrapWritePolicy::
+        IdentityBoundImmutableMaterialization:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_bootstrap_time_policy(
+    const NativePortBootstrapTimePolicy policy) noexcept {
+    return policy == NativePortBootstrapTimePolicy::NativeHostEpoch;
+}
+
 } // namespace
 
 NativePortContractError::NativePortContractError(
@@ -108,10 +124,66 @@ bool valid_native_port_hook_result(
 bool valid_native_port_hook_result(
     const NativePortHookBinding& binding,
     const NativePortHookResult& result) noexcept {
-    return valid_native_port_hook_result(result) &&
-           (binding.original_policy ==
-                    NativePortHookOriginalPolicy::MayContinueOriginal ||
-            result.action != NativePortHookAction::ContinueOriginal);
+    if (!valid_native_port_hook_result(result) ||
+        (binding.original_policy !=
+             NativePortHookOriginalPolicy::MayContinueOriginal &&
+         result.action == NativePortHookAction::ContinueOriginal))
+        return false;
+    if (binding.kind != NativePortHookKind::Instruction)
+        return true;
+    // An instruction hook proves and displaces exactly one instruction. It
+    // may not masquerade as a whole-function replacement by returning to PR
+    // or jumping over an unproved body. A successful replacement resumes at
+    // the immediate fallthrough; Abort remains a typed bring-up failure.
+    if (result.action == NativePortHookAction::Return) return false;
+    if (result.action == NativePortHookAction::Jump)
+        return static_cast<std::uint64_t>(binding.guest_address) +
+                   binding.covered_size <=
+                   std::numeric_limits<std::uint32_t>::max() &&
+               result.target ==
+                   binding.guest_address + binding.covered_size;
+    return true;
+}
+
+void NativePortContext::bind_acceptance(
+    const NativePortAcceptanceBinding& binding) noexcept {
+    acceptance_milestone_id_ = binding.milestone_id;
+    acceptance_witness_hook_guest_address_ =
+        binding.witness_hook_guest_address;
+    active_hook_guest_address_ = 0u;
+    acceptance_presented_frame_baseline_ =
+        host != nullptr ? host->presented_frames() : 0u;
+    acceptance_reached_ = false;
+}
+
+std::uint32_t NativePortContext::begin_hook_dispatch(
+    const std::uint32_t guest_address) noexcept {
+    const auto previous = active_hook_guest_address_;
+    active_hook_guest_address_ = guest_address;
+    return previous;
+}
+
+void NativePortContext::end_hook_dispatch(
+    const std::uint32_t previous_guest_address) noexcept {
+    active_hook_guest_address_ = previous_guest_address;
+}
+
+bool NativePortContext::report_acceptance(
+    const std::string_view milestone_id) noexcept {
+    if (acceptance_reached_ || bootstrap_phase !=
+            NativePortBootstrapPhase::Completed || host == nullptr ||
+        milestone_id != acceptance_milestone_id_ ||
+        active_hook_guest_address_ == 0u ||
+        active_hook_guest_address_ !=
+            acceptance_witness_hook_guest_address_ ||
+        host->presented_frames() <= acceptance_presented_frame_baseline_)
+        return false;
+    acceptance_reached_ = true;
+    return true;
+}
+
+bool NativePortContext::acceptance_reached() const noexcept {
+    return acceptance_reached_;
 }
 
 void validate_native_port_definition(
@@ -129,8 +201,83 @@ void validate_native_port_definition(
         invalid_definition("executable-identity");
     if ((definition.bootstrap.entry_point & 1u) != 0u ||
         definition.bootstrap.entry_point == 0u ||
-        !valid_native_port_link_symbol(definition.bootstrap.symbol))
+        (definition.bootstrap.post_entry_point & 1u) != 0u ||
+        definition.bootstrap.post_entry_point == 0u ||
+        definition.bootstrap.post_aot_roots.empty() ||
+        !valid_bootstrap_time_policy(
+            definition.bootstrap.time_policy) ||
+        !valid_native_port_link_symbol(definition.bootstrap.symbol) ||
+        !valid_native_port_sha256_identity(
+            definition.bootstrap.post_cpu_state_identity))
         invalid_definition("bootstrap");
+    std::set<std::uint32_t> post_aot_roots;
+    for (const auto root : definition.bootstrap.post_aot_roots) {
+        if ((root & 1u) != 0u || root == 0u ||
+            !post_aot_roots.insert(root).second)
+            invalid_definition("post-aot-root");
+    }
+    std::set<std::uint32_t> continuation_resumes;
+    for (const auto& continuation :
+         definition.bootstrap.post_aot_continuations) {
+        if ((continuation.function_entry & 1u) != 0u ||
+            continuation.function_entry == 0u ||
+            (continuation.resume_address & 1u) != 0u ||
+            continuation.resume_address == 0u ||
+            !post_aot_roots.contains(continuation.function_entry) ||
+            !continuation_resumes.insert(
+                continuation.resume_address).second)
+            invalid_definition("post-aot-continuation");
+    }
+    if (!post_aot_roots.contains(
+            definition.bootstrap.post_entry_point) &&
+        !continuation_resumes.contains(
+            definition.bootstrap.post_entry_point))
+        invalid_definition("post-entry-control-flow-root-missing");
+    if (!valid_identifier_component(definition.acceptance.milestone_id) ||
+        (definition.acceptance.witness_hook_guest_address & 1u) != 0u ||
+        definition.acceptance.witness_hook_guest_address == 0u)
+        invalid_definition("acceptance-milestone");
+    std::set<std::string_view> checkpoint_runtime_image_ids;
+    for (const auto image_id : definition.checkpoint_runtime_image_ids) {
+        if (!valid_identifier_component(image_id) ||
+            !checkpoint_runtime_image_ids.insert(image_id).second)
+            invalid_definition("checkpoint-runtime-image-id");
+    }
+
+    std::set<std::tuple<std::uint64_t, std::uint64_t>>
+        bootstrap_write_ranges;
+    for (const auto& write : definition.bootstrap.writes) {
+        const auto physical = canonical_physical_address(write.guest_address);
+        const auto relative =
+            physical >= native_port_main_memory_physical_base
+                ? physical - native_port_main_memory_physical_base
+                : native_port_main_memory_physical_span;
+        const auto backing_offset =
+            relative < native_port_main_memory_physical_span
+                ? relative & (native_port_main_memory_backing_size - 1u)
+                : native_port_main_memory_backing_size;
+        if (write.byte_size == 0u ||
+            backing_offset >= native_port_main_memory_backing_size ||
+            write.byte_size >
+                native_port_main_memory_backing_size - backing_offset ||
+            write.byte_size >
+                native_port_main_memory_physical_span - relative ||
+            !valid_native_port_sha256_identity(
+                write.pre_write_identity) ||
+            !valid_native_port_sha256_identity(
+                write.post_write_identity) ||
+            !valid_bootstrap_write_policy(write.policy))
+            invalid_definition("bootstrap-write-binding");
+        const auto range = std::tuple{
+            static_cast<std::uint64_t>(backing_offset),
+            static_cast<std::uint64_t>(backing_offset) + write.byte_size};
+        for (const auto& existing : bootstrap_write_ranges) {
+            if (std::get<0>(range) < std::get<1>(existing) &&
+                std::get<0>(existing) < std::get<1>(range))
+                invalid_definition("overlapping-bootstrap-write-bindings");
+        }
+        bootstrap_write_ranges.insert(range);
+    }
 
     std::set<std::string_view> image_ids;
     std::set<std::tuple<std::uint64_t, std::uint64_t>> image_ranges;
@@ -199,6 +346,18 @@ void validate_native_port_definition(
     };
     if (!range_inside_image(definition.bootstrap.entry_point, 2u))
         invalid_definition("bootstrap-outside-images");
+    if (!range_inside_image(definition.bootstrap.post_entry_point, 2u))
+        invalid_definition("post-entry-outside-images");
+    for (const auto root : definition.bootstrap.post_aot_roots) {
+        if (!range_inside_image(root, 2u))
+            invalid_definition("post-aot-root-outside-images");
+    }
+    for (const auto& continuation :
+         definition.bootstrap.post_aot_continuations) {
+        if (!range_inside_image(continuation.function_entry, 2u) ||
+            !range_inside_image(continuation.resume_address, 2u))
+            invalid_definition("post-aot-continuation-outside-images");
+    }
 
     std::set<std::uint32_t> hook_addresses;
     std::set<std::string_view> hook_symbols;
@@ -211,7 +370,7 @@ void validate_native_port_definition(
             hook.kind == NativePortHookKind::FunctionEntry ||
             hook.kind == NativePortHookKind::Instruction;
         const auto valid_requirement =
-            hook.requirement == NativePortHookRequirement::Required ||
+            native_port_hook_is_executable(hook.requirement) ||
             hook.requirement == NativePortHookRequirement::DiagnosticOnly;
         const auto valid_original_policy =
             hook.original_policy ==
@@ -243,76 +402,24 @@ void validate_native_port_definition(
         }
         hook_ranges.insert(range);
     }
+    const auto acceptance_hook = std::find_if(
+        definition.hooks.begin(), definition.hooks.end(),
+        [&](const auto& hook) {
+            return hook.guest_address ==
+                   definition.acceptance.witness_hook_guest_address;
+        });
+    if (acceptance_hook == definition.hooks.end() ||
+        !native_port_hook_closes_product_contract(
+            acceptance_hook->requirement))
+        invalid_definition("acceptance-witness-hook");
 
     std::set<std::uint32_t> resolved_instructions;
     for (const auto& resolution : definition.hardware_resolutions) {
-        const auto valid_kind =
-            resolution.kind ==
-                NativePortHardwareResolutionKind::NativeMemory ||
-            resolution.kind ==
-                NativePortHardwareResolutionKind::ReplacedByHook;
         if ((resolution.instruction_address & 1u) != 0u ||
-            !valid_kind ||
             !range_inside_image(resolution.instruction_address, 2u) ||
             !resolved_instructions.insert(
                 resolution.instruction_address).second)
             invalid_definition("hardware-resolution");
-        if (resolution.kind ==
-            NativePortHardwareResolutionKind::NativeMemory) {
-            constexpr std::uint8_t valid_access_mask =
-                native_port_memory_access_mask(NativePortMemoryAccess::Read) |
-                native_port_memory_access_mask(NativePortMemoryAccess::Write) |
-                native_port_memory_access_mask(
-                    NativePortMemoryAccess::Prefetch);
-            constexpr std::uint8_t valid_width_mask =
-                native_port_memory_width_u8 |
-                native_port_memory_width_u16 |
-                native_port_memory_width_u32 |
-                native_port_memory_width_cache_line_32;
-            const auto image = std::find_if(
-                definition.images.begin(),
-                definition.images.end(),
-                [&](const auto& candidate) {
-                    return candidate.image_id ==
-                           resolution.native_memory_image_id;
-                });
-            const auto range_end =
-                static_cast<std::uint64_t>(
-                    resolution.native_memory_guest_address) +
-                resolution.native_memory_byte_size;
-            const auto image_begin =
-                image == definition.images.end()
-                    ? 0u
-                    : static_cast<std::uint64_t>(image->guest_address);
-            const auto image_end =
-                image == definition.images.end()
-                    ? 0u
-                    : image_begin + image->byte_size;
-            if (resolution.hook_guest_address != 0u ||
-                resolution.native_memory_image_id.empty() ||
-                resolution.native_memory_byte_size == 0u ||
-                resolution.native_memory_access_mask == 0u ||
-                resolution.native_memory_width_mask == 0u ||
-                (resolution.native_memory_access_mask &
-                 ~valid_access_mask) != 0u ||
-                (resolution.native_memory_width_mask &
-                 ~valid_width_mask) != 0u ||
-                image == definition.images.end() ||
-                resolution.native_memory_guest_address < image_begin ||
-                range_end > image_end ||
-                ((resolution.native_memory_access_mask &
-                  native_port_memory_access_mask(
-                      NativePortMemoryAccess::Write)) != 0u &&
-                 !image->writable))
-                invalid_definition("native-memory-resolution-hook");
-            continue;
-        }
-        if (!resolution.native_memory_image_id.empty() ||
-            resolution.native_memory_guest_address != 0u ||
-            resolution.native_memory_byte_size != 0u ||
-            resolution.native_memory_access_mask != 0u ||
-            resolution.native_memory_width_mask != 0u)
-            invalid_definition("hook-resolution-native-memory-fields");
         const auto hook = std::find_if(
             definition.hooks.begin(),
             definition.hooks.end(),
@@ -325,7 +432,8 @@ void validate_native_port_definition(
         // every external, guarded, seeded or resume entry into the covered
         // interior before it may certify an interior hardware instruction.
         if (hook == definition.hooks.end() ||
-            hook->requirement != NativePortHookRequirement::Required ||
+            !native_port_hook_closes_product_contract(
+                hook->requirement) ||
             hook->original_policy !=
                 NativePortHookOriginalPolicy::ReplacesOriginal ||
             resolution.instruction_address < hook->guest_address ||

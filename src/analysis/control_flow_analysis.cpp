@@ -61,6 +61,25 @@ struct SeedEvidence {
     std::vector<ControlFlowAnalysisResult::SeedCause> causes;
 };
 
+struct ExactFunctionOwnershipInterval final {
+    std::uint32_t begin = 0u;
+    std::uint64_t end = 0u;
+};
+
+[[nodiscard]] bool exact_function_strictly_contains(
+    const std::span<const ExactFunctionOwnershipInterval> intervals,
+    const std::uint32_t address) noexcept {
+    const auto candidate = std::upper_bound(
+        intervals.begin(), intervals.end(), address,
+        [](const auto value, const auto& interval) {
+            return value < interval.begin;
+        });
+    if (candidate == intervals.begin()) return false;
+    const auto& interval = *std::prev(candidate);
+    return address > interval.begin &&
+           static_cast<std::uint64_t>(address) < interval.end;
+}
+
 using SeedCause = ControlFlowAnalysisResult::SeedCause;
 using SeedCauseKind = ControlFlowAnalysisResult::SeedCauseKind;
 
@@ -318,11 +337,15 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
 
 [[nodiscard]] AnalysisSeed make_analysis_seed(
     const std::uint32_t address,
-    const SeedEvidence& evidence) {
+    const SeedEvidence& evidence,
+    const std::span<const ExactFunctionOwnershipInterval>
+        exact_function_ownership) {
     AnalysisSeed seed;
     seed.address = address;
-    seed.function_origins.assign(evidence.origins.begin(),
-                                 evidence.origins.end());
+    if (!exact_function_strictly_contains(
+            exact_function_ownership, address))
+        seed.function_origins.assign(evidence.origins.begin(),
+                                     evidence.origins.end());
     seed.guarded_candidate = !evidence.proven;
     seed.evidence = evidence.evidence;
     seed.function_size = evidence.function_size;
@@ -331,6 +354,8 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
 
 std::vector<AnalysisSeed> make_seed_vector(
     const std::map<std::uint32_t, SeedEvidence>& seeds,
+    const std::span<const ExactFunctionOwnershipInterval>
+        exact_function_ownership,
     const std::set<std::uint32_t>* const selected_targets =
         nullptr) {
     std::vector<AnalysisSeed> result;
@@ -341,12 +366,14 @@ std::vector<AnalysisSeed> make_seed_vector(
             const auto found = seeds.find(address);
             if (found == seeds.end()) continue;
             result.push_back(
-                make_analysis_seed(found->first, found->second));
+                make_analysis_seed(found->first, found->second,
+                                   exact_function_ownership));
         }
         return result;
     }
     for (const auto& [address, evidence] : seeds)
-        result.push_back(make_analysis_seed(address, evidence));
+        result.push_back(make_analysis_seed(
+            address, evidence, exact_function_ownership));
     return result;
 }
 
@@ -410,6 +437,7 @@ struct RecursiveWorkingIndex final {
 
 void classify_dynamic_sites(
     std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image,
     std::vector<IndirectControlFlowResolution>& resolutions);
 
 // CFA consumes Recursive's monotone journal through stable function-owner
@@ -600,6 +628,7 @@ class IncrementalCfaScanCache final {
             telemetry.local_control_flow_instruction_visits +=
                 component.lines.size();
             classify_dynamic_sites(component.lines,
+                                   image,
                                    component.local.indirect_control_flow);
             for (const auto& resolution :
                  component.local.indirect_control_flow) {
@@ -1149,6 +1178,8 @@ bool memory_load(const katana::sh4::InstructionKind kind) {
     case K::MovByteLoadR0Indexed:
     case K::MovWordLoadR0Indexed:
     case K::MovLongLoadR0Indexed:
+    case K::MovWordLoadPcRelative:
+    case K::MovLongLoadPcRelative:
         return true;
     default:
         return false;
@@ -1157,7 +1188,12 @@ bool memory_load(const katana::sh4::InstructionKind kind) {
 
 struct BackwardSlice {
     std::set<std::uint32_t> writers;
-    bool incomplete = false;
+    // Path completeness and writer shape are separate contracts.  A unique
+    // register-copy writer is a useful first link in a static value chain even
+    // though it is not, by itself, the memory-writer shape used by the dynamic
+    // origin classifier.
+    bool path_incomplete = false;
+    bool writer_not_memory_load = false;
     bool preceding_call = false;
 };
 
@@ -1199,7 +1235,7 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
     BackwardSlice result;
     const auto initial = index.locations.find(before_address);
     if (initial == index.locations.end()) {
-        result.incomplete = true;
+        result.path_incomplete = true;
         return result;
     }
     struct Work {
@@ -1217,7 +1253,7 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
         if (!visited.emplace(work.block, work.before_index).second) continue;
         const auto found = index.by_start.find(work.block);
         if (found == index.by_start.end()) {
-            result.incomplete = true;
+            result.path_incomplete = true;
             continue;
         }
         const auto& block = *found->second;
@@ -1225,7 +1261,7 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
         auto depth = work.depth;
         for (std::size_t line_index = work.before_index; line_index-- > 0u;) {
             if (++depth > instruction_budget) {
-                result.incomplete = true;
+                result.path_incomplete = true;
                 writer_found = true;
                 break;
             }
@@ -1240,13 +1276,13 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
             result.writers.insert(line.address);
             if (line.instruction.destination_register != register_index ||
                 !memory_load(line.instruction.kind))
-                result.incomplete = true;
+                result.writer_not_memory_load = true;
             break;
         }
         if (writer_found) continue;
         const auto incoming = index.predecessors.find(block.start_address);
         if (incoming == index.predecessors.end() || incoming->second.empty()) {
-            result.incomplete = true;
+            result.path_incomplete = true;
             continue;
         }
         for (const auto predecessor : incoming->second) {
@@ -1258,8 +1294,116 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
     return result;
 }
 
-void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> lines,
-                            std::vector<IndirectControlFlowResolution>& resolutions) {
+const katana::sh4::DisassemblyLine* find_line(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::uint32_t address) {
+    const auto found = std::lower_bound(
+        lines.begin(), lines.end(), address,
+        [](const auto& line, const auto value) { return line.address < value; });
+    return found != lines.end() && found->address == address ? &*found : nullptr;
+}
+
+struct StaticCodePointerChain {
+    std::optional<std::uint32_t> target;
+    std::set<std::uint32_t> definition_sites;
+    bool complete = false;
+    bool preceding_call = false;
+};
+
+// Resolve the common compiler form
+//
+//   mov.l @(literal,pc), rN  [; mov rN,rM] [; add #imm,rM] ; jsr/jmp @rM
+//
+// without promoting it to complete control-flow proof.  The candidate merely
+// becomes guarded AOT inventory.  Every incoming CFG path must reach the same
+// unique writer chain, no call may intervene, and the final address must pass
+// the normal executable-image decoder validation.  MOVA is admitted under the
+// same contract for compiler-generated local thunk addresses.
+StaticCodePointerChain resolve_static_code_pointer_chain(
+    const WriterSliceIndex& index,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image,
+    std::uint32_t before_address,
+    std::uint8_t register_index) {
+    StaticCodePointerChain result;
+    std::int64_t addend = 0;
+    std::set<std::pair<std::uint32_t, std::uint8_t>> visited;
+    constexpr std::size_t maximum_chain_depth = 8u;
+    for (std::size_t depth = 0u; depth < maximum_chain_depth; ++depth) {
+        if (!visited.emplace(before_address, register_index).second) return result;
+        const auto slice = bounded_writer_slice(index, before_address, register_index);
+        result.preceding_call = result.preceding_call || slice.preceding_call;
+        result.definition_sites.insert(slice.writers.begin(), slice.writers.end());
+        // r8-r14 are the SH-4 ABI's nonvolatile general registers.  Crossing a
+        // call in one of them is admitted only as guarded AOT inventory: a
+        // non-conforming callee can still change the runtime target, but the
+        // extra decode-validated candidate cannot redirect execution or prove
+        // the dynamic target set complete. Caller-saved chains remain cut at
+        // every call.
+        const bool call_transport_admissible =
+            !slice.preceding_call ||
+            (register_index >= 8u && register_index <= 14u);
+        if (slice.path_incomplete || !call_transport_admissible ||
+            slice.writers.size() != 1u)
+            return result;
+        const auto* const writer = find_line(lines, *slice.writers.begin());
+        if (writer == nullptr ||
+            writer->instruction.destination_register != register_index)
+            return result;
+        using K = katana::sh4::InstructionKind;
+        if (writer->instruction.kind == K::MovRegister) {
+            register_index = writer->instruction.source_register;
+            before_address = writer->address;
+            continue;
+        }
+        if (writer->instruction.kind == K::AddImmediate) {
+            addend += writer->instruction.immediate;
+            before_address = writer->address;
+            continue;
+        }
+
+        std::optional<std::uint32_t> candidate;
+        if (writer->instruction.kind == K::MoveAddressPcRelative) {
+            const auto address =
+                static_cast<std::int64_t>((writer->address + 4u) & ~3u) +
+                writer->instruction.displacement + addend;
+            candidate = static_cast<std::uint32_t>(address);
+        } else if (writer->instruction.kind == K::MovLongLoadPcRelative) {
+            const auto literal_address =
+                ((writer->address + 4u) & ~3u) +
+                static_cast<std::uint32_t>(writer->instruction.displacement);
+            const auto resolved_literal =
+                image.resolve_segment_address(literal_address, 4u);
+            const auto* const segment =
+                resolved_literal.has_value()
+                    ? image.find_segment(*resolved_literal, 4u)
+                    : nullptr;
+            const auto offset =
+                segment != nullptr
+                    ? segment->byte_offset(*resolved_literal)
+                    : std::optional<std::size_t>{};
+            if (segment == nullptr || !segment->permissions.readable ||
+                !offset.has_value() || *offset > segment->bytes.size() ||
+                4u > segment->bytes.size() - *offset)
+                return result;
+            candidate = static_cast<std::uint32_t>(
+                static_cast<std::int64_t>(image.read_u32_le(*resolved_literal)) + addend);
+        } else {
+            return result;
+        }
+        const auto validation = validate_decode_candidate(image, *candidate);
+        if (!validation.valid()) return result;
+        result.target = validation.resolved_address;
+        result.complete = true;
+        return result;
+    }
+    return result;
+}
+
+void classify_dynamic_sites(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image,
+    std::vector<IndirectControlFlowResolution>& resolutions) {
     const auto blocks = build_basic_blocks(lines);
     const auto writer_slice_index = build_writer_slice_index(blocks);
     for (auto& resolution : resolutions) {
@@ -1282,17 +1426,42 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
         const auto slice = bounded_writer_slice(
             writer_slice_index, resolution.instruction_address, resolution.register_index);
         resolution.definition_sites.assign(slice.writers.begin(), slice.writers.end());
-        resolution.definition_complete = !slice.incomplete && !slice.writers.empty();
+        resolution.definition_complete = !slice.path_incomplete &&
+                                         !slice.writer_not_memory_load &&
+                                         !slice.writers.empty();
         resolution.preceding_call = slice.preceding_call;
         const katana::sh4::DisassemblyLine* writer = nullptr;
-        if (slice.writers.size() == 1u && !slice.incomplete) {
-            const auto found_writer = std::lower_bound(
-                lines.begin(),
-                lines.end(),
-                *slice.writers.begin(),
-                [](const auto& line, const auto address) { return line.address < address; });
-            if (found_writer != lines.end() && found_writer->address == *slice.writers.begin())
-                writer = &*found_writer;
+        if (slice.writers.size() == 1u && !slice.path_incomplete) {
+            writer = find_line(lines, *slice.writers.begin());
+        }
+        if (dispatch->instruction.kind == katana::sh4::InstructionKind::Jsr ||
+            dispatch->instruction.kind == katana::sh4::InstructionKind::Jmp) {
+            const auto static_chain = resolve_static_code_pointer_chain(
+                writer_slice_index, lines, image, resolution.instruction_address,
+                resolution.register_index);
+            resolution.preceding_call = resolution.preceding_call ||
+                                        static_chain.preceding_call;
+            if (static_chain.complete && static_chain.target.has_value()) {
+                resolution.definition_sites.assign(
+                    static_chain.definition_sites.begin(),
+                    static_chain.definition_sites.end());
+                resolution.definition_complete =
+                    !static_chain.preceding_call;
+                resolution.analysis_candidates.push_back(*static_chain.target);
+                std::sort(resolution.analysis_candidates.begin(),
+                          resolution.analysis_candidates.end());
+                resolution.analysis_candidates.erase(
+                    std::unique(resolution.analysis_candidates.begin(),
+                                resolution.analysis_candidates.end()),
+                    resolution.analysis_candidates.end());
+                if (resolution.status == ResolutionStatus::Unresolved) {
+                    resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+                    resolution.evidence_origins = {
+                        AnalysisEvidenceOrigin::LocalValue};
+                    resolution.reason =
+                        "runtime-contract-static-code-pointer-chain";
+                }
+            }
         }
         if (resolution.origin_class == IndirectControlFlowOriginClass::Table) continue;
         bool vtable_base = false;
@@ -1302,7 +1471,9 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
         if (writer != nullptr) {
             const auto base = bounded_writer_slice(
                 writer_slice_index, writer->address, writer->instruction.source_register);
-            vtable_base = base.writers.size() == 1u && !base.incomplete;
+            const bool unique_base = base.writers.size() == 1u &&
+                                     !base.path_incomplete;
+            vtable_base = unique_base && !base.writer_not_memory_load;
             callback_source = callback_source || (writer->instruction.kind ==
                                                       katana::sh4::InstructionKind::MovRegister &&
                                                   writer->instruction.source_register == 13u);
@@ -1311,7 +1482,7 @@ void classify_dynamic_sites(const std::span<const katana::sh4::DisassemblyLine> 
                            writer->instruction.source_register <= 14u &&
                            (writer_kind == katana::sh4::InstructionKind::MovLongLoad ||
                             writer_kind == katana::sh4::InstructionKind::MovLongLoadDisplacement);
-            if (vtable_base) {
+            if (unique_base) {
                 const auto base_writer = std::lower_bound(
                     lines.begin(),
                     lines.end(),
@@ -2201,6 +2372,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
     const bool hints = overrides != nullptr && overrides->mode == AnalysisDirectiveMode::Hint;
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
+    std::vector<ExactFunctionOwnershipInterval>
+        exact_function_ownership;
     if (overrides != nullptr) {
         for (const auto& function : overrides->functions) {
             if ((function.size & 1u) != 0u) {
@@ -2236,6 +2409,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
             const std::array origins{hints ? FunctionOrigin::UserHint
                                            : FunctionOrigin::UserOverride};
+            if (!hints && function.size != 0u)
+                exact_function_ownership.push_back(
+                    {validation.resolved_address,
+                     static_cast<std::uint64_t>(
+                         validation.resolved_address) + function.size});
             static_cast<void>(add_seed(seeds,
                                        validation.resolved_address,
                                        origins,
@@ -2264,6 +2442,19 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             }
         }
     }
+    std::sort(
+        exact_function_ownership.begin(),
+        exact_function_ownership.end(),
+        [](const auto& left, const auto& right) {
+            return left.begin < right.begin;
+        });
+    for (std::size_t index = 1u;
+         index < exact_function_ownership.size(); ++index) {
+        if (exact_function_ownership[index].begin <
+            exact_function_ownership[index - 1u].end)
+            throw std::invalid_argument(
+                "Explizite Funktionsgrenzen ueberlappen sich.");
+    }
 
     ControlFlowAnalysisResult analysis;
     detail::RecursiveAnalysisSession recursive_session;
@@ -2287,8 +2478,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         for (const auto& [address, evidence] : seeds) {
             ControlFlowAnalysisResult::SeedFact fact;
             fact.target_address = address;
-            fact.origins.assign(evidence.origins.begin(),
-                                evidence.origins.end());
+            if (!exact_function_strictly_contains(
+                    exact_function_ownership, address))
+                fact.origins.assign(evidence.origins.begin(),
+                                    evidence.origins.end());
             fact.proven = evidence.proven;
             fact.evidence = evidence.evidence;
             fact.function_size = evidence.function_size;
@@ -2942,13 +3135,16 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         const bool recursive_cold_contract =
             !has_recursive_baseline || recursive_full_recompute;
         auto recursive_complete_seeds =
-            recursive_cold_contract ? make_seed_vector(seeds)
+            recursive_cold_contract
+                ? make_seed_vector(seeds, exact_function_ownership)
                                     : std::vector<AnalysisSeed>{};
         auto recursive_delta_seeds =
             recursive_cold_contract
                 ? std::vector<AnalysisSeed>{}
                 : make_seed_vector(
-                      seeds, &active_round_seed_changes.changed_targets);
+                      seeds,
+                      exact_function_ownership,
+                      &active_round_seed_changes.changed_targets);
         RecursiveAnalysisPhysicalWork seed_arena_work;
         seed_arena_work.seed_arena_copy_items =
             recursive_complete_seeds.size() + recursive_delta_seeds.size();
@@ -2987,7 +3183,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     RecursiveBaselineRejected);
             function_value_full_program_required = true;
 
-            recursive_complete_seeds = make_seed_vector(seeds);
+            recursive_complete_seeds = make_seed_vector(
+                seeds, exact_function_ownership);
             RecursiveAnalysisPhysicalWork retry_seed_arena_work;
             retry_seed_arena_work.seed_arena_copy_items =
                 recursive_complete_seeds.size();
@@ -4664,10 +4861,22 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
     for (const auto& entry : analysis.guarded_aot_entries)
         final_block_leaders.push_back(entry.guest_address);
+    std::vector<std::uint32_t> final_normal_entry_leaders;
+    for (const auto& seed : analysis.seed_facts) {
+        if (seed.origins.empty())
+            final_normal_entry_leaders.push_back(seed.target_address);
+    }
+    std::sort(final_normal_entry_leaders.begin(),
+              final_normal_entry_leaders.end());
+    final_normal_entry_leaders.erase(
+        std::unique(final_normal_entry_leaders.begin(),
+                    final_normal_entry_leaders.end()),
+        final_normal_entry_leaders.end());
     const auto final_blocks = build_basic_blocks(
         analysis.recursive.instructions,
         analysis.resolved_edges,
-        final_block_leaders);
+        final_block_leaders,
+        final_normal_entry_leaders);
     analysis.instruction_arena =
         std::make_shared<const InstructionArena>(analysis.recursive.instructions);
     analysis.block_spans = build_block_spans(*analysis.instruction_arena, final_blocks);

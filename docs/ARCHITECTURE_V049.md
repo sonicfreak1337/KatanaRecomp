@@ -32,13 +32,15 @@ Code endet an einer typisierten Runtimegrenze. Der begrenzte
 Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 `diagnostic_partial` erzeugten Diagnoseports.
 
-Der aktuelle KR-5004-Stand verwendet Runtime-ABI 96, Block-ABI 5,
+Der aktuelle KR-5005-Stand verwendet Runtime-ABI 97, Block-ABI 5,
 Analyzer-ABI 36, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-Portprojektvertrag 85, Native-Port-Profilvertrag 8, Native-AOT-Profil 27 und
+Portprojektvertrag 86, Native-Port-Profilvertrag 10, Native-AOT-Profil 29 und
 Partitionsschema 7. Die historischen Checkpoint- und Laufangaben dieses
 Dokuments bleiben an ihre damaligen Vertraege gebunden. Der aktuelle native
 Produktpfad ist durch KR-5000 physisch von den historischen Diagnosegeraeten
-getrennt; der naechste aktive Task ist KR-5001.
+getrennt; der naechste aktive Task ist KR-5005. Provider- und Draw-IR bleiben
+backendneutral; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
+Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
 
 ## Drei Ebenen
 
@@ -89,7 +91,7 @@ Der oeffentliche C++-Vertrag liegt in
 Spielprojekte integrieren Definition, Callbackcode und Registrierung weiter
 selbst in ihr Portbinary.
 
-`GameProjectArtifact` Format 4 ist fuer Spielprojektvertrag 5 der besitzende,
+`GameProjectArtifact` Format 5 ist fuer Spielprojektvertrag 6 der besitzende,
 binaere Transport fuer
 rein deklarative Definitionen. Payload und Gesamtartefakt sind jeweils an
 SHA-256 gebunden. Exakte Funktionsgrenzen, Jump-/Callbacktabellen,
@@ -113,7 +115,7 @@ MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
 Der aktuelle Handoff-Quellvertrag besteht aus Handoff-Artefaktformat 2,
-Runtime-ABI 96, Portprojektvertrag 85 und Plattformzustandsvertrag 2.
+Runtime-ABI 97, Portprojektvertrag 86 und Plattformzustandsvertrag 2.
 Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
 Evidenz und muessen vor einem weiteren DirectBoot-Produktlauf fuer den dann

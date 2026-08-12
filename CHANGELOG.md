@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
+  Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare
+  Continuations durch Analyse, CFG, Optimierung und Export. Die Acceptance-
+  Grenze verlangt weiterhin vollstaendigen Bootstrap, native Presentation und
+  das definierte Produktmeilenstein-Signal; Bring-up-Probes schliessen die
+  Produkt-Closure nicht. Der backendneutrale Provider-/Draw-IR-Vertrag hat
+  zunaechst ein D3D11-Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist
+  spaeter geplant und aktuell keine Abnahme.
+
+- Der aktuelle inkompatible Vertragsstand ist Runtime-ABI `97`, Analyzer-ABI
+  `36`, Backend-Interface-ABI `20`, Portprojektvertrag `86`, Native-Port-
+  Profilvertrag `10`, Native-AOT-Emissionsprofil `29`, GameProject-Vertrag
+  `6` mit Artefaktformat `5` und NativePort-Artifact-Format `7`. Diese Angaben
+  gelten fuer den aktuellen Snapshot; historische Eintraege behalten ihre
+  damaligen Versionsstaende.
+
 - Die interne Pre-Alpha-Version steigt auf `0.49.1`. `0.50.0` bleibt die
   erste Alpha und wird exakt durch das erste rein nativ erreichte Sonic-
   Hauptmenue freigegeben.
@@ -38,14 +54,14 @@
   validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
   Closure.
 
-- Runtime-ABI `96`, Analyzer-ABI `36`, Backend-Interface-ABI `20`,
-  Portprojektvertrag `85`, Native-Port-Profilvertrag `8`, Hardwareaudit-Schema
+- Runtime-ABI `97`, Analyzer-ABI `36`, Backend-Interface-ABI `20`,
+  Portprojektvertrag `86`, Native-Port-Profilvertrag `10`, Hardwareaudit-Schema
   `v5`, Hardwareaudit-Set-Schema `v2`
   und Port-
   Metadatencache-Schema `3` versionieren
   die inkompatiblen Layout-, SDK-, Persistenz- und Exportaenderungen. Der
-  historische GameProject-Vertrag `5` samt Artefaktformat `4` bleibt
-  unveraendert und enthaelt bewusst keine Native-Port-Definition; deren
+  der aktuelle GameProject-Vertrag `6` samt Artefaktformat `5` bleibt
+  von der Native-Port-Definition getrennt; deren
   unabhaengiger privater Provider wurde mit KR-5001 angebunden.
   Backend-Interface-ABI `20` bindet den erweiterten unabhaengigen
   `PortExportOptions::native_port_definition`-Zeiger; er wird nicht in den
@@ -66,7 +82,7 @@
   Dokumentations-/Source-Checkpoint wurden keine Tests oder neuen
   Sonic-Laeufe ausgefuehrt; der naechste aktive Task ist KR-5002.
 
-- Portprojektvertrag `85` macht den schnellsten Hostbuild zum
+- Portprojektvertrag `86` macht den schnellsten Hostbuild zum
   Bring-up-Standard: generierte AOT-TUs verwenden `/Od /Ob0`, eingebettete
   statt gemeinsam serialisierter MSVC-Debuginformation, einen separaten
   Vierer-Ninja-Pool und 4.096 Dispatch-Eintraege pro Shard. Runtime,
@@ -77,7 +93,7 @@
   `473.506.304` Byte grosses Produktbinary; davon entfielen `337,205 s` auf
   den Hostbuild. Der Post-Link-Audit blieb erfolgreich.
 
-- Portprojektvertrag `85` trennt die verifizierte Titelinitialisierung von
+- Portprojektvertrag `86` trennt die verifizierte Titelinitialisierung von
   der laufenden AOT-Integritaetsueberwachung. Der private Bootstrap darf das
   identity-bound initiale RAM-Abbild fertigstellen, bevor Immutable-Write-
   Guard und AOT-Bruecken aktiviert werden. Danach sind Pointer-, Stop- und

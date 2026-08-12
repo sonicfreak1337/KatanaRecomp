@@ -330,6 +330,8 @@ std::string_view required_product_milestone_name(
         return "FirstTaFrame";
     case RequiredProductMilestone::FirstVisibleGameFrame:
         return "FirstVisibleGameFrame";
+    case RequiredProductMilestone::MainMenuPresented:
+        return "MainMenuPresented";
     }
     return "Invalid";
 }

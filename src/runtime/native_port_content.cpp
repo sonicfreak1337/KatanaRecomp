@@ -288,6 +288,86 @@ void require_safe_existing_path(
     return bytes;
 }
 
+[[nodiscard]] std::string sha256_identity(
+    const std::span<const std::uint8_t> bytes) {
+    Sha256 hash;
+    hash.update(bytes);
+    return std::string("sha256:") + hash.finish();
+}
+
+struct BootstrapBackingInterval final {
+    std::uint32_t begin = 0u;
+    std::uint32_t end = 0u;
+    std::uint8_t immutable_kind_mask = 0u;
+    NativePortBootstrapWritePolicy write_policy =
+        NativePortBootstrapWritePolicy::WritableDataOnly;
+};
+
+[[nodiscard]] BootstrapBackingInterval bootstrap_backing_interval(
+    const std::uint32_t address,
+    const std::uint32_t size,
+    const NativePortContractFailure failure,
+    const std::string_view detail) {
+    const auto physical = canonical_physical_address(address);
+    if (size == 0u || physical < native_port_main_memory_physical_base ||
+        physical >= native_port_main_memory_physical_base +
+                        native_port_main_memory_physical_span)
+        throw NativePortContractError(failure, detail);
+    const auto relative = physical - native_port_main_memory_physical_base;
+    const auto begin = relative & (native_port_main_memory_backing_size - 1u);
+    if (size > native_port_main_memory_backing_size - begin ||
+        size > native_port_main_memory_physical_span - relative)
+        throw NativePortContractError(failure, detail);
+    return {begin, begin + size};
+}
+
+void append_bootstrap_immutable_backing_intervals(
+    std::vector<BootstrapBackingInterval>& intervals,
+    const NativePortImmutableRange& range) {
+    if (range.byte_size == 0u)
+        throw NativePortContractError(
+            NativePortContractFailure::InvalidDefinition,
+            "bootstrap-immutable-range");
+
+    // Native AOT may contain identity-bound source mappings that deliberately
+    // live outside the ordinary 64-MiB main-memory window.  They still belong
+    // to the runtime immutable-write guard, but they cannot be changed through
+    // the 16-MiB bootstrap backing snapshot and therefore have no interval in
+    // this transition check.
+    const auto physical_begin = static_cast<std::uint64_t>(
+        canonical_physical_address(range.physical_address));
+    const auto physical_end = physical_begin + range.byte_size;
+    if (physical_end > 0x1'0000'0000ull)
+        throw NativePortContractError(
+            NativePortContractFailure::InvalidDefinition,
+            "bootstrap-immutable-range");
+
+    constexpr auto main_begin = static_cast<std::uint64_t>(
+        native_port_main_memory_physical_base);
+    constexpr auto main_end = main_begin +
+                              native_port_main_memory_physical_span;
+    auto overlap_begin = std::max(physical_begin, main_begin);
+    const auto overlap_end = std::min(physical_end, main_end);
+    if (overlap_begin >= overlap_end) return;
+
+    // The 64-MiB physical window contains four aliases of one 16-MiB
+    // backing. Split at alias boundaries so every changed backing byte is
+    // protected even if a future executable range spans such a boundary.
+    while (overlap_begin < overlap_end) {
+        const auto relative = overlap_begin - main_begin;
+        const auto backing_begin = static_cast<std::uint32_t>(
+            relative & (native_port_main_memory_backing_size - 1u));
+        const auto alias_remaining =
+            native_port_main_memory_backing_size - backing_begin;
+        const auto extent = static_cast<std::uint32_t>(std::min(
+            overlap_end - overlap_begin,
+            static_cast<std::uint64_t>(alias_remaining)));
+        intervals.push_back(
+            {backing_begin, backing_begin + extent, range.kind_mask});
+        overlap_begin += extent;
+    }
+}
+
 } // namespace
 
 NativePortMemory::NativePortMemory()
@@ -338,6 +418,202 @@ void NativePortMemory::load_verified_images(
         const auto bytes = read_bound_image(content_root, image);
         std::copy(bytes.begin(), bytes.end(), destination.begin() + offset);
     }
+}
+
+std::vector<std::uint8_t>
+capture_native_port_main_memory(const CpuState& cpu) {
+    const auto guard = cpu.memory.direct_linear_memory_guard(false);
+    std::uint32_t offset = 0u;
+    if (guard.read_bytes == nullptr ||
+        !direct_linear_guard_offset(
+            guard,
+            0x8C000000u,
+            native_port_main_memory_backing_size,
+            offset))
+        throw NativePortContractError(
+            NativePortContractFailure::BootstrapFailed,
+            "bootstrap-main-memory-snapshot");
+    return {guard.read_bytes + offset,
+            guard.read_bytes + offset + native_port_main_memory_backing_size};
+}
+
+void validate_native_port_bootstrap_memory_transition(
+    const CpuState& cpu,
+    const std::span<const std::uint8_t> before,
+    const std::span<const NativePortBootstrapWriteBinding> writes,
+    const std::span<const NativePortImmutableRange> immutable_ranges) {
+    if (before.size() != native_port_main_memory_backing_size)
+        throw NativePortContractError(
+            NativePortContractFailure::BootstrapFailed,
+            "bootstrap-memory-snapshot-size");
+    const auto after = capture_native_port_main_memory(cpu);
+
+    std::vector<BootstrapBackingInterval> writable;
+    writable.reserve(writes.size());
+    for (const auto& write : writes) {
+        auto interval = bootstrap_backing_interval(
+            write.guest_address,
+            write.byte_size,
+            NativePortContractFailure::InvalidDefinition,
+            "bootstrap-write-range");
+        interval.write_policy = write.policy;
+        if (sha256_identity(std::span<const std::uint8_t>(before).subspan(
+                interval.begin,
+                write.byte_size)) != write.pre_write_identity)
+            throw NativePortContractError(
+                NativePortContractFailure::BootstrapFailed,
+                "bootstrap-pre-memory-identity");
+        writable.push_back(interval);
+    }
+    std::sort(writable.begin(), writable.end(), [](const auto& left,
+                                                   const auto& right) {
+        return std::tie(left.begin, left.end) <
+               std::tie(right.begin, right.end);
+    });
+
+    std::vector<BootstrapBackingInterval> immutable;
+    immutable.reserve(immutable_ranges.size());
+    for (const auto& range : immutable_ranges)
+        append_bootstrap_immutable_backing_intervals(immutable, range);
+    std::sort(immutable.begin(), immutable.end(), [](const auto& left,
+                                                     const auto& right) {
+        return std::tie(left.begin, left.end) <
+               std::tie(right.begin, right.end);
+    });
+
+    std::size_t writable_index = 0u;
+    std::size_t next_immutable_index = 0u;
+    std::vector<std::size_t> active_immutable;
+    for (std::uint32_t offset = 0u;
+         offset < native_port_main_memory_backing_size;
+         ++offset) {
+        if (before[offset] == after[offset]) continue;
+        while (writable_index < writable.size() &&
+               writable[writable_index].end <= offset)
+            ++writable_index;
+        if (writable_index == writable.size() ||
+            writable[writable_index].begin > offset)
+            throw NativePortContractError(
+                NativePortContractFailure::BootstrapFailed,
+                "bootstrap-changed-undeclared-byte");
+
+        while (next_immutable_index < immutable.size() &&
+               immutable[next_immutable_index].begin <= offset) {
+            if (immutable[next_immutable_index].end > offset)
+                active_immutable.push_back(next_immutable_index);
+            ++next_immutable_index;
+        }
+        std::erase_if(active_immutable, [&](const auto index) {
+            return immutable[index].end <= offset;
+        });
+        std::uint8_t immutable_kind_mask = 0u;
+        for (const auto index : active_immutable)
+            immutable_kind_mask |= immutable[index].immutable_kind_mask;
+        if (immutable_kind_mask != 0u &&
+            writable[writable_index].write_policy !=
+                NativePortBootstrapWritePolicy::
+                    IdentityBoundImmutableMaterialization) {
+            std::ostringstream detail;
+            detail << "bootstrap-changed-immutable-byte:backing-offset=0x"
+                   << std::hex << offset << ";kind=0x"
+                   << static_cast<unsigned>(immutable_kind_mask);
+            throw NativePortContractError(
+                NativePortContractFailure::ImmutableMemoryWrite,
+                detail.str());
+        }
+    }
+
+    for (const auto& write : writes) {
+        const auto interval = bootstrap_backing_interval(
+            write.guest_address,
+            write.byte_size,
+            NativePortContractFailure::InvalidDefinition,
+            "bootstrap-write-range");
+        if (sha256_identity(std::span<const std::uint8_t>(after).subspan(
+                interval.begin,
+                write.byte_size)) != write.post_write_identity)
+            throw NativePortContractError(
+                NativePortContractFailure::BootstrapFailed,
+                "bootstrap-post-memory-identity");
+    }
+}
+
+std::string native_port_cpu_state_identity(const CpuState& cpu) {
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(1'024u);
+    const auto append_u8 = [&](const std::uint8_t value) {
+        bytes.push_back(value);
+    };
+    const auto append_u32 = [&](const std::uint32_t value) {
+        for (std::size_t shift = 0u; shift < 32u; shift += 8u)
+            bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+    };
+    const auto append_u64 = [&](const std::uint64_t value) {
+        for (std::size_t shift = 0u; shift < 64u; shift += 8u)
+            bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+    };
+    const auto append_words = [&](const auto& words) {
+        for (const auto value : words) append_u32(value);
+    };
+
+    append_words(cpu.r);
+    append_words(cpu.r_bank);
+    append_words(cpu.fr);
+    append_words(cpu.xf);
+    append_u32(cpu.pc);
+    append_u32(cpu.pr);
+    append_u32(cpu.gbr);
+    append_u32(cpu.vbr);
+    append_u32(cpu.ssr);
+    append_u32(cpu.spc);
+    append_u32(cpu.sgr);
+    append_u32(cpu.dbr);
+    append_u32(cpu.tra);
+    append_u32(cpu.tea);
+    append_u32(cpu.expevt);
+    append_u32(cpu.intevt);
+    append_u32(cpu.pteh);
+    append_u32(cpu.ptel);
+    append_u32(cpu.ptea);
+    append_u32(cpu.ttb);
+    append_u32(cpu.mmucr);
+    for (const auto& entry : cpu.utlb) {
+        append_u32(entry.pteh);
+        append_u32(entry.ptel);
+        append_u32(entry.ptea);
+    }
+    append_u64(cpu.tlb_load_count);
+    append_u32(cpu.mach);
+    append_u32(cpu.macl);
+    append_u32(cpu.fpul);
+    append_u32(cpu.fpscr);
+    append_u32(cpu.sr);
+    append_u8(cpu.t ? 1u : 0u);
+    append_u8(cpu.s ? 1u : 0u);
+    append_u8(cpu.q ? 1u : 0u);
+    append_u8(cpu.m ? 1u : 0u);
+    append_u8(cpu.trap_pending ? 1u : 0u);
+    append_u64(cpu.exception_generation);
+    append_u8(static_cast<std::uint8_t>(cpu.last_exception_cause));
+    append_u8(cpu.exception_in_delay_slot ? 1u : 0u);
+    append_u32(cpu.last_exception_instruction_pc);
+    append_u32(cpu.last_exception_instruction_physical_pc);
+    append_u32(cpu.last_exception_owner_pc);
+    append_u64(cpu.last_exception_generation);
+    append_u8(cpu.sleeping ? 1u : 0u);
+    append_u32(cpu.last_prefetch_address);
+    append_u64(cpu.prefetch_count);
+    append_u64(cpu.attempted_guest_instructions);
+    append_u64(cpu.retired_guest_instructions);
+    append_u64(cpu.total_guest_cycles);
+    append_u64(cpu.pending_guest_cycles);
+    append_u32(cpu.active_instruction_pc);
+    append_u32(cpu.active_instruction_physical_pc);
+    append_u32(cpu.active_block_virtual_start);
+    append_u32(cpu.active_block_physical_start);
+    append_u32(cpu.active_block_size);
+    append_u8(cpu.last_prefetch_was_store_queue ? 1u : 0u);
+    return sha256_identity(bytes);
 }
 
 } // namespace katana::runtime

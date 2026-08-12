@@ -329,6 +329,17 @@ void ExecutableImage::add_entry_point(const std::uint32_t address) {
     mark_analysis_mutation();
 }
 
+void ExecutableImage::replace_entry_points(
+    const std::span<const std::uint32_t> addresses) {
+    std::vector<std::uint32_t> replacement(addresses.begin(), addresses.end());
+    std::sort(replacement.begin(), replacement.end());
+    replacement.erase(
+        std::unique(replacement.begin(), replacement.end()), replacement.end());
+    if (replacement == entry_points_) return;
+    entry_points_ = std::move(replacement);
+    mark_analysis_mutation();
+}
+
 void ExecutableImage::add_symbol(ImageSymbol symbol) {
     if (symbol.name.empty()) {
         throw std::invalid_argument("Ein Image-Symbol braucht einen Namen.");
@@ -578,6 +589,32 @@ std::uint32_t ExecutableImage::read_u32_le(const std::uint32_t address) const {
            (static_cast<std::uint32_t>(segment->bytes[*offset + 1u]) << 8u) |
            (static_cast<std::uint32_t>(segment->bytes[*offset + 2u]) << 16u) |
            (static_cast<std::uint32_t>(segment->bytes[*offset + 3u]) << 24u);
+}
+
+void ExecutableImage::write_bytes(
+    const std::uint32_t address,
+    const std::span<const std::uint8_t> bytes) {
+    if (bytes.empty()) return;
+    for (auto& segment : segments_) {
+        if (!segment.contains(address, bytes.size())) continue;
+        const auto offset = segment.byte_offset(address);
+        if (!offset.has_value() || *offset > segment.bytes.size() ||
+            bytes.size() > segment.bytes.size() - *offset) {
+            throw std::out_of_range(
+                "Byte-Schreibzugriff liegt ausserhalb der committed Segmentdaten.");
+        }
+        if (!std::equal(bytes.begin(), bytes.end(),
+                        segment.bytes.begin() +
+                            static_cast<std::ptrdiff_t>(*offset))) {
+            std::copy(bytes.begin(), bytes.end(),
+                      segment.bytes.begin() +
+                          static_cast<std::ptrdiff_t>(*offset));
+            mark_analysis_mutation();
+        }
+        return;
+    }
+    throw std::out_of_range(
+        "Byte-Schreibzugriff liegt ausserhalb der Image-Segmente.");
 }
 
 void ExecutableImage::write_u32_le(const std::uint32_t address, const std::uint32_t value) {

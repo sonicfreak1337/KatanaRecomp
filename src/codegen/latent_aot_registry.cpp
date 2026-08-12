@@ -5,6 +5,7 @@
 
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
+#include "katana/analysis/hardware_audit.hpp"
 #include "katana/analysis/abi.hpp"
 #include "katana/analysis/parallel_work.hpp"
 #include "katana/codegen/cache.hpp"
@@ -832,7 +833,10 @@ bool source_bound_unoptimized_program(
 CandidateAnalysisOutcome finalize_candidate_program(
     const DiscFileCandidate& candidate,
     std::vector<katana::ir::Function> program,
-    const LatentAotDiscoveryOptions& options) {
+    katana::analysis::DreamcastHardwareAudit hardware_audit,
+    const LatentAotDiscoveryOptions& options,
+    const std::span<const katana::ir::ExternalDispatchEntry>
+        external_dispatch_entries) {
     if (const auto rejection =
             candidate_source_shape_rejection(
                 candidate, options))
@@ -885,7 +889,11 @@ CandidateAnalysisOutcome finalize_candidate_program(
         }
     }
     try {
-        static_cast<void>(katana::ir::optimize_program(program));
+        static_cast<void>(katana::ir::optimize_program(
+            program,
+            {},
+            {},
+            {external_dispatch_entries}));
         katana::ir::require_valid_program(program);
     } catch (const std::bad_alloc&) {
         throw;
@@ -1073,7 +1081,8 @@ CandidateAnalysisOutcome finalize_candidate_program(
             candidate.source_bindings,
             candidate.entry_offsets,
             std::move(unique_block_identities),
-            std::move(program)},
+            std::move(program),
+            std::move(hardware_audit)},
         LatentAotAnalysisRejection::None,
         true};
 }
@@ -1210,13 +1219,39 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
                 : LatentAotAnalysisRejection::
                       InventoryTruncated);
 
+    auto hardware_audit =
+        katana::analysis::audit_dreamcast_hardware(image, analysis);
+    hardware_audit.scope = "latent-aot-module";
     std::vector<katana::ir::Function> program;
+    std::vector<katana::ir::ExternalDispatchEntry>
+        external_dispatch_entries;
     try {
         const auto architectural_safepoints =
             katana::ir::architectural_safepoint_block_leaders(
                 analysis);
         program = katana::ir::lower_program(
             analysis, architectural_safepoints);
+        std::set<std::uint32_t> dispatch_block_entries;
+        for (const auto offset : candidate.entry_offsets)
+            dispatch_block_entries.insert(
+                candidate.source_address + offset);
+        dispatch_block_entries.insert(
+            architectural_safepoints.begin(),
+            architectural_safepoints.end());
+        for (const auto& guarded : analysis.guarded_aot_entries) {
+            if (guarded.guest_address != 0u)
+                dispatch_block_entries.insert(
+                    guarded.guest_address);
+            if (guarded.shared_body_address != 0u)
+                dispatch_block_entries.insert(
+                    guarded.shared_body_address);
+        }
+        external_dispatch_entries.reserve(
+            dispatch_block_entries.size());
+        for (const auto address : dispatch_block_entries)
+            external_dispatch_entries.push_back(
+                {address,
+                 katana::ir::ExternalDispatchEntryKind::BlockEntry});
     } catch (const std::bad_alloc&) {
         throw;
     } catch (const std::exception&) {
@@ -1224,7 +1259,11 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             LatentAotAnalysisRejection::ProgramInvalid);
     }
     return finalize_candidate_program(
-        candidate, std::move(program), options);
+        candidate,
+        std::move(program),
+        std::move(hardware_audit),
+        options,
+        external_dispatch_entries);
 }
 
 LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
