@@ -57,7 +57,7 @@ erzwingen `diagnostic-interpreter`. Der historische Geraetepfad ist nur ein
 internes Buildbaum-Orakel und kein generiertes Portprofil. Compilerbuildordner
 und Telemetrie sind an das Runtimeprofil gebunden. `native-port` linkt
 ausschliesslich `KatanaRecomp::native_port_runtime`, verlangt Native-Port-
-Profilvertrag `10` und Portprojektvertrag `86` und erzeugt eine Linkmap. Ein
+Profilvertrag `11` und Portprojektvertrag `87` und erzeugt eine Linkmap. Ein
 Post-Link-Audit verwirft das Binary bei Legacy-Runtime-, ARM7-/SkyEmu-,
 CPU-PVR-/TA- oder Interpreterbestandteilen. Es existiert kein automatischer
 Rueckfall.

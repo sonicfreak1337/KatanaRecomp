@@ -16,7 +16,7 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 6u;
+inline constexpr std::uint32_t game_project_contract_version = 7u;
 
 enum class RequiredProductMilestone : std::uint8_t {
     BootExecutableEntry,
@@ -42,6 +42,9 @@ struct GameProjectFunctionBoundary {
     std::uint32_t start = 0u;
     std::uint32_t size = 0u;
     std::string_view symbol;
+    // Empty binds metadata to the immutable base image. Runtime/overlay
+    // metadata names its owning GameProjectRuntimeImage explicitly.
+    std::string_view image_id;
 };
 
 struct GameProjectJumpTable {
@@ -52,6 +55,7 @@ struct GameProjectJumpTable {
     std::uint32_t relative_base = 0u;
     GameProjectTableEncoding encoding = GameProjectTableEncoding::Absolute32;
     GameProjectControlTransferKind transfer = GameProjectControlTransferKind::Jump;
+    std::string_view image_id;
 };
 
 struct GameProjectCallbackTable {
@@ -60,6 +64,7 @@ struct GameProjectCallbackTable {
     std::uint32_t entry_stride = sizeof(std::uint32_t);
     std::uint32_t pointer_offset = 0u;
     GameProjectControlTransferKind transfer = GameProjectControlTransferKind::Call;
+    std::string_view image_id;
 };
 
 enum class GameProjectFunctionOverrideStrength : std::uint8_t {
@@ -126,6 +131,7 @@ struct GameProjectCodeIdentity {
     std::uint32_t address = 0u;
     std::uint32_t size = 0u;
     std::string_view byte_identity;
+    std::string_view image_id;
 };
 
 // Identity-bound external runtime-image descriptor. The source range

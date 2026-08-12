@@ -31,7 +31,7 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `10`, Portprojektvertrag `86` und der Linkmap-Audit verhindern
+Profilvertrag `11`, Portprojektvertrag `87` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
 NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
@@ -83,10 +83,17 @@ optionale, togglebare Modi und duerfen den Fidelity-Modus nicht veraendern.
 
 Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
 Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
-durch Analyse, CFG, Optimierung und Export. Die Provider-/Draw-IR-Grenze bleibt
-backendneutral; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
-Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet. Bring-up-
-Probes schliessen weder Hardware-Closure noch den No-Skip-Produktnachweis.
+durch Analyse, CFG, Optimierung und Export. Exakte Boundaries, aktive Overlays,
+CallbackTable-Roots, sichere Replacement-Reachability, Linkmap-/PE-Importaudit
+und der Nested-AOT-Fehlertransport sind reviewt und geschlossen. Die
+Provider-/Draw-IR-Grenze bleibt backendneutral; D3D11 ist zunaechst das
+Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist spaeter geplant und
+aktuell keine Prioritaet. Der Produktnachweis bleibt offen: Der Lauf erreichte
+den ersten nativen untexturierten Draw und danach den Sprite-Texture-Pfad,
+endete aber typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
+bekannte Stellen und `175` offene native Hookbindungen aus. Aktiver P0 ist die
+generische Content-zu-Texture-Pipeline; Bootstrap, AOT und Linkaudit sind keine
+offenen Produktblocker.
 
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
@@ -101,11 +108,11 @@ oder Interpreter-Symbole.
 ## Historischer RuntimeOnly-Bring-up
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `97`,
-PlatformServices-ABI `14`, Analyzer-ABI `36`, Function-Analysis-Epoch-Schema
+Aktuell gelten Runtime-ABI `98`,
+PlatformServices-ABI `14`, Analyzer-ABI `37`, Function-Analysis-Epoch-Schema
 `27`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`20`, PVR-State-Contract `3`, Portprojektvertrag `86` und Native-Port-
-Profilvertrag `10`.
+`20`, PVR-State-Contract `3`, Portprojektvertrag `87` und Native-Port-
+Profilvertrag `11`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 `native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
@@ -113,7 +120,8 @@ Die unabhaengige `PortExportOptions::native_port_definition`-Grenze hebt das
 Backend-Interface-ABI auf `20`; bestehende generierte Ports muessen neu
 exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`,
-NativePort-Artifact-Format: `7`.
+NativePort-Artifact-Format: `7`, Analysis Directives `3`, Hookkarte `v2`,
+Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.
 
 Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig. Er ist jetzt internes Diagnoseorakel und kein

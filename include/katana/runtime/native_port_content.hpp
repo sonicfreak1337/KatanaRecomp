@@ -55,8 +55,10 @@ void validate_native_port_bootstrap_memory_transition(
     std::span<const NativePortBootstrapWriteBinding> writes,
     std::span<const NativePortImmutableRange> immutable_ranges);
 
-// Stable, pointer-free identity over every execution-relevant CpuState field.
-// Memory, host callbacks and device pointers are intentionally excluded.
+// Stable identity over every execution-relevant CpuState field. The native
+// product owns only its bounded RAM and therefore rejects an attached MMU
+// address-space object, reset callback or historical Dreamcast device pointer
+// instead of silently omitting those semantics from the digest.
 [[nodiscard]] std::string
 native_port_cpu_state_identity(const CpuState& cpu);
 

@@ -25,14 +25,17 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 97, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 98, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27, lokales
+Analyzer-ABI 37, Function-Analysis-Epoch-Schema 27, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 86, Native-Port-Profilvertrag 10 sowie PVR-State-Contract 3.
+Portprojektvertrag 87, Native-Port-Profilvertrag 11 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`.
-Der aktuelle GameProject-Vertrag ist `6` mit Artefaktformat `5`; der native
-Port-Definitionsvertrag ist `7` und bleibt davon getrennt.
+Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat `6`; der native
+Port-Definitionsvertrag ist `7` und bleibt davon getrennt. Die aktuellen
+Analyse-Direktiven stehen auf `3`, das Hardware-Closure-Schema auf `v4`, die
+Hookanforderungskarte auf `v2` und die exportierten GameProject-Metadaten auf
+`katana-game-project-v5`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
 installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
@@ -91,10 +94,34 @@ Validierung, User-Data-Save-Root und Digest-Domaenen bleiben fail-closed.
 Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
 sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
-Der naechste aktive Task ist KR-5005. Die Provider- und Draw-IR-Grenzen des
+KR-5005 bleibt das offene native Produktgate. Der aktive P0 ist jetzt die
+generische Native-Content-zu-Texture-Pipeline; Bootstrap-, AOT- und
+Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt und werden
+nicht als aktueller Blocker weitergefuehrt. Die Provider- und Draw-IR-Grenzen des
 nativen Grafikpfads sind backendneutral beschrieben; D3D11 ist zunaechst das
 Windows-Backend. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
 nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
+
+Der aktuelle KR-5005-Meilenstein traegt die generischen Native-Architektur-
+Reviewfixes: Post-Bootstrap-Bytes werden vor Analyse, IR und AOT materialisiert
+und jedes emittierte Instruktionswort wird gegen die gebundene Post-Ansicht
+validiert. Exakte Non-Root-Grenzen, edge-only JumpTables, image_id-gebundene
+Metadaten, aktive Overlayauswahl, CallbackTable-Roots und sichere
+Replacement-Reachability sperren unbewiesene Negativbeweise; deklarativ
+begrenzte Callback-Reentrys sowie der Nested-AOT-Fehlertransport erhalten
+typisierte Hook-Aborts bis zum Produktlauf. Linkmap-Owner-/PE-Importaudit und
+die Ablehnung historischer CpuState-Bindings bleiben fail-closed.
+
+Der inkrementelle Release-Build von `katana-recomp` mit 24 Jobs war in
+`18,8 s` erfolgreich. Ein frischer Export nach Vertragsinvalidierung umfasste
+`1.812` Funktionen und `44` Partitionen mit `44` Codegen-Hits und `0` Misses;
+der Folgeexport nach dem Nested-AOT-Fehlerfix erreichte erneut `44/44` Hits.
+Der native Produktlauf erreichte den ersten untexturierten Draw und danach den
+Sprite-Texture-Pfad, endete aber erwartungsgemaess typisiert mit
+`0x53414704`. Die Hardware-Closure weist `194` bekannte Stellen und `175`
+offene native Hookbindungen aus. Es gibt keine Emulations- oder
+Interpreterfallbacks; der naechste P0 bleibt die generische Content-zu-Texture-
+Pipeline, nicht Bootstrap, AOT oder Linkaudit.
 
 Der KR-5005-Zwischenfix schliesst die CMake-Deploymentgrenze fuer FFmpeg im
 Parent-Projekt: Die verifizierte Closure wird unabhaengig vom Caller-Scope
@@ -288,13 +315,13 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    97
+Runtime-ABI:                    98
 Block-ABI:                       5
-Analyzer-ABI:                   36
+Analyzer-ABI:                   37
 PlatformServices-ABI:           14
 Backend-Interface-ABI:          20
-Portprojektvertrag:             86
-Native-Port-Profilvertrag:      10
+Portprojektvertrag:             87
+Native-Port-Profilvertrag:      11
 Native-AOT-Emissionsprofil:     29
 AOT-Partitionsschema:            7
 ```
@@ -411,16 +438,16 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 97 und
-Portprojektvertrag 86. Davon getrennt verwendet `GameProject` Vertrag 6 und
-Artefaktformat 5. `CompletePlatform` erfasst und restauriert den kanonischen
+KR-5005-Stand verwendet Runtime-ABI 98 und
+Portprojektvertrag 87. Davon getrennt verwendet `GameProject` Vertrag 7 und
+Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
 Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-
 Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
 ist nicht automatisch freigegeben.
 
-`GameProjectArtifact` Format 5 transportiert fuer Spielprojektvertrag 6 die deklarativen,
+`GameProjectArtifact` Format 6 transportiert fuer Spielprojektvertrag 7 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
 Funktionsgrenzen, Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole,
 Codeidentitaeten und Direct-Boot-Konfiguration. Native Hookzeiger und private

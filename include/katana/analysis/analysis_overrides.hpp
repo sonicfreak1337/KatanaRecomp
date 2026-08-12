@@ -7,7 +7,7 @@
 
 namespace katana::analysis {
 
-inline constexpr std::uint32_t analysis_directives_current_version = 2u;
+inline constexpr std::uint32_t analysis_directives_current_version = 3u;
 
 enum class AnalysisDirectiveMode : std::uint8_t { Override, Hint };
 
@@ -16,6 +16,15 @@ struct FunctionOverride {
     std::size_t line = 0u;
     // Zero preserves the historical entry-only directive. A non-zero even
     // size is an exact, committed function interval beginning at address.
+    std::uint32_t size = 0u;
+};
+
+// An exact ownership/extent constraint which does not make the function an
+// analysis root.  This keeps identity-bound metadata available to recursive,
+// value and IR analysis without reviving otherwise unreachable code.
+struct FunctionBoundaryOverride {
+    std::uint32_t address = 0u;
+    std::size_t line = 0u;
     std::uint32_t size = 0u;
 };
 
@@ -48,6 +57,10 @@ struct JumpTableOverride {
         JumpTableOverrideEncoding::Absolute32;
     JumpTableOverrideTransfer transfer =
         JumpTableOverrideTransfer::Inferred;
+    // Edge-only metadata may remain inert when its dispatch is unreachable.
+    // Once the dispatch is reached, all ordinary exact validation still
+    // applies. Parsed `jump_table` directives remain required by default.
+    bool require_dispatch = true;
 };
 
 struct AnalysisOverrides {
@@ -55,6 +68,7 @@ struct AnalysisOverrides {
     AnalysisDirectiveMode mode = AnalysisDirectiveMode::Override;
     std::filesystem::path source_path;
     std::vector<FunctionOverride> functions;
+    std::vector<FunctionBoundaryOverride> function_boundaries;
     std::vector<JumpOverride> jumps;
     std::vector<JumpTableOverride> jump_tables;
 };

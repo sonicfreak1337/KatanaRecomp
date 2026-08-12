@@ -126,7 +126,7 @@ noch geloescht.
 
 Fuer den executable-first CLI-Pfad transportiert
 `--game-project <datei.katana-game-project>` ein `GameProjectArtifact`
-Format 4. Es bindet Identitaet, exakte Funktionsgrenzen, Jump- und
+Format 6. Es bindet Identitaet, exakte Funktionsgrenzen, Jump- und
 Callbacktabellen, Runtime-AOT-Templates, Symbole, Codeidentitaeten und
 optionale Bootkonfiguration durch Payload- und Gesamtartefakt-SHA-256. Dieser
 historische Dreamcast-Vertrag serialisiert ausdruecklich keine
@@ -168,7 +168,7 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `86` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `87` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
@@ -176,7 +176,7 @@ Legacy-Runtime, ARM7/SkyEmu, CPU-PVR/TA und Interpreterbestandteilen sein.
 KR-5000 stellt NativePortDefinition/Artifact/Content/Runtime, Bootstrap,
 read-only Content-Mappings und den Linkaudit bereit. KR-5001 erzeugt die
 deterministische `metadata/native-hook-requirements.json`-Karte und
-Hardware-Closure Schema `v2`; Replacement-Proofs bleiben an exakte
+Hardware-Closure Schema `v4` und Hookkarte Schema `v2`; Replacement-Proofs bleiben an exakte
 Grenzen/Eigentuemer/Entrys/Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge
 gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-

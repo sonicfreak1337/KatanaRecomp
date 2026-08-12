@@ -8,7 +8,7 @@ KR-5004 ist der aktive native Disc-/Eingabe-/Savepfad. Historische Checkpoint- u
 bleiben an ihre damaligen Vertraege gebunden.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
-[Analyzer-ABI 36](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
+[Analyzer-ABI 37](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
 Truncation- oder Inventarfelder sind damit vom Runtimevertrag getrennt
 versioniert und koennen nicht mehr unbemerkt mit einem anders gebauten
 Analyzerarchiv gelinkt werden.

@@ -291,6 +291,7 @@ serialize_definition(const GameProjectDefinition& definition) {
         writer.u32(function.start);
         writer.u32(function.size);
         writer.string(function.symbol);
+        writer.string(function.image_id);
     }
 
     writer.u32(checked_count(definition.jump_tables.size()));
@@ -302,6 +303,7 @@ serialize_definition(const GameProjectDefinition& definition) {
         writer.u32(table.relative_base);
         writer.enumeration(table.encoding);
         writer.enumeration(table.transfer);
+        writer.string(table.image_id);
     }
 
     writer.u32(checked_count(definition.callback_tables.size()));
@@ -311,6 +313,7 @@ serialize_definition(const GameProjectDefinition& definition) {
         writer.u32(table.entry_stride);
         writer.u32(table.pointer_offset);
         writer.enumeration(table.transfer);
+        writer.string(table.image_id);
     }
 
     writer.u32(checked_count(
@@ -381,6 +384,7 @@ serialize_definition(const GameProjectDefinition& definition) {
         writer.string(
             identity.byte_identity,
             artifact_maximum_identity_size);
+        writer.string(identity.image_id);
     }
 
     writer.boolean(definition.boot_config.has_value());
@@ -575,8 +579,12 @@ void atomic_replace(const std::filesystem::path& source,
 
 void GameProjectArtifact::rebuild_definition() {
     if (function_symbols_.size() != function_boundaries_.size() ||
+        function_image_ids_.size() != function_boundaries_.size() ||
+        jump_table_image_ids_.size() != jump_tables_.size() ||
+        callback_table_image_ids_.size() != callback_tables_.size() ||
         symbol_names_.size() != symbols_.size() ||
         code_identity_values_.size() != code_identities_.size() ||
+        code_identity_image_ids_.size() != code_identities_.size() ||
         runtime_image_ids_.size() != runtime_images_.size() ||
         runtime_image_byte_identities_.size() != runtime_images_.size() ||
         runtime_image_entry_offsets_.size() != runtime_images_.size())
@@ -584,15 +592,23 @@ void GameProjectArtifact::rebuild_definition() {
 
     for (std::size_t index = 0u;
          index < function_boundaries_.size();
-         ++index)
+         ++index) {
         function_boundaries_[index].symbol = function_symbols_[index];
+        function_boundaries_[index].image_id = function_image_ids_[index];
+    }
+    for (std::size_t index = 0u; index < jump_tables_.size(); ++index)
+        jump_tables_[index].image_id = jump_table_image_ids_[index];
+    for (std::size_t index = 0u; index < callback_tables_.size(); ++index)
+        callback_tables_[index].image_id = callback_table_image_ids_[index];
     for (std::size_t index = 0u; index < symbols_.size(); ++index)
         symbols_[index].name = symbol_names_[index];
     for (std::size_t index = 0u;
          index < code_identities_.size();
-         ++index)
+         ++index) {
         code_identities_[index].byte_identity =
             code_identity_values_[index];
+        code_identities_[index].image_id = code_identity_image_ids_[index];
+    }
     for (std::size_t index = 0u;
          index < runtime_images_.size();
          ++index) {
@@ -668,17 +684,20 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
 
     const auto function_count = reader.count();
     result->function_symbols_.reserve(function_count);
+    result->function_image_ids_.reserve(function_count);
     result->function_boundaries_.reserve(function_count);
     for (std::uint32_t index = 0u; index < function_count; ++index) {
         GameProjectFunctionBoundary function;
         function.start = reader.u32();
         function.size = reader.u32();
         result->function_symbols_.push_back(reader.string());
+        result->function_image_ids_.push_back(reader.string());
         result->function_boundaries_.push_back(function);
     }
 
     const auto jump_table_count = reader.count();
     result->jump_tables_.reserve(jump_table_count);
+    result->jump_table_image_ids_.reserve(jump_table_count);
     for (std::uint32_t index = 0u;
          index < jump_table_count;
          ++index) {
@@ -692,11 +711,13 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
             reader.enumeration<GameProjectTableEncoding>();
         table.transfer =
             reader.enumeration<GameProjectControlTransferKind>();
+        result->jump_table_image_ids_.push_back(reader.string());
         result->jump_tables_.push_back(table);
     }
 
     const auto callback_table_count = reader.count();
     result->callback_tables_.reserve(callback_table_count);
+    result->callback_table_image_ids_.reserve(callback_table_count);
     for (std::uint32_t index = 0u;
          index < callback_table_count;
          ++index) {
@@ -707,6 +728,7 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
         table.pointer_offset = reader.u32();
         table.transfer =
             reader.enumeration<GameProjectControlTransferKind>();
+        result->callback_table_image_ids_.push_back(reader.string());
         result->callback_tables_.push_back(table);
     }
 
@@ -805,6 +827,7 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
 
     const auto code_identity_count = reader.count();
     result->code_identity_values_.reserve(code_identity_count);
+    result->code_identity_image_ids_.reserve(code_identity_count);
     result->code_identities_.reserve(code_identity_count);
     for (std::uint32_t index = 0u;
          index < code_identity_count;
@@ -814,6 +837,7 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
         identity.size = reader.u32();
         result->code_identity_values_.push_back(
             reader.string(artifact_maximum_identity_size));
+        result->code_identity_image_ids_.push_back(reader.string());
         result->code_identities_.push_back(identity);
     }
 

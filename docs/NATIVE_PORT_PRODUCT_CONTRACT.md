@@ -130,9 +130,9 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `97`, Analyzer-ABI `36`, Backend-
-Interface-ABI `20`, Portprojektvertrag `86` und Native-Port-Profilvertrag `10`.
-Der aktuelle GameProject-Vertrag steht auf `6`/Artefaktformat `5` und
+KR-5000 bindet diese Grenze an Runtime-ABI `98`, Analyzer-ABI `37`, Backend-
+Interface-ABI `20`, Portprojektvertrag `87` und Native-Port-Profilvertrag `11`.
+Der aktuelle GameProject-Vertrag steht auf `7`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
 Produktheader-Allowlist; der
@@ -252,10 +252,22 @@ Builds sind nicht redistributierbar.
 
 Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
 Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
-durch Analyse, CFG, Optimierung und Export. Die Bootstrap-Zeitgrenze verwendet
-eine frische monotone Host-Epoche; Acceptance darf erst nach erfolgreichem
-Bootstrap und nativer Frame-Presentation bezeugt werden. Bring-up-Probes sind
-begrenzt, aber kein Ersatz fuer vollstaendige Hook-/Hardware-Closure.
+durch Analyse, CFG, Optimierung und Export. Post-Bootstrap-Bytes werden vor
+Analyse, IR und AOT materialisiert; jedes emittierte Instruktionswort wird
+gegen die gebundene Post-Ansicht validiert. Exakte Non-Root-Boundaries,
+edge-only JumpTables, image_id-gebundene Metadaten, aktive Overlays,
+CallbackTable-Roots, sichere Replacement-Reachability und begrenzte
+Callback-Reentrys sind Teil dieser Closure. Der Nested-AOT-Fehlertransport
+erhaelt den typisierten Hook-Abbruch bis zum Produktlauf; Linkmap-/PE-Importaudit
+und historische CpuState-Bindings bleiben fail-closed. Die Bootstrap-Zeitgrenze
+verwendet eine frische monotone Host-Epoche; Acceptance darf erst nach
+erfolgreichem Bootstrap und nativer Frame-Presentation bezeugt werden. Der
+aktuelle Lauf erreichte den ersten nativen untexturierten Draw und danach den
+Sprite-Texture-Pfad, endete jedoch typisiert mit `0x53414704`; die
+Hardware-Closure weist `194` bekannte und `175` offene native Hookstellen aus.
+Der aktive P0 ist die generische Content-zu-Texture-Pipeline, nicht Bootstrap,
+AOT oder Linkaudit. Bring-up-Probes sind begrenzt, aber kein Ersatz fuer
+vollstaendige Hook-/Hardware-Closure.
 
 ## Verbindliche Taskreihenfolge
 

@@ -140,7 +140,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `86`, Native-Port-Profilvertrag `10` und
+kein Portprofil. Portprojektvertrag `87`, Native-Port-Profilvertrag `11` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -186,13 +186,16 @@ Roots, sichere IDs, User-Data-Save-Root und Digest-Domaenen bleiben
 fail-closed; der Linkaudit enthaelt keine historischen Geraetesymbole. Der
 vollstaendige originale SFD-Opening-Stream lief ohne Skip bis EOS und endete
 `Completed` mit 3.257 dekodierten und 3.257 GPU-praesentierten Videoframes,
-4.709.760 Audioframes und 3.257 GPU-Presents. Der naechste aktive Task ist
-`KR-5005`. Provider- und Draw-IR bleiben als backendneutrale Produktgrenze
+4.709.760 Audioframes und 3.257 GPU-Presents. KR-5005 bleibt das offene
+native Produktgate. Der aktive P0 ist jetzt die generische
+Native-Content-zu-Texture-Pipeline; Bootstrap-, AOT- und Linkaudit-Befunde
+sind geschlossen beziehungsweise ueberholt. Provider- und Draw-IR bleiben
+als backendneutrale Produktgrenze
 formuliert; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein
 gegenwaertiges Gate.
 
-KR-5005 verwendet ab Portprojektvertrag `86` einen echten schnellen
+KR-5005 verwendet ab Portprojektvertrag `87` einen echten schnellen
 Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
 und einem gemessenen Vierer-Ninja-Pool; eine gemeinsame MSVC-PDB ist
 ausgeschlossen, und 4.096 Dispatch-Eintraege pro Shard vermeiden Hunderte
@@ -202,19 +205,21 @@ Der reale Sonic-Mikrovergleich sank fuer vier identische TUs von `16,542 s`
 mit `/O1` auf `4,560 s` mit `/Od`. Der anschliessende kalte Vollport schrieb
 233 Host-TUs, beendete Export und Packaging in `408,278 s` bei `337,205 s`
 Hostbuildzeit und bestand den Post-Link-Audit. Die sichtbare Produktabnahme
-folgt im laufenden KR-5005-Port.
+bleibt wegen der offenen Content-zu-Texture-Pipeline aus.
 
 Der erste Lauf dieses Binaries lokalisierte zudem eine generische
 Bootstrapluecke: identity-bound Titel-RAM musste vor den Laufzeit-
 Immutable-Guards materialisiert werden, AOT-Bruecken durften dabei aber noch
-nicht aktiv sein. Portprojektvertrag `86` schliesst diese Reihenfolge
+nicht aktiv sein. Portprojektvertrag `87` schliesst diese Reihenfolge
 fail-closed; nach erfolgreichem Bootstrap beginnt erst der ueberwachte
 statische AOT-Lauf.
 
 Der aktuelle Source-Snapshot erweitert diesen KR-5005-Pfad um echte
 Post-Bootstrap-AOT-Roots und resumierbare Continuations sowie die
-Dispatchability-Weitergabe durch CFG und Optimierung. Das ist noch kein
-Produktgate. Provider- und Draw-IR bleiben backendneutral; D3D11 ist zunaechst
+Dispatchability-Weitergabe durch CFG und Optimierung. Die Closure- und
+Nested-AOT-Fehlertransport-Pruefungen sind abgeschlossen; das Produktgate
+bleibt wegen der offenen Content-zu-Texture-Pipeline offen. Provider- und
+Draw-IR bleiben backendneutral; D3D11 ist zunaechst
 das Windows-Backend, waehrend Steam-Deck-/Linux-Unterstuetzung spaeter und
 nicht als aktuelle Prioritaet vorgesehen ist.
 
@@ -262,9 +267,9 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 97, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 86, Native-Port-Profilvertrag 10
-  Analyzer-ABI 36
+  Runtime-ABI 98, PlatformServices-ABI 14, Backend-Interface-ABI 20,
+  PVR-State-Contract 3, Portprojektvertrag 87, Native-Port-Profilvertrag 11
+  Analyzer-ABI 37
   Function-Analysis-Epoch-Schema 27
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 29, AOT-Partitionsschema 7

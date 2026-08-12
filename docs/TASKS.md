@@ -104,7 +104,7 @@ MHz sind kein Produkt- oder Versionsgate des nativen Ports.
 Prioritaet: P0 Architektur
 
 Status: physische Source-, Link- und Installgrenze abgeschlossen.
-Portprojektvertrag `86` und Native-Port-Profilvertrag `10` machen
+Portprojektvertrag `87` und Native-Port-Profilvertrag `11` machen
 `native-port` zum einzigen Produktprofil. Das installierte Runtime-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die native
 Produktheader-Allowlist; ARM7/AICA, PVR/TA, ASIC, GD-ROM, Maple,
@@ -212,6 +212,11 @@ Bring-up-Probes bleiben beobachtend bzw. begrenzend und koennen keine
 Produkt-Closure bescheinigen. Provider- und Draw-IR sind backendneutral
 angelegt, D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
+Die generischen Bootstrap-, Materialisierungs-, Boundary-, Overlay-,
+Callback-Root-, Replacement-Reachability-, Linkmap-/PE-Import- und
+Nested-AOT-Fehlertransport-Findings sind im aktuellen Source-Review
+geschlossen beziehungsweise ueberholt. Der aktive P0 ist die native
+Content-zu-Texture-Pipeline; KR-5005 bleibt als Produktgate offen.
 Ein KR-5005-Zwischenfix transportiert
 die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
@@ -222,7 +227,7 @@ Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
 verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
 oder Interpreter-Symbole.
 
-Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `86` auf einem eigenen
+Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `87` auf einem eigenen
 schnellen AOT-Profil: Bring-up verwendet fuer generierte Spiel-TUs `/Od /Ob0`,
 keine gemeinsame MSVC-PDB, einen gemessenen Vierer-Ninja-Pool und 4.096
 Dispatch-Eintraege pro Shard. Runtime, Titeladapter und Bootstrap bleiben
@@ -234,7 +239,7 @@ bei `337,205 s` Hostbuildzeit. Der sichtbare Laufnachweis bleibt offen.
 
 Der erste Start belegte eine native Bootstrapluecke statt eines Sonic-
 Analysefehlers: initiales identity-bound Titel-RAM wurde unter bereits
-aktiven Laufzeitguards geschrieben. Portprojektvertrag `86` materialisiert
+aktiven Laufzeitguards geschrieben. Portprojektvertrag `87` materialisiert
 diesen Zustand jetzt vor Guard/AOT-Aktivierung, sperrt Gastcallbacks bis zur
 erfolgreichen Rueckkehr und validiert danach Pointer, Stopzustand und
 Brueckenvertrag fail-closed.
@@ -244,6 +249,18 @@ korrektes Opening mit Bild
 und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
 rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`
 freigegeben.
+
+Aktueller KR-5005-Zwischenstand: Der Release-Build von `katana-recomp` war
+mit 24 Jobs in `18,8 s` erfolgreich. Nach Vertragsinvalidierung wurden
+`1.812` Funktionen in `44` Partitionen mit `44` Codegen-Hits und `0` Misses
+exportiert; der Folgeexport nach dem Nested-AOT-Fehlerfix erreichte erneut
+`44/44` Hits und bestand den strukturellen Linkaudit. Der Produktlauf erreichte
+den ersten nativen untexturierten Draw und danach den Sprite-Texture-Pfad,
+endete aber typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
+bekannte Stellen und `175` offene native Hookbindungen aus. Keine Emulation
+oder Fallbacks sind erlaubt; der naechste P0 ist die generische
+Content-zu-Texture-Pipeline, nicht ein weiterer Bootstrap-, AOT- oder
+Linkaudit-Umbau.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -290,10 +307,12 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 97, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 86, Native-Port-Profilvertrag 10
-  Analyzer-ABI 36, Function-Analysis-Epoch-Schema 27,
-  lokales In-Process-Evaluation-Cache-Schema 13
+  Runtime-ABI 98, PlatformServices-ABI 14, Backend-Interface-ABI 20,
+  PVR-State-Contract 3, Portprojektvertrag 87, Native-Port-Profilvertrag 11
+  Analyzer-ABI 37, Function-Analysis-Epoch-Schema 27,
+  lokales In-Process-Evaluation-Cache-Schema 13, GameProject 7/Artefakt 6,
+  Analysis Directives 3, Hookkarte v2, Hardware-Closure v4,
+  GameProject-Metadaten katana-game-project-v5
   Native-AOT-Emissionsprofil 29, AOT-Partitionsschema 7
 
 historischer Diagnosebefund:

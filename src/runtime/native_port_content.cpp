@@ -539,6 +539,13 @@ void validate_native_port_bootstrap_memory_transition(
 }
 
 std::string native_port_cpu_state_identity(const CpuState& cpu) {
+    if (cpu.manual_reset_sink.context != nullptr ||
+        cpu.manual_reset_sink.callback != nullptr || cpu.address_space ||
+        cpu.gdrom_services != nullptr || cpu.g1_bus != nullptr)
+        throw NativePortContractError(
+            NativePortContractFailure::BootstrapFailed,
+            "cpu-state-historical-runtime-binding");
+
     std::vector<std::uint8_t> bytes;
     bytes.reserve(1'024u);
     const auto append_u8 = [&](const std::uint8_t value) {

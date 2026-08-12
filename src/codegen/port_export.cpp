@@ -447,6 +447,13 @@ std::string persistent_boot_epoch_cache_key(
             append_persistent_epoch_key_value(material, function.size);
         }
         append_persistent_epoch_key_value(
+            material, overrides->function_boundaries.size());
+        for (const auto& boundary : overrides->function_boundaries) {
+            append_persistent_epoch_key_value(material, boundary.address);
+            append_persistent_epoch_key_value(material, boundary.line);
+            append_persistent_epoch_key_value(material, boundary.size);
+        }
+        append_persistent_epoch_key_value(
             material, overrides->jumps.size());
         for (const auto& jump : overrides->jumps) {
             append_persistent_epoch_key_value(
@@ -474,6 +481,8 @@ std::string persistent_boot_epoch_cache_key(
                 static_cast<std::underlying_type_t<
                     katana::analysis::JumpTableOverrideTransfer>>(
                         table.transfer));
+            append_persistent_epoch_key_value(
+                material, table.require_dispatch);
         }
     }
     return katana::io::sha256_bytes(material.str());
@@ -523,11 +532,20 @@ void add_game_project_symbol(katana::io::ExecutableImage& image,
     image.add_symbol(std::move(symbol));
 }
 
+bool game_project_runtime_image_is_active(
+    const katana::runtime::NativePortDefinition* native_port,
+    std::string_view image_id) noexcept;
+
 void apply_game_project_symbols(
     katana::io::ExecutableImage& image,
     const katana::runtime::GameProjectDefinition& definition,
-    const bool function_symbols_are_roots = true) {
+    const bool function_symbols_are_roots = true,
+    const katana::runtime::NativePortDefinition* const native_port = nullptr) {
     for (const auto& function : definition.function_boundaries) {
+        if (!function.image_id.empty() &&
+            !game_project_runtime_image_is_active(
+                native_port, function.image_id))
+            continue;
         if (function.symbol.empty()) continue;
         add_game_project_symbol(
             image,
@@ -574,28 +592,85 @@ bool game_project_runtime_image_is_active(
            native_port->checkpoint_runtime_image_ids.end();
 }
 
+bool game_project_metadata_is_active(
+    const katana::runtime::NativePortDefinition* const native_port,
+    const std::string_view image_id) noexcept {
+    return image_id.empty() ||
+           game_project_runtime_image_is_active(native_port, image_id);
+}
+
 void validate_native_runtime_image_contract(
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port) {
-    if (native_port == nullptr) return;
     if (game_project == nullptr) {
-        if (!native_port->checkpoint_runtime_image_ids.empty())
+        if (native_port != nullptr &&
+            !native_port->checkpoint_runtime_image_ids.empty())
             throw std::invalid_argument(
                 "native-active-runtime-image-without-game-project");
         return;
     }
-    for (const auto image_id : native_port->checkpoint_runtime_image_ids) {
-        const auto descriptor = std::find_if(
-            game_project->runtime_images.begin(),
-            game_project->runtime_images.end(),
-            [&](const auto& candidate) {
-                return candidate.image_id == image_id;
-            });
-        if (descriptor == game_project->runtime_images.end())
-            throw std::invalid_argument(
-                "native-active-runtime-image-id-missing");
+    if (native_port != nullptr) {
+        for (const auto image_id :
+             native_port->checkpoint_runtime_image_ids) {
+            const auto descriptor = std::find_if(
+                game_project->runtime_images.begin(),
+                game_project->runtime_images.end(),
+                [&](const auto& candidate) {
+                    return candidate.image_id == image_id;
+                });
+            if (descriptor == game_project->runtime_images.end())
+                throw std::invalid_argument(
+                    "native-active-runtime-image-id-missing");
+        }
+    }
+
+    struct ActiveRange final {
+        std::uint64_t begin = 0u;
+        std::uint64_t end = 0u;
+    };
+    std::vector<ActiveRange> source_ranges;
+    std::vector<ActiveRange> runtime_ranges;
+    for (const auto& image : game_project->runtime_images) {
+        if (!game_project_runtime_image_is_active(
+                native_port, image.image_id))
+            continue;
+        const auto source = static_cast<std::uint64_t>(
+            katana::runtime::canonical_physical_address(
+                image.source_start));
+        const auto runtime = static_cast<std::uint64_t>(
+            katana::runtime::canonical_physical_address(
+                image.runtime_start));
+        source_ranges.push_back({source, source + image.byte_size});
+        runtime_ranges.push_back({runtime, runtime + image.byte_size});
+    }
+    const auto overlaps = [](const ActiveRange left,
+                             const ActiveRange right) noexcept {
+        return left.begin < right.end && right.begin < left.end;
+    };
+    for (std::size_t left = 0u; left < source_ranges.size(); ++left) {
+        for (std::size_t right = left + 1u;
+             right < source_ranges.size(); ++right) {
+            if (overlaps(source_ranges[left], source_ranges[right]) ||
+                overlaps(runtime_ranges[left], runtime_ranges[right]))
+                throw std::invalid_argument(
+                    "active-runtime-image-ranges-overlap");
+        }
+        for (const auto runtime : runtime_ranges) {
+            if (overlaps(source_ranges[left], runtime))
+                throw std::invalid_argument(
+                    "active-runtime-image-source-runtime-ranges-alias");
+        }
     }
 }
+
+std::uint32_t read_game_project_pointer(
+    const katana::io::ExecutableImage& image,
+    std::uint32_t address);
+
+std::vector<std::uint32_t> game_project_callback_roots(
+    const katana::runtime::GameProjectDefinition* game_project,
+    const katana::io::ExecutableImage& image,
+    const katana::runtime::NativePortDefinition* native_port);
 
 std::vector<std::uint32_t> native_post_aot_roots(
     const katana::runtime::NativePortDefinition& native_port,
@@ -797,7 +872,15 @@ void apply_native_port_post_aot_view(
         }
     }
 
-    const auto post_roots = native_post_aot_roots(*native_port, game_project);
+    auto post_roots = native_post_aot_roots(*native_port, game_project);
+    const auto callback_roots =
+        game_project_callback_roots(game_project, image, native_port);
+    post_roots.insert(
+        post_roots.end(), callback_roots.begin(), callback_roots.end());
+    std::sort(post_roots.begin(), post_roots.end());
+    post_roots.erase(
+        std::unique(post_roots.begin(), post_roots.end()),
+        post_roots.end());
     for (const auto root : post_roots) {
         const auto resolved = image.resolve_segment_address(root, 2u);
         const auto* segment = resolved.has_value()
@@ -899,17 +982,49 @@ std::uint32_t read_game_project_pointer(
     return image.read_u32_le(*resolved);
 }
 
+std::vector<std::uint32_t> game_project_callback_roots(
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const katana::io::ExecutableImage& image,
+    const katana::runtime::NativePortDefinition* const native_port) {
+    std::vector<std::uint32_t> roots;
+    if (game_project == nullptr) return roots;
+    for (const auto& table : game_project->callback_tables) {
+        if (!game_project_metadata_is_active(native_port, table.image_id))
+            continue;
+        for (std::uint32_t index = 0u; index < table.entry_count; ++index) {
+            const auto address64 =
+                static_cast<std::uint64_t>(table.table_address) +
+                static_cast<std::uint64_t>(index) * table.entry_stride +
+                table.pointer_offset;
+            if (address64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::invalid_argument(
+                    "Game-Project-Callbacktabelle laeuft ueber.");
+            const auto target = read_game_project_pointer(
+                image, static_cast<std::uint32_t>(address64));
+            if (target != 0u) roots.push_back(target);
+        }
+    }
+    std::sort(roots.begin(), roots.end());
+    roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+    return roots;
+}
+
 katana::analysis::AnalysisOverrides game_project_analysis_overrides(
     const katana::runtime::GameProjectDefinition& definition,
     const katana::io::ExecutableImage& image,
-    const bool function_metadata_are_roots = true) {
+    const bool function_metadata_are_roots,
+    const katana::runtime::NativePortDefinition* const native_port) {
     katana::analysis::AnalysisOverrides overrides;
     overrides.mode = katana::analysis::AnalysisDirectiveMode::Override;
     overrides.source_path = "external-game-project";
     if (function_metadata_are_roots) {
-        for (const auto& function : definition.function_boundaries)
+        for (const auto& function : definition.function_boundaries) {
+            if (!game_project_metadata_is_active(
+                    native_port, function.image_id))
+                continue;
             overrides.functions.push_back(
                 {function.start, 0u, function.size});
+        }
         for (const auto& hook : definition.mid_function_hooks)
             overrides.functions.push_back({hook.instruction_address, 0u});
         for (const auto& symbol : definition.symbols) {
@@ -917,21 +1032,32 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 katana::runtime::GameProjectSymbolKind::Function)
                 overrides.functions.push_back({symbol.address, 0u});
         }
-        for (const auto& table : definition.callback_tables) {
-            for (std::uint32_t index = 0u; index < table.entry_count; ++index) {
-                const auto address64 =
-                    static_cast<std::uint64_t>(table.table_address) +
-                    static_cast<std::uint64_t>(index) * table.entry_stride +
-                    table.pointer_offset;
-                if (address64 > std::numeric_limits<std::uint32_t>::max())
-                    throw std::invalid_argument(
-                        "Game-Project-Callbacktabelle laeuft ueber.");
-                const auto target = read_game_project_pointer(
-                    image, static_cast<std::uint32_t>(address64));
-                if (target != 0u)
-                    overrides.functions.push_back({target, 0u});
-            }
+    }
+    // Callback tables are external invocation surfaces, not descriptive
+    // symbols. Their identity-bound targets remain native product roots even
+    // when ordinary GameProject function metadata is non-root.
+    for (const auto& table : definition.callback_tables) {
+        if (!game_project_metadata_is_active(native_port, table.image_id))
+            continue;
+        for (std::uint32_t index = 0u; index < table.entry_count; ++index) {
+            const auto address64 =
+                static_cast<std::uint64_t>(table.table_address) +
+                static_cast<std::uint64_t>(index) * table.entry_stride +
+                table.pointer_offset;
+            if (address64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::invalid_argument(
+                    "Game-Project-Callbacktabelle laeuft ueber.");
+            const auto target = read_game_project_pointer(
+                image, static_cast<std::uint32_t>(address64));
+            if (target != 0u)
+                overrides.functions.push_back({target, 0u});
         }
+    }
+    for (const auto& function : definition.function_boundaries) {
+        if (!game_project_metadata_is_active(native_port, function.image_id))
+            continue;
+        overrides.function_boundaries.push_back(
+            {function.start, 0u, function.size});
     }
     std::sort(
         overrides.functions.begin(),
@@ -951,40 +1077,43 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 return left.address == right.address;
             }),
         overrides.functions.end());
-    if (function_metadata_are_roots) {
-        for (const auto& table : definition.jump_tables) {
-            const auto encoding = [&] {
-                switch (table.encoding) {
-                case katana::runtime::GameProjectTableEncoding::Absolute32:
-                    return katana::analysis::JumpTableOverrideEncoding::
-                        Absolute32;
-                case katana::runtime::GameProjectTableEncoding::
-                    SignedRelative16:
-                    return katana::analysis::JumpTableOverrideEncoding::
-                        SignedRelative16;
-                case katana::runtime::GameProjectTableEncoding::
-                    SignedRelative32:
-                    return katana::analysis::JumpTableOverrideEncoding::
-                        SignedRelative32;
-                }
+    // Jump-table declarations add typed outgoing edges at an already reached
+    // dispatch site; unlike functions, symbols and callback tables they do
+    // not create product roots. Preserve them in native-port analysis so a
+    // reachable indirect transfer closes over all identity-bound targets.
+    for (const auto& table : definition.jump_tables) {
+        if (!game_project_metadata_is_active(native_port, table.image_id))
+            continue;
+        const auto encoding = [&] {
+            switch (table.encoding) {
+            case katana::runtime::GameProjectTableEncoding::Absolute32:
                 return katana::analysis::JumpTableOverrideEncoding::
                     Absolute32;
-            }();
-            const auto transfer =
-                table.transfer ==
-                        katana::runtime::GameProjectControlTransferKind::Call
-                    ? katana::analysis::JumpTableOverrideTransfer::Call
-                    : katana::analysis::JumpTableOverrideTransfer::Jump;
-            overrides.jump_tables.push_back(
-                {table.dispatch_address,
-                 table.table_address,
-                 table.entry_count,
-                 0u,
-                 table.entry_stride,
-                 table.relative_base,
-                 encoding,
-                 transfer});
-        }
+            case katana::runtime::GameProjectTableEncoding::SignedRelative16:
+                return katana::analysis::JumpTableOverrideEncoding::
+                    SignedRelative16;
+            case katana::runtime::GameProjectTableEncoding::SignedRelative32:
+                return katana::analysis::JumpTableOverrideEncoding::
+                    SignedRelative32;
+            }
+            return katana::analysis::JumpTableOverrideEncoding::Absolute32;
+        }();
+        const auto transfer =
+            table.transfer ==
+                    katana::runtime::GameProjectControlTransferKind::Call
+                ? katana::analysis::JumpTableOverrideTransfer::Call
+                : katana::analysis::JumpTableOverrideTransfer::Jump;
+        katana::analysis::JumpTableOverride declaration{
+            table.dispatch_address,
+            table.table_address,
+            table.entry_count,
+            0u,
+            table.entry_stride,
+            table.relative_base,
+            encoding,
+            transfer};
+        declaration.require_dispatch = function_metadata_are_roots;
+        overrides.jump_tables.push_back(declaration);
     }
     return overrides;
 }
@@ -996,7 +1125,10 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (game_project != nullptr)
         overrides = game_project_analysis_overrides(
-            *game_project, image, native_port == nullptr);
+            *game_project,
+            image,
+            native_port == nullptr,
+            native_port);
     if (native_port == nullptr) return overrides;
 
     if (!overrides.has_value()) {
@@ -1013,7 +1145,9 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
                 game_project->function_boundaries.begin(),
                 game_project->function_boundaries.end(),
                 [&](const auto& candidate) {
-                    return candidate.start == root;
+                    return candidate.start == root &&
+                           game_project_metadata_is_active(
+                               native_port, candidate.image_id);
                 });
             if (boundary != game_project->function_boundaries.end())
                 size = boundary->size;
@@ -1031,7 +1165,9 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
             game_project->function_boundaries.begin(),
             game_project->function_boundaries.end(),
             [&](const auto& candidate) {
-                return candidate.start == continuation.function_entry;
+                return candidate.start == continuation.function_entry &&
+                       game_project_metadata_is_active(
+                           native_port, candidate.image_id);
             });
         if (boundary == game_project->function_boundaries.end())
             throw std::invalid_argument(
@@ -1117,8 +1253,16 @@ void validate_native_post_aot_program_contract(
     validate_native_port_bootstrap_write_payloads(native_port, payloads);
     if (native_port == nullptr) return;
 
-    const auto expected_roots = native_post_aot_roots(
+    auto expected_roots = native_post_aot_roots(
         *native_port, game_project);
+    const auto callback_roots =
+        game_project_callback_roots(game_project, image, native_port);
+    expected_roots.insert(
+        expected_roots.end(), callback_roots.begin(), callback_roots.end());
+    std::sort(expected_roots.begin(), expected_roots.end());
+    expected_roots.erase(
+        std::unique(expected_roots.begin(), expected_roots.end()),
+        expected_roots.end());
     auto image_roots = std::vector<std::uint32_t>(
         image.entry_points().begin(), image.entry_points().end());
     std::sort(image_roots.begin(), image_roots.end());
@@ -1259,6 +1403,9 @@ void validate_game_project_image_contract(
     const std::span<const NativePortBootstrapWritePayload>
         bootstrap_payloads) {
     for (const auto& function : definition.function_boundaries) {
+        if (!game_project_metadata_is_active(
+                native_port, function.image_id))
+            continue;
         const auto resolved =
             image.resolve_segment_address(function.start, function.size);
         const auto* segment =
@@ -1271,6 +1418,8 @@ void validate_game_project_image_contract(
                 "ausfuehrbarem Imagecode.");
     }
     for (const auto& table : definition.jump_tables) {
+        if (!game_project_metadata_is_active(native_port, table.image_id))
+            continue;
         const auto width =
             table.encoding ==
                     katana::runtime::GameProjectTableEncoding::
@@ -1293,6 +1442,8 @@ void validate_game_project_image_contract(
                 "Executable-Image gebunden.");
     }
     for (const auto& table : definition.callback_tables) {
+        if (!game_project_metadata_is_active(native_port, table.image_id))
+            continue;
         const auto size =
             static_cast<std::size_t>(table.entry_count - 1u) *
                 table.entry_stride +
@@ -1309,6 +1460,9 @@ void validate_game_project_image_contract(
                 "Executable-Image.");
     }
     for (const auto& identity : definition.code_identities) {
+        if (!game_project_metadata_is_active(
+                native_port, identity.image_id))
+            continue;
         const auto bytes =
             game_project_image_bytes(image, identity.address, identity.size);
         if (!katana::runtime::game_project_code_identity_matches(
@@ -1402,7 +1556,7 @@ void validate_game_project_image_contract(
 std::string game_project_metadata(
     const katana::runtime::GameProjectDefinition& definition) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-game-project-v4\",\"contract_version\":"
+    output << "{\"schema\":\"katana-game-project-v5\",\"contract_version\":"
            << definition.contract_version << ",\"project_id\":"
            << katana::io::quote_json(definition.project_id)
            << ",\"project_version\":"
@@ -1461,7 +1615,9 @@ std::string game_project_metadata(
         const auto& function = definition.function_boundaries[index];
         output << "{\"start\":" << function.start << ",\"size\":"
                << function.size << ",\"symbol\":"
-               << katana::io::quote_json(function.symbol) << '}';
+               << katana::io::quote_json(function.symbol)
+               << ",\"image_id\":"
+               << katana::io::quote_json(function.image_id) << '}';
     }
     output << "],\"jump_tables\":[";
     for (std::size_t index = 0u; index < definition.jump_tables.size();
@@ -1476,7 +1632,9 @@ std::string game_project_metadata(
                << ",\"encoding\":"
                << static_cast<unsigned>(table.encoding)
                << ",\"transfer\":"
-               << static_cast<unsigned>(table.transfer) << '}';
+               << static_cast<unsigned>(table.transfer)
+               << ",\"image_id\":"
+               << katana::io::quote_json(table.image_id) << '}';
     }
     output << "],\"callback_tables\":[";
     for (std::size_t index = 0u;
@@ -1489,7 +1647,9 @@ std::string game_project_metadata(
                << ",\"stride\":" << table.entry_stride
                << ",\"pointer_offset\":" << table.pointer_offset
                << ",\"transfer\":"
-               << static_cast<unsigned>(table.transfer) << '}';
+               << static_cast<unsigned>(table.transfer)
+               << ",\"image_id\":"
+               << katana::io::quote_json(table.image_id) << '}';
     }
     output << "],\"runtime_code_templates\":"
            << definition.runtime_code_templates.size()
@@ -13848,6 +14008,19 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         const katana::ir::BasicBlock* block = nullptr;
         std::uint32_t owner = 0u;
     };
+    // The post-image entry set is rebuilt exclusively from identity-bound
+    // post-AOT roots, active runtime-image entries and CallbackTables.  Use
+    // that exact analyzed set as the native callback re-entry capability;
+    // arbitrary emitted AOT addresses must not reopen code which replacement
+    // reachability proved dead.
+    std::vector<std::uint32_t> callback_reentry_entries(
+        image.entry_points().begin(), image.entry_points().end());
+    std::sort(callback_reentry_entries.begin(),
+              callback_reentry_entries.end());
+    callback_reentry_entries.erase(
+        std::unique(callback_reentry_entries.begin(),
+                    callback_reentry_entries.end()),
+        callback_reentry_entries.end());
     std::size_t block_count = 0u;
     for (const auto& function : program) {
         if (function.blocks.size() >
@@ -14353,7 +14526,30 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "using HookKind = katana::runtime::NativePortHookKind;\n"
               "using HookRequirement = katana::runtime::NativePortHookRequirement;\n"
               "using DirectHookFunction = HookResult (*)(\n"
-              "    katana::runtime::NativePortContext&) noexcept;\n"
+              "    katana::runtime::NativePortContext&) noexcept;\n";
+    output << "struct NestedHookAbort final {\n"
+              "    std::uint32_t error_code = 0u;\n"
+              "};\n";
+    output << "constexpr std::array<std::uint32_t, "
+           << callback_reentry_entries.size()
+           << "u> native_callback_reentry_entries{{\n";
+    for (const auto entry : callback_reentry_entries)
+        output << "    0x" << symbol(entry) << "u,\n";
+    output << "}};\n"
+              "[[nodiscard]] bool declared_native_callback_entry(\n"
+              "    const std::uint32_t address) noexcept {\n"
+              "    auto source =\n"
+              "        runtime_dispatch_detail::normalized_source_address(address);\n"
+              "    const auto contains = [](const std::uint32_t candidate) noexcept {\n"
+              "        return std::binary_search(\n"
+              "            native_callback_reentry_entries.begin(),\n"
+              "            native_callback_reentry_entries.end(), candidate);\n"
+              "    };\n"
+              "    if (contains(source)) return true;\n"
+              "    const auto segment = source >> 29u;\n"
+              "    return (segment == 4u || segment == 5u) &&\n"
+              "           contains(source ^ 0x20000000u);\n"
+              "}\n"
               "[[nodiscard]] bool native_unresolved_memory_exception(\n"
               "    const katana::runtime::ExceptionCause cause) noexcept {\n"
               "    using Cause = katana::runtime::ExceptionCause;\n"
@@ -14564,10 +14760,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "                case HookAction::Abort:\n"
               "                    context.stop_reason =\n"
               "                        katana::runtime::NativePortStopReason::HookAbort;\n"
-              "                    throw katana::runtime::NativePortContractError(\n"
-              "                        katana::runtime::NativePortContractFailure::\n"
-              "                            HookAborted,\n"
-              "                        \"native-hook-abort\");\n"
+              "                    return hook_result;\n"
               "                }\n"
               "            }\n"
               "        }\n"
@@ -14583,6 +14776,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        katana::runtime::BlockExit exit;\n"
               "        try {\n"
               "            exit = entry->function(cpu, block_context);\n"
+              "        } catch (const NestedHookAbort& abort) {\n"
+              "            return {HookAction::Abort, 0u, abort.error_code};\n"
               "        } catch (const katana::runtime::MemoryAccessError& error) {\n"
               "            context.stop_reason =\n"
               "                katana::runtime::NativePortStopReason::\n"
@@ -14705,9 +14900,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    const auto result = dispatch_native(\n"
               "        *active_native_context, target, cpu.pr, std::nullopt, false);\n"
               "    if (result.action == HookAction::Abort)\n"
-              "        throw katana::runtime::NativePortContractError(\n"
-              "            katana::runtime::NativePortContractFailure::BootstrapFailed,\n"
-              "            \"nested-native-call\");\n"
+              "        throw NestedHookAbort{result.error_code};\n"
               "}\n"
               "void dispatch_jump(katana::runtime::CpuState& cpu,\n"
               "                   const std::uint32_t target) {\n"
@@ -15052,6 +15245,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        if (" << entry_namespace << "::active_native_context != &context)\n"
               "            return " << entry_namespace << "::bridge_failure(\n"
               "                context, katana::runtime::NativePortStopReason::HookAbort, 5u);\n"
+              "        if (!" << entry_namespace
+           << "::declared_native_callback_entry(guest_address))\n"
+              "            return " << entry_namespace << "::bridge_failure(\n"
+              "                context, katana::runtime::NativePortStopReason::HookAbort, 7u);\n"
               "        return " << entry_namespace << "::dispatch_native(\n"
               "            context, guest_address, context.cpu->pr,\n"
               "            std::nullopt, false);\n"
@@ -17049,7 +17246,10 @@ struct NativePortHardwareClosure final {
     std::size_t unknown_instruction_sites = 0u;
     std::size_t unresolved_memory_sites = 0u;
     std::size_t replaced_by_hook = 0u;
+    std::size_t eliminated_by_replacement_reachability = 0u;
     std::size_t guarded_native_memory = 0u;
+    bool replacement_reachability_proven = false;
+    std::set<std::uint32_t> reachability_eliminated_sites;
     std::vector<Gap> gaps;
 };
 
@@ -17121,9 +17321,27 @@ katana::analysis::DreamcastHardwareAudit combine_native_hardware_audits(
     return combined;
 }
 
+enum class NativePortFunctionBoundaryProof : std::uint8_t {
+    IdentityBoundExact,
+    ClosedControlFlow,
+    IdentityBoundExactAndClosedControlFlow
+};
+
+struct NativePortFunctionBoundaryEvidence final {
+    std::set<std::uint32_t> identity_bound_exact_sizes;
+    std::set<std::uint32_t> closed_control_flow_sizes;
+};
+
+struct NativePortFunctionBoundary final {
+    std::uint32_t size = 0u;
+    NativePortFunctionBoundaryProof proof =
+        NativePortFunctionBoundaryProof::ClosedControlFlow;
+};
+
 struct NativePortProgramIndex final {
     std::map<std::uint32_t, std::set<std::uint32_t>> instruction_owners;
-    std::map<std::uint32_t, std::set<std::uint32_t>> exact_function_sizes;
+    std::map<std::uint32_t, NativePortFunctionBoundaryEvidence>
+        function_boundaries;
     std::map<std::uint32_t, std::vector<const katana::ir::Function*>>
         functions_by_entry;
     std::map<std::uint32_t, std::set<std::uint32_t>> incoming_edge_sources;
@@ -17131,21 +17349,173 @@ struct NativePortProgramIndex final {
         incoming_instruction_addresses;
     std::map<std::uint32_t, std::size_t> block_entry_counts;
     std::map<std::uint32_t, std::size_t> safe_resume_entry_counts;
+    std::map<std::uint32_t, std::set<std::uint32_t>> entry_owners;
+    std::map<std::uint32_t, std::set<std::uint32_t>> outgoing_function_entries;
+    std::set<std::uint32_t> exact_external_entries;
+    std::set<std::uint32_t> external_function_roots;
     std::set<std::uint32_t> function_entries;
     std::set<std::uint32_t> guarded_entries;
     std::set<std::uint32_t> seed_entries;
+    bool external_root_ownership_complete = true;
+    bool call_graph_complete = true;
 };
+
+std::optional<std::uint32_t> native_port_closed_control_flow_size(
+    const katana::ir::Function& function) {
+    using katana::ir::DelaySlotRole;
+    using katana::ir::Operation;
+
+    if ((function.entry_address & 1u) != 0u || function.blocks.empty())
+        return std::nullopt;
+
+    std::map<std::uint32_t, const katana::ir::BasicBlock*> blocks;
+    std::uint64_t extent_end = function.entry_address;
+    for (const auto& block : function.blocks) {
+        if (block.instructions.empty() ||
+            block.start_address != block.instructions.front().source_address ||
+            block.start_address < function.entry_address ||
+            !blocks.emplace(block.start_address, &block).second)
+            return std::nullopt;
+
+        for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
+            const auto address = block.instructions[index].source_address;
+            if ((address & 1u) != 0u || address < function.entry_address ||
+                (index != 0u &&
+                 static_cast<std::uint64_t>(address) !=
+                     static_cast<std::uint64_t>(
+                         block.instructions[index - 1u].source_address) +
+                         2u))
+                return std::nullopt;
+            extent_end = std::max(extent_end,
+                                  static_cast<std::uint64_t>(address) + 2u);
+        }
+
+        const auto* control = &block.instructions.back();
+        if (control->delay_slot.role == DelaySlotRole::Slot) {
+            if (block.instructions.size() < 2u)
+                return std::nullopt;
+            control = &block.instructions[block.instructions.size() - 2u];
+        }
+        if (block.has_indirect_successor &&
+            control->operation != Operation::CallRegister)
+            return std::nullopt;
+
+        if (block.successors.empty()) {
+            switch (control->operation) {
+            case Operation::Branch:
+                if (!control->target_address.has_value())
+                    return std::nullopt;
+                break;
+            case Operation::JumpRegister:
+                if (block.has_indirect_successor ||
+                    control->resolved_targets.empty())
+                    return std::nullopt;
+                break;
+            case Operation::Return:
+            case Operation::ReturnFromException:
+                break;
+            default:
+                // A decoded block which simply falls out of the retained
+                // image is not a function boundary proof.  In particular,
+                // calls and conditional branches require their continuation.
+                return std::nullopt;
+            }
+        }
+    }
+
+    const auto entry = blocks.find(function.entry_address);
+    if (entry == blocks.end()) return std::nullopt;
+
+    std::set<std::uint32_t> reachable;
+    std::vector<std::uint32_t> pending{function.entry_address};
+    while (!pending.empty()) {
+        const auto address = pending.back();
+        pending.pop_back();
+        if (!reachable.insert(address).second) continue;
+        const auto block = blocks.find(address);
+        if (block == blocks.end()) return std::nullopt;
+        for (const auto successor : block->second->successors) {
+            if (!blocks.contains(successor)) return std::nullopt;
+            pending.push_back(successor);
+        }
+    }
+    // Optimisation may retain an externally dispatchable continuation which
+    // is not reachable from the function entry.  Such a component is useful
+    // AOT code, but it prevents a whole-function replacement proof.
+    if (reachable.size() != blocks.size()) return std::nullopt;
+
+    if (extent_end <= function.entry_address ||
+        extent_end > static_cast<std::uint64_t>(
+                         std::numeric_limits<std::uint32_t>::max()) +
+                         1u)
+        return std::nullopt;
+    const auto size = extent_end - function.entry_address;
+    if (size > std::numeric_limits<std::uint32_t>::max() ||
+        (size & 1u) != 0u)
+        return std::nullopt;
+    return static_cast<std::uint32_t>(size);
+}
+
+std::optional<NativePortFunctionBoundary> native_port_function_boundary(
+    const NativePortProgramIndex& index,
+    const std::uint32_t entry_address) {
+    const auto found = index.function_boundaries.find(entry_address);
+    if (found == index.function_boundaries.end()) return std::nullopt;
+    const auto& evidence = found->second;
+    if (evidence.identity_bound_exact_sizes.size() > 1u ||
+        evidence.closed_control_flow_sizes.size() > 1u)
+        return std::nullopt;
+
+    const auto exact = evidence.identity_bound_exact_sizes.empty()
+                           ? std::optional<std::uint32_t>{}
+                           : std::optional<std::uint32_t>{
+                                 *evidence.identity_bound_exact_sizes.begin()};
+    const auto closed = evidence.closed_control_flow_sizes.empty()
+                            ? std::optional<std::uint32_t>{}
+                            : std::optional<std::uint32_t>{
+                                  *evidence.closed_control_flow_sizes.begin()};
+    if (exact.has_value() && closed.has_value() && *exact != *closed)
+        return std::nullopt;
+    if (exact.has_value() && closed.has_value())
+        return NativePortFunctionBoundary{
+            *exact,
+            NativePortFunctionBoundaryProof::
+                IdentityBoundExactAndClosedControlFlow};
+    if (exact.has_value())
+        return NativePortFunctionBoundary{
+            *exact, NativePortFunctionBoundaryProof::IdentityBoundExact};
+    if (closed.has_value())
+        return NativePortFunctionBoundary{
+            *closed, NativePortFunctionBoundaryProof::ClosedControlFlow};
+    return std::nullopt;
+}
+
+std::string_view native_port_function_boundary_proof_name(
+    const NativePortFunctionBoundaryProof proof) noexcept {
+    switch (proof) {
+    case NativePortFunctionBoundaryProof::IdentityBoundExact:
+        return "identity-bound-exact";
+    case NativePortFunctionBoundaryProof::ClosedControlFlow:
+        return "closed-control-flow";
+    case NativePortFunctionBoundaryProof::
+        IdentityBoundExactAndClosedControlFlow:
+        return "identity-bound-exact-and-closed-control-flow";
+    }
+    return "unknown";
+}
 
 NativePortProgramIndex build_native_port_program_index(
     const std::span<const katana::ir::Function> program,
     const katana::analysis::ControlFlowAnalysisResult& analysis,
-    const katana::runtime::GameProjectDefinition* const game_project) {
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const katana::runtime::NativePortDefinition* const native_port,
+    const std::span<const std::uint32_t> external_entries) {
     NativePortProgramIndex index;
     for (const auto& candidate : analysis.recursive.functions) {
         index.function_entries.insert(candidate.address);
         if (candidate.size != 0u)
-            index.exact_function_sizes[candidate.address].insert(
-                candidate.size);
+            index.function_boundaries[candidate.address]
+                .identity_bound_exact_sizes.insert(candidate.size);
     }
     for (const auto& entry : analysis.guarded_aot_entries)
         index.guarded_entries.insert(entry.guest_address);
@@ -17163,9 +17533,13 @@ NativePortProgramIndex build_native_port_program_index(
                 function.entry_address);
         for (const auto& block : function.blocks) {
             ++index.block_entry_counts[block.start_address];
+            index.entry_owners[block.start_address].insert(
+                function.entry_address);
             for (const auto resume :
-                 detail::native_aot_internal_resume_entries(block))
+                 detail::native_aot_internal_resume_entries(block)) {
                 ++index.safe_resume_entry_counts[resume];
+                index.entry_owners[resume].insert(function.entry_address);
+            }
             for (const auto successor : block.successors)
                 index.incoming_edge_sources[successor].insert(
                     function.entry_address);
@@ -17173,6 +17547,14 @@ NativePortProgramIndex build_native_port_program_index(
                 index.instruction_owners[instruction.source_address].insert(
                     function.entry_address);
         }
+    }
+    for (const auto& [entry, functions] : index.functions_by_entry) {
+        if (functions.size() != 1u) continue;
+        if (const auto size =
+                native_port_closed_control_flow_size(*functions.front());
+            size.has_value())
+            index.function_boundaries[entry]
+                .closed_control_flow_sizes.insert(*size);
     }
     for (const auto& edge : analysis.resolved_edges) {
         const auto owners =
@@ -17196,14 +17578,208 @@ NativePortProgramIndex build_native_port_program_index(
         // replacements prove a whole-function boundary without resurrecting
         // pre-bootstrap or otherwise unreachable title code.
         for (const auto& boundary : game_project->function_boundaries) {
-            if (boundary.size == 0u ||
+            if (!game_project_metadata_is_active(
+                    native_port, boundary.image_id) ||
+                boundary.size == 0u ||
                 !index.function_entries.contains(boundary.start))
                 continue;
-            index.exact_function_sizes[boundary.start].insert(
-                boundary.size);
+            index.function_boundaries[boundary.start]
+                .identity_bound_exact_sizes.insert(boundary.size);
         }
     }
+
+    const auto append_function_edge =
+        [&](const std::uint32_t source_entry,
+            const std::uint32_t target_address) {
+            std::set<std::uint32_t> target_owners;
+            if (index.function_entries.contains(target_address))
+                target_owners.insert(target_address);
+            if (const auto owners =
+                    index.entry_owners.find(target_address);
+                owners != index.entry_owners.end())
+                target_owners.insert(owners->second.begin(),
+                                     owners->second.end());
+            if (const auto owners =
+                    index.instruction_owners.find(target_address);
+                owners != index.instruction_owners.end())
+                target_owners.insert(owners->second.begin(),
+                                     owners->second.end());
+            if (target_owners.size() == 1u) {
+                index.outgoing_function_entries[source_entry].insert(
+                    *target_owners.begin());
+                return true;
+            }
+            return false;
+        };
+    for (const auto& function : program) {
+        for (const auto callee : function.direct_callees) {
+            if (!append_function_edge(function.entry_address, callee))
+                index.call_graph_complete = false;
+        }
+        for (const auto& block : function.blocks) {
+            for (const auto successor : block.successors) {
+                if (!append_function_edge(function.entry_address, successor))
+                    index.call_graph_complete = false;
+            }
+            for (const auto& instruction : block.instructions) {
+                if (instruction.target_address.has_value() &&
+                    !append_function_edge(function.entry_address,
+                                          *instruction.target_address))
+                    index.call_graph_complete = false;
+                for (const auto target : instruction.resolved_targets) {
+                    if (!append_function_edge(function.entry_address, target))
+                        index.call_graph_complete = false;
+                }
+            }
+            // `has_indirect_successor` is the authoritative residual-unknown
+            // marker.  A site may expose some resolved targets while still
+            // retaining an unbounded remainder; those positive edges do not
+            // make a negative reachability proof complete.
+            if (block.has_indirect_successor)
+                index.call_graph_complete = false;
+        }
+    }
+    for (const auto& edge : analysis.resolved_edges) {
+        const auto sources =
+            index.instruction_owners.find(edge.instruction_address);
+        if (sources == index.instruction_owners.end()) continue;
+        if (edge.guarded) index.call_graph_complete = false;
+        for (const auto source : sources->second) {
+            if (!append_function_edge(source, edge.target_address))
+                index.call_graph_complete = false;
+        }
+    }
+    for (const auto& fact : analysis.seed_facts) {
+        bool has_owned_source = false;
+        for (const auto& cause : fact.causes) {
+            if (!cause.source_address.has_value()) continue;
+            const auto sources =
+                index.instruction_owners.find(*cause.source_address);
+            if (sources == index.instruction_owners.end()) continue;
+            has_owned_source = true;
+            for (const auto source : sources->second) {
+                if (!append_function_edge(source, fact.target_address))
+                    index.call_graph_complete = false;
+            }
+        }
+        if (!has_owned_source && fact.target_address != 0u)
+            index.exact_external_entries.insert(fact.target_address);
+    }
+    for (const auto entry : external_entries) {
+        index.exact_external_entries.insert(entry);
+        std::set<std::uint32_t> owners;
+        if (index.function_entries.contains(entry)) owners.insert(entry);
+        if (const auto found = index.entry_owners.find(entry);
+            found != index.entry_owners.end())
+            owners.insert(found->second.begin(), found->second.end());
+        if (const auto found = index.instruction_owners.find(entry);
+            found != index.instruction_owners.end())
+            owners.insert(found->second.begin(), found->second.end());
+        if (owners.size() != 1u) {
+            index.external_root_ownership_complete = false;
+            continue;
+        }
+        index.external_function_roots.insert(*owners.begin());
+    }
+    for (const auto entry : index.exact_external_entries) {
+        if (std::find(external_entries.begin(), external_entries.end(), entry) !=
+            external_entries.end())
+            continue;
+        std::set<std::uint32_t> owners;
+        if (index.function_entries.contains(entry)) owners.insert(entry);
+        if (const auto found = index.entry_owners.find(entry);
+            found != index.entry_owners.end())
+            owners.insert(found->second.begin(), found->second.end());
+        if (const auto found = index.instruction_owners.find(entry);
+            found != index.instruction_owners.end())
+            owners.insert(found->second.begin(), found->second.end());
+        if (owners.size() != 1u) {
+            index.external_root_ownership_complete = false;
+            continue;
+        }
+        index.external_function_roots.insert(*owners.begin());
+    }
     return index;
+}
+
+struct NativePortHookCoverageProof final {
+    bool valid = false;
+    std::string reason;
+};
+
+NativePortHookCoverageProof prove_native_port_hook_coverage(
+    const NativePortProgramIndex& index,
+    std::span<const std::uint32_t> native_resume_entries,
+    const katana::runtime::NativePortHookBinding& hook,
+    std::uint32_t instruction_address);
+
+std::set<std::uint32_t> native_port_reachable_function_entries(
+    const NativePortProgramIndex& index,
+    const std::span<const std::uint32_t> replacement_entries) {
+    const std::set<std::uint32_t> replacements(replacement_entries.begin(),
+                                                replacement_entries.end());
+    std::set<std::uint32_t> reachable;
+    std::vector<std::uint32_t> pending(index.external_function_roots.begin(),
+                                       index.external_function_roots.end());
+    while (!pending.empty()) {
+        const auto entry = pending.back();
+        pending.pop_back();
+        if (!reachable.insert(entry).second || replacements.contains(entry))
+            continue;
+        const auto outgoing = index.outgoing_function_entries.find(entry);
+        if (outgoing == index.outgoing_function_entries.end()) continue;
+        pending.insert(pending.end(), outgoing->second.begin(),
+                       outgoing->second.end());
+    }
+    return reachable;
+}
+
+std::set<std::uint32_t> native_port_reachability_eliminated_sites(
+    const NativePortProgramIndex& index,
+    const katana::runtime::NativePortDefinition& definition,
+    const std::span<const std::uint32_t> native_resume_entries,
+    const std::set<std::uint32_t>& instruction_addresses) {
+    // Negative reachability is a product proof only when every call/transfer
+    // edge and every externally callable entry has one exact owner.  A
+    // best-effort call graph may still guide diagnostics, but it must never
+    // erase a hardware requirement.
+    if (!index.call_graph_complete ||
+        !index.external_root_ownership_complete ||
+        index.external_function_roots.empty())
+        return {};
+    std::vector<std::uint32_t> replacement_entries;
+    for (const auto& hook : definition.hooks) {
+        if (hook.kind != katana::runtime::NativePortHookKind::FunctionEntry ||
+            !katana::runtime::native_port_hook_closes_product_contract(
+                hook.requirement) ||
+            hook.original_policy !=
+                katana::runtime::NativePortHookOriginalPolicy::
+                    ReplacesOriginal)
+            continue;
+        const auto proof = prove_native_port_hook_coverage(
+            index, native_resume_entries, hook, hook.guest_address);
+        if (proof.valid) replacement_entries.push_back(hook.guest_address);
+    }
+    std::sort(replacement_entries.begin(), replacement_entries.end());
+    replacement_entries.erase(
+        std::unique(replacement_entries.begin(), replacement_entries.end()),
+        replacement_entries.end());
+    const auto baseline = native_port_reachable_function_entries(index, {});
+    const auto after = native_port_reachable_function_entries(
+        index, replacement_entries);
+
+    std::set<std::uint32_t> eliminated;
+    for (const auto instruction_address : instruction_addresses) {
+        const auto owners =
+            index.instruction_owners.find(instruction_address);
+        if (owners == index.instruction_owners.end() ||
+            owners->second.size() != 1u)
+            continue;
+        const auto owner = *owners->second.begin();
+        if (baseline.contains(owner) && !after.contains(owner))
+            eliminated.insert(instruction_address);
+    }
+    return eliminated;
 }
 
 std::set<std::uint32_t> native_port_covering_function_entries(
@@ -17214,23 +17790,17 @@ std::set<std::uint32_t> native_port_covering_function_entries(
         index.instruction_owners.find(instruction_address);
     if (materialized != index.instruction_owners.end())
         owners.insert(materialized->second.begin(), materialized->second.end());
-    for (const auto& [entry, sizes] : index.exact_function_sizes) {
+    for (const auto& [entry, evidence] : index.function_boundaries) {
+        static_cast<void>(evidence);
         if (instruction_address < entry) break;
-        for (const auto size : sizes) {
-            if (static_cast<std::uint64_t>(instruction_address) + 2u <=
-                static_cast<std::uint64_t>(entry) + size) {
-                owners.insert(entry);
-                break;
-            }
-        }
+        const auto boundary = native_port_function_boundary(index, entry);
+        if (boundary.has_value() &&
+            static_cast<std::uint64_t>(instruction_address) + 2u <=
+                static_cast<std::uint64_t>(entry) + boundary->size)
+            owners.insert(entry);
     }
     return owners;
 }
-
-struct NativePortHookCoverageProof final {
-    bool valid = false;
-    std::string reason;
-};
 
 NativePortHookCoverageProof prove_native_port_hook_coverage(
     const NativePortProgramIndex& index,
@@ -17290,11 +17860,9 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
     if (instruction_address < hook.guest_address ||
         static_cast<std::uint64_t>(instruction_address) + 2u > hook_end)
         return {false, "instruction-outside-function-hook"};
-    const auto exact_sizes =
-        index.exact_function_sizes.find(hook.guest_address);
-    if (exact_sizes == index.exact_function_sizes.end() ||
-        exact_sizes->second.size() != 1u ||
-        *exact_sizes->second.begin() != hook.covered_size)
+    const auto boundary =
+        native_port_function_boundary(index, hook.guest_address);
+    if (!boundary.has_value() || boundary->size != hook.covered_size)
         return {false, "function-hook-exact-boundary-unproven"};
     const auto owners =
         native_port_covering_function_entries(index, instruction_address);
@@ -17335,6 +17903,9 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
     if (std::any_of(index.seed_entries.begin(),
                     index.seed_entries.end(), is_interior))
         return {false, "function-hook-interior-seed-entry"};
+    if (std::any_of(index.exact_external_entries.begin(),
+                    index.exact_external_entries.end(), is_interior))
+        return {false, "function-hook-interior-external-entry"};
     // Auto-generated resume labels are an internal compilation detail. The
     // native product dispatcher filters every block/resume strictly inside a
     // proven whole-function replacement, so those dormant labels are not an
@@ -17360,14 +17931,16 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
             *instruction->second.begin() != hook.guest_address)
             return {false, "function-hook-overlapping-ir-owner"};
     }
-    for (const auto& [entry, sizes] : index.exact_function_sizes) {
+    for (const auto& [entry, evidence] : index.function_boundaries) {
+        static_cast<void>(evidence);
         if (entry == hook.guest_address) continue;
-        for (const auto size : sizes) {
-            const auto other_end = static_cast<std::uint64_t>(entry) + size;
-            if (static_cast<std::uint64_t>(entry) < hook_end &&
-                static_cast<std::uint64_t>(hook.guest_address) < other_end)
-                return {false, "function-hook-overlapping-exact-function"};
-        }
+        const auto other = native_port_function_boundary(index, entry);
+        if (!other.has_value()) continue;
+        const auto other_end =
+            static_cast<std::uint64_t>(entry) + other->size;
+        if (static_cast<std::uint64_t>(entry) < hook_end &&
+            static_cast<std::uint64_t>(hook.guest_address) < other_end)
+            return {false, "function-hook-overlapping-exact-function"};
     }
     for (auto incoming = index.incoming_instruction_addresses.upper_bound(
              hook.guest_address);
@@ -17419,12 +17992,40 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     for (const auto& reference : audit.references)
         known_hardware_instructions.insert(reference.instruction_address);
     result.known_hardware_sites = known_hardware_instructions.size();
+    std::set<std::uint32_t> unknown_instruction_addresses;
+    for (const auto& diagnostic : audit.instruction_diagnostics)
+        unknown_instruction_addresses.insert(diagnostic.address);
+    result.unknown_instruction_sites = unknown_instruction_addresses.size();
+    std::set<std::uint32_t> audited_instruction_addresses =
+        known_hardware_instructions;
+    audited_instruction_addresses.insert(
+        unknown_instruction_addresses.begin(),
+        unknown_instruction_addresses.end());
+    for (const auto& site : audit.unresolved_memory_instruction_sites)
+        audited_instruction_addresses.insert(site.instruction_address);
+    result.replacement_reachability_proven =
+        program_index.call_graph_complete &&
+        program_index.external_root_ownership_complete &&
+        !program_index.external_function_roots.empty();
+    result.reachability_eliminated_sites =
+        native_port_reachability_eliminated_sites(
+            program_index,
+            *definition,
+            native_resume_entries,
+            audited_instruction_addresses);
+    if (!program_index.external_root_ownership_complete ||
+        program_index.external_function_roots.empty())
+        result.gaps.push_back(
+            {0u, "native-product-root-ownership-unproven"});
 
     const auto proven_hooks =
         [&](const std::uint32_t instruction_address) {
             std::vector<const katana::runtime::NativePortHookBinding*>
                 candidates;
             for (const auto& hook : definition->hooks) {
+                if (!katana::runtime::native_port_hook_closes_product_contract(
+                        hook.requirement))
+                    continue;
                 const auto proof = prove_native_port_hook_coverage(
                     program_index,
                     native_resume_entries,
@@ -17436,6 +18037,11 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
         };
     const auto admit = [&](const std::uint32_t instruction_address,
                            const std::string_view missing_reason) {
+        if (result.reachability_eliminated_sites.contains(
+                instruction_address)) {
+            ++result.eliminated_by_replacement_reachability;
+            return true;
+        }
         const auto found = resolutions.find(instruction_address);
         if (found != resolutions.end()) {
             const auto& resolution = *found->second;
@@ -17451,6 +18057,13 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                 result.gaps.push_back(
                     {instruction_address,
                      "hardware-hook-binding-missing"});
+                return false;
+            }
+            if (!katana::runtime::native_port_hook_closes_product_contract(
+                    hook->requirement)) {
+                result.gaps.push_back(
+                    {instruction_address,
+                     "hardware-hook-does-not-close-product-contract"});
                 return false;
             }
             const auto proof = prove_native_port_hook_coverage(
@@ -17486,12 +18099,8 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
 
     std::set<std::uint32_t> hook_required_instructions =
         known_hardware_instructions;
-    std::set<std::uint32_t> unknown_instruction_addresses;
-    for (const auto& diagnostic : audit.instruction_diagnostics)
-        unknown_instruction_addresses.insert(diagnostic.address);
     hook_required_instructions.insert(unknown_instruction_addresses.begin(),
                                       unknown_instruction_addresses.end());
-    result.unknown_instruction_sites = unknown_instruction_addresses.size();
     for (const auto address : hook_required_instructions)
         admit(address, "native-hook-missing");
     result.unresolved_memory_sites =
@@ -17500,6 +18109,11 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
          audit.unresolved_memory_instruction_sites) {
         if (hook_required_instructions.contains(site.instruction_address))
             continue;
+        if (result.reachability_eliminated_sites.contains(
+                site.instruction_address)) {
+            ++result.eliminated_by_replacement_reachability;
+            continue;
+        }
         if (resolutions.contains(site.instruction_address) ||
             !proven_hooks(site.instruction_address).empty()) {
             admit(site.instruction_address,
@@ -17542,7 +18156,7 @@ std::string native_port_hardware_closure_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hardware-closure.v3",
+        "katana.native-port-hardware-closure.v4",
         "native-port-hardware-closure");
     output << ",\"definition_present\":"
            << (closure.definition_present ? "true" : "false")
@@ -17553,6 +18167,10 @@ std::string native_port_hardware_closure_json(
            << ",\"unresolved_memory_sites\":"
            << closure.unresolved_memory_sites
            << ",\"replaced_by_hook\":" << closure.replaced_by_hook
+           << ",\"eliminated_by_replacement_reachability\":"
+           << closure.eliminated_by_replacement_reachability
+           << ",\"replacement_reachability_proven\":"
+           << (closure.replacement_reachability_proven ? "true" : "false")
            << ",\"guarded_native_memory\":"
            << closure.guarded_native_memory
            << ",\"dynamic_memory_policy\":"
@@ -17568,16 +18186,6 @@ std::string native_port_hardware_closure_json(
     }
     output << "]}";
     return output.str();
-}
-
-std::optional<std::uint32_t> native_port_exact_function_size(
-    const NativePortProgramIndex& index,
-    const std::uint32_t entry_address) {
-    const auto found = index.exact_function_sizes.find(entry_address);
-    if (found == index.exact_function_sizes.end() ||
-        found->second.size() != 1u)
-        return std::nullopt;
-    return *found->second.begin();
 }
 
 std::optional<std::string> native_port_code_identity(
@@ -17811,7 +18419,7 @@ std::string native_port_hook_requirements_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hook-requirements.v1",
+        "katana.native-port-hook-requirements.v2",
         "native-port-hook-requirements");
     output << ",\"definition_present\":"
            << (definition != nullptr ? "true" : "false")
@@ -17819,6 +18427,8 @@ std::string native_port_hook_requirements_json(
            << katana::io::quote_json(
                   "structural-candidates-and-native-service-requirements")
            << ",\"semantic_title_binding_required\":true"
+           << ",\"replacement_reachability_proven\":"
+           << (closure.replacement_reachability_proven ? "true" : "false")
            << ",\"known_hardware_sites\":" << references_by_site.size()
            << ",\"unknown_instruction_sites\":"
            << diagnostics_by_site.size()
@@ -17910,7 +18520,11 @@ std::string native_port_hook_requirements_json(
                    << katana::io::quote_json(reference.register_name)
                    << '}';
         }
-        output << "],\"resolution\":";
+        output << "],\"eliminated_by_replacement_reachability\":"
+               << (closure.reachability_eliminated_sites.contains(site)
+                       ? "true"
+                       : "false")
+               << ",\"resolution\":";
         const auto resolution = resolutions.find(site);
         if (resolution == resolutions.end()) {
             output << "null";
@@ -17978,7 +18592,11 @@ std::string native_port_hook_requirements_json(
                    << katana::io::quote_json(diagnostics[index]->reason)
                    << '}';
         }
-        output << "],\"gaps\":[";
+        output << "],\"eliminated_by_replacement_reachability\":"
+               << (closure.reachability_eliminated_sites.contains(site)
+                       ? "true"
+                       : "false")
+               << ",\"gaps\":[";
         const auto gaps = gap_reasons.find(site);
         if (gaps != gap_reasons.end()) {
             for (std::size_t index = 0u; index < gaps->second.size(); ++index) {
@@ -18001,8 +18619,12 @@ std::string native_port_hook_requirements_json(
     std::size_t candidate_index = 0u;
     for (const auto& [entry, candidate] : candidates) {
         if (candidate_index++ != 0u) output << ',';
-        const auto exact_size =
-            native_port_exact_function_size(program_index, entry);
+        const auto boundary =
+            native_port_function_boundary(program_index, entry);
+        const auto exact_size = boundary.has_value()
+                                    ? std::optional<std::uint32_t>{
+                                          boundary->size}
+                                    : std::nullopt;
         const auto identity =
             exact_size.has_value()
                 ? native_port_code_identity(image, entry, *exact_size)
@@ -18044,6 +18666,12 @@ std::string native_port_hook_requirements_json(
             output << *exact_size;
         else
             output << "null";
+        output << ",\"boundary_proof\":";
+        if (boundary.has_value())
+            output << katana::io::quote_json(
+                native_port_function_boundary_proof_name(boundary->proof));
+        else
+            output << "null";
         output << ",\"code_identity\":";
         if (identity.has_value())
             output << katana::io::quote_json(*identity);
@@ -18071,7 +18699,16 @@ std::string native_port_hook_requirements_json(
                << ",\"unknown_instruction_site_count\":"
                << candidate.unknown_instruction_sites.size()
                << ",\"dynamic_memory_site_count\":"
-               << candidate.dynamic_memory_sites << ",\"regions\":[";
+               << candidate.dynamic_memory_sites
+               << ",\"reachability_eliminated_requirement_site_count\":"
+               << std::count_if(
+                      candidate.requirement_sites.begin(),
+                      candidate.requirement_sites.end(),
+                      [&](const auto site) {
+                          return closure.reachability_eliminated_sites.contains(
+                              site);
+                      })
+               << ",\"regions\":[";
         std::size_t region_index = 0u;
         for (const auto region : candidate.regions) {
             if (region_index++ != 0u) output << ',';
@@ -18660,8 +19297,31 @@ static PortExportResult export_dreamcast_port_project_impl(
             : hardware_audit;
     const auto native_hardware_audit = combine_native_hardware_audits(
         primary_native_hardware_audit, latent_aot.modules);
+    std::vector<std::uint32_t> native_product_external_entries(
+        prepared.image.entry_points().begin(),
+        prepared.image.entry_points().end());
+    native_product_external_entries.insert(
+        native_product_external_entries.end(),
+        options.native_aot_resume_entries.begin(),
+        options.native_aot_resume_entries.end());
+    if (native_port_definition != nullptr) {
+        for (const auto& continuation :
+             native_port_definition->bootstrap.post_aot_continuations)
+            native_product_external_entries.push_back(
+                continuation.resume_address);
+    }
+    std::sort(native_product_external_entries.begin(),
+              native_product_external_entries.end());
+    native_product_external_entries.erase(
+        std::unique(native_product_external_entries.begin(),
+                    native_product_external_entries.end()),
+        native_product_external_entries.end());
     const auto native_port_program_index = build_native_port_program_index(
-        emitted_program, prepared.analysis, options.game_project);
+        emitted_program,
+        prepared.analysis,
+        options.game_project,
+        options.native_port_definition,
+        native_product_external_entries);
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
             if (!katana::runtime::native_port_hook_is_executable(
@@ -20106,7 +20766,8 @@ PortExportResult export_dreamcast_port_project(
         apply_game_project_symbols(
             image,
             *options.game_project,
-            options.native_port_definition == nullptr);
+            options.native_port_definition == nullptr,
+            options.native_port_definition);
     }
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
@@ -20273,7 +20934,8 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         apply_game_project_symbols(
             image,
             *options.game_project,
-            options.native_port_definition == nullptr);
+            options.native_port_definition == nullptr,
+            options.native_port_definition);
     }
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);

@@ -1145,6 +1145,13 @@ std::string make_boot_analysis_cache_key(
             append_key_value(canonical, function.line);
             append_key_value(canonical, function.size);
         }
+        append_key_value(
+            canonical, overrides->function_boundaries.size());
+        for (const auto& boundary : overrides->function_boundaries) {
+            append_key_value(canonical, boundary.address);
+            append_key_value(canonical, boundary.line);
+            append_key_value(canonical, boundary.size);
+        }
         append_key_value(canonical, overrides->jumps.size());
         for (const auto& jump : overrides->jumps) {
             append_key_value(canonical, jump.instruction_address);
@@ -1169,6 +1176,7 @@ std::string make_boot_analysis_cache_key(
                 static_cast<std::underlying_type_t<
                     katana::analysis::JumpTableOverrideTransfer>>(
                     table.transfer));
+            append_key_value(canonical, table.require_dispatch);
         }
     }
     return katana::io::sha256_bytes(canonical.str());
@@ -1432,6 +1440,21 @@ bool validate_boot_analysis_cache_source_binding(
                 if (!inserted && existing->second != function.size)
                     return false;
             }
+            for (const auto& boundary : overrides->function_boundaries) {
+                if (boundary.size == 0u ||
+                    (boundary.size & 1u) != 0u)
+                    return false;
+                const auto* segment = image.find_segment(
+                    boundary.address, boundary.size);
+                if (segment == nullptr ||
+                    !segment->permissions.executable)
+                    return false;
+                const auto [existing, inserted] =
+                    exact_function_sizes.emplace(
+                        boundary.address, boundary.size);
+                if (!inserted && existing->second != boundary.size)
+                    return false;
+            }
         }
 
         for (const auto address : function_roots) {
@@ -1550,7 +1573,10 @@ bool validate_boot_analysis_cache_source_binding(
                 const auto dispatch =
                     line_by_address.find(
                         declaration.dispatch_address);
-                if (dispatch == line_by_address.end()) return false;
+                if (dispatch == line_by_address.end()) {
+                    if (declaration.require_dispatch) return false;
+                    continue;
+                }
                 const auto lowered = katana::ir::lower_instruction(
                     current_lines[dispatch->second]);
                 const auto is_call =

@@ -2,8 +2,8 @@
 
 Status: historischer RuntimeOnly-/PlatformAbi-Performancevertrag. Ab v0.49.1
 hat `NATIVE_PORT_PRODUCT_CONTRACT.md` Vorrang; aktive Sourcewerte sind
-Runtime-ABI 97, Analyzer-ABI 36, Portprojektvertrag 86 und Native-Port-
-Profilvertrag 10. Das aktuelle Native-AOT-Emissionsprofil ist 29; das AOT-
+Runtime-ABI 98, Analyzer-ABI 37, Portprojektvertrag 87 und Native-Port-
+Profilvertrag 11. Das aktuelle Native-AOT-Emissionsprofil ist 29; das AOT-
 Partitionsschema ist 7. Die folgenden Angaben beschreiben das interne
 Diagnoseorakel und sind keine Produktarchitektur. Der historische opt-in
 Modus `port --analysis-mode runtime-only` war nur mit `--game-project`

@@ -4,6 +4,30 @@
 
 ### Geaendert
 
+- Der aktuelle KR-5005-Meilenstein schliesst die generische
+  Post-Bootstrap-/AOT- und Closure-Pruefung: materialisierte Post-Bytes werden
+  gegen jedes emittierte Instruktionswort validiert, exakte Non-Root-Grenzen,
+  edge-only JumpTables, image_id-gebundene Metadaten, CallbackTable-Roots,
+  sichere Replacement-Reachability und begrenzte Callback-Reentrys sind
+  gebunden. Der verschachtelte statische AOT-Fehlertransport liefert den
+  typisierten Hook-Abbruch `0x53414704`; Linkmap-/PE-Importaudit und
+  historische CpuState-Bindungen bleiben fail-closed.
+
+- Der inkrementelle `katana-recomp`-Release-Build mit 24 Jobs war in `18,8 s`
+  erfolgreich. Exporte erreichten nach Vertragsinvalidierung `1.812` Funktionen,
+  `44` Partitionen und `44/0` Codegen-Hits/Misses; der Folgeexport nach dem
+  Nested-AOT-Fehlerfix erreichte erneut `44/44` Hits und bestand den strukturellen
+  Linkaudit. Der Produktlauf erreichte den ersten nativen untexturierten Draw
+  und anschliessend den Sprite-Texture-Pfad, endete jedoch typisiert mit
+  `0x53414704`. Der aktive P0 ist die generische Content-zu-Texture-Pipeline;
+  Bootstrap, AOT und Linkaudit sind keine offenen Produktblocker.
+
+- Aktueller Vertragsstand: Runtime-ABI `98`, Analyzer-ABI `37`,
+  Backend-Interface-ABI `20`, Portprojektvertrag `87`, Native-Port-Profilvertrag
+  `11`, GameProject-Vertrag `7` mit Artefaktformat `6`, Analysis-Directives-
+  Version `3` und Native-AOT-Emissionsprofil `29`. Historische Eintraege
+  behalten ihre damaligen Versionsstaende.
+
 - Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
   Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare
   Continuations durch Analyse, CFG, Optimierung und Export. Die Acceptance-
@@ -13,12 +37,10 @@
   zunaechst ein D3D11-Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist
   spaeter geplant und aktuell keine Abnahme.
 
-- Der aktuelle inkompatible Vertragsstand ist Runtime-ABI `97`, Analyzer-ABI
-  `36`, Backend-Interface-ABI `20`, Portprojektvertrag `86`, Native-Port-
-  Profilvertrag `10`, Native-AOT-Emissionsprofil `29`, GameProject-Vertrag
-  `6` mit Artefaktformat `5` und NativePort-Artifact-Format `7`. Diese Angaben
-  gelten fuer den aktuellen Snapshot; historische Eintraege behalten ihre
-  damaligen Versionsstaende.
+- Die unmittelbar folgende historische Architektur-Runde verwendete noch
+  Runtime-ABI `97`, Analyzer-ABI `36`, Portprojektvertrag `86`, Native-Port-
+  Profilvertrag `10` und GameProject-Vertrag `6` mit Artefaktformat `5`; diese
+  Angaben bleiben als damaliger Stand gebunden.
 
 - Die interne Pre-Alpha-Version steigt auf `0.49.1`. `0.50.0` bleibt die
   erste Alpha und wird exakt durch das erste rein nativ erreichte Sonic-

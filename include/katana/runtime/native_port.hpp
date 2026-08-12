@@ -264,8 +264,10 @@ struct NativePortImmutableRange final {
 };
 
 // The generated product owns these two bridges. Native title hooks can invoke
-// the exact displaced original entry or re-enter statically recompiled game
-// code without a runtime address lookup, decoder or interpreter fallback.
+// the exact displaced original entry or re-enter an identity-bound external
+// callback root which participated in static analysis, without a runtime
+// address lookup, decoder or interpreter fallback. Arbitrary AOT entries are
+// deliberately not callback capabilities.
 using NativePortAotEntryBridge = NativePortHookResult (*)(
     NativePortContext& context,
     std::uint32_t guest_address) noexcept;

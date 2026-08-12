@@ -126,6 +126,22 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                 {parse_number(fields[0], 16, path, line_number, "function"),
                  line_number,
                  size});
+        } else if (key == "function_boundary" && fields.size() == 2u) {
+            const auto size = parse_number(
+                fields[1], 16, path, line_number, "function-boundary-size");
+            if (size == 0u || (size & 1u) != 0u)
+                fail(path,
+                     line_number,
+                     "function-boundary-size muss eine positive gerade "
+                     "Bytegroesse sein.");
+            overrides.function_boundaries.push_back(
+                {parse_number(fields[0],
+                              16,
+                              path,
+                              line_number,
+                              "function-boundary"),
+                 line_number,
+                 size});
         } else if (key == "jump" && fields.size() == 2u) {
             overrides.jumps.push_back(
                 {parse_number(fields[0], 16, path, line_number, "jump-address"),
@@ -137,6 +153,14 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                  parse_number(fields[1], 16, path, line_number, "table-address"),
                  parse_number(fields[2], 10, path, line_number, "entry-count"),
                  line_number});
+        } else if (key == "jump_table_edge" && fields.size() == 3u) {
+            JumpTableOverride table{
+                parse_number(fields[0], 16, path, line_number, "dispatch-address"),
+                parse_number(fields[1], 16, path, line_number, "table-address"),
+                parse_number(fields[2], 10, path, line_number, "entry-count"),
+                line_number};
+            table.require_dispatch = false;
+            overrides.jump_tables.push_back(table);
         } else {
             fail(path, line_number, "unbekanntes Feld oder falsche Feldanzahl: " + key + ".");
         }
@@ -148,8 +172,9 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
     if (!saw_version) {
         fail(path, 0u, "Pflichtfeld version fehlt.");
     }
-    if (overrides.version != 1u && overrides.version != analysis_directives_current_version) {
-        fail(path, 0u, "nur Analyseanweisungs-Version 1 oder 2 wird unterstuetzt.");
+    if (overrides.version != 1u && overrides.version != 2u &&
+        overrides.version != analysis_directives_current_version) {
+        fail(path, 0u, "nur Analyseanweisungs-Version 1, 2 oder 3 wird unterstuetzt.");
     }
     if (overrides.version == 1u) {
         if (saw_schema || saw_mode) {
@@ -157,12 +182,25 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         }
         overrides.mode = AnalysisDirectiveMode::Override;
     } else if (!saw_schema || !saw_mode) {
-        fail(path, 0u, "Version 2 braucht schema und mode.");
+        fail(path, 0u, "Version 2 und 3 brauchen schema und mode.");
     }
+
+    if (overrides.version < 3u && !overrides.function_boundaries.empty())
+        fail(path, 0u, "function_boundary braucht Analyseanweisungs-Version 3.");
+    if (overrides.version < 3u &&
+        std::any_of(overrides.jump_tables.begin(),
+                    overrides.jump_tables.end(),
+                    [](const auto& table) { return !table.require_dispatch; }))
+        fail(path, 0u, "jump_table_edge braucht Analyseanweisungs-Version 3.");
 
     std::sort(overrides.functions.begin(),
               overrides.functions.end(),
               [](const auto& left, const auto& right) { return left.address < right.address; });
+    std::sort(overrides.function_boundaries.begin(),
+              overrides.function_boundaries.end(),
+              [](const auto& left, const auto& right) {
+                  return left.address < right.address;
+              });
     std::sort(
         overrides.jumps.begin(), overrides.jumps.end(), [](const auto& left, const auto& right) {
             return left.instruction_address < right.instruction_address;
@@ -178,6 +216,13 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                                return left.address == right.address;
                            }) != overrides.functions.end()) {
         fail(path, 0u, "doppelter function-Eintrag.");
+    }
+    if (std::adjacent_find(overrides.function_boundaries.begin(),
+                           overrides.function_boundaries.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.address == right.address;
+                           }) != overrides.function_boundaries.end()) {
+        fail(path, 0u, "doppelter function_boundary-Eintrag.");
     }
     if (std::adjacent_find(overrides.jumps.begin(),
                            overrides.jumps.end(),

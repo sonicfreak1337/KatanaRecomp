@@ -575,10 +575,8 @@ void validate_game_project_definition(
     std::size_t runtime_image_total_size = 0u;
     std::vector<std::string_view> runtime_image_ids;
     std::vector<RuntimeImageRange> runtime_image_source_ranges;
-    std::vector<RuntimeImageRange> runtime_image_runtime_ranges;
     runtime_image_ids.reserve(definition.runtime_images.size());
     runtime_image_source_ranges.reserve(definition.runtime_images.size());
-    runtime_image_runtime_ranges.reserve(definition.runtime_images.size());
     for (const auto& image : definition.runtime_images) {
         if (image.image_id.empty() ||
             image.image_id.find('=') != std::string_view::npos)
@@ -619,16 +617,10 @@ void validate_game_project_definition(
 
         const auto source_physical =
             direct_mapped_physical(image.source_start);
-        const auto runtime_physical =
-            direct_mapped_physical(image.runtime_start);
         runtime_image_ids.push_back(image.image_id);
         runtime_image_source_ranges.push_back(
             {source_physical, static_cast<std::uint64_t>(source_physical) +
                                   image.byte_size});
-        runtime_image_runtime_ranges.push_back(
-            {runtime_physical,
-             static_cast<std::uint64_t>(runtime_physical) +
-                 image.byte_size});
     }
     std::sort(runtime_image_ids.begin(), runtime_image_ids.end());
     if (std::adjacent_find(
@@ -636,6 +628,45 @@ void validate_game_project_definition(
         runtime_image_ids.end())
         throw std::invalid_argument(
             "game-project-runtime-image-id-duplicate");
+    const auto require_metadata_scope =
+        [&](const std::string_view image_id,
+            const std::uint32_t address,
+            const std::uint32_t size,
+            const char* const error) {
+            if (image_id.empty()) return;
+            const auto image = std::find_if(
+                definition.runtime_images.begin(),
+                definition.runtime_images.end(),
+                [&](const auto& candidate) {
+                    return candidate.image_id == image_id;
+                });
+            if (image == definition.runtime_images.end() ||
+                address < image->source_start ||
+                static_cast<std::uint64_t>(address) + size >
+                    static_cast<std::uint64_t>(image->source_start) +
+                        image->byte_size)
+                throw std::invalid_argument(error);
+        };
+    for (const auto& function : definition.function_boundaries)
+        require_metadata_scope(function.image_id,
+                               function.start,
+                               function.size,
+                               "game-project-function-image-scope-invalid");
+    for (const auto& table : definition.jump_tables)
+        require_metadata_scope(table.image_id,
+                               table.dispatch_address,
+                               2u,
+                               "game-project-jump-table-image-scope-invalid");
+    for (const auto& table : definition.callback_tables)
+        require_metadata_scope(table.image_id,
+                               table.table_address,
+                               sizeof(std::uint32_t),
+                               "game-project-callback-table-image-scope-invalid");
+    for (const auto& identity : definition.code_identities)
+        require_metadata_scope(identity.image_id,
+                               identity.address,
+                               identity.size,
+                               "game-project-code-identity-image-scope-invalid");
     const auto require_nonoverlapping_runtime_image_ranges =
         [](auto& ranges, const char* error) {
             std::sort(
@@ -653,20 +684,9 @@ void validate_game_project_definition(
     require_nonoverlapping_runtime_image_ranges(
         runtime_image_source_ranges,
         "game-project-runtime-image-source-ranges-overlap");
-    require_nonoverlapping_runtime_image_ranges(
-        runtime_image_runtime_ranges,
-        "game-project-runtime-image-runtime-ranges-overlap");
-    for (const auto source : runtime_image_source_ranges) {
-        if (std::any_of(
-                runtime_image_runtime_ranges.begin(),
-                runtime_image_runtime_ranges.end(),
-                [&](const auto runtime) {
-                    return source.physical_start < runtime.physical_end &&
-                           runtime.physical_start < source.physical_end;
-                }))
-            throw std::invalid_argument(
-                "game-project-runtime-image-source-runtime-ranges-alias");
-    }
+    // Runtime destinations belong to mutually exclusive image lifetimes.
+    // Their overlap is therefore checked for the selected active set by the
+    // exporter, not globally across dormant overlays in the project catalog.
 
     require_strictly_sorted(
         definition.function_overrides,
@@ -815,18 +835,20 @@ std::string game_project_definition_identity(
              << ';';
     for (const auto& function : definition.function_boundaries)
         material << "function:" << function.start << ':' << function.size << ':'
-                 << function.symbol << ';';
+                 << function.symbol << ':' << function.image_id << ';';
     for (const auto& table : definition.jump_tables)
         material << "jump-table:" << table.dispatch_address << ':'
                  << table.table_address << ':' << table.entry_count << ':'
                  << table.entry_stride << ':' << table.relative_base << ':'
-                 << static_cast<unsigned>(table.encoding) << ':'
-                 << static_cast<unsigned>(table.transfer) << ';';
+                  << static_cast<unsigned>(table.encoding) << ':'
+                  << static_cast<unsigned>(table.transfer) << ':'
+                  << table.image_id << ';';
     for (const auto& table : definition.callback_tables)
         material << "callback-table:" << table.table_address << ':'
                  << table.entry_count << ':' << table.entry_stride << ':'
-                 << table.pointer_offset << ':'
-                 << static_cast<unsigned>(table.transfer) << ';';
+                  << table.pointer_offset << ':'
+                  << static_cast<unsigned>(table.transfer) << ':'
+                  << table.image_id << ';';
     for (const auto& native_template : definition.runtime_code_templates) {
         material << "runtime-template:" << native_template.source_module_id
                  << ':' << native_template.expected_source_identity << ':'
@@ -871,7 +893,8 @@ std::string game_project_definition_identity(
                  << ';';
     for (const auto& identity : definition.code_identities)
         material << "code-identity:" << identity.address << ':'
-                 << identity.size << ':' << identity.byte_identity << ';';
+                 << identity.size << ':' << identity.byte_identity << ':'
+                 << identity.image_id << ';';
     if (definition.boot_config.has_value()) {
         const auto& config = *definition.boot_config;
         material << "direct-boot:" << static_cast<unsigned>(config.firmware_mode)

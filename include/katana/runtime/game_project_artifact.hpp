@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t game_project_artifact_format_version = 5u;
+inline constexpr std::uint32_t game_project_artifact_format_version = 6u;
 inline constexpr std::uint64_t game_project_artifact_maximum_size =
     96u * 1024u * 1024u;
 
@@ -59,13 +59,17 @@ class GameProjectArtifact final {
         RequiredProductMilestone::FirstVisibleGameFrame;
 
     std::vector<std::string> function_symbols_;
+    std::vector<std::string> function_image_ids_;
     std::vector<GameProjectFunctionBoundary> function_boundaries_;
+    std::vector<std::string> jump_table_image_ids_;
     std::vector<GameProjectJumpTable> jump_tables_;
+    std::vector<std::string> callback_table_image_ids_;
     std::vector<GameProjectCallbackTable> callback_tables_;
     std::vector<NativeAotTemplate> runtime_code_templates_;
     std::vector<std::string> symbol_names_;
     std::vector<GameProjectSymbol> symbols_;
     std::vector<std::string> code_identity_values_;
+    std::vector<std::string> code_identity_image_ids_;
     std::vector<GameProjectCodeIdentity> code_identities_;
     std::vector<std::string> runtime_image_ids_;
     std::vector<std::string> runtime_image_byte_identities_;

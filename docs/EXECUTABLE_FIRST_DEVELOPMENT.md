@@ -81,8 +81,8 @@ Ein Treffer ist an
 `Analyse-/IR-Cache-Hit: ja` erkennbar. Dieser Whole-Export-Cache gilt fuer
 `port-executable` beziehungsweise `probe-port-executable`; der GDI-basierte
 NativeDiscBoot-Export behaelt seine Partitions- und Metadatencaches.
-Portprojektvertrag 86 bindet den aktuellen Spielprojektvertrag 6,
-GameProject-Artefaktformat 5, die `katana-game-project-v4`-Metadaten und den
+Portprojektvertrag 87 bindet den aktuellen Spielprojektvertrag 7,
+GameProject-Artefaktformat 6, die `katana-game-project-v5`-Metadaten und den
 getrennten Game-Entry-Vertrag in diesen Schluessel und invalidiert damit aeltere
 Whole-Export-Treffer, statt sie mit einer inkompatiblen Runtimegrenze
 wiederzuverwenden.
@@ -126,8 +126,8 @@ nach dem Laden selbst und stellt nur vorvalidierte, hashgebundene Slices
 bereit.
 
 Der aktuelle KR-5000-Stand verwendet GameEntryHandoff-Artefaktformat 2,
-Runtime-ABI 97, Block-ABI 5, Analyzer-ABI 36, PlatformServices-ABI 14,
-Backend-Interface-ABI 20, Portprojektvertrag 86, Native-AOT-Profil 29,
+Runtime-ABI 98, Block-ABI 5, Analyzer-ABI 37, PlatformServices-ABI 14,
+Backend-Interface-ABI 20, Portprojektvertrag 87, Native-AOT-Profil 29,
 Partitionsschema 7 und Plattformzustandsvertrag 2. Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische
 Evidenz und muessen fuer einen spaeteren DirectBoot-Produktlauf neu fuer den
@@ -164,7 +164,7 @@ Performance- und Gesamtpruefungsgate KR-4974 bis KR-4984.
 
 ### Privates Handoff binden
 
-Das externe `GameProjectArtifact` Format 5 besitzt fuer Spielprojektvertrag 6
+Das externe `GameProjectArtifact` Format 6 besitzt fuer Spielprojektvertrag 7
 alle Strings und Arrays
 seiner rein deklarativen Definition. Es serialisiert exakte Funktionsgrenzen,
 Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole, Codeidentitaeten und

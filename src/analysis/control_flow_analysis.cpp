@@ -80,6 +80,22 @@ struct ExactFunctionOwnershipInterval final {
            static_cast<std::uint64_t>(address) < interval.end;
 }
 
+[[nodiscard]] std::uint32_t exact_function_size_at(
+    const std::span<const ExactFunctionOwnershipInterval> intervals,
+    const std::uint32_t address) noexcept {
+    const auto candidate = std::lower_bound(
+        intervals.begin(), intervals.end(), address,
+        [](const auto& interval, const auto value) {
+            return interval.begin < value;
+        });
+    if (candidate == intervals.end() || candidate->begin != address)
+        return 0u;
+    const auto size = candidate->end - candidate->begin;
+    return size <= std::numeric_limits<std::uint32_t>::max()
+               ? static_cast<std::uint32_t>(size)
+               : 0u;
+}
+
 using SeedCause = ControlFlowAnalysisResult::SeedCause;
 using SeedCauseKind = ControlFlowAnalysisResult::SeedCauseKind;
 
@@ -348,7 +364,10 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
                                      evidence.origins.end());
     seed.guarded_candidate = !evidence.proven;
     seed.evidence = evidence.evidence;
-    seed.function_size = evidence.function_size;
+    const auto exact_size = exact_function_size_at(
+        exact_function_ownership, address);
+    seed.function_size = exact_size != 0u ? exact_size
+                                         : evidence.function_size;
     return seed;
 }
 
@@ -2374,7 +2393,47 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
     std::vector<ExactFunctionOwnershipInterval>
         exact_function_ownership;
+    const auto add_exact_function_ownership =
+        [&](const std::uint32_t begin,
+            const std::uint32_t size) {
+            const auto end = static_cast<std::uint64_t>(begin) + size;
+            const auto existing = std::find_if(
+                exact_function_ownership.begin(),
+                exact_function_ownership.end(),
+                [&](const auto& interval) {
+                    return interval.begin == begin;
+                });
+            if (existing != exact_function_ownership.end()) {
+                if (existing->end != end)
+                    throw std::invalid_argument(
+                        "Explizite Funktionsgrenzen widersprechen sich.");
+                return;
+            }
+            exact_function_ownership.push_back({begin, end});
+        };
     if (overrides != nullptr) {
+        if (hints && !overrides->function_boundaries.empty())
+            override_error(
+                *overrides,
+                overrides->function_boundaries.front().line,
+                overrides->function_boundaries.front().address,
+                "function-boundary-requires-override-mode");
+        for (const auto& boundary : overrides->function_boundaries) {
+            if (boundary.size == 0u || (boundary.size & 1u) != 0u)
+                override_error(*overrides,
+                               boundary.line,
+                               boundary.address,
+                               "function-boundary-size-invalid");
+            const auto validation = validate_committed_code_address(
+                image, boundary.address, boundary.size);
+            if (!validation.valid())
+                override_error(*overrides,
+                               boundary.line,
+                               boundary.address,
+                               code_address_status_name(validation.status));
+            add_exact_function_ownership(
+                validation.resolved_address, boundary.size);
+        }
         for (const auto& function : overrides->functions) {
             if ((function.size & 1u) != 0u) {
                 if (hints) {
@@ -2410,10 +2469,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             const std::array origins{hints ? FunctionOrigin::UserHint
                                            : FunctionOrigin::UserOverride};
             if (!hints && function.size != 0u)
-                exact_function_ownership.push_back(
-                    {validation.resolved_address,
-                     static_cast<std::uint64_t>(
-                         validation.resolved_address) + function.size});
+                add_exact_function_ownership(
+                    validation.resolved_address, function.size);
             static_cast<void>(add_seed(seeds,
                                        validation.resolved_address,
                                        origins,
@@ -2484,7 +2541,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                                     evidence.origins.end());
             fact.proven = evidence.proven;
             fact.evidence = evidence.evidence;
-            fact.function_size = evidence.function_size;
+            const auto exact_size = exact_function_size_at(
+                exact_function_ownership, address);
+            fact.function_size = exact_size != 0u ? exact_size
+                                                  : evidence.function_size;
             fact.causes = evidence.causes;
             analysis.seed_facts.push_back(std::move(fact));
         }
@@ -3549,6 +3609,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 if (directive == jump_table_overrides_by_site.end())
                     continue;
                 const auto& table = *directive->second;
+                const auto* dispatch = recursive_index.find(
+                    table.dispatch_address);
+                if (dispatch == nullptr && !table.require_dispatch)
+                    continue;
                 const auto dispatch_validation =
                     validate_committed_code_address(image, table.dispatch_address);
                 if (!dispatch_validation.valid()) {
@@ -3563,11 +3627,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     require_override_code_address(
                         image, *overrides, table.line, table.dispatch_address);
                 }
-                const auto* dispatch = recursive_index.find(
-                    table.dispatch_address);
                 if (dispatch == nullptr) {
-                    missing_override_dispatch = true;
-                    pending_jump_table_override_sites.insert(site);
+                    if (table.require_dispatch) {
+                        missing_override_dispatch = true;
+                        pending_jump_table_override_sites.insert(site);
+                    }
                     continue;
                 }
                 if (dispatch->instruction.kind != katana::sh4::InstructionKind::Jmp &&
@@ -4567,6 +4631,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 }
             }
             for (const auto& table : overrides->jump_tables) {
+                if (!table.require_dispatch) continue;
                 if (recursive_index.find(table.dispatch_address) == nullptr) {
                     if (hints) {
                         analysis.directive_diagnostics.push_back(

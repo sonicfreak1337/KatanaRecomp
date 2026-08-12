@@ -129,6 +129,17 @@ bool valid_native_port_hook_result(
              NativePortHookOriginalPolicy::MayContinueOriginal &&
          result.action == NativePortHookAction::ContinueOriginal))
         return false;
+    // A required whole-function replacement may discharge the original
+    // function's transitive hardware closure.  An unconstrained jump would
+    // reopen that closure at an undeclared AOT target, so closure-closing
+    // replacements are terminal: Return or a typed Abort.  MayContinueOriginal
+    // hooks do not discharge closure and retain the generic Jump action.
+    if (binding.kind == NativePortHookKind::FunctionEntry &&
+        binding.original_policy ==
+            NativePortHookOriginalPolicy::ReplacesOriginal &&
+        native_port_hook_closes_product_contract(binding.requirement) &&
+        result.action == NativePortHookAction::Jump)
+        return false;
     if (binding.kind != NativePortHookKind::Instruction)
         return true;
     // An instruction hook proves and displaces exactly one instruction. It
