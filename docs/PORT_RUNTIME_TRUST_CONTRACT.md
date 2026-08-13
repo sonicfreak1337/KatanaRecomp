@@ -2,9 +2,9 @@
 
 Der mit KR-4508 eingefuehrte Portprojektvertrag Version 3 trennt
 Analyseerfolg, Eingabeidentitaet und tatsaechliche Gastausfuehrung. Der
-aktuelle KR-5005-Stand verwendet Portprojektvertrag 90, Runtime-ABI 102,
+aktuelle KR-5005-Stand verwendet Portprojektvertrag 91, Runtime-ABI 103,
 Analyzer-ABI 40, PlatformServices-ABI 14, Block-ABI 5,
-Backend-Interface-ABI 21, Native-Port-Profilvertrag 13, Native-AOT-Emissionsprofil 32 und
+Backend-Interface-ABI 21, Native-Port-Profilvertrag 14, Native-AOT-Emissionsprofil 33 und
 Portpartitionsschema 7. Historische Diagnose-/Bring-up-Evidenz bleibt an
 ihre damaligen Vertraege gebunden. Keine der Vertrauensaussagen wird aus
 der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.

@@ -1,13 +1,13 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
 Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
-Vorrang. Aktuell gelten Runtime-ABI 102, Analyzer-ABI 40,
-Portprojektvertrag 90 und Native-Port-Profilvertrag 13. Der source-seitige
+Vorrang. Aktuell gelten Runtime-ABI 103, Analyzer-ABI 40,
+Portprojektvertrag 91 und Native-Port-Profilvertrag 14. Der source-seitige
 KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
 Diagnostik. Der damalige RuntimeOnly-Bring-up verwendete Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27 und lokales In-Process-Evaluation-Cache-
-Schema 13. Native-AOT-Emissionsprofil 32 und AOT-Partitionsschema 7 sind
+Schema 13. Native-AOT-Emissionsprofil 33 und AOT-Partitionsschema 7 sind
 aktuell. Der historische Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig und ist jetzt ausschliesslich internes
 Diagnoseorakel, kein Produktprofil. RuntimeOnly setzt `GuestCallAbi::Unknown`,

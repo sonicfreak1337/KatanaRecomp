@@ -222,6 +222,15 @@ D3D11 erzeugt vollstaendige Mip-Subresources; Registry, Materialisierung und
 Release sind transaktional und exceptionsicher. Es gab keinen Sonic-
 Produktlauf; `261` PRS-Dateien sind Nicht-PVM-Inhalte und kein Decoderfehler.
 
+Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
+`katana-content-root.txt` transaktional; der Altport bleibt bis zum
+Publikationscommit autoritativ. Binding-Kollisionen bereinigen nur die
+Teilkopie. RuntimeImages und Loaded-AOT erhalten einen gemeinsamen
+kanonischen Retirement-Aufruf mit vollstaendiger Range-Abdeckung; partielle
+Bereiche, Live-PC/PR, aktive Bloecke und Immutable-Ranges bleiben fail-closed.
+Die generated Dispatch-Scope bindet beide Contextzeiger nur waehrend des
+Dispatches. Dies ist kein Sonic-Produktlauf und keine KR-5005-Abnahme.
+
 ## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
 
 Prioritaet: P0 Alpha-Gate
@@ -250,7 +259,7 @@ Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
 verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
 oder Interpreter-Symbole.
 
-Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `90` auf einem eigenen
+Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `91` auf einem eigenen
 schnellen AOT-Profil: Bring-up verwendet fuer generierte Spiel-TUs `/Od /Ob0`,
 keine gemeinsame MSVC-PDB, einen gemessenen Vierer-Ninja-Pool und 4.096
 Dispatch-Eintraege pro Shard. Runtime, Titeladapter und Bootstrap bleiben
@@ -262,7 +271,7 @@ bei `337,205 s` Hostbuildzeit. Der sichtbare Laufnachweis bleibt offen.
 
 Der erste Start belegte eine native Bootstrapluecke statt eines Sonic-
 Analysefehlers: initiales identity-bound Titel-RAM wurde unter bereits
-aktiven Laufzeitguards geschrieben. Portprojektvertrag `90` materialisiert
+aktiven Laufzeitguards geschrieben. Portprojektvertrag `91` materialisiert
 diesen Zustand jetzt vor Guard/AOT-Aktivierung, sperrt Gastcallbacks bis zur
 erfolgreichen Rueckkehr und validiert danach Pointer, Stopzustand und
 Brueckenvertrag fail-closed.
@@ -353,13 +362,13 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 102, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-  PVR-State-Contract 3, Portprojektvertrag 90, Native-Port-Profilvertrag 13
+  Runtime-ABI 103, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+  PVR-State-Contract 3, Portprojektvertrag 91, Native-Port-Profilvertrag 14
   Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 7/Artefakt 6,
   Analysis Directives 3, Hookkarte v2, Hardware-Closure v4,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 32, AOT-Partitionsschema 7,
+  Native-AOT-Emissionsprofil 33, AOT-Partitionsschema 7,
   Port-Metadata-Cache-Schema 4
 
 historischer Diagnosebefund:

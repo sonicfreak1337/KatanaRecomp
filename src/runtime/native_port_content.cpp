@@ -559,8 +559,24 @@ NativePortRuntimeImageBindings::NativePortRuntimeImageBindings(
     impl_->active.reserve(images.size());
 }
 
-NativePortRuntimeImageBindings::~NativePortRuntimeImageBindings() noexcept =
-    default;
+NativePortRuntimeImageBindings::~NativePortRuntimeImageBindings() noexcept {
+    if (!impl_) return;
+    // Keep the immutable guard reusable when this lifecycle owner ends before
+    // the guard itself. Normal deactivation is strict; destruction can only
+    // perform best-effort cleanup because it must not throw.
+    for (auto active = impl_->active.rbegin();
+         active != impl_->active.rend(); ++active) {
+        const auto& image = impl_->images[active->image_index];
+        for (const auto& block : image.block_identities) {
+            try {
+                impl_->immutable_guard.remove_runtime_executable_range(
+                    image.runtime_start + block.source_offset,
+                    block.byte_size);
+            } catch (...) {
+            }
+        }
+    }
+}
 
 void NativePortRuntimeImageBindings::activate(
     const std::string_view image_id) {
@@ -642,14 +658,8 @@ void NativePortRuntimeImageBindings::activate(
 std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
     std::uint32_t runtime_start,
     const std::size_t byte_size) {
+    validate_deactivate_runtime_range(runtime_start, byte_size);
     runtime_start = canonical_native_port_runtime_alias(runtime_start);
-    if (byte_size == 0u ||
-        byte_size > std::numeric_limits<std::uint32_t>::max() ||
-        static_cast<std::uint64_t>(runtime_start) + byte_size >
-            0x1'0000'0000ull)
-        throw NativePortContractError(
-            NativePortContractFailure::AotContractViolation,
-            "runtime-image-deactivate-range");
     const auto requested_end =
         static_cast<std::uint64_t>(runtime_start) + byte_size;
     std::vector<std::size_t> selected;
@@ -665,10 +675,6 @@ std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
         if (runtime_start >= image_end ||
             image_runtime_start >= requested_end)
             continue;
-        if (runtime_start > image_runtime_start || requested_end < image_end)
-            throw NativePortContractError(
-                NativePortContractFailure::AotContractViolation,
-                "runtime-image-deactivate-partial");
         selected.push_back(active_index);
     }
     for (auto selected_index = selected.rbegin();
@@ -684,6 +690,35 @@ std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
             impl_->active.begin() + static_cast<std::ptrdiff_t>(active_index));
     }
     return selected.size();
+}
+
+void NativePortRuntimeImageBindings::validate_deactivate_runtime_range(
+    std::uint32_t runtime_start,
+    const std::size_t byte_size) const {
+    runtime_start = canonical_native_port_runtime_alias(runtime_start);
+    if (byte_size == 0u ||
+        byte_size > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(runtime_start) + byte_size >
+            0x1'0000'0000ull)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "runtime-image-deactivate-range");
+    const auto requested_end =
+        static_cast<std::uint64_t>(runtime_start) + byte_size;
+    for (const auto& active : impl_->active) {
+        const auto& image = impl_->images[active.image_index];
+        const auto image_runtime_start =
+            canonical_native_port_runtime_alias(image.runtime_start);
+        const auto image_end =
+            static_cast<std::uint64_t>(image_runtime_start) +
+            image.byte_size;
+        if (runtime_start >= image_end || image_runtime_start >= requested_end)
+            continue;
+        if (runtime_start > image_runtime_start || requested_end < image_end)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "runtime-image-deactivate-partial");
+    }
 }
 
 bool NativePortRuntimeImageBindings::active(
@@ -761,7 +796,26 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
     impl_->active.reserve(modules.size());
 }
 
-NativePortLoadedAotBinder::~NativePortLoadedAotBinder() noexcept = default;
+NativePortLoadedAotBinder::~NativePortLoadedAotBinder() noexcept {
+    if (!impl_) return;
+    // Destruction ends the generated dispatch lifetime. Remove the dynamic
+    // executable ranges before their mappings disappear so an owning guard
+    // never retains phantom loaded-code protection.
+    for (auto active = impl_->active.rbegin();
+         active != impl_->active.rend(); ++active) {
+        const auto& module = impl_->modules[active->module_index];
+        for (const auto& block : module.block_identities) {
+            try {
+                impl_->immutable_guard.remove_runtime_executable_range(
+                    active->runtime_start + block.source_offset,
+                    block.byte_size);
+            } catch (...) {
+                // Destructors cannot recover or report a second exception.
+                // Normal runtime retirement remains strict and throwing.
+            }
+        }
+    }
+}
 
 bool NativePortLoadedAotBinder::validate_bound_entry(
     const std::uint32_t target) const {
@@ -917,6 +971,108 @@ bool NativePortLoadedAotBinder::bind_entry(
     impl_->active.push_back(
         {match->module_index, match->runtime_start, std::move(mapping)});
     return true;
+}
+
+void NativePortLoadedAotBinder::validate_deactivate_runtime_range(
+    std::uint32_t runtime_start,
+    const std::size_t byte_size) const {
+    runtime_start = canonical_native_port_runtime_alias(runtime_start);
+    if (byte_size == 0u ||
+        byte_size > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(runtime_start) + byte_size >
+            0x1'0000'0000ull)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-deactivate-range");
+    const auto requested_end =
+        static_cast<std::uint64_t>(runtime_start) + byte_size;
+    for (const auto& active : impl_->active) {
+        const auto& module = impl_->modules[active.module_index];
+        const auto module_start =
+            canonical_native_port_runtime_alias(active.runtime_start);
+        const auto module_end =
+            static_cast<std::uint64_t>(module_start) + module.byte_size;
+        if (runtime_start >= module_end || module_start >= requested_end)
+            continue;
+        if (runtime_start > module_start || requested_end < module_end)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-deactivate-partial");
+        const auto active_block_start =
+            canonical_native_port_runtime_alias(
+                impl_->cpu.active_block_virtual_start);
+        const auto pc = canonical_native_port_runtime_alias(impl_->cpu.pc);
+        const auto pr = canonical_native_port_runtime_alias(impl_->cpu.pr);
+        const auto points_inside = [&](const std::uint32_t address) {
+            return address >= module_start && address < module_end;
+        };
+        if ((impl_->cpu.active_block_size != 0u &&
+             points_inside(active_block_start)) ||
+            points_inside(pc) || points_inside(pr))
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-deactivate-live-continuation");
+    }
+}
+
+std::size_t NativePortLoadedAotBinder::deactivate_runtime_range(
+    std::uint32_t runtime_start,
+    const std::size_t byte_size) {
+    validate_deactivate_runtime_range(runtime_start, byte_size);
+    runtime_start = canonical_native_port_runtime_alias(runtime_start);
+    const auto requested_end =
+        static_cast<std::uint64_t>(runtime_start) + byte_size;
+    std::vector<std::size_t> selected;
+    for (std::size_t active_index = 0u;
+         active_index < impl_->active.size(); ++active_index) {
+        const auto& active = impl_->active[active_index];
+        const auto& module = impl_->modules[active.module_index];
+        const auto module_start =
+            canonical_native_port_runtime_alias(active.runtime_start);
+        const auto module_end =
+            static_cast<std::uint64_t>(module_start) + module.byte_size;
+        if (runtime_start < module_end && module_start < requested_end)
+            selected.push_back(active_index);
+    }
+    for (auto selected_index = selected.rbegin();
+         selected_index != selected.rend(); ++selected_index) {
+        const auto active_index = *selected_index;
+        const auto& active = impl_->active[active_index];
+        const auto& module = impl_->modules[active.module_index];
+        for (const auto& block : module.block_identities)
+            impl_->immutable_guard.remove_runtime_executable_range(
+                active.runtime_start + block.source_offset,
+                block.byte_size);
+        impl_->active.erase(
+            impl_->active.begin() +
+            static_cast<std::ptrdiff_t>(active_index));
+    }
+    return selected.size();
+}
+
+NativePortExecutableRetirement deactivate_native_port_executable_range(
+    NativePortContext& context,
+    const std::uint32_t runtime_start,
+    const std::size_t byte_size) {
+    if (context.runtime_images == nullptr || context.loaded_aot == nullptr)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-executable-retirement-unbound");
+    // Validate both sides before mutating either. This makes partial-range or
+    // live-continuation failures atomic across the fixed-image and latent-AOT
+    // lifecycle domains.
+    context.runtime_images->validate_deactivate_runtime_range(
+        runtime_start, byte_size);
+    context.loaded_aot->validate_deactivate_runtime_range(
+        runtime_start, byte_size);
+    NativePortExecutableRetirement result;
+    result.runtime_images =
+        context.runtime_images->deactivate_runtime_range(
+            runtime_start, byte_size);
+    result.loaded_aot_modules =
+        context.loaded_aot->deactivate_runtime_range(
+            runtime_start, byte_size);
+    return result;
 }
 
 std::vector<std::uint8_t>

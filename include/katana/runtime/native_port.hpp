@@ -16,6 +16,7 @@ class NativePortPlatformServices;
 class NativePortTextureRegistry;
 class NativePortCpuControl;
 class NativePortRuntimeImageBindings;
+class NativePortLoadedAotBinder;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
@@ -347,6 +348,7 @@ class NativePortContext final {
     NativePortTextureRegistry* textures = nullptr;
     NativePortCpuControl* cpu_control = nullptr;
     NativePortRuntimeImageBindings* runtime_images = nullptr;
+    NativePortLoadedAotBinder* loaded_aot = nullptr;
     NativePortAotBridge aot;
     void* title_state = nullptr;
     std::uint64_t frame_index = 0u;

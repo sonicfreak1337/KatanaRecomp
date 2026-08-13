@@ -791,12 +791,62 @@ int run_test(const int argc, char* argv[]) {
                                  "game.katana-disc",
                                  std::ios::binary);
         local_pack << "local-retail-cache";
+        std::ofstream content_binding(previous_port /
+                                      "katana-content-root.txt",
+                                      std::ios::binary);
+        content_binding << "C:\\private-content\n";
     }
     preserve_local_port_user_data(previous_port, published_port);
-    require(!std::filesystem::exists(previous_port / "user-data") &&
+    require(std::filesystem::exists(previous_port / "user-data") &&
+                read_text(previous_port / "user-data" / "content" /
+                          "game.katana-disc") == "local-retail-cache" &&
                 read_text(published_port / "user-data" / "content" /
-                          "game.katana-disc") == "local-retail-cache",
-            "Atomarer Portaustausch verliert oder kopiert lokale Disc-/Speicherdaten.");
+                          "game.katana-disc") == "local-retail-cache" &&
+                read_text(previous_port / "katana-content-root.txt") ==
+                    "C:\\private-content\n" &&
+                read_text(published_port / "katana-content-root.txt") ==
+                    "C:\\private-content\n",
+            "Portaustausch behaelt keine autoritative lokale Quelle bis zum "
+            "Publikationscommit.");
+    const auto rollback_previous_port =
+        fixture.root / "rollback-previous-port";
+    const auto rollback_published_port =
+        fixture.root / "rollback-published-port";
+    std::filesystem::create_directories(
+        rollback_previous_port / "user-data");
+    std::filesystem::create_directories(
+        rollback_published_port / "user-data");
+    {
+        std::ofstream save(rollback_previous_port / "user-data" /
+                           "save.bin", std::ios::binary);
+        save << "authoritative-save";
+        std::ofstream source_binding(
+            rollback_previous_port / "katana-content-root.txt",
+            std::ios::binary);
+        source_binding << "C:\\private-content\n";
+        std::ofstream conflicting_binding(
+            rollback_published_port / "katana-content-root.txt",
+            std::ios::binary);
+        conflicting_binding << "unexpected-target";
+    }
+    require_failure<std::runtime_error>(
+        [&] {
+            preserve_local_port_user_data(
+                rollback_previous_port, rollback_published_port);
+        },
+        "Fehler nach Save-Kopie akzeptiert eine kollidierende "
+        "Content-Bindung.");
+    require(
+        read_text(rollback_previous_port / "user-data" / "save.bin") ==
+                "authoritative-save" &&
+            read_text(rollback_previous_port / "katana-content-root.txt") ==
+                "C:\\private-content\n" &&
+            !std::filesystem::exists(
+                rollback_published_port / "user-data" / "save.bin") &&
+            read_text(rollback_published_port / "katana-content-root.txt") ==
+                "unexpected-target",
+        "Rollback nach Bindingfehler verlor die autoritative Save-/Binding-"
+        "Quelle oder behielt eine Teilkopie.");
     const auto external_user_data =
         fixture.root / "external-user-data";
     const auto linked_previous_port =
@@ -1229,7 +1279,8 @@ int run_test(const int argc, char* argv[]) {
         [&] {
             validate_game_project_runtime_image_payloads(
                 &external_boundary_project,
-                {});
+                {},
+                nullptr);
         },
         "Descriptor-only Runtime-Image wird ohne privaten Payload akzeptiert.");
     auto mismatched_runtime_image_bytes =
@@ -1243,7 +1294,8 @@ int run_test(const int argc, char* argv[]) {
         [&] {
             validate_game_project_runtime_image_payloads(
                 &external_boundary_project,
-                mismatched_runtime_image_payloads);
+                mismatched_runtime_image_payloads,
+                nullptr);
         },
         "Runtime-Image-Payload mit falscher Byteidentitaet wird akzeptiert.");
     auto external_boundary_options = options;

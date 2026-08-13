@@ -4,6 +4,16 @@
 
 ### Geaendert
 
+- Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
+  `katana-content-root.txt` transaktional; der Altport bleibt bis zum
+  Publikationscommit autoritativ, und Binding-Kollisionen bereinigen nur die
+  neue Teilkopie. RuntimeImages und Loaded-AOT werden vor einem
+  Executable-Replacement gemeinsam validiert und ueber einen kanonischen
+  Retirement-Pfad deaktiviert; partielle Bereiche, Live-PC/PR und aktive
+  Bloecke bleiben fail-closed. Runtime-ABI `103`, Portprojektvertrag `91`,
+  Native-Port-Profilvertrag `14` und Native-AOT-Emissionsprofil `33`.
+  Es gab keinen Sonic-Produktlauf und keine Produktabnahme.
+
 - Der native Texture-/Font-Foundation-Unterauftrag ist source-seitig
   abgeschlossen. Die sieben Layouts SquareTwiddled,
   SquareTwiddledMipmaps, VQ, VQ-Mipmaps, Rectangle, SmallVQ und
@@ -21,7 +31,7 @@
   akzeptiert nur die bounded Trailer-Reservierung plus Alignment. Headerlose
   identity-bound SDK-Fontflaechen
   verwenden belegtes ARGB1555; D3D11 materialisiert vollstaendige
-  Mip-Subresources transaktional und exceptionsicher. Runtime-ABI `102`,
+  Mip-Subresources transaktional und exceptionsicher. Runtime-ABI `103`,
   Projektversion `0.49.1`; es gab keinen Sonic-Produktlauf. `261` uebrige
   PRS-Dateien sind Nicht-PVM-Inhalte und kein Decoderfehler.
 
@@ -37,11 +47,11 @@
   `191` wiederholen das letzte abgeschlossene Bild statt einen leeren Clear zu
   praesentieren.
 
-- Aktueller Vertragsstand: Runtime-ABI `102`, Analyzer-ABI `40`,
-  Backend-Interface-ABI `21`, Portprojektvertrag `90`, Native-Port-Profilvertrag
-  `13`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
+- Aktueller Vertragsstand: Runtime-ABI `103`, Analyzer-ABI `40`,
+  Backend-Interface-ABI `21`, Portprojektvertrag `91`, Native-Port-Profilvertrag
+  `14`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
   Native-Grafikvertrag `2`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
-  `32` und Port-Metadata-Cache-Schema `4`.
+  `33` und Port-Metadata-Cache-Schema `4`.
 
 - Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
   `3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded

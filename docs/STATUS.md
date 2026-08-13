@@ -47,7 +47,7 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `13`, Portprojektvertrag `90` und der Post-Link-Audit sperren
+Profilvertrag `14`, Portprojektvertrag `91` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
 `KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
@@ -99,6 +99,13 @@ Full-Footprint-Trailer; die Trailer bleiben hinter dem kompakten
 Codebook-/Index-Stream, `0` Faelle sind ambig. Headerlose identity-bound
 SDK-Fontoberflaechen belegen ARGB1555. Dieser Unterauftrag schliesst KR-5005
 nicht insgesamt; einen Sonic-Produktlauf gab es dafuer nicht.
+Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
+`katana-content-root.txt` transaktional; der Altport bleibt bis zum
+Publikationscommit autoritativ, und Binding-Kollisionen bereinigen nur die
+Teilkopie. RuntimeImages und Loaded-AOT werden vor Replacement gemeinsam
+validiert und scoped deaktiviert; partielle Bereiche, Live-PC/PR, aktive
+Bloecke und Immutable-Ranges bleiben fail-closed. Es gab keinen Sonic-
+Produktlauf und keine Produktabnahme.
 Der KR-5005-Zwischenfix transportiert die verifizierte FFmpeg-Deploymentclosure
 bei Parent-Projekten ueber globale CMake-Properties und validiert Quellen sowie
 sichere Dateinamen fail-closed. Die frische Konfiguration erzeugte korrekte
@@ -164,11 +171,11 @@ Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `102`,
+Aktuell gelten Runtime-ABI `103`,
 PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`21`, PVR-State-Contract `3`, Portprojektvertrag `90` und Native-Port-
-Profilvertrag `13`. Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat
+`21`, PVR-State-Contract `3`, Portprojektvertrag `91` und Native-Port-
+Profilvertrag `14`. Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
@@ -177,7 +184,7 @@ Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
 Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `32`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `33`, AOT-Partitionsschema: `7`,
 Port-Metadata-Cache-Schema: `4`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
 Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.

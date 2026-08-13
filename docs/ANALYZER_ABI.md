@@ -1,10 +1,10 @@
 # Analyzer-ABI
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `40`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 102, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 21, Portprojektvertrag 90 und Native-Port-
-Profilvertrag 13. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
-Directives-Version 3, Native-AOT-Emissionsprofil 32 und Port-Metadata-Cache-
+Source-Stand verwendet Runtime-ABI 103, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 21, Portprojektvertrag 91 und Native-Port-
+Profilvertrag 14. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
+Directives-Version 3, Native-AOT-Emissionsprofil 33 und Port-Metadata-Cache-
 Schema 4 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
@@ -52,7 +52,7 @@ Analyser-/Metadata-Cachebestand.
 
 Die davon getrennte oeffentliche Codegen-Grenze
 `PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`21` und Portprojektvertrag `90` versioniert. Analyzer-ABI `40` bindet den
+`21` und Portprojektvertrag `91` versioniert. Analyzer-ABI `40` bindet den
 aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
 ersetzen einander nicht.
 

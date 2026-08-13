@@ -31,7 +31,7 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `13`, Portprojektvertrag `90` und der Linkmap-Audit verhindern
+Profilvertrag `14`, Portprojektvertrag `91` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
 NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
@@ -83,6 +83,13 @@ Streams und `52` Compact-Streams mit Full-Footprint-Trailer; die Trailer
 bleiben hinter dem kompakten Codebook-/Index-Stream, `0` Faelle sind ambig.
 Headerlose identity-bound SDK-Fontoberflaechen belegen ARGB1555. Es gab
 keinen Sonic-Produktlauf fuer diesen Foundation-Unterauftrag.
+Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
+`katana-content-root.txt` transaktional; der Altport bleibt bis zum
+Publikationscommit autoritativ. Binding-Kollisionen bereinigen nur die
+Teilkopie. RuntimeImages und Loaded-AOT werden vor Replacement gemeinsam
+validiert und ueber einen scoped Retirement-Pfad deaktiviert; partielle
+Bereiche, Live-PC/PR, aktive Bloecke und Immutable-Ranges bleiben fail-closed.
+Es gab keinen Sonic-Produktlauf und keine Produktabnahme.
 
 Der native Fidelity-Modus folgt visuell standardmaessig 1:1 der Dreamcast-
 Referenz: originale Modelle, Texturen, Beleuchtung, Fog, Blend-/Farbsemantik,
@@ -133,18 +140,18 @@ oder Interpreter-Symbole.
 ## Historischer RuntimeOnly-Bring-up
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `102`,
+Aktuell gelten Runtime-ABI `103`,
 PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`21`, PVR-State-Contract `3`, Portprojektvertrag `90` und Native-Port-
-Profilvertrag `13`.
+`21`, PVR-State-Contract `3`, Portprojektvertrag `91` und Native-Port-
+Profilvertrag `14`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 `native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist im
 aktuellen Stand durch Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen neu
 exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `32`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `33`, AOT-Partitionsschema: `7`,
 Port-Metadata-Cache-Schema: `4`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
 Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.

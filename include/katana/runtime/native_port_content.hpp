@@ -105,6 +105,9 @@ class NativePortRuntimeImageBindings final {
     void activate(std::string_view image_id);
     // The requested interval must fully cover every overlapping active image;
     // partial replacement is rejected. Returns the number deactivated.
+    void validate_deactivate_runtime_range(
+        std::uint32_t runtime_start,
+        std::size_t byte_size) const;
     [[nodiscard]] std::size_t deactivate_runtime_range(
         std::uint32_t runtime_start,
         std::size_t byte_size);
@@ -137,11 +140,36 @@ class NativePortLoadedAotBinder final {
     // False means no analyzed module matches; ambiguous, malformed, or stale
     // generated-code state fails closed.
     [[nodiscard]] bool bind_entry(std::uint32_t target);
+    // Retires every active loaded module fully covered by the requested
+    // runtime interval. Partial replacement and replacement while the CPU is
+    // executing or returning into that module fail closed. Returns the
+    // number retired.
+    void validate_deactivate_runtime_range(
+        std::uint32_t runtime_start,
+        std::size_t byte_size) const;
+    [[nodiscard]] std::size_t deactivate_runtime_range(
+        std::uint32_t runtime_start,
+        std::size_t byte_size);
 
   private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+struct NativePortExecutableRetirement final {
+    std::size_t runtime_images = 0u;
+    std::size_t loaded_aot_modules = 0u;
+};
+
+// One native content/transform boundary must retire both fixed runtime images
+// and dynamically bound latent-AOT modules before replacing executable bytes.
+// This is a lifecycle operation over statically generated host code; it never
+// decodes or recompiles guest instructions at runtime.
+[[nodiscard]] NativePortExecutableRetirement
+deactivate_native_port_executable_range(
+    NativePortContext& context,
+    std::uint32_t runtime_start,
+    std::size_t byte_size);
 
 // Bootstrap validation deliberately observes the complete aliased 16-MiB
 // backing rather than only Memory API calls: a private adapter may use a raw

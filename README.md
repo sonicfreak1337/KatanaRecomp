@@ -25,12 +25,12 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 102, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 103, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 90, Native-Port-Profilvertrag 13 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `32`, AOT-Partitionsschema: `7`.
+Portprojektvertrag 91, Native-Port-Profilvertrag 14 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `33`, AOT-Partitionsschema: `7`.
 Port-Metadata-Cache-Schema: `4`.
 Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `9` und bleibt davon getrennt; das
@@ -104,6 +104,14 @@ verarbeitet; `12.704` waren mipmapped, mit `73.817` unteren Mip-Leveln und
 `668.876.160` dekodierten RGBA-Bytes. Die headerlose identity-bound
 SDK-Font-Grenze belegt ARGB1555. Dies ist ein erledigter Foundation-
 Unterauftrag innerhalb von KR-5005, nicht die No-Skip-Abnahme.
+Der aktuelle P0-Lifecycle-/Datenintegritaetsstand kopiert den lokalen
+Savebaum und die `katana-content-root.txt`-Bindung transaktional, laesst den
+Altport bis zum Publikationscommit autoritativ und bereinigt nach einer
+Binding-Kollision nur die Teilkopie. RuntimeImages und Loaded-AOT werden vor
+Executable-Replacement gemeinsam validiert und ueber einen scoped,
+kanonischen Retirement-Pfad vollstaendig deaktiviert; Live-PC/PR,
+Active-Block, partielle Bereiche und Immutable-Ranges bleiben fail-closed.
+Dies ist kein Sonic-Produktlauf und keine No-Skip-Abnahme.
 KR-5005 bleibt das offene native Produktgate. Der Present-or-Repeat-Vertrag ist
 jetzt bestaetigt: Wenn kein neuer GPU-Frame offen ist, wird das letzte
 abgeschlossene Bild wiederholt; nur der erste Initial-Clear bleibt an der
@@ -481,8 +489,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 102, Analyzer-ABI 40, Portprojektvertrag 90 und
-Native-Port-Profilvertrag 13. Davon getrennt verwendet `GameProject` Vertrag 7 und
+KR-5005-Stand verwendet Runtime-ABI 103, Analyzer-ABI 40, Portprojektvertrag 91 und
+Native-Port-Profilvertrag 14. Davon getrennt verwendet `GameProject` Vertrag 7 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

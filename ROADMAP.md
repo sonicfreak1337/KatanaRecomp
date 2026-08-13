@@ -140,7 +140,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `90`, Native-Port-Profilvertrag `13` und
+kein Portprofil. Portprojektvertrag `91`, Native-Port-Profilvertrag `14` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -207,7 +207,7 @@ formuliert; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein
 gegenwaertiges Gate.
 
-KR-5005 verwendet ab Portprojektvertrag `90` einen echten schnellen
+KR-5005 verwendet ab Portprojektvertrag `91` einen echten schnellen
 Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
 und einem gemessenen Vierer-Ninja-Pool; eine gemeinsame MSVC-PDB ist
 ausgeschlossen, und 4.096 Dispatch-Eintraege pro Shard vermeiden Hunderte
@@ -222,7 +222,7 @@ bleibt wegen der offenen Post-Overlay-Callback-/Function-Pointer-Kante aus.
 Der erste Lauf dieses Binaries lokalisierte zudem eine generische
 Bootstrapluecke: identity-bound Titel-RAM musste vor den Laufzeit-
 Immutable-Guards materialisiert werden, AOT-Bruecken durften dabei aber noch
-nicht aktiv sein. Portprojektvertrag `90` schliesst diese Reihenfolge
+nicht aktiv sein. Portprojektvertrag `91` schliesst diese Reihenfolge
 fail-closed; nach erfolgreichem Bootstrap beginnt erst der ueberwachte
 statische AOT-Lauf.
 
@@ -299,12 +299,12 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 102, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-  PVR-State-Contract 3, Portprojektvertrag 90, Native-Port-Profilvertrag 13
+  Runtime-ABI 103, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+  PVR-State-Contract 3, Portprojektvertrag 91, Native-Port-Profilvertrag 14
   Analyzer-ABI 40
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 32, AOT-Partitionsschema 7,
+  Native-AOT-Emissionsprofil 33, AOT-Partitionsschema 7,
   Port-Metadata-Cache-Schema 4
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht

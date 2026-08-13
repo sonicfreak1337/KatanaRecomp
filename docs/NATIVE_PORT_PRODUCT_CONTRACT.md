@@ -130,9 +130,9 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `102`, Analyzer-ABI `40`, Backend-
-Interface-ABI `21`, Portprojektvertrag `90` und Native-Port-Profilvertrag `13`.
-Der aktuelle Export nutzt Native-AOT-Emissionsprofil `32` und
+KR-5000 bindet diese Grenze an Runtime-ABI `103`, Analyzer-ABI `40`, Backend-
+Interface-ABI `21`, Portprojektvertrag `91` und Native-Port-Profilvertrag `14`.
+Der aktuelle Export nutzt Native-AOT-Emissionsprofil `33` und
 Port-Metadata-Cache-Schema `4`.
 Der aktuelle GameProject-Vertrag steht auf `7`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK

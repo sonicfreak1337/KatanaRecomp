@@ -43,6 +43,7 @@
 #include <chrono>
 #include <compare>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <future>
 #include <iomanip>
@@ -15614,22 +15615,32 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    NativeDispatchScope(\n"
               "        katana::runtime::NativePortContext& context,\n"
               "        katana::runtime::NativePortAotServices& services,\n"
+              "        katana::runtime::NativePortRuntimeImageBindings& "
+              "runtime_image_bindings,\n"
               "        katana::runtime::NativePortLoadedAotBinder& "
-              "loaded_aot_binder) {\n"
+              "loaded_aot_binder) : context_(context) {\n"
               "        if (active_native_context != nullptr ||\n"
               "            runtime_dispatch_detail::active_services != nullptr ||\n"
-              "            runtime_dispatch_detail::active_loaded_aot_binder != nullptr)\n"
+              "            runtime_dispatch_detail::active_loaded_aot_binder != nullptr ||\n"
+              "            context.runtime_images != nullptr ||\n"
+              "            context.loaded_aot != nullptr)\n"
               "            throw std::runtime_error(\"native-dispatch-reentry-scope\");\n"
               "        active_native_context = &context;\n"
               "        runtime_dispatch_detail::active_services = &services;\n"
               "        runtime_dispatch_detail::active_loaded_aot_binder =\n"
               "            &loaded_aot_binder;\n"
+              "        context.runtime_images = &runtime_image_bindings;\n"
+              "        context.loaded_aot = &loaded_aot_binder;\n"
               "    }\n"
               "    ~NativeDispatchScope() noexcept {\n"
+              "        context_.loaded_aot = nullptr;\n"
+              "        context_.runtime_images = nullptr;\n"
               "        runtime_dispatch_detail::active_loaded_aot_binder = nullptr;\n"
               "        runtime_dispatch_detail::active_services = nullptr;\n"
               "        active_native_context = nullptr;\n"
               "    }\n"
+              "  private:\n"
+              "    katana::runtime::NativePortContext& context_;\n"
               "};\n"
               "HookResult dispatch_native(\n"
               "    katana::runtime::NativePortContext& context,\n"
@@ -16192,7 +16203,6 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    for (const auto image_id :\n"
               "         native_port_definition().checkpoint_runtime_image_ids)\n"
               "        runtime_image_bindings.activate(image_id);\n"
-              "    context.runtime_images = &runtime_image_bindings;\n"
               "    katana::runtime::NativePortLoadedAotBinder loaded_aot_binder(\n"
               "        *context.cpu,\n"
               "        runtime_dispatch_detail::native_loaded_aot_modules,\n"
@@ -16201,7 +16211,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        context, &runtime_dispatch_detail::native_chainable_entry,\n"
               "        immutable_guard);\n"
               "    NativeDispatchScope scope(\n"
-              "        context, services, loaded_aot_binder);\n"
+              "        context, services, runtime_image_bindings,\n"
+              "        loaded_aot_binder);\n"
               "    require_native_aot_integrity(context, services);\n"
               "    if (context.stop_reason ==\n"
               "        katana::runtime::NativePortStopReason::HostRequested)\n"
@@ -18394,11 +18405,6 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
                 std::string::npos)
             throw std::runtime_error(
                 "Lokale Content-Bindung besitzt mehrere Pfadzeilen.");
-    } else if (content_binding_error) {
-        throw std::filesystem::filesystem_error(
-            "Lokale Content-Bindung konnte nicht geprueft werden.",
-            previous_content_binding,
-            content_binding_error);
     }
     const auto preserve_content_binding = [&] {
         if (!has_previous_content_binding) return;
@@ -18419,8 +18425,27 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
                 "Publikationsziel der lokalen Content-Bindung ist unlesbar.",
                 published_content_binding,
                 published_binding_error);
-        std::filesystem::rename(previous_content_binding,
-                                published_content_binding);
+        try {
+            if (!std::filesystem::copy_file(
+                    previous_content_binding, published_content_binding,
+                    std::filesystem::copy_options::none))
+                throw std::runtime_error(
+                    "Lokale Content-Bindung wurde nicht kopiert.");
+        } catch (...) {
+            // The previous port remains authoritative until its containing
+            // publish backup is removed after the whole transaction commits.
+            // A partially created destination is expendable; the source is
+            // never moved and therefore cannot be lost by an outer rollback.
+            std::error_code cleanup_error;
+            static_cast<void>(std::filesystem::remove(
+                published_content_binding, cleanup_error));
+            if (cleanup_error)
+                std::throw_with_nested(std::runtime_error(
+                    "Lokale Content-Bindung konnte nach einem "
+                    "Kopierfehler nicht bereinigt werden; der Altport "
+                    "bleibt autoritativ."));
+            throw;
+        }
     };
     const auto require_safe_user_data_tree =
         [&](const std::filesystem::path& root,
@@ -18490,8 +18515,28 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
             "Frisch publizierte lokale Daten konnten nicht entfernt werden.",
             published,
             status_error);
-    std::filesystem::rename(previous, published);
-    preserve_content_binding();
+    try {
+        // Copy, do not move. The enclosing publication transaction removes
+        // the old port only after every local-state component was copied and
+        // the new result became authoritative. Consequently a later binding
+        // failure, process crash, or outer rollback can delete only copies;
+        // the original save tree remains intact in the backup/stale root.
+        std::filesystem::copy(
+            previous, published, std::filesystem::copy_options::recursive);
+        require_safe_user_data_tree(published, false);
+        preserve_content_binding();
+    } catch (...) {
+        std::error_code user_data_cleanup_error;
+        static_cast<void>(
+            std::filesystem::remove_all(published,
+                                        user_data_cleanup_error));
+        if (user_data_cleanup_error)
+            std::throw_with_nested(std::runtime_error(
+                "Kopierte lokale Portdaten konnten nach einem "
+                "Publikationsfehler nicht bereinigt werden; der Altport "
+                "bleibt autoritativ."));
+        throw;
+    }
 }
 
 std::string guarded_aot_inventory_failure_message(
