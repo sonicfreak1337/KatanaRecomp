@@ -2394,6 +2394,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     std::vector<AnalysisDirectiveDiagnostic> seed_diagnostics;
     std::vector<ExactFunctionOwnershipInterval>
         exact_function_ownership;
+    std::vector<std::uint32_t> non_root_function_entry_hints;
     const auto add_exact_function_ownership =
         [&](const std::uint32_t begin,
             const std::uint32_t size) {
@@ -2434,6 +2435,17 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                                code_address_status_name(validation.status));
             add_exact_function_ownership(
                 validation.resolved_address, boundary.size);
+        }
+        for (const auto& entry_hint : overrides->function_entry_hints) {
+            const auto validation = validate_committed_code_address(
+                image, entry_hint.address, 2u);
+            if (!validation.valid())
+                override_error(*overrides,
+                               entry_hint.line,
+                               entry_hint.address,
+                               code_address_status_name(validation.status));
+            non_root_function_entry_hints.push_back(
+                validation.resolved_address);
         }
         for (const auto& function : overrides->functions) {
             if ((function.size & 1u) != 0u) {
@@ -2513,6 +2525,12 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             throw std::invalid_argument(
                 "Explizite Funktionsgrenzen ueberlappen sich.");
     }
+    std::sort(non_root_function_entry_hints.begin(),
+              non_root_function_entry_hints.end());
+    non_root_function_entry_hints.erase(
+        std::unique(non_root_function_entry_hints.begin(),
+                    non_root_function_entry_hints.end()),
+        non_root_function_entry_hints.end());
 
     ControlFlowAnalysisResult analysis;
     detail::RecursiveAnalysisSession recursive_session;
@@ -2561,6 +2579,14 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     GuardedCodeInventory final_guarded_code_inventory;
     GuardedCodeInventory static_callback_inventory;
     detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
+    const auto guarded_callback_candidate_is_admissible =
+        [&](const std::uint32_t address) {
+            return std::binary_search(
+                       non_root_function_entry_hints.begin(),
+                       non_root_function_entry_hints.end(), address) ||
+                   guarded_native_entry_shapes.classify(address) ==
+                       detail::GuardedNativeEntryShapeStatus::Valid;
+        };
     detail::FunctionValueAnalysisSession function_value_session(
         16'384u,
         1'024u * 1024u * 1024u,
@@ -3899,20 +3925,32 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 static_cast<void>(entry);
                 callback_functions.push_back(function);
             }
+            std::vector<std::uint32_t> callback_external_entries;
+            callback_external_entries.reserve(seeds.size());
+            for (const auto& [entry, evidence] : seeds) {
+                static_cast<void>(evidence);
+                if (recursive_index.find(entry) != nullptr)
+                    callback_external_entries.push_back(entry);
+            }
             static_callback_inventory =
                 detail::analyze_static_callback_inventory(
                     image, callback_lines, callback_functions,
+                    callback_external_entries,
+                    non_root_function_entry_hints,
                     guarded_native_entry_shapes);
             auto& callback_candidates =
                 static_callback_inventory.stored_code_addresses;
+            // The inventory already requires both semantic registrar flow
+            // and either a complete standalone entry shape or an independent
+            // non-root function-entry hint. Recursive CFA below remains the
+            // authoritative, fail-closed materialization step.
             callback_candidates.erase(
                 std::remove_if(
                     callback_candidates.begin(),
                     callback_candidates.end(),
                     [&](const auto& candidate) {
-                        return guarded_native_entry_shapes.classify(
-                                   candidate.target_address) !=
-                               detail::GuardedNativeEntryShapeStatus::Valid;
+                        return !guarded_callback_candidate_is_admissible(
+                            candidate.target_address);
                     }),
                 callback_candidates.end());
             static_callback_inventory.candidate_count =
@@ -4554,9 +4592,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 if (inventory == function_inventory_shards.end()) continue;
                 for (const auto& candidate :
                      inventory->second.stored_code_addresses) {
-                if (guarded_native_entry_shapes.classify(
-                        candidate.target_address) !=
-                    detail::GuardedNativeEntryShapeStatus::Valid)
+                if (!guarded_callback_candidate_is_admissible(
+                        candidate.target_address))
                     continue;
                 const std::array origins{
                     FunctionOrigin::StoredCodeAddress};

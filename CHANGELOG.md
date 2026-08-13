@@ -13,10 +13,18 @@
   perspektivische Interpolation sowie reziproke Depth-/Fog-Koordinaten aus
   `SV_Position.w`. Der reale Lauf passiert sowohl den frueheren Texture-Stop
   `0x53414704` als auch den gemischten Clip-Stop `0x53414703`, ohne TA-/QACR-
-  Reentry oder Software-PVR. Er endet danach fail-closed an einem noch nicht
-  statisch inventarisierten List-Callback; das ist der naechste AOT-/Callback-
-  Foundationblocker, kein Grafikfehler. Vollstaendige spielweite
-  Grafikabdeckung bleibt bis zu Menue und Gameplay unbewiesen.
+  Reentry oder Software-PVR. Die danach beobachtete gespeicherte Callback-
+  Kette ist nun ebenfalls generisch geschlossen: externe erreichbare CFG-
+  Bloecke erhalten lokale Analyseowner, Registrar-/Objektfeld-Codepointer
+  bleiben in der positiven Callback-Lane, und Non-Root-Funktionshints oder
+  eigenstaendige Entry-Shape-Beweise begrenzen die AOT-Zulassung. Der direkte
+  Produktlauf passiert diesen Endpunkt und endet an der naechsten nativen
+  Host-Timing-Unterfamilie. Sichtbar bleibt der aktuelle Direktlauf jedoch
+  vom ersten SEGA-Bild an vollstaendig schwarz, obwohl Audio und Titelablauf
+  weiterlaufen und Draw-/Presentzaehler steigen. Die gemeinsame Offscreen-/
+  Compose-/Swapchain-Grenze ist daher der vorherige aktive Grafik-P0;
+  vollstaendige spielweite Grafikabdeckung bleibt bis zu Menue und Gameplay
+  unbewiesen.
 
 - Der warme v72-Export erzeugte `5.103` Funktionen in `149` Partitionen und
   `203` Host-TUs in `24,356 s`. Gegenueber dem identischen kalten v71-Export
@@ -28,6 +36,18 @@
   Analysebeleg `replacement_reachability_proven=false` ist; der Produktlauf
   beweist den Grafikfortschritt, entlaedt aber noch keine nachgelagerten
   Hardware-Sites aus dem statischen Gate.
+
+- Der v74-Export nach dieser Callback-Closure erzeugte `5.316` Funktionen in
+  `158` Partitionen und `213` Host-TUs. Gegenueber v73 sind das `+111`
+  Funktionen und `+2` Partitionen, gegenueber v72 `+213` und `+9`. Das
+  positive statische Inventar stieg von v73 `953/508` auf `2.029` rohe und
+  `618` guarded Callback-Kandidaten. Die Shape-Pruefung blieb mit
+  `326.461/4.194.304` Arbeitseinheiten ohne Truncation oder Budgetende;
+  `42` latente Module und `849/849` PRS-Decodes blieben vollstaendig. Die
+  Hardware-Closure bleibt bewusst bei `850` Sites (`47` geschlossen, `803`
+  offen, `129` Owner), weil dieser Schritt AOT-Abdeckung und keinen
+  Hardwareprovider erweitert. `game.exe` passiert die vorherige Callback-
+  Luecke und endet typisiert am naechsten Host-Timing-Vertrag.
 
 - Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
   `katana-content-root.txt` transaktional; der Altport bleibt bis zum
@@ -72,12 +92,12 @@
   `191` wiederholen das letzte abgeschlossene Bild statt einen leeren Clear zu
   praesentieren.
 
-- Aktueller Vertragsstand: Runtime-ABI `104`, Analyzer-ABI `40`,
-  Backend-Interface-ABI `22`, Portprojektvertrag `92`, Native-Port-Profilvertrag
-  `15`, GameProject-Vertrag `8` mit Artefaktformat `6`,
+- Aktueller Vertragsstand: Runtime-ABI `104`, Analyzer-ABI `41`,
+  Backend-Interface-ABI `22`, Portprojektvertrag `93`, Native-Port-Profilvertrag
+  `16`, GameProject-Vertrag `8` mit Artefaktformat `6`,
   NativePortDefinition-Vertrag `10`, NativePortArtifact-Format `9`,
   Native-Grafikvertrag `6`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
-  `33` und Port-Metadata-Cache-Schema `4`.
+  `34`, Analysis-Directives-Version `4` und Port-Metadata-Cache-Schema `4`.
 
 - Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
   `3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded

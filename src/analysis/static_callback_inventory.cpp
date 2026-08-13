@@ -16,6 +16,8 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -514,6 +516,13 @@ void observe_persistent_store(CallbackFunctionModel& model,
         model.local_sink_mask | source.input_mask);
     if (source.code_constants_truncated)
         model.local_candidates_truncated = true;
+    // The field offset is derived from an actual indirect-call load. Preserve
+    // bounded executable scalars through this local model; the terminal
+    // inventory gate below still requires either a complete standalone shape
+    // or an independent non-root function-entry hint before publication.
+    for (const auto constant : source.constants)
+        add_candidate(model.local_candidates, image, constant,
+                      instruction_address);
     for (const auto constant : source.code_constants)
         add_candidate(model.local_candidates, image, constant,
                       instruction_address);
@@ -974,11 +983,15 @@ GuardedCodeInventory analyze_static_callback_inventory(
     const katana::io::ExecutableImage& image,
     const std::span<const katana::sh4::DisassemblyLine> lines,
     const std::span<const FunctionCandidate> function_candidates,
+    const std::span<const std::uint32_t> external_block_entries,
+    const std::span<const std::uint32_t> non_root_function_entry_hints,
     GuardedNativeEntryShapeCache& native_entry_shapes) {
     GuardedCodeInventory inventory;
     inventory.raw_stored_candidate_budget = maximum_inventory_candidates;
     inventory.candidate_budget = maximum_inventory_candidates;
-    if (lines.empty() || function_candidates.empty()) return inventory;
+    if (lines.empty() ||
+        (function_candidates.empty() && external_block_entries.empty()))
+        return inventory;
 
     std::vector<FunctionBoundary> boundaries;
     boundaries.reserve(function_candidates.size());
@@ -995,8 +1008,16 @@ GuardedCodeInventory analyze_static_callback_inventory(
                                  }),
                      boundaries.end());
 
+    if (!std::is_sorted(external_block_entries.begin(),
+                        external_block_entries.end()) ||
+        std::adjacent_find(external_block_entries.begin(),
+                           external_block_entries.end()) !=
+            external_block_entries.end())
+        throw std::invalid_argument(
+            "Externe Callback-Blockeinstiege sind nicht kanonisch.");
+
     std::vector<std::uint32_t> leaders;
-    leaders.reserve(boundaries.size() * 2u);
+    leaders.reserve(boundaries.size() * 2u + external_block_entries.size());
     for (const auto& boundary : boundaries) {
         leaders.push_back(boundary.entry_address);
         if (boundary.size != 0u &&
@@ -1004,8 +1025,49 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 std::numeric_limits<std::uint32_t>::max() - boundary.size)
             leaders.push_back(boundary.entry_address + boundary.size);
     }
+    leaders.insert(leaders.end(), external_block_entries.begin(),
+                   external_block_entries.end());
     const auto blocks = build_basic_blocks(lines, {}, leaders);
-    const auto functions = discover_functions_from_blocks(blocks, boundaries);
+    auto functions = discover_functions_from_blocks(blocks, boundaries);
+    // A guarded callback or continuation can enter a disconnected CFG
+    // component without constituting descriptive function metadata. Such a
+    // component is already an identity-bound external execution surface, but
+    // ordinary function discovery cannot own it until its registrar has been
+    // analyzed. Give only genuinely unowned external roots a local analysis
+    // owner; interior entries retain their existing owner.
+    std::set<std::uint32_t> owned_blocks;
+    for (const auto& function : functions)
+        owned_blocks.insert(function.block_addresses.begin(),
+                            function.block_addresses.end());
+    bool supplemented = false;
+    for (const auto entry : external_block_entries) {
+        if (owned_blocks.contains(entry)) continue;
+        const auto block = std::find_if(
+            blocks.begin(), blocks.end(),
+            [&](const auto& candidate) {
+                return candidate.start_address == entry;
+            });
+        if (block == blocks.end())
+            throw std::invalid_argument(
+                "Externer Callback-Blockeinstieg wurde nicht "
+                "materialisiert: " +
+                std::to_string(entry));
+        boundaries.push_back({entry, 0u});
+        supplemented = true;
+    }
+    if (supplemented) {
+        std::sort(boundaries.begin(), boundaries.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.entry_address < right.entry_address;
+                  });
+        boundaries.erase(
+            std::unique(boundaries.begin(), boundaries.end(),
+                        [](const auto& left, const auto& right) {
+                            return left.entry_address == right.entry_address;
+                        }),
+            boundaries.end());
+        functions = discover_functions_from_blocks(blocks, boundaries);
+    }
     const auto callback_field_offsets =
         discover_callback_field_offsets(lines);
 
@@ -1113,8 +1175,13 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 if ((sink->second & static_cast<std::uint8_t>(1u << argument)) ==
                     0u)
                     continue;
-                for (const auto constant :
-                     call.arguments[argument].code_constants) {
+                std::set<std::uint32_t> forwarded_constants(
+                    call.arguments[argument].constants.begin(),
+                    call.arguments[argument].constants.end());
+                forwarded_constants.insert(
+                    call.arguments[argument].code_constants.begin(),
+                    call.arguments[argument].code_constants.end());
+                for (const auto constant : forwarded_constants) {
                     const auto target = executable_constant(image, constant);
                     if (!target.has_value()) continue;
                     StoredCodeAddressCandidate candidate;
@@ -1129,6 +1196,27 @@ GuardedCodeInventory analyze_static_callback_inventory(
                     candidate_values_truncated = true;
             }
         }
+    }
+
+    if (!std::is_sorted(non_root_function_entry_hints.begin(),
+                        non_root_function_entry_hints.end()) ||
+        std::adjacent_find(non_root_function_entry_hints.begin(),
+                           non_root_function_entry_hints.end()) !=
+            non_root_function_entry_hints.end())
+        throw std::invalid_argument(
+            "Nicht-rootende Funktionseinstiegshinweise sind nicht "
+            "kanonisch.");
+    for (auto candidate = candidates.begin(); candidate != candidates.end();) {
+        const auto independently_bound = std::binary_search(
+            non_root_function_entry_hints.begin(),
+            non_root_function_entry_hints.end(), candidate->first);
+        if (!independently_bound &&
+            native_entry_shapes.classify(candidate->first) !=
+                GuardedNativeEntryShapeStatus::Valid) {
+            candidate = candidates.erase(candidate);
+            continue;
+        }
+        ++candidate;
     }
 
     inventory.raw_stored_candidate_count = raw_candidates;

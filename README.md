@@ -27,15 +27,15 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 
 Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 104, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 41, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 92, Native-Port-Profilvertrag 15 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `33`, AOT-Partitionsschema: `7`.
+Portprojektvertrag 93, Native-Port-Profilvertrag 16 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`.
 Port-Metadata-Cache-Schema: `4`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
-Analyse-Direktiven stehen auf `3`, das Hardware-Closure-Schema auf `v5`, die
+Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v5`, die
 Hookanforderungskarte auf `v3` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
@@ -113,16 +113,26 @@ kanonischen Retirement-Pfad vollstaendig deaktiviert; Live-PC/PR,
 Active-Block, partielle Bereiche und Immutable-Ranges bleiben fail-closed.
 Dies ist kein Sonic-Produktlauf und keine No-Skip-Abnahme.
 KR-5005 bleibt das offene native Produktgate. Die Grafik-Foundation ist fuer
-den aktuell erreichten Pfad source- und produktseitig geschlossen: Texturen,
+den aktuell erreichten Pfad source-seitig weitgehend implementiert, aber
+produktseitig wieder offen: Texturen,
 dynamische Oberflaechen, NINJA-Modellpunkte, vollstaendige native Drawstates,
 homogenes GPU-Clipping, perspektivische Interpolation und reziproke Depth-/Fog-
 Koordinaten laufen ueber die backendneutrale Draw-IR und das D3D11-Backend.
 Der reale Lauf passiert die frueheren typisierten Texture- und Mixed-Clip-
-Stops ohne TA-/QACR-Reentry oder Software-PVR. Der neue P0 ist ein noch nicht
-statisch inventarisierter List-Callback und damit die generische AOT-/Callback-
-Closure, nicht die Grafik. Vollstaendige spielweite Grafikabdeckung bleibt bis
-zu Menue und Gameplay unbewiesen. Steam-Deck-/Linux-Unterstuetzung bleibt eine
-spaetere, nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
+Stops ohne TA-/QACR-Reentry oder Software-PVR. Die anschliessende statische
+Callback-Luecke ist generisch geschlossen: externe, bereits erreichbare CFG-
+Bloecke werden als lokale Analyseowner behandelt, gespeicherte Codepointer
+ueber Registrar und Objektfeld verfolgt und nur durch Non-Root-Funktionshints
+oder einen eigenstaendigen Entry-Shape-Beweis als AOT-Ziele zugelassen. Der
+Produktlauf passiert diese Kette und endet nun am naechsten nativen
+Foundationvertrag, einer noch nicht vollstaendig ersetzten Host-Timing-
+Unterfamilie. Der aktuelle Direktlauf zeigt trotz laufendem Audio und intern
+gemeldeten Draws/Presents vom ersten SEGA-Bild an nur Schwarz. Die gemeinsame
+Offscreen-/Compose-/Swapchain-Grenze ist deshalb vor Timing der aktive
+Grafik-P0; interne Nichtschwarzzaehler sind kein Produktbeweis. Vollstaendige
+spielweite Grafikabdeckung bleibt bis zu Menue und
+Gameplay unbewiesen. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
+nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
 
 Ein frueherer KR-5005-Zwischenstand trug die generischen Native-Architektur-
 Reviewfixes: Post-Bootstrap-Bytes werden vor Analyse, IR und AOT materialisiert
@@ -144,16 +154,19 @@ Sprite-Texture-Pfad, endete aber erwartungsgemaess typisiert mit
 Lazy-AOT-Aliasnormalisierung ueberholt; es gibt keine Emulations- oder
 Interpreterfallbacks.
 
-Der aktuelle Produktbeleg vervollstaendigte Film `id=0` mit `200`
+Ein frueherer Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
-`200` sichtbar nichtschwarzen Frames. Das Checkpoint-Runtime-Image wurde vor
+`200` intern als nichtschwarz klassifizierten Frames. Der aktuelle v74-
+Direktlauf bleibt im real sichtbaren Fenster vollstaendig schwarz, waehrend
+Audio und Titelablauf weiterlaufen. Das Checkpoint-Runtime-Image wurde vor
 dem ersten Stage-Overlay genau einmal deaktiviert; anschliessend wurden die
 Overlay-, Settings- und Camera-Assets identitaetsgebunden geladen. Der
 schwarze/stale-Overlay-Uebergang ist geschlossen. Danach werden sechs
 dynamische Titeloberflaechen, Stage-Content, Texturen und das erste native
 Modell materialisiert und gezeichnet; die frueheren Texture- und Mixed-Clip-
-Stops werden passiert. Der Lauf endet erst an einem fehlenden statischen
-List-Callback. Film `id=1`/Opening und Hauptmenue bleiben offen. Im
+Stops sowie die anschliessende gespeicherte Callback-Kette werden passiert.
+Der Lauf endet nun typisiert an einer noch offenen Host-Timing-Unterfunktion.
+Film `id=1`/Opening und Hauptmenue bleiben offen. Im
 Presented-by-SEGA-Pfad haben die Frames 1--189 native Draws;
 Frame 190 und Frame 191 wiederholen ohne neuen offenen GPU-Frame das letzte
 abgeschlossene Bild. Es gibt keinen synthetischen Schwarz-Clear mehr.
@@ -172,6 +185,19 @@ umfasst weiter `850` Sites, davon `47` geschlossen, `803` offen und `129`
 Owner. Die Grafik kann nachgelagerte TA-/QACR-/PVR-Sites erst dann statisch
 entladen, wenn die Replacement-Reachability vollstaendig bewiesen ist; aktuell
 steht dieser Beleg bewusst auf `false`.
+
+Der v74-Export nach der generischen Callback-Owner-/Registrar-Erweiterung
+umfasst `5.316` Funktionen in `158` Partitionen und `213` Host-TUs. Gegenueber
+v73 sind das `+111` Funktionen und `+2` Partitionen, gegenueber v72 `+213`
+Funktionen und `+9` Partitionen. Das positive statische Inventar stieg von
+v73 `953/508` auf `2.029` rohe und `618` guarded Callback-Kandidaten;
+gegenueber v72 sind das `+1.378/+110`. Die Shape-Pruefung stieg auf `326.461`
+Arbeitseinheiten, blieb aber weit unter ihrem Budget von `4.194.304`; es gab
+keine Truncation oder Budgeterschoepfung. `42` latente Module und `849/849`
+PRS-Decodes blieben vollstaendig. Die Hardware-Closure blieb erwartungsgemaess
+bei `850/47/803/129`, weil dieser Schritt AOT-Abdeckung erweiterte, aber noch
+keinen Hardwareprovider ersetzte. Der direkte `game.exe`-Lauf passierte den
+alten Callback-Endpunkt und erreichte die naechste Host-Timing-Grenze.
 
 Der validierte v59-Export untersuchte `1.094` Dateien mit `198.135.759`
 encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte
@@ -496,8 +522,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 40, Portprojektvertrag 92 und
-Native-Port-Profilvertrag 15. Davon getrennt verwendet `GameProject` Vertrag 8 und
+KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 41, Portprojektvertrag 93 und
+Native-Port-Profilvertrag 16. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

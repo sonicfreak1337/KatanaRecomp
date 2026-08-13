@@ -1355,9 +1355,59 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     for (const auto address : additional_block_leaders)
         append_exactly_owned_block_entry(address);
 
-    const auto functions = katana::analysis::discover_functions_from_blocks(
+    auto functions = katana::analysis::discover_functions_from_blocks(
         source_blocks, function_discovery_boundaries,
         analysis.resolved_edges);
+    // Guarded candidates and explicit continuation leaders are block roots,
+    // not automatically function roots. Most are already owned by an
+    // ordinary or exact function and must stay there. A candidate can,
+    // however, describe a disconnected externally dispatchable component
+    // that ordinary call reachability cannot own. Materialize only those
+    // genuinely unowned components as supplemental functions so every
+    // admitted native entry survives lowering without splitting normal
+    // fallthrough inside an existing function.
+    std::unordered_set<std::uint32_t> owned_block_entries;
+    for (const auto& function : functions)
+        owned_block_entries.insert(function.block_addresses.begin(),
+                                   function.block_addresses.end());
+    std::vector<katana::analysis::FunctionBoundary>
+        supplemental_candidate_boundaries;
+    for (const auto address : candidate_leaders) {
+        const auto materialized = std::any_of(
+            source_blocks.begin(), source_blocks.end(),
+            [&](const auto& block) {
+                return block.start_address == address;
+            });
+        if (!materialized)
+            throw std::invalid_argument(
+                "Externer Kandidat wurde nicht als Basic Block "
+                "materialisiert: " +
+                std::to_string(address));
+        if (!owned_block_entries.contains(address))
+            supplemental_candidate_boundaries.push_back({address, 0u});
+    }
+    if (!supplemental_candidate_boundaries.empty()) {
+        function_discovery_boundaries.insert(
+            function_discovery_boundaries.end(),
+            supplemental_candidate_boundaries.begin(),
+            supplemental_candidate_boundaries.end());
+        functions = katana::analysis::discover_functions_from_blocks(
+            source_blocks, function_discovery_boundaries,
+            analysis.resolved_edges);
+    }
+    for (const auto address : candidate_leaders) {
+        const auto owned = std::any_of(
+            functions.begin(), functions.end(),
+            [&](const auto& function) {
+                return std::find(function.block_addresses.begin(),
+                                 function.block_addresses.end(),
+                                 address) != function.block_addresses.end();
+            });
+        if (!owned)
+            throw std::invalid_argument(
+                "Externer Kandidat besitzt keinen IR-Funktionsowner: " +
+                std::to_string(address));
+    }
     for (const auto address : additional_block_leaders) {
         const auto owner = std::find_if(
             function_boundaries.begin(), function_boundaries.end(),

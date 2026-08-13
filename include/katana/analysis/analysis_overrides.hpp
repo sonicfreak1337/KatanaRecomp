@@ -7,7 +7,7 @@
 
 namespace katana::analysis {
 
-inline constexpr std::uint32_t analysis_directives_current_version = 3u;
+inline constexpr std::uint32_t analysis_directives_current_version = 4u;
 
 enum class AnalysisDirectiveMode : std::uint8_t { Override, Hint };
 
@@ -26,6 +26,15 @@ struct FunctionBoundaryOverride {
     std::uint32_t address = 0u;
     std::size_t line = 0u;
     std::uint32_t size = 0u;
+};
+
+// A non-root function-entry hint.  It cannot make code reachable on its own
+// and supplies no extent.  Analyses may use it only to corroborate an
+// independently proven semantic edge, such as an exact executable value
+// flowing into a callback field that is later loaded by an indirect call.
+struct FunctionEntryHintOverride {
+    std::uint32_t address = 0u;
+    std::size_t line = 0u;
 };
 
 struct JumpOverride {
@@ -69,6 +78,7 @@ struct AnalysisOverrides {
     std::filesystem::path source_path;
     std::vector<FunctionOverride> functions;
     std::vector<FunctionBoundaryOverride> function_boundaries;
+    std::vector<FunctionEntryHintOverride> function_entry_hints;
     std::vector<JumpOverride> jumps;
     std::vector<JumpTableOverride> jump_tables;
 };

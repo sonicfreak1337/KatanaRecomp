@@ -1,16 +1,16 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `40`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 103, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 21, Portprojektvertrag 91 und Native-Port-
-Profilvertrag 14. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
-Directives-Version 3, Native-AOT-Emissionsprofil 33 und Port-Metadata-Cache-
+Der aktuelle oeffentliche Analyzervertrag ist Version `41`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 104, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 22, Portprojektvertrag 93 und Native-Port-
+Profilvertrag 16. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
+Directives-Version 4, Native-AOT-Emissionsprofil 34 und Port-Metadata-Cache-
 Schema 4 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
-Version 40 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Version 41 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -50,9 +50,19 @@ Loaded-AOT-Rebase installiert gemischte Module erst nach exakter
 Codeblock-Closure. Diese Aenderungen invalidieren den vorherigen
 Analyser-/Metadata-Cachebestand.
 
+Analyzer-ABI 41 trennt deskriptive Funktionskenntnis von Analyse-Roots. Die
+neue Analysis-Directives-v4-Form `function_entry_hint` kann einen bereits aus
+dem erreichbaren CFG oder einer semantischen Callback-Kette gewonnenen Entry
+identitaetsgebunden bestaetigen, erzeugt selbst aber weder Root noch Kante.
+Externe erreichbare CFG-Bloecke erhalten fuer die begrenzte Callbackanalyse
+lokale Owner, wenn noch keine Funktionsgrenze existiert; Registrar-/Objektfeld-
+Codepointer bleiben dadurch bis zur spaeteren indirekten Aufrufgrenze
+erhalten. Hints, externe Entries und die resultierende Analyseclosure sind in
+Cache, IR und AOT-Vertrag gebunden.
+
 Die davon getrennte oeffentliche Codegen-Grenze
 `PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`21` und Portprojektvertrag `91` versioniert. Analyzer-ABI `40` bindet den
+`22` und Portprojektvertrag `93` versioniert. Analyzer-ABI `41` bindet den
 aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
 ersetzen einander nicht.
 

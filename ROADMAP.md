@@ -197,13 +197,19 @@ Trailer; die `52` Trailer sind reserviert, ohne den kompakten Index-Offset zu
 verschieben, und `0` Faelle sind ambig. Headerlose identity-bound
 SDK-Fontoberflaechen belegen ARGB1555. Dieser Unterauftrag schliesst KR-5005
 nicht insgesamt. Die anschliessende Grafik-Foundation ist fuer den aktuell
-erreichten Produktpfad ebenfalls geschlossen: NINJA-Modellpunkte und native
+erreichten Produktpfad source-seitig weitgehend implementiert, produktseitig
+aber wieder offen: NINJA-Modellpunkte und native
 Drawstates werden backendneutral uebergeben; D3D11 uebernimmt homogenes
 Clipping, perspektivische Interpolation und reziproke Depth-/Fog-Semantik.
 Der reale Lauf passiert die frueheren Texture- und Mixed-Clip-Stops ohne
-TA-/QACR-Reentry. KR-5005 bleibt offen, weil danach ein noch nicht statisch
-inventarisierter List-Callback fehlt. Steam-Deck-/Linux-Unterstuetzung ist
-spaeter geplant, aktuell nicht priorisiert und kein gegenwaertiges Gate.
+TA-/QACR-Reentry. Die danach beobachtete Registrar-/Objektfeld-Callback-Kette
+ist jetzt generisch statisch inventarisiert und als AOT-Closure gebunden.
+KR-5005 bleibt offen, weil der Lauf anschliessend eine noch nicht vollstaendig
+ersetzte Host-Timing-Unterfamilie erreicht. Zuvor ist jedoch die aktuelle
+vollstaendige Schwarzbildregression zu schliessen: Audio und Titelablauf
+laufen, interne Draw-/Presentzaehler steigen, aber im Fenster erscheint vom
+ersten SEGA-Bild an kein Bild. Steam-Deck-/Linux-Unterstuetzung
+ist spaeter geplant, aktuell nicht priorisiert und kein gegenwaertiges Gate.
 
 KR-5005 verwendet ab Portprojektvertrag `91` einen echten schnellen
 Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
@@ -214,8 +220,10 @@ optimiert. Der finale `gate`-Build bleibt davon getrennt voll optimiert.
 Der reale Sonic-Mikrovergleich sank fuer vier identische TUs von `16,542 s`
 mit `/O1` auf `4,560 s` mit `/Od`. Der anschliessende kalte Vollport schrieb
 233 Host-TUs, beendete Export und Packaging in `408,278 s` bei `337,205 s`
-Hostbuildzeit und bestand den Post-Link-Audit. Die sichtbare Produktabnahme
-bleibt wegen der offenen Post-Overlay-Callback-/Function-Pointer-Kante aus.
+Hostbuildzeit und bestand den Post-Link-Audit. Die damalige offene Post-
+Overlay-Callback-/Function-Pointer-Kante ist im v74-Stand geschlossen; die
+vollstaendige sichtbare Produktabnahme bleibt wegen der nachfolgenden nativen
+Host-Timing-Grenze aus.
 
 Der erste Lauf dieses Binaries lokalisierte zudem eine generische
 Bootstrapluecke: identity-bound Titel-RAM musste vor den Laufzeit-
@@ -227,18 +235,23 @@ statische AOT-Lauf.
 Der vorherige Source-Snapshot erweiterte diesen KR-5005-Pfad um echte
 Post-Bootstrap-AOT-Roots und resumierbare Continuations sowie die
 Dispatchability-Weitergabe durch CFG und Optimierung. Die Closure- und
-Nested-AOT-Fehlertransport-Pruefungen sind abgeschlossen; das Produktgate
-bleibt wegen der offenen Post-Overlay-Callback-/Function-Pointer-Kante offen. Provider- und
+Nested-AOT-Fehlertransport-Pruefungen sind abgeschlossen; die spaetere
+Registrar-/Objektfeld-Callback-Kante ist ebenfalls geschlossen. Das
+Produktgate bleibt am nachfolgenden Host-Timing-Vertrag offen. Provider- und
 Draw-IR bleiben backendneutral; D3D11 ist zunaechst
 das Windows-Backend, waehrend Steam-Deck-/Linux-Unterstuetzung spaeter und
 nicht als aktuelle Prioritaet vorgesehen ist.
 
-Der aktuelle Produktbeleg vervollstaendigte Film `id=0` mit `200`
+Ein frueherer Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
-`200` sichtbar nichtschwarzen Frames. Der schwarze/stale-Overlay-Uebergang ist
+`200` intern als nichtschwarz klassifizierten Frames. Der aktuelle v74-
+Direktlauf bleibt real vollstaendig schwarz; die gemeinsame Offscreen-/
+Compose-/Swapchain-Grenze ist deshalb offen. Der fruehere schwarze/stale-
+Overlay-Uebergang war
 geschlossen. Der Lauf materialisiert danach Stage-Content, sechs dynamische
-Oberflaechen, Texturen und ein natives Modell und endet erst an einem fehlenden
-statischen List-Callback. Film `id=1`/Opening und Hauptmenue bleiben offen. Im
+Oberflaechen, Texturen und ein natives Modell, passiert die anschliessende
+gespeicherte Callback-Kette und endet erst an einer offenen Host-Timing-
+Unterfunktion. Film `id=1`/Opening und Hauptmenue bleiben offen. Im
 Presented-by-SEGA-Pfad haben Frames `1--189`
 native Draws; Frame `190` und `191` wiederholen bei geschlossenem GPU-Frame
 das letzte abgeschlossene Bild. Der Present-or-Repeat-Vertrag ist bestaetigt;
@@ -260,6 +273,18 @@ Codegen erreichte `149/149` Treffer und der Hostbuild `200/203` Objekttreffer.
 Gegenueber dem identischen kalten v71-Export mit `422,637 s` ist das etwa
 `17,4x` schneller. Die Closurezahl bleibt bis zum vollstaendigen statischen
 Replacement-Reachability-Beweis unveraendert.
+
+Der v74-Export bindet externe erreichbare CFG-Bloecke als lokale
+Analyseowner, verfolgt statische Codepointer durch Registrar und Objektfeld
+und verwendet GameProject-Funktionswissen nur noch als Non-Root-Hint. Er
+erzeugte `5.316` Funktionen in `158` Partitionen und `213` Host-TUs.
+Gegenueber v73 sind das `+111` Funktionen/`+2` Partitionen, gegenueber v72
+`+213`/`+9`. Das Inventar stieg auf `2.029` rohe und `618` guarded Callback-
+Kandidaten; `326.461/4.194.304` Shape-Arbeitseinheiten blieben ohne
+Truncation oder Budgetende. Der direkte Produktlauf passiert den frueheren
+Callback-Endpunkt. Die Hardware-Closure bleibt bei `850` Sites, `47`
+geschlossen, `803` offen und `129` Owner, da kein Hardwareprovider vorzeitig
+als ersetzt gilt.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -306,11 +331,11 @@ letzte reale Produktevidenz:
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
   Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 22,
-  PVR-State-Contract 3, Portprojektvertrag 92, Native-Port-Profilvertrag 15
-  Analyzer-ABI 40
+  PVR-State-Contract 3, Portprojektvertrag 93, Native-Port-Profilvertrag 16
+  Analyzer-ABI 41
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 33, AOT-Partitionsschema 7,
+  Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
   Port-Metadata-Cache-Schema 4
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht

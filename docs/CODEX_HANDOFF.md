@@ -31,7 +31,7 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `15`, Portprojektvertrag `92` und der Linkmap-Audit verhindern
+Profilvertrag `16`, Portprojektvertrag `93` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
 NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
@@ -104,17 +104,22 @@ CallbackTable-Roots, sichere Replacement-Reachability, Linkmap-/PE-Importaudit
 und der Nested-AOT-Fehlertransport sind reviewt und geschlossen. Die
 Provider-/Draw-IR-Grenze bleibt backendneutral; D3D11 ist zunaechst das
 Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist spaeter geplant und
-aktuell keine Prioritaet. Die Grafik-Foundation ist fuer den aktuell erreichten
-Produktpfad geschlossen: Stage-Content, dynamische Oberflaechen, Texturen und
+aktuell keine Prioritaet. Die Grafik-Foundation ist source-seitig weitgehend
+implementiert, produktseitig aber wieder offen: Stage-Content, dynamische
+Oberflaechen, Texturen und
 NINJA-Modellpunkte laufen mit vollstaendigen Drawstates, homogenem GPU-
 Clipping, perspektivischer Interpolation und reziproker Depth-/Fog-Semantik.
 Die frueheren Texture- und Mixed-Clip-Stops werden ohne TA-/QACR-Reentry
 passiert. Film `id=0` wurde mit
 `200` dekodierten, `200` praesentierten und `200` sichtbar nichtschwarzen
-Frames sowie `294.016` Audioframes abgeschlossen; Film `id=1`/Opening und
-Hauptmenue bleiben offen. Der neue Endpunkt ist ein fehlender statischer List-
-Callback und damit die generische Callback-/AOT-Closure. Im Presented-by-SEGA-
-Pfad haben Frames 1--189 native
+Frames sowie `294.016` Audioframes abgeschlossen; der aktuelle v74-Direktlauf
+bleibt trotz laufendem Audio und intern gemeldeten Draws/Presents im real
+sichtbaren Fenster vollstaendig schwarz. Die Compose-/Swapchain-Grenze braucht
+daher einen echten Pixelbeweis. Film `id=1`/Opening und Hauptmenue bleiben
+offen. Die danach beobachtete Registrar-/Objektfeld-Callback-Kette ist im v74-
+Export generisch geschlossen und wird passiert; der naechste typisierte
+Ausfuehrungsendpunkt liegt an einer Host-Timing-Unterfunktion. Im frueheren
+Presented-by-SEGA-Pfad hatten Frames 1--189 native
 Draws; Frame 190 und 191 wiederholen bei geschlossenem GPU-Frame das letzte
 abgeschlossene Bild. Der generische Present-or-Repeat-Vertrag ist bestaetigt:
 Frame 190 und 191
@@ -137,6 +142,15 @@ Die Hardware-Closure bleibt bis zum vollstaendigen Replacement-Reachability-
 Beweis unveraendert; Produktfortschritt und statische Closurezahl sind hier
 bewusst getrennte Belege.
 
+Der v74-Export erzeugte `5.316` Funktionen in `158` Partitionen und `213`
+Host-TUs. Gegenueber v73 sind dies `+111` Funktionen und `+2` Partitionen,
+gegenueber v72 `+213` und `+9`. Das positive Inventar stieg von v73
+`953/508` auf `2.029` rohe und `618` guarded Callback-Kandidaten;
+`326.461/4.194.304` Shape-Arbeitseinheiten blieben ohne Truncation oder
+Budgetende. `42` latente Module und `849/849` PRS-Decodes blieben
+vollstaendig. Die Hardware-Closure blieb bei `850/47/803/129`, weil noch kein
+weiterer Hardwareprovider als ersetzt bewiesen ist.
+
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
 24-Worker-Build in `14,2 s` bestaetigt. Dieser historische Abschnitt ist kein
@@ -151,19 +165,19 @@ oder Interpreter-Symbole.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
 Aktuell gelten Runtime-ABI `104`,
-PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
+PlatformServices-ABI `14`, Analyzer-ABI `41`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`22`, PVR-State-Contract `3`, Portprojektvertrag `92` und Native-Port-
-Profilvertrag `15`.
+`22`, PVR-State-Contract `3`, Portprojektvertrag `93` und Native-Port-
+Profilvertrag `16`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 `native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist im
 aktuellen Stand durch Backend-Interface-ABI `22` versioniert; bestehende generierte Ports muessen neu
 exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `33`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`,
 Port-Metadata-Cache-Schema: `4`,
-NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `3`, Hookkarte `v3`,
+NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `4`, Hookkarte `v3`,
 Hardware-Closure `v5` und GameProject-Metadaten `katana-game-project-v5`.
 
 Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit

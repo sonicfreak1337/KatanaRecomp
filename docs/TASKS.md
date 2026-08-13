@@ -222,18 +222,24 @@ D3D11 erzeugt vollstaendige Mip-Subresources; Registry, Materialisierung und
 Release sind transaktional und exceptionsicher. Es gab keinen Sonic-
 Produktlauf; `261` PRS-Dateien sind Nicht-PVM-Inhalte und kein Decoderfehler.
 
-## [x] KR-5005-Unterauftrag - Native Modell-/GPU-Grafik-Foundation
+## [ ] KR-5005-Unterauftrag - Native Modell-/GPU-Grafik-Foundation
 
 Prioritaet: P0 Foundation-Unterauftrag
 
-Status: fuer den aktuell erreichten Produktpfad source- und produktseitig
-abgeschlossen; spielweite Abdeckung bleibt bis Menue und Gameplay unbewiesen.
+Status: source-seitig weitgehend implementiert, aber produktseitig wieder
+offen. Der aktuelle Direktlauf bleibt im real sichtbaren Fenster vollstaendig
+schwarz; interne Draw-/Nichtschwarzzaehler sind daher kein hinreichender
+Sichtbeweis. Die native Draw-IR-, Offscreen-, Compose- und Swapchain-Kette
+muss bis zum real sichtbaren Pixelnachweis korreliert werden.
 Die backendneutrale Draw-IR traegt Blend, Depth, Rasterizer, Sampler, Material,
 Licht, Fog und Alpha-Test. NINJA-Modellpunkte bleiben im Objektraum; die native
 GPU uebernimmt homogenes Clipping, perspektivische Interpolation und reziproke
 Depth-/Fog-Koordinaten. Der reale Lauf passiert die frueheren Texture- und
-Mixed-Clip-Stops ohne TA-/QACR-Reentry oder Software-PVR und endet erst an
-einem nicht statisch inventarisierten List-Callback.
+Mixed-Clip-Stops ohne TA-/QACR-Reentry oder Software-PVR. Die danach
+beobachtete Registrar-/Objektfeld-Callback-Kette ist im v74-Export generisch
+geschlossen und wird passiert. Der schwarze Output bleibt dennoch ein
+Grafik-P0; der nachgelagerte Ausfuehrungsendpunkt liegt an einer Host-Timing-
+Unterfunktion.
 
 Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
 `katana-content-root.txt` transaktional; der Altport bleibt bis zum
@@ -258,10 +264,13 @@ Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
 Die generischen Bootstrap-, Materialisierungs-, Boundary-, Overlay-,
 Callback-Root-, Replacement-Reachability-, Linkmap-/PE-Import- und
 Nested-AOT-Fehlertransport-Findings sind im aktuellen Source-Review
-geschlossen beziehungsweise ueberholt. Present-or-Repeat, die
-Lazy-AOT-Aliasnormalisierung und die aktuell erreichte Grafik-Foundation sind
-bestaetigt. Der aktive P0 ist jetzt die generische statische Callback-/Listen-
-Closure; KR-5005 bleibt als Produktgate offen.
+geschlossen beziehungsweise ueberholt. Present-or-Repeat und die Lazy-AOT-
+Aliasnormalisierung sind source-seitig gebunden. Der aktuelle sichtbare
+Schwarzbefund widerlegt aber eine produktseitig geschlossene Grafik-
+Foundation. Die statische Callback-/Listen-Closure ist im v74-Export
+geschlossen; aktive P0s sind zuerst die sichtbare native Ausgabekette und
+danach der generische Host-Timing-Vertrag. KR-5005 bleibt als Produktgate
+offen.
 Ein KR-5005-Zwischenfix transportiert
 die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
@@ -302,14 +311,26 @@ Hostbuild `200/203` Objekttreffer. Der identische kalte v71-Export brauchte
 `422,637 s`; der warme Pfad ist damit etwa `17,4x` schneller. Keine Emulation
 oder Fallbacks sind erlaubt.
 
-Der aktuelle Produktbeleg vervollstaendigte Film `id=0` mit `200` dekodierten,
-`200` praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
-Audioframes. Das Checkpoint-Runtime-Image wurde vor dem ersten Stage-Overlay
+Der v74-Export erzeugte `5.316` Funktionen in `158` Partitionen und `213`
+Host-TUs. Gegenueber v73 sind das `+111` Funktionen/`+2` Partitionen,
+gegenueber v72 `+213`/`+9`. Das Inventar stieg auf `2.029` rohe und `618`
+guarded Callback-Kandidaten; `326.461/4.194.304` Shape-Arbeitseinheiten
+blieben ohne Truncation oder Budgetende. Der Direktlauf passiert den alten
+Callback-Endpunkt. Die Hardware-Closure bleibt bei `850/47/803/129`, weil
+noch kein weiterer Hardwareprovider als vollstaendig ersetzt bewiesen wurde.
+
+Ein frueherer Produktbeleg vervollstaendigte Film `id=0` mit `200`
+dekodierten, `200` praesentierten und `200` intern als nichtschwarz
+klassifizierten Frames sowie `294.016` Audioframes. Der aktuelle v74-
+Direktlauf ist im real sichtbaren Fenster vollstaendig schwarz; die
+Ausgabekette ist deshalb erneut offen. Das Checkpoint-Runtime-Image wurde vor
+dem ersten Stage-Overlay
 einmalig deaktiviert und danach wurden Overlay-, Settings- und Camera-Assets
 identitaetsgebunden geladen; der schwarze/stale-Overlay-Uebergang ist
 geschlossen. Danach werden Stage-Content, dynamische Oberflaechen, Texturen und
 ein NINJA-Modell nativ verarbeitet; die frueheren Texture- und Mixed-Clip-Stops
-werden passiert. Der Lauf endet an einem fehlenden statischen List-Callback.
+werden passiert. Die gespeicherte Callback-Kette wird ebenfalls passiert; der
+Ausfuehrungslauf endet danach an einer Host-Timing-Unterfunktion.
 Film `id=1`/Opening und Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad
 haben Frames 1--189 native Draws; Frame 190 und 191 wiederholen bei
 geschlossenem GPU-Frame das letzte abgeschlossene Bild. Der generische
@@ -374,12 +395,12 @@ letzte reale Produktevidenz:
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
   Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 22,
-  PVR-State-Contract 3, Portprojektvertrag 92, Native-Port-Profilvertrag 15
-  Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28,
+  PVR-State-Contract 3, Portprojektvertrag 93, Native-Port-Profilvertrag 16
+  Analyzer-ABI 41, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
-  Analysis Directives 3, Hookkarte v3, Hardware-Closure v5,
+  Analysis Directives 4, Hookkarte v3, Hardware-Closure v5,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 33, AOT-Partitionsschema 7,
+  Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
   Port-Metadata-Cache-Schema 4
 
 historischer Diagnosebefund:

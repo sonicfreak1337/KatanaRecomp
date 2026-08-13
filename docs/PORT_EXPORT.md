@@ -182,13 +182,18 @@ gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
 Schalter ist darauf begrenzt.
 
-Der aktuelle Analyzer-ABI-40-Export ergaenzt einen begrenzten Static-Callback-
+Der aktuelle Analyzer-ABI-41-Export ergaenzt einen begrenzten Static-Callback-
 Inventarpfad und eine kompakte SH-4-Switch-Erkennung. Latent-AOT-Quellen mit
 Sega-PRS-Transform tragen getrennte encoded/decoded Identitaeten; Quellbudget,
 Decoded-Budget, Cache, Telemetry und Source-Map bleiben getrennte Domaenen.
 Loaded-AOT-Rebase bindet gemischte Module nur nach exakter AOT-Codeblock-
 Closure. Das Metadaten-Cache-Schema steht auf `4`, das Emissionsprofil auf
-`32`.
+`34`. Analysis Directives v4 fuehrt Non-Root-Funktionshints ein: Sie duerfen
+einen bereits semantisch erreichten Callback-Entry bestaetigen, aber niemals
+selbst einen Root oder eine CFG-Kante erzeugen. Externe erreichbare CFG-
+Bloecke werden fuer den Inventarpfad als lokale Owner materialisiert, damit
+Registrar-/Objektfeld-Codepointer bis zum spaeteren indirekten Aufruf erhalten
+bleiben.
 
 Der identity-bound Titelbootstrap materialisiert initialen RAM-/Titelzustand
 vor Aktivierung der Laufzeit-Immutable-Guards. In dieser Phase stehen keine

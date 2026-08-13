@@ -1152,6 +1152,12 @@ std::string make_boot_analysis_cache_key(
             append_key_value(canonical, boundary.line);
             append_key_value(canonical, boundary.size);
         }
+        append_key_value(
+            canonical, overrides->function_entry_hints.size());
+        for (const auto& entry_hint : overrides->function_entry_hints) {
+            append_key_value(canonical, entry_hint.address);
+            append_key_value(canonical, entry_hint.line);
+        }
         append_key_value(canonical, overrides->jumps.size());
         for (const auto& jump : overrides->jumps) {
             append_key_value(canonical, jump.instruction_address);

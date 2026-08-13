@@ -19,6 +19,8 @@ class GuardedNativeEntryShapeCache;
     const katana::io::ExecutableImage& image,
     std::span<const katana::sh4::DisassemblyLine> lines,
     std::span<const FunctionCandidate> function_candidates,
+    std::span<const std::uint32_t> external_block_entries,
+    std::span<const std::uint32_t> non_root_function_entry_hints,
     GuardedNativeEntryShapeCache& native_entry_shapes);
 
 } // namespace katana::analysis::detail

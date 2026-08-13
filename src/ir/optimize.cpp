@@ -78,13 +78,34 @@ void require_dispatchability_contract(
             }
         }
     }
-    if (found_blocks.size() != contract.block_entries.size())
+    if (found_blocks.size() != contract.block_entries.size()) {
+        const auto missing = std::find_if(
+            contract.block_entries.begin(), contract.block_entries.end(),
+            [&](const auto address) { return !found_blocks.contains(address); });
+        if (missing == contract.block_entries.end())
+            throw std::invalid_argument(
+                "Extern erreichbare IR-Blockeintritte sind nicht "
+                "kanonisch eindeutig.");
         throw std::invalid_argument(
-            "Extern erreichbarer IR-Blockeintritt fehlt.");
+            "Extern erreichbarer IR-Blockeintritt fehlt: " +
+            std::to_string(*missing));
+    }
     if (found_continuations.size() !=
-        contract.instruction_continuations.size())
+        contract.instruction_continuations.size()) {
+        const auto missing = std::find_if(
+            contract.instruction_continuations.begin(),
+            contract.instruction_continuations.end(),
+            [&](const auto address) {
+                return !found_continuations.contains(address);
+            });
+        if (missing == contract.instruction_continuations.end())
+            throw std::invalid_argument(
+                "Extern erreichbare IR-Instruktionsfortsetzungen sind "
+                "nicht kanonisch eindeutig.");
         throw std::invalid_argument(
-            "Extern erreichbare IR-Instruktionsfortsetzung fehlt.");
+            "Extern erreichbare IR-Instruktionsfortsetzung fehlt: " +
+            std::to_string(*missing));
+    }
 }
 
 void canonicalize(Instruction& instruction) {

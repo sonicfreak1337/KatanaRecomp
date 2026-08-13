@@ -1573,6 +1573,17 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 katana::runtime::GameProjectSymbolKind::Function)
                 overrides.functions.push_back({symbol.address, 0u});
         }
+    } else {
+        // Native products do not root descriptive function symbols. Retain
+        // them as non-root hints so an independently proven callback-
+        // registrar flow can promote exactly the referenced entry without
+        // reviving the entire symbol map.
+        for (const auto& symbol : definition.symbols) {
+            if (symbol.kind ==
+                katana::runtime::GameProjectSymbolKind::Function)
+                overrides.function_entry_hints.push_back(
+                    {symbol.address, 0u});
+        }
     }
     // Callback tables are external invocation surfaces, not descriptive
     // symbols. Their identity-bound targets remain native product roots even
@@ -1618,6 +1629,19 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 return left.address == right.address;
             }),
         overrides.functions.end());
+    std::sort(overrides.function_entry_hints.begin(),
+              overrides.function_entry_hints.end(),
+              [](const auto& left, const auto& right) {
+                  return left.address < right.address;
+              });
+    overrides.function_entry_hints.erase(
+        std::unique(
+            overrides.function_entry_hints.begin(),
+            overrides.function_entry_hints.end(),
+            [](const auto& left, const auto& right) {
+                return left.address == right.address;
+            }),
+        overrides.function_entry_hints.end());
     // Jump-table declarations add typed outgoing edges at an already reached
     // dispatch site; unlike functions, symbols and callback tables they do
     // not create product roots. Preserve them in native-port analysis so a

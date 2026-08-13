@@ -130,9 +130,9 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `103`, Analyzer-ABI `40`, Backend-
-Interface-ABI `21`, Portprojektvertrag `91` und Native-Port-Profilvertrag `14`.
-Der aktuelle Export nutzt Native-AOT-Emissionsprofil `33` und
+KR-5000 bindet diese Grenze aktuell an Runtime-ABI `104`, Analyzer-ABI `41`,
+Backend-Interface-ABI `22`, Portprojektvertrag `93` und Native-Port-
+Profilvertrag `16`. Der aktuelle Export nutzt Native-AOT-Emissionsprofil `34` und
 Port-Metadata-Cache-Schema `4`.
 Der aktuelle GameProject-Vertrag steht auf `8`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -282,14 +282,29 @@ Grafik-Foundation verarbeitet danach dynamische Oberflaechen, Texturen,
 NINJA-Modellpunkte, vollstaendige Drawstates, homogenes GPU-Clipping,
 perspektivische Interpolation und reziproke Depth-/Fog-Semantik ohne
 TA-/QACR-Reentry. Die frueheren Texture- und Mixed-Clip-Stops werden passiert;
-der naechste typisierte Laufblocker ist ein fehlender statischer List-Callback.
-Film `id=1`/Opening und Hauptmenue bleiben offen. Im
-Presented-by-SEGA-Pfad haben Frames `1--189` native Draws; Frame `190` und
+die danach beobachtete Registrar-/Objektfeld-Callback-Kette ist im v74-Export
+generisch statisch gebunden und wird passiert. Der naechste typisierte
+Ausfuehrungsendpunkt ist eine Host-Timing-Unterfunktion. Der aktuelle
+Direktlauf bleibt jedoch vom ersten SEGA-Bild an im real sichtbaren Fenster
+vollstaendig schwarz, waehrend Audio und Titelablauf weiterlaufen. Interne
+Draw-/Present-/Nichtschwarzzaehler sind damit kein Produktbeweis; die
+Offscreen-/Compose-/Swapchain-Grenze muss durch korrelierte Pixelproben
+geschlossen werden. Film `id=1`/Opening und Hauptmenue bleiben offen. Im
+frueheren Presented-by-SEGA-Pfad hatten Frames `1--189` native Draws; Frame `190` und
 `191` wiederholen das letzte abgeschlossene Bild. Der generische
 Present-or-Repeat-Vertrag ist bestaetigt; der synthetische Schwarz-Clear ist
 geschlossen. Die Hardware-Closure steht aktuell bei `850` Sites (`47`
 geschlossen, `803` offen, `129` Owner); ein neuer 9-Slot-/8-Unique-
 Callbackvektor fuehrte zu `96` weiteren Exportfunktionen.
+
+Der v74-Beleg umfasst `5.316` Funktionen in `158` Partitionen und `213`
+Host-TUs. Das positive Inventar stieg gegenueber v73 von `953/508` auf
+`2.029` rohe und `618` guarded Callback-Kandidaten; die Shape-Pruefung blieb
+mit `326.461/4.194.304` Arbeitseinheiten ohne Truncation oder Budgetende.
+`42` latente Module und `849/849` PRS-Decodes blieben vollstaendig. Die
+Hardware-Closure bleibt bei `850` Sites (`47` geschlossen, `803` offen,
+`129` Owner), weil die Callback-Erweiterung AOT-Abdeckung und keinen
+Hardwareprovider schliesst.
 
 Der warme v72-Beleg erzeugte `5.103` Funktionen in `149` Partitionen und
 `203` Host-TUs in `24,356 s` mit `149/149` Codegen- und `200/203`

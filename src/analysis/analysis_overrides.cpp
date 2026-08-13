@@ -142,6 +142,14 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                               "function-boundary"),
                  line_number,
                  size});
+        } else if (key == "function_entry_hint" && fields.size() == 1u) {
+            overrides.function_entry_hints.push_back(
+                {parse_number(fields[0],
+                              16,
+                              path,
+                              line_number,
+                              "function-entry-hint"),
+                 line_number});
         } else if (key == "jump" && fields.size() == 2u) {
             overrides.jumps.push_back(
                 {parse_number(fields[0], 16, path, line_number, "jump-address"),
@@ -173,8 +181,11 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         fail(path, 0u, "Pflichtfeld version fehlt.");
     }
     if (overrides.version != 1u && overrides.version != 2u &&
+        overrides.version != 3u &&
         overrides.version != analysis_directives_current_version) {
-        fail(path, 0u, "nur Analyseanweisungs-Version 1, 2 oder 3 wird unterstuetzt.");
+        fail(path, 0u,
+             "nur Analyseanweisungs-Version 1, 2, 3 oder 4 wird "
+             "unterstuetzt.");
     }
     if (overrides.version == 1u) {
         if (saw_schema || saw_mode) {
@@ -182,7 +193,7 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         }
         overrides.mode = AnalysisDirectiveMode::Override;
     } else if (!saw_schema || !saw_mode) {
-        fail(path, 0u, "Version 2 und 3 brauchen schema und mode.");
+        fail(path, 0u, "Version 2, 3 und 4 brauchen schema und mode.");
     }
 
     if (overrides.version < 3u && !overrides.function_boundaries.empty())
@@ -192,12 +203,20 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                     overrides.jump_tables.end(),
                     [](const auto& table) { return !table.require_dispatch; }))
         fail(path, 0u, "jump_table_edge braucht Analyseanweisungs-Version 3.");
+    if (overrides.version < 4u && !overrides.function_entry_hints.empty())
+        fail(path, 0u,
+             "function_entry_hint braucht Analyseanweisungs-Version 4.");
 
     std::sort(overrides.functions.begin(),
               overrides.functions.end(),
               [](const auto& left, const auto& right) { return left.address < right.address; });
     std::sort(overrides.function_boundaries.begin(),
               overrides.function_boundaries.end(),
+              [](const auto& left, const auto& right) {
+                  return left.address < right.address;
+              });
+    std::sort(overrides.function_entry_hints.begin(),
+              overrides.function_entry_hints.end(),
               [](const auto& left, const auto& right) {
                   return left.address < right.address;
               });
@@ -223,6 +242,13 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
                                return left.address == right.address;
                            }) != overrides.function_boundaries.end()) {
         fail(path, 0u, "doppelter function_boundary-Eintrag.");
+    }
+    if (std::adjacent_find(overrides.function_entry_hints.begin(),
+                           overrides.function_entry_hints.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.address == right.address;
+                           }) != overrides.function_entry_hints.end()) {
+        fail(path, 0u, "doppelter function_entry_hint-Eintrag.");
     }
     if (std::adjacent_find(overrides.jumps.begin(),
                            overrides.jumps.end(),
