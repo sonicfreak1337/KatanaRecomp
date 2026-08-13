@@ -10,17 +10,17 @@
   ersten Stage-Overlay einmalig deaktiviert und danach wurden Overlay-,
   Settings- und Camera-Assets identitaetsgebunden geladen; der schwarze/stale-
   Overlay-Uebergang ist geschlossen. Film `id=1`/Opening und Hauptmenue sind
-  noch nicht erreicht. Der aktuelle typisierte Blocker ist
-  `MissingStaticEntry` an einer statisch nicht normalisierten Runtime-Image-/
-  Alias-Identitaet einer post-Overlay Callback-/Function-Pointer-Kante. Film
-  `id=1`/Opening und Hauptmenue sowie der schwarze Zwischenbildfehler bleiben
-  offen.
+  noch nicht erreicht. Der aktuelle typisierte Blocker ist der Modell-/Textur-
+  Pfad mit `0x53414704`; Film `id=1`/Opening und Hauptmenue bleiben offen.
+  Der generische Present-or-Repeat-Vertrag ist bestaetigt: Frame `190` und
+  `191` wiederholen das letzte abgeschlossene Bild statt einen leeren Clear zu
+  praesentieren.
 
 - Aktueller Vertragsstand: Runtime-ABI `101`, Analyzer-ABI `40`,
   Backend-Interface-ABI `21`, Portprojektvertrag `90`, Native-Port-Profilvertrag
   `13`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
   Native-Grafikvertrag `2`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
-  `30` und Port-Metadata-Cache-Schema `4`.
+  `32` und Port-Metadata-Cache-Schema `4`.
 
 - Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
   `3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded
@@ -31,6 +31,24 @@
   die nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
   post-Overlay Callback-/Function-Pointer-Kante. Die groessere Closure ist
   Folge der erweiterten Analyseabdeckung, keine Hardware-Regression.
+
+- Seit `cf15c229` bleibt der PRS-Transform auf den statisch rekompilierten
+  Originalcode begrenzt; atomar retired werden nur ueberlappende Runtime-
+  Images vor dem Transform. Der generische Lazy-AOT-Aliasfehler ist behoben:
+  Nach `bind_entry` wird der Entry-Source in die gebundene P1-Sicht
+  normalisiert, sodass P0/P1/P2-Ziele den Latent-AOT-Owner erreichen.
+  Film `id=0` bestaetigt erneut `200/200` Video und `294.016` Audioframes;
+  danach endet der native Modell-/Texturpfad typisiert mit `0x53414704`.
+  Die Hardware-Closure steht bei `850` Sites (`47` geschlossen, `803` offen,
+  `129` Owner); ein neuer 9-Slot-/8-Unique-Callbackvektor fuehrte zu `96`
+  weiteren Exportfunktionen. Das ist erweiterte Abdeckung, keine Regression.
+
+- Der aktuelle Presented-by-SEGA-Befund ist geschlossen: Frames `1--189`
+  besitzen `6--7` native Draws; Frame `190` und `191` wiederholen bei
+  geschlossenem GPU-Frame das letzte abgeschlossene Bild. Der generische
+  Present-or-Repeat-Vertrag verhindert den synthetischen Schwarz-Clear. Film
+  `id=1`/Opening und Hauptmenue sind nicht erreicht; der Modell-/Textur-Stop
+  bleibt mit `0x53414704` offen.
 
 - Ein vorheriger KR-5005-Zwischenstand schloss die generische
   Post-Bootstrap-/AOT- und Closure-Pruefung: materialisierte Post-Bytes werden

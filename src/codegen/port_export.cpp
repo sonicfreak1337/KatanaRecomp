@@ -12810,7 +12810,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
               "    if (!static_return_nop_callback_fastpath_enabled() ||\n"
               "        active_services == nullptr)\n"
               "        return false;\n"
-              "    const auto source = katana::runtime::unrelocate_code_address(target);\n"
+              "    auto canonical_target = target;\n"
+              "    if ((canonical_target >> 29u) < 6u)\n"
+              "        canonical_target =\n"
+              "            katana::runtime::canonical_physical_address(canonical_target) |\n"
+              "            0x80000000u;\n"
+              "    const auto source =\n"
+              "        katana::runtime::unrelocate_code_address(canonical_target);\n"
               "    thread_local std::uint32_t cached_source = 0u;\n"
               "    thread_local const StaticReturnNopCallbackProof* cached_proof = nullptr;\n"
               "    if (cached_proof == nullptr || cached_source != source) {\n"
@@ -14422,12 +14428,15 @@ std::string native_product_main(
            "#include <cstddef>\n"
            "#include <cstdint>\n"
            "#include <filesystem>\n"
+           "#include <fstream>\n"
            "#include <iostream>\n"
            "#include <stdexcept>\n"
+           "#include <string>\n"
            "#include <system_error>\n"
            "#include <string_view>\n\n"
            "int main(int argc, char** argv) {\n"
            "    katana::runtime::CpuState* diagnostic_cpu = nullptr;\n"
+           "    const bool direct_launch = argc == 1;\n"
            "    try {\n"
            "        constexpr bool hardware_closure_complete = " +
            std::string(hardware_closure_complete ? "true" : "false") +
@@ -14441,12 +14450,15 @@ std::string native_product_main(
            "        constexpr bool product_contract_complete =\n"
            "            hardware_closure_complete && !has_bringup_probes;\n"
            "        const bool explicit_bringup = !product_contract_complete &&\n"
-           "            (argc == 4 || argc == 6) && std::string_view(argv[1]) ==\n"
-           "                \"--bringup-incomplete-hardware-closure\" &&\n"
-           "            std::string_view(argv[2]) == \"--content-root\";\n"
+           "            (direct_launch ||\n"
+           "             ((argc == 4 || argc == 6) &&\n"
+           "              std::string_view(argv[1]) ==\n"
+           "                  \"--bringup-incomplete-hardware-closure\" &&\n"
+           "              std::string_view(argv[2]) == \"--content-root\"));\n"
            "        const bool closed_product = product_contract_complete &&\n"
-           "            (argc == 3 || argc == 5) &&\n"
-           "            std::string_view(argv[1]) == \"--content-root\";\n"
+           "            (direct_launch ||\n"
+           "             ((argc == 3 || argc == 5) &&\n"
+           "              std::string_view(argv[1]) == \"--content-root\"));\n"
            "        const auto optional_argument = explicit_bringup ? 4 : 3;\n"
            "        const bool has_presentation_fps =\n"
            "            (explicit_bringup || closed_product) &&\n"
@@ -14486,8 +14498,69 @@ std::string native_product_main(
            "                      << \"unresolved_hardware_sites=\"\n"
            "                      << hardware_gap_count\n"
            "                      << \" probes=\" << has_bringup_probes << '\\n';\n"
-           "        const auto content_root_argument =\n"
-           "            explicit_bringup ? 3 : 2;\n"
+           "        std::error_code executable_error;\n"
+           "        auto executable_path = std::filesystem::weakly_canonical(\n"
+           "            std::filesystem::path(argv[0]), executable_error);\n"
+           "        if (executable_error || executable_path.empty())\n"
+           "            executable_path = std::filesystem::absolute(argv[0]);\n"
+           "        std::filesystem::path content_root;\n"
+           "        if (direct_launch) {\n"
+           "            const auto configuration_path =\n"
+           "                executable_path.parent_path() /\n"
+           "                \"katana-content-root.txt\";\n"
+           "            std::error_code configuration_error;\n"
+           "            const bool has_configuration =\n"
+           "                std::filesystem::exists(configuration_path,\n"
+           "                                        configuration_error);\n"
+           "            if (configuration_error)\n"
+           "                throw std::runtime_error(\n"
+           "                    \"direct-launch-content-configuration-unreadable\");\n"
+           "            if (has_configuration) {\n"
+           "                std::ifstream configuration(configuration_path);\n"
+           "                std::string configured_root;\n"
+           "                if (!configuration ||\n"
+           "                    !std::getline(configuration, configured_root))\n"
+           "                    throw std::runtime_error(\n"
+           "                        \"direct-launch-content-configuration-empty\");\n"
+           "                const auto first = configured_root.find_first_not_of(\n"
+           "                    \" \\t\\r\\n\");\n"
+           "                const auto last = configured_root.find_last_not_of(\n"
+           "                    \" \\t\\r\\n\");\n"
+           "                if (first == std::string::npos)\n"
+           "                    throw std::runtime_error(\n"
+           "                        \"direct-launch-content-configuration-empty\");\n"
+           "                configured_root = configured_root.substr(\n"
+           "                    first, last - first + 1u);\n"
+           "                std::string trailing_line;\n"
+           "                while (std::getline(configuration, trailing_line)) {\n"
+           "                    if (trailing_line.find_first_not_of(\n"
+           "                            \" \\t\\r\\n\") != std::string::npos)\n"
+           "                        throw std::runtime_error(\n"
+           "                            \"direct-launch-content-configuration-multiline\");\n"
+           "                }\n"
+           "                content_root =\n"
+           "                    std::filesystem::path(configured_root);\n"
+           "                if (content_root.is_relative())\n"
+           "                    content_root = executable_path.parent_path() /\n"
+           "                                   content_root;\n"
+           "            } else {\n"
+           "                content_root = executable_path.parent_path() /\n"
+           "                               \"content\";\n"
+           "            }\n"
+           "            std::cerr << \"KATANA_NATIVE_DIRECT_LAUNCH content_root=\"\n"
+           "                      << content_root.string() << '\\n';\n"
+           "        } else {\n"
+           "            const auto content_root_argument =\n"
+           "                explicit_bringup ? 3 : 2;\n"
+           "            content_root = argv[content_root_argument];\n"
+           "        }\n"
+           "        std::error_code content_root_error;\n"
+           "        if (!std::filesystem::is_directory(content_root,\n"
+           "                                           content_root_error) ||\n"
+           "            content_root_error)\n"
+           "            throw std::runtime_error(\n"
+           "                \"native content directory missing; set \"\n"
+           "                \"katana-content-root.txt beside game.exe\");\n"
            "        const auto& definition = " +
            entry_namespace +
            "::native_port_definition();\n"
@@ -14517,7 +14590,7 @@ std::string native_product_main(
            "        katana::runtime::NativePortMemory memory(\n"
            "            definition.bootstrap.cache_control_value);\n"
            "        memory.load_verified_images(\n"
-           "            std::filesystem::path(argv[content_root_argument]),\n"
+           "            content_root,\n"
            "            definition.images);\n"
            "        auto& cpu = memory.cpu();\n"
            "        diagnostic_cpu = &cpu;\n"
@@ -14527,13 +14600,8 @@ std::string native_product_main(
            "                  definition.bootstrap.vector_base,\n"
            "                  definition.bootstrap.status_register,\n"
            "                  definition.bootstrap.fpscr});\n"
-           "        std::error_code executable_error;\n"
-           "        auto executable_path = std::filesystem::weakly_canonical(\n"
-           "            std::filesystem::path(argv[0]), executable_error);\n"
-           "        if (executable_error || executable_path.empty())\n"
-           "            executable_path = std::filesystem::absolute(argv[0]);\n"
            "        katana::runtime::NativePortPlatformConfig platform_config;\n"
-           "        platform_config.content_root = argv[content_root_argument];\n"
+           "        platform_config.content_root = content_root;\n"
            "        platform_config.user_data_root =\n"
            "            executable_path.parent_path() / \"user-data\";\n"
            "        platform_config.project_id = definition.project_id;\n"
@@ -14581,11 +14649,19 @@ std::string native_product_main(
            "                  << \" bootstrap_phase=\"\n"
            "                  << static_cast<unsigned>(context.bootstrap_phase)\n"
            "                  << '\\n';\n"
+           "        if (direct_launch) {\n"
+           "            std::cerr << \"Press Enter to close.\" << std::flush;\n"
+           "            std::cin.get();\n"
+           "        }\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::NativePortContractError& error) {\n"
            "        std::cerr << \"KATANA_NATIVE_PORT_CONTRACT failure=\"\n"
            "                  << static_cast<unsigned>(error.failure())\n"
            "                  << \" detail=\" << error.what() << '\\n';\n"
+           "        if (direct_launch) {\n"
+           "            std::cerr << \"Press Enter to close.\" << std::flush;\n"
+           "            std::cin.get();\n"
+           "        }\n"
            "        return 1;\n"
            "    } catch (const std::exception& error) {\n"
            "        std::cerr << \"KATANA_NATIVE_PORT_FAILURE \" << error.what();\n"
@@ -14593,6 +14669,10 @@ std::string native_product_main(
            "            std::cerr << \" pc=0x\" << std::hex << diagnostic_cpu->pc\n"
            "                      << \" pr=0x\" << diagnostic_cpu->pr << std::dec;\n"
            "        std::cerr << '\\n';\n"
+           "        if (direct_launch) {\n"
+           "            std::cerr << \"Press Enter to close.\" << std::flush;\n"
+           "            std::cin.get();\n"
+           "        }\n"
            "        return 1;\n"
            "    }\n"
            "}\n";
@@ -15274,7 +15354,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "std::uint32_t normalized_source_address(\n"
               "    const std::uint32_t address) noexcept {\n"
               "    auto canonical = address;\n"
-              "    if ((canonical >> 29u) == 5u) canonical ^= 0x20000000u;\n"
+              "    if ((canonical >> 29u) < 6u)\n"
+              "        canonical =\n"
+              "            katana::runtime::canonical_physical_address(canonical) |\n"
+              "            0x80000000u;\n"
               "    return katana::runtime::unrelocate_code_address(canonical);\n"
               "}\n"
               "const NativePortDispatchEntry* find_exact_entry(\n"
@@ -15500,7 +15583,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "           << services.first_immutable_write_address()\n"
               "           << std::dec << \"-bytes-\"\n"
               "           << services.first_immutable_write_size()\n"
-              "           << \"-kind-\" << static_cast<unsigned>(kind_mask);\n"
+              "           << \"-kind-\" << static_cast<unsigned>(kind_mask)\n"
+              "           << \";pc=0x\" << std::hex << context.cpu->pc\n"
+              "           << \";pr=0x\" << context.cpu->pr\n"
+              "           << \";exit-source=0x\"\n"
+              "           << runtime_dispatch_detail::active_exit_source\n"
+              "                  .virtual_address;\n"
               "    throw katana::runtime::NativePortContractError(\n"
               "        katana::runtime::NativePortContractFailure::\n"
               "            ImmutableMemoryWrite,\n"
@@ -15621,6 +15709,16 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        const auto* entry = runtime_dispatch_detail::find_entry(target);\n"
               "        if (entry == nullptr || entry->function == nullptr)\n"
               "            fail_missing_entry(target);\n"
+              "        const auto entry_source =\n"
+              "            runtime_dispatch_detail::normalized_source_address(target);\n"
+              "        if (runtime_dispatch_detail::\n"
+              "                native_loaded_aot_source_address(entry_source) &&\n"
+              "            (target >> 29u) < 6u) {\n"
+              "            target =\n"
+              "                katana::runtime::canonical_physical_address(target) |\n"
+              "                0x80000000u;\n"
+              "            cpu.pc = target;\n"
+              "        }\n"
               "        katana::runtime::BlockExecutionContext block_context;\n"
               "        block_context.scheduler_cycle =\n"
               "            runtime_dispatch_detail::active_services->scheduler_cycle();\n"
@@ -16633,7 +16731,11 @@ std::string port_install_instructions(
            "Provide a private content directory whose files and byte ranges match the identities "
            "embedded in the native-port definition. The executable verifies every bound image "
            "before executing game code.\n\n"
-           "Run from PowerShell:\n"
+           "For normal direct launch, either place the verified private files in ./content or "
+           "create ./katana-content-root.txt containing exactly one absolute or package-relative "
+           "private content directory. Then game.exe can be started normally or by double-click. "
+           "The local path file is ignored by Git and must not be redistributed.\n\n"
+           "For an explicit product-gate run from PowerShell:\n"
            "  ./run-product-gate.ps1 -Executable ./game.exe -ContentRoot "
            "<private-native-content-directory>\n\n"
            "The original files are opened read-only and are never modified or deleted. Verified "
@@ -18243,6 +18345,83 @@ void validate_native_port_bootstrap_write_payloads(
 
 void preserve_local_port_user_data(const std::filesystem::path& previous_root,
                                    const std::filesystem::path& published_root) {
+    constexpr std::string_view local_content_binding_name =
+        "katana-content-root.txt";
+    constexpr std::uintmax_t maximum_local_content_binding_bytes = 32u * 1024u;
+    const auto path_missing = [](const std::filesystem::file_status& status,
+                                 const std::error_code& error) {
+        return error == std::errc::no_such_file_or_directory ||
+               (!error &&
+                status.type() == std::filesystem::file_type::not_found);
+    };
+    const auto previous_content_binding =
+        previous_root / local_content_binding_name;
+    std::error_code content_binding_error;
+    const auto previous_content_binding_status = std::filesystem::symlink_status(
+        previous_content_binding, content_binding_error);
+    const bool has_previous_content_binding =
+        !path_missing(previous_content_binding_status, content_binding_error);
+    if (has_previous_content_binding) {
+        if (content_binding_error ||
+            !std::filesystem::is_regular_file(
+                previous_content_binding_status) ||
+            unsafe_port_path_link(previous_content_binding,
+                                  previous_content_binding_status))
+            throw std::runtime_error(
+                "Lokale Content-Bindung ist keine sichere regulaere Datei.");
+        content_binding_error.clear();
+        const auto binding_size = std::filesystem::file_size(
+            previous_content_binding, content_binding_error);
+        if (content_binding_error ||
+            binding_size > maximum_local_content_binding_bytes)
+            throw std::runtime_error(
+                "Lokale Content-Bindung ist unlesbar oder zu gross.");
+        std::ifstream binding(previous_content_binding, std::ios::binary);
+        std::string contents(static_cast<std::size_t>(binding_size), '\0');
+        if (!contents.empty())
+            binding.read(contents.data(),
+                         static_cast<std::streamsize>(contents.size()));
+        if (!binding || contents.find('\0') != std::string::npos)
+            throw std::runtime_error(
+                "Lokale Content-Bindung ist kein gueltiger Textvertrag.");
+        const auto first_line_end = contents.find_first_of("\r\n");
+        const auto first_line = contents.substr(0u, first_line_end);
+        if (first_line.find_first_not_of(" \t") == std::string::npos)
+            throw std::runtime_error(
+                "Lokale Content-Bindung besitzt keinen Content-Pfad.");
+        if (first_line_end != std::string::npos &&
+            contents.find_first_not_of(" \t\r\n", first_line_end) !=
+                std::string::npos)
+            throw std::runtime_error(
+                "Lokale Content-Bindung besitzt mehrere Pfadzeilen.");
+    } else if (content_binding_error) {
+        throw std::filesystem::filesystem_error(
+            "Lokale Content-Bindung konnte nicht geprueft werden.",
+            previous_content_binding,
+            content_binding_error);
+    }
+    const auto preserve_content_binding = [&] {
+        if (!has_previous_content_binding) return;
+        const auto published_content_binding =
+            published_root / local_content_binding_name;
+        std::error_code published_binding_error;
+        const auto published_binding_status = std::filesystem::symlink_status(
+            published_content_binding, published_binding_error);
+        if (!path_missing(published_binding_status,
+                          published_binding_error))
+            throw std::runtime_error(
+                "Frisch publizierter Port besitzt unerwartet bereits eine "
+                "lokale Content-Bindung.");
+        if (published_binding_error &&
+            published_binding_error !=
+                std::errc::no_such_file_or_directory)
+            throw std::filesystem::filesystem_error(
+                "Publikationsziel der lokalen Content-Bindung ist unlesbar.",
+                published_content_binding,
+                published_binding_error);
+        std::filesystem::rename(previous_content_binding,
+                                published_content_binding);
+    };
     const auto require_safe_user_data_tree =
         [&](const std::filesystem::path& root,
             const bool require_empty) {
@@ -18276,11 +18455,10 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
     const auto previous = previous_root / "user-data";
     std::error_code status_error;
     const auto previous_status = std::filesystem::symlink_status(previous, status_error);
-    if (status_error == std::errc::no_such_file_or_directory ||
-        (!status_error &&
-         previous_status.type() ==
-             std::filesystem::file_type::not_found))
+    if (path_missing(previous_status, status_error)) {
+        preserve_content_binding();
         return;
+    }
     if (status_error)
         throw std::filesystem::filesystem_error(
             "Lokale Portdaten konnten nicht geprueft werden.", previous, status_error);
@@ -18313,6 +18491,7 @@ void preserve_local_port_user_data(const std::filesystem::path& previous_root,
             published,
             status_error);
     std::filesystem::rename(previous, published);
+    preserve_content_binding();
 }
 
 std::string guarded_aot_inventory_failure_message(
@@ -21694,7 +21873,7 @@ static PortExportResult export_dreamcast_port_project_impl(
     artifact_progress.advance(1u);
     write_port_file(canonical_root,
                     ".gitignore",
-                    "/build/\n/build-*/\n/user-data/\n/content/*.katana-disc\n*.katana-disc\n",
+                    "/build/\n/build-*/\n/user-data/\n/katana-content-root.txt\n/content/*.katana-disc\n*.katana-disc\n",
                     true);
     artifact_progress.advance(1u);
     write_port_file(

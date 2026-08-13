@@ -3,7 +3,7 @@
 Status: historischer RuntimeOnly-/PlatformAbi-Performancevertrag. Ab v0.49.1
 hat `NATIVE_PORT_PRODUCT_CONTRACT.md` Vorrang; aktive Sourcewerte sind
 Runtime-ABI 101, Analyzer-ABI 40, Portprojektvertrag 90 und Native-Port-
-Profilvertrag 13. Das aktuelle Native-AOT-Emissionsprofil ist 30; das AOT-
+Profilvertrag 13. Das aktuelle Native-AOT-Emissionsprofil ist 32; das AOT-
 Partitionsschema ist 7. Die folgenden Angaben beschreiben das interne
 Diagnoseorakel und sind keine Produktarchitektur. Der historische opt-in
 Modus `port --analysis-mode runtime-only` war nur mit `--game-project`
@@ -35,10 +35,10 @@ zwischen YUV-Lauf und Audio-Umbau identisch.
 
 Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
 und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Das ist
-historische Performanceevidenz; der aktuelle native Produkt-P0 ist die
-statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
-Post-Overlay-Callback-/Function-Pointer-Kante. Danach bleibt der Identity-Miss
-der private Identity-Miss offen.
+historische Performanceevidenz; der aktuelle native Produkt-P0 ist der
+typisierte Modell-/Textur-Stop mit `0x53414704`. Die Present-or-Repeat-Grenze
+ist bestaetigt und die fruehere Aliasgrenze geschlossen. Der private
+Identity-Miss bleibt historische Evidenz.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
 Sonic-v56-Diagnoselauf zeigt jedoch, dass der Port noch nicht produktiv

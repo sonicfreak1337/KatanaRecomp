@@ -4,7 +4,7 @@ Der aktuelle oeffentliche Analyzervertrag ist Version `40`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 101, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 21, Portprojektvertrag 90 und Native-Port-
 Profilvertrag 13. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
-Directives-Version 3, Native-AOT-Emissionsprofil 30 und Port-Metadata-Cache-
+Directives-Version 3, Native-AOT-Emissionsprofil 32 und Port-Metadata-Cache-
 Schema 4 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten

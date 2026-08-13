@@ -6,7 +6,7 @@ Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
 Analyzer-ABI 40, Backend-Interface-ABI 21, PlatformServices-ABI 14,
-Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 30 und
+Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 32 und
 Partitionsschema 7. Der
 native GPU-Pfad ist hardware-only D3D11; WARP/REF/GDI/CPU-Rasterizer,
 PVR/TA und historische Geraeteruntime sind keine Produktabhaengigkeiten.

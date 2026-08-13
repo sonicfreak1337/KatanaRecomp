@@ -30,7 +30,7 @@ PlatformServices-ABI 14,
 Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
 Portprojektvertrag 90, Native-Port-Profilvertrag 13 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `30`, AOT-Partitionsschema: `7`.
+Aktuelles Native-AOT-Emissionsprofil: `32`, AOT-Partitionsschema: `7`.
 Port-Metadata-Cache-Schema: `4`.
 Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `9` und bleibt davon getrennt; das
@@ -96,11 +96,14 @@ Validierung, User-Data-Save-Root und Digest-Domaenen bleiben fail-closed.
 Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
 sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
-KR-5005 bleibt das offene native Produktgate. Der aktive P0 ist jetzt die
-statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
-Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap-, AOT- und
-Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt und werden
-nicht als aktueller Blocker weitergefuehrt. Die Provider- und Draw-IR-Grenzen des
+KR-5005 bleibt das offene native Produktgate. Der Present-or-Repeat-Vertrag ist
+jetzt bestaetigt: Wenn kein neuer GPU-Frame offen ist, wird das letzte
+abgeschlossene Bild wiederholt; nur der erste Initial-Clear bleibt an der
+privaten Title-Grenze. Der aktuelle P0 ist der typisierte Modell-/Textur-Stop
+`0x53414704`; die Lazy-AOT-Aliasnormalisierung ist behoben. Bootstrap-, AOT-
+und Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt und werden
+nicht als aktueller Blocker weitergefuehrt. Die Provider-
+und Draw-IR-Grenzen des
 nativen Grafikpfads sind backendneutral beschrieben; D3D11 ist zunaechst das
 Windows-Backend. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
 nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
@@ -121,11 +124,9 @@ Der zugehoerige inkrementelle Release-Build von `katana-recomp` mit 24 Jobs war 
 der Folgeexport nach dem Nested-AOT-Fehlerfix erreichte erneut `44/44` Hits.
 Der native Produktlauf erreichte den ersten untexturierten Draw und danach den
 Sprite-Texture-Pfad, endete aber erwartungsgemaess typisiert mit
-`0x53414704`. Die Hardware-Closure weist `194` bekannte Stellen und `175`
-offene native Hookbindungen aus. Es gibt keine Emulations- oder
-Interpreterfallbacks; der naechste P0 ist die statisch gebundene
-Post-Overlay-Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT oder
-Linkaudit.
+`0x53414704`. Diese fruehere Evidenz ist durch die nachfolgende
+Lazy-AOT-Aliasnormalisierung ueberholt; es gibt keine Emulations- oder
+Interpreterfallbacks.
 
 Der aktuelle v62-Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
@@ -133,11 +134,21 @@ dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
 dem ersten Stage-Overlay genau einmal deaktiviert; anschliessend wurden die
 Overlay-, Settings- und Camera-Assets identitaetsgebunden geladen. Der
 schwarze/stale-Overlay-Uebergang ist geschlossen. Film `id=1`/Opening und das
-Hauptmenue sind noch nicht erreicht; der Lauf endet aktuell typisiert an
-`MissingStaticEntry` einer statisch nicht normalisierten Runtime-Image-/Alias-
-Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante. Film `id=1`/
-Opening und Hauptmenue bleiben offen; der schwarze Zwischenbildfehler bleibt
-ebenfalls offen.
+Hauptmenue sind noch nicht erreicht; der Lauf endet aktuell typisiert am
+Modell-/Texturpfad mit `0x53414704`. Film `id=1`/Opening und Hauptmenue
+bleiben offen. Im Presented-by-SEGA-Pfad haben die Frames 1--189 native Draws;
+Frame 190 und Frame 191 wiederholen ohne neuen offenen GPU-Frame das letzte
+abgeschlossene Bild. Es gibt keinen synthetischen Schwarz-Clear mehr.
+
+Seit `cf15c229` bleibt der PRS-Transform auf den statisch rekompilierten
+Originalcode begrenzt; atomar retired werden nur ueberlappende Runtime-
+Images vor dem Transform. Der generische Lazy-AOT-Aliasfehler ist behoben:
+Nach `bind_entry` wird der Entry-Source in die gebundene P1-Sicht
+normalisiert, sodass P0/P1/P2-Ziele den Latent-AOT-Owner erreichen.
+Der aktuelle Hardware-Closure-Stand umfasst `850` Sites, davon `47`
+geschlossen, `803` offen und `129` Owner. Ein neuer 9-Slot-/8-Unique-
+Callbackvektor fuehrte zu `96` weiteren Exportfunktionen; dies ist keine
+behobene Produktabnahme.
 
 Der validierte v59-Export untersuchte `1.094` Dateien mit `198.135.759`
 encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte

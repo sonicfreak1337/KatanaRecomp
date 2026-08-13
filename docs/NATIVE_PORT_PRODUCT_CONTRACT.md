@@ -132,7 +132,7 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 
 KR-5000 bindet diese Grenze an Runtime-ABI `101`, Analyzer-ABI `40`, Backend-
 Interface-ABI `21`, Portprojektvertrag `90` und Native-Port-Profilvertrag `13`.
-Der aktuelle Export nutzt Native-AOT-Emissionsprofil `30` und
+Der aktuelle Export nutzt Native-AOT-Emissionsprofil `32` und
 Port-Metadata-Cache-Schema `4`.
 Der aktuelle GameProject-Vertrag steht auf `7`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
@@ -267,12 +267,16 @@ erfolgreichem Bootstrap und nativer Frame-Presentation bezeugt werden. Der
 aktuelle Lauf vervollstaendigte Film `id=0` mit `200` dekodierten, `200`
 praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
 Audioframes. Der schwarze/stale-Overlay-Uebergang ist geschlossen; Film
-`id=1`/Opening und Hauptmenue bleiben offen. Der aktive P0 ist die statisch
-nicht normalisierte Runtime-Image-/Alias-Identitaet an einer post-Overlay
-Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT oder Linkaudit. Der
-typisierte Laufblocker ist `MissingStaticEntry`; der schwarze Zwischenbildfehler
-bleibt offen. Die Hardware-Closure wuchs mit der erweiterten Abdeckung von
-`257` auf `304` Luecken und ist deshalb keine Regression.
+`id=1`/Opening und Hauptmenue bleiben offen. Der aktive P0 ist die Verifikation
+der generischen Present-or-Repeat-Grenze fuer den diagnostisch isolierten
+Schwarz-Clear bei Frame 190, nicht Bootstrap, AOT oder Linkaudit. Der
+typisierte Laufblocker ist der Modell-/Texturpfad mit `0x53414704`. Im
+Presented-by-SEGA-Pfad haben Frames `1--189` native Draws; Frame `190` und
+`191` wiederholen das letzte abgeschlossene Bild. Der generische
+Present-or-Repeat-Vertrag ist bestaetigt; der synthetische Schwarz-Clear ist
+geschlossen. Die Hardware-Closure steht aktuell bei `850` Sites (`47`
+geschlossen, `803` offen, `129` Owner); ein neuer 9-Slot-/8-Unique-
+Callbackvektor fuehrte zu `96` weiteren Exportfunktionen.
 
 Der v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte `3.965`
 Funktionen in `127` Partitionen. Transformierte Quellidentitaet, decoded

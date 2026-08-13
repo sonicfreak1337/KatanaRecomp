@@ -203,7 +203,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-5002 | Nativer Audio-/Moviepfad | [x] source-seitig abgeschlossen; WinMM PCM, LGPL-Shared-FFmpeg/libav-Provider, bounded Decode-/EOS-Vertrag und Ready-to-Stopped-Movie-Lifecycle ohne Geraetefallback |
 | KR-5003 | Nativer GPU-Pfad | [x] source- und produktseitig abgeschlossen; hardware-only D3D11 ohne WARP/REF/GDI/CPU-Rasterizer, PVR/TA oder historische Geraeteruntime; native Vertices/Texturen/Drawstate, getrennte Render-/Output-/Game-/UI-/Kamera-Vertraege, sichtbare SFD-Abnahme mit 200 GPU-Frames |
 | KR-5004 | Native Disc-, Eingabe- und Save-Dienste | [x] source- und produktseitig abgeschlossen; identitaetsgebundene read-only Content-Ranges, XInput fuer vier Gamepads, atomare projekt-/slot-/schema-gebundene Saves mit Backup-Recovery, fail-closed Roots/IDs/Digest-Domaenen |
-| KR-5005 | Nativer No-Skip-Sonic-Produktlauf | aktiv P0 Alpha-Gate; v62 bestaetigt Film 0 und Overlay-Lifecycle, naechster generischer Blocker ist die statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante; Film 1/Opening, Memory-Card-Screen und Hauptmenue bleiben offen |
+| KR-5005 | Nativer No-Skip-Sonic-Produktlauf | aktiv P0 Alpha-Gate; v62 bestaetigt Film 0 und Overlay-Lifecycle, die Lazy-AOT-Aliasnormalisierung ist geschlossen; aktueller P0 ist die Verifikation der generischen Present-or-Repeat-Grenze fuer den diagnostisch isolierten Schwarz-Clear bei Frame 190; Film 1/Opening, Memory-Card-Screen und Hauptmenue bleiben offen |
 
 ## Aktuelle Meilensteinzuordnung
 

@@ -263,6 +263,9 @@ class NativePortHostServices {
     // time and never constructs a video-status device or register value.
     virtual void synchronize_simulation_boundary() = 0;
     virtual void begin_frame(std::uint64_t frame_index) = 0;
+    // Complete one title simulation frame. If the title did not open a new
+    // GPU frame, the desktop host repeats the last completed image instead of
+    // manufacturing and presenting an empty clear frame.
     virtual void present_frame(std::uint64_t frame_index) = 0;
     [[nodiscard]] virtual std::uint64_t presented_frames()
         const noexcept = 0;

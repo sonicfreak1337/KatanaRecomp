@@ -188,7 +188,7 @@ Sega-PRS-Transform tragen getrennte encoded/decoded Identitaeten; Quellbudget,
 Decoded-Budget, Cache, Telemetry und Source-Map bleiben getrennte Domaenen.
 Loaded-AOT-Rebase bindet gemischte Module nur nach exakter AOT-Codeblock-
 Closure. Das Metadaten-Cache-Schema steht auf `4`, das Emissionsprofil auf
-`30`.
+`32`.
 
 Der identity-bound Titelbootstrap materialisiert initialen RAM-/Titelzustand
 vor Aktivierung der Laufzeit-Immutable-Guards. In dieser Phase stehen keine

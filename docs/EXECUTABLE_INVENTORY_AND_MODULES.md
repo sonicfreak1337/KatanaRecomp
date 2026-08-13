@@ -6,12 +6,15 @@ Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
 Analyzer-ABI 40, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Emissionsprofil 30 und
+Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Emissionsprofil 32 und
 Portpartitionsschema 7. Historische Checkpoint- und Laufangaben bleiben an
-ihre damaligen Vertraege gebunden; der aktive P0 ist die statisch gebundene
+ihre damaligen Vertraegen gebunden. Aktueller P0 ist der typisierte
+Modell-/Textur-Stop mit `0x53414704`; Present-or-Repeat ist bestaetigt.
+Historische Detailformulierung: der fruehere P0 war die statisch gebundene
 statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
 Post-Overlay-Callback-/Function-Pointer-Kante innerhalb des offenen
-KR-5005-Gates.
+KR-5005-Gates. Die Present-or-Repeat-Grenze ist bestaetigt; die fruehere
+Lazy-AOT-Aliasgrenze ist geschlossen.
 
 ## Byteinventar
 
@@ -282,7 +285,7 @@ nativen Materializer und vorab erzeugten latenten nativen Modulen
  abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 101,
 Block-ABI 5, Analyzer-ABI 40, Backend-Interface-ABI 21,
 PlatformServices-ABI 14, Portprojektvertrag 90, Native-Port-Profilvertrag 13,
-Native-AOT-Emissionsprofil 30
+Native-AOT-Emissionsprofil 32
 und Portpartitionsschema 7. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien

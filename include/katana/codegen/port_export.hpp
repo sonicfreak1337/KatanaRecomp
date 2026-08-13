@@ -224,8 +224,9 @@ export_dreamcast_port_project_from_boot_artifact(
     const PortExportOptions& options,
     PortAnalysisMode analysis_mode);
 
-// Moves local-only mutable state from a replaced port into its freshly
-// published successor without ever copying it through codegen staging.
+// Moves local-only mutable state and the optional direct-launch content-root
+// binding from a replaced port into its freshly published successor without
+// ever copying either through codegen staging.
 void preserve_local_port_user_data(const std::filesystem::path& previous_root,
                                    const std::filesystem::path& published_root);
 

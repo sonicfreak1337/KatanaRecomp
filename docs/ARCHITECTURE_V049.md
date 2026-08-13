@@ -34,14 +34,15 @@ Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
 Analyzer-ABI 40, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 30 und
+Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 32 und
 Partitionsschema 7. Die historischen Checkpoint- und Laufangaben dieses
 Dokuments bleiben an ihre damaligen Vertraege gebunden. Der aktuelle native
 Produktpfad ist durch KR-5000 physisch von den historischen Diagnosegeraeten
-getrennt; KR-5005 bleibt das offene native Produktgate. Der aktive P0 ist die
-statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
-Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap, AOT und Linkaudit sind keine
-offenen Produktblocker. Provider- und Draw-IR bleiben backendneutral; D3D11 ist
+getrennt; KR-5005 bleibt das offene native Produktgate. Der aktuelle P0 ist der
+typisierte Modell-/Textur-Stop mit `0x53414704`; die Present-or-Repeat-Grenze
+ist bestaetigt, die fruehere Aliasgrenze geschlossen. Bootstrap, AOT und
+Linkaudit sind keine offenen Produktblocker. Provider- und Draw-IR bleiben
+backendneutral; D3D11 ist
 zunaechst das Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist spaeter
 geplant und aktuell keine Prioritaet.
 

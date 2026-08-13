@@ -187,9 +187,11 @@ fail-closed; der Linkaudit enthaelt keine historischen Geraetesymbole. Der
 vollstaendige originale SFD-Opening-Stream lief ohne Skip bis EOS und endete
 `Completed` mit 3.257 dekodierten und 3.257 GPU-praesentierten Videoframes,
 4.709.760 Audioframes und 3.257 GPU-Presents. KR-5005 bleibt das offene
-native Produktgate. Der aktive P0 ist jetzt die statisch gebundene
-Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap-, AOT- und Linkaudit-Befunde
-sind geschlossen beziehungsweise ueberholt. Provider- und Draw-IR bleiben
+native Produktgate. Der aktive P0 ist jetzt die Verifikation der generischen
+Present-or-Repeat-Grenze fuer den diagnostisch isolierten Schwarz-Clear bei
+Frame 190; die Lazy-AOT-Aliasnormalisierung ist behoben. Bootstrap-, AOT- und
+Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt. Provider- und
+Draw-IR bleiben
 als backendneutrale Produktgrenze
 formuliert; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein
@@ -227,17 +229,21 @@ Der aktuelle v62-Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
 `200` sichtbar nichtschwarzen Frames. Der schwarze/stale-Overlay-Uebergang ist
 geschlossen; Film `id=1`/Opening und Hauptmenue bleiben offen. Der Lauf endet
-aktuell typisiert an `MissingStaticEntry` einer statisch nicht normalisierten
-Runtime-Image-/Alias-Identitaet an einer post-Overlay Callback-/Function-
-Pointer-Kante. Film `id=1`/Opening und Hauptmenue sowie der schwarze
-Zwischenbildfehler bleiben offen.
+aktuell typisiert am Modell-/Texturpfad mit `0x53414704`. Film `id=1`/Opening
+und Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad haben Frames `1--189`
+native Draws; Frame `190` und `191` wiederholen bei geschlossenem GPU-Frame
+das letzte abgeschlossene Bild. Der Present-or-Repeat-Vertrag ist bestaetigt;
+der synthetische Schwarz-Clear ist geschlossen.
 
 Der validierte v59-Export untersuchte `1.094` Dateien, dekodierte `849/849`
 PRS-Dateien strikt und erzeugte `3.965` Funktionen in `127` Partitionen.
 `488` rohe und `395` guarded Callback-Kandidaten sowie `39` Latent-AOT-
 Kandidaten wurden ohne Truncation oder Budgeterschoepfung erfasst. Die
 Closure-Gaps stiegen von `257` auf `304`, weil der Export mehr echte
-erreichbare Funktionen einbezog; dies ist keine Hardware-Regression.
+erreichbare Funktionen einbezog; dies ist keine Hardware-Regression. Der
+aktuelle Hardware-Closure-Stand umfasst `850` Sites, `47` geschlossen, `803`
+offen und `129` Owner. Ein neuer 9-Slot-/8-Unique-Callbackvektor fuehrte zu
+`96` weiteren Exportfunktionen.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -288,7 +294,7 @@ aktueller funktionaler Source-Stand:
   Analyzer-ABI 40
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 30, AOT-Partitionsschema 7,
+  Native-AOT-Emissionsprofil 32, AOT-Partitionsschema 7,
   Port-Metadata-Cache-Schema 4
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht

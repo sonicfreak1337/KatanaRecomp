@@ -304,7 +304,6 @@ void transform_scalar_value(CallbackValue& value,
     result.input_mask = static_cast<std::uint8_t>(
         base.input_mask | byte_index.input_mask);
     if (base.constants_truncated || base.constants.size() != 1u ||
-        byte_index.input_mask == 0u ||
         !byte_index.constants.empty() || byte_index.constants_truncated)
         return result;
 
@@ -328,7 +327,9 @@ void transform_scalar_value(CallbackValue& value,
     }
     // A single executable word can be an ordinary pointer-valued field.  Two
     // or more consecutive entries followed by a non-code terminator are the
-    // narrowest useful identity-bound table shape.
+    // narrowest useful identity-bound table shape. The index may originate
+    // in mutable title state; this inventory remains guarded and never marks
+    // the indirect transfer complete.
     if (entries < 2u) return {};
     return result;
 }
@@ -766,8 +767,13 @@ void apply_instruction(CallbackFunctionModel& model,
     case K::MovByteLoadPostIncrement:
     case K::MovWordLoadPostIncrement:
     case K::MovLongLoadPostIncrement: {
-        const auto loaded = load_value(state, state.registers[source], 0,
-                                       width);
+        auto loaded = load_value(state, state.registers[source], 0, width);
+        if (width == 4u) {
+            const auto static_loaded = load_static_image_values(
+                image, state.registers[source], 0, native_entry_shapes);
+            static_cast<void>(join_value(loaded, static_loaded,
+                                         native_entry_shapes));
+        }
         transform_add_immediate(state.registers[source], image,
                                 native_entry_shapes,
                                 static_cast<std::int32_t>(width),

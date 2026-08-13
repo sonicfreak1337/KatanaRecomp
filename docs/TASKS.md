@@ -215,9 +215,10 @@ Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
 Die generischen Bootstrap-, Materialisierungs-, Boundary-, Overlay-,
 Callback-Root-, Replacement-Reachability-, Linkmap-/PE-Import- und
 Nested-AOT-Fehlertransport-Findings sind im aktuellen Source-Review
-geschlossen beziehungsweise ueberholt. Der aktive P0 ist die statisch nicht
-normalisierte Runtime-Image-/Alias-Identitaet an einer post-Overlay Callback-/
-Function-Pointer-Kante; KR-5005 bleibt als Produktgate offen.
+geschlossen beziehungsweise ueberholt. Der aktive P0 ist die Verifikation der
+generischen Present-or-Repeat-Grenze fuer den diagnostisch isolierten Schwarz-
+Clear bei Frame 190; die Lazy-AOT-Aliasnormalisierung ist behoben und KR-5005
+bleibt als Produktgate offen.
 Ein KR-5005-Zwischenfix transportiert
 die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
@@ -257,11 +258,11 @@ mit 24 Jobs in `18,8 s` erfolgreich. Nach Vertragsinvalidierung wurden
 exportiert; der Folgeexport nach dem Nested-AOT-Fehlerfix erreichte erneut
 `44/44` Hits und bestand den strukturellen Linkaudit. Der Produktlauf erreichte
 den ersten nativen untexturierten Draw und danach den Sprite-Texture-Pfad,
-endete aber typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
-bekannte Stellen und `175` offene native Hookbindungen aus. Keine Emulation
-oder Fallbacks sind erlaubt; der naechste P0 ist die statisch gebundene
-Post-Overlay-Callback-/Function-Pointer-Kante, nicht ein weiterer Bootstrap-,
-AOT- oder Linkaudit-Umbau.
+endete aber typisiert mit `0x53414704`. Diese fruehere Evidenz ist durch die
+nachfolgende Lazy-AOT-Aliasnormalisierung ueberholt. Keine Emulation oder
+Fallbacks sind erlaubt; der naechste P0 ist die Verifikation der generischen
+Present-or-Repeat-Grenze fuer den diagnostisch isolierten Schwarz-Clear bei
+Frame 190, nicht ein weiterer Bootstrap-, AOT- oder Linkaudit-Umbau.
 
 Der aktuelle Produktbeleg vervollstaendigte Film `id=0` mit `200` dekodierten,
 `200` praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
@@ -269,10 +270,12 @@ Audioframes. Das Checkpoint-Runtime-Image wurde vor dem ersten Stage-Overlay
 einmalig deaktiviert und danach wurden Overlay-, Settings- und Camera-Assets
 identitaetsgebunden geladen; der schwarze/stale-Overlay-Uebergang ist
 geschlossen. Film `id=1`/Opening und Hauptmenue bleiben offen. Der Lauf endet
-typisiert an `MissingStaticEntry` einer statisch nicht normalisierten Runtime-
-Image-/Alias-Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante.
-Film `id=1`/Opening und Hauptmenue sowie der schwarze Zwischenbildfehler bleiben
-offen.
+typisiert am Modell-/Texturpfad mit `0x53414704`.
+Film `id=1`/Opening und Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad
+haben Frames 1--189 native Draws; Frame 190 und 191 wiederholen bei
+geschlossenem GPU-Frame das letzte abgeschlossene Bild. Der generische
+Present-or-Repeat-Vertrag ist bestaetigt; der synthetische Schwarz-Clear ist
+geschlossen.
 
 Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
 `3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded
@@ -280,7 +283,9 @@ Callback-Kandidaten wurden ohne Truncation oder Budgeterschoepfung erfasst.
 Der v62-Lauf bestaetigte Film `id=0` mit `200/200` Video, `294.016`
 Audioframes und `200` sichtbar nichtschwarzen Frames. Die Closure-Gaps stiegen
 von `257` auf `304`, weil mehr echte erreichbare Funktionen analysiert wurden;
-dies ist keine Hardware-Regression.
+dies ist keine Hardware-Regression. Der aktuelle Hardware-Closure-Stand umfasst
+`850` Sites, `47` geschlossen, `803` offen und `129` Owner; ein neuer
+9-Slot-/8-Unique-Callbackvektor fuehrte zu `96` weiteren Exportfunktionen.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -333,7 +338,7 @@ Aktueller funktionaler Source-Stand:
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 7/Artefakt 6,
   Analysis Directives 3, Hookkarte v2, Hardware-Closure v4,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 30, AOT-Partitionsschema 7,
+  Native-AOT-Emissionsprofil 32, AOT-Partitionsschema 7,
   Port-Metadata-Cache-Schema 4
 
 historischer Diagnosebefund:

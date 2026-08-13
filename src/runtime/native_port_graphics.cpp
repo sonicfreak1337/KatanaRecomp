@@ -1710,7 +1710,9 @@ NativePortDesktopHost::frame_pacing_snapshot() const noexcept {
 void NativePortDesktopHost::paced_present() {
     const auto present_and_record = [this](const bool repeated) {
         const auto before = graphics_.snapshot().presented_frames;
-        if (repeated)
+        const bool repeat_completed_frame =
+            repeated || !graphics_.snapshot().frame_open;
+        if (repeat_completed_frame)
             graphics_.repeat_present();
         else
             graphics_.present();
@@ -1719,7 +1721,7 @@ void NativePortDesktopHost::paced_present() {
             const auto presented = after - before;
             saturating_add(
                 frame_pacing_snapshot_.presentation_frames, presented);
-            if (repeated)
+            if (repeat_completed_frame)
                 saturating_add(
                     frame_pacing_snapshot_.repeated_presentations,
                     presented);

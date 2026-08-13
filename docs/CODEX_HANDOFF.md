@@ -90,21 +90,26 @@ Provider-/Draw-IR-Grenze bleibt backendneutral; D3D11 ist zunaechst das
 Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist spaeter geplant und
 aktuell keine Prioritaet. Der Produktnachweis bleibt offen: Der Lauf erreichte
 den ersten nativen untexturierten Draw und danach den Sprite-Texture-Pfad,
-endete aber typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
-bekannte Stellen und `175` offene native Hookbindungen aus. Aktiver P0 ist die
-statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
-post-Overlay Callback-/Function-Pointer-Kante; Bootstrap,
-AOT und Linkaudit sind keine offenen Produktblocker. Film `id=0` wurde mit
+endete aber typisiert mit `0x53414704`. Diese fruehere Evidenz ist durch die
+nachfolgende Lazy-AOT-Aliasnormalisierung ueberholt; Bootstrap, AOT und
+Linkaudit sind keine offenen Produktblocker. Film `id=0` wurde mit
 `200` dekodierten, `200` praesentierten und `200` sichtbar nichtschwarzen
 Frames sowie `294.016` Audioframes abgeschlossen; Film `id=1`/Opening und
-Hauptmenue sowie der schwarze Zwischenbildfehler bleiben offen. Der
+Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad haben Frames 1--189 native
+Draws; Frame 190 und 191 wiederholen bei geschlossenem GPU-Frame das letzte
+abgeschlossene Bild. Der generische Present-or-Repeat-Vertrag ist bestaetigt:
+Frame 190 und 191
+wiederholen bei geschlossenem GPU-Frame das letzte abgeschlossene Bild. Der
 
 Der validierte v59-Export untersuchte `1.094` Dateien, dekodierte `849/849`
 PRS-Dateien strikt und erzeugte `3.965` Funktionen in `127` Partitionen.
 `488` rohe und `395` guarded Callback-Kandidaten sowie `39` Latent-AOT-
 Kandidaten wurden ohne Truncation oder Budgeterschoepfung erfasst. Die
 Closure-Gaps stiegen von `257` auf `304`, weil mehr echte erreichbare
-Funktionen analysiert wurden; dies ist keine Hardware-Regression.
+Funktionen analysiert wurden; dies ist keine Hardware-Regression. Der aktuelle
+Hardware-Closure-Stand umfasst `850` Sites, `47` geschlossen, `803` offen und
+`129` Owner; ein neuer 9-Slot-/8-Unique-Callbackvektor fuehrte zu `96` weiteren
+Exportfunktionen.
 
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
@@ -130,7 +135,7 @@ Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist im
 aktuellen Stand durch Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen neu
 exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `30`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `32`, AOT-Partitionsschema: `7`,
 Port-Metadata-Cache-Schema: `4`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
 Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.

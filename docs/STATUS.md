@@ -125,20 +125,19 @@ durch Analyse, CFG, Optimierung und Export. Die Provider-/Draw-IR-Grenze bleibt
 backendneutral; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein Gate.
 Der KR-5005-Produktnachweis bleibt offen: Der Produktlauf erreichte den ersten
-nativen untexturierten Draw und danach den Sprite-Texture-Pfad, endete aber
-erwartungsgemaess typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
-bekannte Stellen und `175` offene native Hookbindungen aus; Bring-up-Probes
-koennen keine vollstaendige Produktabnahme bescheinigen. Der aktive P0 ist die
-statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
-Post-Overlay-Callback-/Function-Pointer-Kante, nicht
-Bootstrap, AOT oder Linkaudit. Der aktuelle native Produktbeleg
+nativ untexturierten Draw und danach den Sprite-Texture-Pfad, endete aber
+erwartungsgemaess typisiert mit `0x53414704`. Die fruehere Aliasgrenze ist
+behoben; Bootstrap, AOT und Linkaudit sind keine offenen Produktblocker. Der
+aktuelle native Produktbeleg
 vervollstaendigte Film `id=0` mit `200` dekodierten, `200` praesentierten und
 `200` sichtbar nichtschwarzen Frames sowie `294.016` Audioframes. Der
 schwarze/stale-Overlay-Uebergang ist geschlossen; Film `id=1`/Opening und
-Hauptmenue sind noch nicht erreicht. Der Lauf endet aktuell typisiert an
-`MissingStaticEntry` einer statisch nicht normalisierten Runtime-Image-/Alias-
-Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante. Film `id=1`/
-Opening und Hauptmenue sowie der schwarze Zwischenbildfehler bleiben offen.
+Hauptmenue sind noch nicht erreicht. Der Lauf endet aktuell typisiert am
+Modell-/Texturpfad mit `0x53414704`. Film `id=1`/
+Opening und Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad haben Frames
+1--189 native Draws; Frame 190 und 191 wiederholen bei geschlossenem GPU-Frame
+das letzte abgeschlossene Bild. Der generische Present-or-Repeat-Vertrag ist
+bestaetigt; der synthetische Schwarz-Clear ist geschlossen.
 
 Der validierte v59-Export untersuchte `1.094` Dateien mit `198.135.759`
 encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte
@@ -146,8 +145,10 @@ encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte
 Callback-Kandidaten sowie `39` Latent-AOT-Kandidaten wurden ohne Truncation
 oder Budgeterschoepfung erfasst. Die Hardware-Closure-Gaps stiegen von `257`
 auf `304`, weil mehr echte erreichbare Funktionen analysiert wurden; dies ist
-keine Hardware-Regression. Framepacing blieb bei 60/60 mit deaktiviertem
-Catch-up.
+keine Hardware-Regression. Der aktuelle Hardware-Closure-Stand umfasst `850`
+Sites, `47` geschlossen, `803` offen und `129` Owner; ein neuer
+9-Slot-/8-Unique-Callbackvektor fuehrte zu `96` weiteren Exportfunktionen.
+Framepacing blieb bei 60/60 mit deaktiviertem Catch-up.
 
 Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
@@ -167,7 +168,7 @@ Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
 Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `30`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `32`, AOT-Partitionsschema: `7`,
 Port-Metadata-Cache-Schema: `4`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
 Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.
