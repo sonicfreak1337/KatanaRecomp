@@ -25,7 +25,7 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 101, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 102, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
@@ -96,6 +96,14 @@ Validierung, User-Data-Save-Root und Digest-Domaenen bleiben fail-closed.
 Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
 sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
+Der Texture-/Font-Foundation-Unterauftrag innerhalb von KR-5005 ist
+source-seitig abgeschlossen: Sieben Texture-Layouts einschliesslich Mipmap-
+und SmallVQ-Varianten werden dekodiert. Im vollstaendigen Korpus wurden
+`849` PRS-Dateien, `588/588` PVM-Archive und `16.725/16.725` Texturen
+verarbeitet; `12.704` waren mipmapped, mit `73.817` unteren Mip-Leveln und
+`668.876.160` dekodierten RGBA-Bytes. Die headerlose identity-bound
+SDK-Font-Grenze belegt ARGB1555. Dies ist ein erledigter Foundation-
+Unterauftrag innerhalb von KR-5005, nicht die No-Skip-Abnahme.
 KR-5005 bleibt das offene native Produktgate. Der Present-or-Repeat-Vertrag ist
 jetzt bestaetigt: Wenn kein neuer GPU-Frame offen ist, wird das letzte
 abgeschlossene Bild wiederholt; nur der erste Initial-Clear bleibt an der
@@ -350,7 +358,7 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    101
+Runtime-ABI:                    102
 Block-ABI:                       5
 Analyzer-ABI:                   39
 PlatformServices-ABI:           14
@@ -473,7 +481,7 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 101, Analyzer-ABI 40, Portprojektvertrag 90 und
+KR-5005-Stand verwendet Runtime-ABI 102, Analyzer-ABI 40, Portprojektvertrag 90 und
 Native-Port-Profilvertrag 13. Davon getrennt verwendet `GameProject` Vertrag 7 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte

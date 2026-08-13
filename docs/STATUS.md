@@ -90,6 +90,15 @@ Save-Root und Digest-Domaenen bleiben fail-closed. Der vollstaendige originale
 SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit 3.257
 dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 3.257 GPU-Presents und `hardware=1`. Aktiv ist jetzt KR-5005.
+Der Texture-/Font-Foundation-Unterauftrag innerhalb von KR-5005 ist
+source-seitig abgeschlossen. Sieben Layouts werden dekodiert; `588/588`
+PVM-Archive und `16.725/16.725` Texturen sind abgedeckt, darunter `12.704`
+mipmapped Texturen, `73.817` untere Mip-Level und `668.876.160` RGBA-Bytes.
+SmallVQ umfasst `427` kompakte Streams und `52` Compact-Streams mit
+Full-Footprint-Trailer; die Trailer bleiben hinter dem kompakten
+Codebook-/Index-Stream, `0` Faelle sind ambig. Headerlose identity-bound
+SDK-Fontoberflaechen belegen ARGB1555. Dieser Unterauftrag schliesst KR-5005
+nicht insgesamt; einen Sonic-Produktlauf gab es dafuer nicht.
 Der KR-5005-Zwischenfix transportiert die verifizierte FFmpeg-Deploymentclosure
 bei Parent-Projekten ueber globale CMake-Properties und validiert Quellen sowie
 sichere Dateinamen fail-closed. Die frische Konfiguration erzeugte korrekte
@@ -155,7 +164,7 @@ Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `101`,
+Aktuell gelten Runtime-ABI `102`,
 PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `21`, PVR-State-Contract `3`, Portprojektvertrag `90` und Native-Port-

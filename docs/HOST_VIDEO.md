@@ -4,7 +4,7 @@ KR-4701 fuehrte `katana-native-video` ein; der aktuelle Runtimevertrag steht
 auf Version 3. Externe
 Portprojekte erhalten die Schnittstelle ueber `katana_runtime`; die erzeugte
 `game.exe` benoetigt die KatanaRecomp-CLI nicht als Laufzeithuelle.
-Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
+Der aktuelle KR-5005-Stand verwendet Runtime-ABI 102, Block-ABI 5,
 Analyzer-ABI 40, Backend-Interface-ABI 21, PlatformServices-ABI 14,
 Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 32 und
 Partitionsschema 7. Der

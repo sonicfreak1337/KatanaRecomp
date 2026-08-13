@@ -1,7 +1,7 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
 Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
-Vorrang. Aktuell gelten Runtime-ABI 101, Analyzer-ABI 40,
+Vorrang. Aktuell gelten Runtime-ABI 102, Analyzer-ABI 40,
 Portprojektvertrag 90 und Native-Port-Profilvertrag 13. Der source-seitige
 KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-

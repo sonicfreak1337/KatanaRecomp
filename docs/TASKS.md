@@ -201,6 +201,27 @@ SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit 3.257
 dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 3.257 GPU-Presents und `hardware=1`.
 
+## [x] KR-5005-Unterauftrag - Native Texture-/Font-Foundation
+
+Prioritaet: P0 Foundation-Unterauftrag
+
+Status: source-seitig abgeschlossen; KR-5005 insgesamt bleibt offen. Die
+Texture-Layout-Unterstuetzung deckt SquareTwiddled, SquareTwiddledMipmaps,
+VQ, VQ-Mipmaps, Rectangle, SmallVQ und SmallVQ-Mipmaps ab. Der Korpus umfasst
+`849` PRS-Dateien, `588/588` PVM-Archive und `16.725/16.725` Texturen;
+`12.704` Texturen waren mipmapped, mit `73.817` unteren Mip-Leveln und
+`668.876.160` dekodierten RGBA-Bytes. Die Entry-Abdeckung stieg von
+`3.422/16.725` auf `16.725/16.725` (`100 %`, `+13.303`, `+79,5`
+Prozentpunkte, etwa `4,9x`); die Bilddatenmenge stieg um `114.697.856` Bytes
+(`+20,7 %`). `58` doppelte GBIX-Werte werden durch Content-SHA plus
+Archivordinal eindeutig behandelt. SmallVQ umfasst `427` kompakte Streams
+und `52` Compact-Streams mit reserviertem Full-Footprint-Trailer; die
+semantische Codebook-Groesse und der Index-Offset bleiben kompakt, `0` Faelle
+sind ambig. Headerlose identity-bound SDK-Fontoberflaechen belegen ARGB1555.
+D3D11 erzeugt vollstaendige Mip-Subresources; Registry, Materialisierung und
+Release sind transaktional und exceptionsicher. Es gab keinen Sonic-
+Produktlauf; `261` PRS-Dateien sind Nicht-PVM-Inhalte und kein Decoderfehler.
+
 ## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
 
 Prioritaet: P0 Alpha-Gate
@@ -332,7 +353,7 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 101, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+  Runtime-ABI 102, PlatformServices-ABI 14, Backend-Interface-ABI 21,
   PVR-State-Contract 3, Portprojektvertrag 90, Native-Port-Profilvertrag 13
   Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 7/Artefakt 6,

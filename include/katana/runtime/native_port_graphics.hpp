@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 2u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 3u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -154,6 +154,9 @@ struct NativePortTextureHandle final {
 struct NativePortTextureConfig final {
     NativePortExtent extent;
     NativePortTextureFormat format = NativePortTextureFormat::Rgba8Unorm;
+    // Includes the top level. Every following level halves each dimension,
+    // clamped to one pixel. Dynamic textures are intentionally single-level.
+    std::uint32_t mip_levels = 1u;
     bool shader_resource = true;
     bool dynamic = false;
 };
@@ -288,8 +291,14 @@ class NativePortGraphicsDevice final {
     [[nodiscard]] NativePortTextureHandle create_texture(
         const NativePortTextureConfig& config,
         const NativePortImageView* initial_pixels = nullptr);
+    [[nodiscard]] NativePortTextureHandle create_texture(
+        const NativePortTextureConfig& config,
+        std::span<const NativePortImageView> initial_mip_levels);
     void update_texture(NativePortTextureHandle texture,
                         const NativePortImageView& pixels);
+    void update_texture(
+        NativePortTextureHandle texture,
+        std::span<const NativePortImageView> mip_levels);
     void destroy_texture(NativePortTextureHandle texture);
 
     void begin_frame(const NativePortFrameConfig& config = {});

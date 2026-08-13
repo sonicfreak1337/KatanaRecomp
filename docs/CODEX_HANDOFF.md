@@ -74,6 +74,15 @@ User-Data-Save-Root und Digest-Domaenen bleiben fail-closed. Der vollstaendige
 originale SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit
 3.257 dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760
 Audioframes, 3.257 GPU-Presents und `hardware=1`. Aktiv ist `KR-5005`.
+Der Texture-/Font-Foundation-Unterauftrag innerhalb von KR-5005 ist
+source-seitig abgeschlossen, waehrend KR-5005 insgesamt offen bleibt. Sieben
+Layouts werden dekodiert; `588/588` PVM-Archive und `16.725/16.725` Texturen
+sind abgedeckt, darunter `12.704` mipmapped Texturen, `73.817` untere
+Mip-Level und `668.876.160` RGBA-Bytes. SmallVQ umfasst `427` kompakte
+Streams und `52` Compact-Streams mit Full-Footprint-Trailer; die Trailer
+bleiben hinter dem kompakten Codebook-/Index-Stream, `0` Faelle sind ambig.
+Headerlose identity-bound SDK-Fontoberflaechen belegen ARGB1555. Es gab
+keinen Sonic-Produktlauf fuer diesen Foundation-Unterauftrag.
 
 Der native Fidelity-Modus folgt visuell standardmaessig 1:1 der Dreamcast-
 Referenz: originale Modelle, Texturen, Beleuchtung, Fog, Blend-/Farbsemantik,
@@ -124,7 +133,7 @@ oder Interpreter-Symbole.
 ## Historischer RuntimeOnly-Bring-up
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `101`,
+Aktuell gelten Runtime-ABI `102`,
 PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `21`, PVR-State-Contract `3`, Portprojektvertrag `90` und Native-Port-

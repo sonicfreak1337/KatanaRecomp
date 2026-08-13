@@ -186,7 +186,17 @@ Roots, sichere IDs, User-Data-Save-Root und Digest-Domaenen bleiben
 fail-closed; der Linkaudit enthaelt keine historischen Geraetesymbole. Der
 vollstaendige originale SFD-Opening-Stream lief ohne Skip bis EOS und endete
 `Completed` mit 3.257 dekodierten und 3.257 GPU-praesentierten Videoframes,
-4.709.760 Audioframes und 3.257 GPU-Presents. KR-5005 bleibt das offene
+4.709.760 Audioframes und 3.257 GPU-Presents.
+Der Texture-/Font-Foundation-Unterauftrag innerhalb von KR-5005 ist
+source-seitig abgeschlossen: Sieben Layouts einschliesslich Mipmap- und
+SmallVQ-Varianten werden dekodiert; `588/588` PVM-Archive und
+`16.725/16.725` Texturen sind abgedeckt, darunter `12.704` mipmapped
+Texturen, `73.817` untere Mip-Level und `668.876.160` RGBA-Bytes. SmallVQ
+umfasst `427` kompakte Streams und `52` Compact-Streams mit Full-Footprint-
+Trailer; die `52` Trailer sind reserviert, ohne den kompakten Index-Offset zu
+verschieben, und `0` Faelle sind ambig. Headerlose identity-bound
+SDK-Fontoberflaechen belegen ARGB1555. Dieser Unterauftrag schliesst KR-5005
+nicht insgesamt. KR-5005 bleibt das offene
 native Produktgate. Der aktive P0 ist jetzt die Verifikation der generischen
 Present-or-Repeat-Grenze fuer den diagnostisch isolierten Schwarz-Clear bei
 Frame 190; die Lazy-AOT-Aliasnormalisierung ist behoben. Bootstrap-, AOT- und
@@ -289,7 +299,7 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 101, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+  Runtime-ABI 102, PlatformServices-ABI 14, Backend-Interface-ABI 21,
   PVR-State-Contract 3, Portprojektvertrag 90, Native-Port-Profilvertrag 13
   Analyzer-ABI 40
   Function-Analysis-Epoch-Schema 28

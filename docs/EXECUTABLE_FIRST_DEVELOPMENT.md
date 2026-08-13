@@ -126,7 +126,7 @@ nach dem Laden selbst und stellt nur vorvalidierte, hashgebundene Slices
 bereit.
 
 Der aktuelle KR-5000-Stand verwendet GameEntryHandoff-Artefaktformat 2,
-Runtime-ABI 101, Block-ABI 5, Analyzer-ABI 40, PlatformServices-ABI 14,
+Runtime-ABI 102, Block-ABI 5, Analyzer-ABI 40, PlatformServices-ABI 14,
 Backend-Interface-ABI 21, Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 32,
 Partitionsschema 7 und Plattformzustandsvertrag 2. Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische

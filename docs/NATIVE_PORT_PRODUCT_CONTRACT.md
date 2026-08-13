@@ -130,7 +130,7 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `101`, Analyzer-ABI `40`, Backend-
+KR-5000 bindet diese Grenze an Runtime-ABI `102`, Analyzer-ABI `40`, Backend-
 Interface-ABI `21`, Portprojektvertrag `90` und Native-Port-Profilvertrag `13`.
 Der aktuelle Export nutzt Native-AOT-Emissionsprofil `32` und
 Port-Metadata-Cache-Schema `4`.
@@ -217,6 +217,17 @@ Draw-Pakete, Viewports und Renderkonfiguration werden nicht an D3D11-Typen
 gekoppelt. D3D11 ist zunaechst das Windows-Backend; Steam-Deck-/Linux-
 Unterstuetzung bleibt eine spaetere, nicht aktuelle Prioritaet und ist kein
 gegenwaertiges Produkt- oder Alpha-Gate.
+
+Die native Texture-/Font-Foundation ist als begrenzter Unterauftrag innerhalb
+von KR-5005 abgeschlossen, nicht als Abschluss des No-Skip-Gates. Der Decoder
+deckt SquareTwiddled, SquareTwiddledMipmaps, VQ, VQ-Mipmaps, Rectangle,
+SmallVQ und SmallVQ-Mipmaps ab. SmallVQ unterscheidet `427` kompakte Streams
+von `52` Compact-Streams mit reserviertem Full-Footprint-Trailer; die
+semantische Codebook-Groesse und der Index-Offset bleiben kompakt, und `0`
+Faelle sind ambig. Headerlose identity-bound SDK-Fontoberflaechen verwenden
+belegtes ARGB1555. D3D11 materialisiert vollstaendige Mip-Subresources
+transaktional und exceptionsicher. Es gab keinen Sonic-Produktlauf fuer
+diesen Unterauftrag.
 
 KR-5004 bindet native Datei-, Eingabe- und Save-Dienste ohne GD-ROM-, Maple-
 oder VMU-Geraetevertrag. `NativePortPlatformServices` liest ausschliesslich

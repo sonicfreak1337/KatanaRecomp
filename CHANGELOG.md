@@ -4,6 +4,27 @@
 
 ### Geaendert
 
+- Der native Texture-/Font-Foundation-Unterauftrag ist source-seitig
+  abgeschlossen. Die sieben Layouts SquareTwiddled,
+  SquareTwiddledMipmaps, VQ, VQ-Mipmaps, Rectangle, SmallVQ und
+  SmallVQ-Mipmaps werden dekodiert. Der vollstaendige Korpus umfasst `849`
+  PRS-Dateien, `588/588` PVM-Archive und `16.725/16.725` Texturen, darunter
+  `12.704` mipmapped Texturen, `73.817` untere Mip-Level und `668.876.160`
+  dekodierte RGBA-Bytes. Die Entry-Abdeckung stieg von `3.422/16.725` auf
+  `16.725/16.725` (`100 %`, `+13.303`, `+79,5` Prozentpunkte, etwa `4,9x`);
+  die Bilddatenmenge stieg um `114.697.856` Bytes (`+20,7 %`). `58` doppelte
+  GBIX-Werte werden ueber Content-SHA plus Archivordinal disambiguiert.
+  SmallVQ umfasst `427` kompakte Streams und `52` Compact-Streams mit
+  Full-Footprint-Trailer; alle `52` Trailer sind reserviert, `0/52` Streams
+  sind ambig und keiner ueberschreitet die logische Compact-Grenze. Der
+  Decoder behaelt deshalb Codebook-Eintraege und Index-Offset kompakt und
+  akzeptiert nur die bounded Trailer-Reservierung plus Alignment. Headerlose
+  identity-bound SDK-Fontflaechen
+  verwenden belegtes ARGB1555; D3D11 materialisiert vollstaendige
+  Mip-Subresources transaktional und exceptionsicher. Runtime-ABI `102`,
+  Projektversion `0.49.1`; es gab keinen Sonic-Produktlauf. `261` uebrige
+  PRS-Dateien sind Nicht-PVM-Inhalte und kein Decoderfehler.
+
 - Der aktuelle native Produktlauf vervollstaendigte Film `id=0` mit `200`
   dekodierten, `200` praesentierten und `200` sichtbar nichtschwarzen Frames
   sowie `294.016` Audioframes. Das Checkpoint-Runtime-Image wurde vor dem
@@ -16,7 +37,7 @@
   `191` wiederholen das letzte abgeschlossene Bild statt einen leeren Clear zu
   praesentieren.
 
-- Aktueller Vertragsstand: Runtime-ABI `101`, Analyzer-ABI `40`,
+- Aktueller Vertragsstand: Runtime-ABI `102`, Analyzer-ABI `40`,
   Backend-Interface-ABI `21`, Portprojektvertrag `90`, Native-Port-Profilvertrag
   `13`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
   Native-Grafikvertrag `2`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil

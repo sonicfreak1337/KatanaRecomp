@@ -14,7 +14,7 @@ das native Produktprofil mit ausschliesslich erforderlichen Hostdiensten ab.
 
 ## ABI
 
-Der aktuelle KR-5005-Stand verwendet Runtime-ABI `101`, Block-ABI `5`,
+Der aktuelle KR-5005-Stand verwendet Runtime-ABI `102`, Block-ABI `5`,
 Analyzer-ABI `40`, PlatformServices-ABI `14`, Backend-Interface-ABI `21`,
 Portprojektvertrag `90`, Native-Port-Profilvertrag `13`, Native-AOT-
 Emissionsprofil `32` und Portpartitionsschema `7`. Historische Runtime- und
@@ -735,7 +735,7 @@ generische C++-Emitter setzt auch bei einem durch Funktionsdiscovery
 nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
-umgebenden Wrappers. Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101,
+umgebenden Wrappers. Der aktuelle KR-5005-Stand verwendet Runtime-ABI 102,
 Block-ABI 5, Analyzer-ABI 40, Backend-Interface-ABI 21,
 PlatformServices-ABI 14, Portvertrag 89, Native-Port-Profilvertrag 13,
 Native-AOT-Emissionsprofil 32 und

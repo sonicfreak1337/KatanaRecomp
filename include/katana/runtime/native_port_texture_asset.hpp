@@ -15,6 +15,9 @@
 
 namespace katana::runtime {
 
+class NativePortPlatformServices;
+struct NativePortContentFileBinding;
+
 enum class NativePortTextureAssetPixelFormat : std::uint8_t {
     Argb1555 = 0x00u,
     Rgb565 = 0x01u,
@@ -23,7 +26,12 @@ enum class NativePortTextureAssetPixelFormat : std::uint8_t {
 
 enum class NativePortTextureAssetDataFormat : std::uint8_t {
     SquareTwiddled = 0x01u,
+    SquareTwiddledMipmaps = 0x02u,
+    VectorQuantized = 0x03u,
+    VectorQuantizedMipmaps = 0x04u,
     Rectangle = 0x09u,
+    SmallVectorQuantized = 0x10u,
+    SmallVectorQuantizedMipmaps = 0x11u,
 };
 
 enum class NativePortTextureAssetFailure : std::uint8_t {
@@ -66,23 +74,34 @@ struct NativePortTextureAssetLimits final {
     std::size_t maximum_rgba_bytes = 512u * 1024u * 1024u;
 };
 
+struct NativePortDecodedTextureMipLevel final {
+    NativePortExtent extent;
+    std::vector<std::uint8_t> rgba8;
+};
+
 struct NativePortDecodedTextureAsset final {
     std::string name;
     std::optional<std::uint32_t> global_index;
+    std::uint32_t archive_ordinal = 0u;
     NativePortTextureAssetPixelFormat source_pixel_format =
         NativePortTextureAssetPixelFormat::Rgb565;
     NativePortTextureAssetDataFormat source_data_format =
         NativePortTextureAssetDataFormat::Rectangle;
     NativePortExtent extent;
+    // Top level followed by every source-authored lower level. The top level
+    // stays in rgba8 for source compatibility; lower_mip_levels is ordered
+    // width/2 down to 1x1 and is empty for non-mipmapped source formats.
     std::vector<std::uint8_t> rgba8;
+    std::vector<NativePortDecodedTextureMipLevel> lower_mip_levels;
 };
 
 // The content identity is the verified SHA-256 of the containing content
-// object. global_index selects an entry within a multi-texture object; callers
-// without a global index must instead provide a per-texture content identity.
+// object. The source ordinal is always part of the identity because GBIX is
+// optional and need not be unique, even inside one content object.
 struct NativePortTextureAssetIdentity final {
     std::uint64_t generation = 0u;
     std::optional<std::uint32_t> global_index;
+    std::uint32_t archive_ordinal = 0u;
     std::array<std::uint8_t, 32u> content_sha256{};
 
     friend constexpr bool operator==(const NativePortTextureAssetIdentity&,
@@ -132,6 +151,30 @@ struct NativePortTextureRegistrySnapshot final {
     std::uint32_t entries = 0u;
     std::uint64_t texture_bytes = 0u;
     std::uint64_t acquired_references = 0u;
+};
+
+// One decoded archive entry after it has been installed in the native GPU
+// registry. Containing-content identity plus source ordinal form the stable
+// resource identity. The optional GBIX remains descriptive metadata and is
+// never assumed unique, even within one archive.
+struct NativePortMaterializedTextureAsset final {
+    std::string name;
+    std::optional<std::uint32_t> global_index;
+    std::uint32_t archive_ordinal = 0u;
+    std::uint32_t guest_token = 0u;
+    NativePortTextureHandle texture;
+    NativePortExtent extent;
+    std::uint32_t mip_levels = 1u;
+};
+
+// Explicit archive lifetime. Title adapters may keep several independently
+// verified archives resident and release them at their native SDK unload
+// boundary. Entries remain in source order so NJS_TEXLIST-style ordinal
+// bindings do not depend on GBIX availability.
+struct NativePortMaterializedTextureArchive final {
+    std::uint64_t generation = 0u;
+    std::array<std::uint8_t, 32u> content_sha256{};
+    std::vector<NativePortMaterializedTextureAsset> entries;
 };
 
 // Owns the GPU handles registered through it. Tokens are opaque, non-zero and
@@ -185,5 +228,50 @@ decode_native_port_pvm_texture_archive(
 decode_native_port_prs_pvm_texture_archive(
     std::span<const std::uint8_t> source,
     const NativePortTextureAssetLimits& limits = {});
+
+// Decodes one exact, headerless texture surface. This is the native boundary
+// for SDK-owned embedded assets such as font atlases; title adapters bind the
+// source bytes and dimensions by executable/content identity rather than
+// reconstructing a guest VRAM upload. The source span must contain exactly
+// the canonical encoded payload for the declared layout.
+[[nodiscard]] NativePortDecodedTextureAsset
+decode_native_port_texture_surface(
+    std::span<const std::uint8_t> source,
+    NativePortExtent extent,
+    NativePortTextureAssetPixelFormat pixel_format,
+    NativePortTextureAssetDataFormat data_format,
+    const NativePortTextureAssetLimits& limits = {});
+
+// Opens one exact content binding through the native platform boundary,
+// decodes a PRS/PVM archive, and acquires every texture as one operation. The
+// span overload is for bytes whose identity was already verified by the
+// caller; the platform overload performs that verification while opening the
+// bound content range.
+// Acquisition failure rolls back all completed entries. If graphics-backend
+// destruction itself fails during rollback, that cleanup error is reported
+// and the caller must invalidate the owning generation before reuse.
+[[nodiscard]] NativePortMaterializedTextureArchive
+materialize_native_port_prs_pvm_texture_archive(
+    std::span<const std::uint8_t> source,
+    std::string_view content_byte_identity,
+    NativePortTextureRegistry& registry,
+    std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits = {});
+
+[[nodiscard]] NativePortMaterializedTextureArchive
+materialize_native_port_prs_pvm_texture_archive(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    NativePortTextureRegistry& registry,
+    std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits = {});
+
+// Releases every reference held by an archive. Successful releases are
+// removed even if a later graphics-backend release fails; failed entries stay
+// attached to the archive so the caller may retry or invalidate the owning
+// generation explicitly.
+void release_native_port_texture_archive(
+    NativePortTextureRegistry& registry,
+    NativePortMaterializedTextureArchive& archive);
 
 } // namespace katana::runtime

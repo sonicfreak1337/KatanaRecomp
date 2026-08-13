@@ -1,9 +1,13 @@
 #include "katana/runtime/native_port_texture_asset.hpp"
 
+#include "katana/runtime/native_port.hpp"
+#include "katana/runtime/native_port_platform.hpp"
+
 #include "prs_decode.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <exception>
 #include <limits>
 #include <new>
 #include <string>
@@ -25,7 +29,6 @@ constexpr std::uint16_t supported_pvm_flags =
 constexpr std::size_t pvm_name_bytes = 28u;
 constexpr std::uint32_t maximum_pvr_dimension = 1'024u;
 constexpr std::uint32_t minimum_pvr_dimension = 8u;
-constexpr std::size_t maximum_pvrt_padding_bytes = 31u;
 
 [[noreturn]] void fail(const NativePortTextureAssetFailure failure,
                        const std::size_t offset,
@@ -157,8 +160,18 @@ struct PvmEntryMetadata final {
     switch (value) {
     case 0x01u:
         return NativePortTextureAssetDataFormat::SquareTwiddled;
+    case 0x02u:
+        return NativePortTextureAssetDataFormat::SquareTwiddledMipmaps;
+    case 0x03u:
+        return NativePortTextureAssetDataFormat::VectorQuantized;
+    case 0x04u:
+        return NativePortTextureAssetDataFormat::VectorQuantizedMipmaps;
     case 0x09u:
         return NativePortTextureAssetDataFormat::Rectangle;
+    case 0x10u:
+        return NativePortTextureAssetDataFormat::SmallVectorQuantized;
+    case 0x11u:
+        return NativePortTextureAssetDataFormat::SmallVectorQuantizedMipmaps;
     default:
         fail(NativePortTextureAssetFailure::UnsupportedDataFormat, offset,
              "pvrt-data-format");
@@ -175,11 +188,193 @@ void validate_dimensions(const NativePortExtent extent,
         extent.width <= limits.maximum_dimension &&
         extent.height <= limits.maximum_dimension &&
         std::has_single_bit(extent.width) && std::has_single_bit(extent.height);
-    if (!basic_valid ||
-        (data_format == NativePortTextureAssetDataFormat::SquareTwiddled &&
-         extent.width != extent.height))
+    const auto requires_square =
+        data_format != NativePortTextureAssetDataFormat::Rectangle;
+    if (!basic_valid || (requires_square && extent.width != extent.height))
         fail(NativePortTextureAssetFailure::InvalidDimensions, offset,
              "pvrt-dimensions");
+}
+
+[[nodiscard]] bool is_twiddled(
+    const NativePortTextureAssetDataFormat format) noexcept {
+    return format == NativePortTextureAssetDataFormat::SquareTwiddled ||
+           format ==
+               NativePortTextureAssetDataFormat::SquareTwiddledMipmaps;
+}
+
+[[nodiscard]] bool is_vector_quantized(
+    const NativePortTextureAssetDataFormat format) noexcept {
+    return format == NativePortTextureAssetDataFormat::VectorQuantized ||
+           format ==
+               NativePortTextureAssetDataFormat::VectorQuantizedMipmaps ||
+           format ==
+               NativePortTextureAssetDataFormat::SmallVectorQuantized ||
+           format == NativePortTextureAssetDataFormat::
+                         SmallVectorQuantizedMipmaps;
+}
+
+[[nodiscard]] bool has_mipmaps(
+    const NativePortTextureAssetDataFormat format) noexcept {
+    return format ==
+               NativePortTextureAssetDataFormat::SquareTwiddledMipmaps ||
+           format ==
+               NativePortTextureAssetDataFormat::VectorQuantizedMipmaps ||
+           format == NativePortTextureAssetDataFormat::
+                         SmallVectorQuantizedMipmaps;
+}
+
+[[nodiscard]] bool is_small_vector_quantized(
+    const NativePortTextureAssetDataFormat format) noexcept {
+    return format ==
+               NativePortTextureAssetDataFormat::SmallVectorQuantized ||
+           format == NativePortTextureAssetDataFormat::
+                         SmallVectorQuantizedMipmaps;
+}
+
+[[nodiscard]] std::size_t small_vector_quantized_codebook_entries(
+    const NativePortTextureAssetDataFormat format,
+    const std::uint32_t width,
+    const std::size_t offset) {
+    if (format == NativePortTextureAssetDataFormat::SmallVectorQuantized) {
+        if (width <= 16u) return 64u;
+        if (width <= 32u) return 128u;
+        if (width <= 64u) return 512u;
+        return 1'024u;
+    }
+    if (format ==
+        NativePortTextureAssetDataFormat::SmallVectorQuantizedMipmaps) {
+        if (width <= 16u) return 64u;
+        if (width <= 32u) return 256u;
+        return 1'024u;
+    }
+    fail(NativePortTextureAssetFailure::InvalidPvrt, offset,
+         "pvrt-small-vq-format");
+}
+
+[[nodiscard]] std::size_t mip_level_bytes(
+    const NativePortTextureAssetDataFormat format,
+    const std::uint32_t dimension,
+    const std::size_t offset) {
+    const auto pixels = checked_multiply(
+        dimension, dimension, NativePortTextureAssetFailure::InvalidPvrt,
+        offset, "pvrt-mipmap-pixels");
+    if (is_vector_quantized(format))
+        return std::max(pixels / 4u, std::size_t{1u});
+    if (is_twiddled(format)) {
+        // Dreamcast twiddled mip chains reserve two 16-bit texels for the
+        // otherwise single-texel 1x1 level.
+        if (dimension == 1u) return 4u;
+        return checked_multiply(
+            pixels, 2u, NativePortTextureAssetFailure::InvalidPvrt, offset,
+            "pvrt-mipmap-bytes");
+    }
+    fail(NativePortTextureAssetFailure::InvalidPvrt, offset,
+         "pvrt-mipmap-format");
+}
+
+struct PvrDataLayout final {
+    std::size_t encoded_bytes = 0u;
+    std::size_t top_level_offset = 0u;
+    std::size_t top_level_bytes = 0u;
+    std::size_t codebook_entries = 0u;
+    std::size_t codebook_bytes = 0u;
+};
+
+constexpr std::size_t full_vq_codebook_bytes = 2'048u;
+constexpr std::size_t maximum_pvrt_alignment_bytes = 63u;
+
+[[nodiscard]] PvrDataLayout pvr_data_layout(
+    const NativePortExtent extent,
+    const NativePortTextureAssetDataFormat format,
+    const std::size_t offset) {
+    PvrDataLayout layout;
+    const auto pixels = checked_multiply(
+        extent.width, extent.height,
+        NativePortTextureAssetFailure::InvalidPvrt, offset,
+        "pvrt-layout-pixels");
+    if (format == NativePortTextureAssetDataFormat::Rectangle ||
+        format == NativePortTextureAssetDataFormat::SquareTwiddled) {
+        layout.top_level_bytes = checked_multiply(
+            pixels, 2u, NativePortTextureAssetFailure::InvalidPvrt, offset,
+            "pvrt-layout-bytes");
+        layout.encoded_bytes = layout.top_level_bytes;
+        return layout;
+    }
+
+    layout.top_level_bytes = mip_level_bytes(format, extent.width, offset);
+    std::size_t lower_mipmap_bytes = 0u;
+    if (has_mipmaps(format)) {
+        for (std::uint32_t dimension = 1u; dimension < extent.width;
+             dimension <<= 1u) {
+            lower_mipmap_bytes = checked_add(
+                lower_mipmap_bytes,
+                mip_level_bytes(format, dimension, offset),
+                NativePortTextureAssetFailure::InvalidPvrt, offset,
+                "pvrt-mipmap-chain");
+        }
+    }
+
+    if (is_vector_quantized(format)) {
+        if (is_small_vector_quantized(format)) {
+            layout.codebook_entries =
+                small_vector_quantized_codebook_entries(format, extent.width,
+                                                          offset);
+        } else {
+            layout.codebook_entries = 1'024u;
+        }
+        layout.codebook_bytes = checked_multiply(
+            layout.codebook_entries, 2u,
+            NativePortTextureAssetFailure::InvalidPvrt, offset,
+            "pvrt-codebook-bytes");
+    }
+
+    layout.top_level_offset =
+        checked_add(layout.codebook_bytes, lower_mipmap_bytes,
+                    NativePortTextureAssetFailure::InvalidPvrt, offset,
+                    "pvrt-top-level-offset");
+    layout.encoded_bytes = checked_add(
+        layout.top_level_offset, layout.top_level_bytes,
+        NativePortTextureAssetFailure::InvalidPvrt, offset,
+        "pvrt-layout-size");
+    return layout;
+}
+
+[[nodiscard]] PvrDataLayout select_pvm_data_layout(
+    const NativePortExtent extent,
+    const NativePortTextureAssetDataFormat format,
+    const std::size_t available_bytes,
+    const std::size_t source_offset) {
+    auto layout = pvr_data_layout(extent, format, source_offset);
+    if (layout.encoded_bytes > available_bytes)
+        fail(NativePortTextureAssetFailure::InvalidPvrt, source_offset,
+             "pvrt-truncated-pixels");
+
+    const auto compact_trailer = available_bytes - layout.encoded_bytes;
+    if (is_small_vector_quantized(format)) {
+        // Some SDK writers retain the unused footprint of a full 2-KiB
+        // codebook *after* the compact codebook and index stream. It is
+        // trailing reservation, not part of the physical index stream:
+        // preserve the compact semantic codebook and offsets while accepting
+        // only that bounded reservation plus chunk alignment.
+        const auto unused_codebook_bytes =
+            full_vq_codebook_bytes - layout.codebook_bytes;
+        const auto maximum_trailing_reservation = checked_add(
+            unused_codebook_bytes, maximum_pvrt_alignment_bytes,
+            NativePortTextureAssetFailure::InvalidPvrt, source_offset,
+            "pvrt-small-vq-reservation");
+        const auto compact_alignment =
+            compact_trailer <= maximum_pvrt_alignment_bytes;
+        const auto full_footprint_reservation =
+            compact_trailer >= unused_codebook_bytes &&
+            compact_trailer <= maximum_trailing_reservation;
+        if (!compact_alignment && !full_footprint_reservation)
+            fail(NativePortTextureAssetFailure::InvalidPvrt, source_offset,
+                 "pvrt-small-vq-layout");
+    } else if (compact_trailer > maximum_pvrt_alignment_bytes) {
+        fail(NativePortTextureAssetFailure::InvalidPvrt, source_offset,
+             "pvrt-padding");
+    }
+    return layout;
 }
 
 [[nodiscard]] std::uint32_t morton_index(const std::uint32_t x,
@@ -228,27 +423,226 @@ void decode_pixel(const std::uint16_t source,
     }
 }
 
+[[nodiscard]] std::size_t mip_level_offset(
+    const PvrDataLayout& layout,
+    NativePortTextureAssetDataFormat format,
+    std::uint32_t dimension,
+    std::size_t source_base_offset);
+
+void decode_pixels(std::span<const std::uint8_t> source,
+                   const PvrDataLayout& layout,
+                   NativePortTextureAssetPixelFormat pixel_format,
+                   NativePortTextureAssetDataFormat data_format,
+                   NativePortExtent extent,
+                   std::size_t level_offset,
+                   std::vector<std::uint8_t>& rgba8,
+                   std::size_t source_base_offset);
+
+[[nodiscard]] NativePortDecodedTextureAsset decode_surface_impl(
+    const std::span<const std::uint8_t> source,
+    const NativePortExtent extent,
+    const NativePortTextureAssetPixelFormat pixel_format,
+    const NativePortTextureAssetDataFormat data_format,
+    const NativePortTextureAssetLimits& limits) {
+    validate_limits(limits);
+    if (source.size() > limits.maximum_decompressed_bytes)
+        fail(NativePortTextureAssetFailure::DecompressedOutputLimit, 0u,
+             "surface-input-limit");
+    switch (pixel_format) {
+    case NativePortTextureAssetPixelFormat::Argb1555:
+    case NativePortTextureAssetPixelFormat::Rgb565:
+    case NativePortTextureAssetPixelFormat::Argb4444:
+        break;
+    default:
+        fail(NativePortTextureAssetFailure::UnsupportedPixelFormat, 0u,
+             "surface-pixel-format");
+    }
+    validate_dimensions(extent, data_format, limits, 0u);
+    const auto layout = pvr_data_layout(extent, data_format, 0u);
+    if (source.size() != layout.encoded_bytes)
+        fail(NativePortTextureAssetFailure::InvalidPvrt, source.size(),
+             "surface-encoded-size");
+
+    const auto top_pixels = checked_multiply(
+        extent.width, extent.height,
+        NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+        "surface-rgba-pixels");
+    auto aggregate_rgba_bytes = checked_multiply(
+        top_pixels, 4u, NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+        "surface-rgba-bytes");
+    if (has_mipmaps(data_format)) {
+        for (auto dimension = extent.width / 2u;; dimension >>= 1u) {
+            const auto level_bytes = checked_multiply(
+                checked_multiply(
+                    dimension, dimension,
+                    NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+                    "surface-mipmap-pixels"),
+                4u, NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+                "surface-mipmap-bytes");
+            aggregate_rgba_bytes = checked_add(
+                aggregate_rgba_bytes, level_bytes,
+                NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+                "surface-mipmap-chain");
+            if (dimension == 1u) break;
+        }
+    }
+    if (aggregate_rgba_bytes > limits.maximum_rgba_bytes)
+        fail(NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+             "surface-rgba-limit");
+
+    NativePortDecodedTextureAsset texture;
+    texture.source_pixel_format = pixel_format;
+    texture.source_data_format = data_format;
+    texture.extent = extent;
+    texture.rgba8.resize(top_pixels * 4u);
+    decode_pixels(source, layout, pixel_format, data_format, extent,
+                  layout.top_level_offset, texture.rgba8, 0u);
+    if (has_mipmaps(data_format)) {
+        texture.lower_mip_levels.reserve(std::bit_width(extent.width) - 1u);
+        for (auto dimension = extent.width / 2u;; dimension >>= 1u) {
+            NativePortDecodedTextureMipLevel level;
+            level.extent = {dimension, dimension};
+            level.rgba8.resize(
+                static_cast<std::size_t>(dimension) * dimension * 4u);
+            decode_pixels(
+                source, layout, pixel_format, data_format, level.extent,
+                mip_level_offset(layout, data_format, dimension, 0u),
+                level.rgba8, 0u);
+            texture.lower_mip_levels.push_back(std::move(level));
+            if (dimension == 1u) break;
+        }
+    }
+    return texture;
+}
+
+[[nodiscard]] std::size_t mip_level_offset(
+    const PvrDataLayout& layout,
+    const NativePortTextureAssetDataFormat format,
+    const std::uint32_t dimension,
+    const std::size_t source_base_offset) {
+    if (!has_mipmaps(format)) return layout.top_level_offset;
+    if (is_vector_quantized(format) && dimension == 1u)
+        return checked_add(layout.codebook_bytes, 1u,
+                           NativePortTextureAssetFailure::InvalidPvrt,
+                           source_base_offset, "pvrt-vq-1x1-offset");
+    if (is_twiddled(format) && dimension == 1u) return 2u;
+
+    auto result = is_vector_quantized(format) ? layout.codebook_bytes : 0u;
+    for (std::uint32_t lower = 1u; lower < dimension; lower <<= 1u)
+        result = checked_add(
+            result, mip_level_bytes(format, lower, source_base_offset),
+            NativePortTextureAssetFailure::InvalidPvrt, source_base_offset,
+            "pvrt-mipmap-offset");
+    return result;
+}
+
 void decode_pixels(const std::span<const std::uint8_t> source,
-                   NativePortDecodedTextureAsset& texture) {
-    const auto width = texture.extent.width;
-    const auto height = texture.extent.height;
+                   const PvrDataLayout& layout,
+                   const NativePortTextureAssetPixelFormat pixel_format,
+                   const NativePortTextureAssetDataFormat data_format,
+                   const NativePortExtent extent,
+                   const std::size_t level_offset,
+                   std::vector<std::uint8_t>& rgba8,
+                   const std::size_t source_base_offset) {
+    const auto width = extent.width;
+    const auto height = extent.height;
+    if (is_vector_quantized(data_format) && width == 1u) {
+        if (level_offset >= source.size())
+            fail(NativePortTextureAssetFailure::InvalidPvrt,
+                 source_base_offset + level_offset, "pvrt-vq-1x1-index");
+        const auto codebook_block = source[level_offset];
+        const auto codebook_blocks = layout.codebook_entries / 4u;
+        if (codebook_block >= codebook_blocks)
+            fail(NativePortTextureAssetFailure::InvalidPvrt,
+                 source_base_offset + level_offset, "pvrt-vq-1x1-index");
+        // The hardware derives the 1x1 VQ level from the bottom-right texel
+        // of the stored 2x2 level.
+        const auto codebook_offset =
+            (static_cast<std::size_t>(codebook_block) * 4u + 3u) * 2u;
+        const auto value = static_cast<std::uint16_t>(
+            static_cast<std::uint16_t>(source[codebook_offset]) |
+            static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(source[codebook_offset + 1u])
+                << 8u));
+        decode_pixel(value, pixel_format, rgba8.data());
+        return;
+    }
+
+    const auto level_bytes =
+        is_twiddled(data_format) && has_mipmaps(data_format) && width == 1u
+            ? std::size_t{2u}
+        : data_format == NativePortTextureAssetDataFormat::Rectangle
+            ? checked_multiply(
+                  checked_multiply(
+                      width, height,
+                      NativePortTextureAssetFailure::InvalidPvrt,
+                      source_base_offset + level_offset,
+                      "pvrt-rectangle-pixels"),
+                  2u, NativePortTextureAssetFailure::InvalidPvrt,
+                  source_base_offset + level_offset,
+                  "pvrt-rectangle-bytes")
+            : mip_level_bytes(data_format, width,
+                              source_base_offset + level_offset);
+    if (level_offset > source.size() ||
+        level_bytes > source.size() - level_offset)
+        fail(NativePortTextureAssetFailure::InvalidPvrt,
+             source_base_offset + level_offset, "pvrt-mipmap-bytes");
+    const auto level = source.subspan(level_offset, level_bytes);
+    if (is_vector_quantized(data_format)) {
+        const auto block_dimension = width / 2u;
+        const auto codebook_blocks = layout.codebook_entries / 4u;
+        for (std::uint32_t y = 0u; y < height; y += 2u) {
+            for (std::uint32_t x = 0u; x < width; x += 2u) {
+                const auto index_offset = static_cast<std::size_t>(
+                    morton_index(x / 2u, y / 2u, block_dimension));
+                const auto codebook_block = level[index_offset];
+                if (codebook_block >= codebook_blocks)
+                    fail(NativePortTextureAssetFailure::InvalidPvrt,
+                         source_base_offset + level_offset + index_offset,
+                         "pvrt-vq-index");
+                for (std::uint32_t local_x = 0u; local_x < 2u; ++local_x) {
+                    for (std::uint32_t local_y = 0u; local_y < 2u;
+                         ++local_y) {
+                        const auto codebook_entry =
+                            static_cast<std::size_t>(codebook_block) * 4u +
+                            local_x * 2u + local_y;
+                        const auto codebook_offset = codebook_entry * 2u;
+                        const std::uint16_t value = static_cast<std::uint16_t>(
+                            static_cast<std::uint16_t>(
+                                source[codebook_offset]) |
+                            static_cast<std::uint16_t>(
+                                static_cast<std::uint16_t>(
+                                    source[codebook_offset + 1u])
+                                << 8u));
+                        const auto destination_offset =
+                            (static_cast<std::size_t>(y + local_y) * width +
+                             x + local_x) *
+                            4u;
+                        decode_pixel(value, pixel_format,
+                                     rgba8.data() + destination_offset);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     for (std::uint32_t y = 0u; y < height; ++y) {
         for (std::uint32_t x = 0u; x < width; ++x) {
             const std::size_t source_pixel =
-                texture.source_data_format ==
-                        NativePortTextureAssetDataFormat::SquareTwiddled
+                is_twiddled(data_format)
                     ? morton_index(x, y, width)
                     : static_cast<std::size_t>(y) * width + x;
             const std::size_t source_offset = source_pixel * 2u;
             const std::uint16_t value =
-                static_cast<std::uint16_t>(source[source_offset]) |
+                static_cast<std::uint16_t>(level[source_offset]) |
                 static_cast<std::uint16_t>(
-                    static_cast<std::uint16_t>(source[source_offset + 1u])
+                    static_cast<std::uint16_t>(level[source_offset + 1u])
                     << 8u);
             const std::size_t destination_offset =
                 (static_cast<std::size_t>(y) * width + x) * 4u;
-            decode_pixel(value, texture.source_pixel_format,
-                         texture.rgba8.data() + destination_offset);
+            decode_pixel(value, pixel_format,
+                         rgba8.data() + destination_offset);
         }
     }
 }
@@ -390,6 +784,7 @@ void decode_pixels(const std::span<const std::uint8_t> source,
         NativePortDecodedTextureAsset texture;
         texture.name = metadata[index].name;
         texture.global_index = metadata[index].global_index;
+        texture.archive_ordinal = static_cast<std::uint32_t>(index);
         texture.source_pixel_format =
             parse_pixel_format(source[chunk_offset + 8u], chunk_offset + 8u);
         texture.source_data_format =
@@ -428,33 +823,39 @@ void decode_pixels(const std::span<const std::uint8_t> source,
             texture.extent.width, texture.extent.height,
             NativePortTextureAssetFailure::InvalidDimensions,
             chunk_offset + 12u, "pvrt-pixel-count");
-        const auto encoded_bytes = checked_multiply(
-            pixel_count, 2u, NativePortTextureAssetFailure::InvalidPvrt,
-            chunk_offset + 4u, "pvrt-pixel-bytes");
         const auto rgba_bytes = checked_multiply(
             pixel_count, 4u,
             NativePortTextureAssetFailure::RgbaOutputLimit,
             chunk_offset + 12u, "pvrt-rgba-bytes");
         const auto available_data_bytes = chunk_payload_size - 8u;
-        if (encoded_bytes > available_data_bytes)
-            fail(NativePortTextureAssetFailure::InvalidPvrt,
-                 chunk_offset + 4u, "pvrt-truncated-pixels");
-        const auto padding_bytes = available_data_bytes - encoded_bytes;
         const auto pixel_data_offset = chunk_offset + 16u;
-        const auto unpadded_chunk_bytes = checked_add(
-            16u, encoded_bytes,
-            NativePortTextureAssetFailure::InvalidPvrt, chunk_offset + 4u,
-            "pvrt-padding-size");
-        const auto expected_padding_bytes =
-            (32u - (unpadded_chunk_bytes & 31u)) & 31u;
-        if (padding_bytes > maximum_pvrt_padding_bytes ||
-            padding_bytes != expected_padding_bytes ||
-            !all_zero(source.subspan(pixel_data_offset + encoded_bytes,
-                                     padding_bytes)))
-            fail(NativePortTextureAssetFailure::InvalidPvrt,
-                 pixel_data_offset + encoded_bytes, "pvrt-padding");
+        const auto layout = select_pvm_data_layout(
+            texture.extent, texture.source_data_format,
+            available_data_bytes, chunk_offset + 9u);
+        const auto encoded_bytes = layout.encoded_bytes;
+        // select_pvm_data_layout has already validated the bounded trailing
+        // alignment/reservation without changing the compact index offset.
+        auto decoded_rgba_bytes = rgba_bytes;
+        if (has_mipmaps(texture.source_data_format)) {
+            for (auto dimension = texture.extent.width / 2u;;
+                 dimension >>= 1u) {
+                const auto level_pixels = checked_multiply(
+                    dimension, dimension,
+                    NativePortTextureAssetFailure::RgbaOutputLimit,
+                    chunk_offset + 12u, "pvrt-mipmap-rgba-pixels");
+                const auto level_rgba_bytes = checked_multiply(
+                    level_pixels, 4u,
+                    NativePortTextureAssetFailure::RgbaOutputLimit,
+                    chunk_offset + 12u, "pvrt-mipmap-rgba-bytes");
+                decoded_rgba_bytes = checked_add(
+                    decoded_rgba_bytes, level_rgba_bytes,
+                    NativePortTextureAssetFailure::RgbaOutputLimit,
+                    chunk_offset + 12u, "pvrt-mipmap-rgba-chain");
+                if (dimension == 1u) break;
+            }
+        }
         aggregate_rgba_bytes = checked_add(
-            aggregate_rgba_bytes, rgba_bytes,
+            aggregate_rgba_bytes, decoded_rgba_bytes,
             NativePortTextureAssetFailure::RgbaOutputLimit, chunk_offset,
             "pvm-rgba-size");
         if (aggregate_rgba_bytes > limits.maximum_rgba_bytes)
@@ -462,7 +863,38 @@ void decode_pixels(const std::span<const std::uint8_t> source,
                  chunk_offset, "pvm-rgba-limit");
 
         texture.rgba8.resize(rgba_bytes);
-        decode_pixels(source.subspan(pixel_data_offset, encoded_bytes), texture);
+        const auto encoded = source.subspan(pixel_data_offset, encoded_bytes);
+        decode_pixels(encoded, layout, texture.source_pixel_format,
+                      texture.source_data_format, texture.extent,
+                      layout.top_level_offset, texture.rgba8,
+                      pixel_data_offset);
+        if (has_mipmaps(texture.source_data_format)) {
+            texture.lower_mip_levels.reserve(
+                std::bit_width(texture.extent.width) - 1u);
+            for (auto dimension = texture.extent.width / 2u;;
+                 dimension >>= 1u) {
+                NativePortDecodedTextureMipLevel level;
+                level.extent = {dimension, dimension};
+                level.rgba8.resize(
+                    checked_multiply(
+                        checked_multiply(
+                            dimension, dimension,
+                            NativePortTextureAssetFailure::RgbaOutputLimit,
+                            chunk_offset + 12u,
+                            "pvrt-mipmap-output-pixels"),
+                        4u, NativePortTextureAssetFailure::RgbaOutputLimit,
+                        chunk_offset + 12u,
+                        "pvrt-mipmap-output-bytes"));
+                decode_pixels(
+                    encoded, layout, texture.source_pixel_format,
+                    texture.source_data_format, level.extent,
+                    mip_level_offset(layout, texture.source_data_format,
+                                     dimension, pixel_data_offset),
+                    level.rgba8, pixel_data_offset);
+                texture.lower_mip_levels.push_back(std::move(level));
+                if (dimension == 1u) break;
+            }
+        }
         textures.push_back(std::move(texture));
         chunk_offset = chunk_end;
     }
@@ -529,7 +961,8 @@ class NativePortTextureRegistry::Impl final {
         const NativePortTextureAssetIdentity& identity,
         const NativePortDecodedTextureAsset& texture) {
         validate_identity(identity);
-        if (identity.global_index != texture.global_index)
+        if (identity.global_index != texture.global_index ||
+            identity.archive_ordinal != texture.archive_ordinal)
             registry_fail(NativePortTextureRegistryFailure::InvalidIdentity,
                           0u, "identity-global-index");
         const auto texture_bytes = validate_texture(texture);
@@ -543,6 +976,8 @@ class NativePortTextureRegistry::Impl final {
                 existing->extent.height != texture.extent.height ||
                 existing->pixel_format != texture.source_pixel_format ||
                 existing->data_format != texture.source_data_format ||
+                existing->mip_levels !=
+                    texture.lower_mip_levels.size() + 1u ||
                 existing->texture_bytes != texture_bytes)
                 registry_fail(
                     NativePortTextureRegistryFailure::IdentityCollision,
@@ -562,21 +997,6 @@ class NativePortTextureRegistry::Impl final {
             return {existing->guest_token, existing->handle};
         }
 
-        // A GBIX identifies one logical texture inside a content generation.
-        // A different verified content digest for that same identity is
-        // ambiguous and cannot silently create a second native mapping.
-        if (identity.global_index.has_value()) {
-            const auto collision = std::ranges::find_if(
-                entries_, [&identity](const Entry& entry) {
-                    return entry.identity.generation == identity.generation &&
-                           entry.identity.global_index == identity.global_index;
-                });
-            if (collision != entries_.end())
-                registry_fail(
-                    NativePortTextureRegistryFailure::IdentityCollision,
-                    collision->guest_token, "content-digest-collision");
-        }
-
         if (entries_.size() == limits_.maximum_entries)
             registry_fail(NativePortTextureRegistryFailure::EntryLimit, 0u,
                           "entry-limit");
@@ -590,12 +1010,24 @@ class NativePortTextureRegistry::Impl final {
         NativePortTextureConfig config;
         config.extent = texture.extent;
         config.format = NativePortTextureFormat::Rgba8Unorm;
-        NativePortImageView image;
-        image.extent = texture.extent;
-        image.format = NativePortTextureFormat::Rgba8Unorm;
-        image.stride_bytes = texture.extent.width * 4u;
-        image.pixels = std::as_bytes(std::span(texture.rgba8));
-        const auto handle = graphics_.create_texture(config, &image);
+        config.mip_levels = static_cast<std::uint32_t>(
+            texture.lower_mip_levels.size() + 1u);
+        std::vector<NativePortImageView> images;
+        images.reserve(config.mip_levels);
+        images.push_back(NativePortImageView{
+            texture.extent,
+            NativePortTextureFormat::Rgba8Unorm,
+            texture.extent.width * 4u,
+            false,
+            std::as_bytes(std::span(texture.rgba8))});
+        for (const auto& level : texture.lower_mip_levels)
+            images.push_back(NativePortImageView{
+                level.extent,
+                NativePortTextureFormat::Rgba8Unorm,
+                level.extent.width * 4u,
+                false,
+                std::as_bytes(std::span(level.rgba8))});
+        const auto handle = graphics_.create_texture(config, images);
         const auto guest_token = next_guest_token_++;
         try {
             entries_.push_back(Entry{identity,
@@ -605,7 +1037,8 @@ class NativePortTextureRegistry::Impl final {
                                      texture_bytes,
                                      texture.extent,
                                      texture.source_pixel_format,
-                                     texture.source_data_format});
+                                     texture.source_data_format,
+                                     config.mip_levels});
         } catch (...) {
             graphics_.destroy_texture(handle);
             throw;
@@ -682,6 +1115,7 @@ class NativePortTextureRegistry::Impl final {
         NativePortExtent extent;
         NativePortTextureAssetPixelFormat pixel_format;
         NativePortTextureAssetDataFormat data_format;
+        std::uint32_t mip_levels;
     };
 
     using EntryIterator = std::vector<Entry>::iterator;
@@ -723,7 +1157,12 @@ class NativePortTextureRegistry::Impl final {
         }
         switch (texture.source_data_format) {
         case NativePortTextureAssetDataFormat::SquareTwiddled:
+        case NativePortTextureAssetDataFormat::SquareTwiddledMipmaps:
+        case NativePortTextureAssetDataFormat::VectorQuantized:
+        case NativePortTextureAssetDataFormat::VectorQuantizedMipmaps:
         case NativePortTextureAssetDataFormat::Rectangle:
+        case NativePortTextureAssetDataFormat::SmallVectorQuantized:
+        case NativePortTextureAssetDataFormat::SmallVectorQuantizedMipmaps:
             break;
         default:
             registry_fail(NativePortTextureRegistryFailure::InvalidTexture, 0u,
@@ -731,10 +1170,37 @@ class NativePortTextureRegistry::Impl final {
         }
         const auto pixels = static_cast<std::uint64_t>(texture.extent.width) *
                             texture.extent.height;
-        const auto bytes = pixels * 4u;
+        auto bytes = pixels * 4u;
         if (bytes != texture.rgba8.size())
             registry_fail(NativePortTextureRegistryFailure::InvalidTexture, 0u,
                           "texture-rgba-size");
+        const auto expected_lower_levels = has_mipmaps(
+            texture.source_data_format)
+                                               ? std::bit_width(
+                                                     texture.extent.width) -
+                                                     1u
+                                               : 0u;
+        if (texture.lower_mip_levels.size() != expected_lower_levels)
+            registry_fail(NativePortTextureRegistryFailure::InvalidTexture,
+                          0u, "texture-mip-count");
+        auto expected_extent = texture.extent;
+        for (const auto& level : texture.lower_mip_levels) {
+            expected_extent.width = std::max(expected_extent.width / 2u, 1u);
+            expected_extent.height =
+                std::max(expected_extent.height / 2u, 1u);
+            const auto level_bytes =
+                static_cast<std::uint64_t>(expected_extent.width) *
+                expected_extent.height * 4u;
+            if (level.extent.width != expected_extent.width ||
+                level.extent.height != expected_extent.height ||
+                level.rgba8.size() != level_bytes ||
+                level_bytes > std::numeric_limits<std::uint64_t>::max() -
+                                  bytes)
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-mip-layout");
+            bytes += level_bytes;
+        }
         return bytes;
     }
 
@@ -833,7 +1299,19 @@ NativePortTextureRegistry::~NativePortTextureRegistry() = default;
 NativePortTextureRegistryBinding NativePortTextureRegistry::acquire(
     const NativePortTextureAssetIdentity& identity,
     const NativePortDecodedTextureAsset& texture) {
-    return impl_->acquire(identity, texture);
+    try {
+        return impl_->acquire(identity, texture);
+    } catch (const NativePortTextureRegistryError&) {
+        throw;
+    } catch (const std::bad_alloc&) {
+        throw NativePortTextureRegistryError(
+            NativePortTextureRegistryFailure::ResourceExhausted, 0u,
+            "acquire-allocation");
+    } catch (const std::length_error&) {
+        throw NativePortTextureRegistryError(
+            NativePortTextureRegistryFailure::ResourceExhausted, 0u,
+            "acquire-allocation");
+    }
 }
 
 NativePortTextureHandle NativePortTextureRegistry::resolve(
@@ -887,6 +1365,146 @@ decode_native_port_prs_pvm_texture_archive(
             return decode_pvm_impl(decompressed, limits);
         },
         "prs-pvm-allocation");
+}
+
+NativePortDecodedTextureAsset decode_native_port_texture_surface(
+    const std::span<const std::uint8_t> source,
+    const NativePortExtent extent,
+    const NativePortTextureAssetPixelFormat pixel_format,
+    const NativePortTextureAssetDataFormat data_format,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures(
+        [&] {
+            return decode_surface_impl(source, extent, pixel_format,
+                                       data_format, limits);
+        },
+        "surface-allocation");
+}
+
+NativePortMaterializedTextureArchive
+materialize_native_port_prs_pvm_texture_archive(
+    const std::span<const std::uint8_t> source,
+    const std::string_view content_byte_identity,
+    NativePortTextureRegistry& registry,
+    const std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures([&] {
+        if (generation == 0u ||
+            !valid_native_port_sha256_identity(content_byte_identity) ||
+            source.empty() || source.size() > limits.maximum_compressed_bytes)
+            fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
+                 "materialize-binding");
+
+        NativePortMaterializedTextureArchive archive;
+        archive.generation = generation;
+        for (std::size_t index = 0u; index < archive.content_sha256.size();
+             ++index) {
+            const auto hex =
+                content_byte_identity.substr(7u + index * 2u, 2u);
+            const auto nibble = [](const char value) -> std::uint8_t {
+                if (value >= '0' && value <= '9')
+                    return static_cast<std::uint8_t>(value - '0');
+                if (value >= 'a' && value <= 'f')
+                    return static_cast<std::uint8_t>(value - 'a' + 10);
+                return static_cast<std::uint8_t>(value - 'A' + 10);
+            };
+            archive.content_sha256[index] = static_cast<std::uint8_t>(
+                (nibble(hex[0]) << 4u) | nibble(hex[1]));
+        }
+
+        auto decoded = decode_native_port_prs_pvm_texture_archive(
+            source, limits);
+        archive.entries.reserve(decoded.size());
+        try {
+            for (const auto& texture : decoded) {
+                NativePortTextureAssetIdentity identity;
+                identity.generation = generation;
+                identity.global_index = texture.global_index;
+                identity.archive_ordinal = texture.archive_ordinal;
+                identity.content_sha256 = archive.content_sha256;
+                // Copy all potentially allocating metadata before acquiring
+                // a registry reference. archive.entries was reserved for the
+                // full decoded count, so publishing the completed value below
+                // is a non-allocating move and cannot orphan a GPU reference.
+                NativePortMaterializedTextureAsset materialized{
+                    texture.name,
+                    texture.global_index,
+                    texture.archive_ordinal,
+                    0u,
+                    {},
+                    texture.extent,
+                    static_cast<std::uint32_t>(
+                        texture.lower_mip_levels.size() + 1u)};
+                const auto acquired = registry.acquire(identity, texture);
+                materialized.guest_token = acquired.guest_token;
+                materialized.texture = acquired.texture;
+                archive.entries.push_back(std::move(materialized));
+            }
+        } catch (...) {
+            const auto acquisition_failure = std::current_exception();
+            std::exception_ptr cleanup_failure;
+            for (auto entry = archive.entries.rbegin();
+                 entry != archive.entries.rend(); ++entry) {
+                try {
+                    registry.release(entry->guest_token, generation);
+                } catch (...) {
+                    if (!cleanup_failure)
+                        cleanup_failure = std::current_exception();
+                }
+            }
+            if (cleanup_failure) std::rethrow_exception(cleanup_failure);
+            std::rethrow_exception(acquisition_failure);
+        }
+        return archive;
+    }, "materialize-prs-pvm");
+}
+
+NativePortMaterializedTextureArchive
+materialize_native_port_prs_pvm_texture_archive(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    NativePortTextureRegistry& registry,
+    const std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits) {
+    if (binding.byte_size == 0u ||
+        binding.byte_size > limits.maximum_compressed_bytes)
+        fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
+             "materialize-binding-size");
+    return translate_resource_failures([&] {
+        auto file = platform.open_content_file(binding);
+        std::vector<std::byte> compressed(
+            static_cast<std::size_t>(binding.byte_size));
+        file->read_at(0u, compressed);
+        return materialize_native_port_prs_pvm_texture_archive(
+            std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(compressed.data()),
+                compressed.size()),
+            binding.byte_identity, registry, generation, limits);
+    }, "materialize-prs-pvm-content");
+}
+
+void release_native_port_texture_archive(
+    NativePortTextureRegistry& registry,
+    NativePortMaterializedTextureArchive& archive) {
+    std::exception_ptr first_failure;
+    std::vector<NativePortMaterializedTextureAsset> failed;
+    failed.reserve(archive.entries.size());
+    for (auto entry = archive.entries.rbegin(); entry != archive.entries.rend();
+         ++entry) {
+        try {
+            registry.release(entry->guest_token, archive.generation);
+        } catch (...) {
+            if (!first_failure) first_failure = std::current_exception();
+            failed.push_back(std::move(*entry));
+        }
+    }
+    std::ranges::reverse(failed);
+    archive.entries = std::move(failed);
+    if (archive.entries.empty()) {
+        archive.generation = 0u;
+        archive.content_sha256 = {};
+    }
+    if (first_failure) std::rethrow_exception(first_failure);
 }
 
 } // namespace katana::runtime

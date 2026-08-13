@@ -240,12 +240,36 @@ void wait_until_monotonic_nanoseconds(const std::uint64_t deadline) {
                : fit_aspect(full, config.aspect);
 }
 
+[[nodiscard]] NativePortExtent texture_mip_extent(
+    const NativePortExtent extent,
+    const std::uint32_t level) noexcept {
+    return {std::max(extent.width >> level, 1u),
+            std::max(extent.height >> level, 1u)};
+}
+
 [[nodiscard]] std::uint64_t checked_texture_bytes(
-    const NativePortExtent extent) {
-    if (!valid_extent(extent))
+    const NativePortTextureConfig& config) {
+    if (!valid_extent(config.extent) || config.mip_levels == 0u ||
+        config.mip_levels > static_cast<std::uint32_t>(
+                                std::bit_width(std::max(
+                                    config.extent.width,
+                                    config.extent.height))) ||
+        (config.dynamic && config.mip_levels != 1u))
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::InvalidResource, 0u, "texture-extent");
-    return static_cast<std::uint64_t>(extent.width) * extent.height * 4u;
+    std::uint64_t result = 0u;
+    for (std::uint32_t level = 0u; level < config.mip_levels; ++level) {
+        const auto extent = texture_mip_extent(config.extent, level);
+        const auto level_bytes =
+            static_cast<std::uint64_t>(extent.width) * extent.height * 4u;
+        if (level_bytes > std::numeric_limits<std::uint64_t>::max() - result)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidResource,
+                0u,
+                "texture-byte-size");
+        result += level_bytes;
+    }
+    return result;
 }
 
 void validate_image(const NativePortImageView& image,
@@ -279,6 +303,21 @@ void validate_image(const NativePortImageView& image,
             NativePortGraphicsFailure::InvalidResource,
             0u,
             "image-display-aspect");
+}
+
+void validate_texture_images(
+    const NativePortTextureConfig& config,
+    const std::span<const NativePortImageView> images) {
+    if (images.empty()) return;
+    if (images.size() != config.mip_levels)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidResource,
+            0u,
+            "texture-mip-count");
+    for (std::uint32_t level = 0u; level < config.mip_levels; ++level)
+        validate_image(images[level],
+                       texture_mip_extent(config.extent, level),
+                       config.format);
 }
 
 void saturating_increment(std::uint64_t& value) noexcept {
@@ -407,19 +446,18 @@ class NativePortGraphicsDevice::Impl final {
 
     [[nodiscard]] NativePortTextureHandle create_texture(
         const NativePortTextureConfig& config,
-        const NativePortImageView* const initial_pixels) {
+        const std::span<const NativePortImageView> initial_mip_levels) {
         require_owner_thread();
         if (!valid_texture_format(config.format) || !config.shader_resource)
             fail(NativePortGraphicsFailure::InvalidResource,
                  0u,
                  "texture-not-shader-resource");
-        const auto byte_size = checked_texture_bytes(config.extent);
+        const auto byte_size = checked_texture_bytes(config);
         if (byte_size > config_.maximum_texture_bytes - texture_bytes_)
             fail(NativePortGraphicsFailure::ResourceLimit,
                  0u,
                  "texture-byte-budget");
-        if (initial_pixels != nullptr)
-            validate_image(*initial_pixels, config.extent, config.format);
+        validate_texture_images(config, initial_mip_levels);
 
         std::uint32_t index = 0u;
         if (!free_texture_slots_.empty()) {
@@ -439,7 +477,7 @@ class NativePortGraphicsDevice::Impl final {
             D3D11_TEXTURE2D_DESC description{};
             description.Width = config.extent.width;
             description.Height = config.extent.height;
-            description.MipLevels = 1u;
+            description.MipLevels = config.mip_levels;
             description.ArraySize = 1u;
             description.Format = texture_format(config.format);
             description.SampleDesc.Count = 1u;
@@ -464,8 +502,9 @@ class NativePortGraphicsDevice::Impl final {
             slot.byte_size = byte_size;
             slot.live = true;
             if (slot.generation == 0u) slot.generation = 1u;
-            if (initial_pixels != nullptr)
-                upload_texture(slot, *initial_pixels);
+            for (std::uint32_t level = 0u;
+                 level < initial_mip_levels.size(); ++level)
+                upload_texture(slot, initial_mip_levels[level], level);
         } catch (...) {
             slot.texture.Reset();
             slot.view.Reset();
@@ -483,8 +522,26 @@ class NativePortGraphicsDevice::Impl final {
                         const NativePortImageView& pixels) {
         require_owner_thread();
         auto& slot = resolve_texture(handle);
+        if (slot.config.mip_levels != 1u)
+            fail(NativePortGraphicsFailure::InvalidResource,
+                 0u,
+                 "texture-single-level-update");
         validate_image(pixels, slot.config.extent, slot.config.format);
-        upload_texture(slot, pixels);
+        upload_texture(slot, pixels, 0u);
+    }
+
+    void update_texture(
+        const NativePortTextureHandle handle,
+        const std::span<const NativePortImageView> mip_levels) {
+        require_owner_thread();
+        auto& slot = resolve_texture(handle);
+        validate_texture_images(slot.config, mip_levels);
+        if (mip_levels.empty())
+            fail(NativePortGraphicsFailure::InvalidResource,
+                 0u,
+                 "texture-empty-mip-update");
+        for (std::uint32_t level = 0u; level < mip_levels.size(); ++level)
+            upload_texture(slot, mip_levels[level], level);
     }
 
     void destroy_texture(const NativePortTextureHandle handle) {
@@ -676,7 +733,8 @@ class NativePortGraphicsDevice::Impl final {
             texture_config.extent = image.extent;
             texture_config.format = image.format;
             texture_config.dynamic = true;
-            image_texture_ = create_texture(texture_config, nullptr);
+            image_texture_ = create_texture(
+                texture_config, std::span<const NativePortImageView>{});
             image_texture_extent_ = image.extent;
             image_texture_format_ = image.format;
         }
@@ -1354,14 +1412,17 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     void upload_texture(TextureSlot& slot,
-                        const NativePortImageView& image) {
+                        const NativePortImageView& image,
+                        const std::uint32_t mip_level) {
         const auto row_bytes =
             static_cast<std::size_t>(image.extent.width) * 4u;
+        const auto subresource = D3D11CalcSubresource(
+            mip_level, 0u, slot.config.mip_levels);
         if (slot.config.dynamic) {
             D3D11_MAPPED_SUBRESOURCE mapped{};
             const auto result = context_->Map(
                 slot.texture.Get(),
-                0u,
+                subresource,
                 D3D11_MAP_WRITE_DISCARD,
                 0u,
                 &mapped);
@@ -1370,7 +1431,7 @@ class NativePortGraphicsDevice::Impl final {
                      static_cast<std::uint32_t>(result),
                      "texture-map");
             if (mapped.RowPitch < row_bytes) {
-                context_->Unmap(slot.texture.Get(), 0u);
+                context_->Unmap(slot.texture.Get(), subresource);
                 fail(NativePortGraphicsFailure::InvalidResource,
                      0u,
                      "texture-row-pitch");
@@ -1385,10 +1446,10 @@ class NativePortGraphicsDevice::Impl final {
                         static_cast<std::size_t>(source_row) * image.stride_bytes,
                     row_bytes);
             }
-            context_->Unmap(slot.texture.Get(), 0u);
+            context_->Unmap(slot.texture.Get(), subresource);
         } else if (!image.bottom_up) {
             context_->UpdateSubresource(slot.texture.Get(),
-                                        0u,
+                                        subresource,
                                         nullptr,
                                         image.pixels.data(),
                                         image.stride_bytes,
@@ -1406,13 +1467,15 @@ class NativePortGraphicsDevice::Impl final {
                             row_bytes);
             }
             context_->UpdateSubresource(slot.texture.Get(),
-                                        0u,
+                                        subresource,
                                         nullptr,
                                         normalized.data(),
                                         static_cast<UINT>(row_bytes),
                                         0u);
         }
-        saturating_add(snapshot_.uploaded_bytes, slot.byte_size);
+        saturating_add(snapshot_.uploaded_bytes,
+                       static_cast<std::uint64_t>(row_bytes) *
+                           image.extent.height);
     }
 
     void set_viewport(const NativePortPixelRect rect) {
@@ -1550,11 +1613,13 @@ class NativePortGraphicsDevice::Impl final {
     }
     [[nodiscard]] NativePortTextureHandle create_texture(
         const NativePortTextureConfig&,
-        const NativePortImageView*) {
+        std::span<const NativePortImageView>) {
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::UnsupportedHost, 1u, "unsupported-host");
     }
     void update_texture(NativePortTextureHandle, const NativePortImageView&) {}
+    void update_texture(NativePortTextureHandle,
+                        std::span<const NativePortImageView>) {}
     void destroy_texture(NativePortTextureHandle) {}
     void begin_frame(const NativePortFrameConfig&) {}
     void draw(const NativePortDrawPacket&) {}
@@ -1596,13 +1661,30 @@ NativePortGraphicsLayout NativePortGraphicsDevice::layout() const {
 NativePortTextureHandle NativePortGraphicsDevice::create_texture(
     const NativePortTextureConfig& config,
     const NativePortImageView* const initial_pixels) {
-    return impl_->create_texture(config, initial_pixels);
+    return initial_pixels != nullptr
+               ? impl_->create_texture(
+                     config,
+                     std::span<const NativePortImageView>(initial_pixels, 1u))
+               : impl_->create_texture(
+                     config, std::span<const NativePortImageView>{});
+}
+
+NativePortTextureHandle NativePortGraphicsDevice::create_texture(
+    const NativePortTextureConfig& config,
+    const std::span<const NativePortImageView> initial_mip_levels) {
+    return impl_->create_texture(config, initial_mip_levels);
 }
 
 void NativePortGraphicsDevice::update_texture(
     const NativePortTextureHandle texture,
     const NativePortImageView& pixels) {
     impl_->update_texture(texture, pixels);
+}
+
+void NativePortGraphicsDevice::update_texture(
+    const NativePortTextureHandle texture,
+    const std::span<const NativePortImageView> mip_levels) {
+    impl_->update_texture(texture, mip_levels);
 }
 
 void NativePortGraphicsDevice::destroy_texture(
