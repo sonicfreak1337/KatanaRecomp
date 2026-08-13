@@ -1,11 +1,11 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `41`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `44`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 104, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 22, Portprojektvertrag 93 und Native-Port-
-Profilvertrag 16. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
+Backend-Interface-ABI 23, Portprojektvertrag 94 und Native-Port-
+Profilvertrag 17. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
 Directives-Version 4, Native-AOT-Emissionsprofil 34 und Port-Metadata-Cache-
-Schema 4 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
+Schema 6 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
@@ -60,11 +60,23 @@ Codepointer bleiben dadurch bis zur spaeteren indirekten Aufrufgrenze
 erhalten. Hints, externe Entries und die resultierende Analyseclosure sind in
 Cache, IR und AOT-Vertrag gebunden.
 
-Die davon getrennte oeffentliche Codegen-Grenze
-`PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`22` und Portprojektvertrag `93` versioniert. Analyzer-ABI `41` bindet den
-aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
-ersetzen einander nicht.
+Analyzer-ABI 44 bindet die bounded, stride-basierte statische
+Callback-Inventarisierung. Der Stride muss aus der SH-4-Indexarithmetik
+folgen, ist auf `256` Bytes begrenzt und verlangt mindestens zwei
+stride-konsistente, shape-validierte Codeeintraege vor einem Nicht-Code-
+Terminator. PC-relative Literale liefern allein keine Descriptor-Tabellen-
+Evidenz mehr: erst ihr statischer Speicher-Dereferenz legitimiert die
+Inventarisierung. Das verhindert Formatstring-/Ressourcen-Scheinevidenz;
+alle Ergebnisse bleiben guarded und erweitern weder unbewiesen CFG noch
+Laufzeitziele. Die zugehoerigen Hook-Proofs protokollieren die eingehenden
+Instruktionsquellen, und externe Fortschritts-Waits werden als
+identitaetsgebundene Provideranforderung ausgegeben.
+
+Im historischen ABI-41-Stand wurde die davon getrennte oeffentliche
+Codegen-Grenze `PortExportOptions::native_port_definition` durch
+Backend-Interface-ABI `22` und Portprojektvertrag `93` versioniert.
+Analyzer-ABI `41` band den damaligen SDK-Vertrag einschliesslich des
+Hardwareaudit-Layouts; die Zaehler ersetzen einander nicht.
 
 Analyzer-ABI 34 band die typisierten Executor-/RAM-Fortschrittsfelder,
 das Eviction-Ledger und den ganz-oder-gar-nicht-Vertrag persistierter

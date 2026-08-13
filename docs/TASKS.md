@@ -415,13 +415,13 @@ letzte reale Produktevidenz:
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
   Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 93, Native-Port-Profilvertrag 16
-  Analyzer-ABI 43, Function-Analysis-Epoch-Schema 28,
+  PVR-State-Contract 3, Portprojektvertrag 94, Native-Port-Profilvertrag 17
+  Analyzer-ABI 44, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
-  Analysis Directives 4, Hookkarte v4, Hardware-Closure v5,
+  Analysis Directives 4, Hookkarte v5, Hardware-Closure v6,
   GameProject-Metadaten katana-game-project-v5
   Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 5
+  Port-Metadata-Cache-Schema 6
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

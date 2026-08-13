@@ -880,10 +880,21 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
             return candidate.source_offset < value;
         });
     if (block == module.block_identities.end() ||
-        block->source_offset != offset)
+        block->source_offset != offset) {
+        std::ostringstream detail;
+        detail << "loaded-aot-entry-identity-missing:target=0x" << std::hex
+               << runtime_target << ";runtime-start=0x"
+               << match_runtime_start << ";source-start=0x"
+               << module.source_start << ";offset=0x" << offset
+               << ";pc=0x" << impl_->cpu.pc << ";pr=0x" << impl_->cpu.pr
+               << ";active-instruction=0x"
+               << impl_->cpu.active_instruction_pc
+               << ";active-block=0x"
+               << impl_->cpu.active_block_virtual_start;
         throw NativePortContractError(
             NativePortContractFailure::AotContractViolation,
-            "loaded-aot-entry-identity-missing");
+            detail.str());
+    }
     const auto bytes = native_port_direct_bytes(
         impl_->cpu, runtime_target, block->byte_size);
     if (!bytes.has_value() || sha256_identity(*bytes) != block->sha256)

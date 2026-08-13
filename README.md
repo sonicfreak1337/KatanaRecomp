@@ -27,16 +27,16 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 
 Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 104, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 43, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 44, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 93, Native-Port-Profilvertrag 16 sowie PVR-State-Contract 3.
+Portprojektvertrag 94, Native-Port-Profilvertrag 17 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`.
-Port-Metadata-Cache-Schema: `5`.
+Port-Metadata-Cache-Schema: `6`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
-Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v5`, die
-Hookanforderungskarte auf `v4` und die exportierten GameProject-Metadaten auf
+Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v6`, die
+Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
@@ -200,6 +200,26 @@ PRS-Decodes blieben vollstaendig. Die Hardware-Closure blieb erwartungsgemaess
 bei `850/47/803/129`, weil dieser Schritt AOT-Abdeckung erweiterte, aber noch
 keinen Hardwareprovider ersetzte. Der direkte `game.exe`-Lauf passierte den
 alten Callback-Endpunkt und erreichte die naechste Host-Timing-Grenze.
+
+Der v94-Zwischenstand verfeinert die begrenzte statische Callback-
+Inventarisierung: Eine per SH-4-Indexarithmetik nachgewiesene, variable
+Record-Stride wird bis `256` Bytes durchsucht (der relevante Titelpfad hat
+`16` Bytes), verlangt mindestens zwei stride-konsistente Codeeintraege und
+einen Nicht-Code-Terminator und bleibt vollstaendig `guarded`. Ein blosses
+PC-relatives Literal wird dagegen erst nach einem echten statischen
+Speicher-Dereferenz als Descriptor-Tabellenquelle zugelassen; so bleiben
+Formatstrings und Ressourcen ohne irrefuehrende Callback-Evidenz. Der Export
+liefert `5.196` Funktionen in `153` Partitionen, `1.960` rohe und `612`
+guarded Callback-Kandidaten, `140` Codegen-Treffer und `13` Misses in
+`171,7 s`; weder Truncation noch Budget- oder ungelöste-CF-Terminierung trat
+auf. Die Hook-Proofs tragen nun die eingehenden Instruktionsquellen und
+externe Fortschritts-Waits als explizite Provideranforderung. Der direkte
+Produktlauf passiert den frueheren `0x8C01E6A6`-Miss, erreicht Frame `198`
+und laedt `STG00`/3D; der neue deterministische Stop ist
+`loaded-aot-entry-identity-missing` bei Runtime `0x8C900D76`, Quelle
+`0x8805A000+0xD76`. Damit bleibt der fehlende Block eine
+identitaetsgebundene Loaded-AOT-Abdeckung, kein stillschweigend ausgefuehrter
+Fallback.
 
 Der reviewte v87-Export erweitert diese statische Grundlage auf `5.217`
 Funktionen in `155` Partitionen. `42` latente Module liefern `3.828`
@@ -540,8 +560,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 43, Portprojektvertrag 93 und
-Native-Port-Profilvertrag 16. Davon getrennt verwendet `GameProject` Vertrag 8 und
+KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 44, Portprojektvertrag 94 und
+Native-Port-Profilvertrag 17. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

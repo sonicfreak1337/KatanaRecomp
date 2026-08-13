@@ -18865,6 +18865,7 @@ struct NativePortHardwareClosure final {
     bool definition_present = false;
     bool complete = false;
     std::size_t known_hardware_sites = 0u;
+    std::size_t native_progress_wait_sites = 0u;
     std::size_t unknown_instruction_sites = 0u;
     std::size_t unresolved_memory_sites = 0u;
     std::size_t resolved_by_native_cpu_control = 0u;
@@ -18876,6 +18877,55 @@ struct NativePortHardwareClosure final {
     std::set<std::uint32_t> reachability_eliminated_sites;
     std::vector<Gap> gaps;
 };
+
+std::set<std::uint32_t> native_port_external_progress_wait_sites(
+    const katana::analysis::DreamcastHardwareAudit& audit) {
+    std::set<std::uint32_t> sites;
+    for (const auto& loop : audit.loops) {
+        // A one-block RAM poll with no local counter and no write to its guard
+        // address can only make progress through an external producer.  The
+        // native product has no guest device scheduler which could service
+        // that producer behind the AOT code, so an identity-bound native
+        // provider must replace the owning boundary.  Larger/mixed loops stay
+        // diagnostic until their internal call/write effects are proven.
+        if (!loop.counter_instruction_addresses.empty() ||
+            loop.block_addresses.size() != 1u)
+            continue;
+        if (loop.classification ==
+            katana::analysis::HardwareLoopClassification::RamPoll) {
+            for (const auto& access : loop.accesses) {
+                if (!access.guards_loop || !access.linear_memory ||
+                    access.kind !=
+                        katana::analysis::HardwareAccessKind::Read)
+                    continue;
+                const bool locally_written = std::ranges::any_of(
+                    loop.accesses, [&](const auto& candidate) {
+                        return candidate.kind ==
+                                   katana::analysis::HardwareAccessKind::Write &&
+                               candidate.canonical_address ==
+                                   access.canonical_address;
+                    });
+                if (!locally_written)
+                    sites.insert(access.instruction_address);
+            }
+            continue;
+        }
+        // A pointer loaded in the predecessor block can leave the effective
+        // guard address unresolved inside the one-block loop.  This is still
+        // a positive proof that external state must change: no local counter
+        // exists and the guarded syntactic read is the loop's only exit
+        // dependency.  Treat it as a provider requirement without guessing
+        // whether the pointer names RAM or MMIO.  The title binding must prove
+        // the complete owner/ABI before it can discharge the requirement.
+        if (loop.classification ==
+                katana::analysis::HardwareLoopClassification::Unknown &&
+            loop.unresolved_guard_access)
+            sites.insert(
+                loop.unresolved_guard_read_instruction_addresses.begin(),
+                loop.unresolved_guard_read_instruction_addresses.end());
+    }
+    return sites;
+}
 
 katana::analysis::DreamcastHardwareAudit combine_native_hardware_audits(
     const katana::analysis::DreamcastHardwareAudit& primary,
@@ -19706,6 +19756,14 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
         std::ostringstream reason;
         reason << "function-hook-interior-guarded-entry-0x"
                << std::hex << std::uppercase << *escaping;
+        if (const auto sources =
+                index.incoming_instruction_addresses.find(*escaping);
+            sources != index.incoming_instruction_addresses.end() &&
+            !sources->second.empty()) {
+            reason << "-sources";
+            for (const auto source : sources->second)
+                reason << "-0x" << source;
+        }
         return {false, reason.str()};
     }
     const auto seed_entry_escapes_owner =
@@ -19839,6 +19897,10 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
             &reference);
     }
     result.known_hardware_sites = known_hardware_instructions.size();
+    const auto native_progress_wait_instructions =
+        native_port_external_progress_wait_sites(audit);
+    result.native_progress_wait_sites =
+        native_progress_wait_instructions.size();
     std::set<std::uint32_t> unknown_instruction_addresses;
     for (const auto& diagnostic : audit.instruction_diagnostics)
         unknown_instruction_addresses.insert(diagnostic.address);
@@ -19848,6 +19910,9 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     audited_instruction_addresses.insert(
         unknown_instruction_addresses.begin(),
         unknown_instruction_addresses.end());
+    audited_instruction_addresses.insert(
+        native_progress_wait_instructions.begin(),
+        native_progress_wait_instructions.end());
     for (const auto& site : audit.unresolved_memory_instruction_sites)
         audited_instruction_addresses.insert(site.instruction_address);
     result.replacement_reachability_proven =
@@ -19987,6 +20052,10 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                                       unknown_instruction_addresses.end());
     for (const auto address : hook_required_instructions)
         admit(address, "native-hook-missing");
+    for (const auto address : native_progress_wait_instructions) {
+        if (hook_required_instructions.contains(address)) continue;
+        admit(address, "native-progress-wait-provider-missing");
+    }
     result.unresolved_memory_sites =
         audit.unresolved_memory_instruction_sites.size();
     for (const auto& site :
@@ -20040,12 +20109,14 @@ std::string native_port_hardware_closure_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hardware-closure.v5",
+        "katana.native-port-hardware-closure.v6",
         "native-port-hardware-closure");
     output << ",\"definition_present\":"
            << (closure.definition_present ? "true" : "false")
            << ",\"complete\":" << (closure.complete ? "true" : "false")
            << ",\"known_hardware_sites\":" << closure.known_hardware_sites
+           << ",\"native_progress_wait_sites\":"
+           << closure.native_progress_wait_sites
            << ",\"unknown_instruction_sites\":"
            << closure.unknown_instruction_sites
            << ",\"unresolved_memory_sites\":"
@@ -20180,6 +20251,7 @@ std::string native_port_hook_requirements_json(
     struct Candidate final {
         std::set<std::uint32_t> requirement_sites;
         std::set<std::uint32_t> hardware_sites;
+        std::set<std::uint32_t> native_progress_wait_sites;
         std::set<std::uint32_t> unknown_instruction_sites;
         std::set<katana::analysis::DreamcastHardwareRegion> regions;
         std::size_t dynamic_memory_sites = 0u;
@@ -20259,6 +20331,27 @@ std::string native_port_hook_requirements_json(
         candidate.hardware_sites.insert(site);
         for (const auto* reference : references)
             candidate.regions.insert(reference->region);
+    }
+    const auto native_progress_wait_sites =
+        native_port_external_progress_wait_sites(audit);
+    std::size_t mapped_native_progress_wait_sites = 0u;
+    std::size_t ambiguous_native_progress_wait_sites = 0u;
+    std::size_t unmapped_native_progress_wait_sites = 0u;
+    for (const auto site : native_progress_wait_sites) {
+        const auto owners =
+            native_port_covering_function_entries(program_index, site);
+        if (owners.empty()) {
+            ++unmapped_native_progress_wait_sites;
+            continue;
+        }
+        if (owners.size() != 1u) {
+            ++ambiguous_native_progress_wait_sites;
+            continue;
+        }
+        ++mapped_native_progress_wait_sites;
+        auto& candidate = candidates[*owners.begin()];
+        candidate.requirement_sites.insert(site);
+        candidate.native_progress_wait_sites.insert(site);
     }
     std::map<std::uint32_t,
              std::vector<
@@ -20354,7 +20447,7 @@ std::string native_port_hook_requirements_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hook-requirements.v4",
+        "katana.native-port-hook-requirements.v5",
         "native-port-hook-requirements");
     output << ",\"definition_present\":"
            << (definition != nullptr ? "true" : "false")
@@ -20380,6 +20473,14 @@ std::string native_port_hook_requirements_json(
            << ambiguous_hardware_sites
            << ",\"unmapped_hardware_sites\":"
            << unmapped_hardware_sites
+           << ",\"native_progress_wait_sites\":"
+           << native_progress_wait_sites.size()
+           << ",\"mapped_native_progress_wait_sites\":"
+           << mapped_native_progress_wait_sites
+           << ",\"ambiguous_native_progress_wait_sites\":"
+           << ambiguous_native_progress_wait_sites
+           << ",\"unmapped_native_progress_wait_sites\":"
+           << unmapped_native_progress_wait_sites
            << ",\"dynamic_memory_sites\":"
            << audit.unresolved_memory_instruction_sites.size()
            << ",\"dynamic_memory_policy\":"
@@ -20389,6 +20490,70 @@ std::string native_port_hook_requirements_json(
     for (std::size_t index = 0u; index < global_gap_reasons.size(); ++index) {
         if (index != 0u) output << ',';
         output << katana::io::quote_json(global_gap_reasons[index]);
+    }
+    output << "],\"native_progress_waits\":[";
+    std::size_t progress_wait_index = 0u;
+    for (const auto& loop : audit.loops) {
+        std::vector<const katana::analysis::HardwareLoopAccessEvidence*>
+            guard_reads;
+        for (const auto& access : loop.accesses) {
+            if (native_progress_wait_sites.contains(
+                    access.instruction_address) &&
+                access.guards_loop && access.linear_memory &&
+                access.kind ==
+                    katana::analysis::HardwareAccessKind::Read)
+                guard_reads.push_back(&access);
+        }
+        std::vector<std::uint32_t> unresolved_guard_reads;
+        for (const auto address :
+             loop.unresolved_guard_read_instruction_addresses) {
+            if (native_progress_wait_sites.contains(address))
+                unresolved_guard_reads.push_back(address);
+        }
+        if (guard_reads.empty() && unresolved_guard_reads.empty()) continue;
+        if (progress_wait_index++ != 0u) output << ',';
+        output << "{\"header_address\":" << loop.header_address
+               << ",\"latch_address\":" << loop.latch_address
+               << ",\"backedge_instruction_address\":"
+               << loop.backedge_instruction_address
+               << ",\"guard_address_resolved\":"
+               << (unresolved_guard_reads.empty() ? "true" : "false")
+               << ",\"guard_reads\":[";
+        for (std::size_t index = 0u; index < guard_reads.size(); ++index) {
+            if (index != 0u) output << ',';
+            const auto& access = *guard_reads[index];
+            output << "{\"instruction_address\":"
+                   << access.instruction_address
+                   << ",\"guest_address\":" << access.guest_address
+                   << ",\"canonical_address\":"
+                   << access.canonical_address
+                   << ",\"owner_candidates\":[";
+            const auto owners = native_port_covering_function_entries(
+                program_index, access.instruction_address);
+            std::size_t owner_index = 0u;
+            for (const auto owner : owners) {
+                if (owner_index++ != 0u) output << ',';
+                output << owner;
+            }
+            output << "]}";
+        }
+        output << "],\"unresolved_guard_reads\":[";
+        for (std::size_t index = 0u;
+             index < unresolved_guard_reads.size(); ++index) {
+            if (index != 0u) output << ',';
+            const auto address = unresolved_guard_reads[index];
+            output << "{\"instruction_address\":" << address
+                   << ",\"owner_candidates\":[";
+            const auto owners = native_port_covering_function_entries(
+                program_index, address);
+            std::size_t owner_index = 0u;
+            for (const auto owner : owners) {
+                if (owner_index++ != 0u) output << ',';
+                output << owner;
+            }
+            output << "]}";
+        }
+        output << "]}";
     }
     output << "],\"sites\":[";
     std::size_t site_index = 0u;
@@ -20645,6 +20810,8 @@ std::string native_port_hook_requirements_json(
         output << "]"
                << ",\"hardware_site_count\":"
                << candidate.hardware_sites.size()
+               << ",\"native_progress_wait_site_count\":"
+               << candidate.native_progress_wait_sites.size()
                << ",\"unknown_instruction_site_count\":"
                << candidate.unknown_instruction_sites.size()
                << ",\"dynamic_memory_site_count\":"

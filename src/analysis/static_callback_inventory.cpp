@@ -29,7 +29,8 @@ constexpr std::size_t maximum_scalar_constants = 8u;
 constexpr std::size_t maximum_code_constants = 64u;
 constexpr std::size_t maximum_inventory_candidates = 16'384u;
 constexpr std::size_t maximum_stack_values = 256u;
-constexpr std::size_t maximum_static_code_pointer_table_entries = 64u;
+constexpr std::size_t maximum_static_code_pointer_table_entries = 256u;
+constexpr std::uint32_t maximum_static_code_pointer_table_stride = 256u;
 
 struct CallbackValue final {
     // Bit 0..3 corresponds to the function's incoming r4..r7.
@@ -43,6 +44,10 @@ struct CallbackValue final {
     // incomplete and needlessly broad.
     std::set<std::uint32_t> code_constants;
     bool code_constants_truncated = false;
+    // Guaranteed power-of-two byte alignment for an otherwise unknown
+    // scalar. This keeps the shape of mutable table indices through SHLL
+    // operations without pretending that the index value itself is known.
+    std::uint32_t minimum_alignment = 1u;
     std::optional<std::int32_t> stack_address;
     bool may_be_stack = false;
 
@@ -175,6 +180,7 @@ void transform_scalar_value(CallbackValue& value,
     const auto before = value;
     value = {};
     value.input_mask = before.input_mask;
+    value.minimum_alignment = before.minimum_alignment;
     if (before.constants_truncated) {
         value.constants_truncated = true;
         if (before.code_constants_truncated) {
@@ -220,6 +226,8 @@ void transform_scalar_value(CallbackValue& value,
                 add_bounded_code_constant(destination, constant,
                                           native_entry_shapes));
     }
+    destination.minimum_alignment =
+        std::min(destination.minimum_alignment, source.minimum_alignment);
     if (destination.stack_address != source.stack_address)
         destination.stack_address.reset();
     destination.may_be_stack = destination.may_be_stack || source.may_be_stack;
@@ -306,14 +314,20 @@ void transform_scalar_value(CallbackValue& value,
     result.input_mask = static_cast<std::uint8_t>(
         base.input_mask | byte_index.input_mask);
     if (base.constants_truncated || base.constants.size() != 1u ||
-        !byte_index.constants.empty() || byte_index.constants_truncated)
+        !byte_index.constants.empty() || byte_index.constants_truncated ||
+        byte_index.minimum_alignment < 4u ||
+        byte_index.minimum_alignment >
+            maximum_static_code_pointer_table_stride ||
+        (byte_index.minimum_alignment & 3u) != 0u)
         return result;
 
     const auto table = *base.constants.begin();
     if ((table & 3u) != 0u) return result;
+    const auto stride = byte_index.minimum_alignment;
     std::size_t entries = 0u;
     for (; entries <= maximum_static_code_pointer_table_entries; ++entries) {
-        const auto address = static_cast<std::uint64_t>(table) + entries * 4u;
+        const auto address = static_cast<std::uint64_t>(table) +
+                             entries * static_cast<std::uint64_t>(stride);
         if (address > std::numeric_limits<std::uint32_t>::max()) break;
         const auto raw = read_image_u32(image,
                                         static_cast<std::uint32_t>(address));
@@ -327,11 +341,12 @@ void transform_scalar_value(CallbackValue& value,
         }
         add_constant(result, image, *raw, native_entry_shapes);
     }
-    // A single executable word can be an ordinary pointer-valued field.  Two
-    // or more consecutive entries followed by a non-code terminator are the
-    // narrowest useful identity-bound table shape. The index may originate
-    // in mutable title state; this inventory remains guarded and never marks
-    // the indirect transfer complete.
+    // A single executable word can be an ordinary pointer-valued field. Two
+    // or more stride-consistent records followed by a non-code terminator are
+    // the narrowest useful identity-bound table shape. The stride is proven
+    // by the SH-4 index arithmetic rather than guessed from surrounding data.
+    // The index may originate in mutable title state; this remains guarded
+    // positive inventory and never marks the indirect transfer complete.
     if (entries < 2u) return {};
     return result;
 }
@@ -399,12 +414,31 @@ void set_unknown(CallbackValue& value, const bool preserve_stack_origin = false)
     value.may_be_stack = may_be_stack;
 }
 
+void scale_minimum_alignment(CallbackValue& value,
+                             const std::uint32_t scale) noexcept {
+    const auto widened = static_cast<std::uint64_t>(value.minimum_alignment) *
+                         static_cast<std::uint64_t>(scale);
+    value.minimum_alignment = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(
+            widened, maximum_static_code_pointer_table_stride));
+}
+
+void add_immediate_to_minimum_alignment(CallbackValue& value,
+                                        const std::int32_t immediate) noexcept {
+    if (immediate == 0) return;
+    const auto bits = static_cast<std::uint32_t>(immediate);
+    const auto immediate_alignment = bits & (~bits + 1u);
+    value.minimum_alignment =
+        std::min(value.minimum_alignment, immediate_alignment);
+}
+
 void transform_add_immediate(CallbackValue& value,
                              const katana::io::ExecutableImage& image,
                              GuardedNativeEntryShapeCache&
                                  native_entry_shapes,
                              const std::int32_t immediate,
                              const bool stack_pointer) {
+    add_immediate_to_minimum_alignment(value, immediate);
     if (value.constants_truncated) {
         value.constants.clear();
     } else {
@@ -504,6 +538,48 @@ void add_candidate(std::vector<StoredCodeAddressCandidate>& candidates,
         found = std::prev(candidates.end());
     }
     found->store_instruction_addresses.push_back(source_address);
+}
+
+void observe_loaded_static_descriptor_table(
+    CallbackFunctionModel& model,
+    const katana::io::ExecutableImage& image,
+    const CallbackValue& loaded,
+    const std::uint32_t load_instruction_address,
+    GuardedNativeEntryShapeCache& native_entry_shapes) {
+    if (loaded.constants_truncated) return;
+    // A reachable identity-bound structure can carry a pointer to a callback
+    // descriptor array which is copied through mutable title RAM before the
+    // eventual indirect call. Recognize the table at the earlier static load
+    // rather than requiring that mutable RAM to retain its post-bootstrap
+    // value. The smallest valid 32-bit-aligned record stride wins; every
+    // target remains guarded positive inventory and is shape-validated again
+    // before publication.
+    for (const auto table : loaded.constants) {
+        if ((table & 3u) != 0u) continue;
+        const auto first = read_image_u32(image, table);
+        if (!first.has_value() ||
+            !executable_constant(image, *first).has_value())
+            continue;
+        CallbackValue base;
+        base.constants.insert(table);
+        for (std::uint32_t stride = 4u;
+             stride <= maximum_static_code_pointer_table_stride;
+             stride += 4u) {
+            CallbackValue byte_index;
+            byte_index.minimum_alignment = stride;
+            const auto entries = scan_static_code_pointer_table(
+                image, base, byte_index, native_entry_shapes);
+            if (entries.code_constants_truncated) {
+                model.local_candidates_truncated = true;
+                break;
+            }
+            if (entries.code_constants.empty()) continue;
+            for (const auto target : entries.code_constants)
+                add_candidate(model.local_candidates, image, target,
+                              load_instruction_address);
+            break;
+        }
+    }
 }
 
 void observe_persistent_store(CallbackFunctionModel& model,
@@ -638,21 +714,25 @@ void apply_instruction(CallbackFunctionModel& model,
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 1u; });
+        scale_minimum_alignment(state.registers[destination], 2u);
         return;
     case K::ShiftLogicalLeftTwo:
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 2u; });
+        scale_minimum_alignment(state.registers[destination], 4u);
         return;
     case K::ShiftLogicalLeftEight:
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 8u; });
+        scale_minimum_alignment(state.registers[destination], 256u);
         return;
     case K::ShiftLogicalLeftSixteen:
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 16u; });
+        scale_minimum_alignment(state.registers[destination], 65'536u);
         return;
     case K::AddImmediate:
         transform_add_immediate(state.registers[destination], image,
@@ -677,6 +757,12 @@ void apply_instruction(CallbackFunctionModel& model,
             value.has_value())
             add_constant(state.registers[destination], image, *value,
                          native_entry_shapes);
+        // A PC-relative literal proves only the scalar pointer value. Treating
+        // the pointed-to bytes as a descriptor table here misclassifies
+        // ordinary strings and resources whose first four bytes happen to
+        // canonicalize into executable P0/P1 RAM. The later static memory
+        // dereference is the required evidence that this literal actually
+        // leads to an identity-bound table pointer.
         return;
     }
     case K::MovWordLoadPcRelative:
@@ -735,6 +821,8 @@ void apply_instruction(CallbackFunctionModel& model,
             const auto loaded = load_static_image_values(
                 image, state.registers[source], 0,
                 native_entry_shapes);
+            observe_loaded_static_descriptor_table(
+                model, image, loaded, line.address, native_entry_shapes);
             static_cast<void>(join_value(state.registers[destination], loaded,
                                          native_entry_shapes));
         }
@@ -749,6 +837,8 @@ void apply_instruction(CallbackFunctionModel& model,
             const auto loaded = load_static_image_values(
                 image, state.registers[source], instruction.displacement,
                 native_entry_shapes);
+            observe_loaded_static_descriptor_table(
+                model, image, loaded, line.address, native_entry_shapes);
             static_cast<void>(join_value(state.registers[destination], loaded,
                                          native_entry_shapes));
         }
@@ -780,6 +870,9 @@ void apply_instruction(CallbackFunctionModel& model,
         if (width == 4u) {
             const auto static_loaded = load_static_image_values(
                 image, state.registers[source], 0, native_entry_shapes);
+            observe_loaded_static_descriptor_table(
+                model, image, static_loaded, line.address,
+                native_entry_shapes);
             static_cast<void>(join_value(loaded, static_loaded,
                                          native_entry_shapes));
         }

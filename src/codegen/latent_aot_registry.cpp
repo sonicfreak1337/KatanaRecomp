@@ -42,6 +42,11 @@ namespace {
 
 constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
+constexpr std::size_t maximum_latent_aot_runtime_alias_entry_passes = 16u;
+constexpr std::uint32_t latent_aot_runtime_page_size = 4096u;
+constexpr std::uint32_t latent_aot_main_ram_begin = 0x8C000000u;
+constexpr std::uint32_t latent_aot_main_ram_end = 0x8D000000u;
+constexpr std::size_t minimum_latent_aot_runtime_cluster_targets = 16u;
 constexpr std::size_t maximum_latent_aot_file_references = 4096u;
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
@@ -512,6 +517,105 @@ std::optional<std::uint32_t> latent_read_u32(
            (static_cast<std::uint32_t>(candidate.bytes[offset + 3u]) << 24u);
 }
 
+bool valid_latent_runtime_base(const std::uint32_t base,
+                               const std::uint32_t byte_size) noexcept {
+    return (base & (latent_aot_runtime_page_size - 1u)) == 0u &&
+           base >= latent_aot_main_ram_begin &&
+           static_cast<std::uint64_t>(base) + byte_size <=
+               latent_aot_main_ram_end;
+}
+
+std::optional<std::uint32_t> infer_latent_runtime_pointer_cluster_base(
+    const std::set<std::uint32_t>& targets,
+    const std::uint32_t byte_size) {
+    if (byte_size < sizeof(std::uint16_t) ||
+        byte_size > latent_aot_main_ram_end - latent_aot_main_ram_begin)
+        return std::nullopt;
+    const auto maximum_base = static_cast<std::uint32_t>(
+        latent_aot_main_ram_end - byte_size);
+    const auto maximum_base_page =
+        maximum_base & ~(latent_aot_runtime_page_size - 1u);
+    std::map<std::uint32_t, std::int64_t> events;
+    for (const auto target : targets) {
+        if (target < latent_aot_main_ram_begin ||
+            target >= latent_aot_main_ram_end)
+            continue;
+        const auto lowest_unaligned =
+            static_cast<std::uint64_t>(target) + 1u >= byte_size
+                ? static_cast<std::uint64_t>(target) + 1u - byte_size
+                : 0u;
+        const auto lowest = static_cast<std::uint32_t>(
+            (std::max<std::uint64_t>(lowest_unaligned,
+                                     latent_aot_main_ram_begin) +
+             latent_aot_runtime_page_size - 1u) &
+            ~(static_cast<std::uint64_t>(latent_aot_runtime_page_size) - 1u));
+        const auto highest = std::min(
+            target & ~(latent_aot_runtime_page_size - 1u),
+            maximum_base_page);
+        if (lowest > highest) continue;
+        ++events[lowest];
+        const auto after = static_cast<std::uint64_t>(highest) +
+                           latent_aot_runtime_page_size;
+        if (after <= latent_aot_main_ram_end)
+            --events[static_cast<std::uint32_t>(after)];
+    }
+    const auto sentinel = static_cast<std::uint64_t>(maximum_base_page) +
+                          latent_aot_runtime_page_size;
+    if (sentinel <= latent_aot_main_ram_end)
+        events.try_emplace(static_cast<std::uint32_t>(sentinel), 0);
+    if (events.size() < 2u) return std::nullopt;
+
+    std::int64_t active = 0;
+    std::size_t best_coverage = 0u;
+    std::optional<std::uint32_t> best_base;
+    bool best_is_ambiguous = false;
+    for (auto current = events.begin(); std::next(current) != events.end();
+         ++current) {
+        active += current->second;
+        if (active <= 0 || current->first > maximum_base_page) continue;
+        const auto next = std::next(current)->first;
+        if (next <= current->first) continue;
+        const auto page_count =
+            (static_cast<std::uint64_t>(next) - current->first) /
+            latent_aot_runtime_page_size;
+        const auto coverage = static_cast<std::size_t>(active);
+        if (coverage > best_coverage) {
+            best_coverage = coverage;
+            best_base = page_count == 1u
+                            ? std::optional<std::uint32_t>{current->first}
+                            : std::nullopt;
+            best_is_ambiguous = page_count != 1u;
+        } else if (coverage == best_coverage && coverage != 0u) {
+            best_is_ambiguous = true;
+        }
+    }
+    if (best_is_ambiguous || !best_base.has_value() ||
+        best_coverage < minimum_latent_aot_runtime_cluster_targets)
+        return std::nullopt;
+
+    std::optional<std::uint32_t> minimum_offset;
+    std::optional<std::uint32_t> maximum_offset;
+    const auto limit = static_cast<std::uint64_t>(*best_base) + byte_size;
+    for (const auto target : targets) {
+        if (target < *best_base || static_cast<std::uint64_t>(target) >= limit)
+            continue;
+        const auto offset = target - *best_base;
+        minimum_offset = !minimum_offset.has_value()
+                             ? offset
+                             : std::min(*minimum_offset, offset);
+        maximum_offset = !maximum_offset.has_value()
+                             ? offset
+                             : std::max(*maximum_offset, offset);
+    }
+    const auto edge_window = std::max<std::uint32_t>(
+        latent_aot_runtime_page_size, byte_size / 8u);
+    if (!minimum_offset.has_value() || !maximum_offset.has_value() ||
+        *minimum_offset > edge_window ||
+        static_cast<std::uint64_t>(*maximum_offset) + edge_window < byte_size)
+        return std::nullopt;
+    return best_base;
+}
+
 struct LatentCodeAddressResolver final {
     std::uint32_t source_address = 0u;
     std::uint32_t byte_size = 0u;
@@ -519,6 +623,23 @@ struct LatentCodeAddressResolver final {
     std::set<std::uint32_t> function_entries;
     std::set<std::uint32_t> block_entries;
     std::span<const std::uint32_t> external_code_targets;
+
+    [[nodiscard]] std::optional<std::uint32_t> resolve_local(
+        const std::uint32_t raw) const noexcept {
+        const auto normalized = latent_direct_code_address(raw);
+        if (!normalized.has_value()) return std::nullopt;
+        const auto source_end =
+            static_cast<std::uint64_t>(source_address) + byte_size;
+        if (*normalized >= source_address &&
+            static_cast<std::uint64_t>(*normalized) < source_end)
+            return *normalized;
+        if (!preferred_runtime_base.has_value() ||
+            *normalized < *preferred_runtime_base)
+            return std::nullopt;
+        const auto offset = *normalized - *preferred_runtime_base;
+        if (offset >= byte_size) return std::nullopt;
+        return source_address + offset;
+    }
 
     [[nodiscard]] std::optional<std::uint32_t> resolve(
         const std::uint32_t raw,
@@ -533,21 +654,9 @@ struct LatentCodeAddressResolver final {
             return require_function ? function_entries.contains(candidate)
                                     : block_entries.contains(candidate);
         };
-        const auto source_end =
-            static_cast<std::uint64_t>(source_address) + byte_size;
-        if (*normalized >= source_address &&
-            static_cast<std::uint64_t>(*normalized) < source_end &&
-            admit_local(*normalized))
-            return *normalized;
-        if (!preferred_runtime_base.has_value() ||
-            *normalized < *preferred_runtime_base)
-            return std::nullopt;
-        const auto offset = *normalized - *preferred_runtime_base;
-        if (offset >= byte_size) return std::nullopt;
-        const auto synthetic = source_address + offset;
-        return admit_local(synthetic)
-                   ? std::optional<std::uint32_t>{synthetic}
-                   : std::nullopt;
+        const auto local = resolve_local(raw);
+        return local.has_value() && admit_local(*local) ? local
+                                                        : std::nullopt;
     }
 };
 
@@ -560,6 +669,7 @@ LatentCodeAddressResolver make_latent_code_address_resolver(
     resolver.byte_size = candidate.size;
     resolver.external_code_targets = external_code_targets;
     std::map<std::uint32_t, std::vector<std::uint32_t>> function_offsets_by_low;
+    std::set<std::uint32_t> direct_main_ram_targets;
     for (const auto& function : program) {
         resolver.function_entries.insert(function.entry_address);
         if (function.entry_address >= candidate.source_address) {
@@ -586,6 +696,9 @@ LatentCodeAddressResolver make_latent_code_address_resolver(
                          (static_cast<std::uint32_t>(candidate.bytes[cell + 3u]) << 24u);
         const auto normalized = latent_direct_code_address(raw);
         if (!normalized.has_value()) continue;
+        if (*normalized >= latent_aot_main_ram_begin &&
+            *normalized < latent_aot_main_ram_end)
+            direct_main_ram_targets.insert(*normalized);
         const auto offsets =
             function_offsets_by_low.find(*normalized & 0xfffu);
         if (offsets == function_offsets_by_low.end()) continue;
@@ -593,9 +706,8 @@ LatentCodeAddressResolver make_latent_code_address_resolver(
         for (const auto offset : offsets->second) {
             if (*normalized < offset) continue;
             const auto base = *normalized - offset;
-            if ((base & 0xfffu) != 0u || base == candidate.source_address ||
-                static_cast<std::uint64_t>(base) + candidate.size >
-                    0x1'0000'0000ull)
+            if (!valid_latent_runtime_base(base, candidate.size) ||
+                base == candidate.source_address)
                 continue;
             cell_bases.insert(base);
         }
@@ -618,8 +730,17 @@ LatentCodeAddressResolver make_latent_code_address_resolver(
             second_votes = votes;
         }
     }
-    if (best_votes >= 2u && best_votes > second_votes)
-        resolver.preferred_runtime_base = best_base;
+    const auto function_evidence_base =
+        best_votes >= 2u && best_votes > second_votes ? best_base
+                                                      : std::nullopt;
+    const auto cluster_base = infer_latent_runtime_pointer_cluster_base(
+        direct_main_ram_targets, candidate.size);
+    if (function_evidence_base.has_value() && cluster_base.has_value() &&
+        function_evidence_base != cluster_base)
+        return resolver;
+    resolver.preferred_runtime_base = function_evidence_base.has_value()
+                                          ? function_evidence_base
+                                          : cluster_base;
     return resolver;
 }
 
@@ -649,6 +770,49 @@ std::optional<std::uint32_t> latent_block_register_literal(
         return std::nullopt;
     }
     return std::nullopt;
+}
+
+std::vector<std::uint32_t> latent_runtime_alias_call_entry_offsets(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program,
+    const std::span<const std::uint32_t> external_code_targets) {
+    using katana::ir::Operation;
+    const auto resolver = make_latent_code_address_resolver(
+        candidate, program, external_code_targets);
+    if (!resolver.preferred_runtime_base.has_value()) return {};
+
+    std::vector<std::uint32_t> result;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (std::size_t index = 0u; index < block.instructions.size();
+                 ++index) {
+                const auto& instruction = block.instructions[index];
+                // JSR establishes an independent function entry. A literal-
+                // fed JMP may instead be an intra-function case transfer, so
+                // it remains covered by the existing known-block resolver.
+                if (instruction.operation != Operation::CallRegister ||
+                    instruction.branch_register_relative)
+                    continue;
+                const auto raw = latent_block_register_literal(
+                    candidate, block, index, instruction.branch_register);
+                if (!raw.has_value()) continue;
+                const auto target = resolver.resolve_local(*raw);
+                if (!target.has_value() ||
+                    resolver.function_entries.contains(*target) ||
+                    (*target & 1u) != 0u ||
+                    *target < candidate.source_address)
+                    continue;
+                const auto offset = *target - candidate.source_address;
+                if (offset > candidate.bytes.size() ||
+                    candidate.bytes.size() - offset < sizeof(std::uint16_t))
+                    continue;
+                result.push_back(offset);
+            }
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
 }
 
 std::vector<PreparedLatentAotExternalTransfer>
@@ -1625,7 +1789,8 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     segment.load_phase =
         katana::io::ImageLoadPhase::RuntimeModule;
     image.add_segment(std::move(segment));
-    for (const auto offset : candidate.entry_offsets)
+    auto analysis_entry_offsets = candidate.entry_offsets;
+    for (const auto offset : analysis_entry_offsets)
         image.add_entry_point(candidate.source_address + offset);
 
     katana::analysis::ControlFlowAnalysisResult analysis;
@@ -1656,52 +1821,105 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         std::move(persistent_epoch_publish_callback);
     std::atomic resolution_retention_limit_reason{
         katana::analysis::ResolutionRetentionLimitReason::None};
-    try {
-        analysis = katana::analysis::analyze_control_flow(
-            image,
-            nullptr,
-            [&control_flow_progress, &resolution_retention_limit_reason](
-                const katana::analysis::
-                    ControlFlowAnalysisProgress& progress) {
-                if (progress.function_value_resolution_retention_limit_reason !=
-                    katana::analysis::ResolutionRetentionLimitReason::None)
-                    resolution_retention_limit_reason.store(
-                        progress
-                            .function_value_resolution_retention_limit_reason,
-                        std::memory_order_relaxed);
-                control_flow_progress.update(progress);
-            },
-            analysis_options);
-    } catch (const std::bad_alloc&) {
-        throw;
-    } catch (const std::exception&) {
-        return reject_candidate(
-            LatentAotAnalysisRejection::ProgramInvalid,
-            false);
+    bool runtime_alias_entry_fixpoint_complete = false;
+    std::vector<katana::ir::Function> stable_discovery_program;
+    for (std::size_t pass = 0u;
+         pass < maximum_latent_aot_runtime_alias_entry_passes; ++pass) {
+        resolution_retention_limit_reason.store(
+            katana::analysis::ResolutionRetentionLimitReason::None,
+            std::memory_order_relaxed);
+        try {
+            analysis = katana::analysis::analyze_control_flow(
+                image,
+                nullptr,
+                [&control_flow_progress, &resolution_retention_limit_reason](
+                    const katana::analysis::
+                        ControlFlowAnalysisProgress& progress) {
+                    if (progress
+                            .function_value_resolution_retention_limit_reason !=
+                        katana::analysis::ResolutionRetentionLimitReason::None)
+                        resolution_retention_limit_reason.store(
+                            progress
+                                .function_value_resolution_retention_limit_reason,
+                            std::memory_order_relaxed);
+                    control_flow_progress.update(progress);
+                },
+                analysis_options);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid,
+                false);
+        }
+        switch (analysis.termination_reason) {
+        case katana::analysis::ControlFlowAnalysisTerminationReason::
+            AnalysisIterationBudgetExceeded:
+            return reject_candidate(
+                LatentAotAnalysisRejection::
+                    AnalysisIterationBudgetExceeded);
+        case katana::analysis::ControlFlowAnalysisTerminationReason::
+            InstructionBudgetExceeded:
+            return reject_candidate(
+                LatentAotAnalysisRejection::InstructionBudgetExceeded);
+        case katana::analysis::ControlFlowAnalysisTerminationReason::
+            AnalysisContextBudgetExceeded:
+            return reject_candidate(
+                LatentAotAnalysisRejection::
+                    AnalysisContextBudgetExceeded);
+        case katana::analysis::ControlFlowAnalysisTerminationReason::None:
+            break;
+        }
+
+        std::vector<std::uint32_t> discovered_offsets;
+        std::vector<katana::ir::Function> discovery_program;
+        try {
+            const auto safepoints =
+                katana::ir::architectural_safepoint_block_leaders(analysis);
+            discovery_program =
+                katana::ir::lower_program(analysis, safepoints);
+            discovered_offsets = latent_runtime_alias_call_entry_offsets(
+                candidate, discovery_program,
+                options.external_code_targets);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        }
+        discovered_offsets.erase(
+            std::remove_if(
+                discovered_offsets.begin(), discovered_offsets.end(),
+                [&](const auto offset) {
+                    return std::binary_search(analysis_entry_offsets.begin(),
+                                              analysis_entry_offsets.end(),
+                                              offset);
+                }),
+            discovered_offsets.end());
+        if (discovered_offsets.empty()) {
+            stable_discovery_program = std::move(discovery_program);
+            runtime_alias_entry_fixpoint_complete = true;
+            break;
+        }
+        if (analysis_entry_offsets.size() >
+                options.maximum_functions_per_module ||
+            discovered_offsets.size() >
+                options.maximum_functions_per_module -
+                    analysis_entry_offsets.size())
+            return reject_candidate(
+                LatentAotAnalysisRejection::FunctionBudgetExceeded);
+        for (const auto offset : discovered_offsets)
+            image.add_entry_point(candidate.source_address + offset);
+        merge_entry_offsets(analysis_entry_offsets, discovered_offsets);
     }
+    if (!runtime_alias_entry_fixpoint_complete)
+        return reject_candidate(
+            LatentAotAnalysisRejection::AnalysisIterationBudgetExceeded);
     control_flow_progress.complete(
         analysis.fixpoint_iterations,
         analysis.termination_reason ==
                 katana::analysis::ControlFlowAnalysisTerminationReason::None &&
             !analysis.function_budget_exhausted);
-    switch (analysis.termination_reason) {
-    case katana::analysis::ControlFlowAnalysisTerminationReason::
-        AnalysisIterationBudgetExceeded:
-        return reject_candidate(
-            LatentAotAnalysisRejection::
-                AnalysisIterationBudgetExceeded);
-    case katana::analysis::ControlFlowAnalysisTerminationReason::
-        InstructionBudgetExceeded:
-        return reject_candidate(
-            LatentAotAnalysisRejection::InstructionBudgetExceeded);
-    case katana::analysis::ControlFlowAnalysisTerminationReason::
-        AnalysisContextBudgetExceeded:
-        return reject_candidate(
-            LatentAotAnalysisRejection::
-                AnalysisContextBudgetExceeded);
-    case katana::analysis::ControlFlowAnalysisTerminationReason::None:
-        break;
-    }
     if (!complete_native_graph(
             analysis, exact_runtime_only_stop_on_miss,
             resolution_retention_limit_reason.load(
@@ -1724,8 +1942,9 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         const auto architectural_safepoints =
             katana::ir::architectural_safepoint_block_leaders(
                 analysis);
-        program = katana::ir::lower_program(
-            analysis, architectural_safepoints);
+        program = std::move(stable_discovery_program);
+        if (program.empty())
+            throw std::runtime_error("latent-aot-stable-program-missing");
         std::set<std::uint32_t> dispatch_block_entries;
         for (const auto offset : candidate.entry_offsets)
             dispatch_block_entries.insert(
