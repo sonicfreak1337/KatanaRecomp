@@ -1,5 +1,7 @@
 #include "katana/runtime/native_port_texture_asset.hpp"
 
+#include "prs_decode.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <limits>
@@ -97,123 +99,31 @@ void validate_limits(const NativePortTextureAssetLimits& limits) {
                                });
 }
 
-class PrsReader final {
-  public:
-    explicit PrsReader(const std::span<const std::uint8_t> source)
-        : source_(source) {}
-
-    [[nodiscard]] bool source_bytes_exhausted() const noexcept {
-        return offset_ == source_.size();
-    }
-
-    [[nodiscard]] std::size_t offset() const noexcept { return offset_; }
-
-    [[nodiscard]] std::uint8_t read_byte() {
-        if (source_bytes_exhausted())
-            fail(NativePortTextureAssetFailure::InvalidPrs, offset_,
-                 "prs-truncated-token");
-        return source_[offset_++];
-    }
-
-    [[nodiscard]] bool read_bit() {
-        if (remaining_control_bits_ == 0u) {
-            control_ = read_byte();
-            remaining_control_bits_ = 8u;
-        }
-        const bool result = (control_ & 1u) != 0u;
-        control_ >>= 1u;
-        --remaining_control_bits_;
-        return result;
-    }
-
-  private:
-    std::span<const std::uint8_t> source_;
-    std::size_t offset_ = 0u;
-    std::uint8_t control_ = 0u;
-    std::uint8_t remaining_control_bits_ = 0u;
-};
-
-void append_prs_byte(std::vector<std::uint8_t>& output,
-                     const std::uint8_t value,
-                     const NativePortTextureAssetLimits& limits,
-                     const std::size_t source_offset) {
-    if (output.size() == limits.maximum_decompressed_bytes)
-        fail(NativePortTextureAssetFailure::DecompressedOutputLimit,
-             source_offset, "prs-output-limit");
-    output.push_back(value);
-}
-
-void append_prs_copy(std::vector<std::uint8_t>& output,
-                     const std::size_t distance,
-                     const std::size_t length,
-                     const NativePortTextureAssetLimits& limits,
-                     const std::size_t source_offset) {
-    if (distance == 0u || distance > output.size())
-        fail(NativePortTextureAssetFailure::InvalidPrs, source_offset,
-             "prs-invalid-back-reference");
-    if (length > limits.maximum_decompressed_bytes - output.size())
-        fail(NativePortTextureAssetFailure::DecompressedOutputLimit,
-             source_offset, "prs-output-limit");
-    for (std::size_t index = 0u; index < length; ++index)
-        output.push_back(output[output.size() - distance]);
-}
-
 [[nodiscard]] std::vector<std::uint8_t> decompress_prs_impl(
     const std::span<const std::uint8_t> source,
     const NativePortTextureAssetLimits& limits) {
     validate_limits(limits);
-    if (source.empty())
-        fail(NativePortTextureAssetFailure::InvalidPrs, 0u, "prs-empty");
-    if (source.size() > limits.maximum_compressed_bytes)
-        fail(NativePortTextureAssetFailure::CompressedInputLimit, 0u,
-             "prs-input-limit");
-
-    PrsReader reader(source);
-    std::vector<std::uint8_t> output;
-    output.reserve(std::min(source.size(), limits.maximum_decompressed_bytes));
-
-    for (;;) {
-        if (reader.source_bytes_exhausted())
-            fail(NativePortTextureAssetFailure::InvalidPrs,
-                 reader.offset(), "prs-missing-terminator");
-
-        if (reader.read_bit()) {
-            append_prs_byte(output, reader.read_byte(), limits,
-                            reader.offset());
-            continue;
+    try {
+        return katana::detail::decompress_sega_prs(
+            source, limits.maximum_compressed_bytes,
+            limits.maximum_decompressed_bytes);
+    } catch (const katana::detail::PrsDecodeError& error) {
+        auto failure = NativePortTextureAssetFailure::InvalidPrs;
+        switch (error.failure()) {
+        case katana::detail::PrsDecodeFailure::InvalidLimits:
+            failure = NativePortTextureAssetFailure::InvalidLimits;
+            break;
+        case katana::detail::PrsDecodeFailure::InvalidInput:
+            failure = NativePortTextureAssetFailure::InvalidPrs;
+            break;
+        case katana::detail::PrsDecodeFailure::CompressedInputLimit:
+            failure = NativePortTextureAssetFailure::CompressedInputLimit;
+            break;
+        case katana::detail::PrsDecodeFailure::DecompressedOutputLimit:
+            failure = NativePortTextureAssetFailure::DecompressedOutputLimit;
+            break;
         }
-
-        if (!reader.read_bit()) {
-            const std::size_t first_length_bit = reader.read_bit() ? 1u : 0u;
-            const std::size_t second_length_bit = reader.read_bit() ? 1u : 0u;
-            const std::size_t length =
-                ((first_length_bit << 1u) | second_length_bit) + 2u;
-            const auto encoded_offset = reader.read_byte();
-            const std::size_t distance = 256u - encoded_offset;
-            append_prs_copy(output, distance, length, limits,
-                            reader.offset());
-            continue;
-        }
-
-        const auto low = reader.read_byte();
-        const auto high = reader.read_byte();
-        const auto encoded = static_cast<std::uint16_t>(low) |
-                             static_cast<std::uint16_t>(high << 8u);
-        if (encoded == 0u) {
-            if (!reader.source_bytes_exhausted())
-                fail(NativePortTextureAssetFailure::InvalidPrs,
-                     reader.offset(), "prs-data-after-terminator");
-            return output;
-        }
-
-        const std::size_t encoded_offset = encoded >> 3u;
-        const std::size_t distance = 8'192u - encoded_offset;
-        std::size_t length = encoded & 0x7u;
-        if (length == 0u)
-            length = static_cast<std::size_t>(reader.read_byte()) + 1u;
-        else
-            length += 2u;
-        append_prs_copy(output, distance, length, limits, reader.offset());
+        fail(failure, error.source_offset(), error.operation());
     }
 }
 

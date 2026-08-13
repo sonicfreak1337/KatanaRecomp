@@ -205,7 +205,7 @@ dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 
 Prioritaet: P0 Alpha-Gate
 
-Status: aktiv nach KR-5000 bis KR-5004. Der aktuelle KR-5005-Source-Snapshot
+Status: aktiv nach KR-5000 bis KR-5004. Der vorherige KR-5005-Source-Snapshot
 verankert identity-bound Bootstrap-Materialisierung, echte Post-Bootstrap-AOT-
 Roots und resumierbare Continuations in Analyse, CFG, Optimierung und Export;
 Bring-up-Probes bleiben beobachtend bzw. begrenzend und koennen keine
@@ -215,9 +215,9 @@ Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
 Die generischen Bootstrap-, Materialisierungs-, Boundary-, Overlay-,
 Callback-Root-, Replacement-Reachability-, Linkmap-/PE-Import- und
 Nested-AOT-Fehlertransport-Findings sind im aktuellen Source-Review
-geschlossen beziehungsweise ueberholt. Der aktive P0 ist die statisch
-gebundene Post-Overlay-Callback-/Function-Pointer-Kante; KR-5005 bleibt als
-Produktgate offen.
+geschlossen beziehungsweise ueberholt. Der aktive P0 ist die statisch nicht
+normalisierte Runtime-Image-/Alias-Identitaet an einer post-Overlay Callback-/
+Function-Pointer-Kante; KR-5005 bleibt als Produktgate offen.
 Ein KR-5005-Zwischenfix transportiert
 die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
@@ -228,7 +228,7 @@ Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
 verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
 oder Interpreter-Symbole.
 
-Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `89` auf einem eigenen
+Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `90` auf einem eigenen
 schnellen AOT-Profil: Bring-up verwendet fuer generierte Spiel-TUs `/Od /Ob0`,
 keine gemeinsame MSVC-PDB, einen gemessenen Vierer-Ninja-Pool und 4.096
 Dispatch-Eintraege pro Shard. Runtime, Titeladapter und Bootstrap bleiben
@@ -240,7 +240,7 @@ bei `337,205 s` Hostbuildzeit. Der sichtbare Laufnachweis bleibt offen.
 
 Der erste Start belegte eine native Bootstrapluecke statt eines Sonic-
 Analysefehlers: initiales identity-bound Titel-RAM wurde unter bereits
-aktiven Laufzeitguards geschrieben. Portprojektvertrag `89` materialisiert
+aktiven Laufzeitguards geschrieben. Portprojektvertrag `90` materialisiert
 diesen Zustand jetzt vor Guard/AOT-Aktivierung, sperrt Gastcallbacks bis zur
 erfolgreichen Rueckkehr und validiert danach Pointer, Stopzustand und
 Brueckenvertrag fail-closed.
@@ -269,8 +269,18 @@ Audioframes. Das Checkpoint-Runtime-Image wurde vor dem ersten Stage-Overlay
 einmalig deaktiviert und danach wurden Overlay-, Settings- und Camera-Assets
 identitaetsgebunden geladen; der schwarze/stale-Overlay-Uebergang ist
 geschlossen. Film `id=1`/Opening und Hauptmenue bleiben offen. Der Lauf endet
-typisiert an `MissingStaticEntry` einer post-Overlay Callback-/Function-
-Pointer-Kante.
+typisiert an `MissingStaticEntry` einer statisch nicht normalisierten Runtime-
+Image-/Alias-Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante.
+Film `id=1`/Opening und Hauptmenue sowie der schwarze Zwischenbildfehler bleiben
+offen.
+
+Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
+`3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded
+Callback-Kandidaten wurden ohne Truncation oder Budgeterschoepfung erfasst.
+Der v62-Lauf bestaetigte Film `id=0` mit `200/200` Video, `294.016`
+Audioframes und `200` sichtbar nichtschwarzen Frames. Die Closure-Gaps stiegen
+von `257` auf `304`, weil mehr echte erreichbare Funktionen analysiert wurden;
+dies ist keine Hardware-Regression.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -318,12 +328,13 @@ letzte reale Produktevidenz:
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
   Runtime-ABI 101, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-  PVR-State-Contract 3, Portprojektvertrag 89, Native-Port-Profilvertrag 13
-  Analyzer-ABI 39, Function-Analysis-Epoch-Schema 28,
+  PVR-State-Contract 3, Portprojektvertrag 90, Native-Port-Profilvertrag 13
+  Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 7/Artefakt 6,
   Analysis Directives 3, Hookkarte v2, Hardware-Closure v4,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 29, AOT-Partitionsschema 7
+  Native-AOT-Emissionsprofil 30, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 4
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

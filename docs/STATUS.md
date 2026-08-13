@@ -47,7 +47,7 @@ Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
 nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
-Profilvertrag `13`, Portprojektvertrag `89` und der Post-Link-Audit sperren
+Profilvertrag `13`, Portprojektvertrag `90` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
 `KR-5000` ist abgeschlossen: NativePortDefinition, NativePortArtifact,
@@ -119,7 +119,7 @@ Der KR-5000-Reviewstand wurde mit `katana-recomp`, `katana_analyzer_sdk` und
 `14,2 s` bestaetigt. In diesem Checkpoint gab es keine Tests und keinen neuen
 Sonic-Export oder -Lauf.
 
-Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
+Ein vorheriger KR-5005-Source-Snapshot fuehrte identity-bound Bootstrap-
 Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
 durch Analyse, CFG, Optimierung und Export. Die Provider-/Draw-IR-Grenze bleibt
 backendneutral; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
@@ -129,13 +129,25 @@ nativen untexturierten Draw und danach den Sprite-Texture-Pfad, endete aber
 erwartungsgemaess typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
 bekannte Stellen und `175` offene native Hookbindungen aus; Bring-up-Probes
 koennen keine vollstaendige Produktabnahme bescheinigen. Der aktive P0 ist die
-statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante, nicht
+statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
+Post-Overlay-Callback-/Function-Pointer-Kante, nicht
 Bootstrap, AOT oder Linkaudit. Der aktuelle native Produktbeleg
 vervollstaendigte Film `id=0` mit `200` dekodierten, `200` praesentierten und
 `200` sichtbar nichtschwarzen Frames sowie `294.016` Audioframes. Der
 schwarze/stale-Overlay-Uebergang ist geschlossen; Film `id=1`/Opening und
 Hauptmenue sind noch nicht erreicht. Der Lauf endet aktuell typisiert an
-`MissingStaticEntry` einer post-Overlay Callback-/Function-Pointer-Kante.
+`MissingStaticEntry` einer statisch nicht normalisierten Runtime-Image-/Alias-
+Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante. Film `id=1`/
+Opening und Hauptmenue sowie der schwarze Zwischenbildfehler bleiben offen.
+
+Der validierte v59-Export untersuchte `1.094` Dateien mit `198.135.759`
+encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte
+`3.965` Funktionen in `127` Partitionen. `488` rohe und `395` guarded
+Callback-Kandidaten sowie `39` Latent-AOT-Kandidaten wurden ohne Truncation
+oder Budgeterschoepfung erfasst. Die Hardware-Closure-Gaps stiegen von `257`
+auf `304`, weil mehr echte erreichbare Funktionen analysiert wurden; dies ist
+keine Hardware-Regression. Framepacing blieb bei 60/60 mit deaktiviertem
+Catch-up.
 
 Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
@@ -143,9 +155,9 @@ AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
 Aktuell gelten Runtime-ABI `101`,
-PlatformServices-ABI `14`, Analyzer-ABI `39`, Function-Analysis-Epoch-Schema
+PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`21`, PVR-State-Contract `3`, Portprojektvertrag `89` und Native-Port-
+`21`, PVR-State-Contract `3`, Portprojektvertrag `90` und Native-Port-
 Profilvertrag `13`. Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
@@ -155,7 +167,8 @@ Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
 Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `30`, AOT-Partitionsschema: `7`,
+Port-Metadata-Cache-Schema: `4`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
 Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.
 

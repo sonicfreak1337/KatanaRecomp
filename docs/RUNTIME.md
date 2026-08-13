@@ -15,11 +15,12 @@ das native Produktprofil mit ausschliesslich erforderlichen Hostdiensten ab.
 ## ABI
 
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI `101`, Block-ABI `5`,
-Analyzer-ABI `39`, PlatformServices-ABI `14`, Backend-Interface-ABI `21`,
-Portprojektvertrag `89`, Native-Port-Profilvertrag `13`, Native-AOT-
-Emissionsprofil `29` und Portpartitionsschema `7`. Historische Runtime- und
+Analyzer-ABI `40`, PlatformServices-ABI `14`, Backend-Interface-ABI `21`,
+Portprojektvertrag `90`, Native-Port-Profilvertrag `13`, Native-AOT-
+Emissionsprofil `30` und Portpartitionsschema `7`. Historische Runtime- und
 Diagnoseangaben bleiben an ihre damaligen Vertraege gebunden. Der aktive P0
-ist die statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante.
+ist die statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
+Post-Overlay-Callback-/Function-Pointer-Kante.
 
 Generierter Code enthaelt eine Compile-Time-Pruefung gegen diese Version. Eine
 abweichende Runtime wird beim Kompilieren sichtbar abgelehnt. ABI-Version 3
@@ -734,9 +735,9 @@ nachfolgerlosen Block in jedem Backendmodus `PC` auf die Folgeadresse der
 letzten Gastinstruktion. Die Produktinvariante prueft einen Fallthrough relativ
 zu dieser tatsaechlichen Terminatorquelle und nicht zum Eintritt des
 umgebenden Wrappers. Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101,
-Block-ABI 5, Analyzer-ABI 39, Backend-Interface-ABI 21,
+Block-ABI 5, Analyzer-ABI 40, Backend-Interface-ABI 21,
 PlatformServices-ABI 14, Portvertrag 89, Native-Port-Profilvertrag 13,
-Native-AOT-Emissionsprofil 29 und
+Native-AOT-Emissionsprofil 30 und
 Portpartitionsschema 7. Der Host-Video-Vertrag steht auf Version 3; die
 Beobachtungsgrenze steht auf Systemreplay-Schema 8, Runtime-Probe-Schema 5
 und Device-Schema 6.

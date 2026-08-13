@@ -8,7 +8,7 @@ KR-5005 ist das offene native Produktgate. Historische Checkpoint- und Laufangab
 bleiben an ihre damaligen Vertraege gebunden.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
-[Analyzer-ABI 39](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
+[Analyzer-ABI 40](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
 Truncation- oder Inventarfelder sind damit vom Runtimevertrag getrennt
 versioniert und koennen nicht mehr unbemerkt mit einem anders gebauten
 Analyzerarchiv gelinkt werden.

@@ -33,13 +33,14 @@ Diagnoseinterpreter ist nur Bestandteil eines ausdruecklich als
 `diagnostic_partial` erzeugten Diagnoseports.
 
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
-Analyzer-ABI 39, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-Portprojektvertrag 89, Native-Port-Profilvertrag 13, Native-AOT-Profil 29 und
+Analyzer-ABI 40, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Profil 30 und
 Partitionsschema 7. Die historischen Checkpoint- und Laufangaben dieses
 Dokuments bleiben an ihre damaligen Vertraege gebunden. Der aktuelle native
 Produktpfad ist durch KR-5000 physisch von den historischen Diagnosegeraeten
 getrennt; KR-5005 bleibt das offene native Produktgate. Der aktive P0 ist die
-statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap, AOT und Linkaudit sind keine
+statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
+Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap, AOT und Linkaudit sind keine
 offenen Produktblocker. Provider- und Draw-IR bleiben backendneutral; D3D11 ist
 zunaechst das Windows-Backend. Steam-Deck-/Linux-Unterstuetzung ist spaeter
 geplant und aktuell keine Prioritaet.
@@ -117,8 +118,8 @@ MMU und Exceptionzustand, hashgesicherte RAM-Operationen, typisierte
 Geraetezustaende und ausstehende Schedulerereignisse.
 
 Der aktuelle Handoff-Quellvertrag besteht aus Handoff-Artefaktformat 2,
-Runtime-ABI 101, Analyzer-ABI 39, Backend-Interface-ABI 21,
-Portprojektvertrag 89, Native-Port-Profilvertrag 13 und
+Runtime-ABI 101, Analyzer-ABI 40, Backend-Interface-ABI 21,
+Portprojektvertrag 90, Native-Port-Profilvertrag 13 und
 Plattformzustandsvertrag 2.
 Vorhandene private
 CompletePlatform-Artefakte aus den ABI-63-/ABI-64-Runden sind historische

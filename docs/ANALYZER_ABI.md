@@ -1,15 +1,16 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `39`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `40`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 101, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 21, Portprojektvertrag 89 und Native-Port-
+Backend-Interface-ABI 21, Portprojektvertrag 90 und Native-Port-
 Profilvertrag 13. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
-Directives-Version 3 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht
-den Analyzer-ABI-Zaehler.
+Directives-Version 3, Native-AOT-Emissionsprofil 30 und Port-Metadata-Cache-
+Schema 4 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
+Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
-Version 39 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Version 40 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -31,7 +32,7 @@ Analyzer-SDK-Headerinstallation ausgeschlossen. Damit gelangen Codegen-
 Tooling und das private Native-Port-Artefakt nicht mehr als Analyzer-SDK-
 Oberflaeche in installierte Consumer.
 
-Analyzer-ABI 39 trennt exakte Funktionsgrenzen von Analyse-Roots und bindet
+Analyzer-ABI 39 trennte exakte Funktionsgrenzen von Analyse-Roots und band
 edge-only Jump-Table-Metadaten samt ihrer Cacheidentitaet. Identity-bound
 GameProject-Grenzen begrenzen damit Recursive-, Function-Value- und IR-
 Analyse, ohne unerreichbaren Code als Root wiederzubeleben. Die gebundene
@@ -40,9 +41,18 @@ Instruktionswoerter werden gegen sie validiert und aktive image_id-Overlays,
 CallbackTable-Roots sowie Replacement-Reachability bleiben Teil der
 identitaetsgebundenen Metadaten.
 
+Analyzer-ABI 40 bindet den begrenzten Static-Callback-Inventarpfad, die
+kompakte SH-4-Switch-Erkennung und die fruehe Exportgrenze. Transformierte
+Latent-AOT-Quellen tragen neben ihrer encoded Source-Identitaet eine getrennte
+decoded Modulidentitaet; PRS-Quell-/Decoded-Caps, transformgebundene Cachekeys,
+Telemetry und Source-Maps werden damit deterministisch versioniert. Der
+Loaded-AOT-Rebase installiert gemischte Module erst nach exakter
+Codeblock-Closure. Diese Aenderungen invalidieren den vorherigen
+Analyser-/Metadata-Cachebestand.
+
 Die davon getrennte oeffentliche Codegen-Grenze
 `PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`21` und Portprojektvertrag `89` versioniert. Analyzer-ABI `39` bindet den
+`21` und Portprojektvertrag `90` versioniert. Analyzer-ABI `40` bindet den
 aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
 ersetzen einander nicht.
 

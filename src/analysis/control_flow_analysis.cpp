@@ -5,6 +5,7 @@
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/instruction.hpp"
 #include "guarded_native_entry_shape.hpp"
+#include "static_callback_inventory.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2558,6 +2559,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             seed_telemetry.metadata_targets.size();
     };
     GuardedCodeInventory final_guarded_code_inventory;
+    GuardedCodeInventory static_callback_inventory;
     detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
     detail::FunctionValueAnalysisSession function_value_session(
         16'384u,
@@ -3881,6 +3883,98 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             continue;
         }
 
+        // ConservativeRuntimeOnly intentionally carries no SH-C ABI and must
+        // not invoke the much heavier interprocedural FunctionValue lattice.
+        // It still needs statically visible callback registrations, however:
+        // direct calls often forward an executable literal through one or
+        // more small registrar wrappers before storing it in a callback node.
+        // The bounded companion analysis below publishes only guarded AOT
+        // inventory. The live runtime value remains authoritative and no
+        // indirect target set is ever marked complete by this path.
+        if (!function_value_analysis_supported) {
+            auto callback_lines = recursive_index.materialize_lines();
+            std::vector<FunctionCandidate> callback_functions;
+            callback_functions.reserve(recursive_index.functions.size());
+            for (const auto& [entry, function] : recursive_index.functions) {
+                static_cast<void>(entry);
+                callback_functions.push_back(function);
+            }
+            static_callback_inventory =
+                detail::analyze_static_callback_inventory(
+                    image, callback_lines, callback_functions,
+                    guarded_native_entry_shapes);
+            auto& callback_candidates =
+                static_callback_inventory.stored_code_addresses;
+            callback_candidates.erase(
+                std::remove_if(
+                    callback_candidates.begin(),
+                    callback_candidates.end(),
+                    [&](const auto& candidate) {
+                        return guarded_native_entry_shapes.classify(
+                                   candidate.target_address) !=
+                               detail::GuardedNativeEntryShapeStatus::Valid;
+                    }),
+                callback_candidates.end());
+            static_callback_inventory.candidate_count =
+                callback_candidates.size();
+            for (const auto& candidate :
+                 callback_candidates) {
+                const std::array origins{
+                    FunctionOrigin::StoredCodeAddress};
+                auto source_sites = candidate.store_instruction_addresses;
+                std::sort(source_sites.begin(), source_sites.end());
+                source_sites.erase(
+                    std::unique(source_sites.begin(), source_sites.end()),
+                    source_sites.end());
+                auto evidence_call_sites = candidate.evidence_call_sites;
+                std::sort(evidence_call_sites.begin(),
+                          evidence_call_sites.end());
+                evidence_call_sites.erase(
+                    std::unique(evidence_call_sites.begin(),
+                                evidence_call_sites.end()),
+                    evidence_call_sites.end());
+                auto evidence_callees = candidate.evidence_callees;
+                std::sort(evidence_callees.begin(),
+                          evidence_callees.end());
+                evidence_callees.erase(
+                    std::unique(evidence_callees.begin(),
+                                evidence_callees.end()),
+                    evidence_callees.end());
+                const auto add_callback_seed =
+                    [&](const std::optional<std::uint32_t> source_site) {
+                        SeedCause cause{
+                            SeedCauseKind::StoredCodeAddress,
+                            source_site,
+                            std::nullopt,
+                            std::nullopt};
+                        cause.evidence_call_sites = evidence_call_sites;
+                        cause.evidence_callees = evidence_callees;
+                        changed =
+                            add_seed(
+                                seeds,
+                                candidate.target_address,
+                                origins,
+                                false,
+                                ControlFlowEvidence::GuardedPartial,
+                                0u,
+                                std::move(cause),
+                                &pending_seed_changes,
+                                &seed_telemetry) ||
+                            changed;
+                    };
+                if (source_sites.empty()) {
+                    add_callback_seed(std::nullopt);
+                } else {
+                    for (const auto source_site : source_sites)
+                        add_callback_seed(source_site);
+                }
+            }
+            if (changed) {
+                report_progress("static-callback-inventory-seed-expansion");
+                continue;
+            }
+        }
+
         if (!persistent_function_analysis_epoch_imported &&
             !persistent_function_analysis_epoch_import_terminal &&
             persistent_function_analysis_epoch_program_functions.has_value() &&
@@ -4766,6 +4860,33 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         analysis.returned_table_scan_truncated =
             guarded_code_inventory.table_scan_truncated;
         final_guarded_code_inventory = std::move(guarded_code_inventory);
+    } else if (!function_value_analysis_supported) {
+        analysis.raw_stored_code_inventory_candidates =
+            static_callback_inventory.raw_stored_candidate_count;
+        analysis.raw_stored_code_inventory_budget =
+            static_callback_inventory.raw_stored_candidate_budget;
+        analysis.raw_stored_code_inventory_truncated =
+            static_callback_inventory.raw_stored_candidates_truncated;
+        analysis.guarded_code_inventory_candidates =
+            static_callback_inventory.candidate_count;
+        analysis.guarded_code_inventory_budget =
+            static_callback_inventory.candidate_budget;
+        analysis.guarded_code_inventory_candidate_budget_exhausted =
+            static_callback_inventory.candidate_budget_exhausted;
+        analysis.guarded_code_inventory_walk =
+            static_callback_inventory.walk_diagnostics;
+        analysis.candidate_inventory_truncated =
+            static_callback_inventory.candidate_inventory_truncated;
+        const auto& shape_statistics =
+            guarded_native_entry_shapes.statistics();
+        analysis.guarded_code_shape_validation_work =
+            shape_statistics.work;
+        analysis.guarded_code_shape_validation_work_budget =
+            shape_statistics.work_budget;
+        analysis.guarded_code_shape_budget_exceeded_candidates =
+            shape_statistics.shape_budget_exceeded;
+        final_guarded_code_inventory =
+            std::move(static_callback_inventory);
     }
     materialize_recursive_result_once();
     analysis.runtime_code_copies.copies.reserve(

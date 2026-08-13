@@ -82,6 +82,14 @@ struct LatentAotDiscoveryOptions {
     std::size_t maximum_file_bytes =
         katana::runtime::maximum_native_aot_template_extent;
     std::size_t maximum_total_file_bytes = 64u * 1024u * 1024u;
+    // Compressed transform sources are streamed and discarded independently
+    // from ordinary raw-file candidates. The larger sequential-I/O cap lets a
+    // disc expose a broad asset family without retaining it in analysis RAM.
+    std::size_t maximum_total_transform_source_bytes =
+        256u * 1024u * 1024u;
+    // Separate cap for deterministically transformed module bytes. This keeps
+    // only admitted decoded code candidates bounded in analysis memory.
+    std::size_t maximum_total_transformed_bytes = 64u * 1024u * 1024u;
     std::size_t maximum_workers = 64u;
     std::size_t maximum_entry_scan_instructions = 1024u;
     std::size_t maximum_native_instructions_per_module = 32768u;
@@ -113,11 +121,22 @@ struct PreparedLatentAotBlockIdentity {
     [[nodiscard]] bool operator==(const PreparedLatentAotBlockIdentity&) const = default;
 };
 
+// Describes how the identity-bound disc extent becomes the analyzed module
+// bytes. Identity is a byte-for-byte load. SegaPrs is the strict, bounded
+// legacy PRS transform; its encoded and decoded identities are both retained.
+enum class LatentAotSourceTransform : std::uint8_t {
+    Identity,
+    SegaPrs,
+};
+
 // One exact logical disc extent which may materialize a byte-identical native
 // template at runtime. The identifier is descriptor-local and carries neither
-// a source path nor source bytes.
+// a source path nor source bytes. byte_identity belongs to the encoded source;
+// PreparedLatentAotModule::byte_identity belongs to the transformed module.
 struct PreparedLatentAotSourceBinding {
     std::string id;
+    LatentAotSourceTransform transform = LatentAotSourceTransform::Identity;
+    std::string byte_identity;
     std::uint64_t disc_byte_offset = 0u;
     std::uint32_t byte_size = 0u;
 
@@ -165,6 +184,14 @@ struct LatentAotDiscovery {
     std::size_t rejected_files = 0u;
     std::size_t duplicate_files = 0u;
     std::uint64_t examined_bytes = 0u;
+    // Strict Sega PRS source-transform telemetry. Decoded bytes have their own
+    // total budget and are never counted as additional disc I/O bytes.
+    std::size_t prs_files_examined = 0u;
+    std::size_t prs_files_decoded = 0u;
+    std::size_t prs_files_rejected = 0u;
+    std::size_t prs_candidates_admitted = 0u;
+    std::uint64_t prs_decoded_bytes = 0u;
+    bool prs_decoded_budget_exhausted = false;
     std::size_t analysis_cache_positive_hits = 0u;
     std::size_t analysis_cache_negative_hits = 0u;
     std::size_t analysis_cache_misses = 0u;

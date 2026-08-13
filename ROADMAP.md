@@ -140,7 +140,7 @@ Bindungen enden fail-closed; sie fallen nicht auf Geraeteemulation zurueck.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen:
 Das Produkt-SDK exportiert nur `aot_runtime` und `native_port_runtime`; der
 historische Geraeteverbund ist ein nicht installierbares Buildbaum-Orakel und
-kein Portprofil. Portprojektvertrag `89`, Native-Port-Profilvertrag `13` und
+kein Portprofil. Portprojektvertrag `90`, Native-Port-Profilvertrag `13` und
 der erweiterte Linkmap-Audit sperren jede Rueckkante. NativePortDefinition,
 NativePortArtifact, NativePortContent, NativePortRuntime und Bootstrap sowie
 read-only Content-Mappings, Hook-/Hardware-Closure und direkter nativer
@@ -195,7 +195,7 @@ formuliert; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein
 gegenwaertiges Gate.
 
-KR-5005 verwendet ab Portprojektvertrag `89` einen echten schnellen
+KR-5005 verwendet ab Portprojektvertrag `90` einen echten schnellen
 Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
 und einem gemessenen Vierer-Ninja-Pool; eine gemeinsame MSVC-PDB ist
 ausgeschlossen, und 4.096 Dispatch-Eintraege pro Shard vermeiden Hunderte
@@ -210,11 +210,11 @@ bleibt wegen der offenen Post-Overlay-Callback-/Function-Pointer-Kante aus.
 Der erste Lauf dieses Binaries lokalisierte zudem eine generische
 Bootstrapluecke: identity-bound Titel-RAM musste vor den Laufzeit-
 Immutable-Guards materialisiert werden, AOT-Bruecken durften dabei aber noch
-nicht aktiv sein. Portprojektvertrag `89` schliesst diese Reihenfolge
+nicht aktiv sein. Portprojektvertrag `90` schliesst diese Reihenfolge
 fail-closed; nach erfolgreichem Bootstrap beginnt erst der ueberwachte
 statische AOT-Lauf.
 
-Der aktuelle Source-Snapshot erweitert diesen KR-5005-Pfad um echte
+Der vorherige Source-Snapshot erweiterte diesen KR-5005-Pfad um echte
 Post-Bootstrap-AOT-Roots und resumierbare Continuations sowie die
 Dispatchability-Weitergabe durch CFG und Optimierung. Die Closure- und
 Nested-AOT-Fehlertransport-Pruefungen sind abgeschlossen; das Produktgate
@@ -223,12 +223,21 @@ Draw-IR bleiben backendneutral; D3D11 ist zunaechst
 das Windows-Backend, waehrend Steam-Deck-/Linux-Unterstuetzung spaeter und
 nicht als aktuelle Prioritaet vorgesehen ist.
 
-Der aktuelle native Produktbeleg vervollstaendigte Film `id=0` mit `200`
+Der aktuelle v62-Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
 `200` sichtbar nichtschwarzen Frames. Der schwarze/stale-Overlay-Uebergang ist
 geschlossen; Film `id=1`/Opening und Hauptmenue bleiben offen. Der Lauf endet
-aktuell typisiert an `MissingStaticEntry` einer post-Overlay Callback-/Function-
-Pointer-Kante.
+aktuell typisiert an `MissingStaticEntry` einer statisch nicht normalisierten
+Runtime-Image-/Alias-Identitaet an einer post-Overlay Callback-/Function-
+Pointer-Kante. Film `id=1`/Opening und Hauptmenue sowie der schwarze
+Zwischenbildfehler bleiben offen.
+
+Der validierte v59-Export untersuchte `1.094` Dateien, dekodierte `849/849`
+PRS-Dateien strikt und erzeugte `3.965` Funktionen in `127` Partitionen.
+`488` rohe und `395` guarded Callback-Kandidaten sowie `39` Latent-AOT-
+Kandidaten wurden ohne Truncation oder Budgeterschoepfung erfasst. Die
+Closure-Gaps stiegen von `257` auf `304`, weil der Export mehr echte
+erreichbare Funktionen einbezog; dies ist keine Hardware-Regression.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -275,11 +284,12 @@ letzte reale Produktevidenz:
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
   Runtime-ABI 101, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-  PVR-State-Contract 3, Portprojektvertrag 89, Native-Port-Profilvertrag 13
-  Analyzer-ABI 39
+  PVR-State-Contract 3, Portprojektvertrag 90, Native-Port-Profilvertrag 13
+  Analyzer-ABI 40
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 29, AOT-Partitionsschema 7
+  Native-AOT-Emissionsprofil 30, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 4
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
 installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie

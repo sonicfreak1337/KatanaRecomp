@@ -64,6 +64,10 @@ struct NativePortLoadedAotBlockIdentityView {
 struct NativePortLoadedAotModuleView {
     std::uint32_t source_start = 0u;
     std::uint32_t byte_size = 0u;
+    // Identity of the decoded source module consumed by analysis. A runtime
+    // copy may legitimately mutate non-code data before its first dispatch;
+    // in that case the binder requires every emitted AOT block identity to
+    // remain exact before installing the mapping.
     std::string_view sha256;
     std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
 };
@@ -129,8 +133,9 @@ class NativePortLoadedAotBinder final {
     // Returns true only when target belongs to an already active mapping.
     // An exact block-identity mismatch is a typed AOT-contract failure.
     [[nodiscard]] bool validate_bound_entry(std::uint32_t target) const;
-    // Installs one unambiguous exact-byte mapping for target. False means no
-    // analyzed module matches; ambiguous or malformed state fails closed.
+    // Installs one unambiguous exact executable-closure mapping for target.
+    // False means no analyzed module matches; ambiguous, malformed, or stale
+    // generated-code state fails closed.
     [[nodiscard]] bool bind_entry(std::uint32_t target);
 
   private:

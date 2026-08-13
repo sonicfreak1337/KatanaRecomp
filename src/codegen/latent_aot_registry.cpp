@@ -19,6 +19,8 @@
 #include "katana/runtime/block_table.hpp"
 #include "katana/sh4/decoder.hpp"
 
+#include "../runtime/prs_decode.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -180,24 +182,56 @@ std::string_view disc_basename(const std::string_view value) noexcept {
     return value.substr(slash == std::string_view::npos ? 0u : slash + 1u);
 }
 
+bool disc_file_uses_sega_prs(const std::string_view value) {
+    return normalize_disc_reference(value).ends_with(".PRS");
+}
+
+bool candidate_has_transformed_source(
+    const DiscFileCandidate& candidate) noexcept {
+    return std::any_of(
+        candidate.source_bindings.begin(), candidate.source_bindings.end(),
+        [](const auto& binding) {
+            return binding.transform != LatentAotSourceTransform::Identity;
+        });
+}
+
 bool source_binding_less(const PreparedLatentAotSourceBinding& left,
                          const PreparedLatentAotSourceBinding& right) noexcept {
     if (left.disc_byte_offset != right.disc_byte_offset)
         return left.disc_byte_offset < right.disc_byte_offset;
     if (left.byte_size != right.byte_size)
         return left.byte_size < right.byte_size;
+    if (left.transform != right.transform)
+        return left.transform < right.transform;
+    if (left.byte_identity != right.byte_identity)
+        return left.byte_identity < right.byte_identity;
     return left.id < right.id;
 }
 
 PreparedLatentAotSourceBinding make_source_binding(
-    const std::string_view byte_identity,
+    const LatentAotSourceTransform transform,
+    const std::string_view source_byte_identity,
     const std::uint64_t disc_byte_offset,
     const std::uint32_t byte_size) {
-    return {"latent-aot-source-" + std::string(byte_identity.substr(7u)) + "-" +
+    const auto transform_name =
+        transform == LatentAotSourceTransform::Identity ? "" : "prs-";
+    return {"latent-aot-source-" + std::string(transform_name) +
+                std::string(source_byte_identity.substr(7u)) + "-" +
                 std::to_string(disc_byte_offset) + "-" +
                 std::to_string(byte_size),
+            transform,
+            std::string(source_byte_identity),
             disc_byte_offset,
             byte_size};
+}
+
+bool valid_source_transform(const LatentAotSourceTransform transform) noexcept {
+    switch (transform) {
+    case LatentAotSourceTransform::Identity:
+    case LatentAotSourceTransform::SegaPrs:
+        return true;
+    }
+    return false;
 }
 
 bool insert_source_binding(
@@ -234,7 +268,14 @@ bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept 
                     candidate.source_bindings.end(),
                     [&](const auto& binding) {
                         return binding.id.empty() ||
-                               binding.byte_size != candidate.size ||
+                               !valid_source_transform(binding.transform) ||
+                               !valid_sha256_identity(binding.byte_identity) ||
+                               binding.byte_size == 0u ||
+                               (binding.transform ==
+                                    LatentAotSourceTransform::Identity &&
+                                (binding.byte_size != candidate.size ||
+                                 binding.byte_identity !=
+                                     candidate.byte_identity)) ||
                                binding.disc_byte_offset >
                                    std::numeric_limits<std::uint64_t>::max() -
                                        binding.byte_size;
@@ -525,11 +566,18 @@ candidate_source_shape_rejection(
     const LatentAotDiscoveryOptions& options) {
     const bool exact_entry_binding =
         !candidate.explicit_entry_offsets.empty();
-    if ((exact_entry_binding
+    const bool transformed_source =
+        candidate_has_transformed_source(candidate);
+    if (candidate.size != candidate.bytes.size() ||
+        !valid_sha256_identity(candidate.byte_identity) ||
+        (exact_entry_binding
              ? candidate.bytes.size() < 2u ||
-                   (candidate.bytes.size() & 1u) != 0u
-             : candidate.bytes.size() < 4u ||
-                   (candidate.bytes.size() & 3u) != 0u) ||
+                   (!transformed_source &&
+                    (candidate.bytes.size() & 1u) != 0u)
+             : transformed_source
+                   ? candidate.bytes.size() < 2u
+                   : candidate.bytes.size() < 4u ||
+                         (candidate.bytes.size() & 3u) != 0u) ||
         !valid_candidate_entry_offsets(candidate))
         return candidate.entry_offsets.empty()
                    ? LatentAotAnalysisRejection::NoEntryPoints
@@ -1195,7 +1243,9 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     katana::io::ImageSegment segment{
         ".latent-disc-module",
         candidate.source_address,
-        candidate.source_bindings.front().disc_byte_offset,
+        candidate_has_transformed_source(candidate)
+            ? 0u
+            : candidate.source_bindings.front().disc_byte_offset,
         candidate.bytes.size(),
         katana::io::SegmentKind::Mixed,
         {true, true, true},
@@ -1633,6 +1683,8 @@ LatentAotDiscovery discover_latent_aot_modules(
         options.maximum_file_bytes >
             katana::runtime::maximum_native_aot_template_extent ||
         options.maximum_total_file_bytes < minimum_candidate_bytes ||
+        options.maximum_total_transform_source_bytes < 1u ||
+        options.maximum_total_transformed_bytes < 2u ||
         options.maximum_workers == 0u ||
         options.maximum_entry_scan_instructions == 0u ||
         options.maximum_native_instructions_per_module == 0u ||
@@ -1748,9 +1800,29 @@ LatentAotDiscovery discover_latent_aot_modules(
                 return disc_basename(reference) == basename;
             });
     };
-    std::stable_partition(
+    const auto first_unreferenced = std::stable_partition(
         heuristic_file_order.begin(), heuristic_file_order.end(),
         file_is_referenced);
+    // Compressed executable overlays are invisible to the raw opcode shape
+    // filter. Examine strict PRS sources before unrelated raw data, while
+    // preserving explicit executable-string references as the first tier.
+    std::stable_partition(
+        first_unreferenced, heuristic_file_order.end(),
+        [&](const std::size_t index) {
+            return disc_file_uses_sega_prs(files[index].first);
+        });
+    const auto first_non_prs = std::find_if(
+        first_unreferenced, heuristic_file_order.end(),
+        [&](const std::size_t index) {
+            return !disc_file_uses_sega_prs(files[index].first);
+        });
+    std::stable_sort(
+        first_unreferenced, first_non_prs,
+        [&](const std::size_t left, const std::size_t right) {
+            if (files[left].second.size != files[right].second.size)
+                return files[left].second.size < files[right].second.size;
+            return left < right;
+        });
     {
         katana::ProgressCounterSnapshot counters;
         counters.discovered = files.size();
@@ -1809,6 +1881,7 @@ LatentAotDiscovery discover_latent_aot_modules(
     };
 
     std::uint64_t examined_file_bytes = 0u;
+    std::uint64_t examined_transform_source_bytes = 0u;
     std::size_t source_binding_count = 0u;
     std::set<std::pair<std::uint64_t, std::uint32_t>> exact_file_extents;
     for (const auto& file : files) {
@@ -1869,8 +1942,9 @@ LatentAotDiscovery discover_latent_aot_modules(
         explicit_entry_offsets.erase(
             std::unique(explicit_entry_offsets.begin(), explicit_entry_offsets.end()),
             explicit_entry_offsets.end());
-        auto source_binding =
-            make_source_binding(byte_identity, disc_byte_offset, entry.size);
+        auto source_binding = make_source_binding(
+            LatentAotSourceTransform::Identity, byte_identity,
+            disc_byte_offset, entry.size);
         const auto candidate_key =
             std::pair{byte_identity, entry.size};
         const auto existing =
@@ -1918,6 +1992,7 @@ LatentAotDiscovery discover_latent_aot_modules(
     }
 
     std::size_t heuristic_candidate_count = 0u;
+    std::size_t transformed_candidate_bytes = 0u;
     if (heuristic_discovery) {
         for (const auto file_index : heuristic_file_order) {
             const auto& file = files[file_index];
@@ -1925,27 +2000,37 @@ LatentAotDiscovery discover_latent_aot_modules(
             if (source_binding_count >=
                 maximum_latent_aot_source_bindings)
                 break;
-            if (entry.size < 4u || entry.size > options.maximum_file_bytes ||
-                (entry.size & 3u) != 0u)
+            const bool sega_prs = disc_file_uses_sega_prs(file.first);
+            if (entry.size == 0u || entry.size > options.maximum_file_bytes ||
+                (!sega_prs &&
+                 (entry.size < 4u || (entry.size & 3u) != 0u)))
                 continue;
             const auto disc_byte_offset = disc_byte_offset_for(entry);
             if (exact_file_extents.contains({disc_byte_offset, entry.size}))
                 continue;
-            if (entry.size >
-                options.maximum_total_file_bytes - examined_file_bytes)
-                break;
+            const auto& source_budget_used =
+                sega_prs ? examined_transform_source_bytes
+                         : examined_file_bytes;
+            const auto source_budget =
+                sega_prs ? options.maximum_total_transform_source_bytes
+                         : options.maximum_total_file_bytes;
+            if (entry.size > source_budget - source_budget_used)
+                continue;
             if (disc_byte_offset > source->size() ||
                 entry.size > source->size() - disc_byte_offset)
                 throw std::runtime_error(
                     "Latente Discdatei liegt ausserhalb der Discquelle.");
-            auto bytes = filesystem.read_file(
+            auto source_bytes = filesystem.read_file(
                 entry, static_cast<std::uint32_t>(options.maximum_file_bytes));
-            if (bytes.size() != entry.size)
+            if (source_bytes.size() != entry.size)
                 throw std::runtime_error(
                     "Latente Discdatei wurde abgeschnitten gelesen.");
             ++result.examined_files;
-            result.examined_bytes += bytes.size();
-            examined_file_bytes += bytes.size();
+            result.examined_bytes += source_bytes.size();
+            if (sega_prs)
+                examined_transform_source_bytes += source_bytes.size();
+            else
+                examined_file_bytes += source_bytes.size();
             {
                 katana::ProgressCounterSnapshot counters;
                 counters.discovered = files.size();
@@ -1954,12 +2039,37 @@ LatentAotDiscovery discover_latent_aot_modules(
                     result.examined_bytes,
                     std::move(counters));
             }
+            const auto source_byte_identity =
+                "sha256:" + katana::io::sha256_bytes(std::string_view(
+                                reinterpret_cast<const char*>(
+                                    source_bytes.data()),
+                                source_bytes.size()));
+            auto transform = LatentAotSourceTransform::Identity;
+            auto bytes = std::move(source_bytes);
+            if (sega_prs) {
+                ++result.prs_files_examined;
+                try {
+                    bytes = katana::detail::decompress_sega_prs(
+                        bytes, options.maximum_file_bytes,
+                        options.maximum_file_bytes);
+                } catch (const std::bad_alloc&) {
+                    throw;
+                } catch (const katana::detail::PrsDecodeError&) {
+                    ++result.prs_files_rejected;
+                    continue;
+                }
+                ++result.prs_files_decoded;
+                result.prs_decoded_bytes += bytes.size();
+                transform = LatentAotSourceTransform::SegaPrs;
+            }
+            const auto candidate_size =
+                static_cast<std::uint32_t>(bytes.size());
             auto byte_identity =
                 "sha256:" + katana::io::sha256_bytes(std::string_view(
                                 reinterpret_cast<const char*>(bytes.data()),
                                 bytes.size()));
             const auto candidate_key =
-                std::pair{byte_identity, entry.size};
+                std::pair{byte_identity, candidate_size};
             if (!known_identities.insert(byte_identity).second) {
                 ++result.duplicate_files;
                 const auto existing =
@@ -1968,9 +2078,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                 if (existing !=
                     candidate_by_byte_identity_and_size.end()) {
                     auto source_binding = make_source_binding(
-                        byte_identity,
-                        disc_byte_offset,
-                        entry.size);
+                        transform, source_byte_identity,
+                        disc_byte_offset, entry.size);
                     if (insert_source_binding(
                             candidates[existing->second],
                             std::move(source_binding)))
@@ -1978,25 +2087,42 @@ LatentAotDiscovery discover_latent_aot_modules(
                 }
                 continue;
             }
+            auto source_binding = make_source_binding(
+                transform, source_byte_identity, disc_byte_offset,
+                entry.size);
+            const std::vector<std::uint32_t> entry_offsets{0u};
+            DiscFileCandidate candidate{
+                candidate_size,
+                0u,
+                std::move(bytes),
+                byte_identity,
+                {std::move(source_binding)},
+                entry_offsets,
+                {}};
+            if (candidate_source_shape_rejection(candidate, options)) {
+                ++result.rejected_files;
+                continue;
+            }
+            if (sega_prs &&
+                candidate.bytes.size() >
+                    options.maximum_total_transformed_bytes -
+                        transformed_candidate_bytes) {
+                result.prs_decoded_budget_exhausted = true;
+                ++result.rejected_files;
+                continue;
+            }
             if (heuristic_candidate_count ==
                 options.maximum_candidate_files)
                 continue;
-            auto source_binding =
-                make_source_binding(byte_identity, disc_byte_offset, entry.size);
-            const std::vector<std::uint32_t> entry_offsets{0u};
-            if (!place_candidate({entry.size,
-                                  0u,
-                                  std::move(bytes),
-                                  std::move(byte_identity),
-                                  {std::move(source_binding)},
-                                  entry_offsets,
-                                  {}},
-                                 false))
+            if (sega_prs)
+                transformed_candidate_bytes += candidate.bytes.size();
+            if (!place_candidate(std::move(candidate), false))
                 break;
             candidate_by_byte_identity_and_size.emplace(
                 candidate_key, candidates.size() - 1u);
             ++source_binding_count;
             ++heuristic_candidate_count;
+            if (sega_prs) ++result.prs_candidates_admitted;
         }
     }
 

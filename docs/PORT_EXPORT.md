@@ -168,7 +168,7 @@ port/
   .gitignore
 ```
 
-Seit Portprojektvertrag `89` ist `native-port` das einzige Produktprofil;
+Seit Portprojektvertrag `90` ist `native-port` das einzige Produktprofil;
 `diagnostic-interpreter` bleibt dem Diagnoseexport vorbehalten und der
 historische Geraetepfad ist kein Exportprofil. Das Produkt-SDK exportiert nur
 `aot_runtime` und `native_port_runtime`. Der Post-Link-Audit muss frei von
@@ -181,6 +181,14 @@ Grenzen/Eigentuemer/Entrys/Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge
 gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
 Schalter ist darauf begrenzt.
+
+Der aktuelle Analyzer-ABI-40-Export ergaenzt einen begrenzten Static-Callback-
+Inventarpfad und eine kompakte SH-4-Switch-Erkennung. Latent-AOT-Quellen mit
+Sega-PRS-Transform tragen getrennte encoded/decoded Identitaeten; Quellbudget,
+Decoded-Budget, Cache, Telemetry und Source-Map bleiben getrennte Domaenen.
+Loaded-AOT-Rebase bindet gemischte Module nur nach exakter AOT-Codeblock-
+Closure. Das Metadaten-Cache-Schema steht auf `4`, das Emissionsprofil auf
+`30`.
 
 Der identity-bound Titelbootstrap materialisiert initialen RAM-/Titelzustand
 vor Aktivierung der Laufzeit-Immutable-Guards. In dieser Phase stehen keine

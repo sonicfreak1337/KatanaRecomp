@@ -27,10 +27,11 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 
 Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 101, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 39, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 40, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 89, Native-Port-Profilvertrag 13 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`.
+Portprojektvertrag 90, Native-Port-Profilvertrag 13 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `30`, AOT-Partitionsschema: `7`.
+Port-Metadata-Cache-Schema: `4`.
 Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `9` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
@@ -96,14 +97,15 @@ Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
 sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
 KR-5005 bleibt das offene native Produktgate. Der aktive P0 ist jetzt die
-statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap-, AOT- und
+statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
+Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap-, AOT- und
 Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt und werden
 nicht als aktueller Blocker weitergefuehrt. Die Provider- und Draw-IR-Grenzen des
 nativen Grafikpfads sind backendneutral beschrieben; D3D11 ist zunaechst das
 Windows-Backend. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
 nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
 
-Der aktuelle KR-5005-Meilenstein traegt die generischen Native-Architektur-
+Ein frueherer KR-5005-Zwischenstand trug die generischen Native-Architektur-
 Reviewfixes: Post-Bootstrap-Bytes werden vor Analyse, IR und AOT materialisiert
 und jedes emittierte Instruktionswort wird gegen die gebundene Post-Ansicht
 validiert. Exakte Non-Root-Grenzen, edge-only JumpTables, image_id-gebundene
@@ -113,7 +115,7 @@ begrenzte Callback-Reentrys sowie der Nested-AOT-Fehlertransport erhalten
 typisierte Hook-Aborts bis zum Produktlauf. Linkmap-Owner-/PE-Importaudit und
 die Ablehnung historischer CpuState-Bindings bleiben fail-closed.
 
-Der inkrementelle Release-Build von `katana-recomp` mit 24 Jobs war in
+Der zugehoerige inkrementelle Release-Build von `katana-recomp` mit 24 Jobs war in
 `18,8 s` erfolgreich. Ein frischer Export nach Vertragsinvalidierung umfasste
 `1.812` Funktionen und `44` Partitionen mit `44` Codegen-Hits und `0` Misses;
 der Folgeexport nach dem Nested-AOT-Fehlerfix erreichte erneut `44/44` Hits.
@@ -125,14 +127,25 @@ Interpreterfallbacks; der naechste P0 ist die statisch gebundene
 Post-Overlay-Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT oder
 Linkaudit.
 
-Der aktuelle native Produktbeleg vervollstaendigte Film `id=0` mit `200`
+Der aktuelle v62-Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
 `200` sichtbar nichtschwarzen Frames. Das Checkpoint-Runtime-Image wurde vor
 dem ersten Stage-Overlay genau einmal deaktiviert; anschliessend wurden die
 Overlay-, Settings- und Camera-Assets identitaetsgebunden geladen. Der
 schwarze/stale-Overlay-Uebergang ist geschlossen. Film `id=1`/Opening und das
 Hauptmenue sind noch nicht erreicht; der Lauf endet aktuell typisiert an
-`MissingStaticEntry` einer post-Overlay Callback-/Function-Pointer-Kante.
+`MissingStaticEntry` einer statisch nicht normalisierten Runtime-Image-/Alias-
+Identitaet an einer post-Overlay Callback-/Function-Pointer-Kante. Film `id=1`/
+Opening und Hauptmenue bleiben offen; der schwarze Zwischenbildfehler bleibt
+ebenfalls offen.
+
+Der validierte v59-Export untersuchte `1.094` Dateien mit `198.135.759`
+encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte
+`3.965` Funktionen in `127` Partitionen. Er nahm `39` Latent-AOT-Kandidaten
+auf; `488` rohe und `395` guarded Callback-Kandidaten wurden ohne Truncation
+oder Budgeterschoepfung erfasst. Die Hardware-Closure wuchs von `257` auf
+`304`, weil mehr echte erreichbare Funktionen analysiert wurden; das ist keine
+Hardware-Regression. Framepacing blieb bei 60/60 mit deaktiviertem Catch-up.
 
 Der KR-5005-Zwischenfix schliesst die CMake-Deploymentgrenze fuer FFmpeg im
 Parent-Projekt: Die verifizierte Closure wird unabhaengig vom Caller-Scope
@@ -449,7 +462,7 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 101, Portprojektvertrag 89 und
+KR-5005-Stand verwendet Runtime-ABI 101, Analyzer-ABI 40, Portprojektvertrag 90 und
 Native-Port-Profilvertrag 13. Davon getrennt verwendet `GameProject` Vertrag 7 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte

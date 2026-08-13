@@ -12378,12 +12378,16 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 return left.disc_byte_offset < right.disc_byte_offset;
             if (left.byte_size != right.byte_size)
                 return left.byte_size < right.byte_size;
+            if (left.transform != right.transform)
+                return left.transform < right.transform;
+            if (left.byte_identity != right.byte_identity)
+                return left.byte_identity < right.byte_identity;
             return left.id < right.id;
     };
     for (const auto& module : latent_modules) {
         if (module.id.empty() || !latent_ids.insert(module.id).second ||
             !valid_sha256(module.byte_identity) ||
-            module.byte_size < 2u || (module.byte_size & 1u) != 0u ||
+            module.byte_size < 2u ||
             module.byte_size >
                 katana::runtime::maximum_native_aot_template_extent ||
             static_cast<std::uint64_t>(module.source_address) + module.byte_size >
@@ -12415,7 +12419,13 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         for (const auto& binding : module.source_bindings) {
             if (!valid_source_binding_id(binding.id) ||
                 !latent_source_binding_ids.insert(binding.id).second ||
-                binding.byte_size != module.byte_size ||
+                !valid_sha256(binding.byte_identity) ||
+                (binding.transform != LatentAotSourceTransform::Identity &&
+                 binding.transform != LatentAotSourceTransform::SegaPrs) ||
+                binding.byte_size == 0u ||
+                (binding.transform == LatentAotSourceTransform::Identity &&
+                 (binding.byte_size != module.byte_size ||
+                  binding.byte_identity != module.byte_identity)) ||
                 binding.disc_byte_offset >
                     std::numeric_limits<std::uint64_t>::max() -
                         binding.byte_size ||
@@ -12716,11 +12726,20 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                       latent_modules.end(),
                       std::size_t{0u},
                       [](const auto total, const auto& module) {
-                          return total + module.source_bindings.size();
+                          return total + std::count_if(
+                              module.source_bindings.begin(),
+                              module.source_bindings.end(),
+                              [](const auto& binding) {
+                                  return binding.transform ==
+                                      LatentAotSourceTransform::Identity;
+                              });
                       })
                << "u);\n";
         for (const auto& module : latent_modules) {
             for (const auto& binding : module.source_bindings) {
+                if (binding.transform !=
+                    LatentAotSourceTransform::Identity)
+                    continue;
                 output << "    {\n"
                        << "        descriptors.push_back({"
                        << katana::io::quote_json(binding.id) << ", "
@@ -12728,7 +12747,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                        << katana::io::quote_json(expected_content_identity)
                        << ", " << binding.disc_byte_offset << "ull, "
                        << binding.byte_size << "u, "
-                       << katana::io::quote_json(module.byte_identity)
+                       << katana::io::quote_json(binding.byte_identity)
                        << "});\n"
                        << "    }\n";
             }
@@ -17458,8 +17477,7 @@ port_metadata(const PortExportOptions& options,
               const bool direct_boot_executable,
               const std::string_view project_identity,
               const katana::analysis::ControlFlowAnalysisResult& analysis,
-              const std::size_t latent_aot_module_count,
-              const std::size_t latent_aot_source_binding_count) {
+              const LatentAotDiscovery& latent_aot) {
     const auto& indirect = analysis.indirect_control_flow;
     const auto count = [&indirect](const auto status) {
         return std::count_if(indirect.begin(), indirect.end(), [status](const auto& resolution) {
@@ -17503,9 +17521,30 @@ port_metadata(const PortExportOptions& options,
                           LatentAotDiscoveryMode::ExactOnly
                       ? "exact-only"
                       : "heuristic")
-           << ",\"latent_aot_modules\":" << latent_aot_module_count
+           << ",\"latent_aot_modules\":" << latent_aot.modules.size()
            << ",\"latent_aot_source_bindings\":"
-           << latent_aot_source_binding_count
+           << std::accumulate(
+                  latent_aot.modules.begin(), latent_aot.modules.end(),
+                  std::size_t{0u},
+                  [](const auto total, const auto& module) {
+                      return total + module.source_bindings.size();
+                  })
+           << ",\"latent_aot_examined_files\":"
+           << latent_aot.examined_files
+           << ",\"latent_aot_examined_bytes\":"
+           << latent_aot.examined_bytes
+           << ",\"latent_aot_prs_files_examined\":"
+           << latent_aot.prs_files_examined
+           << ",\"latent_aot_prs_files_decoded\":"
+           << latent_aot.prs_files_decoded
+           << ",\"latent_aot_prs_files_rejected\":"
+           << latent_aot.prs_files_rejected
+           << ",\"latent_aot_prs_candidates_admitted\":"
+           << latent_aot.prs_candidates_admitted
+           << ",\"latent_aot_prs_decoded_bytes\":"
+           << latent_aot.prs_decoded_bytes
+           << ",\"latent_aot_prs_decoded_budget_exhausted\":"
+           << (latent_aot.prs_decoded_budget_exhausted ? "true" : "false")
            << ",\"resolved_control_flow\":"
            << count(katana::analysis::ControlFlowReportStatus::Resolved)
            << ",\"guarded_control_flow\":"
@@ -18008,6 +18047,18 @@ void report_latent_aot_analysis_durations(
                 std::to_string(
                     discovery.analysis_candidate_duration_ms[index]));
     }
+    report_progress(
+        options,
+        "latent-aot-prs:examined=" +
+            std::to_string(discovery.prs_files_examined) +
+            ":decoded=" + std::to_string(discovery.prs_files_decoded) +
+            ":rejected=" + std::to_string(discovery.prs_files_rejected) +
+            ":candidates=" +
+            std::to_string(discovery.prs_candidates_admitted) +
+            ":decoded-bytes=" +
+            std::to_string(discovery.prs_decoded_bytes) +
+            ":budget-exhausted=" +
+            (discovery.prs_decoded_budget_exhausted ? "1" : "0"));
 }
 
 void require_unique_loaded_module_template_ids(
@@ -21354,6 +21405,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                                  << module.source_address << ':' << module.byte_size << ':';
             for (const auto& binding : module.source_bindings)
                 metadata_ir_identity << binding.id << ':'
+                                     << static_cast<unsigned>(binding.transform)
+                                     << ':' << binding.byte_identity << ':'
                                      << binding.disc_byte_offset << ':'
                                      << binding.byte_size << ',';
             metadata_ir_identity << ':';
@@ -21421,17 +21474,31 @@ static PortExportResult export_dreamcast_port_project_impl(
                 *options.game_project,
                 native_port_definition == nullptr);
         for (const auto& module : latent_aot.modules) {
+            const auto identity_binding = std::find_if(
+                module.source_bindings.begin(),
+                module.source_bindings.end(),
+                [](const auto& binding) {
+                    return binding.transform ==
+                        LatentAotSourceTransform::Identity;
+                });
+            const bool transformed =
+                identity_binding == module.source_bindings.end();
+            // PRS is a non-linear transform. Its source-map coordinate is the
+            // exact decoded-module domain named by the identity-bound module,
+            // never a fabricated raw-disc byte offset.
             katana::io::ImageSegment segment{
-                "latent-aot-module",
+                transformed ? module.id : "latent-aot-module",
                 module.source_address,
-                module.source_bindings.front().disc_byte_offset,
+                transformed ? 0u : identity_binding->disc_byte_offset,
                 module.byte_size,
                 katana::io::SegmentKind::Mixed,
                 {true, false, true},
                 // The validated disc span remains addressable to the source map without
                 // retaining retail bytes or allocating a same-sized zero buffer.
                 {}};
-            segment.source_kind = katana::io::ImageSourceKind::DiscModule;
+            segment.source_kind =
+                transformed ? katana::io::ImageSourceKind::Unknown
+                            : katana::io::ImageSourceKind::DiscModule;
             segment.load_phase = katana::io::ImageLoadPhase::RuntimeModule;
             segment.latent_source_size = module.byte_size;
             source_map_image.add_segment(std::move(segment));
@@ -21532,16 +21599,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                                        prepared.direct_boot_executable,
                                        prepared.project_identity,
                                        prepared.analysis,
-                                       latent_aot.modules.size(),
-                                       std::accumulate(
-                                           latent_aot.modules.begin(),
-                                           latent_aot.modules.end(),
-                                           std::size_t{0u},
-                                           [](const auto total,
-                                              const auto& module) {
-                                               return total +
-                                                      module.source_bindings.size();
-                                           }))});
+                                       latent_aot)});
     if (options.game_project != nullptr)
         artifacts.push_back(
             {"metadata/game-project.json",
@@ -21974,7 +22032,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                 katana::analysis::ControlFlowAnalysisTerminationReason::None &&
             !analysis.function_budget_exhausted);
     if (!options.diagnostic_partial &&
-        analysis.function_budget_exhausted &&
+        !katana::analysis::guarded_aot_inventory_complete(analysis) &&
         analysis.guarded_aot_entry_rejections.empty() &&
         std::none_of(
             analysis.recursive.diagnostics.begin(),

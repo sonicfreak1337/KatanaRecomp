@@ -59,12 +59,92 @@ bool outside_dispatch_path(const std::uint32_t target,
 bool snapshot_candidate_source(const katana::io::ExecutableImage& image,
                                const katana::io::ImageSegment& segment) {
     if (!segment.permissions.readable) return false;
-    if (segment.load_phase != katana::io::ImageLoadPhase::Initial ||
-        segment.source_kind == katana::io::ImageSourceKind::RuntimeMemory)
+    if (segment.source_kind == katana::io::ImageSourceKind::RuntimeMemory)
         return false;
-    if (!segment.permissions.writable) return true;
-    return image.initial_snapshot_policy() ==
-           katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent;
+    if (segment.load_phase == katana::io::ImageLoadPhase::Initial &&
+        !segment.permissions.writable)
+        return true;
+    return segment.load_phase == katana::io::ImageLoadPhase::Initial &&
+           image.initial_snapshot_policy() ==
+               katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent;
+}
+
+std::optional<std::uint32_t> snapshot_pc_relative_long_value(
+    const katana::io::ExecutableImage& image,
+    const katana::sh4::DisassemblyLine& load) {
+    if (load.instruction.kind !=
+        katana::sh4::InstructionKind::MovLongLoadPcRelative)
+        return std::nullopt;
+    const auto literal_address64 =
+        ((static_cast<std::uint64_t>(load.address) + 4u) & ~std::uint64_t{3u}) +
+        static_cast<std::uint32_t>(load.instruction.displacement);
+    if (literal_address64 > std::numeric_limits<std::uint32_t>::max())
+        return std::nullopt;
+    const auto resolved_literal = image.resolve_segment_address(
+        static_cast<std::uint32_t>(literal_address64), 4u);
+    const auto* literal_segment = resolved_literal.has_value()
+                                      ? image.find_segment(*resolved_literal, 4u)
+                                      : nullptr;
+    if (literal_segment == nullptr ||
+        !snapshot_candidate_source(image, *literal_segment))
+        return std::nullopt;
+    const auto value = image.read_u32_le(*resolved_literal);
+    return image.resolve_segment_address(value, 2u).has_value()
+               ? std::optional<std::uint32_t>{value}
+               : std::nullopt;
+}
+
+bool resolved_outside_dispatch_path(const katana::io::ExecutableImage& image,
+                                    const std::uint32_t target,
+                                    const std::uint32_t path_begin,
+                                    const std::uint32_t dispatch_address) {
+    const auto resolved_target = image.resolve_segment_address(target, 2u);
+    const auto resolved_begin = image.resolve_segment_address(path_begin, 2u);
+    const auto resolved_dispatch = image.resolve_segment_address(dispatch_address, 2u);
+    return resolved_target.has_value() && resolved_begin.has_value() &&
+           resolved_dispatch.has_value() &&
+           outside_dispatch_path(*resolved_target, *resolved_begin, *resolved_dispatch);
+}
+
+bool bounded_fallback_exits_dispatch_path(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t fallback_begin,
+    const std::size_t scale_index,
+    const std::size_t dispatch_index) {
+    if (fallback_begin >= scale_index || scale_index < 2u ||
+        dispatch_index <= scale_index || dispatch_index >= lines.size())
+        return false;
+    for (auto index = fallback_begin; index < scale_index; ++index) {
+        if (index + 1u >= lines.size() || !contiguous(lines[index], lines[index + 1u]))
+            return false;
+    }
+
+    const auto terminal_index = scale_index - 2u;
+    const auto delay_index = scale_index - 1u;
+    if (terminal_index < fallback_begin || !lines[delay_index].is_delay_slot)
+        return false;
+    for (auto index = fallback_begin; index < terminal_index; ++index) {
+        if (lines[index].instruction.changes_control_flow()) return false;
+    }
+
+    const auto& terminal = lines[terminal_index];
+    std::optional<std::uint32_t> target;
+    if (terminal.instruction.kind == katana::sh4::InstructionKind::Bra) {
+        target = terminal.target_address;
+    } else if (terminal.instruction.kind == katana::sh4::InstructionKind::Jmp &&
+               terminal_index != fallback_begin) {
+        const auto& target_load = lines[terminal_index - 1u];
+        if (contiguous(target_load, terminal) &&
+            target_load.instruction.destination_register ==
+                terminal.instruction.branch_register)
+            target = snapshot_pc_relative_long_value(image, target_load);
+    }
+    return target.has_value() &&
+           resolved_outside_dispatch_path(image,
+                                          *target,
+                                          lines[scale_index].address,
+                                          lines[dispatch_index].address);
 }
 
 std::optional<JumpTableAnalysis>
@@ -277,10 +357,14 @@ bool fixed_stride_terminal_tail(const katana::io::ExecutableImage& image,
 
 std::optional<std::size_t>
 bounded_entry_count(const std::span<const katana::sh4::DisassemblyLine> lines,
+                    const katana::io::ExecutableImage& image,
                     const std::size_t scale_index,
+                    const std::size_t dispatch_index,
                     const std::uint8_t index_register) {
-    if (scale_index < 2u) return std::nullopt;
-    for (std::size_t distance = 2u; distance <= 6u && distance <= scale_index; ++distance) {
+    if (scale_index < 2u || dispatch_index <= scale_index ||
+        dispatch_index >= lines.size())
+        return std::nullopt;
+    for (std::size_t distance = 2u; distance <= 16u && distance <= scale_index; ++distance) {
         const auto compare_index = scale_index - distance;
         const auto& compare = lines[compare_index];
         if (compare.instruction.kind != katana::sh4::InstructionKind::CompareHigherOrSame ||
@@ -295,20 +379,17 @@ bounded_entry_count(const std::span<const katana::sh4::DisassemblyLine> lines,
             compare_index + 2u == scale_index && contiguous(branch, lines[scale_index]) &&
             outside_dispatch_path(*branch.target_address,
                                   lines[scale_index].address,
-                                  lines[scale_index + 4u].address)) {
+                                  lines[dispatch_index].address)) {
             guarded = true;
         } else if (branch.instruction.kind == katana::sh4::InstructionKind::Bf &&
-                   compare_index + 4u == scale_index &&
-                   *branch.target_address == lines[scale_index].address) {
-            const auto& fallback = lines[compare_index + 2u];
-            const auto& delay = lines[compare_index + 3u];
-            guarded = contiguous(branch, fallback) && contiguous(fallback, delay) &&
-                      contiguous(delay, lines[scale_index]) &&
-                      fallback.instruction.kind == katana::sh4::InstructionKind::Bra &&
-                      fallback.target_address.has_value() &&
-                      outside_dispatch_path(*fallback.target_address,
-                                            lines[scale_index].address,
-                                            lines[scale_index + 4u].address);
+                   *branch.target_address == lines[scale_index].address &&
+                   compare_index + 2u < scale_index) {
+            guarded = contiguous(branch, lines[compare_index + 2u]) &&
+                      bounded_fallback_exits_dispatch_path(image,
+                                                           lines,
+                                                           compare_index + 2u,
+                                                           scale_index,
+                                                           dispatch_index);
         }
         if (!guarded) continue;
         if (compare_index == 0u) return std::nullopt;
@@ -688,30 +769,67 @@ JumpTableAnalysis analyze_declared_jump_table(
 
 std::optional<JumpTableAnalysis>
 recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
-                                      const std::span<const katana::sh4::DisassemblyLine> lines,
-                                      const std::size_t dispatch_index,
-                                      JumpTableSnapshotCache* const cache) {
-    if (dispatch_index < 4u || dispatch_index >= lines.size()) return std::nullopt;
+                                       const std::span<const katana::sh4::DisassemblyLine> lines,
+                                       const std::size_t dispatch_index,
+                                       JumpTableSnapshotCache* const cache) {
+    if (dispatch_index < 3u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
     const auto& load = lines[dispatch_index - 1u];
     const auto& table_base = lines[dispatch_index - 2u];
-    const auto& copy_index = lines[dispatch_index - 3u];
-    const auto& scale_index = lines[dispatch_index - 4u];
-    if (!contiguous(scale_index, copy_index) || !contiguous(copy_index, table_base) ||
-        !contiguous(table_base, load) || !contiguous(load, dispatch) ||
+    if (!contiguous(table_base, load) || !contiguous(load, dispatch) ||
         dispatch.instruction.kind != katana::sh4::InstructionKind::Braf ||
         load.instruction.kind != katana::sh4::InstructionKind::MovWordLoadR0Indexed ||
         load.instruction.destination_register != dispatch.instruction.branch_register ||
-        table_base.instruction.kind != katana::sh4::InstructionKind::MoveAddressPcRelative ||
-        copy_index.instruction.kind != katana::sh4::InstructionKind::MovRegister ||
-        copy_index.instruction.destination_register != load.instruction.source_register ||
-        copy_index.instruction.destination_register == 0u ||
-        scale_index.instruction.kind != katana::sh4::InstructionKind::ShiftLogicalLeftOne ||
-        scale_index.instruction.destination_register != copy_index.instruction.source_register)
+        table_base.instruction.kind != katana::sh4::InstructionKind::MoveAddressPcRelative)
         return std::nullopt;
 
+    // GCC-family SH-4 output uses both of these equivalent bounded switch
+    // shapes.  The second form avoids the redundant index copy when the
+    // scaled selector can remain in its original register:
+    //
+    //   shll  Rn              shll  Rn
+    //   mov   Rn,Rm           mova  table,R0
+    //   mova  table,R0        mov.w @(R0,Rn),R0
+    //   mov.w @(R0,Rm),Rx     braf  R0
+    //   braf  Rx
+    //
+    // Keep the same dominating bounds proof for both forms.  Recognizing the
+    // compact form as a single table is important: treating a case target as
+    // an independent function would lose the remaining switch closure.
+    std::size_t scale_line_index = dispatch_index - 3u;
+    const auto& direct_scale = lines[scale_line_index];
+    const bool direct_index =
+        contiguous(direct_scale, table_base) &&
+        direct_scale.instruction.kind ==
+            katana::sh4::InstructionKind::ShiftLogicalLeftOne &&
+        direct_scale.instruction.destination_register ==
+            load.instruction.source_register &&
+        load.instruction.source_register != 0u;
+    if (!direct_index) {
+        if (dispatch_index < 4u) return std::nullopt;
+        const auto& copy_index = lines[dispatch_index - 3u];
+        scale_line_index = dispatch_index - 4u;
+        const auto& copied_scale = lines[scale_line_index];
+        if (!contiguous(copied_scale, copy_index) ||
+            !contiguous(copy_index, table_base) ||
+            copy_index.instruction.kind !=
+                katana::sh4::InstructionKind::MovRegister ||
+            copy_index.instruction.destination_register !=
+                load.instruction.source_register ||
+            copy_index.instruction.destination_register == 0u ||
+            copied_scale.instruction.kind !=
+                katana::sh4::InstructionKind::ShiftLogicalLeftOne ||
+            copied_scale.instruction.destination_register !=
+                copy_index.instruction.source_register)
+            return std::nullopt;
+    }
+
     const auto entry_count = bounded_entry_count(
-        lines, dispatch_index - 4u, scale_index.instruction.destination_register);
+        lines,
+        image,
+        scale_line_index,
+        dispatch_index,
+        lines[scale_line_index].instruction.destination_register);
     if (!entry_count.has_value()) return std::nullopt;
     const auto table_address = ((table_base.address + 4u) & ~3u) +
                                static_cast<std::uint32_t>(table_base.instruction.displacement);

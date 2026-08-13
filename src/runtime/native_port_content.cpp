@@ -316,14 +316,17 @@ void require_safe_existing_path(
 native_port_direct_bytes(const CpuState& cpu,
                          const std::uint32_t address,
                          const std::uint32_t size) noexcept {
-    auto direct_address = address;
-    const auto segment = direct_address >> 29u;
-    if (segment == 5u) direct_address ^= 0x20000000u;
-    if (size == 0u || (direct_address >> 29u) != 4u)
+    const auto segment = address >> 29u;
+    // NativePortMemory has no MMU service. Its bounded main-RAM backing is
+    // therefore directly addressable through No-MMU P0 as well as the P1/P2
+    // aliases. P3 and P4 still require translation or hardware semantics and
+    // must never be treated as ordinary title RAM here.
+    if (size == 0u || segment >= 6u ||
+        (segment < 4u && (cpu.mmucr & 1u) != 0u))
         return std::nullopt;
     const auto guard = cpu.memory.direct_linear_memory_guard(false);
     if (!guard) return std::nullopt;
-    const auto physical = canonical_physical_address(direct_address);
+    const auto physical = canonical_physical_address(address);
     if (physical < guard.physical_base) return std::nullopt;
     const auto relative = physical - guard.physical_base;
     if (relative >= guard.physical_span ||
@@ -697,7 +700,6 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
             static_cast<std::uint64_t>(module.source_start) +
             module.byte_size;
         if ((module.source_start & 3u) != 0u || module.byte_size < 2u ||
-            (module.byte_size & 1u) != 0u ||
             module.byte_size > maximum_module_bytes ||
             source_end > 0x1'0000'0000ull ||
             !valid_sha256_identity(module.sha256) ||
@@ -812,9 +814,27 @@ bool NativePortLoadedAotBinder::bind_entry(
                 continue;
             const auto module_bytes = native_port_direct_bytes(
                 impl_->cpu, runtime_start, module.byte_size);
-            if (!module_bytes.has_value() ||
-                sha256_identity(*module_bytes) != module.sha256)
+            if (!module_bytes.has_value())
                 continue;
+            // Loaded title modules commonly mix executable blocks with mutable
+            // data.  Prefer the whole decoded-image identity while it is still
+            // intact, but admit a later binding only when every block emitted
+            // as AOT code still has its exact export-time identity.  This keeps
+            // data initialization from invalidating safe static code without
+            // weakening the executable closure.
+            if (sha256_identity(*module_bytes) != module.sha256) {
+                const auto code_identity_matches = std::all_of(
+                    module.block_identities.begin(),
+                    module.block_identities.end(), [&](const auto& candidate) {
+                        const auto bytes = native_port_direct_bytes(
+                            impl_->cpu,
+                            runtime_start + candidate.source_offset,
+                            candidate.byte_size);
+                        return bytes.has_value() &&
+                               sha256_identity(*bytes) == candidate.sha256;
+                    });
+                if (!code_identity_matches) continue;
+            }
             const Candidate candidate{module_index, runtime_start};
             if (match.has_value() &&
                 (match->module_index != candidate.module_index ||
@@ -850,10 +870,24 @@ bool NativePortLoadedAotBinder::bind_entry(
         throw NativePortContractError(
             NativePortContractFailure::AotContractViolation,
             "loaded-aot-runtime-mapping");
-    for (const auto& block : module.block_identities)
-        impl_->immutable_guard.add_runtime_executable_range(
-            match->runtime_start + block.source_offset,
-            block.byte_size);
+    std::size_t registered = 0u;
+    try {
+        for (const auto& block : module.block_identities) {
+            impl_->immutable_guard.add_runtime_executable_range(
+                match->runtime_start + block.source_offset,
+                block.byte_size);
+            ++registered;
+        }
+    } catch (...) {
+        while (registered != 0u) {
+            --registered;
+            const auto& block = module.block_identities[registered];
+            impl_->immutable_guard.remove_runtime_executable_range(
+                match->runtime_start + block.source_offset,
+                block.byte_size);
+        }
+        throw;
+    }
     impl_->active.push_back(
         {match->module_index, match->runtime_start, std::move(mapping)});
     return true;

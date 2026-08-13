@@ -11,14 +11,28 @@
   Settings- und Camera-Assets identitaetsgebunden geladen; der schwarze/stale-
   Overlay-Uebergang ist geschlossen. Film `id=1`/Opening und Hauptmenue sind
   noch nicht erreicht. Der aktuelle typisierte Blocker ist
-  `MissingStaticEntry` an einer post-Overlay Callback-/Function-Pointer-Kante.
+  `MissingStaticEntry` an einer statisch nicht normalisierten Runtime-Image-/
+  Alias-Identitaet einer post-Overlay Callback-/Function-Pointer-Kante. Film
+  `id=1`/Opening und Hauptmenue sowie der schwarze Zwischenbildfehler bleiben
+  offen.
 
-- Aktueller Vertragsstand: Runtime-ABI `101`, Analyzer-ABI `39`,
-  Backend-Interface-ABI `21`, Portprojektvertrag `89`, Native-Port-Profilvertrag
+- Aktueller Vertragsstand: Runtime-ABI `101`, Analyzer-ABI `40`,
+  Backend-Interface-ABI `21`, Portprojektvertrag `90`, Native-Port-Profilvertrag
   `13`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
-  Native-Grafikvertrag `2` und Frame-Pacing-Vertrag `1`.
+  Native-Grafikvertrag `2`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
+  `30` und Port-Metadata-Cache-Schema `4`.
 
-- Der aktuelle KR-5005-Meilenstein schliesst die generische
+- Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
+  `3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded
+  Callback-Kandidaten blieben ohne Truncation oder Budgeterschoepfung. Die
+  v62-Produktevidenz bestaetigte Film `id=0` mit `200/200` Video,
+  `294.016` Audioframes und `200` sichtbar nichtschwarzen Frames. Der alte
+  statische Stage-Einstieg ist geschlossen; der generische naechste Blocker ist
+  die nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
+  post-Overlay Callback-/Function-Pointer-Kante. Die groessere Closure ist
+  Folge der erweiterten Analyseabdeckung, keine Hardware-Regression.
+
+- Ein vorheriger KR-5005-Zwischenstand schloss die generische
   Post-Bootstrap-/AOT- und Closure-Pruefung: materialisierte Post-Bytes werden
   gegen jedes emittierte Instruktionswort validiert, exakte Non-Root-Grenzen,
   edge-only JumpTables, image_id-gebundene Metadaten, CallbackTable-Roots,
@@ -36,7 +50,7 @@
   `0x53414704`. Der damalige aktive P0 war die generische Content-zu-Texture-Pipeline;
   Bootstrap, AOT und Linkaudit sind keine offenen Produktblocker.
 
-- Aktueller Vertragsstand: Runtime-ABI `98`, Analyzer-ABI `37`,
+- Historischer Vertragsstand dieses Zwischenstands: Runtime-ABI `98`, Analyzer-ABI `37`,
   Backend-Interface-ABI `20`, Portprojektvertrag `87`, Native-Port-Profilvertrag
   `11`, GameProject-Vertrag `7` mit Artefaktformat `6`, Analysis-Directives-
   Version `3` und Native-AOT-Emissionsprofil `29`. Historische Eintraege

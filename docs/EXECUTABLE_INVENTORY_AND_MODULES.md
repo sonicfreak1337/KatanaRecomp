@@ -5,10 +5,11 @@ Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
-Analyzer-ABI 39, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-Portprojektvertrag 89, Native-Port-Profilvertrag 13, Native-AOT-Emissionsprofil 29 und
+Analyzer-ABI 40, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+Portprojektvertrag 90, Native-Port-Profilvertrag 13, Native-AOT-Emissionsprofil 30 und
 Portpartitionsschema 7. Historische Checkpoint- und Laufangaben bleiben an
 ihre damaligen Vertraege gebunden; der aktive P0 ist die statisch gebundene
+statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
 Post-Overlay-Callback-/Function-Pointer-Kante innerhalb des offenen
 KR-5005-Gates.
 
@@ -279,9 +280,9 @@ Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
  abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 101,
-Block-ABI 5, Analyzer-ABI 39, Backend-Interface-ABI 21,
-PlatformServices-ABI 14, Portprojektvertrag 89, Native-Port-Profilvertrag 13,
-Native-AOT-Emissionsprofil 29
+Block-ABI 5, Analyzer-ABI 40, Backend-Interface-ABI 21,
+PlatformServices-ABI 14, Portprojektvertrag 90, Native-Port-Profilvertrag 13,
+Native-AOT-Emissionsprofil 30
 und Portpartitionsschema 7. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5
 skalieren die Produktbeobachtung, ohne den interpreterfreien

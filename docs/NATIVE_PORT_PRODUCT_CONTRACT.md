@@ -130,8 +130,10 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `101`, Analyzer-ABI `39`, Backend-
-Interface-ABI `21`, Portprojektvertrag `89` und Native-Port-Profilvertrag `13`.
+KR-5000 bindet diese Grenze an Runtime-ABI `101`, Analyzer-ABI `40`, Backend-
+Interface-ABI `21`, Portprojektvertrag `90` und Native-Port-Profilvertrag `13`.
+Der aktuelle Export nutzt Native-AOT-Emissionsprofil `30` und
+Port-Metadata-Cache-Schema `4`.
 Der aktuelle GameProject-Vertrag steht auf `7`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
@@ -250,7 +252,7 @@ Buildkonfiguration und Source einzeln in `runtime-dependencies.json` Schema
 exakte 2-GB-Quellclosure liegt nicht im Repository, und DEVELOPMENT-ONLY-
 Builds sind nicht redistributierbar.
 
-Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
+Ein vorheriger KR-5005-Source-Snapshot fuehrte identity-bound Bootstrap-
 Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
 durch Analyse, CFG, Optimierung und Export. Post-Bootstrap-Bytes werden vor
 Analyse, IR und AOT materialisiert; jedes emittierte Instruktionswort wird
@@ -266,9 +268,16 @@ aktuelle Lauf vervollstaendigte Film `id=0` mit `200` dekodierten, `200`
 praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
 Audioframes. Der schwarze/stale-Overlay-Uebergang ist geschlossen; Film
 `id=1`/Opening und Hauptmenue bleiben offen. Der aktive P0 ist die statisch
-gebundene Post-Overlay-Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT
-oder Linkaudit. Der typisierte Laufblocker ist `MissingStaticEntry`; die
-Hardware-Closure weist `194` bekannte und `175` offene native Hookstellen aus.
+nicht normalisierte Runtime-Image-/Alias-Identitaet an einer post-Overlay
+Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT oder Linkaudit. Der
+typisierte Laufblocker ist `MissingStaticEntry`; der schwarze Zwischenbildfehler
+bleibt offen. Die Hardware-Closure wuchs mit der erweiterten Abdeckung von
+`257` auf `304` Luecken und ist deshalb keine Regression.
+
+Der v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte `3.965`
+Funktionen in `127` Partitionen. Transformierte Quellidentitaet, decoded
+Modulidentitaet, Cache und Source-Map bleiben dabei getrennt gebunden; Loaded-
+AOT-Rebase installiert eine Zuordnung erst nach exakter Codeblock-Closure.
 Bring-up-Probes sind begrenzt, aber kein Ersatz fuer
 vollstaendige Hook-/Hardware-Closure.
 

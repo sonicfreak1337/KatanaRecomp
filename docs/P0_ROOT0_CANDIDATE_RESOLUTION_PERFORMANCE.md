@@ -1,13 +1,13 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
 Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
-Vorrang. Aktuell gelten Runtime-ABI 101, Analyzer-ABI 39,
-Portprojektvertrag 89 und Native-Port-Profilvertrag 13. Der source-seitige
+Vorrang. Aktuell gelten Runtime-ABI 101, Analyzer-ABI 40,
+Portprojektvertrag 90 und Native-Port-Profilvertrag 13. Der source-seitige
 KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
 Diagnostik. Der damalige RuntimeOnly-Bring-up verwendete Analyzer-ABI 34,
 Function-Analysis-Epoch-Schema 27 und lokales In-Process-Evaluation-Cache-
-Schema 13. Native-AOT-Emissionsprofil 29 und AOT-Partitionsschema 7 sind
+Schema 13. Native-AOT-Emissionsprofil 30 und AOT-Partitionsschema 7 sind
 aktuell. Der historische Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig und ist jetzt ausschliesslich internes
 Diagnoseorakel, kein Produktprofil. RuntimeOnly setzt `GuestCallAbi::Unknown`,
@@ -23,8 +23,9 @@ Produktblocker. Die identische Vergleichsreihe stieg bis `24,2926 MHz`, aber
 `100 MHz` und Memory-Card-Screen/Hauptmenue bleiben offen.
 
 Der fruehere RuntimeOnly-P0 lag im seriellen Runtime-/Dispatch-Overhead bis
-mindestens `100 MHz`; der aktuelle native Produkt-P0 ist die statisch
-gebundene Post-Overlay-Callback-/Function-Pointer-Kante, nicht fehlende Movie-Decodierung. Die fruehere
+mindestens `100 MHz`; der aktuelle native Produkt-P0 ist die statisch nicht
+normalisierte Runtime-Image-/Alias-Identitaet an einer Post-Overlay Callback-/
+Function-Pointer-Kante, nicht fehlende Movie-Decodierung. Die fruehere
 StartRender-/Frame-Finalize-Diagnose ist verworfen; StartRender wurde
 beobachtet. Dieses Dokument bewahrt die Candidate-Resolution-Diagnostik und
 deren historische Gates, behauptet aber keinen RuntimeOnly-Candidate-
@@ -594,9 +595,9 @@ Reviewschwerpunkte:
 
 Die Produktwirkung bleibt nach dem beendeten fail-closed D9-Lauf und der
 globalen Produktabnahme offen; D9 erzeugte kein Portartefakt und keinen
-Produk­terfolg. KR-4994 ist source-seitig abgeschlossen; der aktuelle P0 ist die
-fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
-Stackvertrag/Gate.
+Produk­terfolg. KR-4994 ist source-seitig abgeschlossen; der damalige
+PlatformAbi-P0 war die fehlende Wirksamkeit der autoritativen Hybrid-Join-
+Closure beim vollständigen Stackvertrag/Gate.
 
 ### KR-4994 - Begrenzter identitaetserhaltender unresolved Stack-/Context-Candidate-Carrier [x]
 

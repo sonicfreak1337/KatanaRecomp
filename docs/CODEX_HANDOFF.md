@@ -31,7 +31,7 @@ Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
 ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
-Profilvertrag `13`, Portprojektvertrag `89` und der Linkmap-Audit verhindern
+Profilvertrag `13`, Portprojektvertrag `90` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
 NativePortRuntime und Bootstrap sowie read-only Content-Mappings, Hook-/
@@ -81,7 +81,7 @@ Animationen und Framing sind massgeblich; SADX/Steam ist keine visuelle
 Ground Truth. 1080p ist die Standardausgabe. 4K, 21:9 und Filter sind spaeter
 optionale, togglebare Modi und duerfen den Fidelity-Modus nicht veraendern.
 
-Der aktuelle KR-5005-Source-Snapshot fuehrt identity-bound Bootstrap-
+Ein vorheriger KR-5005-Source-Snapshot fuehrte identity-bound Bootstrap-
 Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
 durch Analyse, CFG, Optimierung und Export. Exakte Boundaries, aktive Overlays,
 CallbackTable-Roots, sichere Replacement-Reachability, Linkmap-/PE-Importaudit
@@ -92,11 +92,19 @@ aktuell keine Prioritaet. Der Produktnachweis bleibt offen: Der Lauf erreichte
 den ersten nativen untexturierten Draw und danach den Sprite-Texture-Pfad,
 endete aber typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
 bekannte Stellen und `175` offene native Hookbindungen aus. Aktiver P0 ist die
-statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap,
+statisch nicht normalisierte Runtime-Image-/Alias-Identitaet an einer
+post-Overlay Callback-/Function-Pointer-Kante; Bootstrap,
 AOT und Linkaudit sind keine offenen Produktblocker. Film `id=0` wurde mit
 `200` dekodierten, `200` praesentierten und `200` sichtbar nichtschwarzen
 Frames sowie `294.016` Audioframes abgeschlossen; Film `id=1`/Opening und
-Hauptmenue bleiben offen. Der schwarze/stale-Overlay-Uebergang ist geschlossen.
+Hauptmenue sowie der schwarze Zwischenbildfehler bleiben offen. Der
+
+Der validierte v59-Export untersuchte `1.094` Dateien, dekodierte `849/849`
+PRS-Dateien strikt und erzeugte `3.965` Funktionen in `127` Partitionen.
+`488` rohe und `395` guarded Callback-Kandidaten sowie `39` Latent-AOT-
+Kandidaten wurden ohne Truncation oder Budgeterschoepfung erfasst. Die
+Closure-Gaps stiegen von `257` auf `304`, weil mehr echte erreichbare
+Funktionen analysiert wurden; dies ist keine Hardware-Regression.
 
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
@@ -112,9 +120,9 @@ oder Interpreter-Symbole.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
 Aktuell gelten Runtime-ABI `101`,
-PlatformServices-ABI `14`, Analyzer-ABI `39`, Function-Analysis-Epoch-Schema
+PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`21`, PVR-State-Contract `3`, Portprojektvertrag `89` und Native-Port-
+`21`, PVR-State-Contract `3`, Portprojektvertrag `90` und Native-Port-
 Profilvertrag `13`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
@@ -122,7 +130,8 @@ Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist im
 aktuellen Stand durch Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen neu
 exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`,
+Aktuelles Native-AOT-Emissionsprofil: `30`, AOT-Partitionsschema: `7`,
+Port-Metadata-Cache-Schema: `4`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
 Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.
 
