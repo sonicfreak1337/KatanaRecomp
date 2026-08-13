@@ -134,7 +134,7 @@ KR-5000 bindet diese Grenze an Runtime-ABI `103`, Analyzer-ABI `40`, Backend-
 Interface-ABI `21`, Portprojektvertrag `91` und Native-Port-Profilvertrag `14`.
 Der aktuelle Export nutzt Native-AOT-Emissionsprofil `33` und
 Port-Metadata-Cache-Schema `4`.
-Der aktuelle GameProject-Vertrag steht auf `7`/Artefaktformat `6` und
+Der aktuelle GameProject-Vertrag steht auf `8`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
 Produktheader-Allowlist; der
@@ -277,17 +277,25 @@ verwendet eine frische monotone Host-Epoche; Acceptance darf erst nach
 erfolgreichem Bootstrap und nativer Frame-Presentation bezeugt werden. Der
 aktuelle Lauf vervollstaendigte Film `id=0` mit `200` dekodierten, `200`
 praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
-Audioframes. Der schwarze/stale-Overlay-Uebergang ist geschlossen; Film
-`id=1`/Opening und Hauptmenue bleiben offen. Der aktive P0 ist die Verifikation
-der generischen Present-or-Repeat-Grenze fuer den diagnostisch isolierten
-Schwarz-Clear bei Frame 190, nicht Bootstrap, AOT oder Linkaudit. Der
-typisierte Laufblocker ist der Modell-/Texturpfad mit `0x53414704`. Im
+Audioframes. Der schwarze/stale-Overlay-Uebergang ist geschlossen. Die native
+Grafik-Foundation verarbeitet danach dynamische Oberflaechen, Texturen,
+NINJA-Modellpunkte, vollstaendige Drawstates, homogenes GPU-Clipping,
+perspektivische Interpolation und reziproke Depth-/Fog-Semantik ohne
+TA-/QACR-Reentry. Die frueheren Texture- und Mixed-Clip-Stops werden passiert;
+der naechste typisierte Laufblocker ist ein fehlender statischer List-Callback.
+Film `id=1`/Opening und Hauptmenue bleiben offen. Im
 Presented-by-SEGA-Pfad haben Frames `1--189` native Draws; Frame `190` und
 `191` wiederholen das letzte abgeschlossene Bild. Der generische
 Present-or-Repeat-Vertrag ist bestaetigt; der synthetische Schwarz-Clear ist
 geschlossen. Die Hardware-Closure steht aktuell bei `850` Sites (`47`
 geschlossen, `803` offen, `129` Owner); ein neuer 9-Slot-/8-Unique-
 Callbackvektor fuehrte zu `96` weiteren Exportfunktionen.
+
+Der warme v72-Beleg erzeugte `5.103` Funktionen in `149` Partitionen und
+`203` Host-TUs in `24,356 s` mit `149/149` Codegen- und `200/203`
+Hostobjekt-Treffern. Die Hardware-Closure wird durch Laufzeiterfolg allein
+nicht entladen: Solange `replacement_reachability_proven=false` bleibt, werden
+nachgelagerte TA-/QACR-/PVR-Sites weiterhin fail-closed als offen berichtet.
 
 Der v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte `3.965`
 Funktionen in `127` Partitionen. Transformierte Quellidentitaet, decoded

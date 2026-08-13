@@ -4,6 +4,31 @@
 
 ### Geaendert
 
+- Der native Grafik-Foundation-Unterauftrag ist fuer den aktuell erreichten
+  Produktpfad source- und produktseitig geschlossen. Die backendneutrale
+  Draw-IR beschreibt jetzt vollstaendige Blend-, Depth-, Rasterizer-,
+  Sampler-, Material-, Licht-, Fog- und Alpha-Test-Zustaende; D3D11 setzt
+  diese Zustaende begrenzt und cachebar um. NINJA-Modellpunkte bleiben im
+  Objektraum, die native GPU uebernimmt homogene Near-Plane-Clipping,
+  perspektivische Interpolation sowie reziproke Depth-/Fog-Koordinaten aus
+  `SV_Position.w`. Der reale Lauf passiert sowohl den frueheren Texture-Stop
+  `0x53414704` als auch den gemischten Clip-Stop `0x53414703`, ohne TA-/QACR-
+  Reentry oder Software-PVR. Er endet danach fail-closed an einem noch nicht
+  statisch inventarisierten List-Callback; das ist der naechste AOT-/Callback-
+  Foundationblocker, kein Grafikfehler. Vollstaendige spielweite
+  Grafikabdeckung bleibt bis zu Menue und Gameplay unbewiesen.
+
+- Der warme v72-Export erzeugte `5.103` Funktionen in `149` Partitionen und
+  `203` Host-TUs in `24,356 s`. Gegenueber dem identischen kalten v71-Export
+  mit `422,637 s` sind das `398,281 s` beziehungsweise `94,2 %` weniger und
+  etwa `17,4x` schneller. Analyse, IR und Metadaten kamen aus dem Cache,
+  Codegen erreichte `149/149` Treffer, und der Hostbuild kompilierte nur `3`
+  TUs bei `200/203` Objekttreffern. Die Hardware-Closure bleibt bei `850`
+  Sites (`47` geschlossen, `803` offen, `129` Owner), weil der bestehende
+  Analysebeleg `replacement_reachability_proven=false` ist; der Produktlauf
+  beweist den Grafikfortschritt, entlaedt aber noch keine nachgelagerten
+  Hardware-Sites aus dem statischen Gate.
+
 - Der aktuelle P0-Lifecycle-/Datenintegritaetsfix kopiert Savebaum und
   `katana-content-root.txt` transaktional; der Altport bleibt bis zum
   Publikationscommit autoritativ, und Binding-Kollisionen bereinigen nur die
@@ -47,10 +72,11 @@
   `191` wiederholen das letzte abgeschlossene Bild statt einen leeren Clear zu
   praesentieren.
 
-- Aktueller Vertragsstand: Runtime-ABI `103`, Analyzer-ABI `40`,
-  Backend-Interface-ABI `21`, Portprojektvertrag `91`, Native-Port-Profilvertrag
-  `14`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
-  Native-Grafikvertrag `2`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
+- Aktueller Vertragsstand: Runtime-ABI `104`, Analyzer-ABI `40`,
+  Backend-Interface-ABI `22`, Portprojektvertrag `92`, Native-Port-Profilvertrag
+  `15`, GameProject-Vertrag `8` mit Artefaktformat `6`,
+  NativePortDefinition-Vertrag `10`, NativePortArtifact-Format `9`,
+  Native-Grafikvertrag `6`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
   `33` und Port-Metadata-Cache-Schema `4`.
 
 - Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte

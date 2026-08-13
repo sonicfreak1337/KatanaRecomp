@@ -85,22 +85,85 @@ constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
 
 [[nodiscard]] bool valid_topology(
     const NativePortPrimitiveTopology topology) noexcept {
-    return topology == NativePortPrimitiveTopology::TriangleList ||
+    return topology == NativePortPrimitiveTopology::PointList ||
+           topology == NativePortPrimitiveTopology::LineList ||
+           topology == NativePortPrimitiveTopology::LineStrip ||
+           topology == NativePortPrimitiveTopology::TriangleList ||
            topology == NativePortPrimitiveTopology::TriangleStrip ||
-           topology == NativePortPrimitiveTopology::LineList;
+           false;
 }
 
-[[nodiscard]] bool valid_blend(const NativePortBlendMode blend) noexcept {
-    return blend == NativePortBlendMode::Opaque ||
-           blend == NativePortBlendMode::Alpha ||
-           blend == NativePortBlendMode::Additive ||
-           blend == NativePortBlendMode::Multiply;
+template <std::size_t Size>
+[[nodiscard]] bool finite_array(
+    const std::array<float, Size>& values) noexcept {
+    return std::all_of(values.begin(), values.end(), [](const float value) {
+        return std::isfinite(value);
+    });
 }
 
-[[nodiscard]] bool valid_depth(const NativePortDepthMode depth) noexcept {
-    return depth == NativePortDepthMode::Disabled ||
-           depth == NativePortDepthMode::ReadWrite ||
-           depth == NativePortDepthMode::ReadOnly;
+[[nodiscard]] bool valid_blend_factor(
+    const NativePortBlendFactor factor) noexcept {
+    return factor == NativePortBlendFactor::Zero ||
+           factor == NativePortBlendFactor::One ||
+           factor == NativePortBlendFactor::SourceColor ||
+           factor == NativePortBlendFactor::InverseSourceColor ||
+           factor == NativePortBlendFactor::DestinationColor ||
+           factor == NativePortBlendFactor::InverseDestinationColor ||
+           factor == NativePortBlendFactor::SourceAlpha ||
+           factor == NativePortBlendFactor::InverseSourceAlpha ||
+           factor == NativePortBlendFactor::DestinationAlpha ||
+           factor == NativePortBlendFactor::InverseDestinationAlpha;
+}
+
+[[nodiscard]] bool valid_blend_operation(
+    const NativePortBlendOperation operation) noexcept {
+    return operation == NativePortBlendOperation::Add ||
+           operation == NativePortBlendOperation::Subtract ||
+           operation == NativePortBlendOperation::ReverseSubtract ||
+           operation == NativePortBlendOperation::Minimum ||
+           operation == NativePortBlendOperation::Maximum;
+}
+
+[[nodiscard]] bool valid_blend(
+    const NativePortBlendState& blend) noexcept {
+    return valid_blend_factor(blend.source_color) &&
+           valid_blend_factor(blend.destination_color) &&
+           valid_blend_operation(blend.color_operation) &&
+           valid_blend_factor(blend.source_alpha) &&
+           valid_blend_factor(blend.destination_alpha) &&
+           valid_blend_operation(blend.alpha_operation) &&
+           (blend.color_write_mask & 0xF0u) == 0u;
+}
+
+[[nodiscard]] bool valid_compare(
+    const NativePortCompareOperation compare) noexcept {
+    return compare == NativePortCompareOperation::Never ||
+           compare == NativePortCompareOperation::Less ||
+           compare == NativePortCompareOperation::Equal ||
+           compare == NativePortCompareOperation::LessEqual ||
+           compare == NativePortCompareOperation::Greater ||
+           compare == NativePortCompareOperation::NotEqual ||
+           compare == NativePortCompareOperation::GreaterEqual ||
+           compare == NativePortCompareOperation::Always;
+}
+
+[[nodiscard]] bool valid_depth(
+    const NativePortDepthState& depth) noexcept {
+    return valid_compare(depth.compare) &&
+           (!depth.write_enabled || depth.test_enabled);
+}
+
+[[nodiscard]] bool valid_depth_mapping(
+    const NativePortDepthMapping& mapping) noexcept {
+    if (mapping.mode != NativePortDepthCoordinateMode::ClipSpace &&
+        mapping.mode != NativePortDepthCoordinateMode::ReciprocalPositive &&
+        mapping.mode !=
+            NativePortDepthCoordinateMode::ReciprocalPositiveHomogeneousClip)
+        return false;
+    return std::isfinite(mapping.reciprocal_scale) &&
+           std::isfinite(mapping.logarithm_divisor) &&
+           mapping.reciprocal_scale > 0.0f &&
+           mapping.logarithm_divisor > 0.0f;
 }
 
 [[nodiscard]] bool valid_cull(const NativePortCullMode cull) noexcept {
@@ -109,9 +172,29 @@ constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
            cull == NativePortCullMode::Back;
 }
 
+[[nodiscard]] bool valid_fill(const NativePortFillMode fill) noexcept {
+    return fill == NativePortFillMode::Solid ||
+           fill == NativePortFillMode::Wireframe;
+}
+
+[[nodiscard]] bool valid_shading(const NativePortShadingMode shading) noexcept {
+    return shading == NativePortShadingMode::Smooth ||
+           shading == NativePortShadingMode::FlatLastVertex;
+}
+
+[[nodiscard]] bool valid_rasterizer(
+    const NativePortRasterizerState& rasterizer) noexcept {
+    return valid_cull(rasterizer.cull) && valid_fill(rasterizer.fill) &&
+           valid_shading(rasterizer.shading) &&
+           std::isfinite(rasterizer.small_triangle_area_threshold) &&
+           rasterizer.small_triangle_area_threshold >= 0.0f;
+}
+
 [[nodiscard]] bool valid_filter(const NativePortTextureFilter filter) noexcept {
-    return filter == NativePortTextureFilter::Nearest ||
-           filter == NativePortTextureFilter::Linear;
+    return filter == NativePortTextureFilter::Point ||
+           filter == NativePortTextureFilter::Bilinear ||
+           filter == NativePortTextureFilter::Trilinear ||
+           filter == NativePortTextureFilter::Anisotropic;
 }
 
 [[nodiscard]] bool valid_address(
@@ -119,6 +202,104 @@ constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
     return address == NativePortTextureAddress::Clamp ||
            address == NativePortTextureAddress::Wrap ||
            address == NativePortTextureAddress::Mirror;
+}
+
+[[nodiscard]] bool valid_sampler(
+    const NativePortSamplerState& sampler) noexcept {
+    return valid_filter(sampler.filter) && valid_address(sampler.address_u) &&
+           valid_address(sampler.address_v) &&
+           valid_address(sampler.address_w) &&
+           std::isfinite(sampler.mip_lod_bias) &&
+           std::isfinite(sampler.minimum_lod) &&
+           std::isfinite(sampler.maximum_lod) &&
+           sampler.mip_lod_bias >= -16.0f &&
+           sampler.mip_lod_bias <= 15.99f && sampler.minimum_lod >= 0.0f &&
+           sampler.maximum_lod >= sampler.minimum_lod &&
+           sampler.maximum_lod <= 65'536.0f &&
+           sampler.maximum_anisotropy >= 1u &&
+           sampler.maximum_anisotropy <= 16u &&
+           (sampler.filter == NativePortTextureFilter::Anisotropic ||
+            sampler.maximum_anisotropy == 1u);
+}
+
+[[nodiscard]] bool valid_texture_combine(
+    const NativePortTextureCombineMode combine) noexcept {
+    return combine == NativePortTextureCombineMode::Modulate ||
+           combine == NativePortTextureCombineMode::Replace ||
+           combine == NativePortTextureCombineMode::Decal ||
+           combine == NativePortTextureCombineMode::Add ||
+           combine == NativePortTextureCombineMode::ModulateTextureAlpha;
+}
+
+[[nodiscard]] bool valid_texture_coordinates(
+    const NativePortTextureCoordinateSource source) noexcept {
+    return source == NativePortTextureCoordinateSource::Vertex ||
+           source == NativePortTextureCoordinateSource::NormalSphere;
+}
+
+[[nodiscard]] bool valid_material(
+    const NativePortMaterialState& material) noexcept {
+    return finite_array(material.diffuse) && finite_array(material.ambient) &&
+           finite_array(material.specular) && finite_array(material.emission) &&
+           std::isfinite(material.specular_power) &&
+           material.specular_power >= 0.0f &&
+           material.specular_power <= 65'536.0f &&
+           valid_texture_combine(material.texture_combine) &&
+           valid_texture_coordinates(material.texture_coordinates) &&
+           (!material.specular_enabled || material.lighting_enabled);
+}
+
+[[nodiscard]] bool valid_lighting(
+    const NativePortLightingState& lighting) noexcept {
+    if (lighting.light_count > lighting.lights.size() ||
+        !finite_array(lighting.ambient))
+        return false;
+    for (std::size_t index = 0u; index < lighting.light_count; ++index) {
+        const auto& light = lighting.lights[index];
+        if (!finite_array(light.direction) || !finite_array(light.color))
+            return false;
+        const auto length_squared =
+            light.direction[0] * light.direction[0] +
+            light.direction[1] * light.direction[1] +
+            light.direction[2] * light.direction[2];
+        if (!std::isfinite(length_squared) || length_squared <= 0.0f)
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool valid_fog_mode(const NativePortFogMode mode) noexcept {
+    return mode == NativePortFogMode::Disabled ||
+           mode == NativePortFogMode::VertexFactor ||
+           mode == NativePortFogMode::Linear ||
+           mode == NativePortFogMode::Exponential ||
+           mode == NativePortFogMode::ExponentialSquared ||
+           mode == NativePortFogMode::LookupTable ||
+           mode == NativePortFogMode::LookupTablePrimary;
+}
+
+[[nodiscard]] bool valid_fog(const NativePortFogState& fog) noexcept {
+    if (!valid_fog_mode(fog.mode) || !finite_array(fog.color) ||
+        !std::isfinite(fog.start) || !std::isfinite(fog.end) ||
+        !std::isfinite(fog.density) || fog.density < 0.0f ||
+        !finite_array(fog.lookup_table))
+        return false;
+    if (fog.mode == NativePortFogMode::Linear && fog.end <= fog.start)
+        return false;
+    if (fog.mode != NativePortFogMode::LookupTable &&
+        fog.mode != NativePortFogMode::LookupTablePrimary)
+        return true;
+    if (fog.density <= 0.0f) return false;
+    return std::all_of(
+        fog.lookup_table.begin(), fog.lookup_table.end(),
+        [](const float value) { return value >= 0.0f && value <= 1.0f; });
+}
+
+[[nodiscard]] bool valid_alpha_test(
+    const NativePortAlphaTestState& alpha_test) noexcept {
+    return valid_compare(alpha_test.compare) &&
+           std::isfinite(alpha_test.reference) &&
+           alpha_test.reference >= 0.0f && alpha_test.reference <= 1.0f;
 }
 
 void validate_graphics_config(const NativePortGraphicsConfig& config) {
@@ -139,6 +320,8 @@ void validate_graphics_config(const NativePortGraphicsConfig& config) {
         config.maximum_texture_bytes > 16ull * 1024u * 1024u * 1024u ||
         config.maximum_transient_vertices < 3u ||
         config.maximum_transient_indices < 3u ||
+        config.maximum_pipeline_states == 0u ||
+        config.maximum_pipeline_states > 65'536u ||
         config.maximum_transient_vertices >
             std::numeric_limits<std::uint32_t>::max() /
                 sizeof(NativePortVertex) ||
@@ -340,6 +523,18 @@ using Microsoft::WRL::ComPtr;
 
 extern const wchar_t native_graphics_window_class[];
 
+constexpr std::uint32_t draw_flag_vertex_color = 1u << 0u;
+constexpr std::uint32_t draw_flag_secondary_color = 1u << 1u;
+constexpr std::uint32_t draw_flag_lighting = 1u << 2u;
+constexpr std::uint32_t draw_flag_specular = 1u << 3u;
+constexpr std::uint32_t draw_flag_normal_sphere = 1u << 4u;
+constexpr std::uint32_t draw_flag_reciprocal_depth = 1u << 5u;
+constexpr std::uint32_t draw_flag_primary_alpha = 1u << 6u;
+constexpr std::uint32_t draw_flag_texture_alpha = 1u << 7u;
+constexpr std::uint32_t draw_texture_combine_shift = 8u;
+constexpr std::uint32_t draw_alpha_test_enabled = 1u << 8u;
+constexpr std::uint32_t draw_flag_homogeneous_reciprocal_clip = 1u << 16u;
+
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
 [[nodiscard]] std::wstring utf8_to_wide(std::string_view value);
@@ -347,6 +542,16 @@ extern const wchar_t native_graphics_window_class[];
     NativePortTextureFormat format) noexcept;
 [[nodiscard]] D3D11_PRIMITIVE_TOPOLOGY primitive_topology(
     NativePortPrimitiveTopology topology) noexcept;
+[[nodiscard]] D3D11_BLEND blend_factor(
+    NativePortBlendFactor factor) noexcept;
+[[nodiscard]] D3D11_BLEND_OP blend_operation(
+    NativePortBlendOperation operation) noexcept;
+[[nodiscard]] D3D11_COMPARISON_FUNC comparison_function(
+    NativePortCompareOperation compare) noexcept;
+[[nodiscard]] D3D11_TEXTURE_ADDRESS_MODE texture_address_mode(
+    NativePortTextureAddress address) noexcept;
+[[nodiscard]] D3D11_FILTER texture_filter(
+    NativePortTextureFilter filter) noexcept;
 [[nodiscard]] UINT next_buffer_capacity(UINT required) noexcept;
 
 } // namespace
@@ -589,17 +794,170 @@ class NativePortGraphicsDevice::Impl final {
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-outside-frame");
         validate_draw(packet);
-        ensure_vertex_buffer(packet.vertices.size_bytes());
-        upload_dynamic(vertex_buffer_.Get(), packet.vertices.data(),
-                       packet.vertices.size_bytes());
-        if (!packet.indices.empty()) {
-            ensure_index_buffer(packet.indices.size_bytes());
-            upload_dynamic(index_buffer_.Get(), packet.indices.data(),
-                           packet.indices.size_bytes());
+
+        auto vertices = packet.vertices;
+        auto indices = packet.indices;
+        auto topology = packet.topology;
+        const bool preprocess_triangles =
+            packet.rasterizer.shading ==
+                NativePortShadingMode::FlatLastVertex ||
+            packet.rasterizer.small_triangle_area_threshold > 0.0f;
+        if (preprocess_triangles) {
+            if (topology != NativePortPrimitiveTopology::TriangleList &&
+                topology != NativePortPrimitiveTopology::TriangleStrip)
+                fail(NativePortGraphicsFailure::InvalidDraw,
+                     0u,
+                     "draw-triangle-preprocess-topology");
+            const auto element_count = indices.empty()
+                                           ? vertices.size()
+                                           : indices.size();
+            const auto triangle_count =
+                topology == NativePortPrimitiveTopology::TriangleList
+                    ? element_count / 3u
+                    : element_count - 2u;
+            if (triangle_count > config_.maximum_transient_vertices / 3u)
+                fail(NativePortGraphicsFailure::ResourceLimit,
+                     0u,
+                     "draw-triangle-preprocess-budget");
+            prepared_vertices_.clear();
+            prepared_vertices_.reserve(triangle_count * 3u);
+            const auto source_index = [&](const std::size_t element) {
+                return indices.empty()
+                           ? static_cast<std::uint32_t>(element)
+                           : indices[element];
+            };
+            const auto append_triangle =
+                [&](const std::size_t first,
+                    const std::size_t second,
+                    const std::size_t third,
+                    const std::size_t provoking) {
+                    NativePortVertex a = vertices[source_index(first)];
+                    NativePortVertex b = vertices[source_index(second)];
+                    NativePortVertex c = vertices[source_index(third)];
+                    const auto determinant =
+                        (static_cast<double>(b.position[0]) - a.position[0]) *
+                            (static_cast<double>(c.position[1]) - a.position[1]) -
+                        (static_cast<double>(b.position[1]) - a.position[1]) *
+                            (static_cast<double>(c.position[0]) - a.position[0]);
+                    if (std::abs(determinant) <
+                        packet.rasterizer.small_triangle_area_threshold)
+                        return;
+                    if (packet.rasterizer.shading ==
+                        NativePortShadingMode::FlatLastVertex) {
+                        const auto& flat = vertices[source_index(provoking)];
+                        a.color = b.color = c.color = flat.color;
+                        a.secondary_color = b.secondary_color =
+                            c.secondary_color = flat.secondary_color;
+                        a.normal = b.normal = c.normal = flat.normal;
+                    }
+                    prepared_vertices_.push_back(a);
+                    prepared_vertices_.push_back(b);
+                    prepared_vertices_.push_back(c);
+                };
+            if (topology == NativePortPrimitiveTopology::TriangleList) {
+                for (std::size_t element = 0u; element < element_count;
+                     element += 3u)
+                    append_triangle(
+                        element, element + 1u, element + 2u, element + 2u);
+            } else {
+                for (std::size_t element = 0u; element + 2u < element_count;
+                     ++element) {
+                    if ((element & 1u) == 0u)
+                        append_triangle(element,
+                                        element + 1u,
+                                        element + 2u,
+                                        element + 2u);
+                    else
+                        append_triangle(element + 1u,
+                                        element,
+                                        element + 2u,
+                                        element + 2u);
+                }
+            }
+            vertices = prepared_vertices_;
+            indices = {};
+            topology = NativePortPrimitiveTopology::TriangleList;
+            if (vertices.empty()) {
+                saturating_increment(snapshot_.draw_calls);
+                return;
+            }
+        }
+
+        ensure_vertex_buffer(vertices.size_bytes());
+        upload_dynamic(vertex_buffer_.Get(), vertices.data(),
+                       vertices.size_bytes());
+        if (!indices.empty()) {
+            ensure_index_buffer(indices.size_bytes());
+            upload_dynamic(index_buffer_.Get(), indices.data(),
+                           indices.size_bytes());
         }
 
         DrawConstants constants{};
         constants.transform = packet.transform.values;
+        constants.normal_transform = packet.normal_transform.values;
+        constants.material_diffuse = packet.material.diffuse;
+        constants.material_ambient = packet.material.ambient;
+        constants.material_specular = packet.material.specular;
+        constants.material_emission = packet.material.emission;
+        constants.scene_ambient = packet.lighting.ambient;
+        constants.fog_color = packet.fog.color;
+        for (std::size_t index = 0u;
+             index < native_port_fog_table_entries; ++index)
+            constants.fog_lookup_table[index / 4u][index % 4u] =
+                packet.fog.lookup_table[index];
+        constants.fog_parameters = {
+            packet.fog.start, packet.fog.end, packet.fog.density, 0.0f};
+        constants.depth_parameters = {
+            packet.depth_mapping.reciprocal_scale,
+            packet.depth_mapping.logarithm_divisor,
+            0.0f,
+            0.0f};
+        constants.material_parameters = {
+            packet.material.specular_power,
+            packet.alpha_test.reference,
+            0.0f,
+            0.0f};
+        std::uint32_t material_flags = 0u;
+        if (packet.material.use_vertex_color)
+            material_flags |= draw_flag_vertex_color;
+        if (packet.material.use_secondary_color)
+            material_flags |= draw_flag_secondary_color;
+        if (packet.material.lighting_enabled)
+            material_flags |= draw_flag_lighting;
+        if (packet.material.specular_enabled)
+            material_flags |= draw_flag_specular;
+        if (packet.material.texture_coordinates ==
+            NativePortTextureCoordinateSource::NormalSphere)
+            material_flags |= draw_flag_normal_sphere;
+        if (packet.depth_mapping.mode ==
+                NativePortDepthCoordinateMode::ReciprocalPositive ||
+            packet.depth_mapping.mode ==
+                NativePortDepthCoordinateMode::ReciprocalPositiveHomogeneousClip)
+            material_flags |= draw_flag_reciprocal_depth;
+        if (packet.depth_mapping.mode ==
+            NativePortDepthCoordinateMode::ReciprocalPositiveHomogeneousClip)
+            material_flags |= draw_flag_homogeneous_reciprocal_clip;
+        if (packet.material.use_primary_alpha)
+            material_flags |= draw_flag_primary_alpha;
+        if (packet.material.use_texture_alpha)
+            material_flags |= draw_flag_texture_alpha;
+        material_flags |=
+            static_cast<std::uint32_t>(packet.material.texture_combine)
+            << draw_texture_combine_shift;
+        constants.pipeline_flags = {
+            material_flags,
+            packet.lighting.light_count,
+            static_cast<std::uint32_t>(packet.fog.mode),
+            static_cast<std::uint32_t>(packet.alpha_test.compare) |
+                (packet.alpha_test.enabled ? draw_alpha_test_enabled : 0u)};
+        for (std::size_t index = 0u;
+             index < packet.lighting.light_count; ++index) {
+            const auto& light = packet.lighting.lights[index];
+            constants.light_directions[index] = {
+                light.direction[0], light.direction[1], light.direction[2],
+                0.0f};
+            constants.light_colors[index] = light.color;
+        }
         context_->UpdateSubresource(
             draw_constants_.Get(), 0u, nullptr, &constants, 0u, 0u);
 
@@ -610,40 +968,42 @@ class NativePortGraphicsDevice::Impl final {
                 : current_layout.game_viewport;
         set_viewport(viewport_rect);
 
-        const auto blend_index = static_cast<std::size_t>(packet.blend);
-        const auto depth_index = static_cast<std::size_t>(packet.depth);
-        const auto cull_index = static_cast<std::size_t>(packet.cull);
-        const auto filter_index = static_cast<std::size_t>(packet.filter);
-        const auto address_index = static_cast<std::size_t>(packet.address);
+        auto* const blend = resolve_blend_state(packet.blend);
+        auto* const depth = resolve_depth_state(packet.depth);
+        auto host_rasterizer = packet.rasterizer;
+        // Flat-last-vertex and small-triangle semantics were resolved by the
+        // bounded vertex preprocessing above. They do not create distinct
+        // host rasterizer objects.
+        host_rasterizer.shading = NativePortShadingMode::Smooth;
+        host_rasterizer.small_triangle_area_threshold = 0.0f;
+        auto* const rasterizer = resolve_rasterizer_state(host_rasterizer);
+        auto* const sampler = resolve_sampler_state(packet.sampler);
         constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
         context_->OMSetBlendState(
-            blend_states_[blend_index].Get(), blend_factor.data(), 0xFFFFFFFFu);
-        context_->OMSetDepthStencilState(depth_states_[depth_index].Get(), 0u);
-        context_->RSSetState(rasterizer_states_[cull_index].Get());
+            blend, blend_factor.data(), 0xFFFFFFFFu);
+        context_->OMSetDepthStencilState(depth, 0u);
+        context_->RSSetState(rasterizer);
         context_->IASetInputLayout(input_layout_.Get());
-        context_->IASetPrimitiveTopology(primitive_topology(packet.topology));
+        context_->IASetPrimitiveTopology(primitive_topology(topology));
         const UINT stride = sizeof(NativePortVertex);
         const UINT offset = 0u;
         context_->IASetVertexBuffers(
             0u, 1u, vertex_buffer_.GetAddressOf(), &stride, &offset);
-        if (!packet.indices.empty())
+        if (!indices.empty())
             context_->IASetIndexBuffer(
                 index_buffer_.Get(), DXGI_FORMAT_R32_UINT, 0u);
         context_->VSSetShader(draw_vertex_shader_.Get(), nullptr, 0u);
         context_->VSSetConstantBuffers(
             0u, 1u, draw_constants_.GetAddressOf());
         context_->PSSetShader(draw_pixel_shader_.Get(), nullptr, 0u);
-        context_->PSSetSamplers(
-            0u,
-            1u,
-            sampler_states_[filter_index][address_index].GetAddressOf());
+        context_->PSSetSamplers(0u, 1u, &sampler);
         auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
                                     : white_view_.Get();
         context_->PSSetShaderResources(0u, 1u, &view);
-        if (packet.indices.empty())
-            context_->Draw(static_cast<UINT>(packet.vertices.size()), 0u);
+        if (indices.empty())
+            context_->Draw(static_cast<UINT>(vertices.size()), 0u);
         else
-            context_->DrawIndexed(static_cast<UINT>(packet.indices.size()),
+            context_->DrawIndexed(static_cast<UINT>(indices.size()),
                                   0u,
                                   0);
         ID3D11ShaderResourceView* no_view = nullptr;
@@ -683,16 +1043,25 @@ class NativePortGraphicsDevice::Impl final {
         context_->ClearRenderTargetView(swap_chain_target_.Get(), black.data());
         set_viewport(layout().output_viewport);
         constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
+        NativePortBlendState composite_blend;
+        NativePortDepthState composite_depth;
+        composite_depth.test_enabled = false;
+        composite_depth.write_enabled = false;
+        NativePortRasterizerState composite_rasterizer;
+        composite_rasterizer.cull = NativePortCullMode::None;
+        NativePortSamplerState composite_sampler;
         context_->OMSetBlendState(
-            blend_states_[0].Get(), blend_factor.data(), 0xFFFFFFFFu);
-        context_->OMSetDepthStencilState(depth_states_[0].Get(), 0u);
-        context_->RSSetState(rasterizer_states_[0].Get());
+            resolve_blend_state(composite_blend), blend_factor.data(),
+            0xFFFFFFFFu);
+        context_->OMSetDepthStencilState(
+            resolve_depth_state(composite_depth), 0u);
+        context_->RSSetState(resolve_rasterizer_state(composite_rasterizer));
         context_->IASetInputLayout(nullptr);
         context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context_->VSSetShader(composite_vertex_shader_.Get(), nullptr, 0u);
         context_->PSSetShader(composite_pixel_shader_.Get(), nullptr, 0u);
-        context_->PSSetSamplers(
-            0u, 1u, sampler_states_[1][0].GetAddressOf());
+        auto* const sampler = resolve_sampler_state(composite_sampler);
+        context_->PSSetSamplers(0u, 1u, &sampler);
         context_->PSSetShaderResources(
             0u, 1u, render_view_.GetAddressOf());
         context_->Draw(3u, 0u);
@@ -797,9 +1166,9 @@ class NativePortGraphicsDevice::Impl final {
         packet.indices = indices;
         packet.texture = image_texture_;
         packet.viewport = viewport;
-        packet.depth = NativePortDepthMode::Disabled;
-        packet.cull = NativePortCullMode::None;
-        packet.blend = NativePortBlendMode::Opaque;
+        packet.depth.test_enabled = false;
+        packet.depth.write_enabled = false;
+        packet.rasterizer.cull = NativePortCullMode::None;
         draw(packet);
         present();
     }
@@ -816,6 +1185,45 @@ class NativePortGraphicsDevice::Impl final {
   private:
     struct DrawConstants final {
         std::array<float, 16u> transform{};
+        std::array<float, 16u> normal_transform{};
+        std::array<float, 4u> material_diffuse{};
+        std::array<float, 4u> material_ambient{};
+        std::array<float, 4u> material_specular{};
+        std::array<float, 4u> material_emission{};
+        std::array<float, 4u> scene_ambient{};
+        std::array<float, 4u> fog_color{};
+        std::array<std::array<float, 4u>,
+                   native_port_fog_table_entries / 4u> fog_lookup_table{};
+        std::array<std::array<float, 4u>,
+                   native_port_maximum_directional_lights> light_directions{};
+        std::array<std::array<float, 4u>,
+                   native_port_maximum_directional_lights> light_colors{};
+        std::array<float, 4u> fog_parameters{};
+        std::array<float, 4u> depth_parameters{};
+        std::array<float, 4u> material_parameters{};
+        std::array<std::uint32_t, 4u> pipeline_flags{};
+    };
+
+    static_assert(sizeof(DrawConstants) % 16u == 0u);
+
+    struct BlendStateSlot final {
+        NativePortBlendState key;
+        ComPtr<ID3D11BlendState> value;
+    };
+
+    struct DepthStateSlot final {
+        NativePortDepthState key;
+        ComPtr<ID3D11DepthStencilState> value;
+    };
+
+    struct RasterizerStateSlot final {
+        NativePortRasterizerState key;
+        ComPtr<ID3D11RasterizerState> value;
+    };
+
+    struct SamplerStateSlot final {
+        NativePortSamplerState key;
+        ComPtr<ID3D11SamplerState> value;
     };
 
     struct TextureSlot final {
@@ -1041,7 +1449,7 @@ class NativePortGraphicsDevice::Impl final {
                   composite_pixel_shader_.GetAddressOf()),
               "composite-pixel-shader");
 
-        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 3u> elements{
+        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 7u> elements{
             D3D11_INPUT_ELEMENT_DESC{
                 "POSITION", 0u, DXGI_FORMAT_R32G32B32_FLOAT, 0u,
                 static_cast<UINT>(offsetof(NativePortVertex, position)),
@@ -1053,6 +1461,22 @@ class NativePortGraphicsDevice::Impl final {
             D3D11_INPUT_ELEMENT_DESC{
                 "COLOR", 0u, DXGI_FORMAT_R32G32B32A32_FLOAT, 0u,
                 static_cast<UINT>(offsetof(NativePortVertex, color)),
+                D3D11_INPUT_PER_VERTEX_DATA, 0u},
+            D3D11_INPUT_ELEMENT_DESC{
+                "NORMAL", 0u, DXGI_FORMAT_R32G32B32_FLOAT, 0u,
+                static_cast<UINT>(offsetof(NativePortVertex, normal)),
+                D3D11_INPUT_PER_VERTEX_DATA, 0u},
+            D3D11_INPUT_ELEMENT_DESC{
+                "COLOR", 1u, DXGI_FORMAT_R32G32B32A32_FLOAT, 0u,
+                static_cast<UINT>(offsetof(NativePortVertex, secondary_color)),
+                D3D11_INPUT_PER_VERTEX_DATA, 0u},
+            D3D11_INPUT_ELEMENT_DESC{
+                "TEXCOORD", 1u, DXGI_FORMAT_R32_FLOAT, 0u,
+                static_cast<UINT>(offsetof(NativePortVertex, fog_coordinate)),
+                D3D11_INPUT_PER_VERTEX_DATA, 0u},
+            D3D11_INPUT_ELEMENT_DESC{
+                "TEXCOORD", 2u, DXGI_FORMAT_R32_FLOAT, 0u,
+                static_cast<UINT>(offsetof(NativePortVertex, depth_coordinate)),
                 D3D11_INPUT_PER_VERTEX_DATA, 0u},
         };
         check(device_->CreateInputLayout(
@@ -1070,124 +1494,135 @@ class NativePortGraphicsDevice::Impl final {
         check(device_->CreateBuffer(
                   &constant_description, nullptr, draw_constants_.GetAddressOf()),
               "draw-constants");
-        create_blend_states();
-        create_depth_states();
-        create_rasterizer_states();
-        create_sampler_states();
     }
 
-    void create_blend_states() {
-        for (std::size_t index = 0u; index < blend_states_.size(); ++index) {
-            D3D11_BLEND_DESC description{};
-            auto& target = description.RenderTarget[0];
-            target.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-            if (index != static_cast<std::size_t>(NativePortBlendMode::Opaque)) {
-                target.BlendEnable = TRUE;
-                target.BlendOp = D3D11_BLEND_OP_ADD;
-                target.BlendOpAlpha = D3D11_BLEND_OP_ADD;
-                target.SrcBlendAlpha = D3D11_BLEND_ONE;
-                target.DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-                switch (static_cast<NativePortBlendMode>(index)) {
-                case NativePortBlendMode::Alpha:
-                    target.SrcBlend = D3D11_BLEND_SRC_ALPHA;
-                    target.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-                    break;
-                case NativePortBlendMode::Additive:
-                    target.SrcBlend = D3D11_BLEND_SRC_ALPHA;
-                    target.DestBlend = D3D11_BLEND_ONE;
-                    break;
-                case NativePortBlendMode::Multiply:
-                    target.SrcBlend = D3D11_BLEND_DEST_COLOR;
-                    target.DestBlend = D3D11_BLEND_ZERO;
-                    break;
-                case NativePortBlendMode::Opaque:
-                    break;
-                }
-            }
-            const auto result = device_->CreateBlendState(
-                &description, blend_states_[index].GetAddressOf());
-            if (FAILED(result))
-                fail(NativePortGraphicsFailure::ResourceCreation,
-                     static_cast<std::uint32_t>(result),
-                     "blend-state");
-        }
+    [[nodiscard]] std::size_t pipeline_state_count() const noexcept {
+        return blend_states_.size() + depth_states_.size() +
+               rasterizer_states_.size() + sampler_states_.size();
     }
 
-    void create_depth_states() {
-        for (std::size_t index = 0u; index < depth_states_.size(); ++index) {
-            D3D11_DEPTH_STENCIL_DESC description{};
-            description.DepthEnable =
-                index == static_cast<std::size_t>(NativePortDepthMode::Disabled)
-                    ? FALSE
-                    : TRUE;
-            description.DepthWriteMask =
-                index == static_cast<std::size_t>(NativePortDepthMode::ReadWrite)
-                    ? D3D11_DEPTH_WRITE_MASK_ALL
-                    : D3D11_DEPTH_WRITE_MASK_ZERO;
-            description.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-            const auto result = device_->CreateDepthStencilState(
-                &description, depth_states_[index].GetAddressOf());
-            if (FAILED(result))
-                fail(NativePortGraphicsFailure::ResourceCreation,
-                     static_cast<std::uint32_t>(result),
-                     "depth-state");
-        }
+    void require_pipeline_state_budget(const char* const operation) {
+        if (pipeline_state_count() >= config_.maximum_pipeline_states)
+            fail(NativePortGraphicsFailure::ResourceLimit, 0u, operation);
     }
 
-    void create_rasterizer_states() {
-        for (std::size_t index = 0u; index < rasterizer_states_.size(); ++index) {
-            D3D11_RASTERIZER_DESC description{};
-            description.FillMode = D3D11_FILL_SOLID;
-            description.CullMode =
-                index == static_cast<std::size_t>(NativePortCullMode::Front)
-                    ? D3D11_CULL_FRONT
-                    : index == static_cast<std::size_t>(NativePortCullMode::Back)
-                          ? D3D11_CULL_BACK
-                          : D3D11_CULL_NONE;
-            description.FrontCounterClockwise = FALSE;
-            description.DepthClipEnable = TRUE;
-            description.ScissorEnable = TRUE;
-            const auto result = device_->CreateRasterizerState(
-                &description, rasterizer_states_[index].GetAddressOf());
-            if (FAILED(result))
-                fail(NativePortGraphicsFailure::ResourceCreation,
-                     static_cast<std::uint32_t>(result),
-                     "rasterizer-state");
-        }
+    [[nodiscard]] ID3D11BlendState* resolve_blend_state(
+        const NativePortBlendState& key) {
+        const auto existing = std::find_if(
+            blend_states_.begin(), blend_states_.end(),
+            [&](const BlendStateSlot& slot) { return slot.key == key; });
+        if (existing != blend_states_.end()) return existing->value.Get();
+        require_pipeline_state_budget("blend-state-budget");
+        D3D11_BLEND_DESC description{};
+        auto& target = description.RenderTarget[0];
+        target.BlendEnable = key.enabled ? TRUE : FALSE;
+        target.SrcBlend = blend_factor(key.source_color);
+        target.DestBlend = blend_factor(key.destination_color);
+        target.BlendOp = blend_operation(key.color_operation);
+        target.SrcBlendAlpha = blend_factor(key.source_alpha);
+        target.DestBlendAlpha = blend_factor(key.destination_alpha);
+        target.BlendOpAlpha = blend_operation(key.alpha_operation);
+        target.RenderTargetWriteMask =
+            ((key.color_write_mask & 0x01u) != 0u
+                 ? D3D11_COLOR_WRITE_ENABLE_RED
+                 : 0u) |
+            ((key.color_write_mask & 0x02u) != 0u
+                 ? D3D11_COLOR_WRITE_ENABLE_GREEN
+                 : 0u) |
+            ((key.color_write_mask & 0x04u) != 0u
+                 ? D3D11_COLOR_WRITE_ENABLE_BLUE
+                 : 0u) |
+            ((key.color_write_mask & 0x08u) != 0u
+                 ? D3D11_COLOR_WRITE_ENABLE_ALPHA
+                 : 0u);
+        ComPtr<ID3D11BlendState> state;
+        const auto result =
+            device_->CreateBlendState(&description, state.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "blend-state");
+        blend_states_.push_back({key, std::move(state)});
+        return blend_states_.back().value.Get();
     }
 
-    void create_sampler_states() {
-        for (std::size_t filter = 0u; filter < sampler_states_.size(); ++filter) {
-            for (std::size_t address = 0u;
-                 address < sampler_states_[filter].size();
-                 ++address) {
-                D3D11_SAMPLER_DESC description{};
-                description.Filter =
-                    filter == static_cast<std::size_t>(
-                                  NativePortTextureFilter::Linear)
-                        ? D3D11_FILTER_MIN_MAG_MIP_LINEAR
-                        : D3D11_FILTER_MIN_MAG_MIP_POINT;
-                const auto address_mode =
-                    address == static_cast<std::size_t>(
-                                   NativePortTextureAddress::Wrap)
-                        ? D3D11_TEXTURE_ADDRESS_WRAP
-                        : address == static_cast<std::size_t>(
-                                         NativePortTextureAddress::Mirror)
-                              ? D3D11_TEXTURE_ADDRESS_MIRROR
-                              : D3D11_TEXTURE_ADDRESS_CLAMP;
-                description.AddressU = address_mode;
-                description.AddressV = address_mode;
-                description.AddressW = address_mode;
-                description.MaxLOD = D3D11_FLOAT32_MAX;
-                const auto result = device_->CreateSamplerState(
-                    &description,
-                    sampler_states_[filter][address].GetAddressOf());
-                if (FAILED(result))
-                    fail(NativePortGraphicsFailure::ResourceCreation,
-                         static_cast<std::uint32_t>(result),
-                         "sampler-state");
-            }
-        }
+    [[nodiscard]] ID3D11DepthStencilState* resolve_depth_state(
+        const NativePortDepthState& key) {
+        const auto existing = std::find_if(
+            depth_states_.begin(), depth_states_.end(),
+            [&](const DepthStateSlot& slot) { return slot.key == key; });
+        if (existing != depth_states_.end()) return existing->value.Get();
+        require_pipeline_state_budget("depth-state-budget");
+        D3D11_DEPTH_STENCIL_DESC description{};
+        description.DepthEnable = key.test_enabled ? TRUE : FALSE;
+        description.DepthWriteMask = key.write_enabled
+                                         ? D3D11_DEPTH_WRITE_MASK_ALL
+                                         : D3D11_DEPTH_WRITE_MASK_ZERO;
+        description.DepthFunc = comparison_function(key.compare);
+        ComPtr<ID3D11DepthStencilState> state;
+        const auto result = device_->CreateDepthStencilState(
+            &description, state.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "depth-state");
+        depth_states_.push_back({key, std::move(state)});
+        return depth_states_.back().value.Get();
+    }
+
+    [[nodiscard]] ID3D11RasterizerState* resolve_rasterizer_state(
+        const NativePortRasterizerState& key) {
+        const auto existing = std::find_if(
+            rasterizer_states_.begin(), rasterizer_states_.end(),
+            [&](const RasterizerStateSlot& slot) { return slot.key == key; });
+        if (existing != rasterizer_states_.end()) return existing->value.Get();
+        require_pipeline_state_budget("rasterizer-state-budget");
+        D3D11_RASTERIZER_DESC description{};
+        description.FillMode = key.fill == NativePortFillMode::Wireframe
+                                   ? D3D11_FILL_WIREFRAME
+                                   : D3D11_FILL_SOLID;
+        description.CullMode = key.cull == NativePortCullMode::Front
+                                   ? D3D11_CULL_FRONT
+                                   : key.cull == NativePortCullMode::Back
+                                         ? D3D11_CULL_BACK
+                                         : D3D11_CULL_NONE;
+        description.FrontCounterClockwise =
+            key.front_counter_clockwise ? TRUE : FALSE;
+        description.DepthClipEnable = key.depth_clip_enabled ? TRUE : FALSE;
+        description.ScissorEnable = TRUE;
+        ComPtr<ID3D11RasterizerState> state;
+        const auto result = device_->CreateRasterizerState(
+            &description, state.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "rasterizer-state");
+        rasterizer_states_.push_back({key, std::move(state)});
+        return rasterizer_states_.back().value.Get();
+    }
+
+    [[nodiscard]] ID3D11SamplerState* resolve_sampler_state(
+        const NativePortSamplerState& key) {
+        const auto existing = std::find_if(
+            sampler_states_.begin(), sampler_states_.end(),
+            [&](const SamplerStateSlot& slot) { return slot.key == key; });
+        if (existing != sampler_states_.end()) return existing->value.Get();
+        require_pipeline_state_budget("sampler-state-budget");
+        D3D11_SAMPLER_DESC description{};
+        description.Filter = texture_filter(key.filter);
+        description.AddressU = texture_address_mode(key.address_u);
+        description.AddressV = texture_address_mode(key.address_v);
+        description.AddressW = texture_address_mode(key.address_w);
+        description.MipLODBias = key.mip_lod_bias;
+        description.MaxAnisotropy = key.maximum_anisotropy;
+        description.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        description.MinLOD = key.minimum_lod;
+        description.MaxLOD = key.maximum_lod;
+        ComPtr<ID3D11SamplerState> state;
+        const auto result = device_->CreateSamplerState(
+            &description, state.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "sampler-state");
+        sampler_states_.push_back({key, std::move(state)});
+        return sampler_states_.back().value.Get();
     }
 
     void create_render_surface() {
@@ -1312,17 +1747,20 @@ class NativePortGraphicsDevice::Impl final {
             !valid_topology(packet.topology) ||
             !valid_blend(packet.blend) ||
             !valid_depth(packet.depth) ||
-            !valid_cull(packet.cull) ||
-            !valid_filter(packet.filter) ||
-            !valid_address(packet.address) ||
+            !valid_depth_mapping(packet.depth_mapping) ||
+            !valid_rasterizer(packet.rasterizer) ||
+            !valid_sampler(packet.sampler) ||
+            !valid_material(packet.material) ||
+            !valid_lighting(packet.lighting) ||
+            !valid_fog(packet.fog) ||
+            !valid_alpha_test(packet.alpha_test) ||
             packet.vertices.empty() ||
             packet.vertices.size() > config_.maximum_transient_vertices ||
             packet.indices.size() > config_.maximum_transient_indices ||
             packet.vertices.size_bytes() > std::numeric_limits<UINT>::max() ||
             packet.indices.size_bytes() > std::numeric_limits<UINT>::max() ||
-            !std::all_of(packet.transform.values.begin(),
-                         packet.transform.values.end(),
-                         [](const float value) { return std::isfinite(value); }))
+            !finite_array(packet.transform.values) ||
+            !finite_array(packet.normal_transform.values))
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-layout");
         for (const auto index : packet.indices) {
             if (index >= packet.vertices.size())
@@ -1338,20 +1776,55 @@ class NativePortGraphicsDevice::Impl final {
                              vertex.position.end(), finite) ||
                 !std::all_of(vertex.texture_coordinate.begin(),
                              vertex.texture_coordinate.end(), finite) ||
-                !std::all_of(vertex.color.begin(), vertex.color.end(), finite))
+                !std::all_of(vertex.color.begin(), vertex.color.end(), finite) ||
+                !std::all_of(vertex.normal.begin(), vertex.normal.end(), finite) ||
+                !std::all_of(vertex.secondary_color.begin(),
+                             vertex.secondary_color.end(), finite) ||
+                !std::isfinite(vertex.fog_coordinate) ||
+                !std::isfinite(vertex.depth_coordinate) ||
+                (packet.fog.mode != NativePortFogMode::Disabled &&
+                 packet.depth_mapping.mode !=
+                     NativePortDepthCoordinateMode::
+                         ReciprocalPositiveHomogeneousClip &&
+                 vertex.fog_coordinate < 0.0f) ||
+                (packet.depth.test_enabled &&
+                 packet.depth_mapping.mode ==
+                     NativePortDepthCoordinateMode::ReciprocalPositive &&
+                 vertex.depth_coordinate <= 0.0f))
                 fail(NativePortGraphicsFailure::InvalidDraw,
                      0u,
                      "draw-vertex");
+            if (packet.material.lighting_enabled ||
+                packet.material.texture_coordinates ==
+                    NativePortTextureCoordinateSource::NormalSphere) {
+                const auto length_squared =
+                    vertex.normal[0] * vertex.normal[0] +
+                    vertex.normal[1] * vertex.normal[1] +
+                    vertex.normal[2] * vertex.normal[2];
+                if (!std::isfinite(length_squared) || length_squared <= 0.0f)
+                    fail(NativePortGraphicsFailure::InvalidDraw,
+                         0u,
+                         "draw-normal");
+            }
         }
         const auto element_count = packet.indices.empty()
                                        ? packet.vertices.size()
                                        : packet.indices.size();
-        const bool valid_count =
-            packet.topology == NativePortPrimitiveTopology::TriangleList
-                ? element_count >= 3u && element_count % 3u == 0u
-                : packet.topology == NativePortPrimitiveTopology::TriangleStrip
-                      ? element_count >= 3u
-                      : element_count >= 2u && element_count % 2u == 0u;
+        const bool valid_count = [&] {
+            switch (packet.topology) {
+            case NativePortPrimitiveTopology::PointList:
+                return element_count >= 1u;
+            case NativePortPrimitiveTopology::LineList:
+                return element_count >= 2u && element_count % 2u == 0u;
+            case NativePortPrimitiveTopology::LineStrip:
+                return element_count >= 2u;
+            case NativePortPrimitiveTopology::TriangleList:
+                return element_count >= 3u && element_count % 3u == 0u;
+            case NativePortPrimitiveTopology::TriangleStrip:
+                return element_count >= 3u;
+            }
+            return false;
+        }();
         if (!valid_count)
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-topology");
         if (packet.texture) static_cast<void>(resolve_texture(packet.texture));
@@ -1572,11 +2045,11 @@ class NativePortGraphicsDevice::Impl final {
     ComPtr<ID3D11Buffer> index_buffer_;
     UINT vertex_buffer_capacity_ = 0u;
     UINT index_buffer_capacity_ = 0u;
-    std::array<ComPtr<ID3D11BlendState>, 4u> blend_states_;
-    std::array<ComPtr<ID3D11DepthStencilState>, 3u> depth_states_;
-    std::array<ComPtr<ID3D11RasterizerState>, 3u> rasterizer_states_;
-    std::array<std::array<ComPtr<ID3D11SamplerState>, 3u>, 2u>
-        sampler_states_;
+    std::vector<NativePortVertex> prepared_vertices_;
+    std::vector<BlendStateSlot> blend_states_;
+    std::vector<DepthStateSlot> depth_states_;
+    std::vector<RasterizerStateSlot> rasterizer_states_;
+    std::vector<SamplerStateSlot> sampler_states_;
     ComPtr<ID3D11Texture2D> white_texture_;
     ComPtr<ID3D11ShaderResourceView> white_view_;
 
@@ -1974,33 +2447,208 @@ const wchar_t native_graphics_window_class[] =
 constexpr char native_graphics_shader_source[] = R"(
 cbuffer DrawConstants : register(b0) {
     row_major float4x4 draw_transform;
+    row_major float4x4 draw_normal_transform;
+    float4 material_diffuse;
+    float4 material_ambient;
+    float4 material_specular;
+    float4 material_emission;
+    float4 scene_ambient;
+    float4 fog_color;
+    float4 fog_lookup_table[32];
+    float4 light_directions[4];
+    float4 light_colors[4];
+    float4 fog_parameters;
+    float4 depth_parameters;
+    float4 material_parameters;
+    uint4 pipeline_flags;
 };
 
 struct DrawVertexInput {
     float3 position : POSITION;
     float2 texcoord : TEXCOORD0;
     float4 color : COLOR0;
+    float3 normal : NORMAL0;
+    float4 secondary_color : COLOR1;
+    float fog_coordinate : TEXCOORD1;
+    float depth_coordinate : TEXCOORD2;
 };
 
 struct DrawVertexOutput {
     float4 position : SV_Position;
     float2 texcoord : TEXCOORD0;
     float4 color : COLOR0;
+    float3 normal : NORMAL0;
+    float4 secondary_color : COLOR1;
+    float fog_coordinate : TEXCOORD1;
+    noperspective float depth_coordinate : TEXCOORD2;
 };
 
 DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     DrawVertexOutput output;
     output.position = mul(float4(input.position, 1.0), draw_transform);
-    output.texcoord = input.texcoord;
+    if ((pipeline_flags.x & 0x20u) != 0u &&
+        (pipeline_flags.x & 0x10000u) == 0u)
+        output.position.z = 0.0;
+    output.normal = normalize(
+        mul(float4(input.normal, 0.0), draw_normal_transform).xyz);
+    output.texcoord = (pipeline_flags.x & 0x10u) != 0u
+        ? float2(-0.5 * output.normal.x + 0.5,
+                  0.5 * output.normal.y + 0.5)
+        : input.texcoord;
     output.color = input.color;
+    output.secondary_color = input.secondary_color;
+    output.fog_coordinate = input.fog_coordinate;
+    output.depth_coordinate = input.depth_coordinate;
     return output;
 }
 
 Texture2D draw_texture : register(t0);
 SamplerState draw_sampler : register(s0);
 
-float4 draw_pixel_main(DrawVertexOutput input) : SV_Target {
-    return draw_texture.Sample(draw_sampler, input.texcoord) * input.color;
+bool alpha_test_passes(float alpha, uint operation, float reference) {
+    if (operation == 0u) return false;
+    if (operation == 1u) return alpha < reference;
+    if (operation == 2u) return alpha == reference;
+    if (operation == 3u) return alpha <= reference;
+    if (operation == 4u) return alpha > reference;
+    if (operation == 5u) return alpha != reference;
+    if (operation == 6u) return alpha >= reference;
+    return true;
+}
+
+float fog_lookup_value(uint index) {
+    const uint bounded_index = min(index, 127u);
+    const uint vector_index = bounded_index >> 2u;
+    const uint component = bounded_index & 3u;
+    const float4 coefficients = fog_lookup_table[vector_index];
+    if (component == 0u) return coefficients.x;
+    if (component == 1u) return coefficients.y;
+    if (component == 2u) return coefficients.z;
+    return coefficients.w;
+}
+
+float lookup_table_fog(float coordinate, float density) {
+    const float z = clamp(density * coordinate, 1.0, 255.9999);
+    const float exponent = floor(log2(z));
+    const float mantissa = z * 16.0 / exp2(exponent) - 16.0;
+    const uint index = (uint)floor(mantissa + exponent * 16.0);
+    const float fraction = mantissa - floor(mantissa);
+    return saturate(lerp(fog_lookup_value(index),
+                         fog_lookup_value(index + 1u),
+                         fraction));
+}
+
+struct DrawPixelOutput {
+    float4 color : SV_Target;
+    float depth : SV_Depth;
+};
+
+DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
+    const uint flags = pipeline_flags.x;
+    const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
+    const float reciprocal_coordinate = max(
+        homogeneous_reciprocal_clip
+            ? input.position.w
+            : input.depth_coordinate,
+        0.0);
+    const bool vertex_color_enabled = (flags & 0x01u) != 0u;
+    const bool secondary_color_enabled = (flags & 0x02u) != 0u;
+    const bool lighting_enabled = (flags & 0x04u) != 0u;
+    const bool specular_enabled = (flags & 0x08u) != 0u;
+    const bool primary_alpha_enabled = (flags & 0x40u) != 0u;
+    const bool texture_alpha_enabled = (flags & 0x80u) != 0u;
+    float4 primary = material_diffuse;
+    float3 post_color = material_emission.rgb;
+    if (lighting_enabled) {
+        const float3 normal = normalize(input.normal);
+        float3 diffuse_light = scene_ambient.rgb * material_ambient.rgb;
+        float3 specular_light = 0.0;
+        [unroll]
+        for (uint index = 0u; index < 4u; ++index) {
+            if (index >= pipeline_flags.y) break;
+            const float3 direction = normalize(light_directions[index].xyz);
+            const float diffuse_amount = saturate(dot(normal, direction));
+            diffuse_light += light_colors[index].rgb * diffuse_amount;
+            if (specular_enabled && diffuse_amount > 0.0) {
+                const float3 half_vector =
+                    normalize(direction + float3(0.0, 0.0, 1.0));
+                const float specular_amount = pow(
+                    saturate(dot(normal, half_vector)),
+                    max(material_parameters.x, 0.0001));
+                specular_light += light_colors[index].rgb *
+                                  material_specular.rgb * specular_amount;
+            }
+        }
+        primary.rgb = material_diffuse.rgb * diffuse_light;
+        post_color += specular_light;
+    }
+    if (vertex_color_enabled) primary *= input.color;
+    if (!primary_alpha_enabled) primary.a = 1.0;
+
+    if (pipeline_flags.z == 6u) {
+        const float primary_fog = lookup_table_fog(
+            homogeneous_reciprocal_clip
+                ? reciprocal_coordinate
+                : input.fog_coordinate,
+            fog_parameters.z);
+        primary = float4(fog_color.rgb, primary_fog);
+    }
+
+    float4 texture_color = draw_texture.Sample(draw_sampler, input.texcoord);
+    if (!texture_alpha_enabled) texture_color.a = 1.0;
+    const uint texture_combine = (flags >> 8u) & 0xffu;
+    float4 result = primary * texture_color;
+    if (texture_combine == 1u) {
+        result = texture_color;
+    } else if (texture_combine == 2u) {
+        result.rgb = lerp(primary.rgb, texture_color.rgb, texture_color.a);
+        result.a = primary.a;
+    } else if (texture_combine == 3u) {
+        result = primary + texture_color;
+    } else if (texture_combine == 4u) {
+        result.rgb = primary.rgb * texture_color.rgb;
+        result.a = texture_color.a;
+    }
+    result.rgb += post_color;
+    if (secondary_color_enabled) result += input.secondary_color;
+
+    const uint alpha_test = pipeline_flags.w;
+    if ((alpha_test & 0x100u) != 0u &&
+        !alpha_test_passes(result.a, alpha_test & 0xffu,
+                           material_parameters.y))
+        discard;
+
+    float fog_amount = 0.0;
+    if (pipeline_flags.z == 1u) {
+        fog_amount = saturate(input.fog_coordinate);
+    } else if (pipeline_flags.z == 2u) {
+        fog_amount = saturate(
+            (input.fog_coordinate - fog_parameters.x) /
+            (fog_parameters.y - fog_parameters.x));
+    } else if (pipeline_flags.z == 3u) {
+        fog_amount = saturate(
+            1.0 - exp(-fog_parameters.z * input.fog_coordinate));
+    } else if (pipeline_flags.z == 4u) {
+        const float fog_distance =
+            fog_parameters.z * input.fog_coordinate;
+        fog_amount = saturate(1.0 - exp(-(fog_distance * fog_distance)));
+    } else if (pipeline_flags.z == 5u) {
+        fog_amount = lookup_table_fog(
+            homogeneous_reciprocal_clip
+                ? reciprocal_coordinate
+                : input.fog_coordinate,
+            fog_parameters.z);
+    }
+    result.rgb = lerp(result.rgb, fog_color.rgb, fog_amount);
+    DrawPixelOutput output;
+    output.color = result;
+    output.depth = input.position.z;
+    if ((flags & 0x20u) != 0u) {
+        output.depth = saturate(
+            log2(1.0 + depth_parameters.x * reciprocal_coordinate) /
+            depth_parameters.y);
+    }
+    return output;
 }
 
 struct CompositeVertexOutput {
@@ -2131,14 +2779,97 @@ struct ShaderCompilerApi final {
 [[nodiscard]] D3D11_PRIMITIVE_TOPOLOGY primitive_topology(
     const NativePortPrimitiveTopology topology) noexcept {
     switch (topology) {
+    case NativePortPrimitiveTopology::PointList:
+        return D3D11_PRIMITIVE_TOPOLOGY_POINTLIST;
+    case NativePortPrimitiveTopology::LineList:
+        return D3D11_PRIMITIVE_TOPOLOGY_LINELIST;
+    case NativePortPrimitiveTopology::LineStrip:
+        return D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP;
     case NativePortPrimitiveTopology::TriangleList:
         return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     case NativePortPrimitiveTopology::TriangleStrip:
         return D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
-    case NativePortPrimitiveTopology::LineList:
-        return D3D11_PRIMITIVE_TOPOLOGY_LINELIST;
     }
     return D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+}
+
+[[nodiscard]] D3D11_BLEND blend_factor(
+    const NativePortBlendFactor factor) noexcept {
+    switch (factor) {
+    case NativePortBlendFactor::Zero: return D3D11_BLEND_ZERO;
+    case NativePortBlendFactor::One: return D3D11_BLEND_ONE;
+    case NativePortBlendFactor::SourceColor: return D3D11_BLEND_SRC_COLOR;
+    case NativePortBlendFactor::InverseSourceColor:
+        return D3D11_BLEND_INV_SRC_COLOR;
+    case NativePortBlendFactor::DestinationColor:
+        return D3D11_BLEND_DEST_COLOR;
+    case NativePortBlendFactor::InverseDestinationColor:
+        return D3D11_BLEND_INV_DEST_COLOR;
+    case NativePortBlendFactor::SourceAlpha: return D3D11_BLEND_SRC_ALPHA;
+    case NativePortBlendFactor::InverseSourceAlpha:
+        return D3D11_BLEND_INV_SRC_ALPHA;
+    case NativePortBlendFactor::DestinationAlpha:
+        return D3D11_BLEND_DEST_ALPHA;
+    case NativePortBlendFactor::InverseDestinationAlpha:
+        return D3D11_BLEND_INV_DEST_ALPHA;
+    }
+    return D3D11_BLEND_ZERO;
+}
+
+[[nodiscard]] D3D11_BLEND_OP blend_operation(
+    const NativePortBlendOperation operation) noexcept {
+    switch (operation) {
+    case NativePortBlendOperation::Add: return D3D11_BLEND_OP_ADD;
+    case NativePortBlendOperation::Subtract: return D3D11_BLEND_OP_SUBTRACT;
+    case NativePortBlendOperation::ReverseSubtract:
+        return D3D11_BLEND_OP_REV_SUBTRACT;
+    case NativePortBlendOperation::Minimum: return D3D11_BLEND_OP_MIN;
+    case NativePortBlendOperation::Maximum: return D3D11_BLEND_OP_MAX;
+    }
+    return D3D11_BLEND_OP_ADD;
+}
+
+[[nodiscard]] D3D11_COMPARISON_FUNC comparison_function(
+    const NativePortCompareOperation compare) noexcept {
+    switch (compare) {
+    case NativePortCompareOperation::Never: return D3D11_COMPARISON_NEVER;
+    case NativePortCompareOperation::Less: return D3D11_COMPARISON_LESS;
+    case NativePortCompareOperation::Equal: return D3D11_COMPARISON_EQUAL;
+    case NativePortCompareOperation::LessEqual:
+        return D3D11_COMPARISON_LESS_EQUAL;
+    case NativePortCompareOperation::Greater: return D3D11_COMPARISON_GREATER;
+    case NativePortCompareOperation::NotEqual:
+        return D3D11_COMPARISON_NOT_EQUAL;
+    case NativePortCompareOperation::GreaterEqual:
+        return D3D11_COMPARISON_GREATER_EQUAL;
+    case NativePortCompareOperation::Always: return D3D11_COMPARISON_ALWAYS;
+    }
+    return D3D11_COMPARISON_NEVER;
+}
+
+[[nodiscard]] D3D11_TEXTURE_ADDRESS_MODE texture_address_mode(
+    const NativePortTextureAddress address) noexcept {
+    switch (address) {
+    case NativePortTextureAddress::Clamp: return D3D11_TEXTURE_ADDRESS_CLAMP;
+    case NativePortTextureAddress::Wrap: return D3D11_TEXTURE_ADDRESS_WRAP;
+    case NativePortTextureAddress::Mirror: return D3D11_TEXTURE_ADDRESS_MIRROR;
+    }
+    return D3D11_TEXTURE_ADDRESS_CLAMP;
+}
+
+[[nodiscard]] D3D11_FILTER texture_filter(
+    const NativePortTextureFilter filter) noexcept {
+    switch (filter) {
+    case NativePortTextureFilter::Point:
+        return D3D11_FILTER_MIN_MAG_MIP_POINT;
+    case NativePortTextureFilter::Bilinear:
+        return D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+    case NativePortTextureFilter::Trilinear:
+        return D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    case NativePortTextureFilter::Anisotropic:
+        return D3D11_FILTER_ANISOTROPIC;
+    }
+    return D3D11_FILTER_MIN_MAG_MIP_POINT;
 }
 
 [[nodiscard]] UINT next_buffer_capacity(const UINT required) noexcept {

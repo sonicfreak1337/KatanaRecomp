@@ -20,7 +20,7 @@ class NativePortLoadedAotBinder;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 9u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 10u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;

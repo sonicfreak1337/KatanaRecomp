@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 3u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 6u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -70,6 +70,10 @@ struct NativePortGraphicsConfig final {
     std::uint64_t maximum_texture_bytes = 1ull << 30u;
     std::uint32_t maximum_transient_vertices = 1'048'576u;
     std::uint32_t maximum_transient_indices = 3'145'728u;
+    // Shared upper bound for lazily materialized blend, depth, rasterizer and
+    // sampler objects. The title supplies semantic state, never backend
+    // handles; this budget keeps hostile or corrupt state churn fail-closed.
+    std::uint32_t maximum_pipeline_states = 4'096u;
 };
 
 // Native game time and host presentation cadence are deliberately separate.
@@ -185,22 +189,88 @@ enum class NativePortImageFit : std::uint8_t {
 };
 
 enum class NativePortPrimitiveTopology : std::uint8_t {
+    PointList,
+    LineList,
+    LineStrip,
     TriangleList,
     TriangleStrip,
-    LineList,
 };
 
-enum class NativePortBlendMode : std::uint8_t {
-    Opaque,
-    Alpha,
-    Additive,
-    Multiply,
+enum class NativePortBlendFactor : std::uint8_t {
+    Zero,
+    One,
+    SourceColor,
+    InverseSourceColor,
+    DestinationColor,
+    InverseDestinationColor,
+    SourceAlpha,
+    InverseSourceAlpha,
+    DestinationAlpha,
+    InverseDestinationAlpha,
 };
 
-enum class NativePortDepthMode : std::uint8_t {
-    Disabled,
-    ReadWrite,
-    ReadOnly,
+enum class NativePortBlendOperation : std::uint8_t {
+    Add,
+    Subtract,
+    ReverseSubtract,
+    Minimum,
+    Maximum,
+};
+
+struct NativePortBlendState final {
+    NativePortBlendFactor source_color = NativePortBlendFactor::One;
+    NativePortBlendFactor destination_color = NativePortBlendFactor::Zero;
+    NativePortBlendOperation color_operation = NativePortBlendOperation::Add;
+    NativePortBlendFactor source_alpha = NativePortBlendFactor::One;
+    NativePortBlendFactor destination_alpha = NativePortBlendFactor::Zero;
+    NativePortBlendOperation alpha_operation = NativePortBlendOperation::Add;
+    // RGBA bits 0..3. Other bits are invalid.
+    std::uint8_t color_write_mask = 0x0Fu;
+    bool enabled = false;
+    friend bool operator==(const NativePortBlendState&,
+                           const NativePortBlendState&) = default;
+};
+
+enum class NativePortCompareOperation : std::uint8_t {
+    Never,
+    Less,
+    Equal,
+    LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
+};
+
+struct NativePortDepthState final {
+    NativePortCompareOperation compare = NativePortCompareOperation::LessEqual;
+    bool test_enabled = true;
+    bool write_enabled = true;
+    friend bool operator==(const NativePortDepthState&,
+                           const NativePortDepthState&) = default;
+};
+
+enum class NativePortDepthCoordinateMode : std::uint8_t {
+    // Vertex position is ordinary homogeneous clip-space depth.
+    ClipSpace,
+    // A positive screen-space reciprocal-depth coordinate is interpolated
+    // and logarithmically mapped in the pixel stage. This preserves useful
+    // precision for native adapters whose source renderer emits 1/W after
+    // transform, without exposing that renderer's device protocol.
+    ReciprocalPositive,
+    // The draw transform produces a genuine homogeneous clip-space position
+    // whose W is positive view depth and whose Z encodes the native near
+    // plane. The pixel stage derives reciprocal depth from SV_Position.w.
+    // This lets host GPUs clip object geometry before rasterization without
+    // forcing an adapter to reproduce a guest renderer's CPU clipper.
+    ReciprocalPositiveHomogeneousClip,
+};
+
+struct NativePortDepthMapping final {
+    NativePortDepthCoordinateMode mode =
+        NativePortDepthCoordinateMode::ClipSpace;
+    float reciprocal_scale = 100'000.0f;
+    float logarithm_divisor = 34.0f;
 };
 
 enum class NativePortCullMode : std::uint8_t {
@@ -209,9 +279,40 @@ enum class NativePortCullMode : std::uint8_t {
     Back,
 };
 
+enum class NativePortFillMode : std::uint8_t {
+    Solid,
+    Wireframe,
+};
+
+enum class NativePortShadingMode : std::uint8_t {
+    Smooth,
+    // Fixed-function Dreamcast content uses the final submitted vertex as
+    // the provoking vertex. Host APIs that use the first vertex therefore
+    // need an explicit, backend-independent conversion rather than relying
+    // on their native flat-shading convention.
+    FlatLastVertex,
+};
+
+struct NativePortRasterizerState final {
+    NativePortCullMode cull = NativePortCullMode::Back;
+    NativePortFillMode fill = NativePortFillMode::Solid;
+    NativePortShadingMode shading = NativePortShadingMode::Smooth;
+    // Zero disables small-triangle rejection. A positive value rejects a
+    // triangle when the absolute XY determinant in the submitted vertex
+    // coordinate space is below this threshold. Directional culling is
+    // applied independently through cull.
+    float small_triangle_area_threshold = 0.0f;
+    bool front_counter_clockwise = false;
+    bool depth_clip_enabled = true;
+    friend bool operator==(const NativePortRasterizerState&,
+                           const NativePortRasterizerState&) = default;
+};
+
 enum class NativePortTextureFilter : std::uint8_t {
-    Nearest,
-    Linear,
+    Point,
+    Bilinear,
+    Trilinear,
+    Anisotropic,
 };
 
 enum class NativePortTextureAddress : std::uint8_t {
@@ -220,10 +321,117 @@ enum class NativePortTextureAddress : std::uint8_t {
     Mirror,
 };
 
+struct NativePortSamplerState final {
+    NativePortTextureFilter filter = NativePortTextureFilter::Bilinear;
+    NativePortTextureAddress address_u = NativePortTextureAddress::Clamp;
+    NativePortTextureAddress address_v = NativePortTextureAddress::Clamp;
+    NativePortTextureAddress address_w = NativePortTextureAddress::Clamp;
+    float mip_lod_bias = 0.0f;
+    float minimum_lod = 0.0f;
+    float maximum_lod = 1'000.0f;
+    std::uint32_t maximum_anisotropy = 1u;
+    friend bool operator==(const NativePortSamplerState&,
+                           const NativePortSamplerState&) = default;
+};
+
+enum class NativePortTextureCombineMode : std::uint8_t {
+    Modulate,
+    Replace,
+    Decal,
+    Add,
+    // RGB is modulated with the primary color while alpha is taken from the
+    // texture. This is distinct from full modulation and is required by
+    // fixed-function renderers whose shading instruction controls RGB and
+    // alpha independently.
+    ModulateTextureAlpha,
+};
+
+enum class NativePortTextureCoordinateSource : std::uint8_t {
+    Vertex,
+    NormalSphere,
+};
+
+struct NativePortMaterialState final {
+    std::array<float, 4u> diffuse{1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 4u> ambient{1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 4u> specular{0.0f, 0.0f, 0.0f, 1.0f};
+    std::array<float, 4u> emission{0.0f, 0.0f, 0.0f, 0.0f};
+    float specular_power = 1.0f;
+    NativePortTextureCombineMode texture_combine =
+        NativePortTextureCombineMode::Modulate;
+    NativePortTextureCoordinateSource texture_coordinates =
+        NativePortTextureCoordinateSource::Vertex;
+    bool use_vertex_color = true;
+    bool use_primary_alpha = true;
+    bool use_texture_alpha = true;
+    bool use_secondary_color = false;
+    bool lighting_enabled = false;
+    bool specular_enabled = false;
+};
+
+struct NativePortDirectionalLight final {
+    // Direction from the shaded point towards the light, in the space
+    // produced by normal_transform.
+    std::array<float, 3u> direction{0.0f, 0.0f, 1.0f};
+    std::array<float, 4u> color{1.0f, 1.0f, 1.0f, 1.0f};
+};
+
+inline constexpr std::size_t native_port_maximum_directional_lights = 4u;
+
+struct NativePortLightingState final {
+    std::array<float, 4u> ambient{0.0f, 0.0f, 0.0f, 1.0f};
+    std::array<NativePortDirectionalLight,
+               native_port_maximum_directional_lights> lights{};
+    std::uint32_t light_count = 0u;
+};
+
+enum class NativePortFogMode : std::uint8_t {
+    Disabled,
+    VertexFactor,
+    Linear,
+    Exponential,
+    ExponentialSquared,
+    // Bounded logarithmic lookup-table fog. The coordinate is multiplied by
+    // density, mapped to one of 128 mantissa/exponent coefficients and
+    // linearly interpolated. This retains a title renderer's authored fog
+    // curve without exposing a guest register or device protocol.
+    LookupTable,
+    // The same bounded lookup is applied to the primary color before texture
+    // combination instead of being blended into the final result.
+    LookupTablePrimary,
+};
+
+inline constexpr std::size_t native_port_fog_table_entries = 128u;
+
+struct NativePortFogState final {
+    NativePortFogMode mode = NativePortFogMode::Disabled;
+    std::array<float, 4u> color{0.0f, 0.0f, 0.0f, 1.0f};
+    float start = 0.0f;
+    float end = 1.0f;
+    float density = 1.0f;
+    std::array<float, native_port_fog_table_entries> lookup_table{};
+};
+
+struct NativePortAlphaTestState final {
+    NativePortCompareOperation compare = NativePortCompareOperation::Always;
+    float reference = 0.0f;
+    bool enabled = false;
+};
+
 struct NativePortVertex final {
     std::array<float, 3u> position{};
     std::array<float, 2u> texture_coordinate{};
     std::array<float, 4u> color{1.0f, 1.0f, 1.0f, 1.0f};
+    // Object-space by default. normal_transform places it into the lighting
+    // and NormalSphere texture-coordinate space.
+    std::array<float, 3u> normal{0.0f, 0.0f, 1.0f};
+    std::array<float, 4u> secondary_color{0.0f, 0.0f, 0.0f, 0.0f};
+    // VertexFactor consumes [0,1]; the other fog modes interpret this as a
+    // non-negative distance/reciprocal-depth coordinate.
+    float fog_coordinate = 0.0f;
+    // Used only by ReciprocalPositive depth mapping. Kept separate from fog
+    // so either semantic can be enabled independently.
+    float depth_coordinate = 0.0f;
 };
 
 struct NativePortMatrix4x4 final {
@@ -239,15 +447,20 @@ struct NativePortDrawPacket final {
     std::span<const NativePortVertex> vertices;
     std::span<const std::uint32_t> indices;
     NativePortMatrix4x4 transform;
+    NativePortMatrix4x4 normal_transform;
     NativePortTextureHandle texture;
     NativePortViewportTarget viewport = NativePortViewportTarget::Game;
     NativePortPrimitiveTopology topology =
         NativePortPrimitiveTopology::TriangleList;
-    NativePortBlendMode blend = NativePortBlendMode::Opaque;
-    NativePortDepthMode depth = NativePortDepthMode::ReadWrite;
-    NativePortCullMode cull = NativePortCullMode::Back;
-    NativePortTextureFilter filter = NativePortTextureFilter::Linear;
-    NativePortTextureAddress address = NativePortTextureAddress::Clamp;
+    NativePortBlendState blend;
+    NativePortDepthState depth;
+    NativePortDepthMapping depth_mapping;
+    NativePortRasterizerState rasterizer;
+    NativePortSamplerState sampler;
+    NativePortMaterialState material;
+    NativePortLightingState lighting;
+    NativePortFogState fog;
+    NativePortAlphaTestState alpha_test;
 };
 
 struct NativePortFrameConfig final {

@@ -196,16 +196,14 @@ umfasst `427` kompakte Streams und `52` Compact-Streams mit Full-Footprint-
 Trailer; die `52` Trailer sind reserviert, ohne den kompakten Index-Offset zu
 verschieben, und `0` Faelle sind ambig. Headerlose identity-bound
 SDK-Fontoberflaechen belegen ARGB1555. Dieser Unterauftrag schliesst KR-5005
-nicht insgesamt. KR-5005 bleibt das offene
-native Produktgate. Der aktive P0 ist jetzt die Verifikation der generischen
-Present-or-Repeat-Grenze fuer den diagnostisch isolierten Schwarz-Clear bei
-Frame 190; die Lazy-AOT-Aliasnormalisierung ist behoben. Bootstrap-, AOT- und
-Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt. Provider- und
-Draw-IR bleiben
-als backendneutrale Produktgrenze
-formuliert; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
-Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein
-gegenwaertiges Gate.
+nicht insgesamt. Die anschliessende Grafik-Foundation ist fuer den aktuell
+erreichten Produktpfad ebenfalls geschlossen: NINJA-Modellpunkte und native
+Drawstates werden backendneutral uebergeben; D3D11 uebernimmt homogenes
+Clipping, perspektivische Interpolation und reziproke Depth-/Fog-Semantik.
+Der reale Lauf passiert die frueheren Texture- und Mixed-Clip-Stops ohne
+TA-/QACR-Reentry. KR-5005 bleibt offen, weil danach ein noch nicht statisch
+inventarisierter List-Callback fehlt. Steam-Deck-/Linux-Unterstuetzung ist
+spaeter geplant, aktuell nicht priorisiert und kein gegenwaertiges Gate.
 
 KR-5005 verwendet ab Portprojektvertrag `91` einen echten schnellen
 Bring-up-Hostbuild: nur die grossen generierten AOT-TUs laufen mit `/Od /Ob0`
@@ -235,12 +233,13 @@ Draw-IR bleiben backendneutral; D3D11 ist zunaechst
 das Windows-Backend, waehrend Steam-Deck-/Linux-Unterstuetzung spaeter und
 nicht als aktuelle Prioritaet vorgesehen ist.
 
-Der aktuelle v62-Produktbeleg vervollstaendigte Film `id=0` mit `200`
+Der aktuelle Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
 `200` sichtbar nichtschwarzen Frames. Der schwarze/stale-Overlay-Uebergang ist
-geschlossen; Film `id=1`/Opening und Hauptmenue bleiben offen. Der Lauf endet
-aktuell typisiert am Modell-/Texturpfad mit `0x53414704`. Film `id=1`/Opening
-und Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad haben Frames `1--189`
+geschlossen. Der Lauf materialisiert danach Stage-Content, sechs dynamische
+Oberflaechen, Texturen und ein natives Modell und endet erst an einem fehlenden
+statischen List-Callback. Film `id=1`/Opening und Hauptmenue bleiben offen. Im
+Presented-by-SEGA-Pfad haben Frames `1--189`
 native Draws; Frame `190` und `191` wiederholen bei geschlossenem GPU-Frame
 das letzte abgeschlossene Bild. Der Present-or-Repeat-Vertrag ist bestaetigt;
 der synthetische Schwarz-Clear ist geschlossen.
@@ -254,6 +253,13 @@ erreichbare Funktionen einbezog; dies ist keine Hardware-Regression. Der
 aktuelle Hardware-Closure-Stand umfasst `850` Sites, `47` geschlossen, `803`
 offen und `129` Owner. Ein neuer 9-Slot-/8-Unique-Callbackvektor fuehrte zu
 `96` weiteren Exportfunktionen.
+
+Der warme v72-Export erzeugte `5.103` Funktionen in `149` Partitionen und
+`203` Host-TUs in `24,356 s`. Analyse, IR und Metadaten waren Cachetreffer,
+Codegen erreichte `149/149` Treffer und der Hostbuild `200/203` Objekttreffer.
+Gegenueber dem identischen kalten v71-Export mit `422,637 s` ist das etwa
+`17,4x` schneller. Die Closurezahl bleibt bis zum vollstaendigen statischen
+Replacement-Reachability-Beweis unveraendert.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -299,8 +305,8 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 103, PlatformServices-ABI 14, Backend-Interface-ABI 21,
-  PVR-State-Contract 3, Portprojektvertrag 91, Native-Port-Profilvertrag 14
+  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 22,
+  PVR-State-Contract 3, Portprojektvertrag 92, Native-Port-Profilvertrag 15
   Analyzer-ABI 40
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13

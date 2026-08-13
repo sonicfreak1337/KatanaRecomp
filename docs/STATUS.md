@@ -140,17 +140,18 @@ Materialisierung, echte Post-Bootstrap-AOT-Roots und resumierbare Continuations
 durch Analyse, CFG, Optimierung und Export. Die Provider-/Draw-IR-Grenze bleibt
 backendneutral; D3D11 ist zunaechst das Windows-Backend. Steam-Deck-/Linux-
 Unterstuetzung ist spaeter geplant, aktuell nicht priorisiert und kein Gate.
-Der KR-5005-Produktnachweis bleibt offen: Der Produktlauf erreichte den ersten
-nativ untexturierten Draw und danach den Sprite-Texture-Pfad, endete aber
-erwartungsgemaess typisiert mit `0x53414704`. Die fruehere Aliasgrenze ist
-behoben; Bootstrap, AOT und Linkaudit sind keine offenen Produktblocker. Der
+Der KR-5005-Produktnachweis bleibt offen. Die fruehere Aliasgrenze ist
+behoben; Bootstrap und Linkaudit sind keine offenen Produktblocker. Der
 aktuelle native Produktbeleg
 vervollstaendigte Film `id=0` mit `200` dekodierten, `200` praesentierten und
 `200` sichtbar nichtschwarzen Frames sowie `294.016` Audioframes. Der
-schwarze/stale-Overlay-Uebergang ist geschlossen; Film `id=1`/Opening und
-Hauptmenue sind noch nicht erreicht. Der Lauf endet aktuell typisiert am
-Modell-/Texturpfad mit `0x53414704`. Film `id=1`/
-Opening und Hauptmenue bleiben offen. Im Presented-by-SEGA-Pfad haben Frames
+schwarze/stale-Overlay-Uebergang ist geschlossen. Danach werden sechs
+dynamische Oberflaechen, Stage-Content, Texturen und das erste NINJA-Modell
+nativ verarbeitet. Homogenes GPU-Clipping, perspektivische Interpolation und
+reziproke Depth-/Fog-Semantik passieren die frueheren Texture- und Mixed-Clip-
+Stops ohne TA-/QACR-Reentry. Der Lauf endet erst an einem nicht statisch
+inventarisierten List-Callback. Film `id=1`/Opening und Hauptmenue bleiben
+offen. Im Presented-by-SEGA-Pfad haben Frames
 1--189 native Draws; Frame 190 und 191 wiederholen bei geschlossenem GPU-Frame
 das letzte abgeschlossene Bild. Der generische Present-or-Repeat-Vertrag ist
 bestaetigt; der synthetische Schwarz-Clear ist geschlossen.
@@ -166,16 +167,23 @@ Sites, `47` geschlossen, `803` offen und `129` Owner; ein neuer
 9-Slot-/8-Unique-Callbackvektor fuehrte zu `96` weiteren Exportfunktionen.
 Framepacing blieb bei 60/60 mit deaktiviertem Catch-up.
 
+Der warme v72-Export erzeugte `5.103` Funktionen in `149` Partitionen und
+`203` Host-TUs in `24,356 s`: `149/149` Codegen-Treffer, warmer Analyse-/IR-/
+Metadatencache und `200/203` Hostobjekt-Treffer. Der identische kalte v71-
+Export brauchte `422,637 s`; der warme Pfad ist damit etwa `17,4x` schneller.
+Die Closure bleibt bei `47/850` geschlossen, weil die negative
+Replacement-Reachability weiterhin nicht vollstaendig bewiesen ist.
+
 Der folgende RuntimeOnly-Stand ist historische Bring-up-Evidenz. Seine AOT-
 Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `103`,
+Aktuell gelten Runtime-ABI `104`,
 PlatformServices-ABI `14`, Analyzer-ABI `40`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`21`, PVR-State-Contract `3`, Portprojektvertrag `91` und Native-Port-
-Profilvertrag `14`. Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat
+`22`, PVR-State-Contract `3`, Portprojektvertrag `92` und Native-Port-
+Profilvertrag `15`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
@@ -186,8 +194,8 @@ Backend-Interface-ABI `21` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `33`, AOT-Partitionsschema: `7`,
 Port-Metadata-Cache-Schema: `4`,
-NativePort-Artifact-Format: `9`, NativePortDefinition `9`, Analysis Directives `3`, Hookkarte `v2`,
-Hardware-Closure `v4` und GameProject-Metadaten `katana-game-project-v5`.
+NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `3`, Hookkarte `v3`,
+Hardware-Closure `v5` und GameProject-Metadaten `katana-game-project-v5`.
 
 Der historische Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zulaessig und bleibt jetzt ausschliesslich internes

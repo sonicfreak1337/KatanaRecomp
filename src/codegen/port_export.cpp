@@ -199,63 +199,132 @@ std::string game_project_export_identity(
     return katana::runtime::game_project_definition_identity(definition);
 }
 
+class NativePortIdentityMaterial final {
+  public:
+    void u8(const std::uint8_t value) {
+        bytes_.push_back(static_cast<char>(value));
+    }
+
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < sizeof(value); ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < sizeof(value); ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+
+    void boolean(const bool value) {
+        u8(value ? 1u : 0u);
+    }
+
+    template <typename Enum>
+    void enumeration(const Enum value) {
+        static_assert(std::is_enum_v<Enum>);
+        u32(static_cast<std::uint32_t>(value));
+    }
+
+    void count(const std::size_t value) {
+        u64(static_cast<std::uint64_t>(value));
+    }
+
+    void text(const std::string_view value) {
+        count(value.size());
+        bytes_.append(value);
+    }
+
+    [[nodiscard]] std::string finish() && {
+        return std::move(bytes_);
+    }
+
+  private:
+    std::string bytes_;
+};
+
 std::string native_port_export_identity(
     const katana::runtime::NativePortDefinition* const definition) {
     if (definition == nullptr)
         return katana::io::sha256_bytes("no-native-port-definition-v1");
     katana::runtime::validate_native_port_definition(*definition);
-    std::ostringstream material;
-    material << "native-port:" << definition->contract_version << ':'
-             << definition->project_id << ':' << definition->project_version
-             << ':' << definition->executable.content_identity << ':'
-             << definition->executable.executable_name << ':'
-             << definition->executable.executable_byte_identity << ':'
-             << definition->bootstrap.entry_point << ':'
-             << definition->bootstrap.stack_pointer << ':'
-             << definition->bootstrap.vector_base << ':'
-             << definition->bootstrap.status_register << ':'
-             << definition->bootstrap.fpscr << ':'
-             << definition->bootstrap.cache_control_value << ':'
-             << definition->bootstrap.post_entry_point << ':'
-             << static_cast<unsigned>(
-                    definition->bootstrap.time_policy)
-             << ':'
-             << definition->bootstrap.symbol << ':'
-             << definition->bootstrap.post_cpu_state_identity << ':'
-             << definition->acceptance.milestone_id << ':'
-             << definition->acceptance.witness_hook_guest_address << ';';
+    NativePortIdentityMaterial material;
+    material.text("katana.native-port-export.identity");
+    material.u32(2u);
+    material.u32(definition->contract_version);
+    material.text(definition->project_id);
+    material.text(definition->project_version);
+    material.text(definition->executable.content_identity);
+    material.text(definition->executable.executable_name);
+    material.text(definition->executable.executable_byte_identity);
+    material.u32(definition->bootstrap.entry_point);
+    material.u32(definition->bootstrap.stack_pointer);
+    material.u32(definition->bootstrap.vector_base);
+    material.u32(definition->bootstrap.status_register);
+    material.u32(definition->bootstrap.fpscr);
+    material.u32(definition->bootstrap.cache_control_value);
+    material.u32(definition->bootstrap.post_entry_point);
+    material.count(definition->bootstrap.post_aot_roots.size());
     for (const auto root : definition->bootstrap.post_aot_roots)
-        material << "post-aot-root:" << root << ';';
+        material.u32(root);
+    material.count(
+        definition->bootstrap.post_aot_continuations.size());
     for (const auto& continuation :
-         definition->bootstrap.post_aot_continuations)
-        material << "post-aot-continuation:"
-                 << continuation.function_entry << ':'
-                 << continuation.resume_address << ';';
+         definition->bootstrap.post_aot_continuations) {
+        material.u32(continuation.function_entry);
+        material.u32(continuation.resume_address);
+    }
+    material.enumeration(definition->bootstrap.time_policy);
+    material.text(definition->bootstrap.symbol);
+    material.text(definition->bootstrap.post_cpu_state_identity);
+    material.count(definition->bootstrap.writes.size());
+    for (const auto& write : definition->bootstrap.writes) {
+        material.u32(write.guest_address);
+        material.u32(write.byte_size);
+        material.text(write.pre_write_identity);
+        material.text(write.post_write_identity);
+        material.enumeration(write.policy);
+    }
+    material.text(definition->acceptance.milestone_id);
+    material.u32(
+        definition->acceptance.witness_hook_guest_address);
+    material.count(definition->checkpoint_runtime_image_ids.size());
     for (const auto image_id : definition->checkpoint_runtime_image_ids)
-        material << "checkpoint-runtime-image:" << image_id << ';';
-    for (const auto& write : definition->bootstrap.writes)
-        material << "bootstrap-write:" << write.guest_address << ':'
-                 << write.byte_size << ':' << write.pre_write_identity << ':'
-                 << write.post_write_identity << ':'
-                 << static_cast<unsigned>(write.policy)
-                 << ';';
-    for (const auto& image : definition->images)
-        material << "image:" << image.image_id << ':'
-                 << image.content_relative_path << ':' << image.byte_identity
-                 << ':' << image.file_offset << ':' << image.guest_address
-                 << ':' << image.byte_size << ':' << image.writable << ';';
-    for (const auto& hook : definition->hooks)
-        material << "hook:" << hook.guest_address << ':'
-                 << hook.covered_size << ':'
-                 << static_cast<unsigned>(hook.kind) << ':'
-                 << static_cast<unsigned>(hook.requirement) << ':'
-                 << static_cast<unsigned>(hook.original_policy) << ':'
-                 << hook.symbol << ':' << hook.code_identity << ';';
-    for (const auto& resolution : definition->hardware_resolutions)
-        material << "hardware:" << resolution.instruction_address << ':'
-                 << resolution.hook_guest_address
-                 << ';';
-    return katana::io::sha256_bytes(material.str());
+        material.text(image_id);
+
+    material.count(definition->images.size());
+    for (const auto& image : definition->images) {
+        material.text(image.image_id);
+        material.text(image.content_relative_path);
+        material.text(image.byte_identity);
+        material.u64(image.file_offset);
+        material.u32(image.guest_address);
+        material.u32(image.byte_size);
+        material.boolean(image.writable);
+    }
+
+    material.count(definition->hooks.size());
+    for (const auto& hook : definition->hooks) {
+        material.u32(hook.guest_address);
+        material.u32(hook.covered_size);
+        material.enumeration(hook.kind);
+        material.enumeration(hook.requirement);
+        material.enumeration(hook.original_policy);
+        material.text(hook.symbol);
+        material.text(hook.code_identity);
+    }
+
+    material.count(definition->hardware_resolutions.size());
+    for (const auto& resolution : definition->hardware_resolutions) {
+        material.u32(resolution.instruction_address);
+        material.u32(resolution.hook_guest_address);
+    }
+
+    material.u32(definition->frame_timing.simulation_rate_hz);
+    material.u32(
+        definition->frame_timing.default_presentation_rate_hz);
+    material.u32(
+        definition->frame_timing.maximum_presentation_rate_hz);
+    return katana::io::sha256_bytes(std::move(material).finish());
 }
 
 [[nodiscard]] bool native_port_replacement_function_strictly_contains(

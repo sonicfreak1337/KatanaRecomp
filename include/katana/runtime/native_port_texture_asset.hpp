@@ -229,6 +229,17 @@ decode_native_port_prs_pvm_texture_archive(
     std::span<const std::uint8_t> source,
     const NativePortTextureAssetLimits& limits = {});
 
+// Decodes one complete GBIX?/PVRT content object. This is the standalone
+// texture counterpart to the PVM archive path and retains the optional GBIX
+// identity without exposing a device texture address.
+[[nodiscard]] NativePortDecodedTextureAsset decode_native_port_pvr_texture(
+    std::span<const std::uint8_t> source,
+    const NativePortTextureAssetLimits& limits = {});
+
+[[nodiscard]] NativePortDecodedTextureAsset decode_native_port_prs_pvr_texture(
+    std::span<const std::uint8_t> source,
+    const NativePortTextureAssetLimits& limits = {});
+
 // Decodes one exact, headerless texture surface. This is the native boundary
 // for SDK-owned embedded assets such as font atlases; title adapters bind the
 // source bytes and dimensions by executable/content identity rather than
@@ -260,6 +271,25 @@ materialize_native_port_prs_pvm_texture_archive(
 
 [[nodiscard]] NativePortMaterializedTextureArchive
 materialize_native_port_prs_pvm_texture_archive(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    NativePortTextureRegistry& registry,
+    std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits = {});
+
+// Installs one standalone GBIX?/PVRT object through the same identity,
+// generation and rollback contract as an archive. The returned collection
+// contains exactly one entry so callers can share release/lifetime handling.
+[[nodiscard]] NativePortMaterializedTextureArchive
+materialize_native_port_pvr_texture(
+    std::span<const std::uint8_t> source,
+    std::string_view content_byte_identity,
+    NativePortTextureRegistry& registry,
+    std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits = {});
+
+[[nodiscard]] NativePortMaterializedTextureArchive
+materialize_native_port_pvr_texture(
     NativePortPlatformServices& platform,
     const NativePortContentFileBinding& binding,
     NativePortTextureRegistry& registry,

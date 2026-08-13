@@ -352,6 +352,34 @@ native_port_direct_bytes(const CpuState& cpu,
     return canonical_physical_address(address) | 0x80000000u;
 }
 
+void validate_no_live_native_port_continuation(
+    const CpuState& cpu,
+    const std::uint32_t canonical_begin,
+    const std::uint64_t canonical_end,
+    const std::string_view detail) {
+    const auto point_inside = [&](const std::uint32_t address) {
+        // A zero PC/PR/active-instruction value denotes an inactive point in
+        // CpuState.  Do not canonicalize that sentinel into the P1 window.
+        if (address == 0u) return false;
+        const auto canonical = canonical_native_port_runtime_alias(address);
+        return canonical >= canonical_begin && canonical < canonical_end;
+    };
+    if (point_inside(cpu.pc) || point_inside(cpu.pr) ||
+        point_inside(cpu.active_instruction_pc))
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation, detail);
+
+    if (cpu.active_block_size == 0u) return;
+    const auto active_begin = canonical_native_port_runtime_alias(
+        cpu.active_block_virtual_start);
+    const auto active_end =
+        static_cast<std::uint64_t>(active_begin) + cpu.active_block_size;
+    if (active_end > 0x1'0000'0000ull ||
+        (active_begin < canonical_end && canonical_begin < active_end))
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation, detail);
+}
+
 struct BootstrapBackingInterval final {
     std::uint32_t begin = 0u;
     std::uint32_t end = 0u;
@@ -718,6 +746,9 @@ void NativePortRuntimeImageBindings::validate_deactivate_runtime_range(
             throw NativePortContractError(
                 NativePortContractFailure::AotContractViolation,
                 "runtime-image-deactivate-partial");
+        validate_no_live_native_port_continuation(
+            impl_->cpu, image_runtime_start, image_end,
+            "runtime-image-deactivate-live-continuation");
     }
 }
 
@@ -998,20 +1029,9 @@ void NativePortLoadedAotBinder::validate_deactivate_runtime_range(
             throw NativePortContractError(
                 NativePortContractFailure::AotContractViolation,
                 "loaded-aot-deactivate-partial");
-        const auto active_block_start =
-            canonical_native_port_runtime_alias(
-                impl_->cpu.active_block_virtual_start);
-        const auto pc = canonical_native_port_runtime_alias(impl_->cpu.pc);
-        const auto pr = canonical_native_port_runtime_alias(impl_->cpu.pr);
-        const auto points_inside = [&](const std::uint32_t address) {
-            return address >= module_start && address < module_end;
-        };
-        if ((impl_->cpu.active_block_size != 0u &&
-             points_inside(active_block_start)) ||
-            points_inside(pc) || points_inside(pr))
-            throw NativePortContractError(
-                NativePortContractFailure::AotContractViolation,
-                "loaded-aot-deactivate-live-continuation");
+        validate_no_live_native_port_continuation(
+            impl_->cpu, module_start, module_end,
+            "loaded-aot-deactivate-live-continuation");
     }
 }
 

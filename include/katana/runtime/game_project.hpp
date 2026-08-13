@@ -16,7 +16,7 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 7u;
+inline constexpr std::uint32_t game_project_contract_version = 8u;
 
 enum class RequiredProductMilestone : std::uint8_t {
     BootExecutableEntry,

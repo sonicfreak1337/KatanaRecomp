@@ -10,7 +10,9 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace katana::runtime {
@@ -18,6 +20,7 @@ namespace {
 
 constexpr std::uint32_t pvm_magic = 0x484D5650u;
 constexpr std::uint32_t pvrt_magic = 0x54525650u;
+constexpr std::uint32_t gbix_magic = 0x58494247u;
 constexpr std::uint16_t pvm_filename_flag = 0x0001u;
 constexpr std::uint16_t pvm_pixel_data_format_flag = 0x0002u;
 constexpr std::uint16_t pvm_texture_dimensions_flag = 0x0004u;
@@ -281,7 +284,22 @@ struct PvrDataLayout final {
 };
 
 constexpr std::size_t full_vq_codebook_bytes = 2'048u;
-constexpr std::size_t maximum_pvrt_alignment_bytes = 63u;
+
+[[nodiscard]] bool valid_pvrt_trailer_size(
+    const std::size_t encoded_bytes,
+    const std::size_t trailer_bytes) noexcept {
+    // Katana SDK writers observed in the bound corpus use one of four
+    // structural endings: no trailer, 16-byte alignment, 32-byte alignment,
+    // or the 32-byte-aligned footprint plus one 8-byte writer record.  Bind
+    // those exact classes instead of accepting arbitrary data merely because
+    // it happens to fit inside a 63-byte window.
+    if (trailer_bytes == 0u) return true;
+    const auto chunk_bytes = encoded_bytes + 16u;
+    const auto padding_16 = (16u - (chunk_bytes & 15u)) & 15u;
+    const auto padding_32 = (32u - (chunk_bytes & 31u)) & 31u;
+    return trailer_bytes == padding_16 || trailer_bytes == padding_32 ||
+           trailer_bytes == padding_32 + 8u;
+}
 
 [[nodiscard]] PvrDataLayout pvr_data_layout(
     const NativePortExtent extent,
@@ -358,19 +376,20 @@ constexpr std::size_t maximum_pvrt_alignment_bytes = 63u;
         // only that bounded reservation plus chunk alignment.
         const auto unused_codebook_bytes =
             full_vq_codebook_bytes - layout.codebook_bytes;
-        const auto maximum_trailing_reservation = checked_add(
-            unused_codebook_bytes, maximum_pvrt_alignment_bytes,
-            NativePortTextureAssetFailure::InvalidPvrt, source_offset,
-            "pvrt-small-vq-reservation");
-        const auto compact_alignment =
-            compact_trailer <= maximum_pvrt_alignment_bytes;
+        const auto compact_alignment = valid_pvrt_trailer_size(
+            layout.encoded_bytes, compact_trailer);
         const auto full_footprint_reservation =
             compact_trailer >= unused_codebook_bytes &&
-            compact_trailer <= maximum_trailing_reservation;
+            valid_pvrt_trailer_size(
+                checked_add(layout.encoded_bytes, unused_codebook_bytes,
+                            NativePortTextureAssetFailure::InvalidPvrt,
+                            source_offset, "pvrt-small-vq-reservation"),
+                compact_trailer - unused_codebook_bytes);
         if (!compact_alignment && !full_footprint_reservation)
             fail(NativePortTextureAssetFailure::InvalidPvrt, source_offset,
                  "pvrt-small-vq-layout");
-    } else if (compact_trailer > maximum_pvrt_alignment_bytes) {
+    } else if (!valid_pvrt_trailer_size(layout.encoded_bytes,
+                                        compact_trailer)) {
         fail(NativePortTextureAssetFailure::InvalidPvrt, source_offset,
              "pvrt-padding");
     }
@@ -522,9 +541,7 @@ void decode_pixels(std::span<const std::uint8_t> source,
     const std::size_t source_base_offset) {
     if (!has_mipmaps(format)) return layout.top_level_offset;
     if (is_vector_quantized(format) && dimension == 1u)
-        return checked_add(layout.codebook_bytes, 1u,
-                           NativePortTextureAssetFailure::InvalidPvrt,
-                           source_base_offset, "pvrt-vq-1x1-offset");
+        return layout.codebook_bytes;
     if (is_twiddled(format) && dimension == 1u) return 2u;
 
     auto result = is_vector_quantized(format) ? layout.codebook_bytes : 0u;
@@ -555,8 +572,10 @@ void decode_pixels(const std::span<const std::uint8_t> source,
         if (codebook_block >= codebook_blocks)
             fail(NativePortTextureAssetFailure::InvalidPvrt,
                  source_base_offset + level_offset, "pvrt-vq-1x1-index");
-        // The hardware derives the 1x1 VQ level from the bottom-right texel
-        // of the stored 2x2 level.
+        // VQ mip chains store a distinct 1x1 index at codebook+0.  Decode its
+        // 2x2 codebook vector and select the bottom-right texel, matching the
+        // PowerVR mip layout.  The 2x2 level begins at codebook+1 and must not
+        // be reused for this level.
         const auto codebook_offset =
             (static_cast<std::size_t>(codebook_block) * 4u + 3u) * 2u;
         const auto value = static_cast<std::uint16_t>(
@@ -905,6 +924,84 @@ void decode_pixels(const std::span<const std::uint8_t> source,
     return textures;
 }
 
+[[nodiscard]] NativePortDecodedTextureAsset decode_pvr_impl(
+    const std::span<const std::uint8_t> source,
+    const NativePortTextureAssetLimits& limits) {
+    validate_limits(limits);
+    if (source.size() > limits.maximum_decompressed_bytes)
+        fail(NativePortTextureAssetFailure::DecompressedOutputLimit, 0u,
+             "pvr-input-limit");
+
+    std::size_t chunk_offset = 0u;
+    std::optional<std::uint32_t> global_index;
+    if (source.size() >= 8u &&
+        read_u32(source, 0u, NativePortTextureAssetFailure::InvalidPvrt,
+                 "pvr-leading-chunk") == gbix_magic) {
+        const auto payload_size = read_u32(
+            source, 4u, NativePortTextureAssetFailure::InvalidPvrt,
+            "gbix-chunk-size");
+        if (payload_size < 4u)
+            fail(NativePortTextureAssetFailure::InvalidPvrt, 4u,
+                 "gbix-chunk-size");
+        chunk_offset = checked_add(
+            8u, payload_size, NativePortTextureAssetFailure::InvalidPvrt, 4u,
+            "gbix-chunk-boundary");
+        if (chunk_offset > source.size())
+            fail(NativePortTextureAssetFailure::InvalidPvrt, 4u,
+                 "gbix-chunk-boundary");
+        global_index = read_u32(
+            source, 8u, NativePortTextureAssetFailure::InvalidPvrt,
+            "gbix-global-index");
+    }
+
+    if (chunk_offset > source.size() || source.size() - chunk_offset < 16u ||
+        read_u32(source, chunk_offset,
+                 NativePortTextureAssetFailure::InvalidPvrt,
+                 "pvrt-magic") != pvrt_magic)
+        fail(NativePortTextureAssetFailure::InvalidPvrt, chunk_offset,
+             "pvrt-magic");
+    const auto payload_size = read_u32(
+        source, chunk_offset + 4u,
+        NativePortTextureAssetFailure::InvalidPvrt, "pvrt-chunk-size");
+    if (payload_size < 8u)
+        fail(NativePortTextureAssetFailure::InvalidPvrt, chunk_offset + 4u,
+             "pvrt-chunk-size");
+    const auto chunk_size = checked_add(
+        8u, payload_size, NativePortTextureAssetFailure::InvalidPvrt,
+        chunk_offset + 4u, "pvrt-chunk-size");
+    const auto chunk_end = checked_add(
+        chunk_offset, chunk_size,
+        NativePortTextureAssetFailure::InvalidPvrt, chunk_offset + 4u,
+        "pvrt-chunk-boundary");
+    if (chunk_end != source.size())
+        fail(NativePortTextureAssetFailure::InvalidPvrt, chunk_end,
+             "pvr-trailing-data");
+
+    const auto pixel_format =
+        parse_pixel_format(source[chunk_offset + 8u], chunk_offset + 8u);
+    const auto data_format =
+        parse_data_format(source[chunk_offset + 9u], chunk_offset + 9u);
+    const NativePortExtent extent{
+        read_u16(source, chunk_offset + 12u,
+                 NativePortTextureAssetFailure::InvalidPvrt, "pvrt-width"),
+        read_u16(source, chunk_offset + 14u,
+                 NativePortTextureAssetFailure::InvalidPvrt, "pvrt-height")};
+    validate_dimensions(extent, data_format, limits, chunk_offset + 12u);
+    const auto available_data_bytes = payload_size - 8u;
+    const auto layout = select_pvm_data_layout(
+        extent, data_format, available_data_bytes, chunk_offset + 9u);
+    const auto pixel_data_offset = chunk_offset + 16u;
+    if (layout.encoded_bytes > source.size() - pixel_data_offset)
+        fail(NativePortTextureAssetFailure::InvalidPvrt, pixel_data_offset,
+             "pvrt-truncated-pixels");
+    auto texture = decode_surface_impl(
+        source.subspan(pixel_data_offset, layout.encoded_bytes), extent,
+        pixel_format, data_format, limits);
+    texture.global_index = global_index;
+    texture.archive_ordinal = 0u;
+    return texture;
+}
+
 template <typename Function>
 [[nodiscard]] auto translate_resource_failures(
     Function&& function,
@@ -938,6 +1035,9 @@ class NativePortTextureRegistry::Impl final {
                           "config");
         try {
             entries_.reserve(limits.maximum_entries);
+            free_slots_.reserve(limits.maximum_entries);
+            identity_index_.reserve(limits.maximum_entries);
+            token_index_.reserve(limits.maximum_entries);
         } catch (const std::bad_alloc&) {
             registry_fail(NativePortTextureRegistryFailure::ResourceExhausted,
                           0u, "reserve");
@@ -967,37 +1067,35 @@ class NativePortTextureRegistry::Impl final {
                           0u, "identity-global-index");
         const auto texture_bytes = validate_texture(texture);
 
-        const auto existing = std::ranges::find_if(
-            entries_, [&identity](const Entry& entry) {
-                return entry.identity == identity;
-            });
-        if (existing != entries_.end()) {
-            if (existing->extent.width != texture.extent.width ||
-                existing->extent.height != texture.extent.height ||
-                existing->pixel_format != texture.source_pixel_format ||
-                existing->data_format != texture.source_data_format ||
-                existing->mip_levels !=
+        const auto existing_index = identity_index_.find(identity);
+        if (existing_index != identity_index_.end()) {
+            auto& existing = entry_at(existing_index->second);
+            if (existing.extent.width != texture.extent.width ||
+                existing.extent.height != texture.extent.height ||
+                existing.pixel_format != texture.source_pixel_format ||
+                existing.data_format != texture.source_data_format ||
+                existing.mip_levels !=
                     texture.lower_mip_levels.size() + 1u ||
-                existing->texture_bytes != texture_bytes)
+                existing.texture_bytes != texture_bytes)
                 registry_fail(
                     NativePortTextureRegistryFailure::IdentityCollision,
-                    existing->guest_token, "identity-collision");
-            if (existing->references ==
+                    existing.guest_token, "identity-collision");
+            if (existing.references ==
                 std::numeric_limits<std::uint32_t>::max())
                 registry_fail(
                     NativePortTextureRegistryFailure::ReferenceCountLimit,
-                    existing->guest_token, "reference-count");
+                    existing.guest_token, "reference-count");
             if (acquired_references_ ==
                 std::numeric_limits<std::uint64_t>::max())
                 registry_fail(
                     NativePortTextureRegistryFailure::ReferenceCountLimit,
-                    existing->guest_token, "aggregate-reference-count");
-            ++existing->references;
+                    existing.guest_token, "aggregate-reference-count");
+            ++existing.references;
             ++acquired_references_;
-            return {existing->guest_token, existing->handle};
+            return {existing.guest_token, existing.handle};
         }
 
-        if (entries_.size() == limits_.maximum_entries)
+        if (active_entries_ == limits_.maximum_entries)
             registry_fail(NativePortTextureRegistryFailure::EntryLimit, 0u,
                           "entry-limit");
         if (texture_bytes > limits_.maximum_texture_bytes - texture_bytes_)
@@ -1028,21 +1126,59 @@ class NativePortTextureRegistry::Impl final {
                 false,
                 std::as_bytes(std::span(level.rgba8))});
         const auto handle = graphics_.create_texture(config, images);
-        const auto guest_token = next_guest_token_++;
+        const auto guest_token = next_guest_token_;
+        std::size_t entry_index = 0u;
+        const bool reused_slot = !free_slots_.empty();
         try {
-            entries_.push_back(Entry{identity,
-                                     guest_token,
-                                     handle,
-                                     1u,
-                                     texture_bytes,
-                                     texture.extent,
-                                     texture.source_pixel_format,
-                                     texture.source_data_format,
-                                     config.mip_levels});
+            if (reused_slot) {
+                entry_index = free_slots_.back();
+                free_slots_.pop_back();
+                entries_[entry_index].emplace(
+                    Entry{identity, guest_token, handle, 1u, texture_bytes,
+                          texture.extent, texture.source_pixel_format,
+                          texture.source_data_format, config.mip_levels});
+            } else {
+                entry_index = entries_.size();
+                entries_.emplace_back(
+                    std::in_place,
+                    Entry{identity, guest_token, handle, 1u, texture_bytes,
+                          texture.extent, texture.source_pixel_format,
+                          texture.source_data_format, config.mip_levels});
+            }
+            const auto [identity_entry, identity_inserted] =
+                identity_index_.emplace(identity, entry_index);
+            if (!identity_inserted)
+                registry_fail(
+                    NativePortTextureRegistryFailure::IdentityCollision,
+                    guest_token, "identity-index");
+            try {
+                const auto [token_entry, token_inserted] =
+                    token_index_.emplace(guest_token, entry_index);
+                if (!token_inserted)
+                    registry_fail(
+                        NativePortTextureRegistryFailure::TokenExhausted,
+                        guest_token, "token-index");
+                static_cast<void>(token_entry);
+            } catch (...) {
+                identity_index_.erase(identity_entry);
+                throw;
+            }
         } catch (...) {
+            if (reused_slot) {
+                if (entry_index < entries_.size())
+                    entries_[entry_index].reset();
+                free_slots_.push_back(entry_index);
+            } else if (entry_index < entries_.size() &&
+                       entries_[entry_index]) {
+                entries_[entry_index].reset();
+                if (entry_index + 1u == entries_.size())
+                    entries_.pop_back();
+            }
             graphics_.destroy_texture(handle);
             throw;
         }
+        ++next_guest_token_;
+        ++active_entries_;
         texture_bytes_ += texture_bytes;
         ++acquired_references_;
         return {guest_token, handle};
@@ -1051,61 +1187,85 @@ class NativePortTextureRegistry::Impl final {
     [[nodiscard]] NativePortTextureHandle resolve(
         const std::uint32_t guest_token,
         const std::uint64_t expected_generation) const {
-        const auto entry = find_token(guest_token);
-        if (entry->identity.generation != expected_generation)
+        const auto& entry = entry_at(find_token_index(guest_token));
+        if (entry.identity.generation != expected_generation)
             registry_fail(NativePortTextureRegistryFailure::GenerationMismatch,
                           guest_token, "resolve-generation");
-        return entry->handle;
+        return entry.handle;
     }
 
     void release(const std::uint32_t guest_token,
                  const std::uint64_t expected_generation) {
-        const auto entry = find_token(guest_token);
-        if (entry->identity.generation != expected_generation)
+        const auto entry_index = find_token_index(guest_token);
+        auto& entry = entry_at(entry_index);
+        if (entry.identity.generation != expected_generation)
             registry_fail(NativePortTextureRegistryFailure::GenerationMismatch,
                           guest_token, "release-generation");
-        if (entry->references > 1u) {
-            --entry->references;
+        if (entry.references > 1u) {
+            --entry.references;
             --acquired_references_;
             return;
         }
-        graphics_.destroy_texture(entry->handle);
-        texture_bytes_ -= entry->texture_bytes;
+        graphics_.destroy_texture(entry.handle);
+        texture_bytes_ -= entry.texture_bytes;
         --acquired_references_;
-        entries_.erase(entry);
+        erase_entry(entry_index);
     }
 
     void invalidate_generation(const std::uint64_t generation) {
         if (generation == 0u)
             registry_fail(NativePortTextureRegistryFailure::InvalidIdentity,
                           0u, "invalidate-generation");
-        for (auto entry = entries_.begin(); entry != entries_.end();) {
-            if (entry->identity.generation != generation) {
-                ++entry;
+        for (std::size_t index = 0u; index < entries_.size(); ++index) {
+            if (!entries_[index] ||
+                entries_[index]->identity.generation != generation)
                 continue;
-            }
-            graphics_.destroy_texture(entry->handle);
-            texture_bytes_ -= entry->texture_bytes;
-            acquired_references_ -= entry->references;
-            entry = entries_.erase(entry);
+            graphics_.destroy_texture(entries_[index]->handle);
+            texture_bytes_ -= entries_[index]->texture_bytes;
+            acquired_references_ -= entries_[index]->references;
+            erase_entry(index);
         }
     }
 
     void invalidate_all() {
-        for (auto entry = entries_.begin(); entry != entries_.end();) {
-            graphics_.destroy_texture(entry->handle);
-            texture_bytes_ -= entry->texture_bytes;
-            acquired_references_ -= entry->references;
-            entry = entries_.erase(entry);
+        for (std::size_t index = 0u; index < entries_.size(); ++index) {
+            if (!entries_[index]) continue;
+            graphics_.destroy_texture(entries_[index]->handle);
+            texture_bytes_ -= entries_[index]->texture_bytes;
+            acquired_references_ -= entries_[index]->references;
+            erase_entry(index);
         }
     }
 
     [[nodiscard]] NativePortTextureRegistrySnapshot snapshot() const noexcept {
-        return {static_cast<std::uint32_t>(entries_.size()), texture_bytes_,
+        return {active_entries_, texture_bytes_,
                 acquired_references_};
     }
 
   private:
+    struct IdentityHash final {
+        [[nodiscard]] std::size_t operator()(
+            const NativePortTextureAssetIdentity& identity) const noexcept {
+            std::uint64_t hash = 14'695'981'039'346'656'037ull;
+            const auto mix = [&](const std::uint8_t byte) {
+                hash ^= byte;
+                hash *= 1'099'511'628'211ull;
+            };
+            const auto mix_integer = [&](const std::uint64_t value) {
+                for (std::uint32_t shift = 0u; shift < 64u; shift += 8u)
+                    mix(static_cast<std::uint8_t>(value >> shift));
+            };
+            mix_integer(identity.generation);
+            mix(identity.global_index.has_value() ? 1u : 0u);
+            mix_integer(identity.global_index.value_or(0u));
+            mix_integer(identity.archive_ordinal);
+            for (const auto byte : identity.content_sha256) mix(byte);
+            if constexpr (sizeof(std::size_t) < sizeof(hash))
+                return static_cast<std::size_t>(hash ^ (hash >> 32u));
+            return static_cast<std::size_t>(hash);
+        }
+    };
+
     struct Entry final {
         NativePortTextureAssetIdentity identity;
         std::uint32_t guest_token;
@@ -1117,9 +1277,6 @@ class NativePortTextureRegistry::Impl final {
         NativePortTextureAssetDataFormat data_format;
         std::uint32_t mip_levels;
     };
-
-    using EntryIterator = std::vector<Entry>::iterator;
-    using ConstEntryIterator = std::vector<Entry>::const_iterator;
 
     [[noreturn]] static void registry_fail(
         const NativePortTextureRegistryFailure failure,
@@ -1204,39 +1361,47 @@ class NativePortTextureRegistry::Impl final {
         return bytes;
     }
 
-    [[nodiscard]] EntryIterator find_token(const std::uint32_t guest_token) {
-        if (guest_token == 0u)
-            registry_fail(NativePortTextureRegistryFailure::UnknownToken,
-                          guest_token, "token");
-        const auto entry = std::ranges::find_if(
-            entries_, [guest_token](const Entry& candidate) {
-                return candidate.guest_token == guest_token;
-            });
-        if (entry == entries_.end())
-            registry_fail(NativePortTextureRegistryFailure::UnknownToken,
-                          guest_token, "token");
-        return entry;
-    }
-
-    [[nodiscard]] ConstEntryIterator find_token(
+    [[nodiscard]] std::size_t find_token_index(
         const std::uint32_t guest_token) const {
         if (guest_token == 0u)
             registry_fail(NativePortTextureRegistryFailure::UnknownToken,
                           guest_token, "token");
-        const auto entry = std::ranges::find_if(
-            entries_, [guest_token](const Entry& candidate) {
-                return candidate.guest_token == guest_token;
-            });
-        if (entry == entries_.end())
+        const auto entry = token_index_.find(guest_token);
+        if (entry == token_index_.end() || entry->second >= entries_.size() ||
+            !entries_[entry->second] ||
+            entries_[entry->second]->guest_token != guest_token)
             registry_fail(NativePortTextureRegistryFailure::UnknownToken,
                           guest_token, "token");
-        return entry;
+        return entry->second;
+    }
+
+    [[nodiscard]] Entry& entry_at(const std::size_t index) {
+        return *entries_[index];
+    }
+
+    [[nodiscard]] const Entry& entry_at(const std::size_t index) const {
+        return *entries_[index];
+    }
+
+    void erase_entry(const std::size_t index) noexcept {
+        auto& entry = *entries_[index];
+        identity_index_.erase(entry.identity);
+        token_index_.erase(entry.guest_token);
+        entries_[index].reset();
+        free_slots_.push_back(index);
+        --active_entries_;
     }
 
     NativePortGraphicsDevice& graphics_;
     NativePortTextureRegistryLimits limits_;
-    std::vector<Entry> entries_;
+    std::vector<std::optional<Entry>> entries_;
+    std::vector<std::size_t> free_slots_;
+    std::unordered_map<NativePortTextureAssetIdentity, std::size_t,
+                       IdentityHash>
+        identity_index_;
+    std::unordered_map<std::uint32_t, std::size_t> token_index_;
     std::uint32_t next_guest_token_ = 1u;
+    std::uint32_t active_entries_ = 0u;
     std::uint64_t texture_bytes_ = 0u;
     std::uint64_t acquired_references_ = 0u;
 };
@@ -1367,6 +1532,24 @@ decode_native_port_prs_pvm_texture_archive(
         "prs-pvm-allocation");
 }
 
+NativePortDecodedTextureAsset decode_native_port_pvr_texture(
+    const std::span<const std::uint8_t> source,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures(
+        [&] { return decode_pvr_impl(source, limits); }, "pvr-allocation");
+}
+
+NativePortDecodedTextureAsset decode_native_port_prs_pvr_texture(
+    const std::span<const std::uint8_t> source,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures(
+        [&] {
+            auto decompressed = decompress_prs_impl(source, limits);
+            return decode_pvr_impl(decompressed, limits);
+        },
+        "prs-pvr-allocation");
+}
+
 NativePortDecodedTextureAsset decode_native_port_texture_surface(
     const std::span<const std::uint8_t> source,
     const NativePortExtent extent,
@@ -1381,6 +1564,82 @@ NativePortDecodedTextureAsset decode_native_port_texture_surface(
         "surface-allocation");
 }
 
+namespace {
+
+[[nodiscard]] NativePortMaterializedTextureArchive materialize_decoded_textures(
+    const std::span<const NativePortDecodedTextureAsset> decoded,
+    const std::string_view content_byte_identity,
+    NativePortTextureRegistry& registry,
+    const std::uint64_t generation) {
+    NativePortMaterializedTextureArchive archive;
+    archive.generation = generation;
+    for (std::size_t index = 0u; index < archive.content_sha256.size();
+         ++index) {
+        const auto hex = content_byte_identity.substr(7u + index * 2u, 2u);
+        const auto nibble = [](const char value) -> std::uint8_t {
+            if (value >= '0' && value <= '9')
+                return static_cast<std::uint8_t>(value - '0');
+            if (value >= 'a' && value <= 'f')
+                return static_cast<std::uint8_t>(value - 'a' + 10);
+            return static_cast<std::uint8_t>(value - 'A' + 10);
+        };
+        archive.content_sha256[index] = static_cast<std::uint8_t>(
+            (nibble(hex[0]) << 4u) | nibble(hex[1]));
+    }
+
+    archive.entries.reserve(decoded.size());
+    try {
+        for (const auto& texture : decoded) {
+            NativePortTextureAssetIdentity identity;
+            identity.generation = generation;
+            identity.global_index = texture.global_index;
+            identity.archive_ordinal = texture.archive_ordinal;
+            identity.content_sha256 = archive.content_sha256;
+            NativePortMaterializedTextureAsset materialized{
+                texture.name,
+                texture.global_index,
+                texture.archive_ordinal,
+                0u,
+                {},
+                texture.extent,
+                static_cast<std::uint32_t>(
+                    texture.lower_mip_levels.size() + 1u)};
+            const auto acquired = registry.acquire(identity, texture);
+            materialized.guest_token = acquired.guest_token;
+            materialized.texture = acquired.texture;
+            archive.entries.push_back(std::move(materialized));
+        }
+    } catch (...) {
+        const auto acquisition_failure = std::current_exception();
+        std::exception_ptr cleanup_failure;
+        for (auto entry = archive.entries.rbegin();
+             entry != archive.entries.rend(); ++entry) {
+            try {
+                registry.release(entry->guest_token, generation);
+            } catch (...) {
+                if (!cleanup_failure) cleanup_failure = std::current_exception();
+            }
+        }
+        if (cleanup_failure) std::rethrow_exception(cleanup_failure);
+        std::rethrow_exception(acquisition_failure);
+    }
+    return archive;
+}
+
+void validate_materialization_binding(
+    const std::span<const std::uint8_t> source,
+    const std::string_view content_byte_identity,
+    const std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits) {
+    if (generation == 0u ||
+        !valid_native_port_sha256_identity(content_byte_identity) ||
+        source.empty() || source.size() > limits.maximum_compressed_bytes)
+        fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
+             "materialize-binding");
+}
+
+} // namespace
+
 NativePortMaterializedTextureArchive
 materialize_native_port_prs_pvm_texture_archive(
     const std::span<const std::uint8_t> source,
@@ -1389,73 +1648,12 @@ materialize_native_port_prs_pvm_texture_archive(
     const std::uint64_t generation,
     const NativePortTextureAssetLimits& limits) {
     return translate_resource_failures([&] {
-        if (generation == 0u ||
-            !valid_native_port_sha256_identity(content_byte_identity) ||
-            source.empty() || source.size() > limits.maximum_compressed_bytes)
-            fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
-                 "materialize-binding");
-
-        NativePortMaterializedTextureArchive archive;
-        archive.generation = generation;
-        for (std::size_t index = 0u; index < archive.content_sha256.size();
-             ++index) {
-            const auto hex =
-                content_byte_identity.substr(7u + index * 2u, 2u);
-            const auto nibble = [](const char value) -> std::uint8_t {
-                if (value >= '0' && value <= '9')
-                    return static_cast<std::uint8_t>(value - '0');
-                if (value >= 'a' && value <= 'f')
-                    return static_cast<std::uint8_t>(value - 'a' + 10);
-                return static_cast<std::uint8_t>(value - 'A' + 10);
-            };
-            archive.content_sha256[index] = static_cast<std::uint8_t>(
-                (nibble(hex[0]) << 4u) | nibble(hex[1]));
-        }
-
-        auto decoded = decode_native_port_prs_pvm_texture_archive(
+        validate_materialization_binding(source, content_byte_identity,
+                                         generation, limits);
+        const auto decoded = decode_native_port_prs_pvm_texture_archive(
             source, limits);
-        archive.entries.reserve(decoded.size());
-        try {
-            for (const auto& texture : decoded) {
-                NativePortTextureAssetIdentity identity;
-                identity.generation = generation;
-                identity.global_index = texture.global_index;
-                identity.archive_ordinal = texture.archive_ordinal;
-                identity.content_sha256 = archive.content_sha256;
-                // Copy all potentially allocating metadata before acquiring
-                // a registry reference. archive.entries was reserved for the
-                // full decoded count, so publishing the completed value below
-                // is a non-allocating move and cannot orphan a GPU reference.
-                NativePortMaterializedTextureAsset materialized{
-                    texture.name,
-                    texture.global_index,
-                    texture.archive_ordinal,
-                    0u,
-                    {},
-                    texture.extent,
-                    static_cast<std::uint32_t>(
-                        texture.lower_mip_levels.size() + 1u)};
-                const auto acquired = registry.acquire(identity, texture);
-                materialized.guest_token = acquired.guest_token;
-                materialized.texture = acquired.texture;
-                archive.entries.push_back(std::move(materialized));
-            }
-        } catch (...) {
-            const auto acquisition_failure = std::current_exception();
-            std::exception_ptr cleanup_failure;
-            for (auto entry = archive.entries.rbegin();
-                 entry != archive.entries.rend(); ++entry) {
-                try {
-                    registry.release(entry->guest_token, generation);
-                } catch (...) {
-                    if (!cleanup_failure)
-                        cleanup_failure = std::current_exception();
-                }
-            }
-            if (cleanup_failure) std::rethrow_exception(cleanup_failure);
-            std::rethrow_exception(acquisition_failure);
-        }
-        return archive;
+        return materialize_decoded_textures(
+            decoded, content_byte_identity, registry, generation);
     }, "materialize-prs-pvm");
 }
 
@@ -1481,6 +1679,45 @@ materialize_native_port_prs_pvm_texture_archive(
                 compressed.size()),
             binding.byte_identity, registry, generation, limits);
     }, "materialize-prs-pvm-content");
+}
+
+NativePortMaterializedTextureArchive materialize_native_port_pvr_texture(
+    const std::span<const std::uint8_t> source,
+    const std::string_view content_byte_identity,
+    NativePortTextureRegistry& registry,
+    const std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures([&] {
+        validate_materialization_binding(source, content_byte_identity,
+                                         generation, limits);
+        const auto decoded = decode_native_port_pvr_texture(source, limits);
+        return materialize_decoded_textures(
+            std::span(&decoded, 1u), content_byte_identity, registry,
+            generation);
+    }, "materialize-pvr");
+}
+
+NativePortMaterializedTextureArchive materialize_native_port_pvr_texture(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    NativePortTextureRegistry& registry,
+    const std::uint64_t generation,
+    const NativePortTextureAssetLimits& limits) {
+    if (binding.byte_size == 0u ||
+        binding.byte_size > limits.maximum_compressed_bytes)
+        fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
+             "materialize-binding-size");
+    return translate_resource_failures([&] {
+        auto file = platform.open_content_file(binding);
+        std::vector<std::byte> encoded(
+            static_cast<std::size_t>(binding.byte_size));
+        file->read_at(0u, encoded);
+        return materialize_native_port_pvr_texture(
+            std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(encoded.data()),
+                encoded.size()),
+            binding.byte_identity, registry, generation, limits);
+    }, "materialize-pvr-content");
 }
 
 void release_native_port_texture_archive(

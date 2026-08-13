@@ -9,6 +9,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -25,8 +26,70 @@ constexpr std::size_t maximum_runtime_image_entries = 65'536u;
 
 std::atomic<const GameProjectBindings*> active_bindings = nullptr;
 
+// Game-project identities are cache, AOT and runtime trust boundaries. Keep
+// their preimage binary, typed and length-delimited so arbitrary project,
+// symbol and image names cannot alias a different field sequence.
+class GameProjectIdentityMaterial final {
+  public:
+    void u8(const std::uint8_t value) {
+        bytes_.push_back(static_cast<char>(value));
+    }
+
+    void u32(const std::uint32_t value) {
+        for (std::size_t byte = 0u; byte < sizeof(value); ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+
+    void u64(const std::uint64_t value) {
+        for (std::size_t byte = 0u; byte < sizeof(value); ++byte)
+            u8(static_cast<std::uint8_t>(value >> (byte * 8u)));
+    }
+
+    void i32(const std::int32_t value) {
+        u32(static_cast<std::uint32_t>(value));
+    }
+
+    void boolean(const bool value) {
+        u8(value ? 1u : 0u);
+    }
+
+    template <typename Enum>
+    void enumeration(const Enum value) {
+        static_assert(std::is_enum_v<Enum>);
+        u32(static_cast<std::uint32_t>(value));
+    }
+
+    void count(const std::size_t value) {
+        u64(static_cast<std::uint64_t>(value));
+    }
+
+    void text(const std::string_view value) {
+        count(value.size());
+        bytes_.append(value);
+    }
+
+    [[nodiscard]] std::string finish() && {
+        return std::move(bytes_);
+    }
+
+  private:
+    std::string bytes_;
+};
+
 bool valid_code_address(const std::uint32_t address) noexcept {
     return address != 0u && (address & 1u) == 0u;
+}
+
+bool valid_project_identity_component(
+    const std::string_view value) noexcept {
+    return !value.empty() && value.size() <= 128u &&
+           std::all_of(value.begin(), value.end(), [](const char character) {
+               return (character >= 'a' && character <= 'z') ||
+                      (character >= 'A' && character <= 'Z') ||
+                      (character >= '0' && character <= '9') ||
+                      character == '-' || character == '_' ||
+                      character == '.';
+           });
 }
 
 bool valid_range(const std::uint32_t start,
@@ -397,10 +460,10 @@ void validate_game_project_definition(
     const GameProjectDefinition& definition) {
     if (definition.contract_version != game_project_contract_version)
         throw std::invalid_argument("game-project-contract-unsupported");
-    if (definition.project_id.empty())
-        throw std::invalid_argument("game-project-id-empty");
-    if (definition.project_version.empty())
-        throw std::invalid_argument("game-project-version-empty");
+    if (!valid_project_identity_component(definition.project_id))
+        throw std::invalid_argument("game-project-id-invalid");
+    if (!valid_project_identity_component(definition.project_version))
+        throw std::invalid_argument("game-project-version-invalid");
     validate_identity_binding(definition.identity);
     if (required_product_milestone_name(
             definition.required_product_milestone) == "Invalid")
@@ -823,112 +886,164 @@ void validate_game_project_definition(
 std::string game_project_definition_identity(
     const GameProjectDefinition& definition) {
     validate_game_project_definition(definition);
-    std::ostringstream material;
-    material << "game-project-v" << definition.contract_version << ':'
-             << definition.project_id << ':' << definition.project_version
-             << ':' << definition.identity.content_identity << ':'
-             << definition.identity.boot_file_name << ':'
-             << definition.identity.boot_byte_identity << ';'
-             << "required-product-milestone:"
-             << static_cast<unsigned>(
-                    definition.required_product_milestone)
-             << ';';
-    for (const auto& function : definition.function_boundaries)
-        material << "function:" << function.start << ':' << function.size << ':'
-                 << function.symbol << ':' << function.image_id << ';';
-    for (const auto& table : definition.jump_tables)
-        material << "jump-table:" << table.dispatch_address << ':'
-                 << table.table_address << ':' << table.entry_count << ':'
-                 << table.entry_stride << ':' << table.relative_base << ':'
-                  << static_cast<unsigned>(table.encoding) << ':'
-                  << static_cast<unsigned>(table.transfer) << ':'
-                  << table.image_id << ';';
-    for (const auto& table : definition.callback_tables)
-        material << "callback-table:" << table.table_address << ':'
-                 << table.entry_count << ':' << table.entry_stride << ':'
-                  << table.pointer_offset << ':'
-                  << static_cast<unsigned>(table.transfer) << ':'
-                  << table.image_id << ';';
+    GameProjectIdentityMaterial material;
+    material.text("katana.game-project-definition.identity");
+    material.u32(2u);
+    material.u32(definition.contract_version);
+    material.text(definition.project_id);
+    material.text(definition.project_version);
+    material.text(definition.identity.content_identity);
+    material.text(definition.identity.boot_file_name);
+    material.text(definition.identity.boot_byte_identity);
+    material.enumeration(definition.required_product_milestone);
+
+    material.count(definition.function_boundaries.size());
+    for (const auto& function : definition.function_boundaries) {
+        material.u32(function.start);
+        material.u32(function.size);
+        material.text(function.symbol);
+        material.text(function.image_id);
+    }
+
+    material.count(definition.jump_tables.size());
+    for (const auto& table : definition.jump_tables) {
+        material.u32(table.dispatch_address);
+        material.u32(table.table_address);
+        material.u32(table.entry_count);
+        material.u32(table.entry_stride);
+        material.u32(table.relative_base);
+        material.enumeration(table.encoding);
+        material.enumeration(table.transfer);
+        material.text(table.image_id);
+    }
+
+    material.count(definition.callback_tables.size());
+    for (const auto& table : definition.callback_tables) {
+        material.u32(table.table_address);
+        material.u32(table.entry_count);
+        material.u32(table.entry_stride);
+        material.u32(table.pointer_offset);
+        material.enumeration(table.transfer);
+        material.text(table.image_id);
+    }
+
+    material.count(definition.runtime_code_templates.size());
     for (const auto& native_template : definition.runtime_code_templates) {
-        material << "runtime-template:" << native_template.source_module_id
-                 << ':' << native_template.expected_source_identity << ':'
-                 << native_template.source_start << ':' << native_template.extent
-                 << ':' << native_template.destination_vbr_delta << ':'
-                 << static_cast<unsigned>(native_template.destination) << ':'
-                 << native_template.expected_runtime_content_identity << ':'
-                 << native_template.expected_runtime_byte_identity << ';';
+        material.text(native_template.source_module_id);
+        material.text(native_template.expected_source_identity);
+        material.u32(native_template.source_start);
+        material.u32(native_template.extent);
+        material.i32(native_template.destination_vbr_delta);
+        material.enumeration(native_template.destination);
+        material.text(native_template.expected_runtime_content_identity);
+        material.text(native_template.expected_runtime_byte_identity);
+        material.count(native_template.patches.size());
         for (const auto& patch : native_template.patches) {
-            material << "patch:" << patch.source_offset << ':';
-            for (const auto& target : patch.allowed_targets)
-                material << target.live_value << '>' << target.block_address
-                         << ',';
-            material << ';';
+            material.u32(patch.source_offset);
+            material.count(patch.allowed_targets.size());
+            for (const auto& target : patch.allowed_targets) {
+                material.u32(target.live_value);
+                material.u32(target.block_address);
+            }
         }
-        for (const auto& range : native_template.mutable_ranges)
-            material << "mutable:" << range.offset << ':' << range.size << ';';
+        material.count(native_template.mutable_ranges.size());
+        for (const auto& range : native_template.mutable_ranges) {
+            material.u32(range.offset);
+            material.u32(range.size);
+        }
+        material.u32(native_template.fixed_runtime_start);
+        material.count(native_template.block_identities.size());
+        for (const auto& identity : native_template.block_identities) {
+            material.u32(identity.source_offset);
+            material.u32(identity.size);
+            material.text(identity.sha256);
+        }
+        material.enumeration(native_template.validation_mode);
     }
+
+    material.count(definition.runtime_images.size());
     for (const auto& image : definition.runtime_images) {
-        material << "runtime-image:" << image.image_id.size() << ':'
-                 << image.image_id << ':' << image.byte_identity << ':'
-                 << image.source_start << ':' << image.runtime_start << ':'
-                 << image.byte_size << ':' << image.entry_offsets.size()
-                 << ':';
+        material.text(image.image_id);
+        material.text(image.byte_identity);
+        material.u32(image.source_start);
+        material.u32(image.runtime_start);
+        material.u32(image.byte_size);
+        material.count(image.entry_offsets.size());
         for (const auto entry : image.entry_offsets)
-            material << entry << ',';
-        material << ';';
+            material.u32(entry);
     }
-    for (const auto& function : definition.function_overrides)
-        material << "override:" << function.function_address << ':'
-                 << static_cast<unsigned>(function.strength) << ':'
-                 << (function.callback != nullptr) << ':'
-                 << (function.condition != nullptr) << ';';
-    for (const auto& hook : definition.mid_function_hooks)
-        material << "mid-hook:" << hook.instruction_address << ':'
-                 << static_cast<unsigned>(hook.strength) << ':'
-                 << (hook.callback != nullptr) << ':'
-                 << (hook.condition != nullptr) << ';';
-    for (const auto& symbol : definition.symbols)
-        material << "symbol:" << symbol.address << ':' << symbol.size << ':'
-                 << symbol.name << ':' << static_cast<unsigned>(symbol.kind)
-                 << ';';
-    for (const auto& identity : definition.code_identities)
-        material << "code-identity:" << identity.address << ':'
-                 << identity.size << ':' << identity.byte_identity << ':'
-                 << identity.image_id << ';';
+
+    material.count(definition.function_overrides.size());
+    for (const auto& function : definition.function_overrides) {
+        material.u32(function.function_address);
+        material.enumeration(function.strength);
+        material.boolean(function.callback != nullptr);
+        material.boolean(function.condition != nullptr);
+        material.boolean(function.user_context != nullptr);
+    }
+
+    material.count(definition.mid_function_hooks.size());
+    for (const auto& hook : definition.mid_function_hooks) {
+        material.u32(hook.instruction_address);
+        material.enumeration(hook.strength);
+        material.boolean(hook.callback != nullptr);
+        material.boolean(hook.condition != nullptr);
+        material.boolean(hook.user_context != nullptr);
+    }
+
+    material.count(definition.symbols.size());
+    for (const auto& symbol : definition.symbols) {
+        material.u32(symbol.address);
+        material.u32(symbol.size);
+        material.text(symbol.name);
+        material.enumeration(symbol.kind);
+    }
+
+    material.count(definition.code_identities.size());
+    for (const auto& identity : definition.code_identities) {
+        material.u32(identity.address);
+        material.u32(identity.size);
+        material.text(identity.byte_identity);
+        material.text(identity.image_id);
+    }
+
+    material.boolean(definition.boot_config.has_value());
     if (definition.boot_config.has_value()) {
         const auto& config = *definition.boot_config;
-        material << "direct-boot:" << static_cast<unsigned>(config.firmware_mode)
-                 << ':' << static_cast<unsigned>(config.boot_path) << ':'
-                 << config.post_bios_platform_contract_version << ':'
-                 << config.post_bios_cpu_state.contract_version << ':'
-                 << config.post_bios_cpu_state.entry_point << ':'
-                 << config.post_bios_cpu_state.stack_pointer << ':'
-                 << config.post_bios_cpu_state.vector_base << ':'
-                 << config.post_bios_cpu_state.status << ':'
-                 << config.post_bios_cpu_state.fpscr << ':'
-                 << config.post_bios_cpu_state.gbr << ':'
-                 << config.post_bios_cpu_state.ssr << ':'
-                 << config.post_bios_cpu_state.spc << ':'
-                 << config.post_bios_cpu_state.sgr << ':'
-                 << config.post_bios_cpu_state.dbr << ':'
-                 << config.post_bios_cpu_state.pr << ';';
+        material.enumeration(config.firmware_mode);
+        material.enumeration(config.boot_path);
+        material.u32(config.post_bios_platform_contract_version);
+        material.u32(config.post_bios_cpu_state.contract_version);
+        material.u32(config.post_bios_cpu_state.entry_point);
+        material.u32(config.post_bios_cpu_state.stack_pointer);
+        material.u32(config.post_bios_cpu_state.vector_base);
+        material.u32(config.post_bios_cpu_state.status);
+        material.u32(config.post_bios_cpu_state.fpscr);
+        material.u32(config.post_bios_cpu_state.gbr);
+        material.u32(config.post_bios_cpu_state.ssr);
+        material.u32(config.post_bios_cpu_state.spc);
+        material.u32(config.post_bios_cpu_state.sgr);
+        material.u32(config.post_bios_cpu_state.dbr);
+        material.u32(config.post_bios_cpu_state.pr);
+        material.text(config.executable_identity.content_identity);
+        material.text(config.executable_identity.boot_file_name);
+        material.text(config.executable_identity.boot_byte_identity);
     }
+
+    material.boolean(definition.game_entry_handoff.has_value());
     if (definition.game_entry_handoff.has_value()) {
         const auto& binding = *definition.game_entry_handoff;
-        material
-            << "game-entry-handoff:" << binding.schema_version << ':'
-            << binding.required_runtime_abi << ':'
-            << binding.required_platform_state_contract << ':'
-            << binding.executable.content_identity << ':'
-            << binding.executable.boot_file_name.size() << ':'
-            << binding.executable.boot_file_name << ':'
-            << binding.executable.boot_byte_identity << ':'
-            << static_cast<unsigned>(binding.console_profile) << ':'
-            << binding.descriptor_identity << ';';
-    } else {
-        material << "game-entry-handoff:none;";
+        material.u32(binding.schema_version);
+        material.u32(binding.required_runtime_abi);
+        material.u32(binding.required_platform_state_contract);
+        material.text(binding.executable.content_identity);
+        material.text(binding.executable.boot_file_name);
+        material.text(binding.executable.boot_byte_identity);
+        material.enumeration(binding.console_profile);
+        material.text(binding.descriptor_identity);
     }
-    return "sha256:" + katana::io::sha256_bytes(material.str());
+    return "sha256:" +
+           katana::io::sha256_bytes(std::move(material).finish());
 }
 
 void validate_game_project_boot_identity(
