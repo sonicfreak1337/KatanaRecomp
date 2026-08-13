@@ -30,6 +30,8 @@ namespace {
 
 constexpr std::uint32_t maximum_graphics_dimension = 16'384u;
 constexpr std::size_t maximum_graphics_title_bytes = 1'024u;
+constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
+constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
 
 [[nodiscard]] std::string copy_validated_graphics_title(
     const std::string_view title) {
@@ -145,6 +147,59 @@ void validate_graphics_config(const NativePortGraphicsConfig& config) {
                 sizeof(std::uint32_t))
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::InvalidConfig, 0u, "config");
+}
+
+void validate_frame_pacing_config(
+    const NativePortFramePacingConfig& config) {
+    if (config.contract_version !=
+            native_port_frame_pacing_contract_version ||
+        config.simulation_rate_hz == 0u ||
+        config.simulation_rate_hz > maximum_native_frame_rate_hz ||
+        config.presentation_rate_hz < config.simulation_rate_hz ||
+        config.presentation_rate_hz > maximum_native_frame_rate_hz)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidConfig,
+            0u,
+            "frame-pacing-config");
+}
+
+[[nodiscard]] NativePortGraphicsConfig desktop_graphics_config(
+    NativePortGraphicsConfig graphics,
+    const NativePortFramePacingConfig& pacing) {
+    validate_frame_pacing_config(pacing);
+    // Software deadlines own cadence when pacing is active.  Combining them
+    // with an unrelated monitor-vblank interval would double-throttle on
+    // 50/60/120/144-Hz displays and make title time display-dependent.
+    if (pacing.enabled) graphics.synchronize_present = false;
+    return graphics;
+}
+
+void advance_frame_deadline(std::uint64_t& deadline,
+                            std::uint64_t& remainder,
+                            const std::uint32_t rate_hz) noexcept {
+    const auto whole = nanoseconds_per_second / rate_hz;
+    const auto fraction = nanoseconds_per_second % rate_hz;
+    if (deadline > std::numeric_limits<std::uint64_t>::max() - whole) {
+        deadline = std::numeric_limits<std::uint64_t>::max();
+        remainder = 0u;
+        return;
+    }
+    deadline += whole;
+    remainder += fraction;
+    if (remainder >= rate_hz) {
+        remainder -= rate_hz;
+        if (deadline != std::numeric_limits<std::uint64_t>::max()) ++deadline;
+    }
+}
+
+void wait_until_monotonic_nanoseconds(const std::uint64_t deadline) {
+    const auto maximum_count = static_cast<std::uint64_t>(
+        std::numeric_limits<std::chrono::nanoseconds::rep>::max());
+    const auto bounded = std::min(deadline, maximum_count);
+    std::this_thread::sleep_until(
+        std::chrono::steady_clock::time_point(
+            std::chrono::nanoseconds(static_cast<
+                std::chrono::nanoseconds::rep>(bounded))));
 }
 
 [[nodiscard]] NativePortPixelRect fit_aspect(
@@ -543,10 +598,25 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "present-without-frame");
+        frame_open_ = false;
+        completed_frame_available_ = true;
+        snapshot_.frame_open = false;
+        present_completed_frame("present");
+    }
+
+    void repeat_present() {
+        require_owner_thread();
+        if (frame_open_ || !completed_frame_available_)
+            fail(NativePortGraphicsFailure::InvalidFrame,
+                 0u,
+                 "repeat-without-completed-frame");
+        present_completed_frame("repeat-present");
+    }
+
+  private:
+    void present_completed_frame(const char* const operation) {
         poll_events();
         if (minimized_) {
-            frame_open_ = false;
-            snapshot_.frame_open = false;
             snapshot_.occluded = true;
             return;
         }
@@ -573,8 +643,6 @@ class NativePortGraphicsDevice::Impl final {
         context_->PSSetShaderResources(0u, 1u, &no_view);
         const auto result = swap_chain_->Present(
             config_.synchronize_present ? 1u : 0u, 0u);
-        frame_open_ = false;
-        snapshot_.frame_open = false;
         if (result == DXGI_STATUS_OCCLUDED) {
             snapshot_.occluded = true;
             return;
@@ -583,11 +651,13 @@ class NativePortGraphicsDevice::Impl final {
             const auto removed = device_->GetDeviceRemovedReason();
             fail(NativePortGraphicsFailure::DeviceLost,
                  static_cast<std::uint32_t>(FAILED(removed) ? removed : result),
-                 "present");
+                 operation);
         }
         snapshot_.occluded = false;
         saturating_increment(snapshot_.presented_frames);
     }
+
+  public:
 
     void present_image(const NativePortImageView& image,
                        const NativePortViewportTarget viewport,
@@ -1418,6 +1488,7 @@ class NativePortGraphicsDevice::Impl final {
     bool close_requested_ = false;
     bool minimized_ = false;
     bool frame_open_ = false;
+    bool completed_frame_available_ = false;
 
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
@@ -1488,6 +1559,7 @@ class NativePortGraphicsDevice::Impl final {
     void begin_frame(const NativePortFrameConfig&) {}
     void draw(const NativePortDrawPacket&) {}
     void present() {}
+    void repeat_present() {}
     void present_image(const NativePortImageView&,
                        NativePortViewportTarget,
                        NativePortImageFit) {}
@@ -1551,6 +1623,10 @@ void NativePortGraphicsDevice::present() {
     impl_->present();
 }
 
+void NativePortGraphicsDevice::repeat_present() {
+    impl_->repeat_present();
+}
+
 void NativePortGraphicsDevice::present_image(
     const NativePortImageView& image,
     const NativePortViewportTarget viewport,
@@ -1563,8 +1639,17 @@ NativePortGraphicsSnapshot NativePortGraphicsDevice::snapshot() const {
 }
 
 NativePortDesktopHost::NativePortDesktopHost(
-    const NativePortGraphicsConfig& graphics_config)
-    : graphics_(graphics_config) {}
+    const NativePortGraphicsConfig& graphics_config,
+    const NativePortFramePacingConfig& frame_pacing_config)
+    : graphics_(desktop_graphics_config(graphics_config,
+                                        frame_pacing_config)),
+      frame_pacing_config_(frame_pacing_config) {
+    frame_pacing_snapshot_.simulation_rate_hz =
+        frame_pacing_config_.simulation_rate_hz;
+    frame_pacing_snapshot_.presentation_rate_hz =
+        frame_pacing_config_.presentation_rate_hz;
+    frame_pacing_snapshot_.enabled = frame_pacing_config_.enabled;
+}
 
 NativePortDesktopHost::~NativePortDesktopHost() = default;
 
@@ -1594,6 +1679,15 @@ NativePortLifecycleState NativePortDesktopHost::poll_lifecycle() {
     return graphics_.lifecycle_state();
 }
 
+void NativePortDesktopHost::synchronize_simulation_boundary() {
+    if (!frame_pacing_config_.enabled || !frame_pacing_started_)
+        return;
+    if (monotonic_time_nanoseconds() <
+        next_simulation_deadline_nanoseconds_)
+        wait_until_monotonic_nanoseconds(
+            next_simulation_deadline_nanoseconds_);
+}
+
 void NativePortDesktopHost::begin_frame(const std::uint64_t frame_index) {
     static_cast<void>(frame_index);
     graphics_.begin_frame();
@@ -1601,11 +1695,163 @@ void NativePortDesktopHost::begin_frame(const std::uint64_t frame_index) {
 
 void NativePortDesktopHost::present_frame(const std::uint64_t frame_index) {
     static_cast<void>(frame_index);
-    graphics_.present();
+    paced_present();
 }
 
 std::uint64_t NativePortDesktopHost::presented_frames() const noexcept {
     return graphics_.snapshot().presented_frames;
+}
+
+NativePortFramePacingSnapshot
+NativePortDesktopHost::frame_pacing_snapshot() const noexcept {
+    return frame_pacing_snapshot_;
+}
+
+void NativePortDesktopHost::paced_present() {
+    const auto present_and_record = [this](const bool repeated) {
+        const auto before = graphics_.snapshot().presented_frames;
+        if (repeated)
+            graphics_.repeat_present();
+        else
+            graphics_.present();
+        const auto after = graphics_.snapshot().presented_frames;
+        if (after > before) {
+            const auto presented = after - before;
+            saturating_add(
+                frame_pacing_snapshot_.presentation_frames, presented);
+            if (repeated)
+                saturating_add(
+                    frame_pacing_snapshot_.repeated_presentations,
+                    presented);
+        }
+    };
+
+    if (!frame_pacing_config_.enabled) {
+        present_and_record(false);
+        saturating_increment(frame_pacing_snapshot_.simulation_frames);
+        return;
+    }
+
+    auto now = monotonic_time_nanoseconds();
+    if (!frame_pacing_started_) {
+        // The first completed frame establishes both native epochs and is
+        // visible immediately. Subsequent title updates run while the first
+        // simulation interval elapses and are gated at this boundary.
+        present_and_record(false);
+        saturating_increment(frame_pacing_snapshot_.simulation_frames);
+        now = monotonic_time_nanoseconds();
+        next_simulation_deadline_nanoseconds_ = now;
+        next_presentation_deadline_nanoseconds_ = now;
+        advance_frame_deadline(
+            next_simulation_deadline_nanoseconds_,
+            simulation_deadline_remainder_,
+            frame_pacing_config_.simulation_rate_hz);
+        advance_frame_deadline(
+            next_presentation_deadline_nanoseconds_,
+            presentation_deadline_remainder_,
+            frame_pacing_config_.presentation_rate_hz);
+        frame_pacing_started_ = true;
+        return;
+    }
+
+    const bool simulation_late =
+        now > next_simulation_deadline_nanoseconds_;
+    if (now >= next_simulation_deadline_nanoseconds_) {
+        // Never issue rapid catch-up frames. A late native frame is presented
+        // once, then both clocks restart from the actual completion time.
+        present_and_record(false);
+        saturating_increment(frame_pacing_snapshot_.simulation_frames);
+        now = monotonic_time_nanoseconds();
+        next_simulation_deadline_nanoseconds_ = now;
+        next_presentation_deadline_nanoseconds_ = now;
+        simulation_deadline_remainder_ = 0u;
+        presentation_deadline_remainder_ = 0u;
+        advance_frame_deadline(
+            next_simulation_deadline_nanoseconds_,
+            simulation_deadline_remainder_,
+            frame_pacing_config_.simulation_rate_hz);
+        advance_frame_deadline(
+            next_presentation_deadline_nanoseconds_,
+            presentation_deadline_remainder_,
+            frame_pacing_config_.presentation_rate_hz);
+        if (simulation_late)
+            saturating_increment(
+                frame_pacing_snapshot_.late_simulation_frames);
+        return;
+    }
+
+    // A new title frame is ready before its next simulation boundary. Present
+    // it on the next output deadline, then repeat only that completed GPU
+    // frame on additional output deadlines. Title state does not advance
+    // again until the simulation boundary below is reached.
+    if (now > next_presentation_deadline_nanoseconds_) {
+        saturating_increment(
+            frame_pacing_snapshot_.missed_presentation_deadlines);
+        present_and_record(false);
+        now = monotonic_time_nanoseconds();
+        next_presentation_deadline_nanoseconds_ = now;
+        presentation_deadline_remainder_ = 0u;
+        advance_frame_deadline(
+            next_presentation_deadline_nanoseconds_,
+            presentation_deadline_remainder_,
+            frame_pacing_config_.presentation_rate_hz);
+    } else {
+        wait_until_monotonic_nanoseconds(
+            next_presentation_deadline_nanoseconds_);
+        present_and_record(false);
+        advance_frame_deadline(
+            next_presentation_deadline_nanoseconds_,
+            presentation_deadline_remainder_,
+            frame_pacing_config_.presentation_rate_hz);
+    }
+    saturating_increment(frame_pacing_snapshot_.simulation_frames);
+
+    for (;;) {
+        now = monotonic_time_nanoseconds();
+        while (next_presentation_deadline_nanoseconds_ <= now &&
+               next_presentation_deadline_nanoseconds_ <=
+                   next_simulation_deadline_nanoseconds_) {
+            saturating_increment(
+                frame_pacing_snapshot_.missed_presentation_deadlines);
+            advance_frame_deadline(
+                next_presentation_deadline_nanoseconds_,
+                presentation_deadline_remainder_,
+                frame_pacing_config_.presentation_rate_hz);
+        }
+        if (next_presentation_deadline_nanoseconds_ >
+            next_simulation_deadline_nanoseconds_)
+            break;
+        wait_until_monotonic_nanoseconds(
+            next_presentation_deadline_nanoseconds_);
+        present_and_record(true);
+        advance_frame_deadline(
+            next_presentation_deadline_nanoseconds_,
+            presentation_deadline_remainder_,
+            frame_pacing_config_.presentation_rate_hz);
+    }
+
+    if (monotonic_time_nanoseconds() <
+        next_simulation_deadline_nanoseconds_) {
+        wait_until_monotonic_nanoseconds(
+            next_simulation_deadline_nanoseconds_);
+    }
+    advance_frame_deadline(
+        next_simulation_deadline_nanoseconds_,
+        simulation_deadline_remainder_,
+        frame_pacing_config_.simulation_rate_hz);
+    now = monotonic_time_nanoseconds();
+    if (next_simulation_deadline_nanoseconds_ <= now) {
+        // Presentation itself consumed a complete additional simulation
+        // interval. Resynchronise once; never run multiple updates to catch up.
+        saturating_increment(
+            frame_pacing_snapshot_.late_simulation_frames);
+        next_simulation_deadline_nanoseconds_ = now;
+        simulation_deadline_remainder_ = 0u;
+        advance_frame_deadline(
+            next_simulation_deadline_nanoseconds_,
+            simulation_deadline_remainder_,
+            frame_pacing_config_.simulation_rate_hz);
+    }
 }
 
 NativePortGraphicsDevice& NativePortDesktopHost::graphics() noexcept {

@@ -142,10 +142,12 @@ bool valid_native_port_hook_result(
         return false;
     if (binding.kind != NativePortHookKind::Instruction)
         return true;
-    // An instruction hook proves and displaces exactly one instruction. It
-    // may not masquerade as a whole-function replacement by returning to PR
-    // or jumping over an unproved body. A successful replacement resumes at
-    // the immediate fallthrough; Abort remains a typed bring-up failure.
+    // An instruction hook proves and displaces exactly one architectural
+    // instruction, including its mandatory delay slot when covered_size is
+    // four. It may not masquerade as a whole-function replacement by
+    // returning to PR or jumping over an unproved body. A successful
+    // replacement resumes at the immediate architectural fallthrough; Abort
+    // remains a typed bring-up failure.
     if (result.action == NativePortHookAction::Return) return false;
     if (result.action == NativePortHookAction::Jump)
         return static_cast<std::uint64_t>(binding.guest_address) +
@@ -210,11 +212,24 @@ void validate_native_port_definition(
         !valid_native_port_sha256_identity(
             definition.executable.executable_byte_identity))
         invalid_definition("executable-identity");
+    constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
+    if (definition.frame_timing.simulation_rate_hz == 0u ||
+        definition.frame_timing.simulation_rate_hz >
+            maximum_native_frame_rate_hz ||
+        definition.frame_timing.default_presentation_rate_hz <
+            definition.frame_timing.simulation_rate_hz ||
+        definition.frame_timing.default_presentation_rate_hz >
+            definition.frame_timing.maximum_presentation_rate_hz ||
+        definition.frame_timing.maximum_presentation_rate_hz >
+            maximum_native_frame_rate_hz)
+        invalid_definition("frame-timing");
     if ((definition.bootstrap.entry_point & 1u) != 0u ||
         definition.bootstrap.entry_point == 0u ||
         (definition.bootstrap.post_entry_point & 1u) != 0u ||
         definition.bootstrap.post_entry_point == 0u ||
         definition.bootstrap.post_aot_roots.empty() ||
+        !NativePortCpuControl::valid_initial_value(
+            definition.bootstrap.cache_control_value) ||
         !valid_bootstrap_time_policy(
             definition.bootstrap.time_policy) ||
         !valid_native_port_link_symbol(definition.bootstrap.symbol) ||
@@ -402,7 +417,7 @@ void validate_native_port_definition(
             !hook_symbols.insert(hook.symbol).second)
             invalid_definition("hook-binding");
         if (hook.kind == NativePortHookKind::Instruction &&
-            hook.covered_size != 2u)
+            hook.covered_size != 2u && hook.covered_size != 4u)
             invalid_definition("instruction-hook-extent");
         const auto range = std::tuple{
             static_cast<std::uint64_t>(hook.guest_address), end};

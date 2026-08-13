@@ -2,8 +2,8 @@
 
 Status: historischer RuntimeOnly-/PlatformAbi-Performancevertrag. Ab v0.49.1
 hat `NATIVE_PORT_PRODUCT_CONTRACT.md` Vorrang; aktive Sourcewerte sind
-Runtime-ABI 98, Analyzer-ABI 37, Portprojektvertrag 87 und Native-Port-
-Profilvertrag 11. Das aktuelle Native-AOT-Emissionsprofil ist 29; das AOT-
+Runtime-ABI 101, Analyzer-ABI 39, Portprojektvertrag 89 und Native-Port-
+Profilvertrag 13. Das aktuelle Native-AOT-Emissionsprofil ist 29; das AOT-
 Partitionsschema ist 7. Die folgenden Angaben beschreiben das interne
 Diagnoseorakel und sind keine Produktarchitektur. Der historische opt-in
 Modus `port --analysis-mode runtime-only` war nur mit `--game-project`
@@ -34,9 +34,9 @@ Audio-/Videopfad. Die PVR-Fullevidenz endete nach vier bewiesenen Frames mit
 zwischen YUV-Lauf und Audio-Umbau identisch.
 
 Die identische Vergleichsreihe stieg von `23,7959 MHz` ueber `24,1885 MHz`
-und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Der aktuelle
-Runtime-P0 ist weiterhin der serielle Runtime-/Dispatch-Overhead bis
-mindestens `100 MHz`; danach bleibt der Identity-Miss
+und `24,2825 MHz` auf `24,2926 MHz` (`+0,4967 MHz`, `+2,09 %`). Das ist
+historische Performanceevidenz; der aktuelle native Produkt-P0 ist die
+statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante. Danach bleibt der Identity-Miss
 der private Identity-Miss offen.
 
 KR-4974 bis KR-4980 sind quellseitig weitgehend umgesetzt. Der terminale
@@ -305,10 +305,10 @@ kein positiver Schedulerhebel. D9 ist
 beendet und Root 0 konvergierte fail-closed ohne Erfolgsaussage; KR-4988 bis
 KR-4991 bleiben inaktiv. KR-4994 und KR-4995 sind source-seitig abgeschlossen;
 die fehlende Wirksamkeit der autoritativen Hybrid-Join-Closure bleibt ein
-historischer PlatformAbi-Befund. Der aktuelle RuntimeOnly-P0 ist der
-serielle Runtime-/Dispatch-Overhead des sichtbaren Audio-/Videopfads:
-`24,2926 MHz` im letzten Vergleichslauf, Ziel mindestens `100 MHz` ohne
-Regression. Danach folgt der post-filmische Identity-Miss
+historischer PlatformAbi-Befund. Der serielle Runtime-/Dispatch-Overhead des
+sichtbaren Audio-/Videopfads (`24,2926 MHz`) ist ebenfalls historisch; der
+aktuelle native Produkt-P0 ist die statisch gebundene Post-Overlay-Callback-/
+Function-Pointer-Kante. Danach folgt der post-filmische Identity-Miss
 der private Identity-Miss. KR-4981 bleibt das globale Produktgate und ist
 bis Hauptmenue nicht bestanden.
 Es gibt keine begleitende neue Testmatrix.

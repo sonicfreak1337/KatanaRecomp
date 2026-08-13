@@ -39,6 +39,7 @@ namespace {
 
 constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
+constexpr std::size_t maximum_latent_aot_file_references = 4096u;
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
 constexpr std::uint64_t latent_aot_module_analysis_base_reserve_bytes =
@@ -139,6 +140,44 @@ normalize_entry_hints(const std::span<const LatentAotEntryHint> entry_hints) {
     std::sort(normalized.begin(), normalized.end(), entry_hint_less);
     normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
     return normalized;
+}
+
+std::string normalize_disc_reference(const std::string_view value) {
+    std::string result;
+    result.reserve(value.size() + 1u);
+    if (value.empty() || value.front() != '/') result.push_back('/');
+    for (const auto character : value) {
+        auto normalized = character;
+        if (normalized == '\\') normalized = '/';
+        if (normalized >= 'a' && normalized <= 'z')
+            normalized = static_cast<char>(normalized - 'a' + 'A');
+        result.push_back(normalized);
+    }
+    const auto version = result.find(';');
+    if (version != std::string::npos) result.resize(version);
+    while (result.size() > 1u && result.back() == '/') result.pop_back();
+    return result;
+}
+
+std::vector<std::string> normalize_file_references(
+    const std::span<const std::string> references) {
+    if (references.size() > maximum_latent_aot_file_references)
+        throw std::invalid_argument("latent-aot-file-reference-budget");
+    std::vector<std::string> result;
+    result.reserve(references.size());
+    for (const auto& reference : references) {
+        if (reference.empty() || reference.size() > 256u)
+            throw std::invalid_argument("latent-aot-file-reference-invalid");
+        result.push_back(normalize_disc_reference(reference));
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::string_view disc_basename(const std::string_view value) noexcept {
+    const auto slash = value.find_last_of('/');
+    return value.substr(slash == std::string_view::npos ? 0u : slash + 1u);
 }
 
 bool source_binding_less(const PreparedLatentAotSourceBinding& left,
@@ -1069,6 +1108,41 @@ CandidateAnalysisOutcome finalize_candidate_program(
             return reject_candidate(
                 LatentAotAnalysisRejection::EntryBlockMissing);
     }
+    std::vector<std::uint32_t> external_code_pointer_candidates;
+    external_code_pointer_candidates.reserve(std::min<std::size_t>(
+        candidate.bytes.size() / sizeof(std::uint32_t),
+        maximum_prepared_latent_aot_external_code_pointer_candidates));
+    const auto module_begin = static_cast<std::uint64_t>(
+        candidate.source_address);
+    const auto module_limit = module_begin + candidate.size;
+    for (std::size_t offset = 0u;
+         offset + sizeof(std::uint32_t) <= candidate.bytes.size();
+         offset += alignof(std::uint32_t)) {
+        const auto value =
+            static_cast<std::uint32_t>(candidate.bytes[offset]) |
+            (static_cast<std::uint32_t>(candidate.bytes[offset + 1u]) << 8u) |
+            (static_cast<std::uint32_t>(candidate.bytes[offset + 2u]) << 16u) |
+            (static_cast<std::uint32_t>(candidate.bytes[offset + 3u]) << 24u);
+        const auto direct_segment = value >> 29u;
+        if (direct_segment != 4u && direct_segment != 5u) continue;
+        const auto normalized = (value & 0x1fffffffu) | 0x80000000u;
+        if (normalized >= module_begin && normalized < module_limit) continue;
+        if (!std::binary_search(options.external_code_targets.begin(),
+                                options.external_code_targets.end(),
+                                normalized))
+            continue;
+        external_code_pointer_candidates.push_back(normalized);
+    }
+    std::sort(external_code_pointer_candidates.begin(),
+              external_code_pointer_candidates.end());
+    external_code_pointer_candidates.erase(
+        std::unique(external_code_pointer_candidates.begin(),
+                    external_code_pointer_candidates.end()),
+        external_code_pointer_candidates.end());
+    if (external_code_pointer_candidates.size() >
+        maximum_prepared_latent_aot_external_code_pointer_candidates)
+        return reject_candidate(
+            LatentAotAnalysisRejection::BlockBudgetExceeded);
     auto module_id =
         "latent-aot-" + candidate.byte_identity.substr(7u) +
         "-" + std::to_string(candidate.size);
@@ -1080,6 +1154,7 @@ CandidateAnalysisOutcome finalize_candidate_program(
             candidate.source_address,
             candidate.source_bindings,
             candidate.entry_offsets,
+            std::move(external_code_pointer_candidates),
             std::move(unique_block_identities),
             std::move(program),
             std::move(hardware_audit)},
@@ -1520,7 +1595,8 @@ LatentAotDiscovery discover_latent_aot_modules(
     const std::span<const std::string> excluded_byte_identities,
     const LatentAotDiscoveryOptions& options,
     const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
-    const std::span<const LatentAotEntryHint> entry_hints) {
+    const std::span<const LatentAotEntryHint> entry_hints,
+    const std::span<const std::string> prioritized_file_references) {
     auto discovery_progress = options.progress.begin(
         katana::ProgressOperation::LatentAotAnalysis,
         katana::ProgressUnit::Bytes,
@@ -1568,6 +1644,18 @@ LatentAotDiscovery discover_latent_aot_modules(
             maximum_analysis_implementation_identity_bytes ||
         options.analysis_cache_implementation_identity.size() >
             maximum_analysis_implementation_identity_bytes ||
+        options.external_code_targets.size() > 65'536u ||
+        !std::is_sorted(options.external_code_targets.begin(),
+                        options.external_code_targets.end()) ||
+        std::adjacent_find(options.external_code_targets.begin(),
+                           options.external_code_targets.end()) !=
+            options.external_code_targets.end() ||
+        std::any_of(options.external_code_targets.begin(),
+                    options.external_code_targets.end(),
+                    [](const std::uint32_t address) {
+                        return (address & 1u) != 0u ||
+                               (address >> 29u) != 4u;
+                    }) ||
         options.source_address_begin >= options.source_address_end ||
         (options.source_address_begin & 3u) != 0u ||
         (options.source_address_end & 3u) != 0u)
@@ -1577,6 +1665,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                     [](const auto range) { return !valid_linear_physical_range(range); }))
         throw std::invalid_argument("Latente AOT-Discovery besitzt ungueltige belegte Ranges.");
     const auto normalized_entry_hints = normalize_entry_hints(entry_hints);
+    const auto normalized_file_references =
+        normalize_file_references(prioritized_file_references);
     std::vector<bool> matched_entry_hints(normalized_entry_hints.size(), false);
     if (!heuristic_discovery && normalized_entry_hints.empty()) {
         discovery_progress.skipped();
@@ -1635,6 +1725,32 @@ LatentAotDiscovery discover_latent_aot_modules(
             return left.second.size < right.second.size;
         return left.first < right.first;
     });
+    std::map<std::string, std::size_t> file_basename_counts;
+    for (const auto& file : files)
+        ++file_basename_counts[std::string(
+            disc_basename(normalize_disc_reference(file.first)))];
+    std::vector<std::size_t> heuristic_file_order(files.size());
+    std::iota(heuristic_file_order.begin(), heuristic_file_order.end(), 0u);
+    const auto file_is_referenced = [&](const std::size_t index) {
+        if (normalized_file_references.empty()) return false;
+        const auto path = normalize_disc_reference(files[index].first);
+        if (std::binary_search(normalized_file_references.begin(),
+                               normalized_file_references.end(), path))
+            return true;
+        const auto basename = std::string(disc_basename(path));
+        const auto count = file_basename_counts.find(basename);
+        if (count == file_basename_counts.end() || count->second != 1u)
+            return false;
+        return std::any_of(
+            normalized_file_references.begin(),
+            normalized_file_references.end(),
+            [&](const auto& reference) {
+                return disc_basename(reference) == basename;
+            });
+    };
+    std::stable_partition(
+        heuristic_file_order.begin(), heuristic_file_order.end(),
+        file_is_referenced);
     {
         katana::ProgressCounterSnapshot counters;
         counters.discovered = files.size();
@@ -1803,7 +1919,8 @@ LatentAotDiscovery discover_latent_aot_modules(
 
     std::size_t heuristic_candidate_count = 0u;
     if (heuristic_discovery) {
-        for (const auto& file : files) {
+        for (const auto file_index : heuristic_file_order) {
+            const auto& file = files[file_index];
             const auto& entry = file.second;
             if (source_binding_count >=
                 maximum_latent_aot_source_bindings)
@@ -2083,6 +2200,20 @@ LatentAotDiscovery discover_latent_aot_modules(
     discovery_progress.complete(
         result.examined_bytes);
     return result;
+}
+
+LatentAotDiscovery discover_latent_aot_modules(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    const std::uint32_t volume_start_lba,
+    const std::uint32_t extent_lba_bias,
+    const std::span<const std::string> excluded_byte_identities,
+    const LatentAotDiscoveryOptions& options,
+    const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    const std::span<const LatentAotEntryHint> entry_hints) {
+    return discover_latent_aot_modules(
+        std::move(source), volume_start_lba, extent_lba_bias,
+        excluded_byte_identities, options, occupied_source_ranges,
+        entry_hints, {});
 }
 
 } // namespace katana::codegen

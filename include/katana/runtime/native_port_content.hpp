@@ -1,15 +1,19 @@
 #pragma once
 
 #include "katana/runtime/native_port.hpp"
+#include "katana/runtime/native_port_cpu_control.hpp"
 #include "katana/runtime/runtime.hpp"
 
 #include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace katana::runtime {
+
+class NativePortImmutableWriteGuard;
 
 inline constexpr std::uint32_t native_port_main_memory_physical_base =
     0x0C000000u;
@@ -23,7 +27,8 @@ inline constexpr std::uint32_t native_port_main_memory_physical_span =
 // device map.
 class NativePortMemory final {
   public:
-    NativePortMemory();
+    explicit NativePortMemory(
+        std::uint32_t initial_cache_control_value = 0u);
 
     NativePortMemory(const NativePortMemory&) = delete;
     NativePortMemory& operator=(const NativePortMemory&) = delete;
@@ -32,6 +37,8 @@ class NativePortMemory final {
 
     [[nodiscard]] CpuState& cpu() noexcept;
     [[nodiscard]] const CpuState& cpu() const noexcept;
+    [[nodiscard]] NativePortCpuControl& cpu_control() noexcept;
+    [[nodiscard]] const NativePortCpuControl& cpu_control() const noexcept;
 
     void load_verified_images(
         const std::filesystem::path& content_root,
@@ -40,6 +47,95 @@ class NativePortMemory final {
   private:
     CpuState cpu_;
     std::shared_ptr<LinearMemoryDevice> main_memory_;
+    std::shared_ptr<NativePortCpuControl> cpu_control_;
+};
+
+// Export-time analyzed code for a disc file is represented at a synthetic
+// source address.  The native product may later load those exact bytes into
+// ordinary title RAM.  These views let the dispatcher bind that runtime copy
+// to the already generated AOT code; they never decode or generate guest code
+// at runtime.
+struct NativePortLoadedAotBlockIdentityView {
+    std::uint32_t source_offset = 0u;
+    std::uint32_t byte_size = 0u;
+    std::string_view sha256;
+};
+
+struct NativePortLoadedAotModuleView {
+    std::uint32_t source_start = 0u;
+    std::uint32_t byte_size = 0u;
+    std::string_view sha256;
+    std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
+};
+
+// A fixed-address title image is executable only while its exact identity is
+// active at the declared runtime range.  Unlike bootstrap code, such ranges
+// may be replaced by a later title overlay through this explicit lifecycle.
+struct NativePortRuntimeImageView final {
+    std::string_view image_id;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t byte_size = 0u;
+    // Identity of the immutable source image consumed by analysis/export.
+    // Runtime data words may legitimately differ after bootstrap; every AOT
+    // entry is therefore validated separately against its exact runtime bytes.
+    std::string_view sha256;
+    std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
+};
+
+class NativePortRuntimeImageBindings final {
+  public:
+    NativePortRuntimeImageBindings(
+        CpuState& cpu,
+        std::span<const NativePortRuntimeImageView> images,
+        NativePortImmutableWriteGuard& immutable_guard);
+    ~NativePortRuntimeImageBindings() noexcept;
+
+    NativePortRuntimeImageBindings(const NativePortRuntimeImageBindings&) = delete;
+    NativePortRuntimeImageBindings& operator=(
+        const NativePortRuntimeImageBindings&) = delete;
+    NativePortRuntimeImageBindings(NativePortRuntimeImageBindings&&) = delete;
+    NativePortRuntimeImageBindings& operator=(
+        NativePortRuntimeImageBindings&&) = delete;
+
+    void activate(std::string_view image_id);
+    // The requested interval must fully cover every overlapping active image;
+    // partial replacement is rejected. Returns the number deactivated.
+    [[nodiscard]] std::size_t deactivate_runtime_range(
+        std::uint32_t runtime_start,
+        std::size_t byte_size);
+    [[nodiscard]] bool active(std::string_view image_id) const noexcept;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+class NativePortLoadedAotBinder final {
+  public:
+    NativePortLoadedAotBinder(
+        CpuState& cpu,
+        std::span<const NativePortLoadedAotModuleView> modules,
+        NativePortImmutableWriteGuard& immutable_guard);
+    ~NativePortLoadedAotBinder() noexcept;
+
+    NativePortLoadedAotBinder(const NativePortLoadedAotBinder&) = delete;
+    NativePortLoadedAotBinder& operator=(
+        const NativePortLoadedAotBinder&) = delete;
+    NativePortLoadedAotBinder(NativePortLoadedAotBinder&&) = delete;
+    NativePortLoadedAotBinder& operator=(
+        NativePortLoadedAotBinder&&) = delete;
+
+    // Returns true only when target belongs to an already active mapping.
+    // An exact block-identity mismatch is a typed AOT-contract failure.
+    [[nodiscard]] bool validate_bound_entry(std::uint32_t target) const;
+    // Installs one unambiguous exact-byte mapping for target. False means no
+    // analyzed module matches; ambiguous or malformed state fails closed.
+    [[nodiscard]] bool bind_entry(std::uint32_t target);
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 // Bootstrap validation deliberately observes the complete aliased 16-MiB

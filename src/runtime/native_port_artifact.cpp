@@ -229,6 +229,7 @@ serialize_definition(const NativePortDefinition& definition) {
     writer.u32(definition.bootstrap.vector_base);
     writer.u32(definition.bootstrap.status_register);
     writer.u32(definition.bootstrap.fpscr);
+    writer.u32(definition.bootstrap.cache_control_value);
     writer.u32(definition.bootstrap.post_entry_point);
     writer.u32(checked_count(
         definition.bootstrap.post_aot_roots.size()));
@@ -289,6 +290,9 @@ serialize_definition(const NativePortDefinition& definition) {
         writer.u32(resolution.instruction_address);
         writer.u32(resolution.hook_guest_address);
     }
+    writer.u32(definition.frame_timing.simulation_rate_hz);
+    writer.u32(definition.frame_timing.default_presentation_rate_hz);
+    writer.u32(definition.frame_timing.maximum_presentation_rate_hz);
     return std::move(writer).finish();
 }
 
@@ -507,6 +511,7 @@ void NativePortArtifact::rebuild_definition() {
     definition_.images = images_;
     definition_.hooks = hooks_;
     definition_.hardware_resolutions = hardware_resolutions_;
+    definition_.frame_timing = frame_timing_;
     validate_native_port_definition(definition_);
 }
 
@@ -555,6 +560,7 @@ NativePortArtifact::load(const std::filesystem::path& path) {
     result->bootstrap_.vector_base = reader.u32();
     result->bootstrap_.status_register = reader.u32();
     result->bootstrap_.fpscr = reader.u32();
+    result->bootstrap_.cache_control_value = reader.u32();
     result->bootstrap_.post_entry_point = reader.u32();
     const auto post_aot_root_count = reader.count();
     result->bootstrap_post_aot_roots_.reserve(post_aot_root_count);
@@ -646,6 +652,9 @@ NativePortArtifact::load(const std::filesystem::path& path) {
         resolution.hook_guest_address = reader.u32();
         result->hardware_resolutions_.push_back(resolution);
     }
+    result->frame_timing_.simulation_rate_hz = reader.u32();
+    result->frame_timing_.default_presentation_rate_hz = reader.u32();
+    result->frame_timing_.maximum_presentation_rate_hz = reader.u32();
 
     if (!reader.empty())
         artifact_error("Native-port artifact has unexpected trailing data.");

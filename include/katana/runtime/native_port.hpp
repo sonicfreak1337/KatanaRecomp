@@ -13,10 +13,13 @@ namespace katana::runtime {
 struct CpuState;
 class NativePortGraphicsDevice;
 class NativePortPlatformServices;
+class NativePortTextureRegistry;
+class NativePortCpuControl;
+class NativePortRuntimeImageBindings;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 7u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 9u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;
@@ -98,6 +101,9 @@ struct NativePortImageBinding final {
 
 struct NativePortHookBinding final {
     std::uint32_t guest_address = 0u;
+    // Instruction hooks cover one architectural instruction: two bytes for
+    // an ordinary SH-4 instruction, or four bytes when its mandatory delay
+    // slot is part of the atomic replacement boundary.
     std::uint32_t covered_size = 0u;
     NativePortHookKind kind = NativePortHookKind::FunctionEntry;
     NativePortHookRequirement requirement =
@@ -166,6 +172,10 @@ struct NativePortBootstrap final {
     std::uint32_t vector_base = 0u;
     std::uint32_t status_register = 0u;
     std::uint32_t fpscr = 0u;
+    // Persistent guest-visible SH-4 CCR configuration at the native entry.
+    // Invalidation command bits are forbidden here because they self-clear;
+    // the product maps only this CPU-control register, never cache arrays.
+    std::uint32_t cache_control_value = 0u;
     // The title bootstrap must leave PC at this exact post-checkpoint entry.
     // Static analysis/codegen uses only the post-AOT roots below, never the
     // loader's pre-checkpoint entry points.  `post_aot_roots` contains true
@@ -201,6 +211,16 @@ struct NativePortAcceptanceBinding final {
     std::uint32_t witness_hook_guest_address = 0u;
 };
 
+// Title simulation cadence is part of the native product contract rather
+// than a Dreamcast device clock.  Presentation may run faster by repeating a
+// completed GPU frame, but it can never advance title state more frequently
+// than simulation_rate_hz.
+struct NativePortFrameTimingBinding final {
+    std::uint32_t simulation_rate_hz = 60u;
+    std::uint32_t default_presentation_rate_hz = 60u;
+    std::uint32_t maximum_presentation_rate_hz = 1'000u;
+};
+
 struct NativePortDefinition final {
     std::uint32_t contract_version =
         native_port_definition_contract_version;
@@ -218,6 +238,7 @@ struct NativePortDefinition final {
     std::span<const NativePortImageBinding> images;
     std::span<const NativePortHookBinding> hooks;
     std::span<const NativePortHardwareResolution> hardware_resolutions;
+    NativePortFrameTimingBinding frame_timing{};
 };
 
 enum class NativePortLifecycleState : std::uint8_t {
@@ -236,6 +257,11 @@ class NativePortHostServices {
     [[nodiscard]] virtual std::uint64_t monotonic_time_nanoseconds()
         const noexcept = 0;
     [[nodiscard]] virtual NativePortLifecycleState poll_lifecycle() = 0;
+    // Synchronize a title-level frame boundary with the native simulation
+    // cadence.  This is the semantic replacement for SDK busy-waits on a
+    // guest scanline/vblank register: the product waits on host monotonic
+    // time and never constructs a video-status device or register value.
+    virtual void synchronize_simulation_boundary() = 0;
     virtual void begin_frame(std::uint64_t frame_index) = 0;
     virtual void present_frame(std::uint64_t frame_index) = 0;
     [[nodiscard]] virtual std::uint64_t presented_frames()
@@ -315,6 +341,9 @@ class NativePortContext final {
     NativePortHostServices* host = nullptr;
     NativePortGraphicsDevice* graphics = nullptr;
     NativePortPlatformServices* platform = nullptr;
+    NativePortTextureRegistry* textures = nullptr;
+    NativePortCpuControl* cpu_control = nullptr;
+    NativePortRuntimeImageBindings* runtime_images = nullptr;
     NativePortAotBridge aot;
     void* title_state = nullptr;
     std::uint64_t frame_index = 0u;
@@ -323,9 +352,9 @@ class NativePortContext final {
     NativePortBootstrapPhase bootstrap_phase =
         NativePortBootstrapPhase::NotStarted;
 
-    // Generated product code binds the private acceptance witness before
-    // bootstrap dispatch. Title code can report it only while that exact hook
-    // is executing and only after a new native frame was presented.
+    // Generated product code binds the private acceptance witness only after
+    // bootstrap has completed. Title code can report it only while that exact
+    // hook is executing and only after a newer native frame was presented.
     void bind_acceptance(const NativePortAcceptanceBinding& binding) noexcept;
     [[nodiscard]] std::uint32_t begin_hook_dispatch(
         std::uint32_t guest_address) noexcept;

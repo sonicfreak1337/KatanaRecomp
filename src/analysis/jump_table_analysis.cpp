@@ -890,17 +890,71 @@ recognize_snapshot_absolute_jump_table_candidates(
     if (!indexed_load_index.has_value() || *indexed_load_index == 0u) return std::nullopt;
 
     const auto& indexed_load = lines[*indexed_load_index];
-    const auto& base_load = lines[*indexed_load_index - 1u];
-    if (!contiguous(base_load, indexed_load) ||
-        base_load.instruction.kind !=
-            katana::sh4::InstructionKind::MovLongLoadPcRelative ||
-        base_load.instruction.destination_register != indexed_load.instruction.source_register ||
-        indexed_load.instruction.source_register == 0u)
-        return std::nullopt;
+    const katana::sh4::DisassemblyLine* base_load = nullptr;
+    if (*indexed_load_index != 0u) {
+        const auto& adjacent_base = lines[*indexed_load_index - 1u];
+        if (contiguous(adjacent_base, indexed_load) &&
+            adjacent_base.instruction.kind ==
+                katana::sh4::InstructionKind::MovLongLoadPcRelative &&
+            adjacent_base.instruction.destination_register ==
+                indexed_load.instruction.source_register &&
+            indexed_load.instruction.source_register != 0u)
+            base_load = &adjacent_base;
+    }
+
+    // SH-4 indexed loads add R0 and Rm symmetrically, but the decoder names
+    // Rm as the source register.  SDK dispatchers also commonly keep the
+    // immutable table base in R0 and the scaled enum in Rm:
+    //
+    //   mov.l @(disp,pc),r0
+    //   shll2 Rm
+    //   mov.l @(r0,Rm),Rn
+    //   jsr   @Rn
+    //
+    // Treat that as the same bounded absolute table shape.  Both writers
+    // must be the first writes seen on the straight-line backward slice so a
+    // stale R0 or an unscaled byte offset cannot manufacture candidates.
+    if (base_load == nullptr && indexed_load.instruction.source_register != 0u) {
+        const auto index_register = indexed_load.instruction.source_register;
+        const katana::sh4::DisassemblyLine* r0_base_load = nullptr;
+        bool scaled_index = false;
+        bool r0_writer_seen = false;
+        bool index_writer_seen = false;
+        auto next_address = indexed_load.address;
+        for (auto cursor = *indexed_load_index; cursor > 0u;) {
+            --cursor;
+            const auto& candidate = lines[cursor];
+            if (candidate.address > std::numeric_limits<std::uint32_t>::max() - 2u ||
+                candidate.address + 2u != next_address)
+                break;
+            next_address = candidate.address;
+            if (candidate.instruction.changes_control_flow()) break;
+
+            const auto writes = general_register_write_mask(candidate.instruction);
+            if (!r0_writer_seen && (writes & 1u) != 0u) {
+                r0_writer_seen = true;
+                if (candidate.instruction.kind ==
+                        katana::sh4::InstructionKind::MovLongLoadPcRelative &&
+                    candidate.instruction.destination_register == 0u)
+                    r0_base_load = &candidate;
+            }
+            if (!index_writer_seen &&
+                (writes & static_cast<std::uint16_t>(1u << index_register)) != 0u) {
+                index_writer_seen = true;
+                scaled_index =
+                    candidate.instruction.kind ==
+                        katana::sh4::InstructionKind::ShiftLogicalLeftTwo &&
+                    candidate.instruction.destination_register == index_register;
+            }
+            if (r0_writer_seen && index_writer_seen) break;
+        }
+        if (r0_base_load != nullptr && scaled_index) base_load = r0_base_load;
+    }
+    if (base_load == nullptr || base_load->is_delay_slot) return std::nullopt;
 
     const auto literal_address =
-        ((base_load.address + 4u) & ~3u) +
-        static_cast<std::uint32_t>(base_load.instruction.displacement);
+        ((base_load->address + 4u) & ~3u) +
+        static_cast<std::uint32_t>(base_load->instruction.displacement);
     const auto resolved_literal = image.resolve_segment_address(literal_address, 4u);
     if (!resolved_literal.has_value()) return std::nullopt;
     const auto* literal_segment = image.find_segment(*resolved_literal, 4u);

@@ -130,8 +130,8 @@ einem expliziten Buildprofil als Diagnosewerkzeug erhalten. Dabei gilt:
 - native Hooks duerfen nicht zur Laufzeit auf historische Geraetemodelle
   zurueckfallen.
 
-KR-5000 bindet diese Grenze an Runtime-ABI `98`, Analyzer-ABI `37`, Backend-
-Interface-ABI `20`, Portprojektvertrag `87` und Native-Port-Profilvertrag `11`.
+KR-5000 bindet diese Grenze an Runtime-ABI `101`, Analyzer-ABI `39`, Backend-
+Interface-ABI `21`, Portprojektvertrag `89` und Native-Port-Profilvertrag `13`.
 Der aktuelle GameProject-Vertrag steht auf `7`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
@@ -262,11 +262,14 @@ erhaelt den typisierten Hook-Abbruch bis zum Produktlauf; Linkmap-/PE-Importaudi
 und historische CpuState-Bindings bleiben fail-closed. Die Bootstrap-Zeitgrenze
 verwendet eine frische monotone Host-Epoche; Acceptance darf erst nach
 erfolgreichem Bootstrap und nativer Frame-Presentation bezeugt werden. Der
-aktuelle Lauf erreichte den ersten nativen untexturierten Draw und danach den
-Sprite-Texture-Pfad, endete jedoch typisiert mit `0x53414704`; die
+aktuelle Lauf vervollstaendigte Film `id=0` mit `200` dekodierten, `200`
+praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
+Audioframes. Der schwarze/stale-Overlay-Uebergang ist geschlossen; Film
+`id=1`/Opening und Hauptmenue bleiben offen. Der aktive P0 ist die statisch
+gebundene Post-Overlay-Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT
+oder Linkaudit. Der typisierte Laufblocker ist `MissingStaticEntry`; die
 Hardware-Closure weist `194` bekannte und `175` offene native Hookstellen aus.
-Der aktive P0 ist die generische Content-zu-Texture-Pipeline, nicht Bootstrap,
-AOT oder Linkaudit. Bring-up-Probes sind begrenzt, aber kein Ersatz fuer
+Bring-up-Probes sind begrenzt, aber kein Ersatz fuer
 vollstaendige Hook-/Hardware-Closure.
 
 ## Verbindliche Taskreihenfolge

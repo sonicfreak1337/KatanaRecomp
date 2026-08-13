@@ -5,6 +5,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 
 namespace katana::runtime {
 
@@ -26,7 +27,8 @@ namespace {
 
 NativePortImmutableWriteGuard::NativePortImmutableWriteGuard(
     const std::span<const NativePortImmutableRange> ranges)
-    : ranges_(ranges) {
+    : fixed_ranges_(ranges.begin(), ranges.end()),
+      ranges_(ranges.begin(), ranges.end()) {
     if (ranges_.empty())
         throw NativePortContractError(
             NativePortContractFailure::InvalidDefinition,
@@ -58,6 +60,100 @@ NativePortImmutableWriteGuard::NativePortImmutableWriteGuard(
         previous_end = range_end;
         first = false;
     }
+}
+
+void NativePortImmutableWriteGuard::add_runtime_executable_range(
+    const std::uint32_t address,
+    const std::size_t size) {
+    if (size == 0u || size > std::numeric_limits<std::uint32_t>::max())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-runtime-executable-range-size");
+    const auto physical = native_port_backing_address(address);
+    const auto final_address =
+        address + static_cast<std::uint32_t>(size - 1u);
+    const auto end = static_cast<std::uint64_t>(physical) + size;
+    if (final_address < address ||
+        native_port_backing_address(final_address) != end - 1u ||
+        end > static_cast<std::uint64_t>(
+                  std::numeric_limits<std::uint32_t>::max()) +
+                  1u)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-runtime-executable-range-address");
+
+    const NativePortImmutableRange inserted{
+        physical, static_cast<std::uint32_t>(size),
+        native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::Executable)};
+    if (std::find(runtime_ranges_.begin(), runtime_ranges_.end(), inserted) !=
+        runtime_ranges_.end())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-runtime-executable-range-duplicate");
+    runtime_ranges_.push_back(inserted);
+    rebuild_ranges();
+}
+
+void NativePortImmutableWriteGuard::remove_runtime_executable_range(
+    const std::uint32_t address,
+    const std::size_t size) {
+    if (size == 0u || size > std::numeric_limits<std::uint32_t>::max())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-runtime-executable-remove-size");
+    const auto physical = native_port_backing_address(address);
+    const NativePortImmutableRange removed{
+        physical, static_cast<std::uint32_t>(size),
+        native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::Executable)};
+    const auto found =
+        std::find(runtime_ranges_.begin(), runtime_ranges_.end(), removed);
+    if (found == runtime_ranges_.end())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-runtime-executable-remove-missing");
+    runtime_ranges_.erase(found);
+    rebuild_ranges();
+}
+
+void NativePortImmutableWriteGuard::rebuild_ranges() {
+    ranges_ = fixed_ranges_;
+    ranges_.insert(
+        ranges_.end(), runtime_ranges_.begin(), runtime_ranges_.end());
+    std::sort(ranges_.begin(), ranges_.end(), [](const auto& left,
+                                                 const auto& right) {
+        return std::tie(left.physical_address, left.byte_size,
+                        left.kind_mask) <
+               std::tie(right.physical_address, right.byte_size,
+                        right.kind_mask);
+    });
+    std::vector<NativePortImmutableRange> merged;
+    merged.reserve(ranges_.size());
+    for (const auto& range : ranges_) {
+        if (merged.empty()) {
+            merged.push_back(range);
+            continue;
+        }
+        auto& previous = merged.back();
+        const auto previous_end =
+            static_cast<std::uint64_t>(previous.physical_address) +
+            previous.byte_size;
+        const auto range_end =
+            static_cast<std::uint64_t>(range.physical_address) +
+            range.byte_size;
+        if (range.physical_address > previous_end) {
+            merged.push_back(range);
+            continue;
+        }
+        const auto merged_end = std::max(previous_end, range_end);
+        previous.byte_size = static_cast<std::uint32_t>(
+            merged_end - previous.physical_address);
+        previous.kind_mask |= range.kind_mask;
+    }
+    ranges_ = std::move(merged);
+    all_kind_mask_ = 0u;
+    for (const auto& range : ranges_) all_kind_mask_ |= range.kind_mask;
 }
 
 std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(

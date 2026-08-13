@@ -25,14 +25,15 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 98, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 101, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 37, Function-Analysis-Epoch-Schema 27, lokales
+Analyzer-ABI 39, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 87, Native-Port-Profilvertrag 11 sowie PVR-State-Contract 3.
+Portprojektvertrag 89, Native-Port-Profilvertrag 13 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `29`, AOT-Partitionsschema: `7`.
 Der aktuelle GameProject-Vertrag ist `7` mit Artefaktformat `6`; der native
-Port-Definitionsvertrag ist `7` und bleibt davon getrennt. Die aktuellen
+Port-Definitionsvertrag ist `9` und bleibt davon getrennt; das
+NativePortArtifact-Format steht auf `9`. Die aktuellen
 Analyse-Direktiven stehen auf `3`, das Hardware-Closure-Schema auf `v4`, die
 Hookanforderungskarte auf `v2` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
@@ -95,7 +96,7 @@ Der vollstaendige native SFD-Opening-Stream lief ohne Skip bis EOS und endete
 sauber mit `Completed`: 3.257 dekodierte und 3.257 GPU-praesentierte
 Videoframes, 4.709.760 Audioframes, 3.257 GPU-Presents und `hardware=1`.
 KR-5005 bleibt das offene native Produktgate. Der aktive P0 ist jetzt die
-generische Native-Content-zu-Texture-Pipeline; Bootstrap-, AOT- und
+statisch gebundene Post-Overlay-Callback-/Function-Pointer-Kante; Bootstrap-, AOT- und
 Linkaudit-Befunde sind geschlossen beziehungsweise ueberholt und werden
 nicht als aktueller Blocker weitergefuehrt. Die Provider- und Draw-IR-Grenzen des
 nativen Grafikpfads sind backendneutral beschrieben; D3D11 ist zunaechst das
@@ -120,8 +121,18 @@ Der native Produktlauf erreichte den ersten untexturierten Draw und danach den
 Sprite-Texture-Pfad, endete aber erwartungsgemaess typisiert mit
 `0x53414704`. Die Hardware-Closure weist `194` bekannte Stellen und `175`
 offene native Hookbindungen aus. Es gibt keine Emulations- oder
-Interpreterfallbacks; der naechste P0 bleibt die generische Content-zu-Texture-
-Pipeline, nicht Bootstrap, AOT oder Linkaudit.
+Interpreterfallbacks; der naechste P0 ist die statisch gebundene
+Post-Overlay-Callback-/Function-Pointer-Kante, nicht Bootstrap, AOT oder
+Linkaudit.
+
+Der aktuelle native Produktbeleg vervollstaendigte Film `id=0` mit `200`
+dekodierten und `200` praesentierten Videoframes, `294.016` Audioframes und
+`200` sichtbar nichtschwarzen Frames. Das Checkpoint-Runtime-Image wurde vor
+dem ersten Stage-Overlay genau einmal deaktiviert; anschliessend wurden die
+Overlay-, Settings- und Camera-Assets identitaetsgebunden geladen. Der
+schwarze/stale-Overlay-Uebergang ist geschlossen. Film `id=1`/Opening und das
+Hauptmenue sind noch nicht erreicht; der Lauf endet aktuell typisiert an
+`MissingStaticEntry` einer post-Overlay Callback-/Function-Pointer-Kante.
 
 Der KR-5005-Zwischenfix schliesst die CMake-Deploymentgrenze fuer FFmpeg im
 Parent-Projekt: Die verifizierte Closure wird unabhaengig vom Caller-Scope
@@ -141,7 +152,7 @@ diesem historischen Checkpoint. Die damalige Erweiterung von
 `PortExportOptions` und `LatentAotDiscoveryOptions` fuehrte Backend-
 Interface-ABI `13` ein; der jetzt unabhaengige
 `PortExportOptions::native_port_definition`-Vertrag wurde inzwischen auf
-Backend-Interface-ABI `20` weiterentwickelt.
+Backend-Interface-ABI `21` weiterentwickelt.
 
 Der historische opt-in-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zugelassen. Ab v0.49.1 ist er ausschliesslich internes
@@ -315,13 +326,13 @@ Stackvertraege bleiben sekundaer zu pruefen; keine Budget-/Thread-Erhoehung und
 kein weiterer SavedEpoch-/Provenienzumbau.
 
 ```text
-Runtime-ABI:                    98
+Runtime-ABI:                    101
 Block-ABI:                       5
-Analyzer-ABI:                   37
+Analyzer-ABI:                   39
 PlatformServices-ABI:           14
-Backend-Interface-ABI:          20
-Portprojektvertrag:             87
-Native-Port-Profilvertrag:      11
+Backend-Interface-ABI:          21
+Portprojektvertrag:             89
+Native-Port-Profilvertrag:      13
 Native-AOT-Emissionsprofil:     29
 AOT-Partitionsschema:            7
 ```
@@ -438,8 +449,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 98 und
-Portprojektvertrag 87. Davon getrennt verwendet `GameProject` Vertrag 7 und
+KR-5005-Stand verwendet Runtime-ABI 101, Portprojektvertrag 89 und
+Native-Port-Profilvertrag 13. Davon getrennt verwendet `GameProject` Vertrag 7 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

@@ -12,7 +12,8 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 1u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 2u;
+inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
     std::uint32_t width = 0u;
@@ -69,6 +70,34 @@ struct NativePortGraphicsConfig final {
     std::uint64_t maximum_texture_bytes = 1ull << 30u;
     std::uint32_t maximum_transient_vertices = 1'048'576u;
     std::uint32_t maximum_transient_indices = 3'145'728u;
+};
+
+// Native game time and host presentation cadence are deliberately separate.
+// One simulation frame advances title state; additional presentations only
+// repeat the most recently completed GPU frame.  This permits 120/144-Hz
+// output without making a 60-Hz title run two or more times too fast.
+//
+// The desktop host currently requires presentation_rate_hz to be at least
+// simulation_rate_hz.  Lower output rates need an explicit frame-drop policy
+// because silently blocking the simulation at the lower rate would change
+// game speed.
+struct NativePortFramePacingConfig final {
+    std::uint32_t contract_version =
+        native_port_frame_pacing_contract_version;
+    std::uint32_t simulation_rate_hz = 60u;
+    std::uint32_t presentation_rate_hz = 60u;
+    bool enabled = true;
+};
+
+struct NativePortFramePacingSnapshot final {
+    std::uint64_t simulation_frames = 0u;
+    std::uint64_t presentation_frames = 0u;
+    std::uint64_t repeated_presentations = 0u;
+    std::uint64_t late_simulation_frames = 0u;
+    std::uint64_t missed_presentation_deadlines = 0u;
+    std::uint32_t simulation_rate_hz = 0u;
+    std::uint32_t presentation_rate_hz = 0u;
+    bool enabled = false;
 };
 
 struct NativePortGraphicsLayout final {
@@ -266,6 +295,9 @@ class NativePortGraphicsDevice final {
     void begin_frame(const NativePortFrameConfig& config = {});
     void draw(const NativePortDrawPacket& packet);
     void present();
+    // Re-composite and present the last completed native GPU frame.  This is
+    // presentation-only: it never opens a title frame or advances game state.
+    void repeat_present();
 
     // Native movie/UI convenience path. It uploads one verified host image,
     // draws it through the same GPU command path and presents it. No guest
@@ -287,7 +319,8 @@ class NativePortGraphicsDevice final {
 class NativePortDesktopHost final : public NativePortHostServices {
   public:
     explicit NativePortDesktopHost(
-        const NativePortGraphicsConfig& graphics_config = {});
+        const NativePortGraphicsConfig& graphics_config = {},
+        const NativePortFramePacingConfig& frame_pacing_config = {});
     ~NativePortDesktopHost() override;
 
     NativePortDesktopHost(const NativePortDesktopHost&) = delete;
@@ -296,17 +329,29 @@ class NativePortDesktopHost final : public NativePortHostServices {
     [[nodiscard]] std::uint64_t monotonic_time_nanoseconds()
         const noexcept override;
     [[nodiscard]] NativePortLifecycleState poll_lifecycle() override;
+    void synchronize_simulation_boundary() override;
     void begin_frame(std::uint64_t frame_index) override;
     void present_frame(std::uint64_t frame_index) override;
     [[nodiscard]] std::uint64_t presented_frames()
         const noexcept override;
+    [[nodiscard]] NativePortFramePacingSnapshot frame_pacing_snapshot()
+        const noexcept;
 
     [[nodiscard]] NativePortGraphicsDevice& graphics() noexcept;
     [[nodiscard]] const NativePortGraphicsDevice& graphics() const noexcept;
 
   private:
+    void paced_present();
+
     NativePortGraphicsDevice graphics_;
+    NativePortFramePacingConfig frame_pacing_config_;
+    NativePortFramePacingSnapshot frame_pacing_snapshot_;
     std::uint64_t next_event_poll_nanoseconds_ = 0u;
+    std::uint64_t next_simulation_deadline_nanoseconds_ = 0u;
+    std::uint64_t next_presentation_deadline_nanoseconds_ = 0u;
+    std::uint64_t simulation_deadline_remainder_ = 0u;
+    std::uint64_t presentation_deadline_remainder_ = 0u;
+    bool frame_pacing_started_ = false;
 };
 
 } // namespace katana::runtime

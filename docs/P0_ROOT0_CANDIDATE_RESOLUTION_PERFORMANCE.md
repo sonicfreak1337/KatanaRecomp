@@ -1,8 +1,8 @@
 # P0 Candidate-Resolution: Aufgaben- und Messplan
 
 Status: historischer PlatformAbi-Analyseplan; der native Produktvertrag hat
-Vorrang. Aktuell gelten Runtime-ABI 98, Analyzer-ABI 37,
-Portprojektvertrag 87 und Native-Port-Profilvertrag 11. Der source-seitige
+Vorrang. Aktuell gelten Runtime-ABI 101, Analyzer-ABI 39,
+Portprojektvertrag 89 und Native-Port-Profilvertrag 13. Der source-seitige
 KR-4985/KR-4986/KR-4987/KR-4994-Fix ist abgeschlossen;
 die folgenden D1/D2/Candidate-Resolution-Werte sind historische PlatformAbi-
 Diagnostik. Der damalige RuntimeOnly-Bring-up verwendete Analyzer-ABI 34,
@@ -22,8 +22,9 @@ Resolution bleibt im RuntimeOnly-Bring-up deferred und ist nicht der aktuelle
 Produktblocker. Die identische Vergleichsreihe stieg bis `24,2926 MHz`, aber
 `100 MHz` und Memory-Card-Screen/Hauptmenue bleiben offen.
 
-Der aktuelle Runtime-P0 liegt im seriellen Runtime-/Dispatch-Overhead bis
-mindestens `100 MHz`, nicht in fehlender Movie-Decodierung. Die fruehere
+Der fruehere RuntimeOnly-P0 lag im seriellen Runtime-/Dispatch-Overhead bis
+mindestens `100 MHz`; der aktuelle native Produkt-P0 ist die statisch
+gebundene Post-Overlay-Callback-/Function-Pointer-Kante, nicht fehlende Movie-Decodierung. Die fruehere
 StartRender-/Frame-Finalize-Diagnose ist verworfen; StartRender wurde
 beobachtet. Dieses Dokument bewahrt die Candidate-Resolution-Diagnostik und
 deren historische Gates, behauptet aber keinen RuntimeOnly-Candidate-
@@ -354,7 +355,7 @@ Discards, Provenienz `31.713`, Cache `455.638.275 B`, maximale physische Dauer
 `admission_success=999`, `projected_context_changed=0`,
 `projected_match_changed=0`. Die Gateänderung ist korrekt, aber kein
 Konvergenzhebel. Historisch wurde dabei Inventory-Provenance-Live-in/
-Spill-through als P0-Folgepunkt vermutet; der aktuelle P0 ist nun die fehlende
+Spill-through als historischer P0-Folgepunkt vermutet; der damalige PlatformAbi-P0 war die fehlende
 Wirksamkeit der autoritativen Hybrid-Join-Closure beim vollständigen
 Stackvertrag/Gate. Dies ist ein historischer PlatformAbi-Befund.
 

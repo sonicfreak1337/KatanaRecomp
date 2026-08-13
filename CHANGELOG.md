@@ -4,6 +4,20 @@
 
 ### Geaendert
 
+- Der aktuelle native Produktlauf vervollstaendigte Film `id=0` mit `200`
+  dekodierten, `200` praesentierten und `200` sichtbar nichtschwarzen Frames
+  sowie `294.016` Audioframes. Das Checkpoint-Runtime-Image wurde vor dem
+  ersten Stage-Overlay einmalig deaktiviert und danach wurden Overlay-,
+  Settings- und Camera-Assets identitaetsgebunden geladen; der schwarze/stale-
+  Overlay-Uebergang ist geschlossen. Film `id=1`/Opening und Hauptmenue sind
+  noch nicht erreicht. Der aktuelle typisierte Blocker ist
+  `MissingStaticEntry` an einer post-Overlay Callback-/Function-Pointer-Kante.
+
+- Aktueller Vertragsstand: Runtime-ABI `101`, Analyzer-ABI `39`,
+  Backend-Interface-ABI `21`, Portprojektvertrag `89`, Native-Port-Profilvertrag
+  `13`, NativePortDefinition-Vertrag `9`, NativePortArtifact-Format `9`,
+  Native-Grafikvertrag `2` und Frame-Pacing-Vertrag `1`.
+
 - Der aktuelle KR-5005-Meilenstein schliesst die generische
   Post-Bootstrap-/AOT- und Closure-Pruefung: materialisierte Post-Bytes werden
   gegen jedes emittierte Instruktionswort validiert, exakte Non-Root-Grenzen,
@@ -19,7 +33,7 @@
   Nested-AOT-Fehlerfix erreichte erneut `44/44` Hits und bestand den strukturellen
   Linkaudit. Der Produktlauf erreichte den ersten nativen untexturierten Draw
   und anschliessend den Sprite-Texture-Pfad, endete jedoch typisiert mit
-  `0x53414704`. Der aktive P0 ist die generische Content-zu-Texture-Pipeline;
+  `0x53414704`. Der damalige aktive P0 war die generische Content-zu-Texture-Pipeline;
   Bootstrap, AOT und Linkaudit sind keine offenen Produktblocker.
 
 - Aktueller Vertragsstand: Runtime-ABI `98`, Analyzer-ABI `37`,

@@ -2,13 +2,13 @@
 
 Historischer Einfuehrungsstand: KR-4716
 
-Aktueller KR-5004-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
+Aktueller KR-5005-Stand: Die oeffentlichen ABI- und Portvertraege folgen dem
 aktiven Buildvertrag. KR-5001 bis KR-5004 sind source-seitig abgeschlossen;
-KR-5004 ist der aktive native Disc-/Eingabe-/Savepfad. Historische Checkpoint- und Laufangaben
+KR-5005 ist das offene native Produktgate. Historische Checkpoint- und Laufangaben
 bleiben an ihre damaligen Vertraege gebunden.
 
 Die oeffentlichen Ergebnislayouts dieser Analyse stehen unter
-[Analyzer-ABI 37](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
+[Analyzer-ABI 39](ANALYZER_ABI.md). Layoutaenderungen wie neue Provenienz-,
 Truncation- oder Inventarfelder sind damit vom Runtimevertrag getrennt
 versioniert und koennen nicht mehr unbemerkt mit einem anders gebauten
 Analyzerarchiv gelinkt werden.

@@ -4789,13 +4789,26 @@ void emit_block(std::ostringstream& output,
         }
     }
     if (!resume_entries.empty()) {
+        std::unordered_set<std::uint32_t> local_entry_addresses(
+            resume_entries.begin(), resume_entries.end());
+        local_entry_addresses.insert(block.start_address);
+        const auto emit_local_entry_cases = [&](const std::uint32_t address) {
+            const auto segment = address >> 29u;
+            if (segment == 4u || segment == 5u) {
+                const auto direct_alias = address ^ 0x20000000u;
+                if (!local_entry_addresses.contains(direct_alias))
+                    output << "                case " << hex32(direct_alias)
+                           << ":\n";
+            }
+            output << "                case " << hex32(address) << ":\n";
+        };
         output << "                switch ("
-               << unrelocated_code_address("cpu.pc") << ") {\n"
-               << "                case " << hex32(block.start_address) << ":\n"
-               << "                    break;\n";
+               << unrelocated_code_address("cpu.pc") << ") {\n";
+        emit_local_entry_cases(block.start_address);
+        output << "                    break;\n";
         for (const auto resume : resume_entries) {
-            output << "                case " << hex32(resume) << ":\n"
-                   << "                    goto " << cpp_block_label(resume)
+            emit_local_entry_cases(resume);
+            output << "                    goto " << cpp_block_label(resume)
                    << "_resume;\n";
         }
         output << "                default:\n"

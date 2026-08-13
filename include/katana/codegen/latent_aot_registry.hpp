@@ -25,6 +25,8 @@ inline constexpr std::size_t maximum_prepared_latent_aot_block_identities =
 inline constexpr std::uint64_t
     maximum_prepared_latent_aot_block_identity_bytes =
         64ull * 1024ull * 1024ull;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_external_code_pointer_candidates = 4096u;
 
 // A local, export-time-only request for a native entry in an exact disc module.
 // The offset is meaningful only for the exact byte identity and logical disc
@@ -89,6 +91,11 @@ struct LatentAotDiscoveryOptions {
     std::size_t maximum_analysis_contexts = 65536u;
     std::uint32_t source_address_begin = 0x88000000u;
     std::uint32_t source_address_end = 0x8C000000u;
+    // Optional sorted, unique, P1-normalized primary-image function entries.
+    // Module discovery records only aligned pointer cells equal to one of these
+    // identity-bound targets. The list never creates module entries by itself;
+    // the exporter performs the final executable-image admission.
+    std::span<const std::uint32_t> external_code_targets;
 };
 
 struct LatentAotOccupiedRange {
@@ -131,6 +138,14 @@ struct PreparedLatentAotModule {
     // require a native source block for every listed offset before publishing
     // a loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
+    // Sorted, unique P1-normalized values from aligned pointer-width cells in
+    // the exact module bytes which point outside the module's synthetic AOT
+    // extent. They are candidates only: the product exporter may promote one
+    // to a primary-image callback root solely when an identity-bound external
+    // GameProject function declaration and executable primary bytes agree.
+    // Keeping discovery and admission separate prevents arbitrary module data
+    // from becoming code while preserving statically stored cross-image calls.
+    std::vector<std::uint32_t> external_code_pointer_candidates;
     // Sorted identities for every uniquely emitted native IR block and exact
     // internal resume entry. Resume ranges may be nested suffixes of their IR
     // owner, but entry offsets are unique. Only hashes survive export-time
@@ -177,5 +192,21 @@ struct LatentAotDiscovery {
     const LatentAotDiscoveryOptions& options = {},
     std::span<const LatentAotOccupiedRange> occupied_source_ranges = {},
     std::span<const LatentAotEntryHint> entry_hints = {});
+
+// Like the stable public overload above, but gives bounded heuristic discovery
+// a deterministic priority set derived from strings in the already verified
+// executable image.  References are selection hints only: unlike exact entry
+// hints they never force a candidate to pass analysis.  This lets a native
+// port discover late-loaded executable files beyond the generic directory
+// candidate cap without turning arbitrary data-file names into trusted code.
+[[nodiscard]] LatentAotDiscovery discover_latent_aot_modules(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    std::uint32_t volume_start_lba,
+    std::uint32_t extent_lba_bias,
+    std::span<const std::string> excluded_byte_identities,
+    const LatentAotDiscoveryOptions& options,
+    std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    std::span<const LatentAotEntryHint> entry_hints,
+    std::span<const std::string> prioritized_file_references);
 
 } // namespace katana::codegen

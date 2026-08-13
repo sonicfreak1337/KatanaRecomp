@@ -215,8 +215,9 @@ Unterstuetzung ist spaeter geplant und aktuell keine Prioritaet.
 Die generischen Bootstrap-, Materialisierungs-, Boundary-, Overlay-,
 Callback-Root-, Replacement-Reachability-, Linkmap-/PE-Import- und
 Nested-AOT-Fehlertransport-Findings sind im aktuellen Source-Review
-geschlossen beziehungsweise ueberholt. Der aktive P0 ist die native
-Content-zu-Texture-Pipeline; KR-5005 bleibt als Produktgate offen.
+geschlossen beziehungsweise ueberholt. Der aktive P0 ist die statisch
+gebundene Post-Overlay-Callback-/Function-Pointer-Kante; KR-5005 bleibt als
+Produktgate offen.
 Ein KR-5005-Zwischenfix transportiert
 die verifizierte FFmpeg-Deploymentclosure bei Parent-Projekten ueber globale
 CMake-Properties und validiert jede Quelle sowie sichere Dateinamen
@@ -227,7 +228,7 @@ Der Linkaudit-Zwischenfix maskiert nur das vollstaendige erlaubte Fragment
 verboten. Der bestaetigte Audit-Lauf endete mit Exit `0` ohne Legacy-Geraete-
 oder Interpreter-Symbole.
 
-Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `87` auf einem eigenen
+Der KR-5005-Hostbuildpfad steht mit Portprojektvertrag `89` auf einem eigenen
 schnellen AOT-Profil: Bring-up verwendet fuer generierte Spiel-TUs `/Od /Ob0`,
 keine gemeinsame MSVC-PDB, einen gemessenen Vierer-Ninja-Pool und 4.096
 Dispatch-Eintraege pro Shard. Runtime, Titeladapter und Bootstrap bleiben
@@ -239,7 +240,7 @@ bei `337,205 s` Hostbuildzeit. Der sichtbare Laufnachweis bleibt offen.
 
 Der erste Start belegte eine native Bootstrapluecke statt eines Sonic-
 Analysefehlers: initiales identity-bound Titel-RAM wurde unter bereits
-aktiven Laufzeitguards geschrieben. Portprojektvertrag `87` materialisiert
+aktiven Laufzeitguards geschrieben. Portprojektvertrag `89` materialisiert
 diesen Zustand jetzt vor Guard/AOT-Aktivierung, sperrt Gastcallbacks bis zur
 erfolgreichen Rueckkehr und validiert danach Pointer, Stopzustand und
 Brueckenvertrag fail-closed.
@@ -258,9 +259,18 @@ exportiert; der Folgeexport nach dem Nested-AOT-Fehlerfix erreichte erneut
 den ersten nativen untexturierten Draw und danach den Sprite-Texture-Pfad,
 endete aber typisiert mit `0x53414704`. Die Hardware-Closure weist `194`
 bekannte Stellen und `175` offene native Hookbindungen aus. Keine Emulation
-oder Fallbacks sind erlaubt; der naechste P0 ist die generische
-Content-zu-Texture-Pipeline, nicht ein weiterer Bootstrap-, AOT- oder
-Linkaudit-Umbau.
+oder Fallbacks sind erlaubt; der naechste P0 ist die statisch gebundene
+Post-Overlay-Callback-/Function-Pointer-Kante, nicht ein weiterer Bootstrap-,
+AOT- oder Linkaudit-Umbau.
+
+Der aktuelle Produktbeleg vervollstaendigte Film `id=0` mit `200` dekodierten,
+`200` praesentierten und `200` sichtbar nichtschwarzen Frames sowie `294.016`
+Audioframes. Das Checkpoint-Runtime-Image wurde vor dem ersten Stage-Overlay
+einmalig deaktiviert und danach wurden Overlay-, Settings- und Camera-Assets
+identitaetsgebunden geladen; der schwarze/stale-Overlay-Uebergang ist
+geschlossen. Film `id=1`/Opening und Hauptmenue bleiben offen. Der Lauf endet
+typisiert an `MissingStaticEntry` einer post-Overlay Callback-/Function-
+Pointer-Kante.
 
 ## Historischer RuntimeOnly-Bring-up
 
@@ -307,9 +317,9 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 98, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-  PVR-State-Contract 3, Portprojektvertrag 87, Native-Port-Profilvertrag 11
-  Analyzer-ABI 37, Function-Analysis-Epoch-Schema 27,
+  Runtime-ABI 101, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+  PVR-State-Contract 3, Portprojektvertrag 89, Native-Port-Profilvertrag 13
+  Analyzer-ABI 39, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 7/Artefakt 6,
   Analysis Directives 3, Hookkarte v2, Hardware-Closure v4,
   GameProject-Metadaten katana-game-project-v5
@@ -941,9 +951,9 @@ FB_W->FB_R-Flip oder titelbezogener Runtime-Hack ist kein Fix.
 Prioritaet: P0 Produkt- und Performancegate
 
 Abhaengigkeit: RuntimeOnly-Build-/Export- und No-Skip-Movie-Gate bestanden;
-der aktuelle Performance-P0 ist der serielle Runtime-/Dispatch-Overhead bei
-`24,2926 MHz` im sichtbaren Audio-/Videopfad, mit einem Ziel von mindestens
-`100 MHz` ohne Regression. Danach liegt der Runtime-Blocker am Call
+die historische Performanceevidenz lag bei `24,2926 MHz` im sichtbaren
+Audio-/Videopfad. Der aktuelle native Produkt-P0 ist die statisch gebundene
+Post-Overlay-Callback-/Function-Pointer-Kante. Danach liegt der Runtime-Blocker am Call
 der private Identity-Miss (`byte-identity-mismatch`). Memory-Card-Screen und
 Hauptmenue bleiben offen.
 

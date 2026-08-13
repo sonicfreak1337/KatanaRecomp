@@ -4,12 +4,13 @@ Dieser KR-4704-Vertrag trennt den Inhalt geladener Bytes von ihren
 Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
-Der aktuelle KR-5005-Stand verwendet Runtime-ABI 98, Block-ABI 5,
-Analyzer-ABI 37, PlatformServices-ABI 14, Backend-Interface-ABI 20,
-Portprojektvertrag 87, Native-Port-Profilvertrag 11, Native-AOT-Emissionsprofil 29 und
+Der aktuelle KR-5005-Stand verwendet Runtime-ABI 101, Block-ABI 5,
+Analyzer-ABI 39, PlatformServices-ABI 14, Backend-Interface-ABI 21,
+Portprojektvertrag 89, Native-Port-Profilvertrag 13, Native-AOT-Emissionsprofil 29 und
 Portpartitionsschema 7. Historische Checkpoint- und Laufangaben bleiben an
-ihre damaligen Vertraege gebunden; der aktive P0 ist die generische
-Content-zu-Texture-Pipeline innerhalb des offenen KR-5005-Gates.
+ihre damaligen Vertraege gebunden; der aktive P0 ist die statisch gebundene
+Post-Overlay-Callback-/Function-Pointer-Kante innerhalb des offenen
+KR-5005-Gates.
 
 ## Byteinventar
 
@@ -277,9 +278,9 @@ Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
 Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
- abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 98,
-Block-ABI 5, Analyzer-ABI 37, Backend-Interface-ABI 20,
-PlatformServices-ABI 14, Portprojektvertrag 87, Native-Port-Profilvertrag 11,
+ abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 101,
+Block-ABI 5, Analyzer-ABI 39, Backend-Interface-ABI 21,
+PlatformServices-ABI 14, Portprojektvertrag 89, Native-Port-Profilvertrag 13,
 Native-AOT-Emissionsprofil 29
 und Portpartitionsschema 7. Systemreplay-Schema 8
 und Runtime-Probe-Schema 5

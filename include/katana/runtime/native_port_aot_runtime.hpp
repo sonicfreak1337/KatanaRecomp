@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -23,6 +24,16 @@ class NativePortImmutableWriteGuard final {
 
     [[nodiscard]] bool tracks_address(std::uint32_t address,
                                       std::size_t size) const noexcept;
+    // Runtime-loaded modules are hashed before their pre-generated AOT is
+    // activated.  Once active, their exact executable block ranges join the
+    // same immutable-write contract as bootstrap code; data bytes in the file
+    // remain writable.
+    void add_runtime_executable_range(std::uint32_t address,
+                                      std::size_t size);
+    // Removes one exact range previously registered by a runtime-image
+    // binding. Bootstrap/static immutable ranges can never be removed.
+    void remove_runtime_executable_range(std::uint32_t address,
+                                         std::size_t size);
     void observe_write(const GuestWriteEvent& event) noexcept;
 
     [[nodiscard]] std::uint64_t generation() const noexcept;
@@ -32,11 +43,14 @@ class NativePortImmutableWriteGuard final {
     [[nodiscard]] std::uint8_t first_write_kind_mask() const noexcept;
 
   private:
+    void rebuild_ranges();
     [[nodiscard]] std::uint8_t range_kind_mask(
         std::uint32_t address,
         std::size_t size) const noexcept;
 
-    std::span<const NativePortImmutableRange> ranges_;
+    std::vector<NativePortImmutableRange> fixed_ranges_;
+    std::vector<NativePortImmutableRange> runtime_ranges_;
+    std::vector<NativePortImmutableRange> ranges_;
     std::uint64_t generation_ = 0u;
     std::uint32_t first_write_address_ = 0u;
     std::size_t first_write_size_ = 0u;

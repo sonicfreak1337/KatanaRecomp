@@ -1,15 +1,15 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `37`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 98, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 20, Portprojektvertrag 87 und Native-Port-
-Profilvertrag 11. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
+Der aktuelle oeffentliche Analyzervertrag ist Version `39`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 101, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 21, Portprojektvertrag 89 und Native-Port-
+Profilvertrag 13. GameProject-Vertrag 7/Artefaktformat 6 und Analysis-
 Directives-Version 3 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht
 den Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
-Version 37 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
+Version 39 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative
 Code-Literale: Erst eine echte Call- oder Tail-ABI-Grenze darf sie zu einem
@@ -31,7 +31,7 @@ Analyzer-SDK-Headerinstallation ausgeschlossen. Damit gelangen Codegen-
 Tooling und das private Native-Port-Artefakt nicht mehr als Analyzer-SDK-
 Oberflaeche in installierte Consumer.
 
-Analyzer-ABI 37 trennt exakte Funktionsgrenzen von Analyse-Roots und bindet
+Analyzer-ABI 39 trennt exakte Funktionsgrenzen von Analyse-Roots und bindet
 edge-only Jump-Table-Metadaten samt ihrer Cacheidentitaet. Identity-bound
 GameProject-Grenzen begrenzen damit Recursive-, Function-Value- und IR-
 Analyse, ohne unerreichbaren Code als Root wiederzubeleben. Die gebundene
@@ -42,7 +42,7 @@ identitaetsgebundenen Metadaten.
 
 Die davon getrennte oeffentliche Codegen-Grenze
 `PortExportOptions::native_port_definition` wird durch Backend-Interface-ABI
-`20` und Portprojektvertrag `87` versioniert. Analyzer-ABI `37` bindet den
+`21` und Portprojektvertrag `89` versioniert. Analyzer-ABI `39` bindet den
 aktuellen SDK-Vertrag einschliesslich des Hardwareaudit-Layouts; die Zaehler
 ersetzen einander nicht.
 
