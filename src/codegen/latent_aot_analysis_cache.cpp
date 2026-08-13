@@ -652,6 +652,9 @@ void write_instruction(Writer& output,
             require_add(successor_count,
                         block.successors.size(),
                         limits.maximum_successors);
+            require_add(target_count,
+                        block.guarded_case_ownership_targets.size(),
+                        limits.maximum_targets);
 
             output.u32(block.start_address);
             output.u32(static_cast<std::uint32_t>(
@@ -665,6 +668,11 @@ void write_instruction(Writer& output,
             output.u32(static_cast<std::uint32_t>(block.successors.size()));
             for (const auto successor : block.successors)
                 output.u32(successor);
+            output.u32(static_cast<std::uint32_t>(
+                block.guarded_case_ownership_targets.size()));
+            for (const auto target :
+                 block.guarded_case_ownership_targets)
+                output.u32(target);
             output.u8(block.has_indirect_successor ? 1u : 0u);
         }
         output.u32(static_cast<std::uint32_t>(
@@ -752,6 +760,24 @@ void write_instruction(Writer& output,
                          successor_index < local_successor_count;
                          ++successor_index)
                         block.successors.push_back(input.u32());
+                }
+                const auto local_ownership_target_count =
+                    static_cast<std::size_t>(input.u32());
+                require_add(target_count,
+                            local_ownership_target_count,
+                            limits.maximum_targets);
+                {
+                    auto ownership_depth = input.scoped_depth();
+                    input.reserve_vector<std::uint32_t>(
+                        local_ownership_target_count,
+                        sizeof(std::uint32_t));
+                    block.guarded_case_ownership_targets.reserve(
+                        local_ownership_target_count);
+                    for (std::size_t target_index = 0u;
+                         target_index < local_ownership_target_count;
+                         ++target_index)
+                        block.guarded_case_ownership_targets.push_back(
+                            input.u32());
                 }
                 const auto has_indirect_successor = input.u8();
                 if (has_indirect_successor > 1u) throw CodecError();

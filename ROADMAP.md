@@ -286,6 +286,25 @@ Callback-Endpunkt. Die Hardware-Closure bleibt bei `850` Sites, `47`
 geschlossen, `803` offen und `129` Owner, da kein Hardwareprovider vorzeitig
 als ersetzt gilt.
 
+Der reviewte v87-Export bindet latente Module ueber `3.828`
+Blockidentitaeten, `107` Funktionsidentitaeten, `4.222` externe Codepointer
+und `290` Cross-Image-Transfers. Zwei beschreibbare relative Switchtabellen
+erhalten bounded `guarded-owner-extent`-Evidenz, ohne als vollstaendiger CFG
+oder Laufzeitzielsatz zu gelten. Actionable Whole-Function-Kandidaten stiegen
+`116 -> 118`, fehlende exakte Grenzen sanken `16 -> 14`; der private
+Disassembly-Abgleich lieferte keinen weiteren exakten Import. Die erweiterte
+Auditclosure umfasst `909` Sites in `136` Ownern (`50` geschlossen, `859`
+offen). Der warme Export dauerte `117,044 s` mit `155/155` Codegentreffern
+und `2,485 s` Hostbuild.
+
+Der aktuelle Produktlauf bestaetigt das SEGA-Bild ohne die zuvor sichtbaren
+horizontalen Naehte, schliesst Film `id=0` ab, laedt Stage-Overlay sowie
+Settings-/Camera-Assets und erreicht den ersten umfangreichen 3D-Frame. Der
+Stillstand liegt dort innerhalb einer wiederholten Modell-/Polygon-
+Submission. Als naechstes wird deshalb die gesamte zugehoerige Grafik-/
+Transfer-Ownerfamilie samt Callbackkanten und Seiteneffekten geschlossen;
+ein einzelner Stall-PC ist kein Providervertrag.
+
 ## Historischer RuntimeOnly-Bring-up
 
 Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit
@@ -330,13 +349,13 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 22,
+  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 23,
   PVR-State-Contract 3, Portprojektvertrag 93, Native-Port-Profilvertrag 16
-  Analyzer-ABI 41
+  Analyzer-ABI 43
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
   Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 4
+  Port-Metadata-Cache-Schema 5
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
 installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie

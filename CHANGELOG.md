@@ -4,6 +4,24 @@
 
 ### Geaendert
 
+- Der reviewte v87-Export schliesst weitere generische Latent-AOT- und
+  Callback-Ownership-Luecken. `42` latente Module liefern `3.828`
+  Blockidentitaeten, `107` ganze Funktionsidentitaeten, `4.222` externe
+  Codepointer und `290` identitaetsgebundene Cross-Image-Transfers. Zwei
+  beschreibbare relative Switchtabellen werden als begrenzte positive
+  `guarded-owner-extent`-Evidenz behandelt, ohne ihre Werte als vollstaendigen
+  CFG oder Laufzeitziele auszugeben. Actionable Whole-Function-Kandidaten
+  stiegen `116 -> 118`, fehlende exakte Grenzen sanken `16 -> 14`; der
+  private Disassembly-Abgleich fand unter den verbleibenden Blockern keinen
+  weiteren exakten Import. Die groessere echte Auditclosure umfasst `909`
+  Sites in `136` Ownern (`50` geschlossen, `859` offen). Der warme Export
+  dauerte `117,044 s`, traf `155/155` Codegenpartitionen und baute den Host in
+  `2,485 s`; gegenueber v83d (`432,1 s`) ist das etwa `3,69x` schneller.
+  Analyzer-ABI `43`, Backend-Interface-ABI `23`, Portprojektvertrag `93`,
+  Native-Port-Profilvertrag `16`, Hookanforderungskarte `v4`,
+  Port-Metadata-Cache-Schema `5` und Native-AOT-Emissionsprofil `34`
+  versionieren den zusammenhaengenden Vertrag.
+
 - Der native Grafik-Foundation-Unterauftrag ist fuer den aktuell erreichten
   Produktpfad source- und produktseitig geschlossen. Die backendneutrale
   Draw-IR beschreibt jetzt vollstaendige Blend-, Depth-, Rasterizer-,
@@ -18,12 +36,14 @@
   Bloecke erhalten lokale Analyseowner, Registrar-/Objektfeld-Codepointer
   bleiben in der positiven Callback-Lane, und Non-Root-Funktionshints oder
   eigenstaendige Entry-Shape-Beweise begrenzen die AOT-Zulassung. Der direkte
-  Produktlauf passiert diesen Endpunkt und endet an der naechsten nativen
-  Host-Timing-Unterfamilie. Sichtbar bleibt der aktuelle Direktlauf jedoch
-  vom ersten SEGA-Bild an vollstaendig schwarz, obwohl Audio und Titelablauf
-  weiterlaufen und Draw-/Presentzaehler steigen. Die gemeinsame Offscreen-/
-  Compose-/Swapchain-Grenze ist daher der vorherige aktive Grafik-P0;
-  vollstaendige spielweite Grafikabdeckung bleibt bis zu Menue und Gameplay
+  Produktlauf passiert diesen Endpunkt. Die gemeinsame Vertex-/Pixel-
+  Constant-Buffer-Bindung beseitigt den vollstaendig schwarzen Output und die
+  horizontalen Naehte im SEGA-Bild. Film `id=0`, Stage-Overlay und die ersten
+  Modell-Draws laufen; der aktuelle Stillstand liegt im ersten umfangreichen
+  3D-Frame innerhalb einer wiederholten Modell-/Polygon-Submission. Der
+  aktive Foundation-P0 ist deshalb die vollstaendige Grafik-/Transfer-
+  Ownerfamilie dieses Pfads und kein einzelner Stall-PC. Vollstaendige
+  spielweite Grafikabdeckung bleibt bis zu Opening, Menue und Gameplay
   unbewiesen.
 
 - Der warme v72-Export erzeugte `5.103` Funktionen in `149` Partitionen und
@@ -92,12 +112,12 @@
   `191` wiederholen das letzte abgeschlossene Bild statt einen leeren Clear zu
   praesentieren.
 
-- Aktueller Vertragsstand: Runtime-ABI `104`, Analyzer-ABI `41`,
-  Backend-Interface-ABI `22`, Portprojektvertrag `93`, Native-Port-Profilvertrag
+- Aktueller Vertragsstand: Runtime-ABI `104`, Analyzer-ABI `43`,
+  Backend-Interface-ABI `23`, Portprojektvertrag `93`, Native-Port-Profilvertrag
   `16`, GameProject-Vertrag `8` mit Artefaktformat `6`,
   NativePortDefinition-Vertrag `10`, NativePortArtifact-Format `9`,
   Native-Grafikvertrag `6`, Frame-Pacing-Vertrag `1`, Native-AOT-Emissionsprofil
-  `34`, Analysis-Directives-Version `4` und Port-Metadata-Cache-Schema `4`.
+  `34`, Analysis-Directives-Version `4` und Port-Metadata-Cache-Schema `5`.
 
 - Der validierte v59-Export dekodierte `849/849` PRS-Dateien strikt und erzeugte
   `3.965` Funktionen in `127` Partitionen; `488` rohe und `395` guarded

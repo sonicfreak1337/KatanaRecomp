@@ -319,6 +319,26 @@ blieben ohne Truncation oder Budgetende. Der Direktlauf passiert den alten
 Callback-Endpunkt. Die Hardware-Closure bleibt bei `850/47/803/129`, weil
 noch kein weiterer Hardwareprovider als vollstaendig ersetzt bewiesen wurde.
 
+Der reviewte v87-Export umfasst `5.217` Funktionen und `155` Partitionen.
+`42` latente Module liefern `3.828` Blockidentitaeten, `107`
+Funktionsidentitaeten, `4.222` externe Codepointer und `290` Cross-Image-
+Transfers. Zwei beschreibbare relative Switchtabellen erhalten bounded
+`guarded-owner-extent`-Evidenz, ohne als vollstaendiger CFG oder
+Laufzeitzielsatz zu gelten. Actionable Whole-Function-Kandidaten stiegen
+`116 -> 118`, fehlende exakte Grenzen sanken `16 -> 14`; der private
+Disassembly-Abgleich ergab keinen weiteren exakten Import. Die erweiterte
+Auditclosure umfasst `909` Sites in `136` Ownern (`50` geschlossen, `859`
+offen). Der warme Export dauerte `117,044 s` mit `155/155` Codegentreffern
+und `2,485 s` Hostbuild.
+
+Der aktuelle Produktlauf bestaetigt das SEGA-Bild ohne die zuvor sichtbaren
+horizontalen Naehte, schliesst Film `id=0` ab, laedt Stage-Overlay sowie
+Settings-/Camera-Assets und erreicht den ersten umfangreichen 3D-Frame. Der
+Stillstand liegt dort innerhalb einer wiederholten Modell-/Polygon-
+Submission. Naechster Grundlagenblock: gesamte Grafik-/Transfer-Ownerfamilie
+dieses Pfads samt Callbackkanten, State-, Speicher-, Rueckgabe- und
+Synchronisationseffekten als generischen nativen Providervertrag schliessen.
+
 Ein frueherer Produktbeleg vervollstaendigte Film `id=0` mit `200`
 dekodierten, `200` praesentierten und `200` intern als nichtschwarz
 klassifizierten Frames sowie `294.016` Audioframes. Der aktuelle v74-
@@ -394,14 +414,14 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 22,
+  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 23,
   PVR-State-Contract 3, Portprojektvertrag 93, Native-Port-Profilvertrag 16
-  Analyzer-ABI 41, Function-Analysis-Epoch-Schema 28,
+  Analyzer-ABI 43, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
-  Analysis Directives 4, Hookkarte v3, Hardware-Closure v5,
+  Analysis Directives 4, Hookkarte v4, Hardware-Closure v5,
   GameProject-Metadaten katana-game-project-v5
   Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 4
+  Port-Metadata-Cache-Schema 5
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

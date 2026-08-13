@@ -176,24 +176,34 @@ Legacy-Runtime, ARM7/SkyEmu, CPU-PVR/TA und Interpreterbestandteilen sein.
 KR-5000 stellt NativePortDefinition/Artifact/Content/Runtime, Bootstrap,
 read-only Content-Mappings und den Linkaudit bereit. KR-5001 erzeugt die
 deterministische `metadata/native-hook-requirements.json`-Karte und
-Hardware-Closure Schema `v4` und Hookkarte Schema `v2`; Replacement-Proofs bleiben an exakte
+Hardware-Closure Schema `v5` und Hookkarte Schema `v4`; Replacement-Proofs bleiben an exakte
 Grenzen/Eigentuemer/Entrys/Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge
 gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-
 Schalter ist darauf begrenzt.
 
-Der aktuelle Analyzer-ABI-41-Export ergaenzt einen begrenzten Static-Callback-
+Der aktuelle Analyzer-ABI-43-Export ergaenzt einen begrenzten Static-Callback-
 Inventarpfad und eine kompakte SH-4-Switch-Erkennung. Latent-AOT-Quellen mit
 Sega-PRS-Transform tragen getrennte encoded/decoded Identitaeten; Quellbudget,
 Decoded-Budget, Cache, Telemetry und Source-Map bleiben getrennte Domaenen.
 Loaded-AOT-Rebase bindet gemischte Module nur nach exakter AOT-Codeblock-
-Closure. Das Metadaten-Cache-Schema steht auf `4`, das Emissionsprofil auf
+Closure. Das Metadaten-Cache-Schema steht auf `5`, das Emissionsprofil auf
 `34`. Analysis Directives v4 fuehrt Non-Root-Funktionshints ein: Sie duerfen
 einen bereits semantisch erreichten Callback-Entry bestaetigen, aber niemals
 selbst einen Root oder eine CFG-Kante erzeugen. Externe erreichbare CFG-
 Bloecke werden fuer den Inventarpfad als lokale Owner materialisiert, damit
 Registrar-/Objektfeld-Codepointer bis zum spaeteren indirekten Aufruf erhalten
 bleiben.
+
+Latente Module werden zusaetzlich ueber exakte Block-/Funktionsidentitaeten,
+kanonisierte P0/P1/P2-Codepointer und identitaetsgebundene Cross-Image-
+Transfers verbunden. Beschreibbare relative Switchtabellen duerfen ihren
+eindeutigen Ownerumfang als `guarded-owner-extent` erhalten; diese Evidenz
+bewahrt erreichbare Case-Bloecke, erzeugt aber weder vollstaendige CFG-Kanten
+noch erlaubte Laufzeitziele. Der v87-Nachweis umfasst `5.217` Funktionen,
+`155` Partitionen, `42` latente Module, `3.828` Blockidentitaeten, `107`
+Funktionsidentitaeten, `4.222` externe Codepointer und `290` Cross-Image-
+Transfers ohne Truncation oder Budgeterschoepfung.
 
 Der identity-bound Titelbootstrap materialisiert initialen RAM-/Titelzustand
 vor Aktivierung der Laufzeit-Immutable-Guards. In dieser Phase stehen keine

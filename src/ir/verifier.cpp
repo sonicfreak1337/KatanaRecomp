@@ -441,6 +441,39 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
             add_issue(
                 issues, block.start_address, "Blocknachfolger passen nicht zur Terminaloperation.");
         }
+        const auto& ownership_targets =
+            block.guarded_case_ownership_targets;
+        if (!std::is_sorted(ownership_targets.begin(),
+                            ownership_targets.end()) ||
+            std::adjacent_find(ownership_targets.begin(),
+                               ownership_targets.end()) !=
+                ownership_targets.end()) {
+            add_issue(issues,
+                      block.start_address,
+                      "Guarded Case-Ownership-Ziele sind nicht kanonisch.");
+        }
+        if (!ownership_targets.empty()) {
+            if (control.operation != Operation::JumpRegister ||
+                !control.branch_register_relative ||
+                (control.dynamic_target_class !=
+                     DynamicTargetClass::GuardedPartial &&
+                 control.dynamic_target_class !=
+                     DynamicTargetClass::RuntimeOnly) ||
+                !block.has_indirect_successor) {
+                add_issue(issues,
+                          block.start_address,
+                          "Guarded Case-Ownership passt nicht zu einem "
+                          "bewachten registerrelativen Sprung.");
+            }
+            for (const auto target : ownership_targets) {
+                if (!block_addresses.contains(target)) {
+                    add_issue(issues,
+                              block.start_address,
+                              "Guarded Case-Ownership verweist ausserhalb "
+                              "der Funktion.");
+                }
+            }
+        }
         const bool indirect_operation = control.operation == Operation::JumpRegister ||
                                         control.operation == Operation::CallRegister;
         const bool invalid_indirect_marker =

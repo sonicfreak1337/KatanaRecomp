@@ -61,6 +61,16 @@ bool snapshot_candidate_source(const katana::io::ExecutableImage& image,
     if (!segment.permissions.readable) return false;
     if (segment.source_kind == katana::io::ImageSourceKind::RuntimeMemory)
         return false;
+    // Latent disc modules are analyzed from exact transformed bytes and are
+    // rebound by both encoded and decoded SHA-256 at runtime. Their mixed
+    // code/data segment is writable after loading, so discovered table values
+    // remain guarded candidates rather than fixed CFG truth. Admitting this
+    // source class lets the existing bounded BRAF recognizer recover all case
+    // blocks while any later table mutation still fails the generated target
+    // guard instead of inventing executable code.
+    if (segment.source_kind == katana::io::ImageSourceKind::DiscModule &&
+        segment.load_phase == katana::io::ImageLoadPhase::RuntimeModule)
+        return true;
     if (segment.load_phase == katana::io::ImageLoadPhase::Initial &&
         !segment.permissions.writable)
         return true;

@@ -27,16 +27,16 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 
 Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 104, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 41, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 43, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
 Portprojektvertrag 93, Native-Port-Profilvertrag 16 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`.
-Port-Metadata-Cache-Schema: `4`.
+Port-Metadata-Cache-Schema: `5`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
 Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v5`, die
-Hookanforderungskarte auf `v3` und die exportierten GameProject-Metadaten auf
+Hookanforderungskarte auf `v4` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
@@ -63,7 +63,8 @@ Der historische Dreamcast-Launcher wird niemals als nativer Fallback gelinkt.
 
 KR-5001 ist source-seitig abgeschlossen: Die deterministische
 `metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
-`v2` verlangen exakte Function-/Instruction-Replacement-Proofs an echten
+`v5` und Hookanforderungskarte `v4` verlangen exakte Function-/Instruction-
+Replacement-Proofs an echten
 Funktionsentry-Grenzen. Bekannte
 Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
 range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert. Der
@@ -124,14 +125,15 @@ Callback-Luecke ist generisch geschlossen: externe, bereits erreichbare CFG-
 Bloecke werden als lokale Analyseowner behandelt, gespeicherte Codepointer
 ueber Registrar und Objektfeld verfolgt und nur durch Non-Root-Funktionshints
 oder einen eigenstaendigen Entry-Shape-Beweis als AOT-Ziele zugelassen. Der
-Produktlauf passiert diese Kette und endet nun am naechsten nativen
-Foundationvertrag, einer noch nicht vollstaendig ersetzten Host-Timing-
-Unterfamilie. Der aktuelle Direktlauf zeigt trotz laufendem Audio und intern
-gemeldeten Draws/Presents vom ersten SEGA-Bild an nur Schwarz. Die gemeinsame
-Offscreen-/Compose-/Swapchain-Grenze ist deshalb vor Timing der aktive
-Grafik-P0; interne Nichtschwarzzaehler sind kein Produktbeweis. Vollstaendige
-spielweite Grafikabdeckung bleibt bis zu Menue und
-Gameplay unbewiesen. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
+Produktlauf passiert diese Kette, Film `id=0`, den Stage-Overlay-Ladevorgang
+und die ersten nativen Modell-Draws. Das SEGA-Bild ist nach der gemeinsamen
+Vertex-/Pixel-Constant-Buffer-Bindung sichtbar und ohne die zuvor beobachteten
+horizontalen Naehte. Der aktuelle Lauf bleibt danach im ersten umfangreichen
+3D-Frame innerhalb der Modell-/Polygon-Submission stehen. Der aktive
+Foundation-P0 ist deshalb jetzt die vollstaendige Grafik-/Transfer-
+Ownerfamilie dieses Drawpfads, nicht ein einzelner Stall-PC. Vollstaendige
+spielweite Grafikabdeckung bleibt bis zu Opening, Menue und Gameplay
+unbewiesen. Steam-Deck-/Linux-Unterstuetzung bleibt eine spaetere,
 nicht aktuelle Prioritaet und ist kein gegenwaertiges Produktgate.
 
 Ein frueherer KR-5005-Zwischenstand trug die generischen Native-Architektur-
@@ -199,6 +201,22 @@ bei `850/47/803/129`, weil dieser Schritt AOT-Abdeckung erweiterte, aber noch
 keinen Hardwareprovider ersetzte. Der direkte `game.exe`-Lauf passierte den
 alten Callback-Endpunkt und erreichte die naechste Host-Timing-Grenze.
 
+Der reviewte v87-Export erweitert diese statische Grundlage auf `5.217`
+Funktionen in `155` Partitionen. `42` latente Module liefern `3.828`
+Blockidentitaeten, `107` ganze Funktionsidentitaeten, `4.222` externe
+Codepointer und `290` identitaetsgebundene Cross-Image-Transfers. Zwei
+beschreibbare relative Switchtabellen werden jetzt als positive, bounded
+`guarded-owner-extent`-Evidenz behandelt: ihre `850`- und `992`-Byte-Owner
+werden zusammengefuehrt, ohne die Tabellenwerte als vollstaendigen CFG oder
+Laufzeitziele auszugeben. Actionable Whole-Function-Kandidaten stiegen
+`116 -> 118`, fehlende Grenzen sanken `16 -> 14`; der Disassembly-Abgleich
+fand unter den verbleibenden Grenzen keinen weiteren exakten Import. Die
+Hardwarekarte umfasst durch die groessere echte Auditclosure nun `909` Sites
+in `136` Ownern (`50` geschlossen, `859` offen). Der warme v87-Lauf endete in
+`117,044 s` mit `155/155` Codegen-Treffern und `2,485 s` Hostbuild; gegenueber
+v83d (`432,1 s`) ist das etwa `3,69x` schneller. Mehr offene Sites sind hier
+erweiterte Sichtbarkeit, keine Hardware-Regression.
+
 Der validierte v59-Export untersuchte `1.094` Dateien mit `198.135.759`
 encodierten Bytes, dekodierte `849/849` PRS-Dateien strikt und erzeugte
 `3.965` Funktionen in `127` Partitionen. Er nahm `39` Latent-AOT-Kandidaten
@@ -225,7 +243,7 @@ diesem historischen Checkpoint. Die damalige Erweiterung von
 `PortExportOptions` und `LatentAotDiscoveryOptions` fuehrte Backend-
 Interface-ABI `13` ein; der jetzt unabhaengige
 `PortExportOptions::native_port_definition`-Vertrag wurde inzwischen auf
-Backend-Interface-ABI `21` weiterentwickelt.
+Backend-Interface-ABI `23` weiterentwickelt.
 
 Der historische opt-in-Modus `port --analysis-mode runtime-only` war nur mit
 `--game-project` zugelassen. Ab v0.49.1 ist er ausschliesslich internes
@@ -522,7 +540,7 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 41, Portprojektvertrag 93 und
+KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 43, Portprojektvertrag 93 und
 Native-Port-Profilvertrag 16. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte

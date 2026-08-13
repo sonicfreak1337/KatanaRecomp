@@ -385,6 +385,10 @@ std::string emit_ir_text(const std::span<const Function> functions) {
         for (const auto* block : sorted_blocks(*function)) {
             output << "  block " << hex32(block->start_address) << " successors=";
             emit_text_addresses(output, sorted_values(block->successors));
+            output << " guarded_case_ownership_targets=";
+            emit_text_addresses(
+                output,
+                sorted_values(block->guarded_case_ownership_targets));
             output << " indirect=" << boolean_name(block->has_indirect_successor) << '\n';
             for (const auto* instruction : sorted_instructions(*block)) {
                 emit_text_instruction(output, *instruction);
@@ -419,6 +423,10 @@ std::string emit_ir_fragment_json(const std::span<const Function> functions,
             const auto& block = *blocks[block_index];
             output << "{\"start_address\":\"" << hex32(block.start_address) << "\",\"successors\":";
             emit_json_addresses(output, sorted_values(block.successors));
+            output << ",\"guarded_case_ownership_targets\":";
+            emit_json_addresses(
+                output,
+                sorted_values(block.guarded_case_ownership_targets));
             output << ",\"has_indirect_successor\":" << boolean_name(block.has_indirect_successor)
                    << ",\"instructions\":[";
             const auto instructions = sorted_instructions(block);

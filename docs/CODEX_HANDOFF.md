@@ -151,6 +151,26 @@ Budgetende. `42` latente Module und `849/849` PRS-Decodes blieben
 vollstaendig. Die Hardware-Closure blieb bei `850/47/803/129`, weil noch kein
 weiterer Hardwareprovider als ersetzt bewiesen ist.
 
+Der reviewte v87-Export umfasst `5.217` Funktionen und `155` Partitionen.
+`42` latente Module liefern `3.828` Blockidentitaeten, `107`
+Funktionsidentitaeten, `4.222` externe Codepointer und `290` Cross-Image-
+Transfers. Zwei beschreibbare relative Switchtabellen erhalten bounded
+`guarded-owner-extent`-Evidenz, ohne als vollstaendiger CFG oder
+Laufzeitzielsatz zu gelten. Actionable Whole-Function-Kandidaten stiegen
+`116 -> 118`, fehlende exakte Grenzen sanken `16 -> 14`; der private
+Disassembly-Abgleich ergab keinen weiteren exakten Import. Die erweiterte
+Auditclosure umfasst `909` Sites in `136` Ownern (`50` geschlossen, `859`
+offen). Der warme Export dauerte `117,044 s`, traf `155/155` Partitionen und
+baute den Host in `2,485 s`.
+
+Der aktuelle Produktlauf bestaetigt das SEGA-Bild ohne die zuvor sichtbaren
+horizontalen Naehte, schliesst Film `id=0` ab, laedt Stage-Overlay sowie
+Settings-/Camera-Assets und erreicht den ersten umfangreichen 3D-Frame. Der
+Stillstand liegt dort innerhalb einer wiederholten Modell-/Polygon-
+Submission. Naechster Grundlagenblock ist die vollstaendige Grafik-/Transfer-
+Ownerfamilie dieses Pfads samt Callbackkanten und Seiteneffekten; keinen
+einzelnen Stall-PC als vermeintlichen Fix behandeln.
+
 Der fruehere KR-5000-Reviewstand wurde mit `katana-recomp`,
 `katana_analyzer_sdk` und `katana_native_port_runtime` in einem inkrementellen
 24-Worker-Build in `14,2 s` bestaetigt. Dieser historische Abschnitt ist kein
@@ -165,19 +185,19 @@ oder Interpreter-Symbole.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
 Aktuell gelten Runtime-ABI `104`,
-PlatformServices-ABI `14`, Analyzer-ABI `41`, Function-Analysis-Epoch-Schema
+PlatformServices-ABI `14`, Analyzer-ABI `43`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`22`, PVR-State-Contract `3`, Portprojektvertrag `93` und Native-Port-
+`23`, PVR-State-Contract `3`, Portprojektvertrag `93` und Native-Port-
 Profilvertrag `16`.
 Der SDK-Reviewabschluss trennt `port_export.cpp` als nicht installierte
 Tooling-Object-Closure vom Analyzer-SDK und schliesst `port_export.hpp` sowie
 `native_port_artifact.hpp` aus der Analyzer-Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist im
-aktuellen Stand durch Backend-Interface-ABI `22` versioniert; bestehende generierte Ports muessen neu
+aktuellen Stand durch Backend-Interface-ABI `23` versioniert; bestehende generierte Ports muessen neu
 exportiert werden.
 Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`,
-Port-Metadata-Cache-Schema: `4`,
-NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `4`, Hookkarte `v3`,
+Port-Metadata-Cache-Schema: `5`,
+NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `4`, Hookkarte `v4`,
 Hardware-Closure `v5` und GameProject-Metadaten `katana-game-project-v5`.
 
 Der historische CLI-Modus `port --analysis-mode runtime-only` war nur mit

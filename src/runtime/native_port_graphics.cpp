@@ -996,6 +996,8 @@ class NativePortGraphicsDevice::Impl final {
         context_->VSSetConstantBuffers(
             0u, 1u, draw_constants_.GetAddressOf());
         context_->PSSetShader(draw_pixel_shader_.Get(), nullptr, 0u);
+        context_->PSSetConstantBuffers(
+            0u, 1u, draw_constants_.GetAddressOf());
         context_->PSSetSamplers(0u, 1u, &sampler);
         auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
                                     : white_view_.Get();

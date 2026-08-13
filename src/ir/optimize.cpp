@@ -496,10 +496,17 @@ OptimizationResult simplify_function_cfg(
         worklist.pop_back();
         if (!reachable.insert(address).second) continue;
         const auto block = block_by_address.find(address);
-        if (block != block_by_address.end())
+        if (block != block_by_address.end()) {
             worklist.insert(worklist.end(),
                             block->second->successors.begin(),
                             block->second->successors.end());
+            // Ownership-only case edges retain the bounded switch body but
+            // never become executable successors or emitter dispatch edges.
+            worklist.insert(
+                worklist.end(),
+                block->second->guarded_case_ownership_targets.begin(),
+                block->second->guarded_case_ownership_targets.end());
+        }
     }
 
     OptimizationResult result;

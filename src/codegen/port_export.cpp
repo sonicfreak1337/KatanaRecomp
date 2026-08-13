@@ -2299,6 +2299,8 @@ bool equivalent_ir_block(const katana::ir::BasicBlock& left,
                          const katana::ir::BasicBlock& right) {
     return left.start_address == right.start_address &&
            left.successors == right.successors &&
+           left.guarded_case_ownership_targets ==
+               right.guarded_case_ownership_targets &&
            left.has_indirect_successor == right.has_indirect_successor &&
            left.instructions.size() == right.instructions.size() &&
            std::equal(left.instructions.begin(),
@@ -12443,6 +12445,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
     std::uint64_t latent_source_binding_bytes = 0u;
     std::size_t latent_aot_block_identity_count = 0u;
     std::uint64_t latent_aot_block_identity_bytes = 0u;
+    std::size_t latent_aot_function_identity_count = 0u;
+    std::uint64_t latent_aot_function_identity_bytes = 0u;
     const auto valid_sha256 = [](const std::string_view identity) {
         constexpr std::string_view prefix{"sha256:"};
         return identity.size() == prefix.size() + 64u &&
@@ -12505,6 +12509,41 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 [](const std::uint32_t candidate) {
                     return (candidate & 1u) != 0u ||
                            (candidate >> 29u) != 4u;
+                }) ||
+            module.external_transfers.size() >
+                maximum_prepared_latent_aot_external_transfers ||
+            !std::is_sorted(
+                module.external_transfers.begin(),
+                module.external_transfers.end(),
+                [](const auto& left, const auto& right) {
+                    return std::tie(left.source_offset,
+                                    left.target_address,
+                                    left.kind) <
+                           std::tie(right.source_offset,
+                                    right.target_address,
+                                    right.kind);
+                }) ||
+            std::adjacent_find(module.external_transfers.begin(),
+                               module.external_transfers.end()) !=
+                module.external_transfers.end() ||
+            std::any_of(
+                module.external_transfers.begin(),
+                module.external_transfers.end(),
+                [&](const auto& transfer) {
+                    const auto valid_kind =
+                        transfer.kind ==
+                            PreparedLatentAotExternalTransferKind::Call ||
+                        transfer.kind ==
+                            PreparedLatentAotExternalTransferKind::Jump;
+                    return (transfer.source_offset & 1u) != 0u ||
+                           transfer.source_offset > module.byte_size - 2u ||
+                           (transfer.target_address & 1u) != 0u ||
+                           (transfer.target_address >> 29u) != 4u ||
+                           !valid_kind ||
+                           !std::binary_search(
+                               module.external_code_pointer_candidates.begin(),
+                               module.external_code_pointer_candidates.end(),
+                               transfer.target_address);
                 }) ||
             module.block_identities.empty() ||
             module.block_identities.size() >
@@ -12576,6 +12615,32 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
             previous_identity_offset = identity.source_offset;
             if (identity.source_offset >= active_identity_end)
                 active_identity_end = identity_end;
+        }
+        std::optional<std::uint32_t> previous_function_offset;
+        for (const auto& identity : module.function_identities) {
+            const auto identity_end =
+                static_cast<std::uint64_t>(identity.source_offset) +
+                identity.size;
+            if ((identity.source_offset & 1u) != 0u ||
+                identity.size < 2u || (identity.size & 1u) != 0u ||
+                identity_end > module.byte_size ||
+                (previous_function_offset.has_value() &&
+                 identity.source_offset <= *previous_function_offset) ||
+                !valid_sha256(identity.sha256))
+                throw std::runtime_error(
+                    "Latentes AOT-Modul besitzt eine ungueltige oder "
+                    "mehrdeutige Funktionsidentitaet.");
+            if (latent_aot_function_identity_count >=
+                    maximum_prepared_latent_aot_function_identities ||
+                identity.size >
+                    maximum_prepared_latent_aot_function_identity_bytes -
+                        latent_aot_function_identity_bytes)
+                throw std::runtime_error(
+                    "Latente AOT-Module ueberschreiten das globale "
+                    "Funktionsidentitaetsbudget.");
+            ++latent_aot_function_identity_count;
+            latent_aot_function_identity_bytes += identity.size;
+            previous_function_offset = identity.source_offset;
         }
         std::set<std::uint32_t> module_dispatch_entries;
         for (const auto& function : module.program) {
@@ -17729,13 +17794,42 @@ port_metadata(const PortExportOptions& options,
                       : "heuristic")
            << ",\"latent_aot_modules\":" << latent_aot.modules.size()
            << ",\"latent_aot_source_bindings\":"
-           << std::accumulate(
-                  latent_aot.modules.begin(), latent_aot.modules.end(),
-                  std::size_t{0u},
-                  [](const auto total, const auto& module) {
-                      return total + module.source_bindings.size();
-                  })
-           << ",\"latent_aot_examined_files\":"
+            << std::accumulate(
+                   latent_aot.modules.begin(), latent_aot.modules.end(),
+                   std::size_t{0u},
+                   [](const auto total, const auto& module) {
+                       return total + module.source_bindings.size();
+                   })
+            << ",\"latent_aot_block_identities\":"
+            << std::accumulate(
+                   latent_aot.modules.begin(), latent_aot.modules.end(),
+                   std::size_t{0u},
+                   [](const auto total, const auto& module) {
+                       return total + module.block_identities.size();
+                   })
+            << ",\"latent_aot_function_identities\":"
+            << std::accumulate(
+                   latent_aot.modules.begin(), latent_aot.modules.end(),
+                   std::size_t{0u},
+                   [](const auto total, const auto& module) {
+                       return total + module.function_identities.size();
+                   })
+            << ",\"latent_aot_external_code_pointer_candidates\":"
+            << std::accumulate(
+                   latent_aot.modules.begin(), latent_aot.modules.end(),
+                   std::size_t{0u},
+                   [](const auto total, const auto& module) {
+                       return total +
+                              module.external_code_pointer_candidates.size();
+                   })
+            << ",\"latent_aot_external_transfers\":"
+            << std::accumulate(
+                   latent_aot.modules.begin(), latent_aot.modules.end(),
+                   std::size_t{0u},
+                   [](const auto total, const auto& module) {
+                       return total + module.external_transfers.size();
+                   })
+            << ",\"latent_aot_examined_files\":"
            << latent_aot.examined_files
            << ",\"latent_aot_examined_bytes\":"
            << latent_aot.examined_bytes
@@ -18193,12 +18287,20 @@ std::vector<std::uint32_t> latent_aot_declared_external_code_targets(
                    game_project->function_boundaries.size());
     const auto append_if_executable = [&](const std::uint32_t address) {
         if ((address & 1u) != 0u) return;
+        const auto direct_segment = address >> 29u;
+        std::optional<std::uint32_t> normalized;
+        if (direct_segment == 4u || direct_segment == 5u)
+            normalized = (address & 0x1fffffffu) | 0x80000000u;
+        else if (direct_segment == 0u && address >= 0x08000000u &&
+                 address < 0x10000000u)
+            normalized = address | 0x80000000u;
+        if (!normalized.has_value()) return;
         const auto segment_address = image.resolve_segment_address(address, 2u);
         const auto* segment = segment_address.has_value()
                                   ? image.find_segment(*segment_address, 2u)
                                   : nullptr;
         if (segment != nullptr && segment->permissions.executable)
-            result.push_back(address);
+            result.push_back(*normalized);
     };
     for (const auto& symbol : game_project->symbols) {
         if (symbol.kind ==
@@ -18846,18 +18948,26 @@ katana::analysis::DreamcastHardwareAudit combine_native_hardware_audits(
 enum class NativePortFunctionBoundaryProof : std::uint8_t {
     IdentityBoundExact,
     ClosedControlFlow,
-    IdentityBoundExactAndClosedControlFlow
+    GuardedOwnerExtent,
+    IdentityBoundExactAndClosedControlFlow,
+    IdentityBoundExactAndGuardedOwnerExtent
 };
 
 struct NativePortFunctionBoundaryEvidence final {
     std::set<std::uint32_t> identity_bound_exact_sizes;
     std::set<std::uint32_t> closed_control_flow_sizes;
+    std::set<std::uint32_t> guarded_owner_extent_sizes;
 };
 
 struct NativePortFunctionBoundary final {
     std::uint32_t size = 0u;
     NativePortFunctionBoundaryProof proof =
         NativePortFunctionBoundaryProof::ClosedControlFlow;
+};
+
+struct NativePortInferredFunctionExtent final {
+    std::uint32_t size = 0u;
+    bool uses_guarded_owner_targets = false;
 };
 
 struct NativePortProgramIndex final {
@@ -18882,7 +18992,8 @@ struct NativePortProgramIndex final {
     bool call_graph_complete = true;
 };
 
-std::optional<std::uint32_t> native_port_closed_control_flow_size(
+std::optional<NativePortInferredFunctionExtent>
+native_port_inferred_function_extent(
     const katana::ir::Function& function) {
     using katana::ir::DelaySlotRole;
     using katana::ir::Operation;
@@ -18892,6 +19003,7 @@ std::optional<std::uint32_t> native_port_closed_control_flow_size(
 
     std::map<std::uint32_t, const katana::ir::BasicBlock*> blocks;
     std::uint64_t extent_end = function.entry_address;
+    bool uses_guarded_owner_targets = false;
     for (const auto& block : function.blocks) {
         if (block.instructions.empty() ||
             block.start_address != block.instructions.front().source_address ||
@@ -18918,9 +19030,20 @@ std::optional<std::uint32_t> native_port_closed_control_flow_size(
                 return std::nullopt;
             control = &block.instructions[block.instructions.size() - 2u];
         }
+        const bool guarded_relative_cases =
+            control->operation == Operation::JumpRegister &&
+            control->branch_register_relative &&
+            (control->dynamic_target_class ==
+                 katana::ir::DynamicTargetClass::GuardedPartial ||
+             control->dynamic_target_class ==
+                 katana::ir::DynamicTargetClass::RuntimeOnly) &&
+            !block.guarded_case_ownership_targets.empty();
+        uses_guarded_owner_targets =
+            uses_guarded_owner_targets || guarded_relative_cases;
         if (block.has_indirect_successor &&
-            control->operation != Operation::CallRegister)
-            return std::nullopt;
+            control->operation != Operation::CallRegister) {
+            if (!guarded_relative_cases) return std::nullopt;
+        }
 
         if (block.successors.empty()) {
             switch (control->operation) {
@@ -18929,7 +19052,10 @@ std::optional<std::uint32_t> native_port_closed_control_flow_size(
                     return std::nullopt;
                 break;
             case Operation::JumpRegister:
-                if (block.has_indirect_successor ||
+                if (block.has_indirect_successor &&
+                    !guarded_relative_cases)
+                    return std::nullopt;
+                if (!block.has_indirect_successor &&
                     control->resolved_targets.empty())
                     return std::nullopt;
                 break;
@@ -18960,6 +19086,28 @@ std::optional<std::uint32_t> native_port_closed_control_flow_size(
             if (!blocks.contains(successor)) return std::nullopt;
             pending.push_back(successor);
         }
+        const auto* control = &block->second->instructions.back();
+        if (control->delay_slot.role == DelaySlotRole::Slot) {
+            if (block->second->instructions.size() < 2u)
+                return std::nullopt;
+            control = &block->second->instructions[
+                block->second->instructions.size() - 2u];
+        }
+        const bool guarded_relative_cases =
+            control->operation == Operation::JumpRegister &&
+            control->branch_register_relative &&
+            (control->dynamic_target_class ==
+                 katana::ir::DynamicTargetClass::GuardedPartial ||
+             control->dynamic_target_class ==
+                 katana::ir::DynamicTargetClass::RuntimeOnly) &&
+            !block->second->guarded_case_ownership_targets.empty();
+        if (guarded_relative_cases) {
+            for (const auto target :
+                 block->second->guarded_case_ownership_targets) {
+                if (!blocks.contains(target)) return std::nullopt;
+                pending.push_back(target);
+            }
+        }
     }
     // Optimisation may retain an externally dispatchable continuation which
     // is not reachable from the function entry.  Such a component is useful
@@ -18975,7 +19123,8 @@ std::optional<std::uint32_t> native_port_closed_control_flow_size(
     if (size > std::numeric_limits<std::uint32_t>::max() ||
         (size & 1u) != 0u)
         return std::nullopt;
-    return static_cast<std::uint32_t>(size);
+    return NativePortInferredFunctionExtent{
+        static_cast<std::uint32_t>(size), uses_guarded_owner_targets};
 }
 
 std::optional<NativePortFunctionBoundary> native_port_function_boundary(
@@ -18985,7 +19134,8 @@ std::optional<NativePortFunctionBoundary> native_port_function_boundary(
     if (found == index.function_boundaries.end()) return std::nullopt;
     const auto& evidence = found->second;
     if (evidence.identity_bound_exact_sizes.size() > 1u ||
-        evidence.closed_control_flow_sizes.size() > 1u)
+        evidence.closed_control_flow_sizes.size() > 1u ||
+        evidence.guarded_owner_extent_sizes.size() > 1u)
         return std::nullopt;
 
     const auto exact = evidence.identity_bound_exact_sizes.empty()
@@ -18996,16 +19146,30 @@ std::optional<NativePortFunctionBoundary> native_port_function_boundary(
                             ? std::optional<std::uint32_t>{}
                             : std::optional<std::uint32_t>{
                                   *evidence.closed_control_flow_sizes.begin()};
-    if (exact.has_value() && closed.has_value() && *exact != *closed)
+    const auto guarded = evidence.guarded_owner_extent_sizes.empty()
+                             ? std::optional<std::uint32_t>{}
+                             : std::optional<std::uint32_t>{
+                                   *evidence.guarded_owner_extent_sizes.begin()};
+    if ((exact.has_value() && closed.has_value() && *exact != *closed) ||
+        (exact.has_value() && guarded.has_value() && *exact != *guarded) ||
+        (closed.has_value() && guarded.has_value() && *closed != *guarded))
         return std::nullopt;
     if (exact.has_value() && closed.has_value())
         return NativePortFunctionBoundary{
             *exact,
             NativePortFunctionBoundaryProof::
                 IdentityBoundExactAndClosedControlFlow};
+    if (exact.has_value() && guarded.has_value())
+        return NativePortFunctionBoundary{
+            *exact,
+            NativePortFunctionBoundaryProof::
+                IdentityBoundExactAndGuardedOwnerExtent};
     if (exact.has_value())
         return NativePortFunctionBoundary{
             *exact, NativePortFunctionBoundaryProof::IdentityBoundExact};
+    if (guarded.has_value())
+        return NativePortFunctionBoundary{
+            *guarded, NativePortFunctionBoundaryProof::GuardedOwnerExtent};
     if (closed.has_value())
         return NativePortFunctionBoundary{
             *closed, NativePortFunctionBoundaryProof::ClosedControlFlow};
@@ -19019,9 +19183,14 @@ std::string_view native_port_function_boundary_proof_name(
         return "identity-bound-exact";
     case NativePortFunctionBoundaryProof::ClosedControlFlow:
         return "closed-control-flow";
+    case NativePortFunctionBoundaryProof::GuardedOwnerExtent:
+        return "guarded-owner-extent";
     case NativePortFunctionBoundaryProof::
         IdentityBoundExactAndClosedControlFlow:
         return "identity-bound-exact-and-closed-control-flow";
+    case NativePortFunctionBoundaryProof::
+        IdentityBoundExactAndGuardedOwnerExtent:
+        return "identity-bound-exact-and-guarded-owner-extent";
     }
     return "unknown";
 }
@@ -19081,11 +19250,15 @@ NativePortProgramIndex build_native_port_program_index(
     }
     for (const auto& [entry, functions] : index.functions_by_entry) {
         if (functions.size() != 1u) continue;
-        if (const auto size =
-                native_port_closed_control_flow_size(*functions.front());
-            size.has_value())
-            index.function_boundaries[entry]
-                .closed_control_flow_sizes.insert(*size);
+        if (const auto extent =
+                native_port_inferred_function_extent(*functions.front());
+            extent.has_value()) {
+            auto& evidence = index.function_boundaries[entry];
+            if (extent->uses_guarded_owner_targets)
+                evidence.guarded_owner_extent_sizes.insert(extent->size);
+            else
+                evidence.closed_control_flow_sizes.insert(extent->size);
+        }
     }
     for (const auto& edge : analysis.resolved_edges) {
         const auto owners =
@@ -19903,6 +20076,7 @@ std::string native_port_hardware_closure_json(
 
 std::optional<std::string> native_port_code_identity(
     const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules,
     const std::uint32_t address,
     const std::uint32_t size) {
     if (size == 0u) return std::nullopt;
@@ -19915,8 +20089,54 @@ std::optional<std::string> native_port_code_identity(
     } catch (const std::bad_alloc&) {
         throw;
     } catch (const std::exception&) {
-        return std::nullopt;
+        // The primary image is only one source domain. Latent modules retain
+        // bounded hashes over their transformed bytes, so a provider boundary
+        // can be identity-bound without retaining or re-reading retail bytes.
     }
+
+    std::optional<std::string> match;
+    bool ambiguous_match = false;
+    for (const auto& module : latent_modules) {
+        const auto module_begin =
+            static_cast<std::uint64_t>(module.source_address);
+        const auto module_end = module_begin + module.byte_size;
+        const auto range_begin = static_cast<std::uint64_t>(address);
+        const auto range_end = range_begin + size;
+        if (range_begin < module_begin || range_end > module_end)
+            continue;
+        const auto source_offset = address - module.source_address;
+        std::optional<std::string> module_match;
+        bool module_ambiguous = false;
+        const auto find_module_match = [&](const auto& identities) {
+            const auto found = std::lower_bound(
+                identities.begin(), identities.end(), source_offset,
+                [](const auto& candidate, const std::uint32_t value) {
+                    return candidate.source_offset < value;
+                });
+            if (found == identities.end() ||
+                found->source_offset != source_offset || found->size != size)
+                return;
+            if (module_match.has_value() && *module_match != found->sha256)
+                module_ambiguous = true;
+            else
+                module_match = found->sha256;
+        };
+        find_module_match(module.function_identities);
+        find_module_match(module.block_identities);
+        if (module_ambiguous) {
+            match.reset();
+            ambiguous_match = true;
+            continue;
+        }
+        if (!module_match.has_value() || ambiguous_match) continue;
+        if (match.has_value() && *match != *module_match) {
+            match.reset();
+            ambiguous_match = true;
+        } else {
+            match = std::move(module_match);
+        }
+    }
+    return ambiguous_match ? std::nullopt : match;
 }
 
 std::string native_port_suggested_hook_symbol(
@@ -19949,7 +20169,8 @@ std::string native_port_hook_requirements_json(
     const NativePortProgramIndex& program_index,
     const std::span<const std::uint32_t> native_resume_entries,
     const katana::analysis::AnalysisGraph& call_graph,
-    const katana::io::ExecutableImage& image) {
+    const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules) {
     struct Caller final {
         std::uint32_t source = 0u;
         std::uint32_t callsite = 0u;
@@ -20133,7 +20354,7 @@ std::string native_port_hook_requirements_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hook-requirements.v3",
+        "katana.native-port-hook-requirements.v4",
         "native-port-hook-requirements");
     output << ",\"definition_present\":"
            << (definition != nullptr ? "true" : "false")
@@ -20174,7 +20395,7 @@ std::string native_port_hook_requirements_json(
     for (const auto& [site, references] : references_by_site) {
         if (site_index++ != 0u) output << ',';
         const auto instruction_identity =
-            native_port_code_identity(image, site, 2u);
+            native_port_code_identity(image, latent_modules, site, 2u);
         const auto instruction_hook = native_port_instruction_hook_candidate(
             program_index, native_resume_entries, site);
         const bool instruction_hook_candidate =
@@ -20271,7 +20492,7 @@ std::string native_port_hook_requirements_json(
     for (const auto& [site, diagnostics] : diagnostics_by_site) {
         if (diagnostic_site_index++ != 0u) output << ',';
         const auto instruction_identity =
-            native_port_code_identity(image, site, 2u);
+            native_port_code_identity(image, latent_modules, site, 2u);
         const auto instruction_hook = native_port_instruction_hook_candidate(
             program_index, native_resume_entries, site);
         const bool instruction_hook_candidate =
@@ -20348,7 +20569,8 @@ std::string native_port_hook_requirements_json(
                                     : std::nullopt;
         const auto identity =
             exact_size.has_value()
-                ? native_port_code_identity(image, entry, *exact_size)
+                ? native_port_code_identity(
+                      image, latent_modules, entry, *exact_size)
                 : std::nullopt;
         // A FunctionEntry replacement is identity-bound.  A syntactically
         // closed range without readable code bytes cannot be emitted as a
@@ -20867,6 +21089,69 @@ static PortExportResult export_dreamcast_port_project_impl(
                                                       prepared.program.end());
     for (const auto& module : latent_aot.modules)
         emitted_program.insert(emitted_program.end(), module.program.begin(), module.program.end());
+    std::map<std::uint32_t, std::size_t> emitted_function_entry_counts;
+    for (const auto& function : emitted_program)
+        ++emitted_function_entry_counts[function.entry_address];
+    for (const auto& module : latent_aot.modules) {
+        for (const auto& transfer : module.external_transfers) {
+            if (emitted_function_entry_counts[transfer.target_address] != 1u)
+                throw std::runtime_error(
+                    "Latenter Cross-Image-Transfer besitzt keinen "
+                    "eindeutigen emittierten Primaerimage-Entry.");
+            const auto source_address =
+                module.source_address + transfer.source_offset;
+            std::size_t matches = 0u;
+            for (auto& function : emitted_program) {
+                if (function.entry_address < module.source_address ||
+                    static_cast<std::uint64_t>(function.entry_address) >=
+                        static_cast<std::uint64_t>(module.source_address) +
+                            module.byte_size)
+                    continue;
+                for (auto& block : function.blocks) {
+                    for (auto& instruction : block.instructions) {
+                        if (instruction.source_address != source_address)
+                            continue;
+                        const auto expected_operation =
+                            transfer.kind ==
+                                    PreparedLatentAotExternalTransferKind::Call
+                                ? katana::ir::Operation::CallRegister
+                                : katana::ir::Operation::JumpRegister;
+                        if (instruction.operation != expected_operation ||
+                            instruction.branch_register_relative ||
+                            !instruction.resolved_targets.empty())
+                            throw std::runtime_error(
+                                "Latenter Cross-Image-Transfer stimmt nicht "
+                                "mit dem isoliert validierten IR ueberein.");
+                        instruction.resolved_targets = {
+                            transfer.target_address};
+                        instruction.dynamic_target_class =
+                            katana::ir::DynamicTargetClass::GuardedComplete;
+                        block.has_indirect_successor = false;
+                        if (transfer.kind ==
+                            PreparedLatentAotExternalTransferKind::Call) {
+                            const auto insertion = std::lower_bound(
+                                function.direct_callees.begin(),
+                                function.direct_callees.end(),
+                                transfer.target_address);
+                            if (insertion == function.direct_callees.end() ||
+                                *insertion != transfer.target_address)
+                                function.direct_callees.insert(
+                                    insertion, transfer.target_address);
+                        }
+                        ++matches;
+                    }
+                }
+            }
+            // A resume entry may retain its own IR view of the same exact
+            // source instruction.  Every occurrence is identity-equivalent
+            // and must receive the recovered edge; requiring one occurrence
+            // incorrectly rejects otherwise valid overlapping resume views.
+            if (matches == 0u)
+                throw std::runtime_error(
+                    "Latenter Cross-Image-Transfer besitzt keinen "
+                    "emittierten Quellbefehl.");
+        }
+    }
     annotate_proven_linear_ram_accesses(emitted_program);
     katana::ir::require_valid_program(emitted_program);
     std::vector<std::uint32_t> explicit_native_aot_resume_entries(
@@ -21659,7 +21944,8 @@ static PortExportResult export_dreamcast_port_project_impl(
             native_port_program_index,
             native_aot_resume_entries,
             current_call_graph,
-            prepared.image);
+            prepared.image,
+            latent_aot.modules);
     bool metadata_cache_hit = false;
     std::string metadata_cache_key;
     if (partition_cache) {

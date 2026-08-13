@@ -9,9 +9,11 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -1313,6 +1315,7 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     const auto source_blocks = katana::analysis::build_basic_blocks(
         analysis.recursive.instructions, analysis.resolved_edges,
         block_leaders, normal_entry_leaders);
+
     for (const auto address : normal_entry_leaders) {
         const auto decoded = std::any_of(
             analysis.recursive.instructions.begin(),
@@ -1355,9 +1358,253 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     for (const auto address : additional_block_leaders)
         append_exactly_owned_block_entry(address);
 
+    // A bounded signed-relative BRAF table is normally an intra-function
+    // computed goto even when its writable runtime snapshot means that its
+    // individual values must remain guarded AOT candidates.  The table may
+    // therefore provide ownership evidence without becoming executable CFG
+    // truth.  Admit that evidence only when the already discovered dispatch
+    // owner is unique and the complete prospective case closure stays within
+    // a deliberately bounded source budget.  This prevents a plausible but
+    // unproven snapshot table from merging a large title routine (or a tail
+    // dispatcher) into an unbounded code-generation function.
+    //
+    // Absolute pointer tables are deliberately excluded: those commonly are
+    // tables of independent callbacks or tail-dispatched functions.
+    constexpr std::size_t maximum_guarded_case_owner_instructions = 2'048u;
+    constexpr std::uint64_t maximum_guarded_case_owner_extent_bytes =
+        1ull * 1024ull * 1024ull;
+    const auto baseline_functions =
+        katana::analysis::discover_functions_from_blocks(
+            source_blocks, function_discovery_boundaries,
+            analysis.resolved_edges);
+    std::unordered_map<std::uint32_t, const katana::analysis::BasicBlock*>
+        source_block_by_start;
+    std::unordered_map<std::uint32_t, std::uint32_t>
+        source_block_start_by_instruction;
+    source_block_by_start.reserve(source_blocks.size());
+    source_block_start_by_instruction.reserve(
+        analysis.recursive.instructions.size());
+    for (const auto& block : source_blocks) {
+        source_block_by_start.emplace(block.start_address, &block);
+        for (const auto& line : block.lines)
+            source_block_start_by_instruction.emplace(
+                line.address, block.start_address);
+    }
+
+    std::unordered_map<std::uint32_t, std::size_t> unique_owner_by_block;
+    std::unordered_set<std::uint32_t> ambiguous_owner_blocks;
+    std::vector<std::unordered_set<std::uint32_t>> admitted_blocks_by_owner(
+        baseline_functions.size());
+    std::vector<std::size_t> admitted_instructions_by_owner(
+        baseline_functions.size(), 0u);
+    for (std::size_t owner = 0u; owner < baseline_functions.size(); ++owner) {
+        for (const auto address : baseline_functions[owner].block_addresses) {
+            admitted_blocks_by_owner[owner].insert(address);
+            const auto block = source_block_by_start.find(address);
+            if (block != source_block_by_start.end())
+                admitted_instructions_by_owner[owner] +=
+                    block->second->lines.size();
+            const auto [existing, inserted] =
+                unique_owner_by_block.emplace(address, owner);
+            if (!inserted && existing->second != owner)
+                ambiguous_owner_blocks.insert(address);
+        }
+    }
+    const auto controlling_block_start =
+        [&](const std::uint32_t instruction_address)
+        -> std::optional<std::uint32_t> {
+        const auto found = source_block_start_by_instruction.find(
+            instruction_address);
+        return found == source_block_start_by_instruction.end()
+                   ? std::nullopt
+                   : std::optional<std::uint32_t>{found->second};
+    };
+
+    std::map<std::uint32_t, std::vector<std::uint32_t>>
+        admitted_guarded_relative_case_targets;
+    auto function_ownership_edges = analysis.resolved_edges;
+    for (const auto& table : analysis.jump_tables) {
+        if (!table.resolved || !table.aot_candidates_only ||
+            table.dispatch_kind !=
+                katana::analysis::JumpTableDispatchKind::Jump ||
+            table.encoding ==
+                katana::analysis::JumpTableEncoding::Absolute32)
+            continue;
+        const auto resolution = std::find_if(
+            analysis.indirect_control_flow.begin(),
+            analysis.indirect_control_flow.end(),
+            [&](const auto& candidate) {
+                return candidate.instruction_address ==
+                       table.dispatch_address;
+            });
+        if (resolution == analysis.indirect_control_flow.end())
+            continue;
+        const auto resolution_status =
+            katana::analysis::control_flow_report_status(*resolution);
+        if (resolution_status !=
+                katana::analysis::ControlFlowReportStatus::GuardedPartial &&
+            resolution_status !=
+                katana::analysis::ControlFlowReportStatus::RuntimeOnly)
+            continue;
+        const auto dispatch_block =
+            controlling_block_start(table.dispatch_address);
+        if (!dispatch_block.has_value() ||
+            ambiguous_owner_blocks.contains(*dispatch_block))
+            continue;
+        const auto dispatch_source_block =
+            source_block_by_start.find(*dispatch_block);
+        if (dispatch_source_block == source_block_by_start.end() ||
+            !dispatch_source_block->second->has_indirect_successor)
+            continue;
+        const auto owner_it = unique_owner_by_block.find(*dispatch_block);
+        if (owner_it == unique_owner_by_block.end()) continue;
+        const auto owner = owner_it->second;
+        if (admitted_instructions_by_owner[owner] >
+            maximum_guarded_case_owner_instructions)
+            continue;
+
+        auto prospective_blocks = admitted_blocks_by_owner[owner];
+        auto prospective_instruction_count =
+            admitted_instructions_by_owner[owner];
+        bool admissible = true;
+        std::vector<std::uint32_t> pending;
+        for (const auto& entry : table.entries) {
+            if (!entry.accepted) {
+                admissible = false;
+                break;
+            }
+            const auto target_block =
+                source_block_by_start.find(entry.target);
+            if (target_block == source_block_by_start.end() ||
+                ambiguous_owner_blocks.contains(entry.target)) {
+                admissible = false;
+                break;
+            }
+            if (const auto target_owner =
+                    unique_owner_by_block.find(entry.target);
+                target_owner != unique_owner_by_block.end() &&
+                target_owner->second != owner) {
+                // A table landing at another independently discovered owner
+                // is a tail-dispatch candidate, not case-ownership proof.
+                admissible = false;
+                break;
+            }
+            pending.push_back(entry.target);
+        }
+        while (admissible && !pending.empty()) {
+            const auto address = pending.back();
+            pending.pop_back();
+            if (!prospective_blocks.insert(address).second) continue;
+            const auto block = source_block_by_start.find(address);
+            if (block == source_block_by_start.end()) {
+                admissible = false;
+                break;
+            }
+            prospective_instruction_count += block->second->lines.size();
+            if (prospective_instruction_count >
+                maximum_guarded_case_owner_instructions) {
+                admissible = false;
+                break;
+            }
+            for (const auto successor : block->second->successors) {
+                if (ambiguous_owner_blocks.contains(successor)) {
+                    admissible = false;
+                    break;
+                }
+                const auto successor_owner =
+                    unique_owner_by_block.find(successor);
+                if (successor_owner != unique_owner_by_block.end() &&
+                    successor_owner->second != owner)
+                    continue;
+                if (source_block_by_start.contains(successor))
+                    pending.push_back(successor);
+            }
+        }
+        if (admissible) {
+            const auto owner_entry =
+                static_cast<std::uint64_t>(
+                    baseline_functions[owner].entry_address);
+            auto extent_end = owner_entry;
+            for (const auto address : prospective_blocks) {
+                const auto block = source_block_by_start.find(address);
+                if (block == source_block_by_start.end() ||
+                    block->second->lines.empty() ||
+                    static_cast<std::uint64_t>(address) < owner_entry) {
+                    admissible = false;
+                    break;
+                }
+                const auto block_end =
+                    static_cast<std::uint64_t>(
+                        block->second->lines.back().address) +
+                    2u;
+                if (block_end < owner_entry ||
+                    block_end - owner_entry >
+                        maximum_guarded_case_owner_extent_bytes) {
+                    admissible = false;
+                    break;
+                }
+                extent_end = std::max(extent_end, block_end);
+            }
+            if (extent_end <= owner_entry) admissible = false;
+        }
+        if (!admissible) continue;
+        admitted_blocks_by_owner[owner] = std::move(prospective_blocks);
+        admitted_instructions_by_owner[owner] =
+            prospective_instruction_count;
+        auto& admitted_targets =
+            admitted_guarded_relative_case_targets[
+                table.dispatch_address];
+        for (const auto& entry : table.entries) {
+            admitted_targets.push_back(entry.target);
+            function_ownership_edges.push_back(
+                {table.dispatch_address,
+                 entry.target,
+                 katana::analysis::ResolvedControlFlowKind::Jump,
+                 true,
+                 katana::analysis::ControlFlowEvidence::GuardedPartial,
+                 {katana::analysis::AnalysisEvidenceOrigin::JumpTable},
+                 true});
+        }
+        std::sort(admitted_targets.begin(), admitted_targets.end());
+        admitted_targets.erase(
+            std::unique(admitted_targets.begin(),
+                        admitted_targets.end()),
+            admitted_targets.end());
+    }
+    std::sort(function_ownership_edges.begin(),
+              function_ownership_edges.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.instruction_address,
+                                  left.target_address,
+                                  left.kind,
+                                  left.guarded,
+                                  left.evidence,
+                                  left.evidence_origins,
+                                  left.analysis_candidate_carrier) <
+                         std::tie(right.instruction_address,
+                                  right.target_address,
+                                  right.kind,
+                                  right.guarded,
+                                  right.evidence,
+                                  right.evidence_origins,
+                                  right.analysis_candidate_carrier);
+              });
+    function_ownership_edges.erase(
+        std::unique(function_ownership_edges.begin(),
+                    function_ownership_edges.end()),
+        function_ownership_edges.end());
+    const auto function_ownership_blocks =
+        function_ownership_edges.size() == analysis.resolved_edges.size()
+            ? source_blocks
+            : katana::analysis::build_basic_blocks(
+                  analysis.recursive.instructions,
+                  function_ownership_edges,
+                  block_leaders,
+                  normal_entry_leaders);
+
     auto functions = katana::analysis::discover_functions_from_blocks(
-        source_blocks, function_discovery_boundaries,
-        analysis.resolved_edges);
+        function_ownership_blocks, function_discovery_boundaries,
+        function_ownership_edges);
     // Guarded candidates and explicit continuation leaders are block roots,
     // not automatically function roots. Most are already owned by an
     // ordinary or exact function and must stay there. A candidate can,
@@ -1392,8 +1639,8 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             supplemental_candidate_boundaries.begin(),
             supplemental_candidate_boundaries.end());
         functions = katana::analysis::discover_functions_from_blocks(
-            source_blocks, function_discovery_boundaries,
-            analysis.resolved_edges);
+            function_ownership_blocks, function_discovery_boundaries,
+            function_ownership_edges);
     }
     for (const auto address : candidate_leaders) {
         const auto owned = std::any_of(
@@ -1535,25 +1782,60 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     for (auto& function : program) {
         for (auto& block : function.blocks) {
             for (auto& instruction : block.instructions) {
-                if (instruction.dynamic_target_class == DynamicTargetClass::NotApplicable) continue;
-                const auto resolution = resolution_by_address.find(instruction.source_address);
-                if (resolution == resolution_by_address.end()) continue;
-                switch (katana::analysis::control_flow_report_status(*resolution->second)) {
-                case katana::analysis::ControlFlowReportStatus::Resolved:
-                    instruction.dynamic_target_class = DynamicTargetClass::NotApplicable;
-                    break;
-                case katana::analysis::ControlFlowReportStatus::GuardedComplete:
-                    instruction.dynamic_target_class = DynamicTargetClass::GuardedComplete;
-                    break;
-                case katana::analysis::ControlFlowReportStatus::GuardedPartial:
-                    instruction.dynamic_target_class = DynamicTargetClass::GuardedPartial;
-                    break;
-                case katana::analysis::ControlFlowReportStatus::RuntimeOnly:
-                    instruction.dynamic_target_class = DynamicTargetClass::RuntimeOnly;
-                    break;
-                case katana::analysis::ControlFlowReportStatus::Unresolved:
-                    instruction.dynamic_target_class = DynamicTargetClass::Unresolved;
-                    break;
+                if (instruction.dynamic_target_class !=
+                    DynamicTargetClass::NotApplicable) {
+                    const auto resolution = resolution_by_address.find(
+                        instruction.source_address);
+                    if (resolution != resolution_by_address.end()) {
+                        switch (katana::analysis::control_flow_report_status(
+                            *resolution->second)) {
+                        case katana::analysis::ControlFlowReportStatus::Resolved:
+                            instruction.dynamic_target_class =
+                                DynamicTargetClass::NotApplicable;
+                            break;
+                        case katana::analysis::ControlFlowReportStatus::GuardedComplete:
+                            instruction.dynamic_target_class =
+                                DynamicTargetClass::GuardedComplete;
+                            break;
+                        case katana::analysis::ControlFlowReportStatus::GuardedPartial:
+                            instruction.dynamic_target_class =
+                                DynamicTargetClass::GuardedPartial;
+                            break;
+                        case katana::analysis::ControlFlowReportStatus::RuntimeOnly:
+                            instruction.dynamic_target_class =
+                                DynamicTargetClass::RuntimeOnly;
+                            break;
+                        case katana::analysis::ControlFlowReportStatus::Unresolved:
+                            instruction.dynamic_target_class =
+                                DynamicTargetClass::Unresolved;
+                            break;
+                        }
+                    }
+                }
+                if (const auto guarded_cases =
+                        admitted_guarded_relative_case_targets.find(
+                            instruction.source_address);
+                    guarded_cases !=
+                    admitted_guarded_relative_case_targets.end()) {
+                    if (instruction.operation != Operation::JumpRegister ||
+                        !instruction.branch_register_relative ||
+                        (instruction.dynamic_target_class !=
+                             DynamicTargetClass::GuardedPartial &&
+                         instruction.dynamic_target_class !=
+                             DynamicTargetClass::RuntimeOnly) ||
+                        !block.has_indirect_successor)
+                        throw std::invalid_argument(
+                            "Guarded relative Case-Tabelle passt nicht zum "
+                            "IR-Dispatch bei " +
+                            std::to_string(instruction.source_address) + '.');
+                    if (!block.guarded_case_ownership_targets.empty() &&
+                        block.guarded_case_ownership_targets !=
+                            guarded_cases->second)
+                        throw std::invalid_argument(
+                            "Ein IR-Block besitzt mehrere guarded "
+                            "Case-Ownership-Vertraege.");
+                    block.guarded_case_ownership_targets =
+                        guarded_cases->second;
                 }
             }
         }

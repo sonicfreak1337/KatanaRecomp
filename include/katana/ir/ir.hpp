@@ -315,6 +315,12 @@ struct BasicBlock {
     std::uint32_t start_address = 0;
     std::vector<Instruction> instructions;
     std::vector<std::uint32_t> successors;
+    // Positive, bounded ownership evidence for guarded relative switch cases.
+    // These addresses retain case blocks inside their discovered function but
+    // are deliberately not executable CFG successors or resolved_targets:
+    // the live guest register and the validating dynamic dispatcher remain
+    // authoritative at runtime.
+    std::vector<std::uint32_t> guarded_case_ownership_targets;
     bool has_indirect_successor = false;
 };
 

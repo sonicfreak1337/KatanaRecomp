@@ -104,6 +104,15 @@ Funktionseinstiege werden abgelehnt. Instruktionen erscheinen in Adressreihenfol
 
 Beide Formate enthalten Operandbreiten, konkrete Operanden, Status-, Speicher- und
 Akkumulatoreffekte, Delay-Slot-Beziehungen, Privilegstatus und Kontrollflussdaten.
+Ein Block kann zusaetzlich sortierte `guarded_case_ownership_targets` tragen.
+Diese endliche, positive Metadatenmenge haelt strukturell erkannte Cases einer
+beschreibbaren relativen Sprungtabelle beim Funktionsowner, ist aber ausdruecklich
+kein ausfuehrbarer CFG-Nachfolger und keine vollstaendige Laufzeitzielmenge. Der
+validierende dynamische AOT-Dispatch bleibt fuer den tatsaechlichen Registerwert
+zustaendig. Nutzt die Hookanalyse diese Metadaten zur strukturellen
+Owner-Ausdehnung, meldet sie deshalb `guarded-owner-extent` und niemals
+`closed-control-flow`; nur unveraenderlicher, vollstaendiger Kontrollfluss darf
+den staerkeren Beweisnamen tragen.
 Die JSON-Ausgabe verwendet das Schema `katana-ir-v2`, hexadezimale Adressen als
 Strings und feste englische Feld- und Enum-Namen. Zusaetzlich gilt der
 gemeinsame Katana-Berichtvertrag mit `report_version`, `report_type` und

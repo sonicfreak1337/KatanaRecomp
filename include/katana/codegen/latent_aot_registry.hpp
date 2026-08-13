@@ -27,6 +27,13 @@ inline constexpr std::uint64_t
         64ull * 1024ull * 1024ull;
 inline constexpr std::size_t
     maximum_prepared_latent_aot_external_code_pointer_candidates = 4096u;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_external_transfers = 4096u;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_function_identities = 2'048u;
+inline constexpr std::uint64_t
+    maximum_prepared_latent_aot_function_identity_bytes =
+        64ull * 1024ull * 1024ull;
 
 // A local, export-time-only request for a native entry in an exact disc module.
 // The offset is meaningful only for the exact byte identity and logical disc
@@ -121,6 +128,40 @@ struct PreparedLatentAotBlockIdentity {
     [[nodiscard]] bool operator==(const PreparedLatentAotBlockIdentity&) const = default;
 };
 
+// Hash over one complete contiguous function extent in the transformed
+// module. Unlike block_identities this is export-time provider evidence, not
+// a runtime dispatch entry. Keeping it separate prevents a function boundary
+// from accidentally becoming an executable root while still allowing the
+// native hook audit to bind whole-function replacements in latent modules.
+struct PreparedLatentAotFunctionIdentity {
+    std::uint32_t source_offset = 0u;
+    std::uint32_t size = 0u;
+    std::string sha256;
+
+    [[nodiscard]] bool operator==(
+        const PreparedLatentAotFunctionIdentity&) const = default;
+};
+
+enum class PreparedLatentAotExternalTransferKind : std::uint8_t {
+    Call,
+    Jump,
+};
+
+// Exact transfer recovered from an instruction and literal inside the
+// transformed module, targeting an admitted primary-image code entry. It is
+// deliberately applied only after module and primary IR have been combined;
+// isolated module verification must never pretend the external callee is a
+// local function.
+struct PreparedLatentAotExternalTransfer {
+    std::uint32_t source_offset = 0u;
+    std::uint32_t target_address = 0u;
+    PreparedLatentAotExternalTransferKind kind =
+        PreparedLatentAotExternalTransferKind::Call;
+
+    [[nodiscard]] bool operator==(
+        const PreparedLatentAotExternalTransfer&) const = default;
+};
+
 // Describes how the identity-bound disc extent becomes the analyzed module
 // bytes. Identity is a byte-for-byte load. SegaPrs is the strict, bounded
 // legacy PRS transform; its encoded and decoded identities are both retained.
@@ -165,11 +206,16 @@ struct PreparedLatentAotModule {
     // Keeping discovery and admission separate prevents arbitrary module data
     // from becoming code while preserving statically stored cross-image calls.
     std::vector<std::uint32_t> external_code_pointer_candidates;
+    std::vector<PreparedLatentAotExternalTransfer> external_transfers;
     // Sorted identities for every uniquely emitted native IR block and exact
     // internal resume entry. Resume ranges may be nested suffixes of their IR
     // owner, but entry offsets are unique. Only hashes survive export-time
     // discovery; source bytes do not.
     std::vector<PreparedLatentAotBlockIdentity> block_identities;
+    // Sorted, bounded whole-function identities. These do not create roots or
+    // dispatch entries and are admitted only when the final closed-CFG size
+    // agrees exactly with source_offset and size.
+    std::vector<PreparedLatentAotFunctionIdentity> function_identities;
     std::vector<katana::ir::Function> program;
     katana::analysis::DreamcastHardwareAudit hardware_audit;
 };
