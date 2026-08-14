@@ -30,6 +30,8 @@ inline constexpr std::size_t
 inline constexpr std::size_t
     maximum_prepared_latent_aot_external_transfers = 4096u;
 inline constexpr std::size_t
+    maximum_prepared_latent_aot_code_pointer_evidence = 16'384u;
+inline constexpr std::size_t
     maximum_prepared_latent_aot_function_identities = 2'048u;
 inline constexpr std::uint64_t
     maximum_prepared_latent_aot_function_identity_bytes =
@@ -75,6 +77,23 @@ struct LatentAotExternalCallbackSink final {
 
     [[nodiscard]] bool operator==(
         const LatentAotExternalCallbackSink&) const = default;
+};
+
+// Identity-bound primary-image record walker which loads a callback from a
+// fixed-width field and invokes it indirectly. A latent module may pair this
+// shape only with an exact local code literal stored through a proven
+// constructor-return receiver. The result remains guarded inventory and
+// never makes the walker's dynamic target set complete.
+struct LatentAotExternalCallbackFieldSink final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t load_instruction_address = 0u;
+    std::int32_t displacement = 0;
+    std::uint8_t width = 0u;
+    bool call = false;
+
+    [[nodiscard]] bool operator==(
+        const LatentAotExternalCallbackFieldSink&) const = default;
 };
 
 struct LatentAotDiscoveryOptions {
@@ -129,6 +148,9 @@ struct LatentAotDiscoveryOptions {
     // primary-image function boundaries and persistent callback stores.
     std::span<const LatentAotExternalCallbackSink>
         external_callback_sinks;
+    // Sorted, unique field-load/call shapes from identity-bound primary code.
+    std::span<const LatentAotExternalCallbackFieldSink>
+        external_callback_field_sinks;
 };
 
 struct LatentAotOccupiedRange {
@@ -180,6 +202,35 @@ struct PreparedLatentAotExternalTransfer {
         const PreparedLatentAotExternalTransfer&) const = default;
 };
 
+enum class PreparedLatentAotCodePointerEvidenceKind : std::uint8_t {
+    // An aligned module cell points at an independently declared resident
+    // code entry. The cell alone never discovers a new entry.
+    DeclaredPointerCell,
+    // A module instruction consumes an exact literal as its register target.
+    LiteralCall,
+    LiteralJump,
+    // A module call forwards an exact literal through one proven callback
+    // argument of an identity-bound resident higher-order API.
+    CallbackArgument,
+};
+
+// Bounded, identity-scoped evidence ledger for code pointers crossing a
+// latent-module boundary. Structural entry shape is deliberately not stored
+// here: the product exporter validates it independently against the exact
+// primary-image bytes before admitting a root. This keeps declarations,
+// observed transfers and mere structural hints in separate proof domains.
+struct PreparedLatentAotCodePointerEvidence {
+    std::uint32_t source_offset = 0u;
+    std::uint32_t target_address = 0u;
+    PreparedLatentAotCodePointerEvidenceKind kind =
+        PreparedLatentAotCodePointerEvidenceKind::DeclaredPointerCell;
+    std::uint32_t sink_address = 0u;
+    std::uint8_t argument_index = 0xFFu;
+
+    [[nodiscard]] bool operator==(
+        const PreparedLatentAotCodePointerEvidence&) const = default;
+};
+
 // Describes how the identity-bound disc extent becomes the analyzed module
 // bytes. Identity is a byte-for-byte load. SegaPrs is the strict, bounded
 // legacy PRS transform; its encoded and decoded identities are both retained.
@@ -218,14 +269,20 @@ struct PreparedLatentAotModule {
     // native source block for every listed offset before publishing a
     // loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
-    // Sorted, unique P1-normalized values from aligned pointer-width cells in
-    // the exact module bytes which point outside the module's synthetic AOT
-    // extent. They are candidates only: the product exporter may promote one
-    // to a primary-image callback root solely when an identity-bound external
-    // GameProject function declaration and executable primary bytes agree.
-    // Keeping discovery and admission separate prevents arbitrary module data
-    // from becoming code while preserving statically stored cross-image calls.
+    // Sorted, unique P1-normalized values which point outside the module's
+    // synthetic AOT extent. Values come either from aligned pointer-width
+    // cells already admitted by the external declaration set or from an exact
+    // PC-relative literal consumed by a register Call/Jump instruction, or
+    // from an exact literal forwarded through a proven callback argument of
+    // a resident higher-order API. They remain candidates: the product
+    // exporter may promote a declared value, or may independently prove the
+    // transfer/callback target against bounded executable primary-image
+    // bytes. Keeping discovery and admission separate prevents arbitrary
+    // module data from becoming code while preserving stripped cross-image
+    // calls and callbacks.
     std::vector<std::uint32_t> external_code_pointer_candidates;
+    std::vector<PreparedLatentAotCodePointerEvidence>
+        external_code_pointer_evidence;
     std::vector<PreparedLatentAotExternalTransfer> external_transfers;
     // Sorted identities for every uniquely emitted native IR block and exact
     // internal resume entry. Resume ranges may be nested suffixes of their IR

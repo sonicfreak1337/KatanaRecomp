@@ -180,12 +180,12 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
     if (!saw_version) {
         fail(path, 0u, "Pflichtfeld version fehlt.");
     }
-    if (overrides.version != 1u && overrides.version != 2u &&
-        overrides.version != 3u &&
-        overrides.version != analysis_directives_current_version) {
+    if (overrides.version == 0u ||
+        overrides.version > analysis_directives_current_version) {
         fail(path, 0u,
-             "nur Analyseanweisungs-Version 1, 2, 3 oder 4 wird "
-             "unterstuetzt.");
+             "nur Analyseanweisungs-Version 1 bis " +
+                 std::to_string(analysis_directives_current_version) +
+                 " wird unterstuetzt.");
     }
     if (overrides.version == 1u) {
         if (saw_schema || saw_mode) {
@@ -193,7 +193,10 @@ AnalysisOverrides parse_analysis_overrides(const std::filesystem::path& path) {
         }
         overrides.mode = AnalysisDirectiveMode::Override;
     } else if (!saw_schema || !saw_mode) {
-        fail(path, 0u, "Version 2, 3 und 4 brauchen schema und mode.");
+        fail(path, 0u,
+             "Version 2 bis " +
+                 std::to_string(analysis_directives_current_version) +
+                 " brauchen schema und mode.");
     }
 
     if (overrides.version < 3u && !overrides.function_boundaries.empty())

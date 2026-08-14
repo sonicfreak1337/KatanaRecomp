@@ -1,15 +1,28 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `49`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `52`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 108, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 23, Portprojektvertrag 99 und Native-Port-
+Backend-Interface-ABI 23, Portprojektvertrag 101 und Native-Port-
 Profilvertrag 22. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
-Directives-Version 5, Native-AOT-Emissionsprofil 37 und Port-Metadata-Cache-
-Schema 9 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
+Directives-Version 5, Native-AOT-Emissionsprofil 40 und Port-Metadata-Cache-
+Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
+
+Analyzer-ABI 52 bindet die bounded Cross-Image-Record-Callback-Analyse.
+Statische Primary-Image-Walker publizieren Funktions-, Call-, Load-, Feld-
+und Call-/Jump-Evidenz; Latent-AOT-Module verfolgen exakte Rueckgaben direkter
+externer Record-Konstruktoren durch CFG-Joins und erkennen lokale
+Codepointerstores in diesen Feldern. Die resultierenden Entries bleiben
+guarded und werden erneut gegen Modulbytes, Entry-Shape, Early-CF, CFG und
+Relocation validiert; die Analyse behauptet keine Vollstaendigkeit der
+indirekten Aufrufkante. Feld-Sinks sind Teil von Analyzer-, Kandidatenepoch-
+und Persistent-Cacheidentitaet. Portprojektvertrag 101, Latent-AOT-Cache 6,
+Analyseimplementierung v20, Native-AOT-Profil 40 und Metadata-Cache 12
+invalidieren aeltere Artefakte deterministisch.
+
 Version 41 ist die Kompatibilitaetsgrenze fuer die aktuell exportierten
 Layouts, Signaturen und Analyseergebnisse. Analyzer-ABI 11 band historisch
 die engere Provenienz fuer 32-Bit-PC-relative

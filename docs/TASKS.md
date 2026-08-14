@@ -327,6 +327,21 @@ Diagnoselaeufen abkuerzen. Der naechste P0 ist kein Moviefehler, sondern ein
 noch ungebundener statischer Entry des nach dem Intro materialisierten
 PRS-Overlays. Memory-Card-Screen und Hauptmenue bleiben offen.
 
+Aktueller v127-Nachweis: Die generische Record-Callback-Transit-Analyse
+verknuepft lokale Latent-AOT-Callbackliterale mit nachgewiesenen
+Primary-Image-Record-/Listen-Walkern, ohne die indirekte Zielmenge als
+vollstaendig zu markieren. Gegenueber v126 steigen Primary-Roots
+`607 -> 614`, Callback-Sinks `715 -> 716`, externe Codepointer
+`4.085 -> 4.094`, Funktionen `5.947 -> 6.086` und Partitionen
+`173 -> 176`. `0x88289190` ist als identitaetsgebundener Dispatch-Entry
+emittiert; der Produktlauf passiert den alten Loaded-AOT-Stop und erreicht
+Frame 334. Die Hardware-Closure bleibt bei `243` bekannten Sites und `244`
+Gaps (`189` hook-missing, `55` progress-wait), da der Task AOT- statt
+Hardwaresemantik schliesst. Der aktuelle sichtbare Blocker ist die
+Modellprojektion (`0/1.071` rasterfaehige Vertices), gefolgt von einer
+Task-/Progress-Frontier ohne neue Framepublikation. Grafik, Memory-Card-
+Screen und Hauptmenue bleiben offen.
+
 Der Export umfasst `5.918` Funktionen in `167` Partitionen, `4.430` rohe und
 `2.509` guarded Callback-Kandidaten sowie `400.972/4.194.304` Shape-Arbeit
 ohne Truncation. Gegenueber v29: `+815` Funktionen, `+18` Partitionen und

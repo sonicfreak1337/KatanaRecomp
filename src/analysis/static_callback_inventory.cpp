@@ -11,13 +11,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <iostream>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -26,12 +29,45 @@ namespace katana::analysis::detail {
 namespace {
 
 constexpr std::size_t maximum_scalar_constants = 8u;
-constexpr std::size_t maximum_code_constants = 64u;
+// A typed indexed callback table may contain up to 256 identity-bound
+// entries.  The executable-value lane must be able to carry one complete
+// admitted table; using the old 64-value scalar-oriented cap made an otherwise
+// bounded 65..256-entry table report semantic inventory loss even while the
+// analysis-wide 16K candidate budget was mostly empty.
+constexpr std::size_t maximum_code_constants = 256u;
+constexpr std::size_t maximum_receiver_constants = 256u;
+constexpr std::size_t maximum_receiver_progressions = 64u;
+constexpr std::uint64_t maximum_receiver_progression_values = 256u;
 constexpr std::size_t maximum_inventory_candidates = 16'384u;
 constexpr std::size_t maximum_stack_values = 256u;
+constexpr std::size_t maximum_callback_field_origins = 256u;
+constexpr std::size_t maximum_persistent_store_observations = 4096u;
 constexpr std::size_t minimum_static_code_pointer_vector_entries = 4u;
 constexpr std::size_t maximum_static_code_pointer_table_entries = 256u;
 constexpr std::uint32_t maximum_static_code_pointer_table_stride = 256u;
+
+struct ReceiverProgression final {
+    std::uint32_t first = 0u;
+    std::uint32_t last = 0u;
+    std::uint32_t stride = 1u;
+
+    bool operator==(const ReceiverProgression&) const = default;
+};
+
+struct CallbackFieldOrigin final {
+    // Receiver provenance is relative to the owning function. Exact receiver
+    // constants remain comparable across functions; incoming ABI argument
+    // bits are comparable only inside the same owner.
+    std::uint8_t receiver_input_mask = 0u;
+    std::set<std::uint32_t> receiver_constants;
+    std::vector<ReceiverProgression> receiver_progressions;
+    bool receiver_constants_truncated = false;
+    std::int32_t displacement = 0;
+    std::uint8_t width = 0u;
+    std::uint32_t load_instruction_address = 0u;
+
+    bool operator==(const CallbackFieldOrigin&) const = default;
+};
 
 struct CallbackValue final {
     // Bit 0..3 corresponds to the function's incoming r4..r7.
@@ -45,12 +81,21 @@ struct CallbackValue final {
     // incomplete and needlessly broad.
     std::set<std::uint32_t> code_constants;
     bool code_constants_truncated = false;
+    // Record/object receiver identity is a separate proof lane.  Eight
+    // ordinary scalars are enough for modes and sizes but not for a function
+    // that selects among many identity-bound task records.  Mixing those
+    // domains previously erased exact store/load receiver relations.
+    std::set<std::uint32_t> receiver_constants;
+    std::vector<ReceiverProgression> receiver_progressions;
+    bool receiver_constants_truncated = false;
     // Guaranteed power-of-two byte alignment for an otherwise unknown
     // scalar. This keeps the shape of mutable table indices through SHLL
     // operations without pretending that the index value itself is known.
     std::uint32_t minimum_alignment = 1u;
     std::optional<std::int32_t> stack_address;
     bool may_be_stack = false;
+    std::vector<CallbackFieldOrigin> field_origins;
+    bool field_origins_truncated = false;
 
     bool operator==(const CallbackValue&) const = default;
 };
@@ -68,12 +113,35 @@ struct CallbackCall final {
     std::array<CallbackValue, 4> arguments;
 };
 
+struct CallbackFieldSink final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    CallbackFieldOrigin field;
+    bool call = false;
+
+    bool operator==(const CallbackFieldSink&) const = default;
+};
+
+struct CallbackPersistentStore final {
+    CallbackValue source;
+    CallbackValue receiver;
+    std::int32_t displacement = 0;
+    std::uint32_t instruction_address = 0u;
+    std::uint8_t width = 0u;
+
+    bool operator==(const CallbackPersistentStore&) const = default;
+};
+
 struct CallbackFunctionModel final {
     std::uint32_t entry = 0u;
     std::uint8_t local_sink_mask = 0u;
     std::vector<CallbackCall> calls;
+    std::vector<CallbackFieldSink> field_sinks;
+    std::vector<CallbackPersistentStore> persistent_stores;
     std::vector<StoredCodeAddressCandidate> local_candidates;
     bool local_candidates_truncated = false;
+    bool field_sinks_truncated = false;
+    bool persistent_stores_truncated = false;
 };
 
 [[nodiscard]] std::optional<std::uint32_t> executable_constant(
@@ -126,6 +194,84 @@ struct CallbackFunctionModel final {
     return offsets;
 }
 
+[[nodiscard]] std::vector<StaticCallbackFieldSinkContract>
+discover_structural_callback_field_sinks(
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    std::vector<StaticCallbackFieldSinkContract> result;
+    constexpr std::size_t maximum_writer_distance = 32u;
+    for (const auto block_address : function.block_addresses) {
+        const auto block = blocks.find(block_address);
+        if (block == blocks.end()) continue;
+        const auto& lines = block->second->lines;
+        for (std::size_t index = 0u; index < lines.size(); ++index) {
+            const auto kind = lines[index].instruction.kind;
+            if (kind != katana::sh4::InstructionKind::Jsr &&
+                kind != katana::sh4::InstructionKind::Jmp)
+                continue;
+            auto tracked = lines[index].instruction.branch_register;
+            auto expected_address = lines[index].address;
+            for (std::size_t distance = 0u;
+                 distance < maximum_writer_distance && index > distance;
+                 ++distance) {
+                const auto& candidate = lines[index - distance - 1u];
+                if (candidate.address + 2u != expected_address) break;
+                expected_address = candidate.address;
+                if (candidate.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::Call ||
+                    candidate.instruction.control_flow ==
+                        katana::sh4::ControlFlowKind::IndirectCall)
+                    break;
+                const auto writes =
+                    general_register_write_mask(candidate.instruction);
+                if ((writes & static_cast<std::uint16_t>(1u << tracked)) ==
+                    0u)
+                    continue;
+                if (candidate.instruction.destination_register != tracked)
+                    break;
+                if (candidate.instruction.kind ==
+                    katana::sh4::InstructionKind::MovRegister) {
+                    tracked = candidate.instruction.source_register;
+                    continue;
+                }
+                std::optional<std::int32_t> displacement;
+                if (candidate.instruction.kind ==
+                    katana::sh4::InstructionKind::MovLongLoadDisplacement)
+                    displacement = candidate.instruction.displacement;
+                else if (candidate.instruction.kind ==
+                         katana::sh4::InstructionKind::MovLongLoad)
+                    displacement = 0;
+                if (displacement.has_value())
+                    result.push_back(
+                        {function.entry_address,
+                         lines[index].address,
+                         candidate.address,
+                         *displacement,
+                         static_cast<std::uint8_t>(4u),
+                         kind == katana::sh4::InstructionKind::Jsr});
+                break;
+            }
+        }
+    }
+    std::sort(result.begin(), result.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.function_address,
+                                  left.call_instruction_address,
+                                  left.load_instruction_address,
+                                  left.displacement,
+                                  left.width,
+                                  left.call) <
+                         std::tie(right.function_address,
+                                  right.call_instruction_address,
+                                  right.load_instruction_address,
+                                  right.displacement,
+                                  right.width,
+                                  right.call);
+              });
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
 [[nodiscard]] bool add_bounded_scalar_constant(CallbackValue& value,
                                                const std::uint32_t constant) {
     if (value.constants_truncated || value.constants.contains(constant))
@@ -162,15 +308,309 @@ struct CallbackFunctionModel final {
     return true;
 }
 
+[[nodiscard]] bool plausible_receiver_constant(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t constant) {
+    const auto physical = constant & 0x1FFFFFFFu;
+    return (physical >= 0x0C000000u && physical < 0x10000000u) ||
+           image.resolve_segment_address(constant, 1u).has_value();
+}
+
+[[nodiscard]] bool receiver_progression_contains(
+    const ReceiverProgression& progression,
+    const std::uint32_t constant) {
+    return constant >= progression.first && constant <= progression.last &&
+           (constant - progression.first) % progression.stride == 0u;
+}
+
+[[nodiscard]] bool add_receiver_progression(
+    std::vector<ReceiverProgression>& progressions,
+    ReceiverProgression progression) {
+    if (progression.stride == 0u || progression.first > progression.last)
+        throw std::invalid_argument(
+            "Ungueltige Callback-Receiver-Progression.");
+    const auto progression_value_count = [](const ReceiverProgression& value) {
+        return (static_cast<std::uint64_t>(value.last) - value.first) /
+                   value.stride +
+               1u;
+    };
+    if (progression_value_count(progression) >
+        maximum_receiver_progression_values)
+        return false;
+    for (auto& existing : progressions) {
+        if (existing.stride != progression.stride ||
+            (existing.first % existing.stride) !=
+                (progression.first % progression.stride))
+            continue;
+        const auto separated_after =
+            static_cast<std::uint64_t>(progression.first) >
+            static_cast<std::uint64_t>(existing.last) + existing.stride;
+        const auto separated_before =
+            static_cast<std::uint64_t>(existing.first) >
+            static_cast<std::uint64_t>(progression.last) + progression.stride;
+        if (separated_after || separated_before) continue;
+        ReceiverProgression merged{
+            std::min(existing.first, progression.first),
+            std::max(existing.last, progression.last), existing.stride};
+        // A loop-carried address recurrence can otherwise extend an exact
+        // progression by one record forever.  Widen it to the explicit loss
+        // state as soon as it exceeds the same finite identity inventory that
+        // exact receiver constants use.  This keeps the analysis monotone and
+        // fail-closed without turning the local work budget into semantics.
+        if (progression_value_count(merged) >
+            maximum_receiver_progression_values)
+            return false;
+        existing = merged;
+        return true;
+    }
+    if (progressions.size() >= maximum_receiver_progressions) return false;
+    progressions.push_back(progression);
+    return true;
+}
+
+[[nodiscard]] bool compact_receiver_constants(CallbackValue& value,
+                                               const std::uint32_t added) {
+    std::vector<std::uint32_t> values(value.receiver_constants.begin(),
+                                      value.receiver_constants.end());
+    values.push_back(added);
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+
+    std::set<std::uint32_t> residual;
+    std::size_t index = 0u;
+    while (index < values.size()) {
+        if (index + 2u >= values.size()) {
+            residual.insert(values.begin() +
+                                static_cast<std::ptrdiff_t>(index),
+                            values.end());
+            break;
+        }
+        const auto stride = values[index + 1u] - values[index];
+        if (stride == 0u ||
+            values[index + 2u] - values[index + 1u] != stride) {
+            residual.insert(values[index]);
+            ++index;
+            continue;
+        }
+        auto end = index + 2u;
+        while (end + 1u < values.size() &&
+               values[end + 1u] - values[end] == stride)
+            ++end;
+        if (!add_receiver_progression(
+                value.receiver_progressions,
+                {values[index], values[end], stride}))
+            return false;
+        index = end + 1u;
+    }
+    for (auto constant = residual.begin(); constant != residual.end();) {
+        const auto covered = std::any_of(
+            value.receiver_progressions.begin(),
+            value.receiver_progressions.end(),
+            [&](const auto& progression) {
+                return receiver_progression_contains(progression, *constant);
+            });
+        if (covered)
+            constant = residual.erase(constant);
+        else
+            ++constant;
+    }
+    if (residual.size() > maximum_receiver_constants) return false;
+    value.receiver_constants = std::move(residual);
+    return true;
+}
+
+enum class ReceiverIntersection : std::uint8_t {
+    None,
+    Exact,
+    Unproven,
+};
+
+[[nodiscard]] ReceiverIntersection receiver_progressions_intersect(
+    const ReceiverProgression& left,
+    const ReceiverProgression& right) {
+    const auto begin = std::max(left.first, right.first);
+    const auto end = std::min(left.last, right.last);
+    if (begin > end) return ReceiverIntersection::None;
+    const auto gcd = std::gcd(left.stride, right.stride);
+    const auto delta = left.first > right.first
+                           ? left.first - right.first
+                           : right.first - left.first;
+    if (delta % gcd != 0u) return ReceiverIntersection::None;
+    if (left.stride == right.stride &&
+        left.first % left.stride == right.first % right.stride)
+        return ReceiverIntersection::Exact;
+
+    constexpr auto maximum_exact_intersection_checks =
+        maximum_receiver_progression_values;
+    const auto left_count =
+        (static_cast<std::uint64_t>(left.last) - left.first) / left.stride +
+        1u;
+    const auto right_count =
+        (static_cast<std::uint64_t>(right.last) - right.first) /
+            right.stride +
+        1u;
+    const auto* smaller = &left;
+    const auto* larger = &right;
+    if (right_count < left_count) {
+        smaller = &right;
+        larger = &left;
+    }
+    if (std::min(left_count, right_count) >
+        maximum_exact_intersection_checks)
+        return ReceiverIntersection::Unproven;
+    for (std::uint64_t value = smaller->first; value <= smaller->last;
+         value += smaller->stride) {
+        if (receiver_progression_contains(
+                *larger, static_cast<std::uint32_t>(value)))
+            return ReceiverIntersection::Exact;
+    }
+    return ReceiverIntersection::None;
+}
+
+[[nodiscard]] ReceiverIntersection receiver_evidence_intersects(
+    const CallbackFieldOrigin& sink,
+    const CallbackValue& store_receiver) {
+    // A truncated receiver lane still contains a sound exact subset.  Check
+    // that subset before reporting the omitted remainder as unproven; clearing
+    // or ignoring it loses real store/load relations merely because another
+    // path widened beyond the bounded inventory.
+    for (const auto constant : sink.receiver_constants) {
+        if (store_receiver.receiver_constants.contains(constant))
+            return ReceiverIntersection::Exact;
+        if (std::any_of(store_receiver.receiver_progressions.begin(),
+                        store_receiver.receiver_progressions.end(),
+                        [&](const auto& progression) {
+                            return receiver_progression_contains(progression,
+                                                                 constant);
+                        }))
+            return ReceiverIntersection::Exact;
+    }
+    for (const auto constant : store_receiver.receiver_constants) {
+        if (std::any_of(sink.receiver_progressions.begin(),
+                        sink.receiver_progressions.end(),
+                        [&](const auto& progression) {
+                            return receiver_progression_contains(progression,
+                                                                 constant);
+                        }))
+            return ReceiverIntersection::Exact;
+    }
+    bool unproven = false;
+    for (const auto& left : sink.receiver_progressions) {
+        for (const auto& right : store_receiver.receiver_progressions) {
+            const auto intersection =
+                receiver_progressions_intersect(left, right);
+            if (intersection == ReceiverIntersection::Exact)
+                return intersection;
+            unproven = unproven ||
+                       intersection == ReceiverIntersection::Unproven;
+        }
+    }
+    if (sink.receiver_constants_truncated ||
+        store_receiver.receiver_constants_truncated)
+        return ReceiverIntersection::Unproven;
+    return unproven ? ReceiverIntersection::Unproven
+                    : ReceiverIntersection::None;
+}
+
+[[nodiscard]] bool add_bounded_receiver_constant(
+    CallbackValue& value,
+    const std::uint32_t constant) {
+    if (value.receiver_constants.contains(constant) ||
+        std::any_of(value.receiver_progressions.begin(),
+                    value.receiver_progressions.end(),
+                    [&](const auto& progression) {
+                        return receiver_progression_contains(progression,
+                                                             constant);
+                    }))
+        return false;
+    if (value.receiver_constants.size() >= maximum_receiver_constants) {
+        if (!compact_receiver_constants(value, constant)) {
+            value.receiver_constants_truncated = true;
+        }
+        return true;
+    }
+    value.receiver_constants.insert(constant);
+    return true;
+}
+
 void add_constant(CallbackValue& value,
                   const katana::io::ExecutableImage& image,
                   const std::uint32_t constant,
                   GuardedNativeEntryShapeCache& native_entry_shapes) {
     static_cast<void>(add_bounded_scalar_constant(value, constant));
+    if (plausible_receiver_constant(image, constant))
+        static_cast<void>(add_bounded_receiver_constant(value, constant));
     if (const auto target = executable_constant(image, constant);
         target.has_value())
         static_cast<void>(add_bounded_code_constant(
             value, *target, native_entry_shapes));
+}
+
+void add_callback_field_origin(CallbackValue& value,
+                               CallbackFieldOrigin origin) {
+    if (value.field_origins_truncated) return;
+    const auto existing = std::find_if(
+        value.field_origins.begin(), value.field_origins.end(),
+        [&](const auto& candidate) {
+            return candidate.displacement == origin.displacement &&
+                   candidate.width == origin.width &&
+                   candidate.load_instruction_address ==
+                       origin.load_instruction_address;
+        });
+    if (existing != value.field_origins.end()) {
+        existing->receiver_input_mask = static_cast<std::uint8_t>(
+            existing->receiver_input_mask | origin.receiver_input_mask);
+        CallbackValue combined;
+        combined.receiver_constants = existing->receiver_constants;
+        combined.receiver_progressions = existing->receiver_progressions;
+        combined.receiver_constants_truncated =
+            existing->receiver_constants_truncated ||
+            origin.receiver_constants_truncated;
+        for (const auto& progression : origin.receiver_progressions) {
+            if (!add_receiver_progression(
+                    combined.receiver_progressions, progression))
+                combined.receiver_constants_truncated = true;
+        }
+        for (const auto constant : origin.receiver_constants)
+            static_cast<void>(
+                add_bounded_receiver_constant(combined, constant));
+        existing->receiver_constants =
+            std::move(combined.receiver_constants);
+        existing->receiver_progressions =
+            std::move(combined.receiver_progressions);
+        existing->receiver_constants_truncated =
+            combined.receiver_constants_truncated;
+        return;
+    }
+    if (value.field_origins.size() == maximum_callback_field_origins) {
+        value.field_origins.clear();
+        value.field_origins_truncated = true;
+        return;
+    }
+    value.field_origins.push_back(std::move(origin));
+}
+
+void attach_callback_field_origin(CallbackValue& loaded,
+                                  const CallbackValue& receiver,
+                                  const std::int32_t displacement,
+                                  const std::size_t width,
+                                  const std::uint32_t instruction_address) {
+    if (width != sizeof(std::uint32_t) || receiver.may_be_stack ||
+        (receiver.input_mask == 0u &&
+         receiver.receiver_constants.empty() &&
+         receiver.receiver_progressions.empty() &&
+         !receiver.receiver_constants_truncated))
+        return;
+    CallbackFieldOrigin origin;
+    origin.receiver_input_mask = receiver.input_mask;
+    origin.receiver_constants = receiver.receiver_constants;
+    origin.receiver_progressions = receiver.receiver_progressions;
+    origin.receiver_constants_truncated =
+        receiver.receiver_constants_truncated;
+    origin.displacement = displacement;
+    origin.width = static_cast<std::uint8_t>(width);
+    origin.load_instruction_address = instruction_address;
+    add_callback_field_origin(loaded, std::move(origin));
 }
 
 template <typename Transform>
@@ -182,6 +622,29 @@ void transform_scalar_value(CallbackValue& value,
     value = {};
     value.input_mask = before.input_mask;
     value.minimum_alignment = before.minimum_alignment;
+    value.receiver_constants_truncated =
+        before.receiver_constants_truncated;
+    std::uint64_t progression_values = 0u;
+    for (const auto& progression : before.receiver_progressions) {
+        for (std::uint64_t constant = progression.first;
+             constant <= progression.last;
+             constant += progression.stride) {
+            if (progression_values++ >= maximum_receiver_constants) {
+                value.receiver_constants_truncated = true;
+                break;
+            }
+            const auto transformed =
+                transform(static_cast<std::uint32_t>(constant));
+            if (plausible_receiver_constant(image, transformed))
+                static_cast<void>(add_bounded_receiver_constant(
+                    value, transformed));
+        }
+    }
+    for (const auto constant : before.receiver_constants)
+        if (const auto transformed = transform(constant);
+            plausible_receiver_constant(image, transformed))
+            static_cast<void>(add_bounded_receiver_constant(
+                value, transformed));
     if (before.constants_truncated) {
         value.constants_truncated = true;
         if (before.code_constants_truncated) {
@@ -227,11 +690,30 @@ void transform_scalar_value(CallbackValue& value,
                 add_bounded_code_constant(destination, constant,
                                           native_entry_shapes));
     }
+    destination.receiver_constants_truncated =
+        destination.receiver_constants_truncated ||
+        source.receiver_constants_truncated;
+    for (const auto& progression : source.receiver_progressions) {
+        if (!add_receiver_progression(
+                destination.receiver_progressions, progression))
+            destination.receiver_constants_truncated = true;
+    }
+    for (const auto constant : source.receiver_constants)
+        static_cast<void>(add_bounded_receiver_constant(
+            destination, constant));
     destination.minimum_alignment =
         std::min(destination.minimum_alignment, source.minimum_alignment);
     if (destination.stack_address != source.stack_address)
         destination.stack_address.reset();
     destination.may_be_stack = destination.may_be_stack || source.may_be_stack;
+    if (destination.field_origins_truncated ||
+        source.field_origins_truncated) {
+        destination.field_origins.clear();
+        destination.field_origins_truncated = true;
+    } else {
+        for (const auto& origin : source.field_origins)
+            add_callback_field_origin(destination, origin);
+    }
     return destination != before;
 }
 
@@ -440,6 +922,45 @@ void transform_add_immediate(CallbackValue& value,
                              const std::int32_t immediate,
                              const bool stack_pointer) {
     add_immediate_to_minimum_alignment(value, immediate);
+    {
+        CallbackValue adjusted_receivers;
+        adjusted_receivers.receiver_constants_truncated =
+            value.receiver_constants_truncated;
+        for (const auto& progression : value.receiver_progressions) {
+            const auto first = static_cast<std::int64_t>(progression.first) +
+                               immediate;
+            const auto last = static_cast<std::int64_t>(progression.last) +
+                              immediate;
+            if (first < 0 || last < 0 ||
+                first > std::numeric_limits<std::uint32_t>::max() ||
+                last > std::numeric_limits<std::uint32_t>::max() ||
+                !plausible_receiver_constant(
+                    image, static_cast<std::uint32_t>(first)) ||
+                !plausible_receiver_constant(
+                    image, static_cast<std::uint32_t>(last)) ||
+                !add_receiver_progression(
+                    adjusted_receivers.receiver_progressions,
+                    {static_cast<std::uint32_t>(first),
+                     static_cast<std::uint32_t>(last),
+                     progression.stride})) {
+                adjusted_receivers.receiver_constants_truncated = true;
+                continue;
+            }
+        }
+        for (const auto constant : value.receiver_constants) {
+            const auto candidate =
+                constant + static_cast<std::uint32_t>(immediate);
+            if (plausible_receiver_constant(image, candidate))
+                static_cast<void>(add_bounded_receiver_constant(
+                    adjusted_receivers, candidate));
+        }
+        value.receiver_constants =
+            std::move(adjusted_receivers.receiver_constants);
+        value.receiver_progressions =
+            std::move(adjusted_receivers.receiver_progressions);
+        value.receiver_constants_truncated =
+            adjusted_receivers.receiver_constants_truncated;
+    }
     if (value.constants_truncated) {
         value.constants.clear();
     } else {
@@ -698,15 +1219,50 @@ void observe_persistent_store(CallbackFunctionModel& model,
                       instruction_address);
 }
 
+void observe_potential_persistent_store(
+    CallbackFunctionModel& model,
+    const CallbackValue& source,
+    const CallbackValue& receiver,
+    const std::int32_t displacement,
+    const std::uint32_t instruction_address,
+    const std::size_t width,
+    GuardedNativeEntryShapeCache& native_entry_shapes) {
+    if (width != sizeof(std::uint32_t) || receiver.may_be_stack ||
+        (source.input_mask == 0u && source.code_constants.empty() &&
+         !source.code_constants_truncated))
+        return;
+    const auto existing = std::find_if(
+        model.persistent_stores.begin(), model.persistent_stores.end(),
+        [&](const auto& candidate) {
+            return candidate.displacement == displacement &&
+                   candidate.instruction_address == instruction_address &&
+                   candidate.width == width;
+        });
+    if (existing != model.persistent_stores.end()) {
+        static_cast<void>(join_value(existing->source, source,
+                                     native_entry_shapes));
+        static_cast<void>(join_value(existing->receiver, receiver,
+                                     native_entry_shapes));
+        return;
+    }
+    if (model.persistent_stores.size() ==
+        maximum_persistent_store_observations) {
+        model.persistent_stores_truncated = true;
+        return;
+    }
+    model.persistent_stores.push_back(
+        {source, receiver, displacement, instruction_address,
+         static_cast<std::uint8_t>(width)});
+}
+
 void store_value(CallbackFunctionModel& model,
                  CallbackState& state,
-                 const katana::io::ExecutableImage& image,
                  const CallbackValue& source,
                  const CallbackValue& destination,
                  const std::int32_t displacement,
                  const std::uint32_t instruction_address,
                  const std::size_t width,
-                 const std::set<std::int32_t>& callback_field_offsets) {
+                 GuardedNativeEntryShapeCache& native_entry_shapes) {
     const auto stack_address = displaced_stack_address(destination,
                                                        displacement);
     if (stack_address.has_value()) {
@@ -717,10 +1273,9 @@ void store_value(CallbackFunctionModel& model,
     }
     // An imprecise SP-derived address may still be a spill. It cannot prove a
     // persistent callback store, so remain fail-closed and do not promote it.
-    if (!destination.may_be_stack &&
-        callback_field_offsets.contains(displacement))
-        observe_persistent_store(model, image, source,
-                                 instruction_address, width);
+    observe_potential_persistent_store(
+        model, source, destination, displacement,
+        instruction_address, width, native_entry_shapes);
 }
 
 [[nodiscard]] CallbackValue load_value(const CallbackState& state,
@@ -739,7 +1294,6 @@ void apply_instruction(CallbackFunctionModel& model,
                        CallbackState& state,
                        const katana::io::ExecutableImage& image,
                        const katana::sh4::DisassemblyLine& line,
-                       const std::set<std::int32_t>& callback_field_offsets,
                        GuardedNativeEntryShapeCache&
                            native_entry_shapes) {
     using K = katana::sh4::InstructionKind;
@@ -865,34 +1419,28 @@ void apply_instruction(CallbackFunctionModel& model,
     case K::MovByteStore:
     case K::MovWordStore:
     case K::MovLongStore:
-        store_value(model, state, image, state.registers[source],
+        store_value(model, state, state.registers[source],
                     state.registers[destination], 0,
-                    line.address, width, callback_field_offsets);
+                    line.address, width, native_entry_shapes);
         return;
     case K::MovByteStoreDisplacement:
     case K::MovWordStoreDisplacement:
     case K::MovLongStoreDisplacement:
-        store_value(model, state, image, state.registers[source],
+        store_value(model, state, state.registers[source],
                     state.registers[destination], instruction.displacement,
-                    line.address, width, callback_field_offsets);
+                    line.address, width, native_entry_shapes);
         return;
     case K::MovByteStoreR0Indexed:
     case K::MovWordStoreR0Indexed:
     case K::MovLongStoreR0Indexed: {
         if (state.registers[0u].constants.size() != 1u ||
-            state.registers[0u].constants_truncated) {
-            if (!state.registers[destination].may_be_stack &&
-                callback_field_offsets.contains(0))
-                observe_persistent_store(model, image,
-                                         state.registers[source],
-                                         line.address, width);
+            state.registers[0u].constants_truncated)
             return;
-        }
-        store_value(model, state, image, state.registers[source],
+        store_value(model, state, state.registers[source],
                     state.registers[destination],
                     static_cast<std::int32_t>(
                         *state.registers[0u].constants.begin()),
-                    line.address, width, callback_field_offsets);
+                    line.address, width, native_entry_shapes);
         return;
     }
     case K::MovByteStorePreDecrement:
@@ -902,8 +1450,8 @@ void apply_instruction(CallbackFunctionModel& model,
         transform_add_immediate(base, image, native_entry_shapes,
                                 -static_cast<std::int32_t>(width),
                                 destination == 15u);
-        store_value(model, state, image, state.registers[source], base, 0,
-                    line.address, width, callback_field_offsets);
+        store_value(model, state, state.registers[source], base, 0,
+                    line.address, width, native_entry_shapes);
         return;
     }
     case K::MovByteLoad:
@@ -922,6 +1470,8 @@ void apply_instruction(CallbackFunctionModel& model,
                 model, image, loaded, line.address, native_entry_shapes);
             static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
+            attach_callback_field_origin(loaded_value, base, 0u, width,
+                                         line.address);
         }
         state.registers[destination] = std::move(loaded_value);
         return;
@@ -940,6 +1490,9 @@ void apply_instruction(CallbackFunctionModel& model,
                 model, image, loaded, line.address, native_entry_shapes);
             static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
+            attach_callback_field_origin(loaded_value, base,
+                                         instruction.displacement, width,
+                                         line.address);
         }
         state.registers[destination] = std::move(loaded_value);
         return;
@@ -966,6 +1519,12 @@ void apply_instruction(CallbackFunctionModel& model,
                 image, index, base, native_entry_shapes);
             static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
+            if (index.constants.size() == 1u &&
+                !index.constants_truncated)
+                attach_callback_field_origin(
+                    loaded_value, base,
+                    static_cast<std::int32_t>(*index.constants.begin()),
+                    width, line.address);
         }
         state.registers[destination] = std::move(loaded_value);
         return;
@@ -973,15 +1532,18 @@ void apply_instruction(CallbackFunctionModel& model,
     case K::MovByteLoadPostIncrement:
     case K::MovWordLoadPostIncrement:
     case K::MovLongLoadPostIncrement: {
-        auto loaded = load_value(state, state.registers[source], 0, width);
+        const auto base = state.registers[source];
+        auto loaded = load_value(state, base, 0, width);
         if (width == 4u) {
             const auto static_loaded = load_static_image_values(
-                image, state.registers[source], 0, native_entry_shapes);
+                image, base, 0, native_entry_shapes);
             observe_loaded_static_descriptor_table(
                 model, image, static_loaded, line.address,
                 native_entry_shapes);
             static_cast<void>(join_value(loaded, static_loaded,
                                          native_entry_shapes));
+            attach_callback_field_origin(loaded, base, 0u, width,
+                                         line.address);
         }
         transform_add_immediate(state.registers[source], image,
                                 native_entry_shapes,
@@ -1071,7 +1633,6 @@ void clobber_call_volatile_registers(CallbackState& state) {
     const FunctionInfo& function,
     const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
     const std::set<std::uint32_t>& function_entries,
-    const std::set<std::int32_t>& callback_field_offsets,
     GuardedNativeEntryShapeCache& native_entry_shapes,
     std::size_t* const limited_evaluations) {
     CallbackFunctionModel model;
@@ -1096,8 +1657,21 @@ void clobber_call_volatile_registers(CallbackState& state) {
     // bounded scalar/code facts before reaching its monotone fixed point.
     // Thirty-two visits was below that lattice height for large SDK state
     // dispatchers and falsely turned a finite positive inventory into Top.
-    const auto evaluation_budget =
-        std::max<std::size_t>(256u, function.block_addresses.size() * 128u);
+    // Work is monotone: an ingress block is queued only after at least one
+    // bounded scalar/code/receiver/provenance fact changes.  The receiver and
+    // typed-table lanes each admit 256 exact values, so the old 128 visits per
+    // block was below the lattice height and incorrectly reported loss for
+    // finite dispatcher functions.  This checked bound stays local to the
+    // function and does not turn timeout or memory limits into semantics.
+    constexpr std::size_t evaluations_per_block = 4'096u;
+    if (function.block_addresses.size() >
+        std::numeric_limits<std::size_t>::max() /
+            evaluations_per_block)
+        throw std::overflow_error(
+            "Static-Callback-Fixpunktbudget laeuft ueber.");
+    const auto evaluation_budget = std::max<std::size_t>(
+        evaluations_per_block,
+        function.block_addresses.size() * evaluations_per_block);
     std::size_t evaluations = 0u;
 
     while (!pending.empty()) {
@@ -1132,8 +1706,42 @@ void clobber_call_volatile_registers(CallbackState& state) {
                 continue;
             }
             apply_instruction(model, state, image, line,
-                              callback_field_offsets,
                               native_entry_shapes);
+        }
+
+        // A higher-order API can invoke a callback directly without first
+        // persisting it in a task record.  The branch register is sampled
+        // before the SH-4 delay slot, so retain the ABI taint from that exact
+        // state.  This is only a positive sink summary: it does not claim an
+        // indirect target set is complete and therefore cannot turn an
+        // unknown callback into an authoritative CFG edge by itself.
+        if (control != nullptr &&
+            (control->instruction.control_flow ==
+                 katana::sh4::ControlFlowKind::IndirectCall ||
+             control->instruction.control_flow ==
+                 katana::sh4::ControlFlowKind::IndirectBranch)) {
+            const auto branch_register =
+                control->instruction.branch_register;
+            if (branch_register < before_delay.registers.size()) {
+                const auto& branch = before_delay.registers[branch_register];
+                model.local_sink_mask = static_cast<std::uint8_t>(
+                    model.local_sink_mask |
+                    branch.input_mask);
+                if (branch.field_origins_truncated)
+                    model.field_sinks_truncated = true;
+                for (const auto& field : branch.field_origins) {
+                    CallbackFieldSink sink{
+                        model.entry,
+                        control->address,
+                        field,
+                        control->instruction.control_flow ==
+                            katana::sh4::ControlFlowKind::IndirectCall};
+                    if (std::find(model.field_sinks.begin(),
+                                  model.field_sinks.end(), sink) ==
+                        model.field_sinks.end())
+                        model.field_sinks.push_back(std::move(sink));
+                }
+            }
         }
 
         if (control != nullptr && !targets.empty()) {
@@ -1179,6 +1787,12 @@ void canonicalize_candidate(StoredCodeAddressCandidate& candidate) {
 
 } // namespace
 
+std::vector<std::int32_t> discover_static_callback_field_offsets(
+    const std::span<const katana::sh4::DisassemblyLine> lines) {
+    const auto offsets = discover_callback_field_offsets(lines);
+    return {offsets.begin(), offsets.end()};
+}
+
 GuardedCodeInventory analyze_static_callback_inventory(
     const katana::io::ExecutableImage& image,
     const std::span<const katana::sh4::DisassemblyLine> lines,
@@ -1187,7 +1801,9 @@ GuardedCodeInventory analyze_static_callback_inventory(
     const std::span<const std::uint32_t> non_root_function_entry_hints,
     GuardedNativeEntryShapeCache& native_entry_shapes,
     std::vector<StaticCallbackSinkContract>* const
-        callback_sink_contracts) {
+        callback_sink_contracts,
+    std::vector<StaticCallbackFieldSinkContract>* const
+        callback_field_sink_contracts) {
     GuardedCodeInventory inventory;
     inventory.raw_stored_candidate_budget = maximum_inventory_candidates;
     inventory.candidate_budget = maximum_inventory_candidates;
@@ -1270,9 +1886,6 @@ GuardedCodeInventory analyze_static_callback_inventory(
             boundaries.end());
         functions = discover_functions_from_blocks(blocks, boundaries);
     }
-    const auto callback_field_offsets =
-        discover_callback_field_offsets(lines);
-
     std::unordered_map<std::uint32_t, const BasicBlock*> block_index;
     block_index.reserve(blocks.size());
     for (const auto& block : blocks)
@@ -1284,14 +1897,113 @@ GuardedCodeInventory analyze_static_callback_inventory(
     std::size_t limited_evaluations = 0u;
     bool candidate_values_truncated = false;
     bool forwarding_truncated = false;
+    std::size_t receiver_may_alias_stores = 0u;
     std::map<std::uint32_t, CallbackFunctionModel> models;
     for (const auto& function : functions) {
         auto model = build_function_model(image, function, block_index,
                                           function_entries,
-                                          callback_field_offsets,
                                           native_entry_shapes,
                                           &limited_evaluations);
         models.insert_or_assign(function.entry_address, std::move(model));
+    }
+
+    // A receiver lane is allowed to become wide, but a lost receiver relation
+    // makes the positive callback inventory incomplete.  Emit only the first
+    // few exact loss sites so a contract failure identifies the responsible
+    // owner/field instead of inviting a blind global budget increase.
+    std::size_t receiver_loss_diagnostics = 0u;
+    constexpr std::size_t maximum_receiver_loss_diagnostics = 12u;
+    for (const auto& [entry, model] : models) {
+        for (const auto& sink : model.field_sinks) {
+            if (!sink.field.receiver_constants_truncated ||
+                receiver_loss_diagnostics >=
+                    maximum_receiver_loss_diagnostics)
+                continue;
+            std::cerr << "KATANA_STATIC_CALLBACK_RECEIVER_LOSS kind=sink"
+                      << " owner=0x" << std::hex << entry
+                      << " instruction=0x" << sink.call_instruction_address
+                      << " load=0x" << sink.field.load_instruction_address
+                      << std::dec
+                      << " displacement=" << sink.field.displacement
+                      << " width=" << static_cast<unsigned>(sink.field.width)
+                      << '\n';
+            ++receiver_loss_diagnostics;
+        }
+        for (const auto& store : model.persistent_stores) {
+            if (!store.receiver.receiver_constants_truncated ||
+                receiver_loss_diagnostics >=
+                    maximum_receiver_loss_diagnostics)
+                continue;
+            std::cerr << "KATANA_STATIC_CALLBACK_RECEIVER_LOSS kind=store"
+                      << " owner=0x" << std::hex << entry
+                      << " instruction=0x" << store.instruction_address
+                      << std::dec
+                      << " displacement=" << store.displacement
+                      << " width=" << static_cast<unsigned>(store.width)
+                      << '\n';
+            ++receiver_loss_diagnostics;
+        }
+    }
+
+    // A displacement alone is not a callback contract.  Relate a persistent
+    // store to a later indirect call/jump only when both operations address
+    // the same proven receiver: either the same exact record address across
+    // owners, or the same incoming ABI receiver within one owner.  This keeps
+    // ordinary fields which happen to share +0/+4/+16 out of the executable
+    // inventory while retaining task records, vtables, and callback lists.
+    using CallbackFieldShape = std::pair<std::int32_t, std::uint8_t>;
+    std::map<CallbackFieldShape, std::vector<const CallbackFieldSink*>>
+        field_sinks_by_shape;
+    for (const auto& [entry, model] : models) {
+        static_cast<void>(entry);
+        candidate_values_truncated =
+            candidate_values_truncated || model.field_sinks_truncated ||
+            model.persistent_stores_truncated;
+        for (const auto& sink : model.field_sinks)
+            field_sinks_by_shape[{sink.field.displacement,
+                                  sink.field.width}]
+                .push_back(&sink);
+    }
+    for (auto& [entry, model] : models) {
+        for (const auto& store : model.persistent_stores) {
+            const auto sinks = field_sinks_by_shape.find(
+                {store.displacement, store.width});
+            if (sinks == field_sinks_by_shape.end()) continue;
+            bool matched = false;
+            bool receiver_may_alias = false;
+            for (const auto* const sink : sinks->second) {
+                const bool same_local_receiver =
+                    sink->function_address == entry &&
+                    (sink->field.receiver_input_mask &
+                     store.receiver.input_mask) != 0u;
+                const auto intersection = receiver_evidence_intersects(
+                    sink->field, store.receiver);
+                const bool same_exact_receiver =
+                    intersection == ReceiverIntersection::Exact;
+                const bool possible_receiver =
+                    intersection == ReceiverIntersection::Unproven;
+                receiver_may_alias = receiver_may_alias ||
+                                     possible_receiver;
+                if (!same_local_receiver && !same_exact_receiver) continue;
+                matched = true;
+                observe_persistent_store(model, image, store.source,
+                                         store.instruction_address,
+                                         store.width);
+                break;
+            }
+            if (!matched && receiver_may_alias) {
+                // Receiver Top is a may-alias state, not lost executable
+                // evidence. Conservatively relate a callback-valued store to
+                // a same-shaped indirect-load sink. This can retain extra
+                // identity-checked guarded roots, but cannot omit a callback
+                // merely because a record loop exceeded the exact receiver
+                // inventory.
+                observe_persistent_store(model, image, store.source,
+                                         store.instruction_address,
+                                         store.width);
+                ++receiver_may_alias_stores;
+            }
+        }
     }
 
     std::map<std::uint32_t, std::uint8_t> sink_masks;
@@ -1350,6 +2062,51 @@ GuardedCodeInventory analyze_static_callback_inventory(
             callback_sink_contracts->push_back(
                 {function_address, argument_mask});
         }
+    }
+
+    if (callback_field_sink_contracts != nullptr) {
+        callback_field_sink_contracts->clear();
+        for (const auto& function : functions) {
+            const auto structural =
+                discover_structural_callback_field_sinks(
+                    function, block_index);
+            callback_field_sink_contracts->insert(
+                callback_field_sink_contracts->end(),
+                structural.begin(), structural.end());
+        }
+        for (const auto& [entry, model] : models) {
+            static_cast<void>(entry);
+            for (const auto& sink : model.field_sinks) {
+                callback_field_sink_contracts->push_back(
+                    {sink.function_address,
+                     sink.call_instruction_address,
+                     sink.field.load_instruction_address,
+                     sink.field.displacement,
+                     sink.field.width,
+                     sink.call});
+            }
+        }
+        std::sort(
+            callback_field_sink_contracts->begin(),
+            callback_field_sink_contracts->end(),
+            [](const auto& left, const auto& right) {
+                return std::tie(left.function_address,
+                                left.call_instruction_address,
+                                left.load_instruction_address,
+                                left.displacement,
+                                left.width,
+                                left.call) <
+                       std::tie(right.function_address,
+                                right.call_instruction_address,
+                                right.load_instruction_address,
+                                right.displacement,
+                                right.width,
+                                right.call);
+            });
+        callback_field_sink_contracts->erase(
+            std::unique(callback_field_sink_contracts->begin(),
+                        callback_field_sink_contracts->end()),
+            callback_field_sink_contracts->end());
     }
 
     if (!std::is_sorted(non_root_function_entry_hints.begin(),
@@ -1443,6 +2200,42 @@ GuardedCodeInventory analyze_static_callback_inventory(
     const bool candidate_budget_truncated =
         raw_candidates > maximum_inventory_candidates ||
         candidates.size() > maximum_inventory_candidates;
+    if (candidate_values_truncated) {
+        const auto count_models = [&](const auto selector) {
+            return std::count_if(
+                models.begin(), models.end(),
+                [&](const auto& item) { return selector(item.second); });
+        };
+        std::size_t truncated_forwarded_arguments = 0u;
+        for (const auto& [entry, model] : models) {
+            static_cast<void>(entry);
+            for (const auto& call : model.calls)
+                truncated_forwarded_arguments += std::count_if(
+                    call.arguments.begin(), call.arguments.end(),
+                    [](const auto& argument) {
+                        return argument.code_constants_truncated;
+                    });
+        }
+        std::cerr
+            << "KATANA_STATIC_CALLBACK_INVENTORY_LOSS "
+            << "field_sink_functions="
+            << count_models([](const auto& model) {
+                   return model.field_sinks_truncated;
+               })
+            << " persistent_store_functions="
+            << count_models([](const auto& model) {
+                   return model.persistent_stores_truncated;
+               })
+            << " local_candidate_functions="
+            << count_models([](const auto& model) {
+                   return model.local_candidates_truncated;
+               })
+            << " forwarded_arguments="
+            << truncated_forwarded_arguments
+            << " receiver_may_alias_stores="
+            << receiver_may_alias_stores
+            << " static_vector=" << static_vectors.truncated << '\n';
+    }
     const bool truncated = limited_evaluations != 0u ||
                            candidate_values_truncated ||
                            forwarding_truncated ||

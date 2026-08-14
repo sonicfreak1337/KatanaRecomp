@@ -25,6 +25,7 @@ struct AddressDescription {
     std::uint32_t canonical = 0u;
     DreamcastHardwareRegion region = DreamcastHardwareRegion::Unknown;
     bool aperture_mapped = false;
+    bool image_backed = false;
     std::string name;
 };
 
@@ -321,7 +322,8 @@ std::string sh4_register_name(const std::uint32_t address) {
 
 AddressDescription describe(const std::uint32_t address) {
     const auto canonical = canonical_address(address);
-    AddressDescription result{canonical, DreamcastHardwareRegion::Unknown, false, {}};
+    AddressDescription result{
+        canonical, DreamcastHardwareRegion::Unknown, false, false, {}};
     const auto set = [&](const DreamcastHardwareRegion region,
                          const bool runtime_mapped,
                          std::string name = {}) {
@@ -426,6 +428,24 @@ AddressDescription describe(const std::uint32_t address) {
             break;
         }
         result.name = dreamcast_register_name(result.region, canonical - base);
+    }
+    return result;
+}
+
+AddressDescription describe_image_access(
+    const io::ExecutableImage& image,
+    const std::uint32_t address,
+    const std::uint8_t width) {
+    auto result = describe(address);
+    // A statically resolved address backed by the identity-bound input image is
+    // source/module data, even when its synthetic analysis address (for
+    // example 0x88...) canonicalizes outside native main RAM.  Hardware ranges
+    // retain precedence: an invalid image segment at a real MMIO aperture must
+    // never hide a device dependency.
+    if (result.region == DreamcastHardwareRegion::Unknown && width != 0u &&
+        image.resolve_segment_address(address, width).has_value()) {
+        result.image_backed = true;
+        result.name = "source-bound-data";
     }
     return result;
 }
@@ -1264,6 +1284,7 @@ guard_input_registers(const sh4::DecodedInstruction& instruction) noexcept {
 }
 
 bool is_linear_loop_memory(const AddressDescription& description) noexcept {
+    if (description.image_backed) return true;
     if (in_range(description.canonical, 0x0C000000u, 0x04000000u)) return true;
     using R = DreamcastHardwareRegion;
     switch (description.region) {
@@ -1616,8 +1637,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                                 block.lines[line_index].address,
                                 access.address,
                                 access.width);
-                        const auto description =
-                            describe(projected_address);
+                        const auto description = describe_image_access(
+                            image, projected_address, access.width);
                         HardwareLoopAccessEvidence evidence;
                         evidence.instruction_address = block.lines[line_index].address;
                         evidence.guest_address = projected_address;
@@ -1914,7 +1935,8 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                             lines[index].address,
                             access.address,
                             access.width);
-                    const auto description = describe(projected_address);
+                    const auto description = describe_image_access(
+                        image, projected_address, access.width);
                     // Unknown is ordinary memory only inside the verified
                     // linear main-RAM aperture. A statically resolved access
                     // anywhere else is an unmapped native-product dependency,

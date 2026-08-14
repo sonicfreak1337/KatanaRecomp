@@ -5,6 +5,7 @@
 #include "katana/io/executable_image.hpp"
 
 #include <span>
+#include <cstdint>
 #include <vector>
 
 namespace katana::analysis::detail {
@@ -19,6 +20,30 @@ struct StaticCallbackSinkContract final {
     bool operator==(const StaticCallbackSinkContract&) const = default;
 };
 
+// Exact primary-image record-field load which feeds an indirect call/jump.
+// Receiver identity remains an analyzer-local proof domain; this exported
+// shape is used only to retain guarded, identity-checked latent AOT entries
+// written to the same field. It never completes the indirect target set.
+struct StaticCallbackFieldSinkContract final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t load_instruction_address = 0u;
+    std::int32_t displacement = 0;
+    std::uint8_t width = 0u;
+    bool call = false;
+
+    bool operator==(const StaticCallbackFieldSinkContract&) const = default;
+};
+
+// Returns the sorted, unique record-field displacements which feed an
+// actually decoded indirect call/jump in the supplied image.  These are
+// positive ABI-shape diagnostics, not structure names or admission evidence.
+// A displacement without receiver provenance must never create a callback
+// root or complete an indirect target set.
+[[nodiscard]] std::vector<std::int32_t>
+discover_static_callback_field_offsets(
+    std::span<const katana::sh4::DisassemblyLine> lines);
+
 // ABI-light companion to the full FunctionValue analysis. It discovers
 // executable constants which flow through direct, statically bound calls into
 // persistent pointer stores. The result is guarded AOT inventory only: it
@@ -32,6 +57,8 @@ struct StaticCallbackSinkContract final {
     std::span<const std::uint32_t> non_root_function_entry_hints,
     GuardedNativeEntryShapeCache& native_entry_shapes,
     std::vector<StaticCallbackSinkContract>* callback_sink_contracts =
-        nullptr);
+        nullptr,
+    std::vector<StaticCallbackFieldSinkContract>*
+        callback_field_sink_contracts = nullptr);
 
 } // namespace katana::analysis::detail

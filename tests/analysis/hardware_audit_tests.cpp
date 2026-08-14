@@ -108,7 +108,7 @@ int main() {
             "Gemischte Zugriffsbreiten behalten nicht die schwaechste Runtime-Capability.");
 
     const auto json = katana::analysis::format_hardware_audit_json(audit);
-    require(json.find("\"schema\":\"katana.hardware-audit.v4\"") != std::string::npos &&
+    require(json.find("\"schema\":\"katana.hardware-audit.v5\"") != std::string::npos &&
                 json.find("\"scope\":\"executable_image\"") != std::string::npos &&
                 json.find("\"support_reason\":\"sort_dma_transfer_path_missing\"") !=
                     std::string::npos &&
@@ -476,7 +476,14 @@ int main() {
                 mixed_context_delay_slot.references.front().instruction_address == 0x04u &&
                 mixed_context_delay_slot.references.front().guest_address == 0xA05F8000u,
             "Hardware-Audit verliert bei mehreren Delay-Slot-Kontexten entweder konservative "
-            "Aufloesung oder konkrete Zugriffsevidenz.");
+            "Aufloesung oder konkrete Zugriffsevidenz: sites=" +
+                std::to_string(mixed_context_delay_slot.memory_access_sites) +
+                " resolved=" +
+                std::to_string(mixed_context_delay_slot.resolved_memory_access_sites) +
+                " unresolved=" +
+                std::to_string(mixed_context_delay_slot.unresolved_memory_access_sites) +
+                " refs=" +
+                std::to_string(mixed_context_delay_slot.references.size()));
 
     std::vector<std::uint8_t> forward_counter_bytes(0x14u, 0u);
     write_u16(forward_counter_bytes, 0x00u, 0xA006u); // BRA 0x10

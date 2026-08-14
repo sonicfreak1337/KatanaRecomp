@@ -2471,7 +2471,8 @@ class NativePortSoundBankEngine::Impl final {
                 const auto nibble = static_cast<std::uint8_t>(
                     (frame & 1u) == 0u ? packed & 15u : packed >> 4u);
                 const auto magnitude = static_cast<std::int32_t>(nibble & 7u);
-                const auto delta = ((magnitude * 2 + 1) * step) >> 3;
+                const auto delta = std::min(
+                    ((magnitude * 2 + 1) * step) >> 3, 0x7FFF);
                 predictor += (nibble & 8u) != 0u ? -delta : delta;
                 predictor = std::clamp(predictor, -32768, 32767);
                 step = std::clamp(

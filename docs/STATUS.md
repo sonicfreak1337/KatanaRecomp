@@ -41,12 +41,21 @@ latched Controls vor dem Bind und behandelt gueltige ungebundene Stop-/
 Note-off-Aufrufe idempotent. Der Produktlauf laedt eine identitaetsgebundene
 Collection und endet erst danach an einem statischen AOT-Entry.
 
-Der v114-Export umfasst `5.778` Funktionen, `167` Partitionen und lief warm
-in `26,378 s` mit `167/167` Codegen- sowie `228/229` Host-TU-Cachetreffern.
-Von `1.423` bekannten Hardware-Sites werden `1.110` durch vollstaendige Hooks
-ersetzt; offen sind `1.423` Anforderungen (`1.371` hook-missing, `51`
-Progress-Waits, `1` Root-Ownership). Der Zuwachs ersetzter Sites gegenueber
-der Controllerbaseline betraegt `+245`; die Gapzahl sank um `2`.
+Der v127-Export umfasst `6.086` Funktionen und `176` Partitionen. Die neue
+bounded Record-Callback-Transit-Analyse verbindet identitaetsgebundene lokale
+Callbackliterale in Recordfeldern mit nachgewiesenen Primary-Image-Walkern,
+ohne indirekte Zielmengen als vollstaendig auszugeben. Gegenueber v126 steigen
+Primary-Roots `607 -> 614`, Callback-Sinks `715 -> 716`, Funktionen
+`5.947 -> 6.086` und Partitionen `173 -> 176`. Der kalte Vollpfad samt
+Hostbuild und Packaging endete nach `1.004,862 s`.
+
+Die Closure bleibt bei `243` bekannten Hardware-Sites und `244` Gaps (`189`
+hook-missing, `55` Progress-Waits); `1.173` Sites sind durch Hooks ersetzt.
+Der Produktlauf passiert den vorher fehlenden Loaded-AOT-Entry und erreicht
+Frame 334. Das reale Bild bleibt schwarz: `0/1.071` Modellvertices sind
+rasterfaehig und die Host-/Gastprojektion divergiert massiv. Anschliessend
+bleibt der Titelpfad ohne neue Framepublikation in einer Task-/Progress-
+Frontier. Grafik, Memory-Card-Screen und Hauptmenue bleiben unbewiesen.
 
 Der aktive P0 ist ab `v0.49.1` der native Sonic-Port und nicht die
 Beschleunigung der historischen Dreamcast-Geraetemodelle. Verbindlich sind

@@ -26,23 +26,30 @@ Videoframes und `294.016` Audioframes; das Opening erreichte `3.257/3.257`
 Videoframes und `4.709.760` Audioframes. Der Sequenzabschluss kehrte mit dem
 originalen Erfolgsstatus in statisch rekompilierten Titelcode zurueck.
 
-Der aktuelle v114-Export umfasst `5.778` Funktionen in `167` Partitionen und
-war mit `167/167` Codegen- sowie `228/229` Host-TU-Cachetreffern in
-`26,378 s` fertig. Seine
-generische, identitaetsgebundene PRS-Prefix-Entry-Table-Erkennung akzeptiert
-nur begrenzte, nullterminierte `3..64`-Entry-Tabellen nach Runtimeextent-,
-Decode-, Early-CF-, CFG- und Relocation-Proof; sie bleibt getrennt von
-privaten exakten Hints und RuntimeOnly behaelt Stop-on-miss. Der Terminator
-liegt ausserhalb der maximal `64` Zielzellen; die statische Page-Basis bleibt
-nur relative Layoutevidenz und wird vor Produktaktivierung durch die exakte
-Loaded-AOT-Materialisierung gebunden. Die Hardware-
-Closure zeigt `1.423` Gaps (`1.371` hook-missing, `51` progress-wait, `1`
-root-ownership) bei `1.423` bekannten Sites; `1.110` Sites sind durch Hooks
-ersetzt. Das ist neu sichtbare
-Closure-Arbeit, keine Regression. Der 100-s-Produktsmoke erreichte Film 0
-`200/200`, nicht aber die dynamische Overlay-Bestaetigung. Danach folgen
-Memory-Card-Pfad und Hauptmenue; ein Start-Controllerimpuls ist erst seit dem
-vollstaendigen No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
+Der aktuelle v127-Export verknuepft erstmals statisch Callbackliterale, die
+ein identitaetsgebundenes Latent-AOT-Modul nach einer direkten
+Record-Konstruktion in ein 32-Bit-Recordfeld schreibt, mit den auf der
+Primary-Image-Seite nachgewiesenen Record-/Listen-Walkern desselben Feldes.
+Die Evidenz bleibt bounded und guarded; sie erklaert keine indirekte
+Zielmenge fuer vollstaendig. Gegenueber v126 steigen Primary-Roots
+`607 -> 614`, Callback-Sinks `715 -> 716`, externe Codepointerkandidaten
+`4.085 -> 4.094`, Funktionen `5.947 -> 6.086` und Partitionen `173 -> 176`.
+Der kalte Export samt Hostbuild, Linkaudit und atomarem Packaging endete nach
+`1.004,862 s`; `0x88289190` ist als hashgebundener AOT-Entry emittiert. Der
+Produktlauf passiert den vorherigen `loaded-aot-entry-identity-missing`-Stop
+und erreicht 14 weitere Framegrenzen (`321 -> 334`).
+
+Die Hardware-Closure bleibt bei `243` bekannten Sites und `244` Gaps
+(`189` hook-missing, `55` progress-wait); `1.173` Sites werden durch Hooks
+ersetzt. Das ist erwartbar, weil die neue Analyse AOT-Erreichbarkeit statt
+Hardwaresemantik schliesst. Der reale Folgeblocker ist eine noch offene
+Grafikgrundlage: Beim letzten Modellframe sind trotz `1.071` endlicher
+Vertices `0` rasterfaehig, und die Hostprojektion weicht um bis zu
+`2,69 Mio.` Pixel von der Gastprojektion ab. Danach bleibt der Titelcode ohne
+neue Frame-/Logpublikation in einem Task-/Progress-Wait. Grafik ist daher
+noch nicht produktseitig geschlossen; Memory-Card-Pfad und Hauptmenue bleiben
+offen. Ein Start-Controllerimpuls ist seit dem vollstaendigen No-Skip-Beleg
+fuer kuerzere Diagnoselaeufe erlaubt.
 
 Der Windows-Native-Port hat jetzt XInput- sowie identitaetsgebundene WinMM-
 Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `4`

@@ -4,6 +4,29 @@
 
 ### Geaendert
 
+- Die statische Cross-Image-Callback-Closure verfolgt jetzt neben
+  Callbackargumenten auch bounded 32-Bit-Recordfelder. Primary-Image-
+  Record-/Listen-Walker liefern positive Feld-Sink-Vertraege; ein
+  Latent-AOT-Modul darf einen lokalen, exakt aufloesbaren Codepointer nur
+  dann als guarded Root gewinnen, wenn es ihn nach einer direkten externen
+  Record-Konstruktion in genau ein solches Feld schreibt. Die neue Evidenz
+  macht keine indirekte Zielmenge vollstaendig und bleibt an Modulbytes,
+  Entry-Shape, Early-CF, CFG und Relocation gebunden. v127 steigert dadurch
+  Primary-Roots `607 -> 614`, Callback-Sinks `715 -> 716`, Funktionen
+  `5.947 -> 6.086` und Partitionen `173 -> 176`; der reale Produktlauf
+  passiert den vorher fehlenden Loaded-AOT-Entry und erreicht 14 weitere
+  Framegrenzen. Analyzer-ABI `52`, Portprojektvertrag `101`, Latent-AOT-
+  Cache-Schema `6`, Analyseimplementierung `v20`, Native-AOT-Profil `40`
+  und Metadata-Cache `12` binden die neue Eingabedimension.
+
+- Analysis-Directives `v4` bleiben nach der Einfuehrung von `v5`
+  rueckwaertskompatibel lesbar; unbekannte zukuenftige Versionen werden mit
+  einer aus dem aktuellen Vertrag erzeugten Diagnose abgewiesen. Der
+  AICA-ADPCM-Pfad begrenzt grosse Nibble-Deltas vor der Predictoraddition auf
+  `0x7FFF`. PC-relative Zugriffe auf identitaetsgebundene synthetische
+  Modulsegmente werden im Hardwareaudit als source-bound data und nicht als
+  vermeintliche Hardwareapertur klassifiziert.
+
 - Der native Audio-Unterbau ersetzt die titelnahe Manatee-/MW-Soundfamilie
   vollstaendig durch semantische Hostdienste. `NativePortAudioEngine` liefert
   bounded PCM16-Hostfeeds und Codecstimmen; `NativePortSoundBankEngine`

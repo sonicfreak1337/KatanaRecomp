@@ -577,8 +577,9 @@ void AicaRegisterFile::render_audio_into(
                         230, 230, 230, 230, 307, 409, 512, 614};
                     const auto magnitude =
                         static_cast<std::int32_t>(nibble & 7u);
-                    const auto delta =
-                        ((magnitude * 2 + 1) * runtime.adpcm_step) >> 3;
+                    const auto delta = std::min(
+                        ((magnitude * 2 + 1) * runtime.adpcm_step) >> 3,
+                        0x7FFF);
                     runtime.adpcm_predictor +=
                         (nibble & 8u) != 0u ? -delta : delta;
                     runtime.adpcm_predictor =
@@ -847,7 +848,8 @@ std::int16_t AicaSampleDecoder::decode_adpcm_nibble(const std::uint8_t nibble) n
     static constexpr std::array<std::int32_t, 8> step_scale = {
         230, 230, 230, 230, 307, 409, 512, 614};
     const auto magnitude = static_cast<std::int32_t>(nibble & 0x7u);
-    const auto delta = ((magnitude * 2 + 1) * step_) >> 3;
+    const auto delta =
+        std::min(((magnitude * 2 + 1) * step_) >> 3, 0x7FFF);
     predictor_ += (nibble & 0x8u) != 0u ? -delta : delta;
     predictor_ = std::clamp(predictor_, -32768, 32767);
     step_ = (step_ * step_scale[static_cast<std::size_t>(magnitude)]) >> 8;

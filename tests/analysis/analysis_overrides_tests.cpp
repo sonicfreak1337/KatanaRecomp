@@ -55,12 +55,24 @@ int main() {
             "Version-2-Hintdatei wurde nicht samt Funktionsgroesse gemaess Schema und Modus "
             "gelesen.");
 
-    save(path, "schema = katana-analysis-directives\nversion = 3\nmode = hint\n");
+    save(path,
+         "schema = katana-analysis-directives\n"
+         "version = 4\n"
+         "mode = hint\n"
+         "function_entry_hint = 0x1040\n");
+    const auto version_four =
+        katana::analysis::parse_analysis_overrides(path);
+    require(version_four.version == 4u &&
+                version_four.function_entry_hints.size() == 1u &&
+                version_four.function_entry_hints.front().address == 0x1040u,
+            "Version-4-Analyseanweisungen wurden nicht mehr akzeptiert.");
+
+    save(path, "schema = katana-analysis-directives\nversion = 6\nmode = hint\n");
     try {
         static_cast<void>(katana::analysis::parse_analysis_overrides(path));
         require(false, "Unbekannte Override-Version wurde akzeptiert.");
     } catch (const std::exception& error) {
-        require(std::string(error.what()).find("Version 1 oder 2") != std::string::npos,
+        require(std::string(error.what()).find("Version 1 bis 5") != std::string::npos,
                 "Versionsdiagnose fehlt.");
     }
 
