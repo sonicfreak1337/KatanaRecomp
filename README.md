@@ -25,7 +25,7 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 106, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 107, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 48, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
@@ -39,13 +39,16 @@ Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v6`, die
 Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
-Der Windows-Native-Port bindet XInput sowie WinMM fuer DualSense, DualShock
-und generische HID-Controller an einen gemeinsamen Plattformvertrag `2`.
-Physische Sony-Controller haben bei neuer Belegung Vorrang; Slots bleiben bei
-Hotplug stabil, Achsen folgen derselben Titelkoordinate und XInput-Vibration
-geht an den zugeordneten physischen XInput-Slot. Der Runtime-/CLI-Build ist
-sauber. Der physische DualSense-Menutest steht aus, bis ein Nutzer am System
-ist.
+Der Windows-Native-Port bindet XInput sowie die explizit identifizierten
+WinMM-Layouts von DualSense und DualShock an Plattformvertrag `3`. Unbekannte
+HID-Buttonordnungen werden nicht als semantische Controllerbelegung geraten.
+Ein Sony-HID und sein XInput-Kompatibilitaetsendpoint werden nach eindeutiger
+aktiver Korrelation zu genau einem Titelcontroller zusammengefuehrt; ein bis
+dahin mehrdeutiger XInput-Endpunkt belegt keinen zweiten Slot. Die native
+Sony-Eingabe bleibt sichtbar, Vibration laeuft ausschliesslich ueber den
+wirklich gebundenen XInput-Endpunkt. Backendbereitschaft und Hotplug bleiben
+fail-closed. Der Runtime-/CLI-Build ist sauber; der physische DualSense-
+Menutest steht aus, bis ein Nutzer am System ist.
 
 Der aktuelle v111/v30-Produktbeleg bindet die statisch hergeleitete
 MOVIE.BIN-Sequenz als nativen, identitaetsgebundenen Multi-Clip-Vertrag. Ein
@@ -609,7 +612,7 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 106, Analyzer-ABI 48, Portprojektvertrag 97 und
+KR-5005-Stand verwendet Runtime-ABI 107, Analyzer-ABI 48, Portprojektvertrag 97 und
 Native-Port-Profilvertrag 20. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte

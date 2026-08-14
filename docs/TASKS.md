@@ -335,10 +335,12 @@ Der 100-s-Produktsmoke schloss Film 0 `200/200`; dynamische Overlay-Evidenz
 steht noch aus.
 
 Controller-Meilenstein: Der Windows-Native-Port vereinheitlicht XInput und
-WinMM-DualSense, -DualShock sowie generisches HID unter Plattformvertrag `2`.
-Physische Sony-Controller haben bei neuer Belegung Vorrang; stabile Slots,
-Hotplug und konsistente Achsen sind gebunden, XInput-Vibration bleibt am
-richtigen XInput-Geraet. Runtime-/CLI-Build ist sauber; der Export endete mit
+die identitaetsgebundenen WinMM-Layouts von DualSense und DualShock unter
+Plattformvertrag `3`. Unbekannte HID-Layouts werden nicht geraten; ein
+Sony-/XInput-Duplikat bleibt bis zur eindeutigen aktiven Zuordnung aus den
+Titel-Slots, und Vibration erreicht danach weiterhin den richtigen XInput-
+Endpunkt. Backendbereitschaft und Triggernormalisierung sind geschlossen.
+Runtime-/CLI-Build ist sauber; der Export endete mit
 Exit `0` nach `567,512 s` bei `5.774` Funktionen und `168` Partitionen.
 Closure unveraendert: `1.423` Sites, `1.425` Gaps, `865` ersetzt. Der
 physische DualSense-Menutest bleibt ohne anwesenden Nutzer offen.
@@ -453,7 +455,7 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 106, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  Runtime-ABI 107, PlatformServices-ABI 14, Backend-Interface-ABI 23,
   PVR-State-Contract 3, Portprojektvertrag 97, Native-Port-Profilvertrag 20
   Analyzer-ABI 48, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,

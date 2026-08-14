@@ -34,11 +34,13 @@ und niemals als erfolgreiche Ausfuehrung gemeldet.
 Unter Windows pollt `Win32GamepadSource` XInput dynamisch ueber
 `xinput1_4.dll`, `xinput1_3.dll` oder `xinput9_1_0.dll`. Aktuelle
 Xbox-Controller verwenden damit den nativen XInput-Vertrag. Parallel stellt
-WinMM/Joystick einen allgemeinen Pfad fuer DualSense, DualShock und uebliche
-Standardgamepads bereit. Beide Pfade liefern stabile Geraeteidentitaeten,
-Buttons, D-Pad, Trigger und zwei Analogsticks an dieselbe Hostabstraktion. Auf
-Hosts ohne implementiertes Backend wird keine native Verfuegbarkeit
-vorgetaeuscht.
+WinMM/Joystick einen identitaetsgebundenen Pfad fuer die bekannten DualSense-
+und DualShock-Layouts bereit. Unbekannte HID-Button- und Achsordnungen werden
+nicht als Standardprofil geraten. Ein mehrdeutiger XInput-Endpunkt bleibt bei
+gleichzeitigem Sony-HID unsichtbar, bis aktive Eingabeevidenz ihn eindeutig
+als Duplikat oder unabhaengigen Controller klassifiziert. Ein gebundenes
+Duplikat teilt den XInput-Vibrationsendpunkt. Auf Hosts ohne geladenes XInput
+und ohne WinMM-Joysticktreiber wird keine native Verfuegbarkeit vorgetaeuscht.
 
 `ControllerInputTimeline` normalisiert die Profile mit versionierten Deadzones
 auf Dreamcast-Buttons, 8-Bit-Trigger und zentrierte 8-Bit-Achsen. Das
@@ -86,7 +88,7 @@ prueft Eingabeinjektion, Audiohash, Fokus/Pause, WinMM und sauberen Shutdown;
 Port-CLI und relocatiertes SDK pruefen den Produktpfad ohne CLI-Laufzeithuelle.
 
 Die fokussierten KR-4814-Regressionen pruefen zusaetzlich identische
-Normalisierung fuer XInput-, DualSense-, DualShock- und Standardprofile,
+Normalisierung fuer XInput-, DualSense- und DualShock-Profile,
 Deadzones, Trigger, Achsen, Hotplug, Fokusreset, Controller-1-Auswahl,
 Aenderungsdeduplizierung, monotonen Replayinput und gastzyklusgenaue
 Maple-`GetCondition`-Payloads. Die Projekt-Homebrew-Strecke vergleicht zwei

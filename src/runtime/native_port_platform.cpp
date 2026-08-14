@@ -677,12 +677,6 @@ struct XInputApi final {
         static_cast<std::int32_t>(scaled) - 32'768);
 }
 
-[[nodiscard]] std::uint8_t joystick_trigger(
-    const std::uint32_t value) noexcept {
-    return static_cast<std::uint8_t>(
-        std::min(value, 65'535u) / 257u);
-}
-
 [[nodiscard]] std::uint32_t xinput_buttons(const WORD value) noexcept {
     std::uint32_t result = 0u;
     const auto copy = [&](const WORD source,
@@ -713,7 +707,6 @@ enum class NativeGamepadSourceKind : std::uint8_t {
     XInput,
     DualSense,
     DualShock,
-    StandardHid,
 };
 
 constexpr std::uint64_t xinput_device_domain = 0x0100000000000000ull;
@@ -723,15 +716,14 @@ constexpr std::uint64_t input_device_slot_mask = 0x00000000FFFFFFFFull;
 
 struct NativeGamepadCandidate final {
     std::uint64_t device_id = 0u;
-    NativeGamepadSourceKind kind = NativeGamepadSourceKind::StandardHid;
+    NativeGamepadSourceKind kind = NativeGamepadSourceKind::XInput;
     NativePortGamepadState state;
 };
 
-[[nodiscard]] NativeGamepadSourceKind joystick_kind(
+[[nodiscard]] std::optional<NativeGamepadSourceKind> joystick_kind(
     const JOYCAPSW& capabilities) noexcept {
     constexpr WORD sony_vendor = 0x054Cu;
-    if (capabilities.wMid != sony_vendor)
-        return NativeGamepadSourceKind::StandardHid;
+    if (capabilities.wMid != sony_vendor) return std::nullopt;
     switch (capabilities.wPid) {
     case 0x0CE6u:
     case 0x0DF2u:
@@ -741,7 +733,7 @@ struct NativeGamepadCandidate final {
     case 0x0BA0u:
         return NativeGamepadSourceKind::DualShock;
     default:
-        return NativeGamepadSourceKind::StandardHid;
+        return std::nullopt;
     }
 }
 
@@ -754,10 +746,8 @@ struct NativeGamepadCandidate final {
         return 1u;
     case NativeGamepadSourceKind::XInput:
         return 2u;
-    case NativeGamepadSourceKind::StandardHid:
-        return 3u;
     }
-    return 4u;
+    return 3u;
 }
 
 void add_button(std::uint32_t& buttons,
@@ -784,28 +774,18 @@ void add_pov_buttons(std::uint32_t& buttons, const DWORD pov) noexcept {
 }
 
 void add_joystick_buttons(NativePortGamepadState& state,
-                          const NativeGamepadSourceKind kind,
                           const DWORD value) noexcept {
     const auto pressed = [&](const unsigned index) {
         return (value & (DWORD{1u} << index)) != 0u;
     };
-    const bool sony = kind == NativeGamepadSourceKind::DualSense ||
-                      kind == NativeGamepadSourceKind::DualShock;
-    if (sony) {
-        add_button(state.buttons, pressed(0u), NativePortGamepadButton::X);
-        add_button(state.buttons, pressed(1u), NativePortGamepadButton::A);
-        add_button(state.buttons, pressed(2u), NativePortGamepadButton::B);
-        add_button(state.buttons, pressed(3u), NativePortGamepadButton::Y);
-        add_button(state.buttons, pressed(8u), NativePortGamepadButton::View);
-        add_button(state.buttons, pressed(9u), NativePortGamepadButton::Menu);
-    } else {
-        add_button(state.buttons, pressed(0u), NativePortGamepadButton::A);
-        add_button(state.buttons, pressed(1u), NativePortGamepadButton::B);
-        add_button(state.buttons, pressed(2u), NativePortGamepadButton::X);
-        add_button(state.buttons, pressed(3u), NativePortGamepadButton::Y);
-        add_button(state.buttons, pressed(6u), NativePortGamepadButton::View);
-        add_button(state.buttons, pressed(7u), NativePortGamepadButton::Menu);
-    }
+    // WinMM is admitted only for the explicitly identified Sony layouts
+    // above. Unknown HID button ordinals are not a semantic gamepad mapping.
+    add_button(state.buttons, pressed(0u), NativePortGamepadButton::X);
+    add_button(state.buttons, pressed(1u), NativePortGamepadButton::A);
+    add_button(state.buttons, pressed(2u), NativePortGamepadButton::B);
+    add_button(state.buttons, pressed(3u), NativePortGamepadButton::Y);
+    add_button(state.buttons, pressed(8u), NativePortGamepadButton::View);
+    add_button(state.buttons, pressed(9u), NativePortGamepadButton::Menu);
     add_button(state.buttons,
                pressed(4u),
                NativePortGamepadButton::LeftShoulder);
@@ -818,6 +798,60 @@ void add_joystick_buttons(NativePortGamepadState& state,
     add_button(state.buttons,
                pressed(11u),
                NativePortGamepadButton::RightStick);
+}
+
+[[nodiscard]] std::uint8_t joystick_half_trigger(
+    const std::int16_t axis) noexcept {
+    if (axis < 0) {
+        const auto magnitude = static_cast<std::uint32_t>(
+            -static_cast<std::int32_t>(axis));
+        return static_cast<std::uint8_t>(
+            (magnitude * 255u + 16'384u) / 32'768u);
+    }
+    const auto magnitude = static_cast<std::uint32_t>(axis);
+    return static_cast<std::uint8_t>(
+        (magnitude * 255u + 16'383u) / 32'767u);
+}
+
+[[nodiscard]] bool gamepad_has_identity_activity(
+    const NativePortGamepadState& state) noexcept {
+    constexpr std::int32_t stick_threshold = 2'048;
+    constexpr std::uint8_t trigger_threshold = 8u;
+    return state.buttons != 0u ||
+           std::abs(static_cast<std::int32_t>(state.left_stick_x_raw)) >
+               stick_threshold ||
+           std::abs(static_cast<std::int32_t>(state.left_stick_y_raw)) >
+               stick_threshold ||
+           std::abs(static_cast<std::int32_t>(state.right_stick_x_raw)) >
+               stick_threshold ||
+           std::abs(static_cast<std::int32_t>(state.right_stick_y_raw)) >
+               stick_threshold ||
+           state.left_trigger_raw > trigger_threshold ||
+           state.right_trigger_raw > trigger_threshold;
+}
+
+[[nodiscard]] bool correlated_gamepad_payload(
+    const NativePortGamepadState& left,
+    const NativePortGamepadState& right) noexcept {
+    constexpr std::int32_t stick_tolerance = 2'048;
+    constexpr std::int32_t trigger_tolerance = 8;
+    const auto close = [](const auto lhs, const auto rhs, const auto tolerance) {
+        return std::abs(static_cast<std::int32_t>(lhs) -
+                        static_cast<std::int32_t>(rhs)) <= tolerance;
+    };
+    return left.buttons == right.buttons &&
+           close(left.left_stick_x_raw, right.left_stick_x_raw,
+                 stick_tolerance) &&
+           close(left.left_stick_y_raw, right.left_stick_y_raw,
+                 stick_tolerance) &&
+           close(left.right_stick_x_raw, right.right_stick_x_raw,
+                 stick_tolerance) &&
+           close(left.right_stick_y_raw, right.right_stick_y_raw,
+                 stick_tolerance) &&
+           close(left.left_trigger_raw, right.left_trigger_raw,
+                 trigger_tolerance) &&
+           close(left.right_trigger_raw, right.right_trigger_raw,
+                 trigger_tolerance);
 }
 
 [[nodiscard]] bool same_gamepad_payload(
@@ -1146,12 +1180,11 @@ class NativePortPlatformServices::Impl final {
         open_save_lock();
 
         xinput_ = load_xinput();
-        // WinMM is linked into the Windows native runtime and remains a valid
-        // hot-plug backend even when no joystick is connected at startup.
-        // `joyGetNumDevs()` reports configured driver slots, not backend
-        // availability; using its transient value here would reject a valid
-        // product before a DualSense/DualShock is plugged in.
-        constexpr bool gamepad_backend_available = true;
+        // A loaded XInput API or at least one configured WinMM driver slot is
+        // independent backend evidence. Merely linking winmm.lib does not
+        // prove that this machine has a joystick driver.
+        const bool gamepad_backend_available =
+            xinput_.get_state != nullptr || joyGetNumDevs() != 0u;
         if (config.require_gamepad_backend && !gamepad_backend_available)
             fail_platform(NativePortPlatformFailure::InputBackend,
                           ERROR_MOD_NOT_FOUND,
@@ -1349,6 +1382,11 @@ class NativePortPlatformServices::Impl final {
                                &capabilities,
                                sizeof(capabilities)) != JOYERR_NOERROR)
                 continue;
+            const auto kind = joystick_kind(capabilities);
+            // JOYCAPS describes ranges and button counts, not the semantic
+            // layout of an arbitrary HID report. Only identity-bound Sony
+            // layouts are admitted through this backend.
+            if (!kind.has_value()) continue;
             JOYINFOEX info{};
             info.dwSize = sizeof(info);
             info.dwFlags = JOY_RETURNALL;
@@ -1358,10 +1396,10 @@ class NativePortPlatformServices::Impl final {
             candidate.device_id = joystick_device_domain |
                                   (static_cast<std::uint64_t>(source_index) +
                                    1u);
-            candidate.kind = joystick_kind(capabilities);
+            candidate.kind = *kind;
             auto& destination = candidate.state;
             destination.connected = true;
-            add_joystick_buttons(destination, candidate.kind, info.dwButtons);
+            add_joystick_buttons(destination, info.dwButtons);
             add_pov_buttons(destination.buttons, info.dwPOV);
             destination.left_stick_x_raw = joystick_axis(
                 info.dwXpos, capabilities.wXmin, capabilities.wXmax);
@@ -1380,15 +1418,12 @@ class NativePortPlatformServices::Impl final {
                 capabilities.wZmax > capabilities.wZmin) {
                 const auto trigger_axis = joystick_axis(
                     info.dwZpos, capabilities.wZmin, capabilities.wZmax);
-                if (trigger_axis < 0) {
-                    const auto magnitude = static_cast<std::uint32_t>(
-                        -static_cast<std::int32_t>(trigger_axis));
+                if (trigger_axis < 0)
                     destination.left_trigger_raw =
-                        joystick_trigger(magnitude * 2u);
-                } else {
-                    destination.right_trigger_raw = joystick_trigger(
-                        static_cast<std::uint32_t>(trigger_axis) * 2u);
-                }
+                        joystick_half_trigger(trigger_axis);
+                else
+                    destination.right_trigger_raw =
+                        joystick_half_trigger(trigger_axis);
             }
             destination.left_stick_x =
                 normalized_axis(destination.left_stick_x_raw);
@@ -1404,6 +1439,116 @@ class NativePortPlatformServices::Impl final {
                 static_cast<float>(destination.right_trigger_raw) / 255.0f;
             candidates.push_back(candidate);
         }
+
+        const auto has_device = [&](const std::uint64_t device_id) {
+            return std::ranges::any_of(candidates, [&](const auto& candidate) {
+                return candidate.device_id == device_id;
+            });
+        };
+        std::erase_if(cross_backend_aliases_, [&](const auto& alias) {
+            return !has_device(alias.first) || !has_device(alias.second);
+        });
+        std::erase_if(independent_xinput_devices_, [&](const auto device_id) {
+            return !has_device(device_id);
+        });
+
+        const auto already_paired = [&](const std::uint64_t device_id) {
+            return std::ranges::any_of(
+                cross_backend_aliases_, [&](const auto& alias) {
+                    return alias.first == device_id ||
+                           alias.second == device_id;
+                });
+        };
+        const auto known_independent_xinput =
+            [&](const std::uint64_t device_id) {
+                return std::ranges::find(independent_xinput_devices_,
+                                         device_id) !=
+                       independent_xinput_devices_.end();
+            };
+        // A Sony HID plus a remapper-created XInput endpoint can expose one
+        // physical pad twice. Bind a session alias only after a unique,
+        // non-neutral correlated input observation. The physical Sony path
+        // wins; neutral unrelated controllers are never guessed to be equal.
+        for (const auto& sony : candidates) {
+            if (sony.kind != NativeGamepadSourceKind::DualSense &&
+                sony.kind != NativeGamepadSourceKind::DualShock)
+                continue;
+            if (already_paired(sony.device_id) ||
+                !gamepad_has_identity_activity(sony.state))
+                continue;
+            const NativeGamepadCandidate* matched = nullptr;
+            for (const auto& xinput : candidates) {
+                if (xinput.kind != NativeGamepadSourceKind::XInput ||
+                    already_paired(xinput.device_id) ||
+                    known_independent_xinput(xinput.device_id) ||
+                    !gamepad_has_identity_activity(xinput.state) ||
+                    !correlated_gamepad_payload(sony.state, xinput.state))
+                    continue;
+                if (matched != nullptr) {
+                    matched = nullptr;
+                    break;
+                }
+                matched = &xinput;
+            }
+            if (matched == nullptr) continue;
+            std::size_t matching_sony = 0u;
+            for (const auto& other : candidates) {
+                if ((other.kind == NativeGamepadSourceKind::DualSense ||
+                     other.kind == NativeGamepadSourceKind::DualShock) &&
+                    !already_paired(other.device_id) &&
+                    gamepad_has_identity_activity(other.state) &&
+                    correlated_gamepad_payload(other.state, matched->state))
+                    ++matching_sony;
+            }
+            if (matching_sony == 1u)
+                cross_backend_aliases_.emplace_back(sony.device_id,
+                                                    matched->device_id);
+        }
+
+        // While a physical Sony endpoint is present, an otherwise unknown
+        // XInput endpoint is withheld from title slots until one active
+        // sample proves it independent. This prevents an idle compatibility
+        // wrapper from occupying a second controller slot before correlation
+        // has any input evidence.
+        const auto has_unpaired_sony = std::ranges::any_of(
+            candidates, [&](const auto& candidate) {
+                return (candidate.kind == NativeGamepadSourceKind::DualSense ||
+                        candidate.kind == NativeGamepadSourceKind::DualShock) &&
+                       !already_paired(candidate.device_id);
+            });
+        for (const auto& xinput : candidates) {
+            if (xinput.kind != NativeGamepadSourceKind::XInput ||
+                already_paired(xinput.device_id) ||
+                known_independent_xinput(xinput.device_id))
+                continue;
+            if (!has_unpaired_sony) {
+                independent_xinput_devices_.push_back(xinput.device_id);
+                continue;
+            }
+            if (!gamepad_has_identity_activity(xinput.state)) continue;
+            const bool has_correlated_sony = std::ranges::any_of(
+                candidates, [&](const auto& sony) {
+                    return (sony.kind == NativeGamepadSourceKind::DualSense ||
+                            sony.kind == NativeGamepadSourceKind::DualShock) &&
+                           !already_paired(sony.device_id) &&
+                           gamepad_has_identity_activity(sony.state) &&
+                           correlated_gamepad_payload(sony.state,
+                                                      xinput.state);
+                });
+            if (!has_correlated_sony)
+                independent_xinput_devices_.push_back(xinput.device_id);
+        }
+        std::erase_if(candidates, [&](const auto& candidate) {
+            if (candidate.kind != NativeGamepadSourceKind::XInput)
+                return false;
+            const bool aliases_sony = std::ranges::any_of(
+                cross_backend_aliases_, [&](const auto& alias) {
+                    return alias.second == candidate.device_id;
+                });
+            if (aliases_sony) return true;
+            return has_unpaired_sony &&
+                   !known_independent_xinput(candidate.device_id);
+        });
 
         std::ranges::sort(candidates, [](const auto& left, const auto& right) {
             const auto left_priority = source_priority(left.kind);
@@ -1460,12 +1605,13 @@ class NativePortPlatformServices::Impl final {
             if (old_device_id != new_device_id) {
                 if (vibration_active_[slot] && xinput_.set_state != nullptr) {
                     const auto old_xinput =
-                        xinput_slot_from_device(old_device_id);
+                        xinput_slot_from_device(vibration_device_ids_[slot]);
                     if (old_xinput.has_value())
                         static_cast<void>(
                             xinput_.set_state(*old_xinput, &stopped));
                 }
                 vibration_active_[slot] = false;
+                vibration_device_ids_[slot] = 0u;
                 saturating_increment(result.connection_generation);
             }
 
@@ -1514,8 +1660,8 @@ class NativePortPlatformServices::Impl final {
                           ERROR_INVALID_PARAMETER,
                           "vibration-range");
         if (xinput_.set_state == nullptr) return false;
-        const auto source =
-            xinput_slot_from_device(input_device_ids_[controller_index]);
+        const auto source = vibration_xinput_slot(
+            input_device_ids_[controller_index]);
         if (!source.has_value()) return false;
         XINPUT_VIBRATION state{};
         state.wLeftMotorSpeed = static_cast<WORD>(std::lround(
@@ -1535,6 +1681,8 @@ class NativePortPlatformServices::Impl final {
         }
         vibration_active_[controller_index] =
             state.wLeftMotorSpeed != 0u || state.wRightMotorSpeed != 0u;
+        vibration_device_ids_[controller_index] =
+            xinput_device_domain | (static_cast<std::uint64_t>(*source) + 1u);
         return true;
     }
 
@@ -1685,6 +1833,19 @@ class NativePortPlatformServices::Impl final {
         std::uint64_t bytes_read = 0u;
     };
 
+    [[nodiscard]] std::optional<DWORD> vibration_xinput_slot(
+        const std::uint64_t device_id) const noexcept {
+        if (const auto direct = xinput_slot_from_device(device_id);
+            direct.has_value())
+            return direct;
+        const auto alias = std::ranges::find_if(
+            cross_backend_aliases_, [&](const auto& binding) {
+                return binding.first == device_id;
+            });
+        if (alias == cross_backend_aliases_.end()) return std::nullopt;
+        return xinput_slot_from_device(alias->second);
+    }
+
     static void validate_config(const NativePortPlatformConfig& config) {
         if (config.contract_version != native_port_platform_contract_version ||
             config.content_root.empty() || config.user_data_root.empty() ||
@@ -1828,8 +1989,13 @@ class NativePortPlatformServices::Impl final {
     UniqueHandle save_root_handle_;
     UniqueHandle save_lock_;
     XInputApi xinput_;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>>
+        cross_backend_aliases_;
+    std::vector<std::uint64_t> independent_xinput_devices_;
     NativePortInputSnapshot input_snapshot_;
     std::array<std::uint64_t, native_port_gamepad_count> input_device_ids_{};
+    std::array<std::uint64_t, native_port_gamepad_count>
+        vibration_device_ids_{};
     std::array<bool, native_port_gamepad_count> vibration_active_{};
 };
 

@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 2u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 3u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
 
 struct NativePortPlatformConfig final {

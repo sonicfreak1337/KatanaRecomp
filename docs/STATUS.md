@@ -77,12 +77,13 @@ Closure-Sichtbarkeit, keine Regression. Der Release-Build mit `24` Jobs
 endete in `51,4 s`; der 100-s-Produktsmoke erreichte Film 0 `200/200`, aber
 noch keine dynamische Overlay-Bestaetigung.
 
-Der Windows-Native-Port unterstuetzt nun XInput und WinMM-DualSense,
-DualShock sowie generisches HID ueber Plattformvertrag `2`. Physische Sony-
-Controller werden bei neuer Belegung priorisiert; Slots bleiben ueber Hotplug
-stabil, Achsen sind backenduebergreifend konsistent und XInput-Vibration
-bleibt dem tatsaechlichen XInput-Geraet zugeordnet. Der Runtime-/CLI-Build ist
-sauber. Der private Export endete nach `567,512 s` mit Exit `0`, `5.774`
+Der Windows-Native-Port unterstuetzt nun XInput und die identitaetsgebundenen
+WinMM-Layouts von DualSense und DualShock ueber Plattformvertrag `3`.
+Unbekannte HID-Layouts werden verworfen; Sony-/XInput-Duplikate bleiben bis
+zur eindeutigen aktiven Zuordnung aus den Titel-Slots und teilen danach den
+tatsaechlichen XInput-Vibrationsendpunkt. Backendverfuegbarkeit sowie beide
+Trigger-Vollaussteuerungen sind fail-closed beziehungsweise symmetrisch. Der
+Runtime-/CLI-Build ist sauber. Der private Export endete nach `567,512 s` mit Exit `0`, `5.774`
 Funktionen und `168` Partitionen; die Closure bleibt bei `1.423` Sites,
 `1.425` Gaps und `865` ersetzten Sites. Der physische DualSense-Menutest
 steht ohne anwesenden Nutzer noch aus.

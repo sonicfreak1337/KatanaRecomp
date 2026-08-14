@@ -30,12 +30,15 @@ Closure-Arbeit, keine Regression. Der 100-s-Produktsmoke erreichte Film 0
 Memory-Card-Pfad und Hauptmenue; ein Start-Controllerimpuls ist erst seit dem
 vollstaendigen No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
 
-Der Windows-Native-Port hat jetzt XInput- sowie WinMM-Controllerabdeckung
-fuer DualSense, DualShock und generisches HID. Physische Sony-Controller
-haben bei neuer Belegung Prioritaet; stabile Slots, Hotplug und konsistente
-Achsen sind Teil des Plattformvertrags `2`, XInput-Vibration bleibt direkt
-gebunden. Der Runtime-/CLI-Build ist sauber; die physische DualSense-
-Menuabnahme bleibt offen, bis ein Nutzer vor Ort testet.
+Der Windows-Native-Port hat jetzt XInput- sowie identitaetsgebundene WinMM-
+Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `3`
+verwirft unbekannte HID-Layouts, prueft echte Backendbereitschaft und
+unterdrueckt ein XInput-Kompatibilitaetsduplikat, bis aktive Evidenz den
+Endpunkt eindeutig demselben Sony-Pad oder einem unabhaengigen Controller
+zuordnet. Achsen und Trigger sind symmetrisch normalisiert; Vibration bleibt
+an den wirklichen XInput-Endpunkt gebunden. Der Runtime-/CLI-Build ist sauber;
+die physische DualSense-Menuabnahme bleibt offen, bis ein Nutzer vor Ort
+testet.
 
 ## Produktziel
 
@@ -379,7 +382,7 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 106, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  Runtime-ABI 107, PlatformServices-ABI 14, Backend-Interface-ABI 23,
   PVR-State-Contract 3, Portprojektvertrag 97, Native-Port-Profilvertrag 20
   Analyzer-ABI 48
   Function-Analysis-Epoch-Schema 28
