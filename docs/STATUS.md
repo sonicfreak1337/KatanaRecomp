@@ -49,6 +49,16 @@ Primary-Roots `607 -> 614`, Callback-Sinks `715 -> 716`, Funktionen
 `5.947 -> 6.086` und Partitionen `173 -> 176`. Der kalte Vollpfad samt
 Hostbuild und Packaging endete nach `1.004,862 s`.
 
+Der v128-Warmexport behaelt diese kanonische Analysemenge vollstaendig und
+senkt durch direkte Lattice-Aenderungssignale, einen einzelnen gesicherten
+Delay-Branchwert, kanonische Field-Sinks und stabilen Receiver-Top den
+End-to-End-Pfad auf `397,280 s`. Die beiden CFA-Laeufe fallen
+`357,030 -> 184,752 s`; Source-Validation `70,013 -> 40,906 s` und beide
+IR-Lowerings `74,497 -> 43,265 s`. Die Abnahme bleibt bei `614` Roots,
+`716` Sinks, `261` Field-Sinks und `25.431` Codepointer-Evidenzen;
+`0x88289190` bleibt emittiert. Alle `242/242` generierten Host-TUs waren
+Content-Hits.
+
 Die Closure bleibt bei `243` bekannten Hardware-Sites und `244` Gaps (`189`
 hook-missing, `55` Progress-Waits); `1.173` Sites sind durch Hooks ersetzt.
 Der Produktlauf passiert den vorher fehlenden Loaded-AOT-Entry und erreicht

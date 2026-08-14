@@ -325,10 +325,12 @@ discover_structural_callback_field_sinks(
 
 [[nodiscard]] bool add_receiver_progression(
     std::vector<ReceiverProgression>& progressions,
-    ReceiverProgression progression) {
+    ReceiverProgression progression,
+    bool* const changed = nullptr) {
     if (progression.stride == 0u || progression.first > progression.last)
         throw std::invalid_argument(
             "Ungueltige Callback-Receiver-Progression.");
+    if (changed != nullptr) *changed = false;
     const auto progression_value_count = [](const ReceiverProgression& value) {
         return (static_cast<std::uint64_t>(value.last) - value.first) /
                    value.stride +
@@ -360,11 +362,14 @@ discover_structural_callback_field_sinks(
         if (progression_value_count(merged) >
             maximum_receiver_progression_values)
             return false;
+        if (existing == merged) return true;
         existing = merged;
+        if (changed != nullptr) *changed = true;
         return true;
     }
     if (progressions.size() >= maximum_receiver_progressions) return false;
     progressions.push_back(progression);
+    if (changed != nullptr) *changed = true;
     return true;
 }
 
@@ -515,7 +520,12 @@ enum class ReceiverIntersection : std::uint8_t {
 [[nodiscard]] bool add_bounded_receiver_constant(
     CallbackValue& value,
     const std::uint32_t constant) {
-    if (value.receiver_constants.contains(constant) ||
+    // Truncation is the explicit receiver-Top state.  Once reached, further
+    // exact witnesses cannot make the conservative lattice value more
+    // precise and must not repeatedly trigger the expensive compact/sort
+    // path on every fixpoint visit.
+    if (value.receiver_constants_truncated ||
+        value.receiver_constants.contains(constant) ||
         std::any_of(value.receiver_progressions.begin(),
                     value.receiver_progressions.end(),
                     [&](const auto& progression) {
@@ -524,9 +534,8 @@ enum class ReceiverIntersection : std::uint8_t {
                     }))
         return false;
     if (value.receiver_constants.size() >= maximum_receiver_constants) {
-        if (!compact_receiver_constants(value, constant)) {
+        if (!compact_receiver_constants(value, constant))
             value.receiver_constants_truncated = true;
-        }
         return true;
     }
     value.receiver_constants.insert(constant);
@@ -546,9 +555,49 @@ void add_constant(CallbackValue& value,
             value, *target, native_entry_shapes));
 }
 
-void add_callback_field_origin(CallbackValue& value,
-                               CallbackFieldOrigin origin) {
-    if (value.field_origins_truncated) return;
+[[nodiscard]] bool merge_callback_field_origin(
+    CallbackFieldOrigin& destination,
+    const CallbackFieldOrigin& source) {
+    bool changed = false;
+    const auto input_mask = static_cast<std::uint8_t>(
+        destination.receiver_input_mask | source.receiver_input_mask);
+    changed = changed || input_mask != destination.receiver_input_mask;
+    destination.receiver_input_mask = input_mask;
+    if (destination.receiver_constants_truncated ||
+        source.receiver_constants_truncated) {
+        changed = changed || !destination.receiver_constants_truncated;
+        destination.receiver_constants_truncated = true;
+        return changed;
+    }
+    CallbackValue combined;
+    combined.receiver_constants = destination.receiver_constants;
+    combined.receiver_progressions = destination.receiver_progressions;
+    for (const auto& progression : source.receiver_progressions) {
+        if (!add_receiver_progression(combined.receiver_progressions,
+                                      progression)) {
+            combined.receiver_constants_truncated = true;
+            break;
+        }
+    }
+    for (const auto constant : source.receiver_constants)
+        static_cast<void>(add_bounded_receiver_constant(combined, constant));
+    changed = changed ||
+              destination.receiver_constants != combined.receiver_constants ||
+              destination.receiver_progressions !=
+                  combined.receiver_progressions ||
+              destination.receiver_constants_truncated !=
+                  combined.receiver_constants_truncated;
+    destination.receiver_constants = std::move(combined.receiver_constants);
+    destination.receiver_progressions =
+        std::move(combined.receiver_progressions);
+    destination.receiver_constants_truncated =
+        combined.receiver_constants_truncated;
+    return changed;
+}
+
+[[nodiscard]] bool add_callback_field_origin(CallbackValue& value,
+                                             CallbackFieldOrigin origin) {
+    if (value.field_origins_truncated) return false;
     const auto existing = std::find_if(
         value.field_origins.begin(), value.field_origins.end(),
         [&](const auto& candidate) {
@@ -557,37 +606,15 @@ void add_callback_field_origin(CallbackValue& value,
                    candidate.load_instruction_address ==
                        origin.load_instruction_address;
         });
-    if (existing != value.field_origins.end()) {
-        existing->receiver_input_mask = static_cast<std::uint8_t>(
-            existing->receiver_input_mask | origin.receiver_input_mask);
-        CallbackValue combined;
-        combined.receiver_constants = existing->receiver_constants;
-        combined.receiver_progressions = existing->receiver_progressions;
-        combined.receiver_constants_truncated =
-            existing->receiver_constants_truncated ||
-            origin.receiver_constants_truncated;
-        for (const auto& progression : origin.receiver_progressions) {
-            if (!add_receiver_progression(
-                    combined.receiver_progressions, progression))
-                combined.receiver_constants_truncated = true;
-        }
-        for (const auto constant : origin.receiver_constants)
-            static_cast<void>(
-                add_bounded_receiver_constant(combined, constant));
-        existing->receiver_constants =
-            std::move(combined.receiver_constants);
-        existing->receiver_progressions =
-            std::move(combined.receiver_progressions);
-        existing->receiver_constants_truncated =
-            combined.receiver_constants_truncated;
-        return;
-    }
+    if (existing != value.field_origins.end())
+        return merge_callback_field_origin(*existing, origin);
     if (value.field_origins.size() == maximum_callback_field_origins) {
         value.field_origins.clear();
         value.field_origins_truncated = true;
-        return;
+        return true;
     }
     value.field_origins.push_back(std::move(origin));
+    return true;
 }
 
 void attach_callback_field_origin(CallbackValue& loaded,
@@ -610,7 +637,8 @@ void attach_callback_field_origin(CallbackValue& loaded,
     origin.displacement = displacement;
     origin.width = static_cast<std::uint8_t>(width);
     origin.load_instruction_address = instruction_address;
-    add_callback_field_origin(loaded, std::move(origin));
+    static_cast<void>(
+        add_callback_field_origin(loaded, std::move(origin)));
 }
 
 template <typename Transform>
@@ -669,52 +697,80 @@ void transform_scalar_value(CallbackValue& value,
                               const CallbackValue& source,
                               GuardedNativeEntryShapeCache&
                                   native_entry_shapes) {
-    const auto before = destination;
-    destination.input_mask = static_cast<std::uint8_t>(
+    bool changed = false;
+    const auto input_mask = static_cast<std::uint8_t>(
         destination.input_mask | source.input_mask);
+    changed = changed || input_mask != destination.input_mask;
+    destination.input_mask = input_mask;
     if (destination.constants_truncated || source.constants_truncated) {
+        changed = changed || !destination.constants_truncated ||
+                  !destination.constants.empty();
         destination.constants.clear();
         destination.constants_truncated = true;
     } else {
         for (const auto constant : source.constants)
-            static_cast<void>(
-                add_bounded_scalar_constant(destination, constant));
+            changed = add_bounded_scalar_constant(destination, constant) ||
+                      changed;
     }
     if (destination.code_constants_truncated ||
         source.code_constants_truncated) {
+        changed = changed || !destination.code_constants_truncated ||
+                  !destination.code_constants.empty();
         destination.code_constants.clear();
         destination.code_constants_truncated = true;
     } else {
         for (const auto constant : source.code_constants)
-            static_cast<void>(
-                add_bounded_code_constant(destination, constant,
-                                          native_entry_shapes));
+            changed = add_bounded_code_constant(destination, constant,
+                                                native_entry_shapes) ||
+                      changed;
     }
-    destination.receiver_constants_truncated =
-        destination.receiver_constants_truncated ||
-        source.receiver_constants_truncated;
-    for (const auto& progression : source.receiver_progressions) {
-        if (!add_receiver_progression(
-                destination.receiver_progressions, progression))
-            destination.receiver_constants_truncated = true;
+    if (destination.receiver_constants_truncated ||
+        source.receiver_constants_truncated) {
+        changed = changed || !destination.receiver_constants_truncated;
+        destination.receiver_constants_truncated = true;
+    } else {
+        for (const auto& progression : source.receiver_progressions) {
+            bool progression_changed = false;
+            if (!add_receiver_progression(destination.receiver_progressions,
+                                          progression,
+                                          &progression_changed)) {
+                destination.receiver_constants_truncated = true;
+                changed = true;
+                break;
+            }
+            changed = changed || progression_changed;
+        }
+        if (!destination.receiver_constants_truncated) {
+            for (const auto constant : source.receiver_constants)
+                changed = add_bounded_receiver_constant(destination,
+                                                        constant) ||
+                          changed;
+        }
     }
-    for (const auto constant : source.receiver_constants)
-        static_cast<void>(add_bounded_receiver_constant(
-            destination, constant));
-    destination.minimum_alignment =
+    const auto minimum_alignment =
         std::min(destination.minimum_alignment, source.minimum_alignment);
-    if (destination.stack_address != source.stack_address)
+    changed = changed || minimum_alignment != destination.minimum_alignment;
+    destination.minimum_alignment = minimum_alignment;
+    if (destination.stack_address != source.stack_address) {
+        changed = changed || destination.stack_address.has_value();
         destination.stack_address.reset();
-    destination.may_be_stack = destination.may_be_stack || source.may_be_stack;
+    }
+    if (source.may_be_stack && !destination.may_be_stack) {
+        destination.may_be_stack = true;
+        changed = true;
+    }
     if (destination.field_origins_truncated ||
         source.field_origins_truncated) {
+        changed = changed || !destination.field_origins_truncated ||
+                  !destination.field_origins.empty();
         destination.field_origins.clear();
         destination.field_origins_truncated = true;
     } else {
         for (const auto& origin : source.field_origins)
-            add_callback_field_origin(destination, origin);
+            changed = add_callback_field_origin(destination, origin) ||
+                      changed;
     }
-    return destination != before;
+    return changed;
 }
 
 [[nodiscard]] bool join_state(CallbackState& destination,
@@ -1582,7 +1638,7 @@ void apply_instruction(CallbackFunctionModel& model,
 [[nodiscard]] std::vector<std::uint32_t> call_targets(
     const katana::io::ExecutableImage& image,
     const katana::sh4::DisassemblyLine& control,
-    const CallbackState& before_delay,
+    const CallbackValue& branch_before_delay,
     const std::set<std::uint32_t>& function_entries) {
     std::set<std::uint32_t> targets;
     if (control.target_address.has_value())
@@ -1590,11 +1646,9 @@ void apply_instruction(CallbackFunctionModel& model,
     const auto kind = control.instruction.kind;
     if (kind == katana::sh4::InstructionKind::Jsr ||
         kind == katana::sh4::InstructionKind::Jmp) {
-        const auto& branch =
-            before_delay.registers[control.instruction.branch_register];
-        if (!branch.code_constants_truncated)
-            targets.insert(branch.code_constants.begin(),
-                           branch.code_constants.end());
+        if (!branch_before_delay.code_constants_truncated)
+            targets.insert(branch_before_delay.code_constants.begin(),
+                           branch_before_delay.code_constants.end());
     }
     std::vector<std::uint32_t> result;
     for (const auto target : targets) {
@@ -1689,7 +1743,7 @@ void clobber_call_volatile_registers(CallbackState& state) {
         const auto& lines = block->second->lines;
 
         const katana::sh4::DisassemblyLine* control = nullptr;
-        CallbackState before_delay;
+        CallbackValue branch_before_delay;
         std::vector<std::uint32_t> targets;
         for (const auto& line : lines) {
             const auto flow = line.instruction.control_flow;
@@ -1700,8 +1754,17 @@ void clobber_call_volatile_registers(CallbackState& state) {
                 flow == katana::sh4::ControlFlowKind::IndirectBranch;
             if (call || tail) {
                 control = &line;
-                before_delay = state;
-                targets = call_targets(image, line, before_delay,
+                branch_before_delay = {};
+                const auto kind = line.instruction.kind;
+                if (kind == katana::sh4::InstructionKind::Jsr ||
+                    kind == katana::sh4::InstructionKind::Jmp) {
+                    const auto branch_register =
+                        line.instruction.branch_register;
+                    if (branch_register < state.registers.size())
+                        branch_before_delay =
+                            state.registers[branch_register];
+                }
+                targets = call_targets(image, line, branch_before_delay,
                                        function_entries);
                 continue;
             }
@@ -1722,8 +1785,8 @@ void clobber_call_volatile_registers(CallbackState& state) {
                  katana::sh4::ControlFlowKind::IndirectBranch)) {
             const auto branch_register =
                 control->instruction.branch_register;
-            if (branch_register < before_delay.registers.size()) {
-                const auto& branch = before_delay.registers[branch_register];
+            if (branch_register < state.registers.size()) {
+                const auto& branch = branch_before_delay;
                 model.local_sink_mask = static_cast<std::uint8_t>(
                     model.local_sink_mask |
                     branch.input_mask);
@@ -1736,10 +1799,27 @@ void clobber_call_volatile_registers(CallbackState& state) {
                         field,
                         control->instruction.control_flow ==
                             katana::sh4::ControlFlowKind::IndirectCall};
-                    if (std::find(model.field_sinks.begin(),
-                                  model.field_sinks.end(), sink) ==
-                        model.field_sinks.end())
+                    const auto existing = std::find_if(
+                        model.field_sinks.begin(),
+                        model.field_sinks.end(),
+                        [&](const auto& candidate) {
+                            return candidate.function_address ==
+                                       sink.function_address &&
+                                   candidate.call_instruction_address ==
+                                       sink.call_instruction_address &&
+                                   candidate.field.load_instruction_address ==
+                                       sink.field.load_instruction_address &&
+                                   candidate.field.displacement ==
+                                       sink.field.displacement &&
+                                   candidate.field.width == sink.field.width &&
+                                   candidate.call == sink.call;
+                        });
+                    if (existing != model.field_sinks.end()) {
+                        static_cast<void>(merge_callback_field_origin(
+                            existing->field, sink.field));
+                    } else {
                         model.field_sinks.push_back(std::move(sink));
+                    }
                 }
             }
         }

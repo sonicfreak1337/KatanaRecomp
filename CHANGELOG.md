@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- Der statische Callback-Fixpunkt kopiert bei Lattice-Joins nicht mehr den
+  kompletten verschachtelten `CallbackValue`, sondern fuehrt alle bounded
+  Mengen mit direkten Aenderungssignalen zusammen. Delay-Slots sichern nur
+  noch den tatsaechlich vor dem Slot gelesenen Branchwert; Field-Sinks werden
+  nach Function-/Call-/Load-/Shape-Identitaet kanonisch vereinigt und
+  Receiver-Top stabilisiert sich nach der ersten Truncation. Der reale
+  v128-Warmexport fiel dadurch gegenueber v127 von `1.004,862 s` auf
+  `397,280 s`; beide primaeren CFA-Laeufe zusammen von `357,030 s` auf
+  `184,752 s`, Source-Validation von `70,013 s` auf `40,906 s` und beide
+  IR-Lowerings von `74,497 s` auf `43,265 s`. Die Abnahme bleibt exakt bei
+  `6.086` Funktionen, `176` Partitionen, `614` Primary-Roots, `716`
+  Callback-Sinks, `261` Field-Sinks und `25.431` Codepointer-Evidenzen;
+  `0x88289190` bleibt emittiert und alle `242/242` Host-TUs waren
+  Content-Hits. Da Analyzerergebnis, ABI und Cachevertrag unveraendert sind,
+  ist kein Vertragsbump erforderlich.
+
 - Die statische Cross-Image-Callback-Closure verfolgt jetzt neben
   Callbackargumenten auch bounded 32-Bit-Recordfelder. Primary-Image-
   Record-/Listen-Walker liefern positive Feld-Sink-Vertraege; ein

@@ -342,6 +342,17 @@ Modellprojektion (`0/1.071` rasterfaehige Vertices), gefolgt von einer
 Task-/Progress-Frontier ohne neue Framepublikation. Grafik, Memory-Card-
 Screen und Hauptmenue bleiben offen.
 
+Analyzer-Performance-Abschluss v128: `join_value` fuehrt bounded Fakten ohne
+tiefe Vorher-Kopie zusammen, Delay-Slots kopieren nur den Branchwert,
+Field-Sinks werden strukturell vereinigt und Receiver-Top bleibt nach der
+ersten Truncation stabil. Der reale Warmexport faellt `1.004,862 ->
+397,280 s`; CFA `357,030 -> 184,752 s`, Source-Validation `70,013 ->
+40,906 s` und IR-Lowering `74,497 -> 43,265 s`. Die kanonische Abnahme ist
+unveraendert: `6.086` Funktionen, `176` Partitionen, `614` Roots, `716`
+Sinks, `261` Field-Sinks, `25.431` Codepointer-Evidenzen und der emittierte
+Entry `0x88289190`. `242/242` Host-TUs waren Content-Hits; Budgets und
+Vertraege wurden nicht abgesenkt.
+
 Der Export umfasst `5.918` Funktionen in `167` Partitionen, `4.430` rohe und
 `2.509` guarded Callback-Kandidaten sowie `400.972/4.194.304` Shape-Arbeit
 ohne Truncation. Gegenueber v29: `+815` Funktionen, `+18` Partitionen und

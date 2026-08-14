@@ -39,6 +39,17 @@ Der kalte Export samt Hostbuild, Linkaudit und atomarem Packaging endete nach
 Produktlauf passiert den vorherigen `loaded-aot-entry-identity-missing`-Stop
 und erreicht 14 weitere Framegrenzen (`321 -> 334`).
 
+Der nachfolgende v128-Warmexport beseitigt die vier groessten lokalen
+Callback-Fixpunktkosten, ohne den Analysevertrag zu lockern: direkte
+Lattice-Aenderungssignale ersetzen tiefe Vorher-Kopien, Delay-Slots sichern
+nur den Branchwert, strukturell identische Field-Sinks vereinigen ihre
+Evidenz und Receiver-Top wird stabil. Der echte End-to-End-Export fiel auf
+`397,280 s` (`-60,5 %`); die beiden CFA-Laeufe zusammen auf `184,752 s`
+statt `357,030 s`. Funktionen, Partitionen, Roots, Sinks, Field-Sinks und
+Codepointer-Evidenzen blieben mit `6.086`, `176`, `614`, `716`, `261` und
+`25.431` exakt gleich. `0x88289190` bleibt im Dispatch, und `242/242`
+generierte Host-TUs waren Content-Hits.
+
 Die Hardware-Closure bleibt bei `243` bekannten Sites und `244` Gaps
 (`189` hook-missing, `55` progress-wait); `1.173` Sites werden durch Hooks
 ersetzt. Das ist erwartbar, weil die neue Analyse AOT-Erreichbarkeit statt
