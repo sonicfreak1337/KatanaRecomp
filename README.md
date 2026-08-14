@@ -27,11 +27,11 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 
 Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 105, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 45, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 48, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 95, Native-Port-Profilvertrag 18 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `35`, AOT-Partitionsschema: `7`.
-Port-Metadata-Cache-Schema: `7`.
+Portprojektvertrag 96, Native-Port-Profilvertrag 19 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `36`, AOT-Partitionsschema: `7`.
+Port-Metadata-Cache-Schema: `8`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
@@ -61,6 +61,24 @@ durch vollstaendige Hooks ersetzt, `20` durch native CPU-Control-Semantik und
 der Port jetzt fail-closed an einem noch ungebundenen Entry eines neu
 materialisierten PRS-Overlays. Opening und native Movie-Sequenz sind damit
 geschlossen; Memory-Card-Pfad und Hauptmenue bleiben KR-5005.
+
+Der aktuelle Export erweitert die generische, identitaetsgebundene PRS-
+Prefix-Entry-Table-Erkennung: genau `3..64` eindeutige direkte Main-RAM-Ziele
+mit Nullterminator, passendem Runtimeextent sowie Decode-/Early-CF-Pruefung
+werden erst nach vollstaendiger CFG- und Relocation-Closure als RuntimeOnly-
+Rootmenge zugelassen. Abgeleitete Tabellenprovenienz bleibt von privaten
+exakten Hints getrennt; nicht inventarisierte Ziele enden weiterhin typisiert
+per Stop-on-miss. Zwei zuvor inventory-truncated Kandidaten mit `9` und `3`
+Entries sind nun zugelassen, vier Stack-/Inventory-Kandidaten bleiben
+konservativ offen. `36/36` Module/Quellen ergeben `6.171` Block- und `200`
+Funktionsidentitaeten, `3.406` externe Pointer, `440` Transfers, `168`
+Partitionen und `5.773` Funktionen. Die sichtbare Hardware-Closure hat
+`1.423` bekannte Sites und `1.425` Gaps (`1.373` hook-missing, `51`
+progress-wait, `1` root-ownership); das ist erweiterte statische Sichtbarkeit,
+keine Hardware-Regression. Release-Build (`24` Jobs) und Voll-Export waren
+in `51,4 s` beziehungsweise `294,9 s` erfolgreich. Ein 100-s-Produktsmoke
+schloss Film 0 (`200/200`) vor seinem Diagnose-Watchdog ab; ein neuer Miss
+trat nicht auf, die dynamische Overlay-Bestaetigung steht noch aus.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
 installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
@@ -583,8 +601,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 105, Analyzer-ABI 45, Portprojektvertrag 95 und
-Native-Port-Profilvertrag 18. Davon getrennt verwendet `GameProject` Vertrag 8 und
+KR-5005-Stand verwendet Runtime-ABI 105, Analyzer-ABI 48, Portprojektvertrag 96 und
+Native-Port-Profilvertrag 19. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

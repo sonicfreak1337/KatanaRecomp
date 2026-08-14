@@ -14,12 +14,18 @@ sowie das Opening mit `3.257/3.257` Videoframes, `4.709.760` Audioframes und
 `3.254` nichtschwarzen Frames. Erst nach diesem Beleg ist ein echter
 Start-Controllerimpuls fuer kuerzere Diagnoselaeufe erlaubt.
 
-Der aktuelle Export umfasst `5.918` Funktionen in `167` Partitionen,
-`4.430/2.509` rohe/guarded Callback-Kandidaten und `759` offene
-Hardware-Closure-Gaps. Der naechste reproduzierbare P0 ist ein ungebundener
-statischer Entry eines nach dem Intro materialisierten PRS-Overlays. Private
-Titeladressen bleiben ausserhalb des Repositorys. Memory-Card-Screen und
-Hauptmenue sind noch nicht erreicht.
+Der aktuelle Export umfasst `5.773` Funktionen in `168` Partitionen. Seine
+identitaetsgebundene PRS-Prefix-Entry-Table-Erkennung laesst nur begrenzte,
+nullterminierte `3..64`-Entry-Tabellen nach Runtimeextent-, Decode-,
+Early-CF-, CFG- und Relocation-Proof als RuntimeOnly-Roots zu und bleibt von
+privaten exakten Hints getrennt; unbekannte Ziele enden per Stop-on-miss.
+`36/36` Module/Quellen ergeben `6.171` Blocks, `200` Funktionsidentitaeten,
+`3.406` externe Pointer und `440` Transfers. Die Hardware-Closure hat
+`1.423` bekannte Sites und `1.425` Gaps (`1.373` hook-missing, `51`
+progress-wait, `1` root-ownership); das ist erweiterte Sichtbarkeit. Der
+100-s-Produktsmoke schloss Film 0 `200/200`, dynamische Overlay-Evidenz steht
+noch aus. Private Titeladressen und Dateinamen bleiben ausserhalb des
+Repositorys.
 
 ## Verbindlicher v0.49.1-Native-Port
 

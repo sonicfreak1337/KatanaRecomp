@@ -18515,8 +18515,14 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
         external_callback_sinks) {
     LatentAotDiscoveryOptions result;
     result.mode = options.latent_aot_discovery_mode;
-    if (!options.latent_aot_entry_hints.empty() &&
-        image.guest_call_abi() == katana::io::GuestCallAbi::Unknown)
+    // RuntimeOnly may use the bounded stop-on-miss contract for every
+    // authoritative latent root set. The candidate itself still has to prove
+    // either exact external hints or a complete identity-bound embedded entry
+    // table; ordinary heuristic offset-zero candidates remain Strict. Do not
+    // condition the policy on the presence of external hints, otherwise a
+    // self-describing transformed module cannot benefit from its own stronger
+    // evidence in a project which needs no private hint list.
+    if (image.guest_call_abi() == katana::io::GuestCallAbi::Unknown)
         result.completeness_policy =
             LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
     result.analysis_implementation_identity =
@@ -18541,6 +18547,23 @@ void report_latent_aot_analysis_durations(
             "latent-aot-module-analysis-ms:" + std::to_string(index) + ':' +
                 std::to_string(
                     discovery.analysis_candidate_duration_ms[index]));
+    }
+    if (!discovery.analysis_candidate_diagnostics.empty()) {
+        std::string diagnostics{"latent-aot-candidates"};
+        for (std::size_t index = 0u;
+             index < discovery.analysis_candidate_diagnostics.size();
+             ++index) {
+            const auto& diagnostic =
+                discovery.analysis_candidate_diagnostics[index];
+            diagnostics += ':' + std::to_string(index) + '=' +
+                std::to_string(diagnostic.transformed_byte_size) + ',' +
+                std::to_string(diagnostic.source_byte_size) + ',' +
+                std::to_string(diagnostic.entry_count) + ',' +
+                (diagnostic.transformed_source ? "1" : "0") + ',' +
+                (diagnostic.admitted ? "1" : "0") + ',' +
+                diagnostic.rejection + ',' + diagnostic.rejection_detail;
+        }
+        report_progress(options, diagnostics);
     }
     report_progress(
         options,

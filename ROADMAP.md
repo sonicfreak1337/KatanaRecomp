@@ -15,12 +15,17 @@ Videoframes und `294.016` Audioframes; das Opening erreichte `3.257/3.257`
 Videoframes und `4.709.760` Audioframes. Der Sequenzabschluss kehrte mit dem
 originalen Erfolgsstatus in statisch rekompilierten Titelcode zurueck.
 
-Der Export umfasst `5.918` Funktionen in `167` Partitionen; die
-Hardware-Closure verbesserte sich von `803` auf `759` Gaps. Der naechste
-globale Bring-up-Blocker ist die statische Bindung eines nach dem Intro
-materialisierten PRS-Overlay-Entrys. Danach folgen Memory-Card-Pfad und
-Hauptmenue. Ein Start-Controllerimpuls ist erst seit diesem vollstaendigen
-No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
+Der aktuelle Export umfasst `5.773` Funktionen in `168` Partitionen. Seine
+generische, identitaetsgebundene PRS-Prefix-Entry-Table-Erkennung akzeptiert
+nur begrenzte, nullterminierte `3..64`-Entry-Tabellen nach Runtimeextent-,
+Decode-, Early-CF-, CFG- und Relocation-Proof; sie bleibt getrennt von
+privaten exakten Hints und RuntimeOnly behaelt Stop-on-miss. Die Hardware-
+Closure zeigt `1.425` Gaps (`1.373` hook-missing, `51` progress-wait, `1`
+root-ownership) bei `1.423` bekannten Sites. Das ist neu sichtbare
+Closure-Arbeit, keine Regression. Der 100-s-Produktsmoke erreichte Film 0
+`200/200`, nicht aber die dynamische Overlay-Bestaetigung. Danach folgen
+Memory-Card-Pfad und Hauptmenue; ein Start-Controllerimpuls ist erst seit dem
+vollstaendigen No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
 
 ## Produktziel
 
@@ -365,12 +370,12 @@ letzte reale Produktevidenz:
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
   Runtime-ABI 105, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 95, Native-Port-Profilvertrag 18
-  Analyzer-ABI 45
+  PVR-State-Contract 3, Portprojektvertrag 96, Native-Port-Profilvertrag 19
+  Analyzer-ABI 48
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 35, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 7
+  Native-AOT-Emissionsprofil 36, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 8
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
 installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie

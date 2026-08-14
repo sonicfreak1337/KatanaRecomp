@@ -4,6 +4,29 @@
 
 ### Geaendert
 
+- Der aktuelle Latent-AOT-Export erkennt generisch eine
+  identitaetsgebundene PRS-Praefix-Entry-Tabelle: Nur `3..64` eindeutige,
+  direkte Main-RAM-Ziele mit Nullterminator, passendem page-aligned
+  Runtimeextent, dekodierbaren Entry-Instruktionen und fruehem Kontrollfluss
+  werden als vollstaendige Rootmenge zugelassen. Die anschliessende CFG- und
+  Relocation-Closure bleibt vollstaendig; RuntimeOnly behaelt fuer jedes
+  nicht inventarisierte Ziel den typisierten Stop-on-miss. Die abgeleitete
+  Evidenz ist strikt von privaten exakten Hints getrennt. Pfadfreie
+  Kandidatendiagnostik meldet Groessen-, Entry- und terminale
+  Vollstaendigkeitsdimensionen. Zwei zuvor inventory-truncated Kandidaten
+  (`9` beziehungsweise `3` Entries) werden nun zugelassen; vier konservative
+  Stack-/Inventory-Kandidaten bleiben abgewiesen. Der Release-Build mit 24
+  Jobs lief in `51,4 s`, der Voll-Export mit Exit `0` in `294,9 s`.
+  `36/36` Module/Quellen liefern `6.171` Blockidentitaeten, `200`
+  Funktionsidentitaeten, `3.406` externe Pointerkandidaten und `440`
+  Cross-Image-Transfers in `168` Partitionen (`5.773` Funktionen). Die
+  sichtbare Hardware-Closure umfasst `1.423` bekannte Sites und `1.425`
+  Gaps (`1.373` hook-missing, `51` progress-wait, `1` root-ownership); der
+  Anstieg beschreibt groessere statische Sichtbarkeit, keine Regression.
+  Runtime-ABI `105`, Analyzer-ABI `48`, Portprojektvertrag `96`, Native-Port-
+  Profilvertrag `19`, Native-AOT-Emissionsprofil `36` und
+  Port-Metadata-Cache-Schema `8` versionieren den Stand.
+
 - Der v111/v30-Produktlauf schliesst die native MOVIE.BIN-Sequenz als
   identitaetsgebundenen Multi-Clip-Vertrag. Ohne Controllerinput oder Skip
   liefen Sonic Team (`200/200` Video, `294.016` Audioframes, `200`

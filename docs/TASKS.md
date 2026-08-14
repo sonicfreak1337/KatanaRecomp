@@ -320,6 +320,20 @@ ohne Truncation. Gegenueber v29: `+815` Funktionen, `+18` Partitionen und
 `803 -> 759` Hardware-Closure-Gaps. Vollstaendige Hooks ersetzen `865`
 Sites; `20` CPU-Control-Sites und `53` Progress-Waits sind nativ gebunden.
 
+Aktueller AOT-P0: Die generische, identitaetsgebundene PRS-Prefix-Entry-Table-
+Erkennung nimmt nur `3..64` eindeutige direkte Main-RAM-Entries mit
+Nullterminator, Runtimeextent-, Decode-, Early-CF-, CFG- und Relocation-Proof
+als RuntimeOnly-Rootmenge an. Sie bleibt von privaten exakten Hints getrennt;
+unbekannte Ziele enden typisiert per Stop-on-miss. Zwei Kandidaten (`9`/`3`
+Entries) sind zugelassen, vier Stack-/Inventory-Kandidaten bleiben offen.
+Der Voll-Export (`294,9 s`) ergibt `36/36` Module/Quellen, `6.171` Blocks,
+`200` Funktionsidentitaeten, `3.406` externe Pointer, `440` Transfers,
+`168` Partitionen und `5.773` Funktionen. Die `1.425` Gaps bei `1.423`
+bekannten Sites (`1.373` hook-missing, `51` progress-wait, `1` root-ownership)
+sind erweiterte Closure-Sichtbarkeit. Release-Build mit `24` Jobs: `51,4 s`.
+Der 100-s-Produktsmoke schloss Film 0 `200/200`; dynamische Overlay-Evidenz
+steht noch aus.
+
 Aktueller KR-5005-Zwischenstand: Der warme v72-Export erzeugte `5.103`
 Funktionen in `149` Partitionen und `203` Host-TUs in `24,356 s`. Analyse, IR
 und Metadaten waren Cachetreffer, Codegen erreichte `149/149` Treffer und der
@@ -431,13 +445,13 @@ letzte reale Produktevidenz:
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
   Runtime-ABI 105, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 95, Native-Port-Profilvertrag 18
-  Analyzer-ABI 45, Function-Analysis-Epoch-Schema 28,
+  PVR-State-Contract 3, Portprojektvertrag 96, Native-Port-Profilvertrag 19
+  Analyzer-ABI 48, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
   Analysis Directives 4, Hookkarte v5, Hardware-Closure v6,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 35, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 7
+  Native-AOT-Emissionsprofil 36, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 8
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

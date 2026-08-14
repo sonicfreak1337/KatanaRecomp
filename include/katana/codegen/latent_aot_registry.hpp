@@ -57,9 +57,11 @@ enum class LatentAotDiscoveryMode : std::uint8_t {
 enum class LatentAotCompletenessPolicy : std::uint8_t {
     // Publication requires the complete guarded inventory contract.
     Strict,
-    // Exact, byte-identity-bound entries may retain only candidate-domain or
-    // ABI-stack-base inventory loss. Their emitted CFG remains complete and
-    // RuntimeOnly dispatch still stops on every omitted target.
+    // Authoritative, byte-identity-bound entries may retain only
+    // candidate-domain or ABI-stack-base inventory loss. They come either
+    // from exact external hints or from a fully bounded entry table embedded
+    // in the transformed module itself. Their emitted CFG remains complete
+    // and RuntimeOnly dispatch still stops on every omitted target.
     ExactRuntimeOnlyStopOnMiss,
 };
 
@@ -210,9 +212,11 @@ struct PreparedLatentAotModule {
     std::uint32_t source_address = 0u;
     std::vector<PreparedLatentAotSourceBinding> source_bindings;
     // Contains offset zero for a heuristic candidate, or exactly the accepted
-    // hash-bound explicit offsets for an exact candidate. The exporter must
-    // require a native source block for every listed offset before publishing
-    // a loaded-module template.
+    // hash-bound offsets for an authoritative candidate. Authoritative roots
+    // are either explicit external hints or a complete bounded entry table
+    // derived from the transformed module bytes. The exporter must require a
+    // native source block for every listed offset before publishing a
+    // loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
     // Sorted, unique P1-normalized values from aligned pointer-width cells in
     // the exact module bytes which point outside the module's synthetic AOT
@@ -237,11 +241,30 @@ struct PreparedLatentAotModule {
 };
 
 struct LatentAotDiscovery {
+    struct CandidateDiagnostic {
+        std::uint32_t transformed_byte_size = 0u;
+        std::uint32_t source_byte_size = 0u;
+        std::uint32_t entry_count = 0u;
+        bool transformed_source = false;
+        bool admitted = false;
+        std::string rejection;
+        // Path- and identity-free terminal completeness dimensions. This is
+        // intentionally a bounded aggregate so one private product export can
+        // distinguish a real budget loss from a conservative value/stack
+        // projection without exposing source names, hashes, addresses or
+        // bytes.
+        std::string rejection_detail;
+    };
+
     std::vector<PreparedLatentAotModule> modules;
     // One wall-clock sample per unique analyzed candidate, in deterministic
     // candidate order. Workers only write their own slot; reporting happens
     // after the parallel region so telemetry never races on stdout.
     std::vector<std::uint64_t> analysis_candidate_duration_ms;
+    // Bounded, path-free candidate outcomes. Sizes and entry counts let a
+    // private product run identify a rejected transform class without
+    // exporting source names, content hashes, or bytes.
+    std::vector<CandidateDiagnostic> analysis_candidate_diagnostics;
     std::size_t examined_files = 0u;
     std::size_t rejected_files = 0u;
     std::size_t duplicate_files = 0u;

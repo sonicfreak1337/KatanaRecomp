@@ -61,6 +61,22 @@ Funktionen und `+18` Partitionen. Die Closure steht bei `759` Gaps statt
 Semantik und `53` als Progress-Waits gebunden. Analysebudgets und Inventare
 blieben vollstaendig.
 
+Der aktuelle PRS-Entry-Table-Zwischenstand erkennt ausschliesslich
+identitaetsgebundene, nullterminierte Prefix-Tabellen mit `3..64` eindeutigen
+direkten Main-RAM-Entries und validiert Runtimeextent, Decode, fruehen
+Kontrollfluss, vollstaendige CFG und Relocation vor der RuntimeOnly-Zulassung.
+Die abgeleitete Evidenz ist von privaten exakten Hints getrennt; Stop-on-miss
+bleibt verpflichtend. Zwei Kandidaten (`9`/`3` Entries) wechselten von
+inventory-truncated zu zugelassen, vier Stack-/Inventory-Kandidaten bleiben
+offen. Der gruen beendete Voll-Export (`294,9 s`) ergibt `36/36`
+Module/Quellen, `6.171` Blockidentitaeten, `200` Funktionsidentitaeten,
+`3.406` externe Pointer, `440` Transfers, `168` Partitionen und `5.773`
+Funktionen. `1.423` bekannte Hardware-Sites und `1.425` Gaps (`1.373`
+hook-missing, `51` progress-wait, `1` root-ownership) sind erweiterte
+Closure-Sichtbarkeit, keine Regression. Der Release-Build mit `24` Jobs
+endete in `51,4 s`; der 100-s-Produktsmoke erreichte Film 0 `200/200`, aber
+noch keine dynamische Overlay-Bestaetigung.
+
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
 Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
@@ -234,11 +250,11 @@ Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `104`,
-PlatformServices-ABI `14`, Analyzer-ABI `43`, Function-Analysis-Epoch-Schema
+Aktuell gelten Runtime-ABI `105`,
+PlatformServices-ABI `14`, Analyzer-ABI `48`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`23`, PVR-State-Contract `3`, Portprojektvertrag `93` und Native-Port-
-Profilvertrag `16`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
+`23`, PVR-State-Contract `3`, Portprojektvertrag `96` und Native-Port-
+Profilvertrag `19`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
@@ -247,8 +263,8 @@ Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
 Backend-Interface-ABI `23` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`,
-Port-Metadata-Cache-Schema: `5`,
+Aktuelles Native-AOT-Emissionsprofil: `36`, AOT-Partitionsschema: `7`,
+Port-Metadata-Cache-Schema: `8`,
 NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `4`, Hookkarte `v4`,
 Hardware-Closure `v5` und GameProject-Metadaten `katana-game-project-v5`.
 

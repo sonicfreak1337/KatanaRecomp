@@ -1,11 +1,11 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `44`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 104, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 23, Portprojektvertrag 94 und Native-Port-
-Profilvertrag 17. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
-Directives-Version 4, Native-AOT-Emissionsprofil 34 und Port-Metadata-Cache-
-Schema 6 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
+Der aktuelle oeffentliche Analyzervertrag ist Version `48`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 105, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 23, Portprojektvertrag 96 und Native-Port-
+Profilvertrag 19. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
+Directives-Version 4, Native-AOT-Emissionsprofil 36 und Port-Metadata-Cache-
+Schema 8 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
@@ -71,6 +71,15 @@ alle Ergebnisse bleiben guarded und erweitern weder unbewiesen CFG noch
 Laufzeitziele. Die zugehoerigen Hook-Proofs protokollieren die eingehenden
 Instruktionsquellen, und externe Fortschritts-Waits werden als
 identitaetsgebundene Provideranforderung ausgegeben.
+
+Analyzer-ABI 48 bindet die getrennte Provenienz einer vollstaendig
+begrenzten, transformgebundenen PRS-Prefix-Entry-Tabelle. Nur `3..64`
+eindeutige direkte Main-RAM-Ziele mit Nullterminator, passendem Runtimeextent
+sowie Decode-/Early-CF-Pruefung koennen nach vollstaendiger CFG- und
+Relocation-Closure RuntimeOnly-Roots bilden. Externe exakte Hints bleiben
+eigenstaendig; nicht inventarisierte Ziele bleiben typisierte Stop-on-miss-
+Faelle. Die pfadfreie Kandidatendiagnostik exponiert nur Groessen-, Entry- und
+terminale Vollstaendigkeitsdimensionen, nicht Quellnamen, Adressen oder Bytes.
 
 Im historischen ABI-41-Stand wurde die davon getrennte oeffentliche
 Codegen-Grenze `PortExportOptions::native_port_definition` durch

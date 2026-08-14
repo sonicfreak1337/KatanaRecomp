@@ -47,6 +47,8 @@ constexpr std::uint32_t latent_aot_runtime_page_size = 4096u;
 constexpr std::uint32_t latent_aot_main_ram_begin = 0x8C000000u;
 constexpr std::uint32_t latent_aot_main_ram_end = 0x8D000000u;
 constexpr std::size_t minimum_latent_aot_runtime_cluster_targets = 16u;
+constexpr std::size_t minimum_latent_aot_prefix_entry_table_targets = 3u;
+constexpr std::size_t maximum_latent_aot_prefix_entry_table_targets = 64u;
 constexpr std::size_t maximum_latent_aot_file_references = 4096u;
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
@@ -106,7 +108,21 @@ struct DiscFileCandidate {
     std::vector<PreparedLatentAotSourceBinding> source_bindings;
     std::vector<std::uint32_t> entry_offsets;
     std::vector<std::uint32_t> explicit_entry_offsets;
+    // A transformed module may carry its own null-terminated, direct-mapped
+    // entry table at offset zero.  Once the complete bounded table shape,
+    // module extent and every target have been validated against the exact
+    // transformed byte identity, those offsets are authoritative in the same
+    // stop-on-miss sense as external exact hints.  Keep the provenance
+    // distinct: a derived table must never become a user-supplied hint or make
+    // a rejected heuristic candidate fatal.
+    bool inferred_authoritative_entry_table = false;
 };
+
+bool candidate_has_authoritative_entries(
+    const DiscFileCandidate& candidate) noexcept {
+    return !candidate.explicit_entry_offsets.empty() ||
+           candidate.inferred_authoritative_entry_table;
+}
 
 bool valid_sha256_identity(const std::string_view identity) noexcept {
     constexpr std::string_view prefix{"sha256:"};
@@ -296,11 +312,29 @@ bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept 
                            candidate.explicit_entry_offsets.end()) !=
             candidate.explicit_entry_offsets.end())
         return false;
+    if (candidate.inferred_authoritative_entry_table &&
+        (!candidate.explicit_entry_offsets.empty() ||
+         !candidate_has_transformed_source(candidate)))
+        return false;
     if (candidate.explicit_entry_offsets.empty()) {
-        if (candidate.entry_offsets.size() != 1u ||
-            candidate.entry_offsets.front() != 0u)
+        const bool conventional_heuristic_entry =
+            candidate.entry_offsets.size() == 1u &&
+            candidate.entry_offsets.front() == 0u;
+        const bool transformed_prefix_entry_table =
+            candidate_has_transformed_source(candidate) &&
+            candidate.entry_offsets.size() >=
+                minimum_latent_aot_prefix_entry_table_targets &&
+            candidate.entry_offsets.size() <=
+                maximum_latent_aot_prefix_entry_table_targets;
+        if (!conventional_heuristic_entry &&
+            !transformed_prefix_entry_table)
+            return false;
+        if (candidate.inferred_authoritative_entry_table !=
+            transformed_prefix_entry_table)
             return false;
     } else if (candidate.entry_offsets != candidate.explicit_entry_offsets) {
+        return false;
+    } else if (candidate.inferred_authoritative_entry_table) {
         return false;
     }
     const auto valid_offset = [&candidate](const std::uint32_t offset) {
@@ -386,6 +420,52 @@ bool complete_native_graph(
             return status == katana::analysis::ControlFlowReportStatus::GuardedPartial ||
                    status == katana::analysis::ControlFlowReportStatus::Unresolved;
         });
+}
+
+std::string guarded_aot_inventory_loss_summary(
+    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    std::string result;
+    const auto append = [&](const std::string_view name,
+                            const bool lost) {
+        if (!lost) return;
+        if (!result.empty()) result += '+';
+        result += name;
+    };
+    const auto& walk = analysis.guarded_code_inventory_walk;
+    append("function-budget", analysis.function_budget_exhausted);
+    append("analysis-termination",
+           analysis.termination_reason !=
+               katana::analysis::ControlFlowAnalysisTerminationReason::None);
+    append("raw-stored", analysis.raw_stored_code_inventory_truncated);
+    append("candidate-budget",
+           analysis.guarded_code_inventory_candidate_budget_exhausted);
+    append("pending-regions", walk.pending_inventory_region_count != 0u);
+    append("region-blocks",
+           walk.inventory_region_block_limited_regions != 0u);
+    append("forwarded-contexts",
+           walk.forwarded_store_context_limited_functions != 0u);
+    append("contextual-contexts",
+           walk.contextual_return_context_limited_functions != 0u);
+    append("contextual-evaluations",
+           walk.contextual_return_evaluation_limited_functions != 0u);
+    append("provenance-capsules",
+           walk.contextual_provenance_replay_capsule_limited_functions != 0u);
+    append("provenance-key-bytes",
+           walk.contextual_provenance_replay_key_byte_limited_functions != 0u);
+    append("abi-stack-projection",
+           walk.abi_stack_argument_projection_truncated_functions != 0u);
+    append("local-fixpoint", walk.local_fixpoint_limited_evaluations != 0u);
+    append("root-logical-budget",
+           walk.resolution_root_logical_budget_exhausted);
+    append("candidate-values", walk.inventory_candidate_values_truncated);
+    append("abi-stack-base", walk.abi_stack_base_unresolved);
+    append("tail-target", walk.inventory_tail_target_unresolved);
+    append("candidate-inventory", analysis.candidate_inventory_truncated);
+    append("returned-table", analysis.returned_table_scan_truncated);
+    append("shape-budget",
+           analysis.guarded_code_shape_budget_exceeded_candidates != 0u);
+    append("entry-rejections", !analysis.guarded_aot_entry_rejections.empty());
+    return result.empty() ? "none" : result;
 }
 
 bool contains_extent(const std::uint32_t start,
@@ -501,6 +581,77 @@ std::optional<std::uint32_t> latent_direct_code_address(
     if (segment == 0u && value >= 0x08000000u && value < 0x10000000u)
         return value | 0x80000000u;
     return std::nullopt;
+}
+
+bool valid_latent_runtime_base(std::uint32_t base,
+                               std::uint32_t byte_size) noexcept;
+
+std::vector<std::uint32_t> latent_prefix_entry_table_offsets(
+    const std::span<const std::uint8_t> bytes) {
+    constexpr auto cell_size = sizeof(std::uint32_t);
+    if (bytes.size() <
+        (minimum_latent_aot_prefix_entry_table_targets + 1u) * cell_size)
+        return {};
+
+    std::vector<std::uint32_t> targets;
+    targets.reserve(maximum_latent_aot_prefix_entry_table_targets);
+    bool terminated = false;
+    for (std::size_t cell = 0u;
+         cell < maximum_latent_aot_prefix_entry_table_targets &&
+         (cell + 1u) * cell_size <= bytes.size();
+         ++cell) {
+        const auto offset = cell * cell_size;
+        const auto raw = static_cast<std::uint32_t>(bytes[offset]) |
+                         (static_cast<std::uint32_t>(bytes[offset + 1u]) << 8u) |
+                         (static_cast<std::uint32_t>(bytes[offset + 2u]) << 16u) |
+                         (static_cast<std::uint32_t>(bytes[offset + 3u]) << 24u);
+        if (raw == 0u) {
+            terminated = true;
+            break;
+        }
+        const auto normalized = latent_direct_code_address(raw);
+        if (!normalized.has_value() ||
+            *normalized < latent_aot_main_ram_begin ||
+            *normalized >= latent_aot_main_ram_end)
+            return {};
+        targets.push_back(*normalized);
+    }
+    if (!terminated ||
+        targets.size() < minimum_latent_aot_prefix_entry_table_targets)
+        return {};
+
+    std::set<std::uint32_t> unique_targets(targets.begin(), targets.end());
+    if (unique_targets.size() != targets.size()) return {};
+
+    // This header class is self-basing: the transformed module begins with a
+    // null-terminated table and its first executable entry lies in the first
+    // page of the page-aligned runtime image.  Derive no address from a file
+    // name or mutable runtime observation.  The subsequent complete CFA and
+    // relocation-closure gates still have to prove every recovered entry.
+    const auto first_target = *unique_targets.begin();
+    const auto runtime_base =
+        first_target & ~(latent_aot_runtime_page_size - 1u);
+    if (!valid_latent_runtime_base(
+            runtime_base, static_cast<std::uint32_t>(bytes.size())))
+        return {};
+
+    const auto table_bytes =
+        static_cast<std::uint32_t>((targets.size() + 1u) * cell_size);
+    std::vector<std::uint32_t> entry_offsets;
+    entry_offsets.reserve(targets.size());
+    for (const auto target : targets) {
+        if (target < runtime_base) return {};
+        const auto offset = target - runtime_base;
+        if ((offset & 1u) != 0u || offset < table_bytes ||
+            static_cast<std::uint64_t>(offset) + 2u > bytes.size())
+            return {};
+        entry_offsets.push_back(offset);
+    }
+    std::sort(entry_offsets.begin(), entry_offsets.end());
+    if (std::adjacent_find(entry_offsets.begin(), entry_offsets.end()) !=
+        entry_offsets.end())
+        return {};
+    return entry_offsets;
 }
 
 std::optional<std::uint32_t> latent_read_u32(
@@ -1033,6 +1184,7 @@ struct CandidateAnalysisOutcome {
     LatentAotAnalysisRejection rejection =
         LatentAotAnalysisRejection::ProgramInvalid;
     bool deterministic = true;
+    std::string rejection_detail{"none"};
 };
 
 struct CandidateAnalysisCacheCounters {
@@ -1046,8 +1198,10 @@ struct CandidateAnalysisCacheCounters {
 
 CandidateAnalysisOutcome reject_candidate(
     const LatentAotAnalysisRejection rejection,
-    const bool deterministic = true) {
-    return {std::nullopt, rejection, deterministic};
+    const bool deterministic = true,
+    std::string rejection_detail = "none") {
+    return {std::nullopt, rejection, deterministic,
+            std::move(rejection_detail)};
 }
 
 std::string_view latent_aot_rejection_name(
@@ -1089,6 +1243,8 @@ candidate_source_shape_rejection(
     const LatentAotDiscoveryOptions& options) {
     const bool exact_entry_binding =
         !candidate.explicit_entry_offsets.empty();
+    const bool inferred_prefix_entry_table =
+        candidate.inferred_authoritative_entry_table;
     const bool transformed_source =
         candidate_has_transformed_source(candidate);
     if (candidate.size != candidate.bytes.size() ||
@@ -1115,40 +1271,53 @@ candidate_source_shape_rejection(
                         candidate.bytes[offset + 1u])
                     << 8u));
         };
-    if (exact_entry_binding) {
+    if (exact_entry_binding || inferred_prefix_entry_table) {
         if (std::any_of(
-                candidate.explicit_entry_offsets.begin(),
-                candidate.explicit_entry_offsets.end(),
+                candidate.entry_offsets.begin(),
+                candidate.entry_offsets.end(),
                 [&](const auto offset) {
                     return !katana::sh4::decode(
                                 opcode_at(offset))
                                 .is_known();
                 }))
             return LatentAotAnalysisRejection::EntryDecodeFailed;
-        return std::nullopt;
+        if (exact_entry_binding) return std::nullopt;
     }
-    if (!katana::sh4::decode(opcode_at(0u)).is_known())
+    const auto scan_entries = inferred_prefix_entry_table
+                                  ? std::span<const std::uint32_t>{
+                                        candidate.entry_offsets}
+                                  : std::span<const std::uint32_t>{};
+    if (!inferred_prefix_entry_table &&
+        !katana::sh4::decode(opcode_at(0u)).is_known())
         return LatentAotAnalysisRejection::EntryDecodeFailed;
-    bool early_control_flow = false;
-    const auto entry_scan = std::min(
-        options.maximum_entry_scan_instructions,
-        candidate.bytes.size() / 2u);
-    for (std::size_t instruction = 0u;
-         instruction < entry_scan;
-         ++instruction) {
-        const auto offset =
-            static_cast<std::uint32_t>(instruction * 2u);
-        const auto decoded =
-            katana::sh4::decode(opcode_at(offset));
-        if (!decoded.is_known())
-            break;
-        if (decoded.changes_control_flow()) {
-            early_control_flow = true;
-            break;
-        }
+    const auto entry_has_early_control_flow =
+        [&](const std::uint32_t entry_offset) {
+            const auto available_instructions =
+                (candidate.bytes.size() - entry_offset) / 2u;
+            const auto entry_scan = std::min(
+                options.maximum_entry_scan_instructions,
+                available_instructions);
+            for (std::size_t instruction = 0u;
+                 instruction < entry_scan;
+                 ++instruction) {
+                const auto offset = entry_offset +
+                    static_cast<std::uint32_t>(instruction * 2u);
+                const auto decoded =
+                    katana::sh4::decode(opcode_at(offset));
+                if (!decoded.is_known()) return false;
+                if (decoded.changes_control_flow()) return true;
+            }
+            return false;
+        };
+    if (inferred_prefix_entry_table) {
+        if (std::any_of(scan_entries.begin(), scan_entries.end(),
+                        [&](const auto offset) {
+                            return !entry_has_early_control_flow(offset);
+                        }))
+            return LatentAotAnalysisRejection::EntryDecodeFailed;
+    } else if (!entry_has_early_control_flow(0u)) {
+        return LatentAotAnalysisRejection::EntryDecodeFailed;
     }
-    if (!early_control_flow)
-        return LatentAotAnalysisRejection::EntryDecodeFailed;
     return std::nullopt;
 }
 
@@ -1863,15 +2032,16 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         return reject_candidate(*rejection);
 
     const bool exact_runtime_only_stop_on_miss =
-        !candidate.explicit_entry_offsets.empty() &&
+        candidate_has_authoritative_entries(candidate) &&
         options.completeness_policy ==
             LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
     katana::io::ExecutableImage image;
-    // A hash-bound explicit entry table is already the authoritative
-    // RuntimeOnly call-target contract. Analyze its static graph without the
-    // SuperHC value/candidate fixpoint; every omitted dynamic destination
-    // remains a typed runtime miss. Strict/heuristic discovery keeps the full
-    // ABI analysis unchanged.
+    // A hash-bound authoritative entry set is already the RuntimeOnly root
+    // contract. It is either externally supplied exactly or derived from a
+    // complete bounded table in the transformed bytes. Analyze its static
+    // graph without the SuperHC value/candidate fixpoint; every omitted
+    // dynamic destination remains a typed runtime miss. Strict/ordinary
+    // heuristic discovery keeps the full ABI analysis unchanged.
     image.set_guest_call_abi(
         exact_runtime_only_stop_on_miss
             ? katana::io::GuestCallAbi::Unknown
@@ -2050,7 +2220,9 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
                 ? LatentAotAnalysisRejection::
                       ControlFlowIncomplete
                 : LatentAotAnalysisRejection::
-                      InventoryTruncated);
+                      InventoryTruncated,
+            true,
+            guarded_aot_inventory_loss_summary(analysis));
 
     auto hardware_audit =
         katana::analysis::audit_dreamcast_hardware(image, analysis);
@@ -2108,7 +2280,7 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
     inputs.byte_size = candidate.size;
     inputs.entry_offsets = candidate.entry_offsets;
     inputs.exact_candidate =
-        !candidate.explicit_entry_offsets.empty();
+        candidate_has_authoritative_entries(candidate);
     inputs.source_address = candidate.source_address;
     inputs.maximum_entry_scan_instructions =
         options.maximum_entry_scan_instructions;
@@ -2161,7 +2333,7 @@ std::string candidate_epoch_cache_key(
     append_value(candidate.size);
     append_value(candidate.source_address);
     append_value(latent_aot_analysis_address_layout_schema);
-    append_value(!candidate.explicit_entry_offsets.empty());
+    append_value(candidate_has_authoritative_entries(candidate));
     auto entry_offsets = candidate.entry_offsets;
     std::sort(entry_offsets.begin(), entry_offsets.end());
     entry_offsets.erase(
@@ -2731,7 +2903,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                      byte_identity,
                      {std::move(source_binding)},
                      entry_offsets,
-                     explicit_entry_offsets},
+                     explicit_entry_offsets,
+                     false},
                     true))
                 break;
             candidate_by_byte_identity_and_size.emplace(
@@ -2843,7 +3016,12 @@ LatentAotDiscovery discover_latent_aot_modules(
             auto source_binding = make_source_binding(
                 transform, source_byte_identity, disc_byte_offset,
                 entry.size);
-            const std::vector<std::uint32_t> entry_offsets{0u};
+            auto entry_offsets = sega_prs
+                                     ? latent_prefix_entry_table_offsets(bytes)
+                                     : std::vector<std::uint32_t>{};
+            const bool inferred_authoritative_entry_table =
+                !entry_offsets.empty();
+            if (entry_offsets.empty()) entry_offsets.push_back(0u);
             DiscFileCandidate candidate{
                 candidate_size,
                 0u,
@@ -2851,7 +3029,8 @@ LatentAotDiscovery discover_latent_aot_modules(
                 byte_identity,
                 {std::move(source_binding)},
                 entry_offsets,
-                {}};
+                {},
+                inferred_authoritative_entry_table};
             if (candidate_source_shape_rejection(candidate, options)) {
                 ++result.rejected_files;
                 continue;
@@ -3044,6 +3223,23 @@ LatentAotDiscovery discover_latent_aot_modules(
     candidate_progress.complete();
     result.analysis_candidate_duration_ms =
         std::move(analysis_candidate_duration_ms);
+    result.analysis_candidate_diagnostics.reserve(candidates.size());
+    for (std::size_t index = 0u; index < candidates.size(); ++index) {
+        const auto& candidate = candidates[index];
+        const auto source_byte_size =
+            candidate.source_bindings.empty()
+                ? 0u
+                : candidate.source_bindings.front().byte_size;
+        result.analysis_candidate_diagnostics.push_back(
+            {candidate.size,
+             source_byte_size,
+             static_cast<std::uint32_t>(candidate.entry_offsets.size()),
+             candidate_has_transformed_source(candidate),
+             analyzed[index].module.has_value(),
+             std::string(latent_aot_rejection_name(
+                 analyzed[index].rejection)),
+             analyzed[index].rejection_detail});
+    }
     result.analysis_cache_positive_hits =
         cache_counters.positive_hits.load(
             std::memory_order_relaxed);

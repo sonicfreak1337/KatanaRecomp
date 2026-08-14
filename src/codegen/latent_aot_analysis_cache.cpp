@@ -874,9 +874,14 @@ std::vector<katana::ir::Function> parse_ir_program_cache_payload(
 
 std::string make_latent_aot_analysis_cache_key(
     const LatentAotAnalysisCacheKeyInputs& inputs) {
+    // An authoritative transformed module can have an odd total byte extent
+    // because code and embedded data share one exact identity. Entry offsets
+    // remain instruction-aligned and the discovery shape gate separately
+    // rejects an odd ordinary/raw candidate. The cache key must therefore not
+    // impose a stronger whole-file alignment than the analyzed contract.
     const auto valid_candidate_size =
         inputs.exact_candidate
-            ? inputs.byte_size >= 2u && (inputs.byte_size & 1u) == 0u
+            ? inputs.byte_size >= 2u
             : inputs.byte_size >= 4u && (inputs.byte_size & 3u) == 0u;
     if (!lowercase_sha256(inputs.byte_sha256) || !valid_candidate_size ||
         static_cast<std::uint64_t>(inputs.source_address) +
