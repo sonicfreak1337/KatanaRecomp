@@ -30356,6 +30356,18 @@ bypass_all_persistent_analysis_state_once(
 }
 
 void detail::FunctionValueAnalysisSession::
+ensure_all_persistent_analysis_state_bypassed_once(
+    const PersistentAnalysisBypassReason reason) {
+    if (reason == PersistentAnalysisBypassReason::None)
+        throw std::invalid_argument(
+            "Persistenter Analyse-Bypass benoetigt einen Grund.");
+    const std::lock_guard lock(impl_->analysis_mutex);
+    if (impl_->pending_persistent_analysis_bypass_reason ==
+        PersistentAnalysisBypassReason::None)
+        impl_->pending_persistent_analysis_bypass_reason = reason;
+}
+
+void detail::FunctionValueAnalysisSession::
 force_full_cpu_recompute_once() {
     bypass_all_persistent_analysis_state_once(
         PersistentAnalysisBypassReason::ExplicitTest);

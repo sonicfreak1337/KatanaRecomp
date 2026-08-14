@@ -7,7 +7,7 @@
 
 namespace katana::analysis {
 
-inline constexpr std::uint32_t analysis_directives_current_version = 4u;
+inline constexpr std::uint32_t analysis_directives_current_version = 5u;
 
 enum class AnalysisDirectiveMode : std::uint8_t { Override, Hint };
 

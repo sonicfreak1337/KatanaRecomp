@@ -25,30 +25,57 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 107, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 108, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 48, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 49, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 97, Native-Port-Profilvertrag 20 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `36`, AOT-Partitionsschema: `7`.
-Port-Metadata-Cache-Schema: `8`.
+Portprojektvertrag 99, Native-Port-Profilvertrag 22 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `37`, AOT-Partitionsschema: `7`.
+Port-Metadata-Cache-Schema: `9`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
-Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v6`, die
+Analyse-Direktiven stehen auf `5`, das Hardware-Closure-Schema auf `v6`, die
 Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
 Der Windows-Native-Port bindet XInput sowie die explizit identifizierten
-WinMM-Layouts von DualSense und DualShock an Plattformvertrag `3`. Unbekannte
+WinMM-Layouts von DualSense und DualShock an Plattformvertrag `4`. Die Sony-
+Identitaet stammt aus dem nativen DirectInput-VID/PID- und
+Geraeteinstanzvertrag, nicht aus WinMM-Multimedia-IDs. Unbekannte
 HID-Buttonordnungen werden nicht als semantische Controllerbelegung geraten.
-Ein Sony-HID und sein XInput-Kompatibilitaetsendpoint werden nach eindeutiger
-aktiver Korrelation zu genau einem Titelcontroller zusammengefuehrt; ein bis
+Ein Sony-HID und sein XInput-Kompatibilitaetsendpoint werden nach drei
+aufeinanderfolgenden eindeutigen aktiven Korrelationen zu genau einem
+Titelcontroller zusammengefuehrt; ein bis
 dahin mehrdeutiger XInput-Endpunkt belegt keinen zweiten Slot. Die native
 Sony-Eingabe bleibt sichtbar, Vibration laeuft ausschliesslich ueber den
-wirklich gebundenen XInput-Endpunkt. Backendbereitschaft und Hotplug bleiben
+wirklich gebundenen XInput-Endpunkt und wird dort beim Shutdown gestoppt.
+Backendbereitschaft und Hotplug bleiben
 fail-closed. Der Runtime-/CLI-Build ist sauber; der physische DualSense-
 Menutest steht aus, bis ein Nutzer am System ist.
+
+Die native Soundbank-Grenze steht auf Vertrag `4` und bildet Manatee-
+Spielabsicht direkt auf Host-PCM ab. MLT/SMPB/SMSB/SFPB/SFOB/SFPW,
+PCM16/PCM8/AICA-ADPCM, Programme, Layer/Splits, Sequenzen, Loops,
+Controller, Pitch/Pan/Sends, Huelle, Filter/LFO und die im Korpus belegte
+QSound/Reverb-Konfiguration sind bounded implementiert; AICA-Register,
+Sound-RAM, ARM7, Kommandoringe und G2-DMA sind kein Teil dieses Produktpfads.
+Der echte Parser/Predecoder validierte alle `122` Sonic-Collections
+(`52.253.920` Bytes), `7.139` Splits, `5.596` Sequenzen, `40.294` Events und
+`4.698` eindeutige Samples: `115` PCM16, `246` PCM8 und `4.337` ADPCM mit
+zusammen `94.889.624` Frames. Der Titeladapter stellt 32 One-shot- und sechs
+Sequenzports bereit, behaelt Controls vor dem ersten Bind und behandelt Stop
+beziehungsweise Note-off auf gueltigen ungebundenen Ports idempotent.
+Eine identitaetsgebundene Titelcollection wird im nativen Ablauf geladen.
+
+Der aktuelle v114-Export umfasst `5.778` Funktionen in `167` Partitionen.
+Die Hardwareclosure enthaelt `1.423` bekannte Sites und `1.423` offene
+Anforderungen (`1.371` hook-missing, `51` Progress-Waits, `1`
+Root-Ownership); `1.110` Sites werden durch vollstaendige Hooks ersetzt und
+`20` durch native CPU-Control-Semantik. Der warme Export dauerte `26,378 s`
+mit `167/167` Codegen- und `228/229` Host-TU-Cachetreffern. Der Produktlauf
+passiert Sound-Port-Lifecycle und MLT-Aufloesung; sein naechster typisierter
+Endpunkt ist ein residenter statischer Entry.
 
 Der aktuelle v111/v30-Produktbeleg bindet die statisch hergeleitete
 MOVIE.BIN-Sequenz als nativen, identitaetsgebundenen Multi-Clip-Vertrag. Ein
@@ -612,8 +639,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 107, Analyzer-ABI 48, Portprojektvertrag 97 und
-Native-Port-Profilvertrag 20. Davon getrennt verwendet `GameProject` Vertrag 8 und
+KR-5005-Stand verwendet Runtime-ABI 108, Analyzer-ABI 49, Portprojektvertrag 99 und
+Native-Port-Profilvertrag 22. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

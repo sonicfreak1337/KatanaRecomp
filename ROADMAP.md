@@ -9,13 +9,26 @@ Erster oeffentlicher Release: `v0.50.0` Alpha
 
 ## Aktueller Produktmeilenstein
 
+Die native Audiogrundlage ist fuer den belegten Titelvertrag geschlossen.
+Der echte Produktruntime-Parser und Predecoder akzeptieren alle `122`
+identitaetsgebundenen MLT-Collections (`52.253.920` Bytes), `5.695` nutzbare
+Programme, `7.139` Splits, `5.596` Sequenzen, `40.294` Events und dekodieren
+`4.698` eindeutige Samples (`115` PCM16, `246` PCM8, `4.337` ADPCM,
+`94.889.624` Frames). 32 One-shot- und sechs Sequenzports bewahren Controls
+vor dem ersten Bind; gueltige ungebundene Stop-/Note-off-Aufrufe sind
+idempotent. Der native Ablauf laedt eine identitaetsgebundene Collection
+erfolgreich und endet erst danach an einem statischen AOT-Entry. Kein
+AICA-/ARM7-/Geraetefallback ist beteiligt.
+
 Der v111/v30-Lauf schliesst die echte zweiteilige Introsequenz im nativen
 Spielablauf ohne Controllerinput oder Skip. Sonic Team erreichte `200/200`
 Videoframes und `294.016` Audioframes; das Opening erreichte `3.257/3.257`
 Videoframes und `4.709.760` Audioframes. Der Sequenzabschluss kehrte mit dem
 originalen Erfolgsstatus in statisch rekompilierten Titelcode zurueck.
 
-Der aktuelle Export umfasst `5.773` Funktionen in `168` Partitionen. Seine
+Der aktuelle v114-Export umfasst `5.778` Funktionen in `167` Partitionen und
+war mit `167/167` Codegen- sowie `228/229` Host-TU-Cachetreffern in
+`26,378 s` fertig. Seine
 generische, identitaetsgebundene PRS-Prefix-Entry-Table-Erkennung akzeptiert
 nur begrenzte, nullterminierte `3..64`-Entry-Tabellen nach Runtimeextent-,
 Decode-, Early-CF-, CFG- und Relocation-Proof; sie bleibt getrennt von
@@ -23,20 +36,24 @@ privaten exakten Hints und RuntimeOnly behaelt Stop-on-miss. Der Terminator
 liegt ausserhalb der maximal `64` Zielzellen; die statische Page-Basis bleibt
 nur relative Layoutevidenz und wird vor Produktaktivierung durch die exakte
 Loaded-AOT-Materialisierung gebunden. Die Hardware-
-Closure zeigt `1.425` Gaps (`1.373` hook-missing, `51` progress-wait, `1`
-root-ownership) bei `1.423` bekannten Sites. Das ist neu sichtbare
+Closure zeigt `1.423` Gaps (`1.371` hook-missing, `51` progress-wait, `1`
+root-ownership) bei `1.423` bekannten Sites; `1.110` Sites sind durch Hooks
+ersetzt. Das ist neu sichtbare
 Closure-Arbeit, keine Regression. Der 100-s-Produktsmoke erreichte Film 0
 `200/200`, nicht aber die dynamische Overlay-Bestaetigung. Danach folgen
 Memory-Card-Pfad und Hauptmenue; ein Start-Controllerimpuls ist erst seit dem
 vollstaendigen No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
 
 Der Windows-Native-Port hat jetzt XInput- sowie identitaetsgebundene WinMM-
-Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `3`
-verwirft unbekannte HID-Layouts, prueft echte Backendbereitschaft und
-unterdrueckt ein XInput-Kompatibilitaetsduplikat, bis aktive Evidenz den
-Endpunkt eindeutig demselben Sony-Pad oder einem unabhaengigen Controller
-zuordnet. Achsen und Trigger sind symmetrisch normalisiert; Vibration bleibt
-an den wirklichen XInput-Endpunkt gebunden. Der Runtime-/CLI-Build ist sauber;
+Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `4`
+verwirft unbekannte HID-Layouts, prueft echte Backendbereitschaft und bindet
+Sony ueber echte DirectInput-VID/PID- und Geraeteinstanzevidenz. Ein XInput-
+Kompatibilitaetsduplikat bleibt unterdrueckt, bis drei aufeinanderfolgende
+aktive Samples den Endpunkt eindeutig demselben Sony-Pad oder einem
+unabhaengigen Controller zuordnen. Hotplug verwirft veraltete
+Unabhaengigkeitsevidenz. Achsen und Trigger sind symmetrisch normalisiert;
+Vibration bleibt an den wirklichen XInput-Endpunkt gebunden und wird dort
+beim Shutdown gestoppt. Der Runtime-/CLI-Build ist sauber;
 die physische DualSense-Menuabnahme bleibt offen, bis ein Nutzer vor Ort
 testet.
 
@@ -382,13 +399,13 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 107, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 97, Native-Port-Profilvertrag 20
-  Analyzer-ABI 48
+  Runtime-ABI 108, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 99, Native-Port-Profilvertrag 22
+  Analyzer-ABI 49
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 36, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 8
+  Native-AOT-Emissionsprofil 37, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 9
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
 installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie

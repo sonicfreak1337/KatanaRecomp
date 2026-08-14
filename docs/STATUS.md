@@ -30,6 +30,24 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
+Die native Audiogrundlage ist abgeschlossen. `NativePortAudioEngine` und
+`NativePortSoundBankEngine` bilden die titelnahe Manatee-/MW-Soundsemantik
+direkt auf Host-PCM ab; es existiert keine AICA-/ARM7-/Sound-RAM-
+Produktruntime. Der echte Parser/Predecoder validierte alle `122` MLTs,
+`52.253.920` Bytes, `5.695` nutzbare Programme, `7.139` Splits, `5.596`
+Sequenzen, `40.294` Events und `4.698` eindeutige Samples (`115` PCM16,
+`246` PCM8, `4.337` ADPCM; `94.889.624` Frames). Der 38-Port-Titeladapter
+latched Controls vor dem Bind und behandelt gueltige ungebundene Stop-/
+Note-off-Aufrufe idempotent. Der Produktlauf laedt eine identitaetsgebundene
+Collection und endet erst danach an einem statischen AOT-Entry.
+
+Der v114-Export umfasst `5.778` Funktionen, `167` Partitionen und lief warm
+in `26,378 s` mit `167/167` Codegen- sowie `228/229` Host-TU-Cachetreffern.
+Von `1.423` bekannten Hardware-Sites werden `1.110` durch vollstaendige Hooks
+ersetzt; offen sind `1.423` Anforderungen (`1.371` hook-missing, `51`
+Progress-Waits, `1` Root-Ownership). Der Zuwachs ersetzter Sites gegenueber
+der Controllerbaseline betraegt `+245`; die Gapzahl sank um `2`.
+
 Der aktive P0 ist ab `v0.49.1` der native Sonic-Port und nicht die
 Beschleunigung der historischen Dreamcast-Geraetemodelle. Verbindlich sind
 statisches SH-4-AOT sowie native PC-GPU-, Audio-/Movie-, Datei-, Eingabe- und
@@ -77,12 +95,14 @@ Closure-Sichtbarkeit, keine Regression. Der Release-Build mit `24` Jobs
 endete in `51,4 s`; der 100-s-Produktsmoke erreichte Film 0 `200/200`, aber
 noch keine dynamische Overlay-Bestaetigung.
 
-Der Windows-Native-Port unterstuetzt nun XInput und die identitaetsgebundenen
-WinMM-Layouts von DualSense und DualShock ueber Plattformvertrag `3`.
-Unbekannte HID-Layouts werden verworfen; Sony-/XInput-Duplikate bleiben bis
-zur eindeutigen aktiven Zuordnung aus den Titel-Slots und teilen danach den
-tatsaechlichen XInput-Vibrationsendpunkt. Backendverfuegbarkeit sowie beide
-Trigger-Vollaussteuerungen sind fail-closed beziehungsweise symmetrisch. Der
+Der Windows-Native-Port unterstuetzt nun XInput und die ueber DirectInput-
+VID/PID und Geraeteinstanz identitaetsgebundenen WinMM-Layouts von DualSense
+und DualShock ueber Plattformvertrag `4`. Unbekannte HID-Layouts werden
+verworfen; Sony-/XInput-Duplikate bleiben bis zu drei aufeinanderfolgenden
+eindeutigen aktiven Samples aus den Titel-Slots. Hotplug revalidiert
+Unabhaengigkeit; der tatsaechliche XInput-Vibrationsendpunkt wird auch beim
+Shutdown gestoppt. Backendverfuegbarkeit sowie beide Trigger-
+Vollaussteuerungen sind fail-closed beziehungsweise symmetrisch. Der
 Runtime-/CLI-Build ist sauber. Der private Export endete nach `567,512 s` mit Exit `0`, `5.774`
 Funktionen und `168` Partitionen; die Closure bleibt bei `1.423` Sites,
 `1.425` Gaps und `865` ersetzten Sites. Der physische DualSense-Menutest
@@ -261,11 +281,11 @@ Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `106`,
-PlatformServices-ABI `14`, Analyzer-ABI `48`, Function-Analysis-Epoch-Schema
+Aktuell gelten Runtime-ABI `108`,
+PlatformServices-ABI `14`, Analyzer-ABI `49`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`23`, PVR-State-Contract `3`, Portprojektvertrag `97` und Native-Port-
-Profilvertrag `20`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
+`23`, PVR-State-Contract `3`, Portprojektvertrag `99` und Native-Port-
+Profilvertrag `22`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
@@ -274,9 +294,9 @@ Headerinstallation aus.
 Die unabhaengige `PortExportOptions::native_port_definition`-Grenze ist durch
 Backend-Interface-ABI `23` versioniert; bestehende generierte Ports muessen
 neu exportiert werden.
-Aktuelles Native-AOT-Emissionsprofil: `36`, AOT-Partitionsschema: `7`,
-Port-Metadata-Cache-Schema: `8`,
-NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `4`, Hookkarte `v4`,
+Aktuelles Native-AOT-Emissionsprofil: `37`, AOT-Partitionsschema: `7`,
+Port-Metadata-Cache-Schema: `9`,
+NativePort-Artifact-Format: `9`, NativePortDefinition `10`, Analysis Directives `5`, Hookkarte `v4`,
 Hardware-Closure `v5` und GameProject-Metadaten `katana-game-project-v5`.
 
 Der historische Modus `port --analysis-mode runtime-only` war nur mit

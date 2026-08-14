@@ -1116,10 +1116,109 @@ int diagnose_firmware(const std::filesystem::path& path,
                                                    : katana::cli::ExitCode::ProcessingFailure);
 }
 
-int disassemble_file(const std::filesystem::path& path, const std::uint32_t base_address) {
+std::optional<std::string> pc_relative_disassembly_annotation(
+    const katana::io::ExecutableImage& image,
+    const katana::sh4::DisassemblyLine& line) {
+    using Kind = katana::sh4::InstructionKind;
+    const auto kind = line.instruction.kind;
+    std::uint32_t literal_address = 0u;
+    std::size_t width = 0u;
+    if (kind == Kind::MovLongLoadPcRelative) {
+        literal_address = ((line.address + 4u) & ~3u) +
+                          static_cast<std::uint32_t>(line.instruction.displacement);
+        width = 4u;
+    } else if (kind == Kind::MovWordLoadPcRelative) {
+        literal_address = line.address + 4u +
+                          static_cast<std::uint32_t>(line.instruction.displacement);
+        width = 2u;
+    } else if (kind == Kind::MoveAddressPcRelative) {
+        const auto value = ((line.address + 4u) & ~3u) +
+                           static_cast<std::uint32_t>(line.instruction.displacement);
+        std::ostringstream annotation;
+        annotation << "mova=0x" << std::hex << std::uppercase << std::setw(8)
+                   << std::setfill('0') << value;
+        return annotation.str();
+    } else {
+        return std::nullopt;
+    }
+
+    const auto* segment = image.find_segment(literal_address, width);
+    if (segment == nullptr) {
+        return std::nullopt;
+    }
+    const auto offset = segment->byte_offset(literal_address);
+    if (!offset.has_value()) {
+        return std::nullopt;
+    }
+
+    std::uint32_t value = segment->bytes[*offset];
+    value |= static_cast<std::uint32_t>(segment->bytes[*offset + 1u]) << 8u;
+    if (width == 4u) {
+        value |= static_cast<std::uint32_t>(segment->bytes[*offset + 2u]) << 16u;
+        value |= static_cast<std::uint32_t>(segment->bytes[*offset + 3u]) << 24u;
+    }
+
+    std::ostringstream annotation;
+    annotation << "literal@0x" << std::hex << std::uppercase << std::setw(8)
+               << std::setfill('0') << literal_address << "=0x" << std::setw(width * 2u)
+               << value;
+    return annotation.str();
+}
+
+int disassemble_file(const std::filesystem::path& path,
+                     const std::uint32_t base_address,
+                     const std::uint32_t file_offset = 0u,
+                     const std::optional<std::uint32_t> requested_byte_count = std::nullopt) {
     katana::io::RawBinaryLoadOptions options;
     options.base_address = base_address;
-    const auto image = katana::io::load_raw_binary(path, options);
+    auto image = katana::io::load_raw_binary(path, options);
+    const auto source_byte_count = image.segments().front().bytes.size();
+
+    if ((file_offset & 1u) != 0u) {
+        throw std::invalid_argument("Der Disassembly-Dateioffset muss 2-Byte-ausgerichtet sein.");
+    }
+    if (file_offset >= source_byte_count) {
+        throw std::invalid_argument("Der Disassembly-Dateioffset liegt ausserhalb der Datei.");
+    }
+
+    const auto available_byte_count = source_byte_count - file_offset;
+    const auto selected_byte_count = requested_byte_count.has_value()
+                                         ? static_cast<std::size_t>(*requested_byte_count)
+                                         : available_byte_count;
+    if (selected_byte_count == 0u || selected_byte_count > available_byte_count) {
+        throw std::invalid_argument("Der Disassembly-Bereich liegt ausserhalb der Datei.");
+    }
+    if ((selected_byte_count & 1u) != 0u) {
+        throw std::invalid_argument("Die Disassembly-Byteanzahl muss durch 2 teilbar sein.");
+    }
+
+    const auto range_address = static_cast<std::uint64_t>(base_address) + file_offset;
+    const auto range_end = range_address + selected_byte_count;
+    if (range_address > std::numeric_limits<std::uint32_t>::max() ||
+        range_end > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u) {
+        throw std::invalid_argument("Der Disassembly-Bereich ueberlaeuft den 32-Bit-Gastadressraum.");
+    }
+
+    if (file_offset != 0u || selected_byte_count != source_byte_count) {
+        const auto& source_segment = image.segments().front();
+        std::vector<std::uint8_t> selected_bytes(
+            source_segment.bytes.begin() + static_cast<std::ptrdiff_t>(file_offset),
+            source_segment.bytes.begin() +
+                static_cast<std::ptrdiff_t>(file_offset + selected_byte_count));
+        katana::io::ExecutableImage selected_image(path);
+        katana::io::ImageSegment selected_segment{
+            ".raw-range",
+            static_cast<std::uint32_t>(range_address),
+            file_offset,
+            selected_byte_count,
+            katana::io::SegmentKind::Code,
+            katana::io::SegmentPermissions{true, false, true},
+            std::move(selected_bytes)};
+        selected_segment.source_kind = katana::io::ImageSourceKind::RawBinary;
+        selected_segment.local_source_name = path.filename().string();
+        selected_image.add_segment(std::move(selected_segment));
+        image = std::move(selected_image);
+    }
     const auto lines = katana::sh4::disassemble(image);
 
     std::size_t unknown_count = 0;
@@ -1127,9 +1226,11 @@ int disassemble_file(const std::filesystem::path& path, const std::uint32_t base
     std::size_t delay_slot_count = 0;
 
     std::cout << "Datei:         " << path.string() << '\n'
-              << "Dateigroesse:  " << std::dec << image.segments()[0].bytes.size() << " Bytes\n"
+              << "Dateigroesse:  " << std::dec << source_byte_count << " Bytes\n"
+              << "Dateioffset:   0x" << std::hex << std::uppercase << file_offset << '\n'
+              << "Bereich:       " << std::dec << selected_byte_count << " Bytes\n"
               << "Basisadresse:  0x" << std::hex << std::uppercase << std::setw(8)
-              << std::setfill('0') << base_address << "\n\n";
+              << std::setfill('0') << static_cast<std::uint32_t>(range_address) << "\n\n";
 
     for (const auto& line : lines) {
         if (!line.instruction.is_known()) {
@@ -1146,8 +1247,12 @@ int disassemble_file(const std::filesystem::path& path, const std::uint32_t base
 
         print_address(line.address);
 
-        std::cout << "  " << std::setw(4) << line.opcode << "  " << format_disassembly_text(line)
-                  << '\n';
+        std::cout << "  " << std::setw(4) << line.opcode << "  " << format_disassembly_text(line);
+        if (const auto annotation = pc_relative_disassembly_annotation(image, line);
+            annotation.has_value()) {
+            std::cout << "  ; " << *annotation;
+        }
+        std::cout << '\n';
     }
 
     std::cout << "\nInstruktionen:         " << std::dec << lines.size()
@@ -8981,7 +9086,7 @@ void print_usage(std::ostream& output) {
               "[--fail-on-gap|--strict]\n"
            << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] "
               "[--include-sensitive]\n"
-           << "  katana-recomp disasm <Datei> [Basisadresse]\n"
+           << "  katana-recomp disasm <Datei> [Basisadresse [Dateioffset [Byteanzahl]]]\n"
            << "  katana-recomp blocks <Datei> [Basisadresse]\n"
            << "  katana-recomp functions <Datei> <Einstieg> [Basisadresse]\n"
            << "  katana-recomp ir <Raw|ELF|Manifest> <Einstieg> [Basisadresse] [--directives "
@@ -9753,14 +9858,25 @@ int main(const int argc, char* argv[]) {
             return decode_single_opcode(argv[2]);
         }
 
-        if ((argc == 3 || argc == 4) && std::string(argv[1]) == "disasm") {
+        if (argc >= 3 && argc <= 6 && std::string(argv[1]) == "disasm") {
             const auto base_address =
-                argc == 4 ? parse_hex_value(argv[3],
+                argc >= 4 ? parse_hex_value(argv[3],
                                             std::numeric_limits<std::uint32_t>::max(),
                                             "Die Basisadresse")
                           : 0u;
+            const auto file_offset =
+                argc >= 5 ? parse_hex_value(argv[4],
+                                            std::numeric_limits<std::uint32_t>::max(),
+                                            "Der Dateioffset")
+                          : 0u;
+            const auto byte_count =
+                argc == 6
+                    ? std::optional<std::uint32_t>{parse_hex_value(
+                          argv[5], std::numeric_limits<std::uint32_t>::max(), "Die Byteanzahl")}
+                    : std::nullopt;
 
-            return disassemble_file(std::filesystem::path(argv[2]), base_address);
+            return disassemble_file(
+                std::filesystem::path(argv[2]), base_address, file_offset, byte_count);
         }
 
         if ((argc == 3 || argc == 4) && std::string(argv[1]) == "blocks") {

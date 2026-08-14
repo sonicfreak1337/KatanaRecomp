@@ -19,27 +19,42 @@ Shutdown setzt Puffer zurueck, loest Header und schliesst das Geraet. Ohne
 verfuegbares Audiogeraet bleibt der Recording-Pfad nutzbar. Nicht implementierte
 Plattformen behaupten keine native Audioausgabe.
 
-Im generierten Port ist dieser Mixer kein Platzhalter: Jeder Audio-Tick liest
-die 64 AICA-Slots aus demselben Registerfile und Sound-RAM, die SH-4 und der
-echte AICA-ARM7 gemeinsam beschreiben. Seit `e1d8ade` startet der ARM7TDMI bei
-der gastseitigen Resetfreigabe, erhaelt `512` Zyklen je Sample und bedient
-Sound-/Main-Interrupts, Timer, REG_L/REG_M und Common-Monitorregister. Der
-Mixer dekodiert die dadurch programmierten PCM16-, PCM8- und AICA-ADPCM-
-Stimmen und wendet Keying, Loopgrenzen, Pitch, Lautstaerke, Direct Send, Pan
-und Master Volume an. ARM-Fehler werden als `Arm7ExecutionFailure` sichtbar
-und niemals als erfolgreiche Ausfuehrung gemeldet.
+Der native Produktport verwendet diesen historischen AICA-/ARM7-Pfad nicht.
+`NativePortAudioEngine` reicht bounded PCM16-Hostfeeds und native
+Codecstimmen an die Plattformausgabe. `NativePortSoundBankEngine` verarbeitet
+Manatee-MLT/SMPB/SMSB/SFPB/SFOB/SFPW semantisch und rendert PCM16, PCM8 sowie
+AICA-ADPCM direkt zu Host-PCM. Programme, Layer/Splits, Sequenzen, Loops,
+Controller, Pitch/Pan/Sends, Huelle, Filter/LFO und die belegte
+QSound/Reverb-Konfiguration bleiben im nativen Dienst; Sound-RAM,
+AICA-Register, ARM7, Kommandoringe, Interrupts und G2-DMA werden nicht
+nachgebildet. Generation-gepruefte Handles, bounded Queues/Budgets und
+threadgebundene Mutationen enden bei unbekannten Formaten fail-closed.
+
+Soundbankvertrag `4` ergaenzt eine bounded Predecode-Grenze, die dieselben
+PCM16-/PCM8-/ADPCM-Decoder und denselben Samplecache wie Live-Noten nutzt.
+Der Sonic-Korpus belegt `122` Collections, `52.253.920` Bytes, `7.139`
+Splits, `5.596` Sequenzen, `40.294` Events und `4.698` eindeutige Samples
+(`115` PCM16, `246` PCM8, `4.337` ADPCM; `94.889.624` Frames). Damit werden
+Formatfehler vor der ersten Note sichtbar und First-Note-Stalls vermieden.
+
+Der alte 64-Slot-AICA-/ARM7-Mixer bleibt ausschliesslich im nicht
+installierbaren historischen Diagnosepfad. Seine fruehere
+`Arm7ExecutionFailure`-Semantik ist kein Produktvertrag.
 
 ## Eingabe und Lebenszyklus
 
 Unter Windows pollt `Win32GamepadSource` XInput dynamisch ueber
 `xinput1_4.dll`, `xinput1_3.dll` oder `xinput9_1_0.dll`. Aktuelle
 Xbox-Controller verwenden damit den nativen XInput-Vertrag. Parallel stellt
-WinMM/Joystick einen identitaetsgebundenen Pfad fuer die bekannten DualSense-
-und DualShock-Layouts bereit. Unbekannte HID-Button- und Achsordnungen werden
+WinMM/Joystick einen ueber DirectInput-VID/PID und Geraeteinstanz
+identitaetsgebundenen Pfad fuer die bekannten DualSense- und DualShock-
+Layouts bereit. Unbekannte HID-Button- und Achsordnungen werden
 nicht als Standardprofil geraten. Ein mehrdeutiger XInput-Endpunkt bleibt bei
-gleichzeitigem Sony-HID unsichtbar, bis aktive Eingabeevidenz ihn eindeutig
-als Duplikat oder unabhaengigen Controller klassifiziert. Ein gebundenes
-Duplikat teilt den XInput-Vibrationsendpunkt. Auf Hosts ohne geladenes XInput
+gleichzeitigem Sony-HID unsichtbar, bis drei aufeinanderfolgende aktive
+Eingabesamples ihn eindeutig als Duplikat oder unabhaengigen Controller
+klassifizieren. Ein gebundenes Duplikat teilt den XInput-
+Vibrationsendpunkt, der auch beim Shutdown gestoppt wird. Hotplug verwirft
+veraltete Unabhaengigkeitsevidenz. Auf Hosts ohne geladenes XInput
 und ohne WinMM-Joysticktreiber wird keine native Verfuegbarkeit vorgetaeuscht.
 
 `ControllerInputTimeline` normalisiert die Profile mit versionierten Deadzones

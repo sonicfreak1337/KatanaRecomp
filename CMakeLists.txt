@@ -663,6 +663,8 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/native_aot_state.hpp
     include/katana/runtime/native_port.hpp
     include/katana/runtime/native_port_audio.hpp
+    include/katana/runtime/native_port_audio_engine.hpp
+    include/katana/runtime/native_port_sound_bank.hpp
     include/katana/runtime/native_port_aot_runtime.hpp
     include/katana/runtime/native_port_codec.hpp
     include/katana/runtime/native_port_content.hpp
@@ -772,6 +774,8 @@ add_library(
 )
 set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
     src/runtime/native_port_audio.cpp
+    src/runtime/native_port_audio_engine.cpp
+    src/runtime/native_port_sound_bank.cpp
     src/runtime/native_port_codec.cpp
     src/runtime/native_port_content.cpp
     src/runtime/native_port_cpu_control.cpp
@@ -865,6 +869,8 @@ if(WIN32)
         katana_native_port_runtime
         PUBLIC
             bcrypt
+            dinput8
+            dxguid
             mfplat
             mfreadwrite
             mfuuid

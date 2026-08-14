@@ -3215,8 +3215,9 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             active_round_full_cpu_fallbacks = 1u;
             mark_persistent_bypass(
                 PersistentAnalysisBypassReason::FunctionBoundaryChanged);
-            function_value_session.bypass_all_persistent_analysis_state_once(
-                PersistentAnalysisBypassReason::FunctionBoundaryChanged);
+            function_value_session
+                .ensure_all_persistent_analysis_state_bypassed_once(
+                    PersistentAnalysisBypassReason::FunctionBoundaryChanged);
             function_value_full_program_required = true;
         }
         report_progress("iteration-start");
@@ -3266,9 +3267,13 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             mark_persistent_bypass(
                 PersistentAnalysisBypassReason::
                     RecursiveBaselineRejected);
-            function_value_session.bypass_all_persistent_analysis_state_once(
-                PersistentAnalysisBypassReason::
-                    RecursiveBaselineRejected);
+            // A cold retry may follow another independently discovered reason
+            // before FVA has consumed the round's strong bypass. Coalesce the
+            // semantic request while retaining the first diagnostic reason.
+            function_value_session
+                .ensure_all_persistent_analysis_state_bypassed_once(
+                    PersistentAnalysisBypassReason::
+                        RecursiveBaselineRejected);
             function_value_full_program_required = true;
 
             recursive_complete_seeds = make_seed_vector(
@@ -3329,6 +3334,45 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             snapshot_candidate_dispatch_index.clear();
         }
         recursive_index.apply(recursive_snapshot);
+
+        // Exact non-root boundaries constrain ownership without reviving
+        // unreachable metadata. Once ordinary recursive control flow has
+        // actually reached such a boundary, however, it must become its own
+        // function seed. Otherwise a tail branch can leave the target inside
+        // the caller's IR function and a later whole-function provider cannot
+        // prove the already identity-bound callee. The new seed requests a
+        // cold boundary split, but it does not add any previously unreachable
+        // instruction to the product closure.
+        bool reached_exact_boundary_promoted = false;
+        for (const auto& boundary : exact_function_ownership) {
+            if (seeds.contains(boundary.begin) ||
+                recursive_index.find(boundary.begin) == nullptr)
+                continue;
+            const auto size64 = boundary.end - boundary.begin;
+            if (size64 == 0u ||
+                size64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::logic_error(
+                    "Erreichte exakte Funktionsgrenze ist nicht darstellbar.");
+            const std::array origins{FunctionOrigin::UserOverride};
+            reached_exact_boundary_promoted =
+                add_seed(
+                    seeds,
+                    boundary.begin,
+                    origins,
+                    false,
+                    ControlFlowEvidence::ForcedOverride,
+                    static_cast<std::uint32_t>(size64),
+                    SeedCause{SeedCauseKind::FunctionDirective,
+                              boundary.begin,
+                              std::nullopt,
+                              boundary.begin},
+                    &pending_seed_changes,
+                    &seed_telemetry) ||
+                reached_exact_boundary_promoted;
+        }
+        if (reached_exact_boundary_promoted) {
+            report_progress("reached-exact-boundary-promoted");
+        }
         for (const auto& line : recursive_snapshot.changed_instructions()) {
             detail::FunctionProgramLineDelta delta;
             delta.address = line.address;
@@ -3437,9 +3481,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                 mark_persistent_bypass(
                     PersistentAnalysisBypassReason::
                         RecursiveBaselineRejected);
-                function_value_session.bypass_all_persistent_analysis_state_once(
-                    PersistentAnalysisBypassReason::
-                        RecursiveBaselineRejected);
+                function_value_session
+                    .ensure_all_persistent_analysis_state_bypassed_once(
+                        PersistentAnalysisBypassReason::
+                            RecursiveBaselineRejected);
                 function_value_full_program_required = true;
             }
         }

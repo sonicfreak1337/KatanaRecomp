@@ -1,11 +1,11 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `48`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 107, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 23, Portprojektvertrag 97 und Native-Port-
-Profilvertrag 20. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
-Directives-Version 4, Native-AOT-Emissionsprofil 36 und Port-Metadata-Cache-
-Schema 8 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
+Der aktuelle oeffentliche Analyzervertrag ist Version `49`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 108, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 23, Portprojektvertrag 99 und Native-Port-
+Profilvertrag 22. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
+Directives-Version 5, Native-AOT-Emissionsprofil 37 und Port-Metadata-Cache-
+Schema 9 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
@@ -86,6 +86,16 @@ Tabellenwerten abgeleitete Page-Basis beweist nur relative Offsets. Eine
 Produktabbildung entsteht erst, wenn der Loaded-AOT-Binder am erreichten
 Runtimebereich die exakte materialisierte Modul- beziehungsweise
 Codeidentitaet unabhaengig bestaetigt.
+
+Analyzer-ABI 49 bindet exakte erreichte Non-Root-Funktionsgrenzen bereits in
+der CFA als getrennte Owner, ohne unerreichbare Metadaten zu Roots zu machen.
+Eine inferred Funktionsausdehnung darf keine unabhaengige bekannte
+Function-Entry-Grenze mehr verschlucken. Mehrere unabhaengige Gruende fuer
+einen vollstaendigen persistenten Analyse-Bypass werden vor der FVA einmalig
+zusammengefuehrt; der strikte direkte Producervertrag bleibt unveraendert.
+Damit besitzen native Ganzfunktionshooks belastbare Ownergrenzen, waehrend
+Cache, IR und AOT denselben erreichten CFG behalten. Analysis-Directives `5`,
+Native-AOT-Profil `37` und Metadata-Cache `9` invalidieren den alten Bestand.
 
 Im historischen ABI-41-Stand wurde die davon getrennte oeffentliche
 Codegen-Grenze `PortExportOptions::native_port_definition` durch

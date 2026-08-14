@@ -162,6 +162,19 @@ reicht von `Ready` bis `Stopped`. Der relevante 24-Worker-Inkrementalbuild war
 in etwa `4,5 s` erfolgreich. Keine neuen Tests/Testmatrix und kein alter
 Voll-Exporter wurden aktiviert.
 
+Audio-Foundation-Abschluss: Die native Soundbank-Grenze `v4` verarbeitet
+MLT/SMPB/SMSB/SFPB/SFOB/SFPW sowie PCM16, PCM8 und AICA-ADPCM direkt zu
+Host-PCM. Programme, Layer/Splits, Sequenzen, Loops, Controller,
+Pitch/Pan/Sends, Huelle, Filter/LFO und die belegte QSound/Reverb-
+Konfiguration sind bounded. Der Titeladapter bindet 32 One-shot- und sechs
+Sequenzports; Controls vor dem ersten Bind bleiben erhalten, Stop/Note-off
+auf gueltigen ungebundenen Ports sind idempotent. Der Produktparser und seine
+Predecode-Grenze validierten `122` Collections (`52.253.920` Bytes), `5.695`
+nutzbare Programme, `7.139` Splits, `5.596` Sequenzen, `40.294` Events und
+`4.698` eindeutige Samples (`115` PCM16, `246` PCM8, `4.337` ADPCM;
+`94.889.624` Frames). Eine identitaetsgebundene Collection laedt real; der
+folgende Stop ist eine AOT- und keine Audioluecke.
+
 ## [x] KR-5003 - Nativer GPU-Pfad
 
 Prioritaet: P0 Produkt
@@ -335,11 +348,13 @@ Der 100-s-Produktsmoke schloss Film 0 `200/200`; dynamische Overlay-Evidenz
 steht noch aus.
 
 Controller-Meilenstein: Der Windows-Native-Port vereinheitlicht XInput und
-die identitaetsgebundenen WinMM-Layouts von DualSense und DualShock unter
-Plattformvertrag `3`. Unbekannte HID-Layouts werden nicht geraten; ein
-Sony-/XInput-Duplikat bleibt bis zur eindeutigen aktiven Zuordnung aus den
-Titel-Slots, und Vibration erreicht danach weiterhin den richtigen XInput-
-Endpunkt. Backendbereitschaft und Triggernormalisierung sind geschlossen.
+die ueber DirectInput-VID/PID und Geraeteinstanz gebundenen WinMM-Layouts von
+DualSense und DualShock unter Plattformvertrag `4`. Unbekannte HID-Layouts
+werden nicht geraten; ein Sony-/XInput-Duplikat bleibt bis zu drei
+aufeinanderfolgenden eindeutigen aktiven Samples aus den Titel-Slots.
+Hotplug revalidiert Unabhaengigkeit, und Vibration erreicht sowie stoppt beim
+Shutdown den richtigen XInput-Endpunkt. Backendbereitschaft und
+Triggernormalisierung sind geschlossen.
 Runtime-/CLI-Build ist sauber; der Export endete mit
 Exit `0` nach `567,512 s` bei `5.774` Funktionen und `168` Partitionen.
 Closure unveraendert: `1.423` Sites, `1.425` Gaps, `865` ersetzt. Der
@@ -455,14 +470,14 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 107, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 97, Native-Port-Profilvertrag 20
-  Analyzer-ABI 48, Function-Analysis-Epoch-Schema 28,
+  Runtime-ABI 108, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 99, Native-Port-Profilvertrag 22
+  Analyzer-ABI 49, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
-  Analysis Directives 4, Hookkarte v5, Hardware-Closure v6,
+  Analysis Directives 5, Hookkarte v5, Hardware-Closure v6,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 36, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 8
+  Native-AOT-Emissionsprofil 37, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 9
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

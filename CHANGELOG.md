@@ -4,21 +4,47 @@
 
 ### Geaendert
 
+- Der native Audio-Unterbau ersetzt die titelnahe Manatee-/MW-Soundfamilie
+  vollstaendig durch semantische Hostdienste. `NativePortAudioEngine` liefert
+  bounded PCM16-Hostfeeds und Codecstimmen; `NativePortSoundBankEngine`
+  verarbeitet MLT/SMPB/SMSB/SFPB/SFOB/SFPW, PCM16, PCM8, AICA-ADPCM,
+  Programme, Layer/Splits, Sequenzen, Loops, Controller, Pitch/Pan/Sends,
+  Huelle, Filter/LFO sowie die belegte QSound/Reverb-Konfiguration. Der
+  Titeladapter bindet 32 One-shot- und sechs Sequenzports; Stop/Note-off sind
+  fuer gueltige ungebundene Ports idempotent, waehrend Gain/Pan/Pitch bis zum
+  ersten Bind gelatcht werden. Ein identitaetsgebundener Basename-Resolver
+  deckt den kompletten MLT-Katalog ab. Der echte Produktruntime-Parser und
+  seine neue bounded Predecode-Grenze validierten `122` Collections,
+  `52.253.920` Bytes, `5.695` nutzbare Programme, `7.139` Splits, `5.596`
+  Sequenzen, `40.294` Events und `4.698` eindeutige Samples (`115` PCM16,
+  `246` PCM8, `4.337` ADPCM; `94.889.624` Frames). Eine
+  identitaetsgebundene Titelcollection wird anschliessend real geladen; die
+  naechste Frontier ist ausschliesslich ein statischer AOT-Entry. Der warme Export
+  dauerte `26,378 s`, traf `167/167` Codegenpartitionen, `228/229`
+  Host-TUs und bestand den Produktlinkaudit. Runtime-ABI `108`, Analyzer-ABI
+  `49`, Portprojektvertrag `99`, Native-Port-Profilvertrag `22`,
+  Analysis-Directives `5`, Native-AOT-Profil `37`, Metadata-Cache `9` und
+  Soundbankvertrag `4` binden den Stand.
+
 - Der Windows-Native-Port besitzt jetzt einen einheitlichen Gamepad-Backend-
-  Vertrag (`v3`): XInput sowie die identitaetsgebundenen WinMM-Layouts von
+  Vertrag (`v4`): XInput sowie die ueber DirectInput-`DIPROP_VIDPID` und die
+  konkrete Geraeteinstanz identitaetsgebundenen WinMM-Layouts von
   DualSense und DualShock liefern stabile Titel-Slots ueber Hotplug und
   konsistente Achskoordinaten. Unbekannte HID-Layouts werden nicht geraten;
-  Sony-/XInput-Duplikate werden nur nach eindeutiger aktiver Korrelation
-  gebunden und belegen waehrend der Mehrdeutigkeit keinen zweiten Slot.
+  Sony-/XInput-Duplikate werden nur nach drei aufeinanderfolgenden,
+  eindeutigen aktiven Korrelationen gebunden und belegen waehrend der
+  Mehrdeutigkeit keinen zweiten Slot. Unabhaengigkeit wird bei geaenderter
+  Sony-Geraetemenge neu bewertet, sodass Hotplug eine spaetere Korrelation
+  nicht blockiert.
   Backendbereitschaft wird wirklich geprueft, beide Triggerhaelften erreichen
   symmetrisch Vollaussteuerung und Vibration bleibt am tatsaechlichen XInput-
-  Endpunkt. Der
+  Endpunkt; der Shutdown stoppt genau diesen Endpunkt. Der
   oeffentliche Runtime-/CLI-Build ist sauber; ein privater Export endete nach
   `567,512 s` mit Exit `0`, `5.774` Funktionen und `168` Partitionen. Die
   Closure bleibt bei `1.423` Sites, `1.425` Gaps und `865` ersetzten Sites.
   Der physische DualSense-Menutest steht aus, weil kein Nutzer vor Ort ist.
-  Runtime-ABI `107`, Portprojektvertrag `97` und Native-Port-Profilvertrag
-  `20` versionieren den kompatibilitaetsrelevanten Stand.
+  Runtime-ABI `108`, Portprojektvertrag `98` und Native-Port-Profilvertrag
+  `21` versionieren den kompatibilitaetsrelevanten Stand.
 
 - Der aktuelle Latent-AOT-Export erkennt generisch eine
   identitaetsgebundene PRS-Praefix-Entry-Tabelle: Nur `3..64` eindeutige,

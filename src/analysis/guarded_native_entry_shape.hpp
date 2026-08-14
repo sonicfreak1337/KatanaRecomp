@@ -696,6 +696,14 @@ class FunctionValueAnalysisSession {
     void bypass_all_persistent_analysis_state_once(
         PersistentAnalysisBypassReason reason);
 
+    // Fixpoint orchestrators may discover several independent reasons for the
+    // same not-yet-consumed full-state bypass. Their semantic effect is
+    // identical, so preserve the first diagnostic reason instead of treating
+    // the later request as a producer-journal overwrite. Direct producers keep
+    // using the strict one-shot API above.
+    void ensure_all_persistent_analysis_state_bypassed_once(
+        PersistentAnalysisBypassReason reason);
+
     // Compatibility test hook; now aliases the strong full-state bypass.
     void force_full_cpu_recompute_once();
 

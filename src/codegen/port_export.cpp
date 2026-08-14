@@ -17046,7 +17046,7 @@ constexpr std::array<std::string_view, 5> allowed_native_codec_owners{
     std::string_view{"swscale"},
 };
 #ifdef _WIN32
-constexpr std::array<std::string_view, 25> allowed_platform_owners{
+constexpr std::array<std::string_view, 27> allowed_platform_owners{
     std::string_view{"msvcprt"},
     std::string_view{"msvcrt"},
     std::string_view{"vcruntime"},
@@ -17060,6 +17060,8 @@ constexpr std::array<std::string_view, 25> allowed_platform_owners{
     std::string_view{"kernel32"},
     std::string_view{"user32"},
     std::string_view{"bcrypt"},
+    std::string_view{"dinput8"},
+    std::string_view{"dxguid"},
     std::string_view{"d3d11"},
     std::string_view{"dxgi"},
     std::string_view{"mfplat"},
@@ -17311,7 +17313,8 @@ struct PeSection final {
 [[nodiscard]] bool allowed_windows_import(const std::string_view name) {
     constexpr std::array exact{
         std::string_view{"kernel32.dll"}, std::string_view{"user32.dll"},
-        std::string_view{"bcrypt.dll"}, std::string_view{"d3d11.dll"},
+        std::string_view{"bcrypt.dll"}, std::string_view{"dinput8.dll"},
+        std::string_view{"d3d11.dll"},
         std::string_view{"dxgi.dll"}, std::string_view{"mfplat.dll"},
         std::string_view{"mfreadwrite.dll"}, std::string_view{"mfuuid.dll"},
         std::string_view{"ole32.dll"}, std::string_view{"winmm.dll"},
@@ -17593,7 +17596,7 @@ std::string port_cmake(const std::string& target_name) {
            "        list(APPEND KATANA_NATIVE_CLOSURE_QUEUE\n"
            "          \"${KATANA_NATIVE_CLOSURE_DEP}\")\n"
            "      elseif(NOT KATANA_NATIVE_CLOSURE_DEP_LOWER MATCHES\n"
-           "          \"^(threads::threads|bcrypt|mfplat|mfreadwrite|mfuuid|ole32|d3d11|dxgi|user32|winmm)$\")\n"
+           "          \"^(threads::threads|bcrypt|dinput8|dxguid|mfplat|mfreadwrite|mfuuid|ole32|d3d11|dxgi|user32|winmm)$\")\n"
            "        message(FATAL_ERROR\n"
            "          \"Unapproved raw link item in native product closure: ${KATANA_NATIVE_CLOSURE_DEP}\")\n"
            "      endif()\n"
@@ -19254,7 +19257,8 @@ struct NativePortProgramIndex final {
 
 std::optional<NativePortInferredFunctionExtent>
 native_port_inferred_function_extent(
-    const katana::ir::Function& function) {
+    const katana::ir::Function& function,
+    const std::set<std::uint32_t>& known_function_entries) {
     using katana::ir::DelaySlotRole;
     using katana::ir::Operation;
 
@@ -19373,6 +19377,18 @@ native_port_inferred_function_extent(
     // is not reachable from the function entry.  Such a component is useful
     // AOT code, but it prevents a whole-function replacement proof.
     if (reachable.size() != blocks.size()) return std::nullopt;
+
+    // A sparse CFG may tail-jump across an independently callable function.
+    // Its numeric min/max span is not a contiguous function boundary: using
+    // that span as ownership evidence would make the skipped callee appear to
+    // have two owners even though it is materialised exactly once.  Exact
+    // metadata may still describe such assembly explicitly, but inferred
+    // closed-CFG extents stop at this ambiguity instead of claiming across it.
+    const auto interior_entry =
+        known_function_entries.upper_bound(function.entry_address);
+    if (interior_entry != known_function_entries.end() &&
+        static_cast<std::uint64_t>(*interior_entry) < extent_end)
+        return std::nullopt;
 
     if (extent_end <= function.entry_address ||
         extent_end > static_cast<std::uint64_t>(
@@ -19511,7 +19527,8 @@ NativePortProgramIndex build_native_port_program_index(
     for (const auto& [entry, functions] : index.functions_by_entry) {
         if (functions.size() != 1u) continue;
         if (const auto extent =
-                native_port_inferred_function_extent(*functions.front());
+                native_port_inferred_function_extent(
+                    *functions.front(), index.function_entries);
             extent.has_value()) {
             auto& evidence = index.function_boundaries[entry];
             if (extent->uses_guarded_owner_targets)
@@ -19868,8 +19885,26 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
         return {false, "function-hook-exact-boundary-unproven"};
     const auto owners =
         native_port_covering_function_entries(index, instruction_address);
-    if (owners.size() != 1u || *owners.begin() != hook.guest_address)
-        return {false, "function-hook-site-owner-ambiguous"};
+    if (owners.size() != 1u || *owners.begin() != hook.guest_address) {
+        std::ostringstream reason;
+        reason << "function-hook-site-owner-ambiguous";
+        if (!owners.empty()) {
+            reason << "-owners";
+            for (const auto owner : owners)
+                reason << "-0x" << std::hex << std::uppercase << owner;
+        } else {
+            reason << "-owners-none";
+        }
+        if (const auto materialized =
+                index.instruction_owners.find(instruction_address);
+            materialized != index.instruction_owners.end() &&
+            !materialized->second.empty()) {
+            reason << "-materialized";
+            for (const auto owner : materialized->second)
+                reason << "-0x" << std::hex << std::uppercase << owner;
+        }
+        return {false, reason.str()};
+    }
 
     const auto functions = index.functions_by_entry.find(hook.guest_address);
     if (functions != index.functions_by_entry.end() &&
