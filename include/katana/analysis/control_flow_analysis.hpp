@@ -129,6 +129,29 @@ struct GuardedAotEntryRejection {
     std::vector<std::uint32_t> source_objects;
 };
 
+// Canonical positive callback contracts discovered while the primary-image
+// control-flow fixpoint is current. They retain only the externally reusable
+// ABI/record shape; analyzer-local receiver provenance remains private and no
+// indirect target set is made complete by publishing these contracts.
+struct StaticCallbackSinkContract final {
+    std::uint32_t function_address = 0u;
+    // Bit 0..3 corresponds to the function's incoming r4..r7.
+    std::uint8_t argument_mask = 0u;
+
+    bool operator==(const StaticCallbackSinkContract&) const = default;
+};
+
+struct StaticCallbackFieldSinkContract final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t load_instruction_address = 0u;
+    std::int32_t displacement = 0;
+    std::uint8_t width = 0u;
+    bool call = false;
+
+    bool operator==(const StaticCallbackFieldSinkContract&) const = default;
+};
+
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     RuntimeCodeCopyAnalysis runtime_code_copies;
@@ -145,6 +168,14 @@ struct ControlFlowAnalysisResult {
     // through this typed, provenance-preserving contract. Product export is
     // fail-closed while diagnostic-partial export may report the rejection.
     std::vector<GuardedAotEntryRejection> guarded_aot_entry_rejections;
+    // These are the final canonical sink views from the same recursive CFG
+    // epoch as this result. Consumers must fall back to their own bounded
+    // extraction when materialized is false (for example an ABI mode whose
+    // primary fixpoint did not run the callback companion analysis).
+    std::vector<StaticCallbackSinkContract> static_callback_sinks;
+    std::vector<StaticCallbackFieldSinkContract>
+        static_callback_field_sinks;
+    bool static_callback_contracts_materialized = false;
     std::shared_ptr<const InstructionArena> instruction_arena;
     std::vector<InstructionSpan> block_spans;
     EvidenceInterner evidence_ids;

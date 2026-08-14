@@ -18962,31 +18962,41 @@ latent_aot_analyzed_external_callback_sinks(
     std::vector<LatentAotExternalCallbackFieldSink>* const
         callback_field_sinks = nullptr) {
     if (callback_field_sinks != nullptr) callback_field_sinks->clear();
-    if (external_code_targets.empty() ||
-        analysis.recursive.instructions.empty() ||
-        analysis.recursive.functions.empty())
+    if (external_code_targets.empty())
         return {};
 
-    katana::analysis::detail::GuardedNativeEntryShapeCache entry_shapes(image);
-    std::vector<katana::analysis::detail::StaticCallbackSinkContract>
-        discovered;
-    std::vector<
-        katana::analysis::detail::StaticCallbackFieldSinkContract>
-        discovered_fields;
-    // This is a positive, bounded contract extraction from the complete
-    // primary CFG.  It does not make an indirect transfer complete: the
-    // resulting cross-image entries remain guarded AOT roots whose bytes are
-    // revalidated when their latent module is materialized.
-    static_cast<void>(
-        katana::analysis::detail::analyze_static_callback_inventory(
-            image,
-            analysis.recursive.instructions,
-            analysis.recursive.functions,
-            {},
-            external_code_targets,
-            entry_shapes,
-            &discovered,
-            &discovered_fields));
+    std::vector<katana::analysis::StaticCallbackSinkContract>
+        fallback_discovered;
+    std::vector<katana::analysis::StaticCallbackFieldSinkContract>
+        fallback_discovered_fields;
+    auto discovered = std::span<const katana::analysis::StaticCallbackSinkContract>(
+        analysis.static_callback_sinks);
+    auto discovered_fields =
+        std::span<const katana::analysis::StaticCallbackFieldSinkContract>(
+            analysis.static_callback_field_sinks);
+    if (!analysis.static_callback_contracts_materialized) {
+        if (analysis.recursive.instructions.empty() ||
+            analysis.recursive.functions.empty())
+            return {};
+        katana::analysis::detail::GuardedNativeEntryShapeCache
+            entry_shapes(image);
+        // ABI modes which do not run the callback companion inside CFA keep
+        // the previous bounded fallback. Native RuntimeOnly exports consume
+        // the canonical final-CFG contracts above and avoid this whole-image
+        // analysis on every latent-AOT fixpoint iteration.
+        static_cast<void>(
+            katana::analysis::detail::analyze_static_callback_inventory(
+                image,
+                analysis.recursive.instructions,
+                analysis.recursive.functions,
+                {},
+                external_code_targets,
+                entry_shapes,
+                &fallback_discovered,
+                &fallback_discovered_fields));
+        discovered = fallback_discovered;
+        discovered_fields = fallback_discovered_fields;
+    }
 
     std::map<std::uint32_t, std::uint8_t> masks;
     for (const auto& sink : discovered) {

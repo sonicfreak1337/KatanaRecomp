@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- Die finale RuntimeOnly-CFA publiziert ihre kanonischen Callback- und
+  Record-Field-Sink-Vertraege jetzt direkt im Analyzerergebnis. Der
+  Cross-Image-Exporter konsumiert genau diese Fixpunktansicht, statt nach
+  jeder Rooterweiterung erneut eine komplette statische Callbackanalyse ueber
+  das Primary Image auszufuehren; andere ABI-Modi behalten einen bounded
+  Fallback. Im realen v129-Analyseupdate fielen die beiden betroffenen
+  Nachanalysephasen zusammen von `81,765 s` auf `44,072 s` (`-46,1 %`).
+  v130 bestaetigt den voll inkrementellen Wiederholungsexport mit `13,748 s`
+  Gesamtzeit, `176/176` Codegen-Hits und einem `2,729 s` Hostbuild. Funktionen,
+  Partitionen, Primary-Roots und Hardware-Closure bleiben bei `6.086`, `176`,
+  `614` sowie `243/244`; die vollstaendige CFA-Sicht behaelt zusaetzlich
+  exakt dekodierte externe Blockkomponenten und meldet deshalb `727`
+  Callback- und `284` Field-Sinks, ohne einen weiteren Product-Root zu
+  erfinden. Analyzer-ABI `53` und Boot-Analysecache-Schema `5` binden den
+  neuen oeffentlichen Ergebnisvertrag.
+
 - Der statische Callback-Fixpunkt kopiert bei Lattice-Joins nicht mehr den
   kompletten verschachtelten `CallbackValue`, sondern fuehrt alle bounded
   Mengen mit direkten Aenderungssignalen zusammen. Delay-Slots sichern nur

@@ -1,7 +1,6 @@
 #pragma once
 
-#include "katana/analysis/function_value_analysis.hpp"
-#include "katana/analysis/recursive_analysis.hpp"
+#include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/io/executable_image.hpp"
 
 #include <span>
@@ -12,28 +11,10 @@ namespace katana::analysis::detail {
 
 class GuardedNativeEntryShapeCache;
 
-struct StaticCallbackSinkContract final {
-    std::uint32_t function_address = 0u;
-    // Bit 0..3 corresponds to the function's incoming r4..r7.
-    std::uint8_t argument_mask = 0u;
-
-    bool operator==(const StaticCallbackSinkContract&) const = default;
-};
-
-// Exact primary-image record-field load which feeds an indirect call/jump.
-// Receiver identity remains an analyzer-local proof domain; this exported
-// shape is used only to retain guarded, identity-checked latent AOT entries
-// written to the same field. It never completes the indirect target set.
-struct StaticCallbackFieldSinkContract final {
-    std::uint32_t function_address = 0u;
-    std::uint32_t call_instruction_address = 0u;
-    std::uint32_t load_instruction_address = 0u;
-    std::int32_t displacement = 0;
-    std::uint8_t width = 0u;
-    bool call = false;
-
-    bool operator==(const StaticCallbackFieldSinkContract&) const = default;
-};
+using StaticCallbackSinkContract =
+    katana::analysis::StaticCallbackSinkContract;
+using StaticCallbackFieldSinkContract =
+    katana::analysis::StaticCallbackFieldSinkContract;
 
 // Returns the sorted, unique record-field displacements which feed an
 // actually decoded indirect call/jump in the supplied image.  These are

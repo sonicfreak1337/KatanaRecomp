@@ -2578,6 +2578,11 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     };
     GuardedCodeInventory final_guarded_code_inventory;
     GuardedCodeInventory static_callback_inventory;
+    std::vector<StaticCallbackSinkContract>
+        final_static_callback_sinks;
+    std::vector<StaticCallbackFieldSinkContract>
+        final_static_callback_field_sinks;
+    bool static_callback_contracts_materialized = false;
     detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
     const auto guarded_callback_candidate_is_admissible =
         [&](const std::uint32_t address) {
@@ -3982,7 +3987,10 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     image, callback_lines, callback_functions,
                     callback_external_entries,
                     non_root_function_entry_hints,
-                    guarded_native_entry_shapes);
+                    guarded_native_entry_shapes,
+                    &final_static_callback_sinks,
+                    &final_static_callback_field_sinks);
+            static_callback_contracts_materialized = true;
             auto& callback_candidates =
                 static_callback_inventory.stored_code_addresses;
             // The inventory already requires both semantic registrar flow
@@ -4970,6 +4978,12 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         final_guarded_code_inventory =
             std::move(static_callback_inventory);
     }
+    analysis.static_callback_sinks =
+        std::move(final_static_callback_sinks);
+    analysis.static_callback_field_sinks =
+        std::move(final_static_callback_field_sinks);
+    analysis.static_callback_contracts_materialized =
+        static_callback_contracts_materialized;
     materialize_recursive_result_once();
     analysis.runtime_code_copies.copies.reserve(
         runtime_copy_result_index.size());

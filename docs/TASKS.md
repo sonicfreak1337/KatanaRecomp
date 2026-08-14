@@ -353,6 +353,15 @@ Sinks, `261` Field-Sinks, `25.431` Codepointer-Evidenzen und der emittierte
 Entry `0x88289190`. `242/242` Host-TUs waren Content-Hits; Budgets und
 Vertraege wurden nicht abgesenkt.
 
+Analyzer-Performance v129/v130: `ControlFlowAnalysisResult` traegt jetzt die
+kanonischen finalen Callback- und Field-Sink-Vertraege; der Cross-Image-
+Exporter wiederholt die komplette Primary-Image-Analyse nicht mehr. Die zwei
+betroffenen Phasen fallen `81,765 -> 44,072 s` (`-46,1 %`). Die Abnahme bleibt
+bei `6.086` Funktionen, `176` Partitionen, `614` Roots und `244` Closure-Gaps;
+die vollstaendigere Owneransicht meldet `727/284` Sinks ohne neuen Root.
+Nach dem ABI-53-Kaltbuild beendet v130 den unveraenderten Wiederholungsexport
+in `13,748 s` mit `176/176` Codegen-Hits und `2,729 s` Hostbuild.
+
 Der Export umfasst `5.918` Funktionen in `167` Partitionen, `4.430` rohe und
 `2.509` guarded Callback-Kandidaten sowie `400.972/4.194.304` Shape-Arbeit
 ohne Truncation. Gegenueber v29: `+815` Funktionen, `+18` Partitionen und

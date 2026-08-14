@@ -913,6 +913,41 @@ void write_graph(
     return value;
 }
 
+void write_static_callback_sink(
+    Writer& output,
+    const katana::analysis::StaticCallbackSinkContract& value) {
+    output.u32(value.function_address);
+    output.u8(value.argument_mask);
+}
+
+[[nodiscard]] katana::analysis::StaticCallbackSinkContract
+read_static_callback_sink(Reader& input) {
+    return {input.u32(), input.u8()};
+}
+
+void write_static_callback_field_sink(
+    Writer& output,
+    const katana::analysis::StaticCallbackFieldSinkContract& value) {
+    output.u32(value.function_address);
+    output.u32(value.call_instruction_address);
+    output.u32(value.load_instruction_address);
+    output.u32(static_cast<std::uint32_t>(value.displacement));
+    output.u8(value.width);
+    output.boolean(value.call);
+}
+
+[[nodiscard]] katana::analysis::StaticCallbackFieldSinkContract
+read_static_callback_field_sink(Reader& input) {
+    katana::analysis::StaticCallbackFieldSinkContract value;
+    value.function_address = input.u32();
+    value.call_instruction_address = input.u32();
+    value.load_instruction_address = input.u32();
+    value.displacement = static_cast<std::int32_t>(input.u32());
+    value.width = input.u8();
+    value.call = input.boolean();
+    return value;
+}
+
 [[nodiscard]] std::vector<std::uint8_t> serialize_payload(
     const PreparedBootAnalysisArtifact& artifact) {
     Writer output(
@@ -943,6 +978,16 @@ void write_graph(
         output,
         artifact.analysis.guarded_aot_entries,
         write_guarded_entry);
+    output.boolean(
+        artifact.analysis.static_callback_contracts_materialized);
+    write_vector(
+        output,
+        artifact.analysis.static_callback_sinks,
+        write_static_callback_sink);
+    write_vector(
+        output,
+        artifact.analysis.static_callback_field_sinks,
+        write_static_callback_field_sink);
     write_analysis_scalars(output, artifact.analysis);
     write_vector(
         output, artifact.hardware_loops, write_hardware_loop);
@@ -978,6 +1023,14 @@ void write_graph(
     artifact.analysis.guarded_aot_entries =
         read_vector<katana::analysis::GuardedAotEntry>(
             input, read_guarded_entry);
+    artifact.analysis.static_callback_contracts_materialized =
+        input.boolean();
+    artifact.analysis.static_callback_sinks =
+        read_vector<katana::analysis::StaticCallbackSinkContract>(
+            input, read_static_callback_sink);
+    artifact.analysis.static_callback_field_sinks =
+        read_vector<katana::analysis::StaticCallbackFieldSinkContract>(
+            input, read_static_callback_field_sink);
     read_analysis_scalars(input, artifact.analysis);
     artifact.hardware_loops =
         read_vector<katana::analysis::HardwareNaturalLoop>(

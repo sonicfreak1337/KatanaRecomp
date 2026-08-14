@@ -50,6 +50,16 @@ Codepointer-Evidenzen blieben mit `6.086`, `176`, `614`, `716`, `261` und
 `25.431` exakt gleich. `0x88289190` bleibt im Dispatch, und `242/242`
 generierte Host-TUs waren Content-Hits.
 
+Der v129-Pass entfernt anschliessend die zwei redundanten Whole-Primary-
+Callbackanalysen aus dem Cross-Image-Exporter. Die finale RuntimeOnly-CFA
+publiziert ihre kanonischen Sinkvertraege direkt; Source-Validation plus die
+zweite Nachanalyse-/Loweringphase fallen `81,765 -> 44,072 s` (`-46,1 %`).
+Die vollstaendige Fixpunktansicht meldet `727` Callback- und `284` Field-Sinks,
+behaelt aber exakt `614` Primary-Roots, `6.086` Funktionen, `176` Partitionen
+und `244` Closure-Gaps. Nach dem einmaligen ABI-53-Kaltbuild bestaetigt v130
+den unveraenderten inkrementellen Export in `13,748 s` mit `176/176`
+Codegen-Hits und `2,729 s` Hostbuild.
+
 Die Hardware-Closure bleibt bei `243` bekannten Sites und `244` Gaps
 (`189` hook-missing, `55` progress-wait); `1.173` Sites werden durch Hooks
 ersetzt. Das ist erwartbar, weil die neue Analyse AOT-Erreichbarkeit statt

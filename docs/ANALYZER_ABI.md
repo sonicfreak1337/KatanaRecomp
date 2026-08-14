@@ -1,6 +1,6 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `52`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `53`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 108, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 23, Portprojektvertrag 101 und Native-Port-
 Profilvertrag 22. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
@@ -11,7 +11,15 @@ Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
 
-Analyzer-ABI 52 bindet die bounded Cross-Image-Record-Callback-Analyse.
+Analyzer-ABI 53 publiziert die kanonischen Callback- und Record-Field-Sinks
+der finalen RuntimeOnly-CFA als Teil von `ControlFlowAnalysisResult`. Der
+Cross-Image-Exporter darf diese Fixpunktansicht direkt wiederverwenden und
+muss das vollstaendige Primary Image nicht erneut analysieren. Ein typisierter
+Materialisierungsstatus trennt die kanonische Sicht von ABI-Modi, die weiterhin
+den bounded Fallback benoetigen. Boot-Analysecache-Schema 5 serialisiert die
+neuen Ergebnisfelder; alte Cacheartefakte werden deterministisch verworfen.
+
+Analyzer-ABI 52 band die bounded Cross-Image-Record-Callback-Analyse.
 Statische Primary-Image-Walker publizieren Funktions-, Call-, Load-, Feld-
 und Call-/Jump-Evidenz; Latent-AOT-Module verfolgen exakte Rueckgaben direkter
 externer Record-Konstruktoren durch CFG-Joins und erkennen lokale

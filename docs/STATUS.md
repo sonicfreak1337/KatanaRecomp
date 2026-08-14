@@ -59,6 +59,16 @@ IR-Lowerings `74,497 -> 43,265 s`. Die Abnahme bleibt bei `614` Roots,
 `0x88289190` bleibt emittiert. Alle `242/242` generierten Host-TUs waren
 Content-Hits.
 
+v129 reicht die finalen Callback-/Field-Sink-Vertraege der RuntimeOnly-CFA
+direkt an Latent-AOT weiter und entfernt damit zwei nachgelagerte
+Whole-Program-Wiederholungen. Die betroffenen Phasen sinken zusammen
+`81,765 -> 44,072 s`; Funktionen, Partitionen und Roots bleiben
+`6.086/176/614`. Die genauere CFA-Owneransicht zaehlt `727/284` Sinks, fuegt
+aber keinen Product-Root und keine Closure-Site hinzu. Der anschliessende
+vollstaendig inkrementelle v130-Export dauert `13,748 s`, trifft `176/176`
+Codegenpartitionen und baut den Host in `2,729 s`. Analyzer-ABI 53 und
+Boot-Analysecache-Schema 5 binden die Ergebnisfelder.
+
 Die Closure bleibt bei `243` bekannten Hardware-Sites und `244` Gaps (`189`
 hook-missing, `55` Progress-Waits); `1.173` Sites sind durch Hooks ersetzt.
 Der Produktlauf passiert den vorher fehlenden Loaded-AOT-Entry und erreicht

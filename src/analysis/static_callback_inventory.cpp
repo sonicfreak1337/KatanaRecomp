@@ -1884,6 +1884,10 @@ GuardedCodeInventory analyze_static_callback_inventory(
         callback_sink_contracts,
     std::vector<StaticCallbackFieldSinkContract>* const
         callback_field_sink_contracts) {
+    if (callback_sink_contracts != nullptr)
+        callback_sink_contracts->clear();
+    if (callback_field_sink_contracts != nullptr)
+        callback_field_sink_contracts->clear();
     GuardedCodeInventory inventory;
     inventory.raw_stored_candidate_budget = maximum_inventory_candidates;
     inventory.candidate_budget = maximum_inventory_candidates;
@@ -2135,7 +2139,6 @@ GuardedCodeInventory analyze_static_callback_inventory(
     }
 
     if (callback_sink_contracts != nullptr) {
-        callback_sink_contracts->clear();
         callback_sink_contracts->reserve(sink_masks.size());
         for (const auto [function_address, argument_mask] : sink_masks) {
             if (argument_mask == 0u) continue;
@@ -2145,7 +2148,6 @@ GuardedCodeInventory analyze_static_callback_inventory(
     }
 
     if (callback_field_sink_contracts != nullptr) {
-        callback_field_sink_contracts->clear();
         for (const auto& function : functions) {
             const auto structural =
                 discover_structural_callback_field_sinks(
