@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 1u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 2u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
 
 struct NativePortPlatformConfig final {
@@ -127,6 +127,10 @@ enum class NativePortGamepadButton : std::uint32_t {
     return static_cast<std::uint32_t>(button);
 }
 
+// Stick axes use a backend-independent coordinate system: left/down is -1,
+// right/up is +1. Face buttons describe their physical layout (A=south,
+// B=east, X=west, Y=north), so XInput, DualSense/DualShock and future Linux
+// backends feed the same title-facing contract.
 struct NativePortGamepadState final {
     bool connected = false;
     std::uint32_t packet_number = 0u;

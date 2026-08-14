@@ -27,6 +27,13 @@ Closure-Arbeit, keine Regression. Der 100-s-Produktsmoke erreichte Film 0
 Memory-Card-Pfad und Hauptmenue; ein Start-Controllerimpuls ist erst seit dem
 vollstaendigen No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
 
+Der Windows-Native-Port hat jetzt XInput- sowie WinMM-Controllerabdeckung
+fuer DualSense, DualShock und generisches HID. Physische Sony-Controller
+haben bei neuer Belegung Prioritaet; stabile Slots, Hotplug und konsistente
+Achsen sind Teil des Plattformvertrags `2`, XInput-Vibration bleibt direkt
+gebunden. Der Runtime-/CLI-Build ist sauber; die physische DualSense-
+Menuabnahme bleibt offen, bis ein Nutzer vor Ort testet.
+
 ## Produktziel
 
 KatanaRecomp ist ein statischer SH-4-Recompiler fuer native PC-Ports. Ein
@@ -369,8 +376,8 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 105, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 96, Native-Port-Profilvertrag 19
+  Runtime-ABI 106, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 97, Native-Port-Profilvertrag 20
   Analyzer-ABI 48
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13

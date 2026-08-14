@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -15,6 +16,7 @@
 #include <windows.h>
 
 #include <bcrypt.h>
+#include <mmsystem.h>
 #include <xinput.h>
 #endif
 
@@ -647,13 +649,41 @@ struct XInputApi final {
     return {};
 }
 
-[[nodiscard]] float normalized_axis(const SHORT value) noexcept {
+[[nodiscard]] float normalized_axis(const std::int16_t value) noexcept {
     return value < 0
                ? std::max(-1.0f, static_cast<float>(value) / 32'768.0f)
                : std::min(1.0f, static_cast<float>(value) / 32'767.0f);
 }
 
-[[nodiscard]] std::uint32_t native_buttons(const WORD value) noexcept {
+[[nodiscard]] std::int16_t inverted_axis(
+    const std::int16_t value) noexcept {
+    const auto inverted = -static_cast<std::int32_t>(value);
+    return static_cast<std::int16_t>(std::clamp(
+        inverted,
+        static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::min()),
+        static_cast<std::int32_t>(std::numeric_limits<std::int16_t>::max())));
+}
+
+[[nodiscard]] std::int16_t joystick_axis(
+    const DWORD value,
+    const UINT minimum,
+    const UINT maximum) noexcept {
+    if (maximum <= minimum) return 0;
+    const auto clamped =
+        std::clamp<std::uint64_t>(value, minimum, maximum) - minimum;
+    const auto range = static_cast<std::uint64_t>(maximum) - minimum;
+    const auto scaled = (clamped * 65'535u) / range;
+    return static_cast<std::int16_t>(
+        static_cast<std::int32_t>(scaled) - 32'768);
+}
+
+[[nodiscard]] std::uint8_t joystick_trigger(
+    const std::uint32_t value) noexcept {
+    return static_cast<std::uint8_t>(
+        std::min(value, 65'535u) / 257u);
+}
+
+[[nodiscard]] std::uint32_t xinput_buttons(const WORD value) noexcept {
     std::uint32_t result = 0u;
     const auto copy = [&](const WORD source,
                           const NativePortGamepadButton destination) {
@@ -677,6 +707,138 @@ struct XInputApi final {
     copy(XINPUT_GAMEPAD_X, NativePortGamepadButton::X);
     copy(XINPUT_GAMEPAD_Y, NativePortGamepadButton::Y);
     return result;
+}
+
+enum class NativeGamepadSourceKind : std::uint8_t {
+    XInput,
+    DualSense,
+    DualShock,
+    StandardHid,
+};
+
+constexpr std::uint64_t xinput_device_domain = 0x0100000000000000ull;
+constexpr std::uint64_t joystick_device_domain = 0x0200000000000000ull;
+constexpr std::uint64_t input_device_domain_mask = 0xFF00000000000000ull;
+constexpr std::uint64_t input_device_slot_mask = 0x00000000FFFFFFFFull;
+
+struct NativeGamepadCandidate final {
+    std::uint64_t device_id = 0u;
+    NativeGamepadSourceKind kind = NativeGamepadSourceKind::StandardHid;
+    NativePortGamepadState state;
+};
+
+[[nodiscard]] NativeGamepadSourceKind joystick_kind(
+    const JOYCAPSW& capabilities) noexcept {
+    constexpr WORD sony_vendor = 0x054Cu;
+    if (capabilities.wMid != sony_vendor)
+        return NativeGamepadSourceKind::StandardHid;
+    switch (capabilities.wPid) {
+    case 0x0CE6u:
+    case 0x0DF2u:
+        return NativeGamepadSourceKind::DualSense;
+    case 0x05C4u:
+    case 0x09CCu:
+    case 0x0BA0u:
+        return NativeGamepadSourceKind::DualShock;
+    default:
+        return NativeGamepadSourceKind::StandardHid;
+    }
+}
+
+[[nodiscard]] unsigned source_priority(
+    const NativeGamepadSourceKind kind) noexcept {
+    switch (kind) {
+    case NativeGamepadSourceKind::DualSense:
+        return 0u;
+    case NativeGamepadSourceKind::DualShock:
+        return 1u;
+    case NativeGamepadSourceKind::XInput:
+        return 2u;
+    case NativeGamepadSourceKind::StandardHid:
+        return 3u;
+    }
+    return 4u;
+}
+
+void add_button(std::uint32_t& buttons,
+                const bool pressed,
+                const NativePortGamepadButton destination) noexcept {
+    if (pressed)
+        buttons |= native_port_gamepad_button_mask(destination);
+}
+
+void add_pov_buttons(std::uint32_t& buttons, const DWORD pov) noexcept {
+    if (pov == JOY_POVCENTERED || pov > 35'999u) return;
+    add_button(buttons,
+               pov >= 31'500u || pov < 4'500u,
+               NativePortGamepadButton::DpadUp);
+    add_button(buttons,
+               pov >= 4'500u && pov < 13'500u,
+               NativePortGamepadButton::DpadRight);
+    add_button(buttons,
+               pov >= 13'500u && pov < 22'500u,
+               NativePortGamepadButton::DpadDown);
+    add_button(buttons,
+               pov >= 22'500u && pov < 31'500u,
+               NativePortGamepadButton::DpadLeft);
+}
+
+void add_joystick_buttons(NativePortGamepadState& state,
+                          const NativeGamepadSourceKind kind,
+                          const DWORD value) noexcept {
+    const auto pressed = [&](const unsigned index) {
+        return (value & (DWORD{1u} << index)) != 0u;
+    };
+    const bool sony = kind == NativeGamepadSourceKind::DualSense ||
+                      kind == NativeGamepadSourceKind::DualShock;
+    if (sony) {
+        add_button(state.buttons, pressed(0u), NativePortGamepadButton::X);
+        add_button(state.buttons, pressed(1u), NativePortGamepadButton::A);
+        add_button(state.buttons, pressed(2u), NativePortGamepadButton::B);
+        add_button(state.buttons, pressed(3u), NativePortGamepadButton::Y);
+        add_button(state.buttons, pressed(8u), NativePortGamepadButton::View);
+        add_button(state.buttons, pressed(9u), NativePortGamepadButton::Menu);
+    } else {
+        add_button(state.buttons, pressed(0u), NativePortGamepadButton::A);
+        add_button(state.buttons, pressed(1u), NativePortGamepadButton::B);
+        add_button(state.buttons, pressed(2u), NativePortGamepadButton::X);
+        add_button(state.buttons, pressed(3u), NativePortGamepadButton::Y);
+        add_button(state.buttons, pressed(6u), NativePortGamepadButton::View);
+        add_button(state.buttons, pressed(7u), NativePortGamepadButton::Menu);
+    }
+    add_button(state.buttons,
+               pressed(4u),
+               NativePortGamepadButton::LeftShoulder);
+    add_button(state.buttons,
+               pressed(5u),
+               NativePortGamepadButton::RightShoulder);
+    add_button(state.buttons,
+               pressed(10u),
+               NativePortGamepadButton::LeftStick);
+    add_button(state.buttons,
+               pressed(11u),
+               NativePortGamepadButton::RightStick);
+}
+
+[[nodiscard]] bool same_gamepad_payload(
+    const NativePortGamepadState& left,
+    const NativePortGamepadState& right) noexcept {
+    return left.buttons == right.buttons &&
+           left.left_stick_x_raw == right.left_stick_x_raw &&
+           left.left_stick_y_raw == right.left_stick_y_raw &&
+           left.right_stick_x_raw == right.right_stick_x_raw &&
+           left.right_stick_y_raw == right.right_stick_y_raw &&
+           left.left_trigger_raw == right.left_trigger_raw &&
+           left.right_trigger_raw == right.right_trigger_raw;
+}
+
+[[nodiscard]] std::optional<DWORD> xinput_slot_from_device(
+    const std::uint64_t device_id) noexcept {
+    if ((device_id & input_device_domain_mask) != xinput_device_domain)
+        return std::nullopt;
+    const auto encoded = device_id & input_device_slot_mask;
+    if (encoded == 0u || encoded > XUSER_MAX_COUNT) return std::nullopt;
+    return static_cast<DWORD>(encoded - 1u);
 }
 
 constexpr std::array<std::byte, 16u> save_magic{
@@ -984,13 +1146,19 @@ class NativePortPlatformServices::Impl final {
         open_save_lock();
 
         xinput_ = load_xinput();
-        if (config.require_gamepad_backend && xinput_.get_state == nullptr)
+        // WinMM is linked into the Windows native runtime and remains a valid
+        // hot-plug backend even when no joystick is connected at startup.
+        // `joyGetNumDevs()` reports configured driver slots, not backend
+        // availability; using its transient value here would reject a valid
+        // product before a DualSense/DualShock is plugged in.
+        constexpr bool gamepad_backend_available = true;
+        if (config.require_gamepad_backend && !gamepad_backend_available)
             fail_platform(NativePortPlatformFailure::InputBackend,
                           ERROR_MOD_NOT_FOUND,
-                          "xinput-load");
+                          "gamepad-backend-load");
         telemetry_->snapshot.native_file_backend = true;
         telemetry_->snapshot.native_gamepad_backend =
-            xinput_.get_state != nullptr;
+            gamepad_backend_available;
         telemetry_->snapshot.native_save_backend = true;
     }
 
@@ -1001,9 +1169,11 @@ class NativePortPlatformServices::Impl final {
             for (std::size_t index = 0u;
                  index < vibration_active_.size();
                  ++index) {
-                if (vibration_active_[index])
+                const auto source =
+                    xinput_slot_from_device(input_device_ids_[index]);
+                if (vibration_active_[index] && source.has_value())
                     static_cast<void>(xinput_.set_state(
-                        static_cast<DWORD>(index), &stopped));
+                        *source, &stopped));
             }
         }
     }
@@ -1123,48 +1293,201 @@ class NativePortPlatformServices::Impl final {
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads() {
         require_owner_thread();
+        std::vector<NativeGamepadCandidate> candidates;
+        candidates.reserve(XUSER_MAX_COUNT + joyGetNumDevs());
+
+        if (xinput_.get_state != nullptr) {
+            for (DWORD source_index = 0u;
+                 source_index < XUSER_MAX_COUNT;
+                 ++source_index) {
+                XINPUT_STATE state{};
+                const auto status = xinput_.get_state(source_index, &state);
+                if (status == ERROR_DEVICE_NOT_CONNECTED) continue;
+                if (status != ERROR_SUCCESS) {
+                    telemetry_->snapshot.last_platform_error_code = status;
+                    fail_platform(NativePortPlatformFailure::InputBackend,
+                                  status,
+                                  "xinput-poll");
+                }
+                const auto& source = state.Gamepad;
+                NativeGamepadCandidate candidate;
+                candidate.device_id = xinput_device_domain |
+                                      (static_cast<std::uint64_t>(
+                                           source_index) +
+                                       1u);
+                candidate.kind = NativeGamepadSourceKind::XInput;
+                candidate.state.connected = true;
+                candidate.state.buttons = xinput_buttons(source.wButtons);
+                candidate.state.left_stick_x_raw = source.sThumbLX;
+                candidate.state.left_stick_y_raw = source.sThumbLY;
+                candidate.state.right_stick_x_raw = source.sThumbRX;
+                candidate.state.right_stick_y_raw = source.sThumbRY;
+                candidate.state.left_trigger_raw = source.bLeftTrigger;
+                candidate.state.right_trigger_raw = source.bRightTrigger;
+                candidate.state.left_stick_x =
+                    normalized_axis(source.sThumbLX);
+                candidate.state.left_stick_y =
+                    normalized_axis(source.sThumbLY);
+                candidate.state.right_stick_x =
+                    normalized_axis(source.sThumbRX);
+                candidate.state.right_stick_y =
+                    normalized_axis(source.sThumbRY);
+                candidate.state.left_trigger =
+                    static_cast<float>(source.bLeftTrigger) / 255.0f;
+                candidate.state.right_trigger =
+                    static_cast<float>(source.bRightTrigger) / 255.0f;
+                candidates.push_back(candidate);
+            }
+        }
+
+        const auto joystick_count = joyGetNumDevs();
+        for (UINT source_index = 0u;
+             source_index < joystick_count;
+             ++source_index) {
+            JOYCAPSW capabilities{};
+            if (joyGetDevCapsW(source_index,
+                               &capabilities,
+                               sizeof(capabilities)) != JOYERR_NOERROR)
+                continue;
+            JOYINFOEX info{};
+            info.dwSize = sizeof(info);
+            info.dwFlags = JOY_RETURNALL;
+            if (joyGetPosEx(source_index, &info) != JOYERR_NOERROR) continue;
+
+            NativeGamepadCandidate candidate;
+            candidate.device_id = joystick_device_domain |
+                                  (static_cast<std::uint64_t>(source_index) +
+                                   1u);
+            candidate.kind = joystick_kind(capabilities);
+            auto& destination = candidate.state;
+            destination.connected = true;
+            add_joystick_buttons(destination, candidate.kind, info.dwButtons);
+            add_pov_buttons(destination.buttons, info.dwPOV);
+            destination.left_stick_x_raw = joystick_axis(
+                info.dwXpos, capabilities.wXmin, capabilities.wXmax);
+            destination.left_stick_y_raw = inverted_axis(joystick_axis(
+                info.dwYpos, capabilities.wYmin, capabilities.wYmax));
+            if ((capabilities.wCaps & JOYCAPS_HASR) != 0u)
+                destination.right_stick_x_raw = joystick_axis(
+                    info.dwRpos, capabilities.wRmin, capabilities.wRmax);
+            if ((capabilities.wCaps & JOYCAPS_HASU) != 0u)
+                destination.right_stick_y_raw = inverted_axis(joystick_axis(
+                    info.dwUpos, capabilities.wUmin, capabilities.wUmax));
+            else if ((capabilities.wCaps & JOYCAPS_HASV) != 0u)
+                destination.right_stick_y_raw = inverted_axis(joystick_axis(
+                    info.dwVpos, capabilities.wVmin, capabilities.wVmax));
+            if ((capabilities.wCaps & JOYCAPS_HASZ) != 0u &&
+                capabilities.wZmax > capabilities.wZmin) {
+                const auto trigger_axis = joystick_axis(
+                    info.dwZpos, capabilities.wZmin, capabilities.wZmax);
+                if (trigger_axis < 0) {
+                    const auto magnitude = static_cast<std::uint32_t>(
+                        -static_cast<std::int32_t>(trigger_axis));
+                    destination.left_trigger_raw =
+                        joystick_trigger(magnitude * 2u);
+                } else {
+                    destination.right_trigger_raw = joystick_trigger(
+                        static_cast<std::uint32_t>(trigger_axis) * 2u);
+                }
+            }
+            destination.left_stick_x =
+                normalized_axis(destination.left_stick_x_raw);
+            destination.left_stick_y =
+                normalized_axis(destination.left_stick_y_raw);
+            destination.right_stick_x =
+                normalized_axis(destination.right_stick_x_raw);
+            destination.right_stick_y =
+                normalized_axis(destination.right_stick_y_raw);
+            destination.left_trigger =
+                static_cast<float>(destination.left_trigger_raw) / 255.0f;
+            destination.right_trigger =
+                static_cast<float>(destination.right_trigger_raw) / 255.0f;
+            candidates.push_back(candidate);
+        }
+
+        std::ranges::sort(candidates, [](const auto& left, const auto& right) {
+            const auto left_priority = source_priority(left.kind);
+            const auto right_priority = source_priority(right.kind);
+            if (left_priority != right_priority)
+                return left_priority < right_priority;
+            return left.device_id < right.device_id;
+        });
+
         NativePortInputSnapshot result = input_snapshot_;
         saturating_increment(result.poll_sequence);
-        if (xinput_.get_state == nullptr) {
-            input_snapshot_ = result;
-            saturating_increment(telemetry_->snapshot.input_polls);
-            return input_snapshot_;
-        }
-        for (std::size_t index = 0u; index < result.gamepads.size(); ++index) {
-            XINPUT_STATE state{};
-            const auto status = xinput_.get_state(
-                static_cast<DWORD>(index), &state);
-            const bool was_connected = result.gamepads[index].connected;
-            if (status == ERROR_DEVICE_NOT_CONNECTED) {
-                result.gamepads[index] = {};
-            } else if (status != ERROR_SUCCESS) {
-                telemetry_->snapshot.last_platform_error_code = status;
-                fail_platform(NativePortPlatformFailure::InputBackend,
-                              status,
-                              "xinput-poll");
-            } else {
-                const auto& source = state.Gamepad;
-                auto& destination = result.gamepads[index];
-                destination.connected = true;
-                destination.packet_number = state.dwPacketNumber;
-                destination.buttons = native_buttons(source.wButtons);
-                destination.left_stick_x_raw = source.sThumbLX;
-                destination.left_stick_y_raw = source.sThumbLY;
-                destination.right_stick_x_raw = source.sThumbRX;
-                destination.right_stick_y_raw = source.sThumbRY;
-                destination.left_trigger_raw = source.bLeftTrigger;
-                destination.right_trigger_raw = source.bRightTrigger;
-                destination.left_stick_x = normalized_axis(source.sThumbLX);
-                destination.left_stick_y = normalized_axis(source.sThumbLY);
-                destination.right_stick_x = normalized_axis(source.sThumbRX);
-                destination.right_stick_y = normalized_axis(source.sThumbRY);
-                destination.left_trigger =
-                    static_cast<float>(source.bLeftTrigger) / 255.0f;
-                destination.right_trigger =
-                    static_cast<float>(source.bRightTrigger) / 255.0f;
+        std::array<std::optional<std::size_t>, native_port_gamepad_count>
+            placement{};
+        std::vector<bool> candidate_used(candidates.size(), false);
+
+        // Keep a connected device in its previous title-visible slot. New
+        // devices then fill free slots by backend priority, with physical Sony
+        // controllers ahead of possible XInput compatibility wrappers.
+        for (std::size_t slot = 0u; slot < placement.size(); ++slot) {
+            if (input_device_ids_[slot] == 0u) continue;
+            for (std::size_t candidate_index = 0u;
+                 candidate_index < candidates.size();
+                 ++candidate_index) {
+                if (!candidate_used[candidate_index] &&
+                    candidates[candidate_index].device_id ==
+                        input_device_ids_[slot]) {
+                    placement[slot] = candidate_index;
+                    candidate_used[candidate_index] = true;
+                    break;
+                }
             }
-            if (was_connected != result.gamepads[index].connected)
+        }
+
+        std::size_t free_slot = 0u;
+        for (std::size_t candidate_index = 0u;
+             candidate_index < candidates.size();
+             ++candidate_index) {
+            if (candidate_used[candidate_index]) continue;
+            while (free_slot < placement.size() &&
+                   placement[free_slot].has_value())
+                ++free_slot;
+            if (free_slot == placement.size()) break;
+            placement[free_slot] = candidate_index;
+            candidate_used[candidate_index] = true;
+        }
+
+        XINPUT_VIBRATION stopped{};
+        for (std::size_t slot = 0u; slot < result.gamepads.size(); ++slot) {
+            const auto old_device_id = input_device_ids_[slot];
+            const auto new_device_id = placement[slot].has_value()
+                                           ? candidates[*placement[slot]]
+                                                 .device_id
+                                           : 0u;
+            if (old_device_id != new_device_id) {
+                if (vibration_active_[slot] && xinput_.set_state != nullptr) {
+                    const auto old_xinput =
+                        xinput_slot_from_device(old_device_id);
+                    if (old_xinput.has_value())
+                        static_cast<void>(
+                            xinput_.set_state(*old_xinput, &stopped));
+                }
+                vibration_active_[slot] = false;
                 saturating_increment(result.connection_generation);
+            }
+
+            if (!placement[slot].has_value()) {
+                result.gamepads[slot] = {};
+                input_device_ids_[slot] = 0u;
+                continue;
+            }
+
+            auto destination = candidates[*placement[slot]].state;
+            const auto& previous = input_snapshot_.gamepads[slot];
+            if (old_device_id == new_device_id && previous.connected) {
+                destination.packet_number = previous.packet_number;
+                if (!same_gamepad_payload(previous, destination) &&
+                    destination.packet_number !=
+                        std::numeric_limits<std::uint32_t>::max())
+                    ++destination.packet_number;
+            } else {
+                destination.packet_number = 1u;
+            }
+            result.gamepads[slot] = destination;
+            input_device_ids_[slot] = new_device_id;
         }
         input_snapshot_ = result;
         saturating_increment(telemetry_->snapshot.input_polls);
@@ -1191,12 +1514,15 @@ class NativePortPlatformServices::Impl final {
                           ERROR_INVALID_PARAMETER,
                           "vibration-range");
         if (xinput_.set_state == nullptr) return false;
+        const auto source =
+            xinput_slot_from_device(input_device_ids_[controller_index]);
+        if (!source.has_value()) return false;
         XINPUT_VIBRATION state{};
         state.wLeftMotorSpeed = static_cast<WORD>(std::lround(
             vibration.low_frequency * 65'535.0f));
         state.wRightMotorSpeed = static_cast<WORD>(std::lround(
             vibration.high_frequency * 65'535.0f));
-        const auto status = xinput_.set_state(controller_index, &state);
+        const auto status = xinput_.set_state(*source, &state);
         if (status == ERROR_DEVICE_NOT_CONNECTED) {
             vibration_active_[controller_index] = false;
             return false;
@@ -1503,6 +1829,7 @@ class NativePortPlatformServices::Impl final {
     UniqueHandle save_lock_;
     XInputApi xinput_;
     NativePortInputSnapshot input_snapshot_;
+    std::array<std::uint64_t, native_port_gamepad_count> input_device_ids_{};
     std::array<bool, native_port_gamepad_count> vibration_active_{};
 };
 

@@ -4,6 +4,18 @@
 
 ### Geaendert
 
+- Der Windows-Native-Port besitzt jetzt einen einheitlichen Gamepad-Backend-
+  Vertrag (`v2`): XInput sowie WinMM fuer DualSense, DualShock und generische
+  HID-Controller liefern stabile Titel-Slots ueber Hotplug, konsistente
+  Achskoordinaten und physische Sony-Prioritaet bei neuer Belegung. XInput-
+  Vibration bleibt an den tatsaechlichen XInput-Controller gebunden. Der
+  oeffentliche Runtime-/CLI-Build ist sauber; ein privater Export endete nach
+  `567,512 s` mit Exit `0`, `5.774` Funktionen und `168` Partitionen. Die
+  Closure bleibt bei `1.423` Sites, `1.425` Gaps und `865` ersetzten Sites.
+  Der physische DualSense-Menutest steht aus, weil kein Nutzer vor Ort ist.
+  Runtime-ABI `106`, Portprojektvertrag `97` und Native-Port-Profilvertrag
+  `20` versionieren den kompatibilitaetsrelevanten Stand.
+
 - Der aktuelle Latent-AOT-Export erkennt generisch eine
   identitaetsgebundene PRS-Praefix-Entry-Tabelle: Nur `3..64` eindeutige,
   direkte Main-RAM-Ziele mit Nullterminator, passendem page-aligned

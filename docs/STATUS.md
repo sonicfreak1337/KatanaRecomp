@@ -77,6 +77,16 @@ Closure-Sichtbarkeit, keine Regression. Der Release-Build mit `24` Jobs
 endete in `51,4 s`; der 100-s-Produktsmoke erreichte Film 0 `200/200`, aber
 noch keine dynamische Overlay-Bestaetigung.
 
+Der Windows-Native-Port unterstuetzt nun XInput und WinMM-DualSense,
+DualShock sowie generisches HID ueber Plattformvertrag `2`. Physische Sony-
+Controller werden bei neuer Belegung priorisiert; Slots bleiben ueber Hotplug
+stabil, Achsen sind backenduebergreifend konsistent und XInput-Vibration
+bleibt dem tatsaechlichen XInput-Geraet zugeordnet. Der Runtime-/CLI-Build ist
+sauber. Der private Export endete nach `567,512 s` mit Exit `0`, `5.774`
+Funktionen und `168` Partitionen; die Closure bleibt bei `1.423` Sites,
+`1.425` Gaps und `865` ersetzten Sites. Der physische DualSense-Menutest
+steht ohne anwesenden Nutzer noch aus.
+
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
 Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
@@ -250,11 +260,11 @@ Abdeckung, Adresskarte und Lebenszyklusbefunde werden wiederverwendet; seine
 AICA-/ARM7- und CPU-PVR-Ausfuehrung ist keine Produktarchitektur mehr.
 
 Funktionaler Source-Stand: aktueller KR-5005-Architekturreview-Checkpoint.
-Aktuell gelten Runtime-ABI `105`,
+Aktuell gelten Runtime-ABI `106`,
 PlatformServices-ABI `14`, Analyzer-ABI `48`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
-`23`, PVR-State-Contract `3`, Portprojektvertrag `96` und Native-Port-
-Profilvertrag `19`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
+`23`, PVR-State-Contract `3`, Portprojektvertrag `97` und Native-Port-
+Profilvertrag `20`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst
