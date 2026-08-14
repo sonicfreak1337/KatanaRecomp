@@ -80,6 +80,12 @@ Relocation-Closure RuntimeOnly-Roots bilden. Externe exakte Hints bleiben
 eigenstaendig; nicht inventarisierte Ziele bleiben typisierte Stop-on-miss-
 Faelle. Die pfadfreie Kandidatendiagnostik exponiert nur Groessen-, Entry- und
 terminale Vollstaendigkeitsdimensionen, nicht Quellnamen, Adressen oder Bytes.
+Die Zielobergrenze zaehlt ausschliesslich Nicht-Null-Ziele; der Terminator wird
+in einer zusaetzlichen begrenzten Zelle gelesen. Die statisch aus den
+Tabellenwerten abgeleitete Page-Basis beweist nur relative Offsets. Eine
+Produktabbildung entsteht erst, wenn der Loaded-AOT-Binder am erreichten
+Runtimebereich die exakte materialisierte Modul- beziehungsweise
+Codeidentitaet unabhaengig bestaetigt.
 
 Im historischen ABI-41-Stand wurde die davon getrennte oeffentliche
 Codegen-Grenze `PortExportOptions::native_port_definition` durch

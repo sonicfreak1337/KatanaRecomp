@@ -39,6 +39,14 @@
   Profilvertrag `19`, Native-AOT-Emissionsprofil `36` und
   Port-Metadata-Cache-Schema `8` versionieren den Stand.
 
+- Die `3..64`-Grenze liest den Nullterminator jetzt als eigene, zusaetzliche
+  begrenzte Tabellenzelle. Damit ist auch eine Tabelle aus exakt `64` Zielen
+  plus Terminator zulaessig; ein 65. Ziel bleibt fail-closed. Die aus den
+  Tabellenwerten gewonnene Page-Basis ist nur ein statischer relativer
+  Layoutbeweis. Erst die spaetere exakte Modul-/Codeidentitaetspruefung am
+  tatsaechlich erreichten Loaded-AOT-Bereich autorisiert eine
+  Laufzeitabbildung.
+
 - Der v111/v30-Produktlauf schliesst die native MOVIE.BIN-Sequenz als
   identitaetsgebundenen Multi-Clip-Vertrag. Ohne Controllerinput oder Skip
   liefen Sonic Team (`200/200` Video, `294.016` Audioframes, `200`

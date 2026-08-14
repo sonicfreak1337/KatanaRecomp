@@ -18,7 +18,10 @@ Der aktuelle Export umfasst `5.773` Funktionen in `168` Partitionen. Seine
 identitaetsgebundene PRS-Prefix-Entry-Table-Erkennung laesst nur begrenzte,
 nullterminierte `3..64`-Entry-Tabellen nach Runtimeextent-, Decode-,
 Early-CF-, CFG- und Relocation-Proof als RuntimeOnly-Roots zu und bleibt von
-privaten exakten Hints getrennt; unbekannte Ziele enden per Stop-on-miss.
+privaten exakten Hints getrennt; unbekannte Ziele enden per Stop-on-miss. Der
+Terminator wird nach maximal `64` Nicht-Null-Zielzellen separat gelesen; die
+abgeleitete Page-Basis ist nur relative Layoutevidenz, bis der Loaded-AOT-
+Binder den tatsaechlichen materialisierten Runtimebereich exakt bestaetigt.
 `36/36` Module/Quellen ergeben `6.171` Blocks, `200` Funktionsidentitaeten,
 `3.406` externe Pointer und `440` Transfers. Die Hardware-Closure hat
 `1.423` bekannte Sites und `1.425` Gaps (`1.373` hook-missing, `51`

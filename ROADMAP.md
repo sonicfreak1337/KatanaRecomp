@@ -19,7 +19,10 @@ Der aktuelle Export umfasst `5.773` Funktionen in `168` Partitionen. Seine
 generische, identitaetsgebundene PRS-Prefix-Entry-Table-Erkennung akzeptiert
 nur begrenzte, nullterminierte `3..64`-Entry-Tabellen nach Runtimeextent-,
 Decode-, Early-CF-, CFG- und Relocation-Proof; sie bleibt getrennt von
-privaten exakten Hints und RuntimeOnly behaelt Stop-on-miss. Die Hardware-
+privaten exakten Hints und RuntimeOnly behaelt Stop-on-miss. Der Terminator
+liegt ausserhalb der maximal `64` Zielzellen; die statische Page-Basis bleibt
+nur relative Layoutevidenz und wird vor Produktaktivierung durch die exakte
+Loaded-AOT-Materialisierung gebunden. Die Hardware-
 Closure zeigt `1.425` Gaps (`1.373` hook-missing, `51` progress-wait, `1`
 root-ownership) bei `1.423` bekannten Sites. Das ist neu sichtbare
 Closure-Arbeit, keine Regression. Der 100-s-Produktsmoke erreichte Film 0

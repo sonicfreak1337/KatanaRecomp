@@ -596,8 +596,12 @@ std::vector<std::uint32_t> latent_prefix_entry_table_offsets(
     std::vector<std::uint32_t> targets;
     targets.reserve(maximum_latent_aot_prefix_entry_table_targets);
     bool terminated = false;
+    // The cardinality cap applies to non-null targets, not to the terminating
+    // cell.  A valid 64-target table therefore needs one additional bounded
+    // read for cell 64.  Reject a 65th target instead of silently narrowing
+    // the documented 3..64 contract to 3..63.
     for (std::size_t cell = 0u;
-         cell < maximum_latent_aot_prefix_entry_table_targets &&
+         cell <= maximum_latent_aot_prefix_entry_table_targets &&
          (cell + 1u) * cell_size <= bytes.size();
          ++cell) {
         const auto offset = cell * cell_size;
@@ -609,6 +613,9 @@ std::vector<std::uint32_t> latent_prefix_entry_table_offsets(
             terminated = true;
             break;
         }
+        if (targets.size() ==
+            maximum_latent_aot_prefix_entry_table_targets)
+            return {};
         const auto normalized = latent_direct_code_address(raw);
         if (!normalized.has_value() ||
             *normalized < latent_aot_main_ram_begin ||
@@ -623,11 +630,14 @@ std::vector<std::uint32_t> latent_prefix_entry_table_offsets(
     std::set<std::uint32_t> unique_targets(targets.begin(), targets.end());
     if (unique_targets.size() != targets.size()) return {};
 
-    // This header class is self-basing: the transformed module begins with a
-    // null-terminated table and its first executable entry lies in the first
-    // page of the page-aligned runtime image.  Derive no address from a file
-    // name or mutable runtime observation.  The subsequent complete CFA and
-    // relocation-closure gates still have to prove every recovered entry.
+    // The table proves a self-consistent relative layout, not an authoritative
+    // runtime placement.  Derive no address from a file name or mutable
+    // observation: use the lowest encoded entry page only to recover bounded
+    // module-relative offsets.  Product activation independently derives the
+    // actual runtime start from a reached block, validates the exact
+    // materialized module/code identities and installs that mapping before
+    // any recovered entry can dispatch.  The complete CFA and relocation-
+    // closure gates below still have to prove every recovered entry.
     const auto first_target = *unique_targets.begin();
     const auto runtime_base =
         first_target & ~(latent_aot_runtime_page_size - 1u);
