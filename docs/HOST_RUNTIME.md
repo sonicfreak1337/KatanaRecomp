@@ -41,6 +41,23 @@ Der alte 64-Slot-AICA-/ARM7-Mixer bleibt ausschliesslich im nicht
 installierbaren historischen Diagnosepfad. Seine fruehere
 `Arm7ExecutionFailure`-Semantik ist kein Produktvertrag.
 
+## Speicherstaende
+
+Der native Produktpfad verwendet `NativePortSaveProvider` als semantische
+Titel-/SDK-Grenze. Bis zu 24 explizit konfigurierte Endpunkte liefern Query,
+List, Read, Write und Remove ueber logische IDs; die Standardgeometrie eines
+VMU-artigen Nutzermediums betraegt 200 Bloecke zu 512 Bytes. Profil und Medium
+sind Bestandteil des inneren Volumes, waehrend der Plattformdienst das
+gesamte Volume projekt-, slot-, schema-, generations- und digestgebunden mit
+Backup-Recovery atomar speichert. Reads kopieren erst nach vollstaendiger
+Validierung in den Zielpuffer; Writes und Removes publizieren nur ein
+vollstaendiges neues Volume. DirectoryFull, InsufficientBlocks, ReadOnly,
+GenerationConflict, Corrupt und Incompatible bleiben getrennte Fehler.
+
+Diese Schicht ist kein Maple-/VMU-Geraet: Ein privater Titeladapter erhaelt
+die originalen ABI-, RAM- und Callback-Seiteneffekte und ruft ausschliesslich
+die abgeschlossenen semantischen Operationen auf.
+
 ## Eingabe und Lebenszyklus
 
 Unter Windows pollt `Win32GamepadSource` XInput dynamisch ueber

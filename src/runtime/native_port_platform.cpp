@@ -28,7 +28,8 @@ namespace katana::runtime {
 namespace {
 
 constexpr std::size_t maximum_platform_identifier_bytes = 128u;
-constexpr std::size_t maximum_save_slot_bytes = 64u;
+constexpr std::size_t maximum_save_slot_bytes =
+    native_port_save_slot_id_maximum_bytes;
 constexpr std::uint64_t maximum_content_budget_bytes =
     64ull * 1024u * 1024u * 1024u;
 constexpr std::uint32_t maximum_save_budget_bytes = 64u * 1024u * 1024u;
@@ -1303,6 +1304,8 @@ class NativePortPlatformServices::Impl final {
         telemetry_->snapshot.native_gamepad_backend =
             gamepad_backend_available;
         telemetry_->snapshot.native_save_backend = true;
+        telemetry_->snapshot.maximum_save_payload_bytes =
+            maximum_save_payload_bytes_;
     }
 
     ~Impl() noexcept {

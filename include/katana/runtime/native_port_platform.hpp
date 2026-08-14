@@ -14,8 +14,11 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 4u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 5u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
+// Public bound for NativePortSaveKey::slot_id. Higher-level semantic save
+// providers must be able to validate their composed keys before host I/O.
+inline constexpr std::size_t native_port_save_slot_id_maximum_bytes = 64u;
 
 struct NativePortPlatformConfig final {
     std::uint32_t contract_version = native_port_platform_contract_version;
@@ -191,6 +194,7 @@ struct NativePortPlatformSnapshot final {
     std::uint64_t save_store_operations = 0u;
     std::uint64_t save_bytes_read = 0u;
     std::uint64_t save_bytes_written = 0u;
+    std::uint32_t maximum_save_payload_bytes = 0u;
     std::uint32_t last_platform_error_code = 0u;
     bool native_file_backend = false;
     bool native_gamepad_backend = false;

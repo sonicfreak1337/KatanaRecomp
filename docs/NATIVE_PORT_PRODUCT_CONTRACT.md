@@ -241,6 +241,15 @@ Primary ist autoritativ, waehrend der Recovery-Store einen guten Backupbestand
 bewahrt. Der native Linkaudit enthaelt nur native Plattform-/Runtime-/Media-/
 Grafik-TUs und keine historischen Geraetesymbole.
 
+`NativePortSaveProvider` ist die darueberliegende semantische Titel-/SDK-
+Grenze. Ein Adapter projiziert seine eigene ABI auf Query, List, Read, Write
+und Remove; Katana verwaltet dabei nur logische Dateimetadaten, bounded
+Blockgeometrie, Medium-/Profilidentitaet, Generationen und geordnete
+Completions. Der Provider kennt weder Gastadressen noch Maplepakete oder
+VMU-Kommandos. Sein serialisiertes Volume liegt vollstaendig innerhalb des
+konfigurierten Plattformbudgets und wird als ein einziges projekt-/slot-/
+schema-gebundenes Record atomar publiziert.
+
 Der vollstaendige originale SFD-Opening-Stream wurde ohne Skip ueber den
 nativen FFmpeg-, GPU- und Audiopfad bis EOS abgenommen: `Ready` -> `Playing` ->
 `Completed` -> `Stopped`, 3.257 dekodierte und 3.257 GPU-praesentierte

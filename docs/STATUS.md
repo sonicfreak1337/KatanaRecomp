@@ -69,6 +69,14 @@ vollstaendig inkrementelle v130-Export dauert `13,748 s`, trifft `176/176`
 Codegenpartitionen und baut den Host in `2,729 s`. Analyzer-ABI 53 und
 Boot-Analysecache-Schema 5 binden die Ergebnisfelder.
 
+Der native Speicherpfad besitzt nun ueber dem atomaren Plattformrecord einen
+eigenen titel-/SDK-semantischen `NativePortSaveProvider`. Seine bounded
+Query/List/Read/Write/Remove-Operationen binden Medium, Profil, Block- und
+Directorygeometrie sowie Generationen und liefern geordnete Completions,
+ohne Maple- oder VMU-Geraeteprotokoll. Der 24-Worker-Runtime-/CLI-Build und
+das native Runtime-Target sind sauber; der private Sonic-Adapter und der
+sichtbare Memory-Card-/Hauptmenunachweis bleiben offen.
+
 Die Closure bleibt bei `243` bekannten Hardware-Sites und `244` Gaps (`189`
 hook-missing, `55` Progress-Waits); `1.173` Sites sind durch Hooks ersetzt.
 Der Produktlauf passiert den vorher fehlenden Loaded-AOT-Entry und erreicht
@@ -126,7 +134,7 @@ noch keine dynamische Overlay-Bestaetigung.
 
 Der Windows-Native-Port unterstuetzt nun XInput und die ueber DirectInput-
 VID/PID und Geraeteinstanz identitaetsgebundenen WinMM-Layouts von DualSense
-und DualShock ueber Plattformvertrag `4`. Unbekannte HID-Layouts werden
+und DualShock ueber Plattformvertrag `5`. Unbekannte HID-Layouts werden
 verworfen; Sony-/XInput-Duplikate bleiben bis zu drei aufeinanderfolgenden
 eindeutigen aktiven Samples aus den Titel-Slots. Hotplug revalidiert
 Unabhaengigkeit; der tatsaechliche XInput-Vibrationsendpunkt wird auch beim

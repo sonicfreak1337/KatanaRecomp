@@ -673,6 +673,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/native_port_graphics.hpp
     include/katana/runtime/native_port_movie.hpp
     include/katana/runtime/native_port_platform.hpp
+    include/katana/runtime/native_port_save.hpp
     include/katana/runtime/native_port_texture_asset.hpp
     include/katana/runtime/runtime.hpp
 )
@@ -783,6 +784,7 @@ set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
     src/runtime/native_port_graphics.cpp
     src/runtime/native_port_movie.cpp
     src/runtime/native_port_platform.cpp
+    src/runtime/native_port_save.cpp
     src/runtime/native_port_runtime.cpp
     src/runtime/native_port_texture_asset.cpp
 )

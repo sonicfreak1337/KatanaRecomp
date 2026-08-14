@@ -214,6 +214,14 @@ SFD-Opening-Stream lief ohne Skip bis EOS und endete `Completed` mit 3.257
 dekodierten und 3.257 GPU-praesentierten Videoframes, 4.709.760 Audioframes,
 3.257 GPU-Presents und `hardware=1`.
 
+Der nachgelagerte Save-Provider-Unterauftrag ist source- und linkseitig
+abgeschlossen. `NativePortSaveProvider` bildet titel-/SDK-semantische
+Query/List/Read/Write/Remove-Operationen auf die atomaren Plattformrecords
+ab und behaelt Block-, Directory-, Medium-, Profil-, Generation- und
+Completionvertraege fail-closed. Er fuehrt keine Maple-/VMU-Kommandos aus.
+Die private Sonic-ABI-Bindung sowie der reale Memory-Card-/Menulauf bleiben
+Teil des offenen KR-5005-Produktgates.
+
 ## [x] KR-5005-Unterauftrag - Native Texture-/Font-Foundation
 
 Prioritaet: P0 Foundation-Unterauftrag
@@ -384,7 +392,7 @@ steht noch aus.
 
 Controller-Meilenstein: Der Windows-Native-Port vereinheitlicht XInput und
 die ueber DirectInput-VID/PID und Geraeteinstanz gebundenen WinMM-Layouts von
-DualSense und DualShock unter Plattformvertrag `4`. Unbekannte HID-Layouts
+DualSense und DualShock unter Plattformvertrag `5`. Unbekannte HID-Layouts
 werden nicht geraten; ein Sony-/XInput-Duplikat bleibt bis zu drei
 aufeinanderfolgenden eindeutigen aktiven Samples aus den Titel-Slots.
 Hotplug revalidiert Unabhaengigkeit, und Vibration erreicht sowie stoppt beim
@@ -505,14 +513,14 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 108, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 99, Native-Port-Profilvertrag 22
-  Analyzer-ABI 49, Function-Analysis-Epoch-Schema 28,
+  Runtime-ABI 109, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 101, Native-Port-Profilvertrag 22
+  Analyzer-ABI 53, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
   Analysis Directives 5, Hookkarte v5, Hardware-Closure v6,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 37, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 9
+  Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 12
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

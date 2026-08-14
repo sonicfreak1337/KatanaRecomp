@@ -25,13 +25,13 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 108, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 109, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 49, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 53, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 99, Native-Port-Profilvertrag 22 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `37`, AOT-Partitionsschema: `7`.
-Port-Metadata-Cache-Schema: `9`.
+Portprojektvertrag 101, Native-Port-Profilvertrag 22 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `7`.
+Port-Metadata-Cache-Schema: `12`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
@@ -40,7 +40,7 @@ Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
 Der Windows-Native-Port bindet XInput sowie die explizit identifizierten
-WinMM-Layouts von DualSense und DualShock an Plattformvertrag `4`. Die Sony-
+WinMM-Layouts von DualSense und DualShock an Plattformvertrag `5`. Die Sony-
 Identitaet stammt aus dem nativen DirectInput-VID/PID- und
 Geraeteinstanzvertrag, nicht aus WinMM-Multimedia-IDs. Unbekannte
 HID-Buttonordnungen werden nicht als semantische Controllerbelegung geraten.
@@ -639,7 +639,7 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 108, Analyzer-ABI 49, Portprojektvertrag 99 und
+KR-5005-Stand verwendet Runtime-ABI 109, Analyzer-ABI 53, Portprojektvertrag 101 und
 Native-Port-Profilvertrag 22. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte

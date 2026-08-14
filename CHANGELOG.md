@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- Der neue titel-/SDK-semantische `NativePortSaveProvider` bildet bis zu
+  vier Controller mit je sechs Speicherendpunkten auf die bereits atomaren
+  Plattformrecords ab, ohne Maple- oder VMU-Geraetemodell. Query, List, Read,
+  Write und Remove bewahren Block-/Directory-Grenzen, Medium-, Profil- und
+  Dateidentitaet, monotone Completion-Reihenfolge und generation-gepruefte
+  CAS-Semantik. Standard-VMU-Geometrie sind `200 x 512` nutzbare Byteslots;
+  abweichende Geometrien bleiben explizit und bounded. Das Review bindet
+  zusammengesetzte Slot-IDs vor dem I/O an die reale Plattformgrenze, prueft
+  die vollstaendige Volume-Groesse gegen das tatsaechliche Instanzbudget,
+  unterscheidet Directory- von Blockerschoepfung und erhaelt auch bei
+  Allocation-Fehlern genau eine typisierte Completion. Runtime-ABI `109`
+  und Plattformvertrag `5` binden die neue installierte Produkt-API. Der
+  Runtime-/CLI-Link sowie das native Runtime-Target wurden mit 24 Workern
+  erfolgreich gebaut; die private Sonic-Save-ABI-Bindung und der sichtbare
+  Memory-Card-/Menulauf bleiben das Produktgate.
+
 - Die finale RuntimeOnly-CFA publiziert ihre kanonischen Callback- und
   Record-Field-Sink-Vertraege jetzt direkt im Analyzerergebnis. Der
   Cross-Image-Exporter konsumiert genau diese Fixpunktansicht, statt nach

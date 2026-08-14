@@ -60,6 +60,16 @@ und `244` Closure-Gaps. Nach dem einmaligen ABI-53-Kaltbuild bestaetigt v130
 den unveraenderten inkrementellen Export in `13,748 s` mit `176/176`
 Codegen-Hits und `2,729 s` Hostbuild.
 
+Die native Speichergrundlage besitzt jetzt zusaetzlich zur atomaren
+Plattformdatei einen titel-/SDK-semantischen Provider. Er verwaltet bounded
+Speichermedien und logische Dateien ueber Query/List/Read/Write/Remove,
+bindet Medium und Save-ABI identitaetsfest, unterscheidet freie Bloecke von
+freien Directoryeintraegen und liefert fuer jeden gueltigen Ownerthread-
+Aufruf genau eine geordnete Completion. Gastadressen, Maplepakete und ein
+VMU-Geraetemodell gehoeren nicht zu diesem Produktvertrag. Der Source-/
+Linkreview ist geschlossen; der private Sonic-Adapter und der reale
+Memory-Card-/Hauptmenupfad sind noch nicht abgenommen.
+
 Die Hardware-Closure bleibt bei `243` bekannten Sites und `244` Gaps
 (`189` hook-missing, `55` progress-wait); `1.173` Sites werden durch Hooks
 ersetzt. Das ist erwartbar, weil die neue Analyse AOT-Erreichbarkeit statt
@@ -73,7 +83,7 @@ offen. Ein Start-Controllerimpuls ist seit dem vollstaendigen No-Skip-Beleg
 fuer kuerzere Diagnoselaeufe erlaubt.
 
 Der Windows-Native-Port hat jetzt XInput- sowie identitaetsgebundene WinMM-
-Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `4`
+Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `5`
 verwirft unbekannte HID-Layouts, prueft echte Backendbereitschaft und bindet
 Sony ueber echte DirectInput-VID/PID- und Geraeteinstanzevidenz. Ein XInput-
 Kompatibilitaetsduplikat bleibt unterdrueckt, bis drei aufeinanderfolgende
@@ -427,13 +437,13 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 108, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 99, Native-Port-Profilvertrag 22
-  Analyzer-ABI 49
+  Runtime-ABI 109, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 101, Native-Port-Profilvertrag 22
+  Analyzer-ABI 53
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 37, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 9
+  Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 12
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
 installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie
