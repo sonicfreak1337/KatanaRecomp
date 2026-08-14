@@ -95,6 +95,88 @@ struct NativePortDecodedTextureAsset final {
     std::vector<NativePortDecodedTextureMipLevel> lower_mip_levels;
 };
 
+// One source-authored texture payload after its containing archive has been
+// fully validated. Unlike NativePortDecodedTextureAsset this preserves the
+// exact bounded bytes consumed by the source layout. Native SDK adapters use
+// it when a later high-level texture upload replaces only part of an existing
+// resource; no guest texture-memory or PVR device model is involved.
+struct NativePortEncodedTextureAsset final {
+    std::string name;
+    std::optional<std::uint32_t> global_index;
+    std::uint32_t archive_ordinal = 0u;
+    NativePortTextureAssetPixelFormat source_pixel_format =
+        NativePortTextureAssetPixelFormat::Rgb565;
+    NativePortTextureAssetDataFormat source_data_format =
+        NativePortTextureAssetDataFormat::Rectangle;
+    NativePortExtent extent;
+    std::vector<std::uint8_t> encoded;
+};
+
+enum class NativePortTextureBackingStoreFailure : std::uint8_t {
+    InvalidCapacity,
+    InvalidRange,
+    ResourceExhausted,
+};
+
+class NativePortTextureBackingStoreError final : public std::runtime_error {
+  public:
+    NativePortTextureBackingStoreError(
+        NativePortTextureBackingStoreFailure failure,
+        std::uint64_t byte_offset,
+        std::string_view operation);
+
+    [[nodiscard]] NativePortTextureBackingStoreFailure failure() const noexcept;
+    [[nodiscard]] std::uint64_t byte_offset() const noexcept;
+
+  private:
+    NativePortTextureBackingStoreFailure failure_;
+    std::uint64_t byte_offset_;
+};
+
+enum class NativePortTextureOverlayCoverage : std::uint8_t {
+    None,
+    Partial,
+    Complete,
+};
+
+struct NativePortTextureBackingStoreSnapshot final {
+    std::uint64_t capacity_bytes = 0u;
+    std::uint64_t valid_bytes = 0u;
+    std::uint64_t writes = 0u;
+};
+
+// Sparse native resource backing for high-level texture upload providers.
+// It records only byte ranges explicitly submitted through a native SDK hook.
+// Callers supply an identity-bound asset as the destination buffer and overlay
+// newer ranges onto it. This preserves partial resource updates without
+// interpreting TA packets or exposing a Dreamcast texture-memory device.
+class NativePortTextureBackingStore final {
+  public:
+    explicit NativePortTextureBackingStore(std::size_t capacity_bytes);
+    ~NativePortTextureBackingStore();
+
+    NativePortTextureBackingStore(const NativePortTextureBackingStore&) =
+        delete;
+    NativePortTextureBackingStore& operator=(
+        const NativePortTextureBackingStore&) = delete;
+    NativePortTextureBackingStore(NativePortTextureBackingStore&&) = delete;
+    NativePortTextureBackingStore& operator=(
+        NativePortTextureBackingStore&&) = delete;
+
+    void write(std::uint32_t destination,
+               std::span<const std::uint8_t> source);
+    [[nodiscard]] NativePortTextureOverlayCoverage overlay(
+        std::uint32_t source_offset,
+        std::span<std::uint8_t> destination) const;
+    void clear() noexcept;
+    [[nodiscard]] NativePortTextureBackingStoreSnapshot snapshot() const
+        noexcept;
+
+  private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 // The content identity is the verified SHA-256 of the containing content
 // object. The source ordinal is always part of the identity because GBIX is
 // optional and need not be unique, even inside one content object.
@@ -227,6 +309,29 @@ decode_native_port_pvm_texture_archive(
 [[nodiscard]] std::vector<NativePortDecodedTextureAsset>
 decode_native_port_prs_pvm_texture_archive(
     std::span<const std::uint8_t> source,
+    const NativePortTextureAssetLimits& limits = {});
+
+// Validates the complete archive but copies only the selected entry's exact
+// encoded texture payload. This is intentionally separate from materializing
+// GPU resources so native SDK adapters can compose partial resource uploads
+// before decoding the final texture.
+[[nodiscard]] NativePortEncodedTextureAsset
+extract_native_port_pvm_texture_archive_entry(
+    std::span<const std::uint8_t> source,
+    std::uint32_t archive_ordinal,
+    const NativePortTextureAssetLimits& limits = {});
+
+[[nodiscard]] NativePortEncodedTextureAsset
+extract_native_port_prs_pvm_texture_archive_entry(
+    std::span<const std::uint8_t> source,
+    std::uint32_t archive_ordinal,
+    const NativePortTextureAssetLimits& limits = {});
+
+[[nodiscard]] NativePortEncodedTextureAsset
+extract_native_port_prs_pvm_texture_archive_entry(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    std::uint32_t archive_ordinal,
     const NativePortTextureAssetLimits& limits = {});
 
 // Decodes one complete GBIX?/PVRT content object. This is the standalone

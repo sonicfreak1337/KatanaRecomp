@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- Der v111/v30-Produktlauf schliesst die native MOVIE.BIN-Sequenz als
+  identitaetsgebundenen Multi-Clip-Vertrag. Ohne Controllerinput oder Skip
+  liefen Sonic Team (`200/200` Video, `294.016` Audioframes, `200`
+  nichtschwarze Frames) und das Opening (`3.257/3.257` Video, `4.709.760`
+  Audioframes, `3.254` nichtschwarze Frames) bis zum regulaeren Sequenzende.
+  Der Export umfasst `5.918` Funktionen, `167` Partitionen, `4.430` rohe und
+  `2.509` guarded Callback-Kandidaten; gegenueber v29 sind das `+815`
+  Funktionen und `+18` Partitionen. Die Hardware-Closure verbessert sich von
+  `803` auf `759` Gaps, waehrend `865` Sites durch vollstaendige Hooks, `20`
+  durch native CPU-Control-Semantik und `53` als Progress-Waits gebunden sind.
+  Der naechste fail-closed Endpunkt ist ein noch ungebundener Entry eines nach
+  dem Intro materialisierten PRS-Overlays. Erst nach diesem No-Skip-Beleg darf
+  Start das Intro in Diagnoselaeufen abkuerzen. Runtime-ABI `105`, Analyzer-
+  ABI `45`, Portprojektvertrag `95`, Native-Port-Profilvertrag `18`, Native-
+  AOT-Emissionsprofil `35`, Port-Metadata-Cache-Schema `7`.
+
 - Der reviewte v87-Export schliesst weitere generische Latent-AOT- und
   Callback-Ownership-Luecken. `42` latente Module liefern `3.828`
   Blockidentitaeten, `107` ganze Funktionsidentitaeten, `4.222` externe

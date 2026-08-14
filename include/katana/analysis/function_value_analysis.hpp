@@ -344,10 +344,11 @@ struct FunctionValueResolutionShard final {
     std::vector<InterproceduralTargetResolution> resolutions;
 };
 
-// A finite code address stored through a non-stack 32-bit memory operation
-// where either the value or destination retains known guest-call argument
-// provenance.  The destination may remain symbolic (for example VBR-relative);
-// this is only native-inventory evidence and never a concrete dispatch edge.
+// A finite code address observed either through a non-stack 32-bit memory
+// operation with guest-call provenance or in an identity-bound static vector
+// of independently valid function entries. The legacy source-address field
+// therefore carries an instruction address or the exact static table slot.
+// This is only native-inventory evidence and never a concrete dispatch edge.
 struct StoredCodeAddressCandidate {
     std::uint32_t target_address = 0u;
     bool complete = false;

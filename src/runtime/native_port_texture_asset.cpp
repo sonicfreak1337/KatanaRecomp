@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <exception>
 #include <limits>
 #include <new>
@@ -668,7 +669,13 @@ void decode_pixels(const std::span<const std::uint8_t> source,
 
 [[nodiscard]] std::vector<NativePortDecodedTextureAsset> decode_pvm_impl(
     const std::span<const std::uint8_t> source,
-    const NativePortTextureAssetLimits& limits) {
+    const NativePortTextureAssetLimits& limits,
+    const std::optional<std::uint32_t> captured_ordinal = std::nullopt,
+    NativePortEncodedTextureAsset* const captured_texture = nullptr,
+    const bool decode_rgba = true) {
+    if (captured_ordinal.has_value() != (captured_texture != nullptr))
+        fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
+             "pvm-capture-contract");
     validate_limits(limits);
     if (source.size() > limits.maximum_decompressed_bytes)
         fail(NativePortTextureAssetFailure::DecompressedOutputLimit, 0u,
@@ -700,6 +707,9 @@ void decode_pixels(const std::span<const std::uint8_t> source,
     if (entry_count > limits.maximum_archive_entries)
         fail(NativePortTextureAssetFailure::ArchiveEntryLimit, 10u,
              "pvm-entry-limit");
+    if (captured_ordinal.has_value() && *captured_ordinal >= entry_count)
+        fail(NativePortTextureAssetFailure::InvalidPvm, 10u,
+             "pvm-entry-ordinal-range");
 
     std::size_t entry_size = 2u;
     if ((flags & pvm_filename_flag) != 0u)
@@ -881,46 +891,65 @@ void decode_pixels(const std::span<const std::uint8_t> source,
             fail(NativePortTextureAssetFailure::RgbaOutputLimit,
                  chunk_offset, "pvm-rgba-limit");
 
-        texture.rgba8.resize(rgba_bytes);
         const auto encoded = source.subspan(pixel_data_offset, encoded_bytes);
-        decode_pixels(encoded, layout, texture.source_pixel_format,
-                      texture.source_data_format, texture.extent,
-                      layout.top_level_offset, texture.rgba8,
-                      pixel_data_offset);
-        if (has_mipmaps(texture.source_data_format)) {
-            texture.lower_mip_levels.reserve(
-                std::bit_width(texture.extent.width) - 1u);
-            for (auto dimension = texture.extent.width / 2u;;
-                 dimension >>= 1u) {
-                NativePortDecodedTextureMipLevel level;
-                level.extent = {dimension, dimension};
-                level.rgba8.resize(
-                    checked_multiply(
+        if (captured_ordinal.has_value() &&
+            *captured_ordinal == static_cast<std::uint32_t>(index)) {
+            captured_texture->name = texture.name;
+            captured_texture->global_index = texture.global_index;
+            captured_texture->archive_ordinal = texture.archive_ordinal;
+            captured_texture->source_pixel_format =
+                texture.source_pixel_format;
+            captured_texture->source_data_format =
+                texture.source_data_format;
+            captured_texture->extent = texture.extent;
+            captured_texture->encoded.assign(encoded.begin(), encoded.end());
+        }
+        if (decode_rgba) {
+            texture.rgba8.resize(rgba_bytes);
+            decode_pixels(encoded, layout, texture.source_pixel_format,
+                          texture.source_data_format, texture.extent,
+                          layout.top_level_offset, texture.rgba8,
+                          pixel_data_offset);
+            if (has_mipmaps(texture.source_data_format)) {
+                texture.lower_mip_levels.reserve(
+                    std::bit_width(texture.extent.width) - 1u);
+                for (auto dimension = texture.extent.width / 2u;;
+                     dimension >>= 1u) {
+                    NativePortDecodedTextureMipLevel level;
+                    level.extent = {dimension, dimension};
+                    level.rgba8.resize(
                         checked_multiply(
-                            dimension, dimension,
+                            checked_multiply(
+                                dimension, dimension,
+                                NativePortTextureAssetFailure::
+                                    RgbaOutputLimit,
+                                chunk_offset + 12u,
+                                "pvrt-mipmap-output-pixels"),
+                            4u,
                             NativePortTextureAssetFailure::RgbaOutputLimit,
                             chunk_offset + 12u,
-                            "pvrt-mipmap-output-pixels"),
-                        4u, NativePortTextureAssetFailure::RgbaOutputLimit,
-                        chunk_offset + 12u,
-                        "pvrt-mipmap-output-bytes"));
-                decode_pixels(
-                    encoded, layout, texture.source_pixel_format,
-                    texture.source_data_format, level.extent,
-                    mip_level_offset(layout, texture.source_data_format,
-                                     dimension, pixel_data_offset),
-                    level.rgba8, pixel_data_offset);
-                texture.lower_mip_levels.push_back(std::move(level));
-                if (dimension == 1u) break;
+                            "pvrt-mipmap-output-bytes"));
+                    decode_pixels(
+                        encoded, layout, texture.source_pixel_format,
+                        texture.source_data_format, level.extent,
+                        mip_level_offset(layout, texture.source_data_format,
+                                         dimension, pixel_data_offset),
+                        level.rgba8, pixel_data_offset);
+                    texture.lower_mip_levels.push_back(std::move(level));
+                    if (dimension == 1u) break;
+                }
             }
+            textures.push_back(std::move(texture));
         }
-        textures.push_back(std::move(texture));
         chunk_offset = chunk_end;
     }
 
     if (chunk_offset != source.size())
         fail(NativePortTextureAssetFailure::InvalidPvm, chunk_offset,
              "pvm-trailing-data");
+    if (captured_texture != nullptr && captured_texture->encoded.empty())
+        fail(NativePortTextureAssetFailure::InvalidPvm, chunk_offset,
+             "pvm-entry-capture");
     return textures;
 }
 
@@ -1020,6 +1049,98 @@ template <typename Function>
 }
 
 } // namespace
+
+class NativePortTextureBackingStore::Impl final {
+  public:
+    explicit Impl(const std::size_t capacity_bytes) {
+        constexpr std::size_t maximum_capacity = 1u << 30u;
+        if (capacity_bytes == 0u || capacity_bytes > maximum_capacity)
+            backing_fail(
+                NativePortTextureBackingStoreFailure::InvalidCapacity, 0u,
+                "capacity");
+        try {
+            bytes_.resize(capacity_bytes);
+            valid_words_.assign((capacity_bytes + 63u) / 64u, 0u);
+        } catch (const std::bad_alloc&) {
+            backing_fail(
+                NativePortTextureBackingStoreFailure::ResourceExhausted, 0u,
+                "allocation");
+        } catch (const std::length_error&) {
+            backing_fail(
+                NativePortTextureBackingStoreFailure::ResourceExhausted, 0u,
+                "allocation");
+        }
+    }
+
+    void write(const std::uint32_t destination,
+               const std::span<const std::uint8_t> source) {
+        validate_range(destination, source.size(), "write");
+        std::memcpy(bytes_.data() + destination, source.data(), source.size());
+        for (std::size_t index = destination;
+             index < static_cast<std::size_t>(destination) + source.size();
+             ++index) {
+            const auto word = index / 64u;
+            const auto mask = std::uint64_t{1u} << (index % 64u);
+            if ((valid_words_[word] & mask) != 0u) continue;
+            valid_words_[word] |= mask;
+            ++valid_bytes_;
+        }
+        if (writes_ != std::numeric_limits<std::uint64_t>::max()) ++writes_;
+    }
+
+    [[nodiscard]] NativePortTextureOverlayCoverage overlay(
+        const std::uint32_t source_offset,
+        const std::span<std::uint8_t> destination) const {
+        validate_range(source_offset, destination.size(), "overlay");
+        std::size_t copied = 0u;
+        for (std::size_t index = 0u; index < destination.size(); ++index) {
+            const auto source_index =
+                static_cast<std::size_t>(source_offset) + index;
+            const auto mask = std::uint64_t{1u} << (source_index % 64u);
+            if ((valid_words_[source_index / 64u] & mask) == 0u) continue;
+            destination[index] = bytes_[source_index];
+            ++copied;
+        }
+        if (copied == 0u) return NativePortTextureOverlayCoverage::None;
+        return copied == destination.size()
+                   ? NativePortTextureOverlayCoverage::Complete
+                   : NativePortTextureOverlayCoverage::Partial;
+    }
+
+    void clear() noexcept {
+        std::ranges::fill(valid_words_, 0u);
+        valid_bytes_ = 0u;
+        writes_ = 0u;
+    }
+
+    [[nodiscard]] NativePortTextureBackingStoreSnapshot snapshot() const
+        noexcept {
+        return {bytes_.size(), valid_bytes_, writes_};
+    }
+
+  private:
+    [[noreturn]] static void backing_fail(
+        const NativePortTextureBackingStoreFailure failure,
+        const std::uint64_t byte_offset,
+        const std::string_view operation) {
+        throw NativePortTextureBackingStoreError(failure, byte_offset,
+                                                 operation);
+    }
+
+    void validate_range(const std::uint32_t offset,
+                        const std::size_t bytes,
+                        const std::string_view operation) const {
+        if (bytes == 0u || offset >= bytes_.size() ||
+            bytes > bytes_.size() - offset)
+            backing_fail(NativePortTextureBackingStoreFailure::InvalidRange,
+                         offset, operation);
+    }
+
+    std::vector<std::uint8_t> bytes_;
+    std::vector<std::uint64_t> valid_words_;
+    std::uint64_t valid_bytes_ = 0u;
+    std::uint64_t writes_ = 0u;
+};
 
 class NativePortTextureRegistry::Impl final {
   public:
@@ -1425,6 +1546,60 @@ std::uint64_t NativePortTextureAssetError::byte_offset() const noexcept {
     return byte_offset_;
 }
 
+NativePortTextureBackingStoreError::NativePortTextureBackingStoreError(
+    const NativePortTextureBackingStoreFailure failure,
+    const std::uint64_t byte_offset,
+    const std::string_view operation)
+    : std::runtime_error(
+          "native-port-texture-backing-" + std::string(operation) + ":" +
+          std::to_string(static_cast<std::uint32_t>(failure)) + ":" +
+          std::to_string(byte_offset)),
+      failure_(failure), byte_offset_(byte_offset) {}
+
+NativePortTextureBackingStoreFailure
+NativePortTextureBackingStoreError::failure() const noexcept {
+    return failure_;
+}
+
+std::uint64_t NativePortTextureBackingStoreError::byte_offset() const noexcept {
+    return byte_offset_;
+}
+
+NativePortTextureBackingStore::NativePortTextureBackingStore(
+    const std::size_t capacity_bytes)
+    : impl_(nullptr) {
+    try {
+        impl_ = std::make_unique<Impl>(capacity_bytes);
+    } catch (const NativePortTextureBackingStoreError&) {
+        throw;
+    } catch (const std::bad_alloc&) {
+        throw NativePortTextureBackingStoreError(
+            NativePortTextureBackingStoreFailure::ResourceExhausted, 0u,
+            "allocation");
+    }
+}
+
+NativePortTextureBackingStore::~NativePortTextureBackingStore() = default;
+
+void NativePortTextureBackingStore::write(
+    const std::uint32_t destination,
+    const std::span<const std::uint8_t> source) {
+    impl_->write(destination, source);
+}
+
+NativePortTextureOverlayCoverage NativePortTextureBackingStore::overlay(
+    const std::uint32_t source_offset,
+    const std::span<std::uint8_t> destination) const {
+    return impl_->overlay(source_offset, destination);
+}
+
+void NativePortTextureBackingStore::clear() noexcept { impl_->clear(); }
+
+NativePortTextureBackingStoreSnapshot
+NativePortTextureBackingStore::snapshot() const noexcept {
+    return impl_->snapshot();
+}
+
 NativePortTextureRegistryError::NativePortTextureRegistryError(
     const NativePortTextureRegistryFailure failure,
     const std::uint32_t guest_token,
@@ -1530,6 +1705,61 @@ decode_native_port_prs_pvm_texture_archive(
             return decode_pvm_impl(decompressed, limits);
         },
         "prs-pvm-allocation");
+}
+
+NativePortEncodedTextureAsset extract_native_port_pvm_texture_archive_entry(
+    const std::span<const std::uint8_t> source,
+    const std::uint32_t archive_ordinal,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures(
+        [&] {
+            NativePortEncodedTextureAsset captured;
+            static_cast<void>(decode_pvm_impl(
+                source, limits, archive_ordinal, &captured, false));
+            return captured;
+        },
+        "pvm-entry-extraction");
+}
+
+NativePortEncodedTextureAsset
+extract_native_port_prs_pvm_texture_archive_entry(
+    const std::span<const std::uint8_t> source,
+    const std::uint32_t archive_ordinal,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures(
+        [&] {
+            auto decompressed = decompress_prs_impl(source, limits);
+            NativePortEncodedTextureAsset captured;
+            static_cast<void>(decode_pvm_impl(
+                decompressed, limits, archive_ordinal, &captured, false));
+            return captured;
+        },
+        "prs-pvm-entry-extraction");
+}
+
+NativePortEncodedTextureAsset
+extract_native_port_prs_pvm_texture_archive_entry(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    const std::uint32_t archive_ordinal,
+    const NativePortTextureAssetLimits& limits) {
+    if (binding.byte_size == 0u ||
+        binding.byte_size > limits.maximum_compressed_bytes)
+        fail(NativePortTextureAssetFailure::InvalidLimits, 0u,
+             "extract-binding-size");
+    return translate_resource_failures(
+        [&] {
+            auto file = platform.open_content_file(binding);
+            std::vector<std::byte> compressed(
+                static_cast<std::size_t>(binding.byte_size));
+            file->read_at(0u, compressed);
+            return extract_native_port_prs_pvm_texture_archive_entry(
+                std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(compressed.data()),
+                    compressed.size()),
+                archive_ordinal, limits);
+        },
+        "prs-pvm-entry-content");
 }
 
 NativePortDecodedTextureAsset decode_native_port_pvr_texture(

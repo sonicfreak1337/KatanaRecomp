@@ -5,6 +5,22 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
+## Aktueller Produktmeilenstein v111/v30
+
+Die echte native MOVIE.BIN-Sequenz ist jetzt als Multi-Clip-Vertrag gebunden.
+Ein No-Skip-Lauf ohne Controllerinput vervollstaendigte Sonic Team mit
+`200/200` Videoframes, `294.016` Audioframes und `200` nichtschwarzen Frames
+sowie das Opening mit `3.257/3.257` Videoframes, `4.709.760` Audioframes und
+`3.254` nichtschwarzen Frames. Erst nach diesem Beleg ist ein echter
+Start-Controllerimpuls fuer kuerzere Diagnoselaeufe erlaubt.
+
+Der aktuelle Export umfasst `5.918` Funktionen in `167` Partitionen,
+`4.430/2.509` rohe/guarded Callback-Kandidaten und `759` offene
+Hardware-Closure-Gaps. Der naechste reproduzierbare P0 ist ein ungebundener
+statischer Entry eines nach dem Intro materialisierten PRS-Overlays. Private
+Titeladressen bleiben ausserhalb des Repositorys. Memory-Card-Screen und
+Hauptmenue sind noch nicht erreicht.
+
 ## Verbindlicher v0.49.1-Native-Port
 
 KatanaRecomp baut einen nativen PC-Port und keinen Emulator. Der Produktpfad

@@ -3,9 +3,13 @@
 #include "structured_control_flow_progress.hpp"
 #include "native_aot_resume.hpp"
 
+#include "../analysis/guarded_native_entry_shape.hpp"
+#include "../analysis/static_callback_inventory.hpp"
+
 #include "katana/build_contract.hpp"
 #include "katana/component_identity.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
+#include "katana/analysis/code_address.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
@@ -34,6 +38,7 @@
 #include "katana/runtime/platform_services.hpp"
 #include "katana/runtime/wait_loop_trace.hpp"
 #include "katana/sh4/instruction_timing.hpp"
+#include "katana/sh4/disassembler.hpp"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +52,7 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -18277,6 +18283,17 @@ std::vector<std::string> executable_image_disc_file_references(
     return {references.begin(), references.end()};
 }
 
+std::optional<std::uint32_t> latent_aot_external_code_address(
+    const std::uint32_t address) noexcept {
+    const auto direct_segment = address >> 29u;
+    if (direct_segment == 4u || direct_segment == 5u)
+        return (address & 0x1fffffffu) | 0x80000000u;
+    if (direct_segment == 0u && address >= 0x08000000u &&
+        address < 0x10000000u)
+        return address | 0x80000000u;
+    return std::nullopt;
+}
+
 std::vector<std::uint32_t> latent_aot_declared_external_code_targets(
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port,
@@ -18287,13 +18304,7 @@ std::vector<std::uint32_t> latent_aot_declared_external_code_targets(
                    game_project->function_boundaries.size());
     const auto append_if_executable = [&](const std::uint32_t address) {
         if ((address & 1u) != 0u) return;
-        const auto direct_segment = address >> 29u;
-        std::optional<std::uint32_t> normalized;
-        if (direct_segment == 4u || direct_segment == 5u)
-            normalized = (address & 0x1fffffffu) | 0x80000000u;
-        else if (direct_segment == 0u && address >= 0x08000000u &&
-                 address < 0x10000000u)
-            normalized = address | 0x80000000u;
+        const auto normalized = latent_aot_external_code_address(address);
         if (!normalized.has_value()) return;
         const auto segment_address = image.resolve_segment_address(address, 2u);
         const auto* segment = segment_address.has_value()
@@ -18323,10 +18334,185 @@ std::vector<std::uint32_t> latent_aot_declared_external_code_targets(
     return result;
 }
 
+std::vector<LatentAotExternalCallbackSink>
+latent_aot_declared_external_callback_sinks(
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const katana::runtime::NativePortDefinition* const native_port,
+    const katana::io::ExecutableImage& image,
+    const std::span<const std::uint32_t> external_code_targets) {
+    if (game_project == nullptr || external_code_targets.empty()) return {};
+
+    constexpr std::size_t maximum_exact_callback_instructions = 4'194'304u;
+    std::vector<katana::sh4::DisassemblyLine> lines;
+    std::vector<katana::analysis::FunctionCandidate> functions;
+    std::vector<std::uint32_t> non_root_entries;
+    std::map<std::uint32_t, std::uint32_t> external_by_resolved_entry;
+    std::size_t instruction_count = 0u;
+
+    for (const auto& boundary : game_project->function_boundaries) {
+        if (!game_project_metadata_is_active(native_port, boundary.image_id))
+            continue;
+        const auto external = latent_aot_external_code_address(boundary.start);
+        if (!external.has_value() ||
+            !std::binary_search(external_code_targets.begin(),
+                                external_code_targets.end(), *external))
+            continue;
+        if (boundary.size == 0u || (boundary.size & 1u) != 0u)
+            throw std::runtime_error(
+                "Exakte Callback-Sink-Funktionsgrenze ist ungueltig.");
+        const auto validation = katana::analysis::validate_decode_candidate(
+            image, boundary.start, boundary.size);
+        if (!validation.valid() || validation.segment == nullptr)
+            throw std::runtime_error(
+                "Exakte Callback-Sink-Funktionsgrenze ist nicht im "
+                "aktiven Image gebunden.");
+        const auto offset = validation.segment->byte_offset(
+            validation.resolved_address);
+        if (!offset.has_value() ||
+            *offset > validation.segment->bytes.size() ||
+            boundary.size > validation.segment->bytes.size() - *offset)
+            throw std::runtime_error(
+                "Exakte Callback-Sink-Funktionsbytes fehlen.");
+        const auto function_instructions =
+            static_cast<std::size_t>(boundary.size / 2u);
+        if (instruction_count > maximum_exact_callback_instructions ||
+            function_instructions >
+                maximum_exact_callback_instructions - instruction_count)
+            throw std::runtime_error(
+                "Exakte Callback-Sink-Analyse ueberschreitet ihr "
+                "Instruktionsbudget.");
+        instruction_count += function_instructions;
+
+        const auto [mapped, inserted] = external_by_resolved_entry.emplace(
+            validation.resolved_address, *external);
+        if (!inserted && mapped->second != *external)
+            throw std::runtime_error(
+                "Callback-Sink-Funktionsalias ist mehrdeutig.");
+        if (!inserted) continue;
+
+        const auto bytes = std::span<const std::uint8_t>(
+            validation.segment->bytes.data() + *offset, boundary.size);
+        auto function_lines = katana::sh4::disassemble(
+            bytes, validation.resolved_address);
+        lines.insert(lines.end(),
+                     std::make_move_iterator(function_lines.begin()),
+                     std::make_move_iterator(function_lines.end()));
+        functions.push_back(
+            {validation.resolved_address,
+             katana::analysis::AnalysisConfidence::Certain,
+             katana::analysis::ControlFlowEvidence::ProvenComplete,
+             {katana::analysis::FunctionOrigin::UserOverride},
+             boundary.size});
+        non_root_entries.push_back(validation.resolved_address);
+    }
+    if (functions.empty()) return {};
+    std::sort(lines.begin(), lines.end(),
+              [](const auto& left, const auto& right) {
+                  return left.address < right.address;
+              });
+    std::sort(functions.begin(), functions.end(),
+              [](const auto& left, const auto& right) {
+                  return left.address < right.address;
+              });
+    std::sort(non_root_entries.begin(), non_root_entries.end());
+
+    katana::analysis::detail::GuardedNativeEntryShapeCache entry_shapes(image);
+    std::vector<katana::analysis::detail::StaticCallbackSinkContract>
+        discovered;
+    static_cast<void>(
+        katana::analysis::detail::analyze_static_callback_inventory(
+            image, lines, functions, {}, non_root_entries, entry_shapes,
+            &discovered));
+
+    std::map<std::uint32_t, std::uint8_t> masks;
+    for (const auto& sink : discovered) {
+        const auto mapped = external_by_resolved_entry.find(
+            sink.function_address);
+        if (mapped == external_by_resolved_entry.end()) continue;
+        auto& mask = masks[mapped->second];
+        mask = static_cast<std::uint8_t>(mask | sink.argument_mask);
+    }
+    std::vector<LatentAotExternalCallbackSink> result;
+    result.reserve(masks.size());
+    for (const auto [address, mask] : masks) {
+        if (mask != 0u) result.push_back({address, mask});
+    }
+    return result;
+}
+
+std::vector<LatentAotExternalCallbackSink>
+latent_aot_analyzed_external_callback_sinks(
+    const katana::io::ExecutableImage& image,
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::span<const std::uint32_t> external_code_targets) {
+    if (external_code_targets.empty() ||
+        analysis.recursive.instructions.empty() ||
+        analysis.recursive.functions.empty())
+        return {};
+
+    katana::analysis::detail::GuardedNativeEntryShapeCache entry_shapes(image);
+    std::vector<katana::analysis::detail::StaticCallbackSinkContract>
+        discovered;
+    // This is a positive, bounded contract extraction from the complete
+    // primary CFG.  It does not make an indirect transfer complete: the
+    // resulting cross-image entries remain guarded AOT roots whose bytes are
+    // revalidated when their latent module is materialized.
+    static_cast<void>(
+        katana::analysis::detail::analyze_static_callback_inventory(
+            image,
+            analysis.recursive.instructions,
+            analysis.recursive.functions,
+            {},
+            external_code_targets,
+            entry_shapes,
+            &discovered));
+
+    std::map<std::uint32_t, std::uint8_t> masks;
+    for (const auto& sink : discovered) {
+        const auto external =
+            latent_aot_external_code_address(sink.function_address);
+        if (!external.has_value() ||
+            !std::binary_search(external_code_targets.begin(),
+                                external_code_targets.end(), *external))
+            continue;
+        auto& mask = masks[*external];
+        mask = static_cast<std::uint8_t>(mask | sink.argument_mask);
+    }
+
+    std::vector<LatentAotExternalCallbackSink> result;
+    result.reserve(masks.size());
+    for (const auto [address, mask] : masks) {
+        if (mask != 0u) result.push_back({address, mask});
+    }
+    return result;
+}
+
+std::vector<LatentAotExternalCallbackSink>
+merge_latent_aot_external_callback_sinks(
+    const std::span<const LatentAotExternalCallbackSink> declared,
+    const std::span<const LatentAotExternalCallbackSink> analyzed) {
+    std::map<std::uint32_t, std::uint8_t> masks;
+    for (const auto& sink : declared)
+        masks[sink.function_address] = static_cast<std::uint8_t>(
+            masks[sink.function_address] | sink.argument_mask);
+    for (const auto& sink : analyzed)
+        masks[sink.function_address] = static_cast<std::uint8_t>(
+            masks[sink.function_address] | sink.argument_mask);
+
+    std::vector<LatentAotExternalCallbackSink> result;
+    result.reserve(masks.size());
+    for (const auto [address, mask] : masks) {
+        if (mask != 0u) result.push_back({address, mask});
+    }
+    return result;
+}
+
 LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     const PortExportOptions& options,
     const katana::io::ExecutableImage& image,
-    const std::span<const std::uint32_t> external_code_targets) {
+    const std::span<const std::uint32_t> external_code_targets,
+    const std::span<const LatentAotExternalCallbackSink>
+        external_callback_sinks) {
     LatentAotDiscoveryOptions result;
     result.mode = options.latent_aot_discovery_mode;
     if (!options.latent_aot_entry_hints.empty() &&
@@ -18341,6 +18527,7 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     if (!options.analysis_cache_root.empty())
         result.analysis_cache_root = options.analysis_cache_root / "latent";
     result.external_code_targets = external_code_targets;
+    result.external_callback_sinks = external_callback_sinks;
     return result;
 }
 
@@ -20989,9 +21176,20 @@ static PortExportResult export_dreamcast_port_project_impl(
                 options.game_project,
                 options.native_port_definition,
                 prepared.image);
+        const auto declared_external_callback_sinks =
+            latent_aot_declared_external_callback_sinks(
+                options.game_project,
+                options.native_port_definition,
+                prepared.image,
+                declared_external_targets);
         const auto discovery_options =
             port_latent_aot_discovery_options(
-                options, prepared.image, declared_external_targets);
+                options, prepared.image, declared_external_targets,
+                declared_external_callback_sinks);
+        report_progress(
+            options,
+            "latent-aot-external-callback-sinks:" +
+                std::to_string(declared_external_callback_sinks.size()));
         report_progress(options, "latent-aot-discovery");
         report_progress(
             options,
@@ -22991,6 +23189,16 @@ PortExportResult export_dreamcast_port_project(
         report_progress(options,
                         "native-disc-game-project-runtime-only-analysis");
     }
+    external_port_overrides = port_analysis_overrides(
+        options.game_project, options.native_port_definition, image);
+    auto prepared_analysis = prepare_boot_analysis(
+        image,
+        external_port_overrides ? &*external_port_overrides : nullptr,
+        options,
+        "native-disc-control-flow");
+    std::size_t boot_analysis_pipeline_runs =
+        prepared_analysis.full_pipeline_runs;
+
     report_progress(options, "latent-aot-source-validation");
     const auto boot_sha256 = executable_image_range_sha256(
         pre_bootstrap_image,
@@ -23004,44 +23212,95 @@ PortExportResult export_dreamcast_port_project(
     const auto declared_external_targets =
         latent_aot_declared_external_code_targets(
             options.game_project, options.native_port_definition, image);
-    const auto discovery_options =
-        port_latent_aot_discovery_options(
-            options, image, declared_external_targets);
-    report_progress(options, "latent-aot-discovery");
+    const auto declared_external_callback_sinks =
+        latent_aot_declared_external_callback_sinks(
+            options.game_project, options.native_port_definition, image,
+            declared_external_targets);
     report_progress(
         options,
         "latent-aot-image-references:" +
             std::to_string(referenced_disc_files.size()));
-    auto precomputed_latent_aot = discover_latent_aot_modules(
-        disc.source,
-        disc.data_track_lba,
-        disc.extent_lba_bias,
-        excluded_identities,
-        discovery_options,
-        occupied,
-        options.latent_aot_entry_hints,
-        referenced_disc_files);
+    LatentAotDiscovery precomputed_latent_aot;
+    constexpr std::size_t maximum_cross_image_callback_iterations = 8u;
+    std::size_t final_external_callback_sink_count = 0u;
+    std::size_t final_latent_external_root_count = 0u;
+    for (std::size_t iteration = 0u;
+         iteration < maximum_cross_image_callback_iterations;
+         ++iteration) {
+        const auto analyzed_external_callback_sinks =
+            latent_aot_analyzed_external_callback_sinks(
+                image,
+                prepared_analysis.artifact.analysis,
+                declared_external_targets);
+        const auto external_callback_sinks =
+            merge_latent_aot_external_callback_sinks(
+                declared_external_callback_sinks,
+                analyzed_external_callback_sinks);
+        final_external_callback_sink_count = external_callback_sinks.size();
+        report_progress(
+            options,
+            "latent-aot-external-callback-sinks:" +
+                std::to_string(external_callback_sinks.size()) +
+                ":iteration=" + std::to_string(iteration) + "-complete");
+        const auto discovery_options = port_latent_aot_discovery_options(
+            options,
+            image,
+            declared_external_targets,
+            external_callback_sinks);
+        report_progress(
+            options,
+            "latent-aot-discovery-fixpoint:" +
+                std::to_string(iteration));
+        precomputed_latent_aot = discover_latent_aot_modules(
+            disc.source,
+            disc.data_track_lba,
+            disc.extent_lba_bias,
+            excluded_identities,
+            discovery_options,
+            occupied,
+            options.latent_aot_entry_hints,
+            referenced_disc_files);
+        const auto latent_external_roots =
+            latent_aot_external_primary_entries(
+                precomputed_latent_aot.modules,
+                options.game_project,
+                options.native_port_definition,
+                image);
+        final_latent_external_root_count = latent_external_roots.size();
+
+        std::vector<std::uint32_t> added_roots;
+        for (const auto root : latent_external_roots) {
+            const auto entries = image.entry_points();
+            if (std::find(entries.begin(), entries.end(), root) !=
+                entries.end())
+                continue;
+            image.add_entry_point(root);
+            added_roots.push_back(root);
+        }
+        if (added_roots.empty()) break;
+        if (iteration + 1u == maximum_cross_image_callback_iterations)
+            throw std::runtime_error(
+                "Cross-Image-Callback-Analyse erreicht keinen Fixpunkt.");
+
+        external_port_overrides = port_analysis_overrides(
+            options.game_project, options.native_port_definition, image);
+        prepared_analysis = prepare_boot_analysis(
+            image,
+            external_port_overrides ? &*external_port_overrides : nullptr,
+            options,
+            "native-disc-cross-image-callback-control-flow");
+        boot_analysis_pipeline_runs +=
+            prepared_analysis.full_pipeline_runs;
+    }
     report_latent_aot_analysis_durations(options, precomputed_latent_aot);
-    const auto latent_external_roots =
-        latent_aot_external_primary_entries(
-            precomputed_latent_aot.modules,
-            options.game_project,
-            options.native_port_definition,
-            image);
-    for (const auto root : latent_external_roots)
-        image.add_entry_point(root);
     report_progress(
         options,
-        "latent-aot-primary-callback-roots:" +
-            std::to_string(latent_external_roots.size()));
+        "latent-aot-cross-image-callback-fixpoint:sinks=" +
+            std::to_string(final_external_callback_sink_count) +
+            ":primary-roots=" +
+            std::to_string(final_latent_external_root_count) +
+            "-complete");
 
-    external_port_overrides = port_analysis_overrides(
-        options.game_project, options.native_port_definition, image);
-    auto prepared_analysis = prepare_boot_analysis(
-        image,
-        external_port_overrides ? &*external_port_overrides : nullptr,
-        options,
-        "native-disc-control-flow");
     auto& analysis = prepared_analysis.artifact.analysis;
     auto& program = prepared_analysis.artifact.lowered_program;
     report_progress(options, "ir-optimization");
@@ -23101,7 +23360,7 @@ PortExportResult export_dreamcast_port_project(
     report.boot_analysis_cache_hit =
         prepared_analysis.cache_hit;
     report.boot_analysis_pipeline_runs =
-        prepared_analysis.full_pipeline_runs;
+        boot_analysis_pipeline_runs;
     if (!options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
         !options.analysis_cache_implementation_identity.empty())

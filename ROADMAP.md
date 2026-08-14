@@ -7,6 +7,21 @@ statisches SH-4-AOT und native PC-Plattformdienste
 
 Erster oeffentlicher Release: `v0.50.0` Alpha
 
+## Aktueller Produktmeilenstein
+
+Der v111/v30-Lauf schliesst die echte zweiteilige Introsequenz im nativen
+Spielablauf ohne Controllerinput oder Skip. Sonic Team erreichte `200/200`
+Videoframes und `294.016` Audioframes; das Opening erreichte `3.257/3.257`
+Videoframes und `4.709.760` Audioframes. Der Sequenzabschluss kehrte mit dem
+originalen Erfolgsstatus in statisch rekompilierten Titelcode zurueck.
+
+Der Export umfasst `5.918` Funktionen in `167` Partitionen; die
+Hardware-Closure verbesserte sich von `803` auf `759` Gaps. Der naechste
+globale Bring-up-Blocker ist die statische Bindung eines nach dem Intro
+materialisierten PRS-Overlay-Entrys. Danach folgen Memory-Card-Pfad und
+Hauptmenue. Ein Start-Controllerimpuls ist erst seit diesem vollstaendigen
+No-Skip-Beleg fuer kuerzere Diagnoselaeufe erlaubt.
+
 ## Produktziel
 
 KatanaRecomp ist ein statischer SH-4-Recompiler fuer native PC-Ports. Ein
@@ -349,13 +364,13 @@ letzte reale Produktevidenz:
 
 aktueller funktionaler Source-Stand:
   aktueller Native-Port-Architekturreview-Checkpoint
-  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 93, Native-Port-Profilvertrag 16
-  Analyzer-ABI 43
+  Runtime-ABI 105, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 95, Native-Port-Profilvertrag 18
+  Analyzer-ABI 45
   Function-Analysis-Epoch-Schema 28
   lokales In-Process-Evaluation-Cache-Schema 13
-  Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 5
+  Native-AOT-Emissionsprofil 35, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 7
 
 Der SDK-Reviewabschluss hält `port_export.cpp` in einer separaten, nicht
 installierten Tooling-Object-Closure und schliesst `port_export.hpp` sowie

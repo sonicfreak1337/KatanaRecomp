@@ -11,7 +11,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t native_aot_emission_profile_version = 34u;
+inline constexpr std::uint32_t native_aot_emission_profile_version = 35u;
 
 enum class NativeAotEmissionProfile : std::uint8_t { Product, ExternalConformance };
 

@@ -25,19 +25,42 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 104, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 105, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 44, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 45, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 94, Native-Port-Profilvertrag 17 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `34`, AOT-Partitionsschema: `7`.
-Port-Metadata-Cache-Schema: `6`.
+Portprojektvertrag 95, Native-Port-Profilvertrag 18 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `35`, AOT-Partitionsschema: `7`.
+Port-Metadata-Cache-Schema: `7`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
 Analyse-Direktiven stehen auf `4`, das Hardware-Closure-Schema auf `v6`, die
 Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
+
+Der aktuelle v111/v30-Produktbeleg bindet die statisch hergeleitete
+MOVIE.BIN-Sequenz als nativen, identitaetsgebundenen Multi-Clip-Vertrag. Ein
+sichtbarer Lauf ohne Controllerinput oder Skip vervollstaendigte zuerst den
+Sonic-Team-Film mit `200/200` Videoframes, `294.016` Audioframes und `200`
+nichtschwarzen Frames und danach das originale Opening mit `3.257/3.257`
+Videoframes, `4.709.760` Audioframes und `3.254` nichtschwarzen Frames. Die
+Sequenz endete regulaer mit dem originalen Erfolgsstatus; der Kontaktbogen
+belegt beide Filmphasen bis zum Ende. Das getestete `game.exe` hat SHA-256
+`616f57fb414d25fc72fb199b5a0aa653b33c93a6ab611ff7fa325ba3f69df358`.
+Erst nach diesem No-Skip-Nachweis darf ein echter Start-Controllerimpuls das
+Intro in spaeteren Diagnoselaeufen abkuerzen.
+
+Der zugehoerige Export umfasst `5.918` Funktionen in `167` Partitionen,
+`4.430` rohe und `2.509` guarded Callback-Kandidaten sowie `400.972` von
+`4.194.304` Entry-Shape-Arbeitseinheiten ohne Truncation oder Budgetende.
+Gegenueber v29 sind das `+815` Funktionen und `+18` Partitionen. Die
+Hardware-Closure verbesserte sich von `803` auf `759` Gaps; `865` Sites sind
+durch vollstaendige Hooks ersetzt, `20` durch native CPU-Control-Semantik und
+`53` als native Progress-Waits gebunden. Nach dem vollstaendigen Intro endet
+der Port jetzt fail-closed an einem noch ungebundenen Entry eines neu
+materialisierten PRS-Overlays. Opening und native Movie-Sequenz sind damit
+geschlossen; Memory-Card-Pfad und Hauptmenue bleiben KR-5005.
 
 Der Architekturreview ist in der Source- und SDK-Grenze umgesetzt: Das
 installierte Produktpaket exportiert nur `KatanaRecomp::aot_runtime`,
@@ -560,8 +583,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 104, Analyzer-ABI 44, Portprojektvertrag 94 und
-Native-Port-Profilvertrag 17. Davon getrennt verwendet `GameProject` Vertrag 8 und
+KR-5005-Stand verwendet Runtime-ABI 105, Analyzer-ABI 45, Portprojektvertrag 95 und
+Native-Port-Profilvertrag 18. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen

@@ -304,6 +304,22 @@ und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
 rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`
 freigegeben.
 
+Aktueller Produktbeleg v111/v30: Die MOVIE.BIN-Sequenz `0` ist als
+identitaetsgebundener Multi-Clip-Vertrag geschlossen. Ohne Controllerinput
+oder Skip liefen Sonic Team (`200/200` Video, `294.016` Audioframes, `200`
+nichtschwarz) und das Opening (`3.257/3.257` Video, `4.709.760` Audioframes,
+`3.254` nichtschwarz) bis zum regulaeren Sequenzende. Ein echter
+Start-Controllerimpuls darf das Intro daher ab jetzt ausschliesslich in
+Diagnoselaeufen abkuerzen. Der naechste P0 ist kein Moviefehler, sondern ein
+noch ungebundener statischer Entry des nach dem Intro materialisierten
+PRS-Overlays. Memory-Card-Screen und Hauptmenue bleiben offen.
+
+Der Export umfasst `5.918` Funktionen in `167` Partitionen, `4.430` rohe und
+`2.509` guarded Callback-Kandidaten sowie `400.972/4.194.304` Shape-Arbeit
+ohne Truncation. Gegenueber v29: `+815` Funktionen, `+18` Partitionen und
+`803 -> 759` Hardware-Closure-Gaps. Vollstaendige Hooks ersetzen `865`
+Sites; `20` CPU-Control-Sites und `53` Progress-Waits sind nativ gebunden.
+
 Aktueller KR-5005-Zwischenstand: Der warme v72-Export erzeugte `5.103`
 Funktionen in `149` Partitionen und `203` Host-TUs in `24,356 s`. Analyse, IR
 und Metadaten waren Cachetreffer, Codegen erreichte `149/149` Treffer und der
@@ -414,14 +430,14 @@ letzte reale Produktevidenz:
 
 Aktueller funktionaler Source-Stand:
   aktueller KR-5005-Architekturreview-Checkpoint
-  Runtime-ABI 104, PlatformServices-ABI 14, Backend-Interface-ABI 23,
-  PVR-State-Contract 3, Portprojektvertrag 94, Native-Port-Profilvertrag 17
-  Analyzer-ABI 44, Function-Analysis-Epoch-Schema 28,
+  Runtime-ABI 105, PlatformServices-ABI 14, Backend-Interface-ABI 23,
+  PVR-State-Contract 3, Portprojektvertrag 95, Native-Port-Profilvertrag 18
+  Analyzer-ABI 45, Function-Analysis-Epoch-Schema 28,
   lokales In-Process-Evaluation-Cache-Schema 13, GameProject 8/Artefakt 6,
   Analysis Directives 4, Hookkarte v5, Hardware-Closure v6,
   GameProject-Metadaten katana-game-project-v5
-  Native-AOT-Emissionsprofil 34, AOT-Partitionsschema 7,
-  Port-Metadata-Cache-Schema 6
+  Native-AOT-Emissionsprofil 35, AOT-Partitionsschema 7,
+  Port-Metadata-Cache-Schema 7
 
 historischer Diagnosebefund:
   Sonic-v56 endete nach 1:28:24 mit Exitcode 5

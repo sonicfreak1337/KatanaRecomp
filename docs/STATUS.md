@@ -42,6 +42,25 @@ Aktive Reihenfolge: `KR-5000` Produktlinkgrenze, `KR-5001` Hookkarte,
 native Plattformdienste und `KR-5005` No-Skip-Lauf bis Hauptmenue. Der
 vollstaendige Vertrag steht in `NATIVE_PORT_PRODUCT_CONTRACT.md`.
 
+Aktueller KR-5005-Produktstand: Der v111/v30-Lauf hat die vollstaendige
+zweiteilige Introsequenz erstmals innerhalb des echten nativen Spielablaufs
+ohne Eingabe oder Skip abgeschlossen. Sonic Team lieferte `200/200` Video,
+`294.016` Audioframes und `200` nichtschwarze Frames; das Opening lieferte
+`3.257/3.257` Video, `4.709.760` Audioframes und `3.254` nichtschwarze
+Frames. Der Sequenzabschluss gab den originalen Erfolgsstatus an den
+rekompilierten Titelcode zurueck. Der naechste typisierte Endpunkt ist ein
+noch nicht gebundener statischer Entry eines nach dem Intro materialisierten
+PRS-Overlays. Ab jetzt darf nur in Diagnoselaeufen ein echter
+Start-Controllerimpuls das bereits vollstaendig verifizierte Intro skippen;
+Memory-Card-Screen und Hauptmenue bleiben unbewiesen.
+
+Der aktuelle Export umfasst `5.918` Funktionen, `167` Partitionen, `4.430`
+rohe und `2.509` guarded Callback-Kandidaten. Gegenueber v29 sind das `+815`
+Funktionen und `+18` Partitionen. Die Closure steht bei `759` Gaps statt
+`803`; `865` Sites sind durch Hooks ersetzt, `20` durch native CPU-Control-
+Semantik und `53` als Progress-Waits gebunden. Analysebudgets und Inventare
+blieben vollstaendig.
+
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
 Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native

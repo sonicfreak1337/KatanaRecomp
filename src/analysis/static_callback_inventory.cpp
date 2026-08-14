@@ -29,6 +29,7 @@ constexpr std::size_t maximum_scalar_constants = 8u;
 constexpr std::size_t maximum_code_constants = 64u;
 constexpr std::size_t maximum_inventory_candidates = 16'384u;
 constexpr std::size_t maximum_stack_values = 256u;
+constexpr std::size_t minimum_static_code_pointer_vector_entries = 4u;
 constexpr std::size_t maximum_static_code_pointer_table_entries = 256u;
 constexpr std::uint32_t maximum_static_code_pointer_table_stride = 256u;
 
@@ -540,6 +541,99 @@ void add_candidate(std::vector<StoredCodeAddressCandidate>& candidates,
     found->store_instruction_addresses.push_back(source_address);
 }
 
+struct StaticCodePointerVectorInventory final {
+    std::vector<StoredCodeAddressCandidate> candidates;
+    bool truncated = false;
+};
+
+[[nodiscard]] StaticCodePointerVectorInventory
+discover_static_code_pointer_vectors(
+    const katana::io::ExecutableImage& image,
+    const std::span<const std::uint32_t> non_root_function_entry_hints,
+    GuardedNativeEntryShapeCache& native_entry_shapes) {
+    StaticCodePointerVectorInventory inventory;
+    // Constructors commonly install a static callback descriptor into a
+    // mutable object before any consumer can expose the descriptor base to
+    // value analysis. That creates a real dependency cycle: the constructor
+    // is reachable only through the very vector whose address it publishes.
+    //
+    // Four contiguous, aligned and independently decodable function entries
+    // in an identity-bound image are a sufficiently strong positive shape to
+    // break that cycle. This remains guarded inventory only. It neither
+    // resolves an indirect transfer nor claims the vector is complete at
+    // runtime. Shorter runs stay excluded because ordinary structures often
+    // contain one or two incidental code pointers.
+    for (const auto& segment : image.segments()) {
+        // Runtime modules and overlays own independent address identities and
+        // retirement epochs. Their vectors must be discovered by the bound
+        // latent/module analysis, never imported into the initial-image
+        // closure merely because the current snapshot also contains bytes at
+        // their source address.
+        if (segment.load_phase != katana::io::ImageLoadPhase::Initial ||
+            !segment.permissions.readable || segment.bytes.size() < 16u)
+            continue;
+        const auto first_offset = static_cast<std::size_t>(
+            (4u - (segment.virtual_address & 3u)) & 3u);
+        auto offset = first_offset;
+        while (offset <= segment.bytes.size() - 4u) {
+            struct Entry final {
+                std::uint32_t target = 0u;
+                std::uint32_t slot = 0u;
+            };
+            std::vector<Entry> entries;
+            auto cursor = offset;
+            for (; cursor <= segment.bytes.size() - 4u; cursor += 4u) {
+                const auto slot64 =
+                    static_cast<std::uint64_t>(segment.virtual_address) +
+                    cursor;
+                if (slot64 > std::numeric_limits<std::uint32_t>::max())
+                    break;
+                const auto slot = static_cast<std::uint32_t>(slot64);
+                const auto raw = read_image_u32(image, slot);
+                if (!raw.has_value()) break;
+                const auto target = executable_constant(image, *raw);
+                if (!target.has_value()) break;
+                const auto* target_segment =
+                    image.find_segment(*target, sizeof(std::uint16_t));
+                if (target_segment == nullptr ||
+                    target_segment->load_phase != segment.load_phase)
+                    break;
+                if (!std::binary_search(
+                        non_root_function_entry_hints.begin(),
+                        non_root_function_entry_hints.end(), *target))
+                    break;
+
+                const auto status = native_entry_shapes.classify(*target);
+                if (status ==
+                    GuardedNativeEntryShapeStatus::ShapeBudgetExceeded) {
+                    inventory.truncated = true;
+                    return inventory;
+                }
+                if (status != GuardedNativeEntryShapeStatus::Valid) break;
+                entries.push_back({*target, slot});
+                if (entries.size() >
+                    maximum_static_code_pointer_table_entries) {
+                    inventory.truncated = true;
+                    return inventory;
+                }
+            }
+
+            if (entries.size() >=
+                minimum_static_code_pointer_vector_entries) {
+                for (const auto& entry : entries)
+                    add_candidate(inventory.candidates, image, entry.target,
+                                  entry.slot);
+            }
+            // cursor names the first rejected word. It cannot begin a valid
+            // vector; resume at the following aligned slot. At end-of-segment
+            // the overflow-safe assignment simply terminates the outer loop.
+            if (cursor > segment.bytes.size() - 4u) break;
+            offset = cursor + 4u;
+        }
+    }
+    return inventory;
+}
+
 void observe_loaded_static_descriptor_table(
     CallbackFunctionModel& model,
     const katana::io::ExecutableImage& image,
@@ -815,54 +909,67 @@ void apply_instruction(CallbackFunctionModel& model,
     case K::MovByteLoad:
     case K::MovWordLoad:
     case K::MovLongLoad: {
-        state.registers[destination] =
-            load_value(state, state.registers[source], 0, width);
+        // Snapshot every address operand before publishing the loaded value.
+        // Rm == Rn is legal and must not make the positive static-image lane
+        // dereference the value that was just loaded instead of the original
+        // base address.
+        const auto base = state.registers[source];
+        auto loaded_value = load_value(state, base, 0, width);
         if (width == 4u) {
             const auto loaded = load_static_image_values(
-                image, state.registers[source], 0,
-                native_entry_shapes);
+                image, base, 0, native_entry_shapes);
             observe_loaded_static_descriptor_table(
                 model, image, loaded, line.address, native_entry_shapes);
-            static_cast<void>(join_value(state.registers[destination], loaded,
+            static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
         }
+        state.registers[destination] = std::move(loaded_value);
         return;
     }
     case K::MovByteLoadDisplacement:
     case K::MovWordLoadDisplacement:
-    case K::MovLongLoadDisplacement:
-        state.registers[destination] = load_value(
-            state, state.registers[source], instruction.displacement, width);
+    case K::MovLongLoadDisplacement: {
+        const auto base = state.registers[source];
+        auto loaded_value =
+            load_value(state, base, instruction.displacement, width);
         if (width == 4u) {
             const auto loaded = load_static_image_values(
-                image, state.registers[source], instruction.displacement,
+                image, base, instruction.displacement,
                 native_entry_shapes);
             observe_loaded_static_descriptor_table(
                 model, image, loaded, line.address, native_entry_shapes);
-            static_cast<void>(join_value(state.registers[destination], loaded,
+            static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
         }
+        state.registers[destination] = std::move(loaded_value);
         return;
+    }
     case K::MovByteLoadR0Indexed:
     case K::MovWordLoadR0Indexed:
-    case K::MovLongLoadR0Indexed:
-        if (state.registers[0u].constants.size() == 1u &&
-            !state.registers[0u].constants_truncated)
-            state.registers[destination] = load_value(
-                state, state.registers[source],
+    case K::MovLongLoadR0Indexed: {
+        // R0, Rm and Rn may all alias. Preserve both address components until
+        // the dynamic and static load domains have consumed them.
+        const auto index = state.registers[0u];
+        const auto base = state.registers[source];
+        CallbackValue loaded_value;
+        if (index.constants.size() == 1u &&
+            !index.constants_truncated)
+            loaded_value = load_value(
+                state, base,
                 static_cast<std::int32_t>(
-                    *state.registers[0u].constants.begin()),
+                    *index.constants.begin()),
                 width);
         else
-            set_unknown(state.registers[destination]);
+            set_unknown(loaded_value);
         if (width == 4u) {
             const auto loaded = load_static_indexed_value(
-                image, state.registers[0u], state.registers[source],
-                native_entry_shapes);
-            static_cast<void>(join_value(state.registers[destination], loaded,
+                image, index, base, native_entry_shapes);
+            static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
         }
+        state.registers[destination] = std::move(loaded_value);
         return;
+    }
     case K::MovByteLoadPostIncrement:
     case K::MovWordLoadPostIncrement:
     case K::MovLongLoadPostIncrement: {
@@ -1078,7 +1185,9 @@ GuardedCodeInventory analyze_static_callback_inventory(
     const std::span<const FunctionCandidate> function_candidates,
     const std::span<const std::uint32_t> external_block_entries,
     const std::span<const std::uint32_t> non_root_function_entry_hints,
-    GuardedNativeEntryShapeCache& native_entry_shapes) {
+    GuardedNativeEntryShapeCache& native_entry_shapes,
+    std::vector<StaticCallbackSinkContract>* const
+        callback_sink_contracts) {
     GuardedCodeInventory inventory;
     inventory.raw_stored_candidate_budget = maximum_inventory_candidates;
     inventory.candidate_budget = maximum_inventory_candidates;
@@ -1233,6 +1342,25 @@ GuardedCodeInventory analyze_static_callback_inventory(
         }
     }
 
+    if (callback_sink_contracts != nullptr) {
+        callback_sink_contracts->clear();
+        callback_sink_contracts->reserve(sink_masks.size());
+        for (const auto [function_address, argument_mask] : sink_masks) {
+            if (argument_mask == 0u) continue;
+            callback_sink_contracts->push_back(
+                {function_address, argument_mask});
+        }
+    }
+
+    if (!std::is_sorted(non_root_function_entry_hints.begin(),
+                        non_root_function_entry_hints.end()) ||
+        std::adjacent_find(non_root_function_entry_hints.begin(),
+                           non_root_function_entry_hints.end()) !=
+            non_root_function_entry_hints.end())
+        throw std::invalid_argument(
+            "Nicht-rootende Funktionseinstiegshinweise sind nicht "
+            "kanonisch.");
+
     std::map<std::uint32_t, StoredCodeAddressCandidate> candidates;
     std::size_t raw_candidates = 0u;
     const auto merge_candidate = [&](const StoredCodeAddressCandidate& source) {
@@ -1254,6 +1382,12 @@ GuardedCodeInventory analyze_static_callback_inventory(
             source.evidence_callees.begin(),
             source.evidence_callees.end());
     };
+    const auto static_vectors = discover_static_code_pointer_vectors(
+        image, non_root_function_entry_hints, native_entry_shapes);
+    for (const auto& candidate : static_vectors.candidates)
+        merge_candidate(candidate);
+    candidate_values_truncated =
+        candidate_values_truncated || static_vectors.truncated;
     for (const auto& [entry, model] : models) {
         static_cast<void>(entry);
         for (const auto& candidate : model.local_candidates)
@@ -1291,14 +1425,6 @@ GuardedCodeInventory analyze_static_callback_inventory(
         }
     }
 
-    if (!std::is_sorted(non_root_function_entry_hints.begin(),
-                        non_root_function_entry_hints.end()) ||
-        std::adjacent_find(non_root_function_entry_hints.begin(),
-                           non_root_function_entry_hints.end()) !=
-            non_root_function_entry_hints.end())
-        throw std::invalid_argument(
-            "Nicht-rootende Funktionseinstiegshinweise sind nicht "
-            "kanonisch.");
     for (auto candidate = candidates.begin(); candidate != candidates.end();) {
         const auto independently_bound = std::binary_search(
             non_root_function_entry_hints.begin(),

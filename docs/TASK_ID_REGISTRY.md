@@ -203,7 +203,7 @@ der Kill-on-close-Job beendete den Child trotzdem.
 | KR-5002 | Nativer Audio-/Moviepfad | [x] source-seitig abgeschlossen; WinMM PCM, LGPL-Shared-FFmpeg/libav-Provider, bounded Decode-/EOS-Vertrag und Ready-to-Stopped-Movie-Lifecycle ohne Geraetefallback |
 | KR-5003 | Nativer GPU-Pfad | [x] source- und produktseitig abgeschlossen; hardware-only D3D11 ohne WARP/REF/GDI/CPU-Rasterizer, PVR/TA oder historische Geraeteruntime; native Vertices/Texturen/Drawstate, getrennte Render-/Output-/Game-/UI-/Kamera-Vertraege, sichtbare SFD-Abnahme mit 200 GPU-Frames |
 | KR-5004 | Native Disc-, Eingabe- und Save-Dienste | [x] source- und produktseitig abgeschlossen; identitaetsgebundene read-only Content-Ranges, XInput fuer vier Gamepads, atomare projekt-/slot-/schema-gebundene Saves mit Backup-Recovery, fail-closed Roots/IDs/Digest-Domaenen |
-| KR-5005 | Nativer No-Skip-Sonic-Produktlauf | aktiv P0 Alpha-Gate; Texture-/Font-Foundation sowie Save-/Executable-Lifecycle-Unterauftraege sind source-seitig abgeschlossen; der aktuelle Stand hat keinen Sonic-Produktlauf und keine Produktabnahme; Film 1/Opening, Memory-Card-Screen und Hauptmenue bleiben offen |
+| KR-5005 | Nativer No-Skip-Sonic-Produktlauf | aktiv P0 Alpha-Gate; Texture-/Font-Foundation sowie Save-/Executable-Lifecycle-Unterauftraege sind source-seitig abgeschlossen; v111/v30 belegt Sonic Team plus Opening im echten Spielablauf ohne Skip (`3.457/3.457` Video, `5.003.776` Audioframes); naechster P0 ist ein ungebundener post-Intro-PRS-Overlay-Entry, Memory-Card-Screen und Hauptmenue bleiben offen |
 
 ## Aktuelle Meilensteinzuordnung
 

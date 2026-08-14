@@ -63,6 +63,18 @@ enum class LatentAotCompletenessPolicy : std::uint8_t {
     ExactRuntimeOnlyStopOnMiss,
 };
 
+// An identity-bound primary-image registrar which persistently consumes one
+// or more SH-4 ABI arguments as callback addresses. The bit mask uses r4..r7
+// as bits 0..3. Latent modules may use this contract only to add guarded local
+// entry roots; it never makes a runtime indirect target set complete.
+struct LatentAotExternalCallbackSink final {
+    std::uint32_t function_address = 0u;
+    std::uint8_t argument_mask = 0u;
+
+    [[nodiscard]] bool operator==(
+        const LatentAotExternalCallbackSink&) const = default;
+};
+
 struct LatentAotDiscoveryOptions {
     LatentAotDiscoveryMode mode = LatentAotDiscoveryMode::HintsAndHeuristics;
     LatentAotCompletenessPolicy completeness_policy =
@@ -111,6 +123,10 @@ struct LatentAotDiscoveryOptions {
     // identity-bound targets. The list never creates module entries by itself;
     // the exporter performs the final executable-image admission.
     std::span<const std::uint32_t> external_code_targets;
+    // Sorted, unique subset of external_code_targets proven from exact
+    // primary-image function boundaries and persistent callback stores.
+    std::span<const LatentAotExternalCallbackSink>
+        external_callback_sinks;
 };
 
 struct LatentAotOccupiedRange {
