@@ -7,7 +7,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_audio_contract_version = 1u;
+inline constexpr std::uint32_t native_port_audio_contract_version = 3u;
 
 struct NativePortAudioFormat final {
     std::uint32_t sample_rate = 44'100u;
@@ -35,6 +35,7 @@ struct NativePortAudioSnapshot final {
     std::uint64_t submitted_frames = 0u;
     std::uint64_t completed_frames = 0u;
     std::uint64_t queued_frames = 0u;
+    std::uint64_t playback_position_queries = 0u;
     std::uint32_t error_code = 0u;
 };
 
@@ -54,11 +55,22 @@ class NativePortAudioStream final {
 
     [[nodiscard]] const NativePortAudioFormat& format() const noexcept;
     [[nodiscard]] bool submit_pcm_s16(std::span<const std::int16_t> interleaved_samples);
+    // Retires completed host buffers only. This remains cheap when submit()
+    // invokes it repeatedly while filling one outer audio/movie pump.
     void poll();
+    // Samples the host device cursor exactly where an outer engine/movie pump
+    // needs a fresh master clock. Call once per outer pump, never per block.
+    void refresh_playback_position();
     void pause();
     void resume();
     void stop();
     [[nodiscard]] NativePortAudioSnapshot snapshot() const noexcept;
+    // Monotonic host-device playback position, in interleaved PCM frames from
+    // this stream's first submission. Native decoders use the cursor to bound
+    // queued audio by what the endpoint has actually consumed rather than by
+    // whole-buffer retirement. Movie presentation may use the same value as
+    // its master clock. The value never exceeds submitted_frames in snapshot().
+    [[nodiscard]] std::uint64_t playback_position_frames() const noexcept;
 
   private:
     class Impl;

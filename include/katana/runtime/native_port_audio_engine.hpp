@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_audio_engine_contract_version = 2u;
+inline constexpr std::uint32_t native_port_audio_engine_contract_version = 3u;
 
 enum class NativePortAudioEngineFailure : std::uint8_t {
     None,
@@ -48,9 +48,12 @@ struct NativePortAudioEngineConfig final {
     NativePortAudioFormat output_format{44'100u, 2u};
     std::uint32_t maximum_voices = 64u;
     std::uint32_t maximum_output_queue_frames = 44'100u;
-    // Keep the native endpoint close enough to title state changes that
-    // pause/stop/gain transitions do not inherit movie-sized latency.
-    std::uint32_t target_output_queue_frames = 1'024u;
+    // Keep enough native PCM queued to survive an ordinary late 60-Hz host
+    // frame without giving pause/stop/gain transitions movie-sized latency.
+    // The mixer accounts against the device playback cursor rather than
+    // whole retained endpoint blocks, so this is a real ~46-ms horizon at
+    // 44.1 kHz rather than an imprecise allocation watermark.
+    std::uint32_t target_output_queue_frames = 2'048u;
     std::uint32_t mix_block_frames = 256u;
     std::uint32_t maximum_buffered_frames_per_voice = 88'200u;
     std::uint32_t maximum_decoder_reads_per_pump = 4'096u;
@@ -67,6 +70,31 @@ struct NativePortAudioVoiceConfig final {
     std::uint64_t loop_start_frame = 0u;
     std::uint64_t loop_end_frame = 0u;
 };
+
+// Format-level metadata for one identity-bound CRI ADX stream.  This is a
+// native content contract: it describes encoded media and authored loop
+// points only; no AICA state, guest sound RAM or CRI command surface is
+// exposed to the product runtime.
+struct NativePortAdxStreamMetadata final {
+    std::uint32_t sample_rate = 0u;
+    std::uint32_t channels = 0u;
+    std::uint64_t sample_frames = 0u;
+    bool loop = false;
+    std::uint64_t loop_start_frame = 0u;
+    std::uint64_t loop_end_frame = 0u;
+};
+
+[[nodiscard]] NativePortAdxStreamMetadata inspect_native_port_adx_content(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding);
+
+// Converts source-rate ADX loop positions into the audio engine's decoded
+// output-rate frame domain with overflow-checked integer arithmetic.
+[[nodiscard]] NativePortAudioVoiceConfig native_port_adx_voice_config(
+    const NativePortAdxStreamMetadata& metadata,
+    std::uint32_t output_sample_rate,
+    float gain = 1.0f,
+    float pan = 0.0f);
 
 struct NativePortAudioVoiceHandle final {
     std::uint32_t slot = 0xFFFFFFFFu;

@@ -1,5 +1,6 @@
 #include "katana/runtime/native_port_audio.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <list>
 #include <stdexcept>
@@ -138,6 +139,13 @@ class NativePortAudioStream::Impl final {
 #endif
     }
 
+    void refresh_playback_position() {
+        require_owner_thread();
+#ifdef _WIN32
+        update_playback_position();
+#endif
+    }
+
     void pause() {
         require_owner_thread();
         if (state_ == NativePortAudioState::Stopped || state_ == NativePortAudioState::Failed ||
@@ -217,10 +225,47 @@ class NativePortAudioStream::Impl final {
                 submitted_frames_,
                 completed_frames_,
                 queued_frames_,
+                playback_position_queries_,
                 error_code_};
     }
 
+    [[nodiscard]] std::uint64_t playback_position_frames() const noexcept {
+        return played_frames_;
+    }
+
   private:
+#ifdef _WIN32
+    void update_playback_position() {
+        if (device_ == nullptr) return;
+        saturating_add(playback_position_queries_, 1u);
+        MMTIME position{};
+        position.wType = TIME_SAMPLES;
+        const auto result = waveOutGetPosition(device_, &position, sizeof(position));
+        if (result != MMSYSERR_NOERROR) fail(result, "position");
+        if (position.wType != TIME_SAMPLES) {
+            // WAVEHDR completion is a conservative playback lower bound when
+            // a legacy driver cannot expose its sample clock.
+            played_frames_ = std::max(played_frames_, completed_frames_);
+            return;
+        }
+        auto raw = static_cast<std::uint32_t>(position.u.sample);
+        if (device_position_initialized_) {
+            if (raw < last_device_position_raw_) {
+                if (last_device_position_raw_ - raw > 0x8000'0000u)
+                    device_position_epoch_ += std::uint64_t{1u} << 32u;
+                else
+                    raw = last_device_position_raw_;
+            }
+        } else {
+            device_position_initialized_ = true;
+        }
+        last_device_position_raw_ = raw;
+        const auto device_frames = device_position_epoch_ + raw;
+        played_frames_ = std::min(submitted_frames_,
+                                  std::max(played_frames_, device_frames));
+    }
+#endif
+
     void require_owner_thread() const {
         if (std::this_thread::get_id() != owner_thread_)
             throw std::logic_error("native-port-audio-thread-violation");
@@ -250,6 +295,13 @@ class NativePortAudioStream::Impl final {
     std::uint64_t submitted_frames_ = 0u;
     std::uint64_t completed_frames_ = 0u;
     std::uint64_t queued_frames_ = 0u;
+    std::uint64_t played_frames_ = 0u;
+    std::uint64_t playback_position_queries_ = 0u;
+#ifdef _WIN32
+    std::uint64_t device_position_epoch_ = 0u;
+    std::uint32_t last_device_position_raw_ = 0u;
+    bool device_position_initialized_ = false;
+#endif
     std::uint32_t error_code_ = 0u;
 };
 
@@ -270,6 +322,9 @@ bool NativePortAudioStream::submit_pcm_s16(
 void NativePortAudioStream::poll() {
     impl_->poll();
 }
+void NativePortAudioStream::refresh_playback_position() {
+    impl_->refresh_playback_position();
+}
 void NativePortAudioStream::pause() {
     impl_->pause();
 }
@@ -281,6 +336,9 @@ void NativePortAudioStream::stop() {
 }
 NativePortAudioSnapshot NativePortAudioStream::snapshot() const noexcept {
     return impl_->snapshot();
+}
+std::uint64_t NativePortAudioStream::playback_position_frames() const noexcept {
+    return impl_->playback_position_frames();
 }
 
 } // namespace katana::runtime

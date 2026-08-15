@@ -228,8 +228,14 @@ class FfmpegDecoder final {
         }
         const bool audio_ready = !audio_queue_.empty();
         const bool video_ready = !video_queue_.empty();
-        if (!audio_ready && !video_ready) {
-            if (audio_drained_ && video_drained_) {
+        const bool audio_end_ready = audio_codec_ != nullptr && audio_drained_ &&
+                                     audio_queue_.empty() && !audio_end_reported_;
+        const bool video_end_ready = video_codec_ != nullptr && video_drained_ &&
+                                     video_queue_.empty() && !video_end_reported_;
+        if (!audio_ready && !video_ready && !audio_end_ready && !video_end_ready) {
+            if (audio_drained_ && video_drained_ &&
+                (audio_codec_ == nullptr || audio_end_reported_) &&
+                (video_codec_ == nullptr || video_end_reported_)) {
                 result = {};
                 result.status = NativePortCodecReadStatus::EndOfStream;
                 result.failure = NativePortCodecFailure::None;
@@ -239,15 +245,43 @@ class FfmpegDecoder final {
             write_failure(result);
             return;
         }
-        if (audio_ready &&
-            (!video_ready || audio_queue_.front().timestamp <= video_queue_.front().timestamp)) {
+
+        enum class Candidate : std::uint8_t { None, Audio, AudioEnd, Video, VideoEnd };
+        Candidate candidate = Candidate::None;
+        auto candidate_timestamp = std::numeric_limits<std::uint64_t>::max();
+        const auto consider = [&](const Candidate value, const std::uint64_t timestamp) {
+            if (candidate == Candidate::None || timestamp < candidate_timestamp) {
+                candidate = value;
+                candidate_timestamp = timestamp;
+            }
+        };
+        if (audio_ready) consider(Candidate::Audio, audio_queue_.front().timestamp);
+        if (audio_end_ready) consider(Candidate::AudioEnd, next_audio_timestamp_);
+        if (video_ready) consider(Candidate::Video, video_queue_.front().timestamp);
+        if (video_end_ready) consider(Candidate::VideoEnd, next_video_timestamp_);
+
+        if (candidate == Candidate::Audio) {
             current_ = std::move(audio_queue_.front());
             audio_queue_.pop_front();
             queued_audio_frames_ -= current_.audio.size() / current_.channels;
-        } else {
+        } else if (candidate == Candidate::Video) {
             current_ = std::move(video_queue_.front());
             video_queue_.pop_front();
             queued_video_bytes_ -= current_.pixels.size();
+        } else {
+            current_ = {};
+            current_.timestamp = candidate_timestamp;
+            if (candidate == Candidate::AudioEnd) {
+                current_.kind = NativePortCodecSampleKind::AudioEnd;
+                audio_end_reported_ = true;
+            } else if (candidate == Candidate::VideoEnd) {
+                current_.kind = NativePortCodecSampleKind::VideoEnd;
+                video_end_reported_ = true;
+            } else {
+                static_cast<void>(fail(NativePortCodecFailure::Internal, AVERROR_BUG));
+                write_failure(result);
+                return;
+            }
         }
         if (global_timestamp_initialized_ && current_.timestamp < last_global_timestamp_) {
             static_cast<void>(fail(NativePortCodecFailure::InvalidData, AVERROR_INVALIDDATA));
@@ -267,7 +301,7 @@ class FfmpegDecoder final {
             result.sample.audio_channels = current_.channels;
             result.sample.audio_samples = current_.audio.data();
             result.sample.audio_sample_count = current_.audio.size();
-        } else {
+        } else if (current_.kind == NativePortCodecSampleKind::Video) {
             result.sample.video_width = current_.width;
             result.sample.video_height = current_.height;
             result.sample.video_stride_bytes = current_.stride;
@@ -781,6 +815,8 @@ class FfmpegDecoder final {
     bool video_flush_sent_ = false;
     bool audio_drained_ = false;
     bool video_drained_ = false;
+    bool audio_end_reported_ = false;
+    bool video_end_reported_ = false;
     bool inject_sofdec_signature_ = false;
 };
 

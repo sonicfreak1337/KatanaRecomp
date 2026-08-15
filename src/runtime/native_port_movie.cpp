@@ -38,6 +38,8 @@ constexpr std::uint32_t maximum_video_queue_budget_frames = 256u;
 constexpr std::uint64_t maximum_video_frame_budget_bytes = 128u * 1024u * 1024u;
 constexpr std::uint64_t maximum_video_queue_budget_bytes = 128u * 1024u * 1024u;
 constexpr std::uint32_t maximum_display_aspect_component = 65'535u;
+constexpr std::uint32_t movie_audio_batch_frames = 1'024u;
+constexpr std::uint64_t movie_audio_timestamp_tolerance_nanoseconds = 1'000'000u;
 
 struct DisplayAspect final {
     std::uint32_t numerator = 0u;
@@ -98,6 +100,22 @@ void saturating_add_counter(std::uint64_t& destination, const std::uint64_t valu
 
 void saturating_increment_counter(std::uint64_t& destination) noexcept {
     saturating_add_counter(destination, 1u);
+}
+
+[[nodiscard]] std::uint64_t audio_frames_to_nanoseconds(
+    const std::uint64_t frames,
+    const std::uint32_t sample_rate) noexcept {
+    if (sample_rate == 0u) return 0u;
+    constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
+    const auto seconds = frames / sample_rate;
+    const auto remainder = frames % sample_rate;
+    if (seconds > std::numeric_limits<std::uint64_t>::max() /
+                      nanoseconds_per_second)
+        return std::numeric_limits<std::uint64_t>::max();
+    auto result = seconds * nanoseconds_per_second;
+    const auto fraction = remainder * nanoseconds_per_second / sample_rate;
+    saturating_add_counter(result, fraction);
+    return result;
 }
 
 void require_safe_existing_path(const std::filesystem::path& path) {
@@ -542,7 +560,10 @@ class NativePortMovieSession::Impl final {
             if (host_time < pause_host_time_)
                 return fail_and_close(NativePortMovieFailure::HostTimeRegression,
                                       "host-time-regression");
-            anchor_host_time_ += host_time - pause_host_time_;
+            const auto paused_duration = host_time - pause_host_time_;
+            anchor_host_time_ += paused_duration;
+            if (audio_tail_clock_started_)
+                audio_tail_anchor_host_time_ += paused_duration;
             last_host_time_ = host_time;
             if (audio_) {
                 try {
@@ -569,9 +590,12 @@ class NativePortMovieSession::Impl final {
             return fail_and_close(NativePortMovieFailure::HostTimeRegression,
                                   "host-time-regression");
         last_host_time_ = host_time;
-        position_ = host_time - anchor_host_time_;
         try {
-            if (audio_) audio_->poll();
+            if (audio_) {
+                audio_->poll();
+                audio_->refresh_playback_position();
+            }
+            update_playback_position(host_time);
 #ifdef _WIN32
             if (codec_provider_ != nullptr)
                 decode_provider_until_position();
@@ -782,6 +806,38 @@ class NativePortMovieSession::Impl final {
             transition(NativePortMovieState::Failed, NativePortMovieFailure::HostAudioFailure);
             throw NativePortMovieError(NativePortMovieFailure::HostAudioFailure, 0u, "audio-open");
         }
+    }
+
+    void update_playback_position(const std::uint64_t host_time) noexcept {
+        const auto wall_position = host_time - anchor_host_time_;
+        if (audio_ == nullptr || !audio_clock_started_) {
+            position_ = wall_position;
+            return;
+        }
+
+        const auto audio_snapshot = audio_->snapshot();
+        auto audio_position = audio_clock_origin_timestamp_;
+        saturating_add_counter(
+            audio_position,
+            audio_frames_to_nanoseconds(audio_->playback_position_frames(),
+                                        provider_audio_format_.sample_rate));
+        if (audio_eos_ && audio_snapshot.queued_frames == 0u) {
+            if (!audio_tail_clock_started_) {
+                audio_tail_clock_started_ = true;
+                audio_tail_anchor_host_time_ = host_time;
+                audio_tail_anchor_position_ = std::max(position_, audio_position);
+            }
+            auto tail_position = audio_tail_anchor_position_;
+            saturating_add_counter(tail_position,
+                                   host_time - audio_tail_anchor_host_time_);
+            position_ = tail_position;
+            return;
+        }
+
+        // Audio is the master while it is live. A host stall may therefore
+        // delay both streams, but can never let video run ahead and leave
+        // already-late PCM queued behind it.
+        position_ = std::max(position_, audio_position);
     }
 
     void initialize_codec_provider(const NativePortCodecProvider& provider) {
@@ -996,7 +1052,80 @@ class NativePortMovieSession::Impl final {
         }
     }
 
+    [[nodiscard]] bool submit_provider_audio_batch(const bool force) {
+        if (provider_audio_batch_.empty()) return true;
+        const auto frames = provider_audio_batch_.size() /
+                            provider_audio_format_.channels;
+        if (!force && frames < movie_audio_batch_frames) return true;
+        if (!audio_->submit_pcm_s16(provider_audio_batch_)) return false;
+        if (!audio_clock_started_) {
+            audio_clock_started_ = true;
+            audio_clock_origin_timestamp_ = provider_audio_batch_timestamp_;
+        }
+        provider_audio_batch_.clear();
+        return true;
+    }
+
+    void append_provider_audio_sample(const ProviderSample& sample) {
+        const auto frames = sample.audio_samples.size() /
+                            sample.audio_format.channels;
+        std::size_t silence_samples = 0u;
+        auto append_timestamp = sample.timestamp;
+        if (provider_audio_timeline_initialized_) {
+            append_timestamp = provider_next_audio_timestamp_;
+            if (provider_next_audio_timestamp_ > sample.timestamp &&
+                provider_next_audio_timestamp_ - sample.timestamp >
+                    movie_audio_timestamp_tolerance_nanoseconds)
+                return fail_and_throw(NativePortMovieFailure::CodecProviderFailure,
+                                      "codec-provider-audio-overlap");
+            if (sample.timestamp > provider_next_audio_timestamp_ &&
+                sample.timestamp - provider_next_audio_timestamp_ >
+                    movie_audio_timestamp_tolerance_nanoseconds) {
+                const auto gap_nanoseconds =
+                    sample.timestamp - provider_next_audio_timestamp_;
+                if (gap_nanoseconds > 1'000'000'000u)
+                    return fail_and_throw(NativePortMovieFailure::CodecProviderFailure,
+                                          "codec-provider-audio-gap");
+                const auto gap_frames =
+                    (gap_nanoseconds * sample.audio_format.sample_rate +
+                     500'000'000u) /
+                    1'000'000'000u;
+                if (gap_frames > config_.maximum_audio_queue_frames)
+                    return fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
+                                          "codec-provider-audio-gap-budget");
+                silence_samples = static_cast<std::size_t>(gap_frames) *
+                                  sample.audio_format.channels;
+            }
+        } else {
+            provider_audio_timeline_initialized_ = true;
+        }
+        if (provider_audio_batch_.empty())
+            provider_audio_batch_timestamp_ = append_timestamp;
+        const auto maximum_batch_samples =
+            static_cast<std::size_t>(config_.maximum_audio_queue_frames) *
+            sample.audio_format.channels;
+        if (provider_audio_batch_.size() > maximum_batch_samples ||
+            silence_samples > maximum_batch_samples - provider_audio_batch_.size() ||
+            sample.audio_samples.size() > maximum_batch_samples -
+                                                   provider_audio_batch_.size() -
+                                                   silence_samples)
+            return fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
+                                  "codec-provider-audio-batch-budget");
+        provider_audio_batch_.insert(provider_audio_batch_.end(),
+                                     silence_samples,
+                                     std::int16_t{0});
+        provider_audio_batch_.insert(provider_audio_batch_.end(),
+                                     sample.audio_samples.begin(),
+                                     sample.audio_samples.end());
+        provider_next_audio_timestamp_ = sample.timestamp;
+        saturating_add_counter(
+            provider_next_audio_timestamp_,
+            audio_frames_to_nanoseconds(frames, sample.audio_format.sample_rate));
+        saturating_add_counter(decoded_audio_frames_, frames);
+    }
+
     void decode_provider_until_position() {
+        if (!submit_provider_audio_batch(false)) return;
         while (!provider_video_queue_.empty() &&
                provider_video_queue_.front().timestamp <= position_) {
             auto sample = std::move(provider_video_queue_.front());
@@ -1014,10 +1143,18 @@ class NativePortMovieSession::Impl final {
         for (std::size_t work = 0u; work < maximum_samples_per_pump; ++work) {
             if (provider_terminal_) break;
             if (!provider_pending_) read_provider_pending();
-            if (!provider_pending_) break;
+            if (!provider_pending_) {
+                if (provider_terminal_) {
+                    if (!submit_provider_audio_batch(true)) return;
+                    audio_eos_ = true;
+                    video_eos_ = true;
+                }
+                break;
+            }
             auto& sample = *provider_pending_;
             switch (sample.kind) {
             case NativePortCodecSampleKind::AudioEnd:
+                if (!submit_provider_audio_batch(true)) return;
                 audio_eos_ = true;
                 provider_pending_.reset();
                 continue;
@@ -1026,11 +1163,13 @@ class NativePortMovieSession::Impl final {
                 provider_pending_.reset();
                 continue;
             case NativePortCodecSampleKind::Audio:
+                if (!provider_audio_timeline_initialized_ &&
+                    sample.timestamp > position_)
+                    return;
                 if (sample.timestamp > decode_horizon) return;
-                if (!audio_->submit_pcm_s16(sample.audio_samples)) return;
-                saturating_add_counter(decoded_audio_frames_,
-                                       sample.audio_samples.size() / sample.audio_format.channels);
+                append_provider_audio_sample(sample);
                 provider_pending_.reset();
+                if (!submit_provider_audio_batch(false)) return;
                 continue;
             case NativePortCodecSampleKind::Video:
                 if (sample.timestamp > decode_horizon) return;
@@ -1371,12 +1510,17 @@ class NativePortMovieSession::Impl final {
         anchor_host_time_ = 0u;
         pause_host_time_ = 0u;
         last_host_time_ = 0u;
+        audio_clock_origin_timestamp_ = 0u;
+        audio_tail_anchor_host_time_ = 0u;
+        audio_tail_anchor_position_ = 0u;
         decoded_audio_frames_ = 0u;
         decoded_video_frames_ = 0u;
         presented_video_frames_ = 0u;
         failure_ = NativePortMovieFailure::None;
         platform_error_code_ = 0u;
         deferred_stop_ = false;
+        audio_clock_started_ = false;
+        audio_tail_clock_started_ = false;
 #ifdef _WIN32
         pending_.reset();
         video_queue_.clear();
@@ -1384,6 +1528,10 @@ class NativePortMovieSession::Impl final {
         provider_pending_.reset();
         provider_video_queue_.clear();
         provider_video_queue_bytes_ = 0u;
+        provider_audio_batch_.clear();
+        provider_audio_batch_timestamp_ = 0u;
+        provider_next_audio_timestamp_ = 0u;
+        provider_audio_timeline_initialized_ = false;
         has_audio_ = false;
         has_video_ = false;
         audio_eos_ = false;
@@ -1422,6 +1570,7 @@ class NativePortMovieSession::Impl final {
         provider_pending_.reset();
         provider_video_queue_.clear();
         provider_video_queue_bytes_ = 0u;
+        provider_audio_batch_.clear();
         pending_.reset();
         video_queue_.clear();
         mf_video_queue_bytes_ = 0u;
@@ -1490,6 +1639,9 @@ class NativePortMovieSession::Impl final {
     std::uint64_t anchor_host_time_ = 0u;
     std::uint64_t pause_host_time_ = 0u;
     std::uint64_t last_host_time_ = 0u;
+    std::uint64_t audio_clock_origin_timestamp_ = 0u;
+    std::uint64_t audio_tail_anchor_host_time_ = 0u;
+    std::uint64_t audio_tail_anchor_position_ = 0u;
     std::uint64_t decoded_audio_frames_ = 0u;
     std::uint64_t decoded_video_frames_ = 0u;
     std::uint64_t presented_video_frames_ = 0u;
@@ -1499,6 +1651,8 @@ class NativePortMovieSession::Impl final {
     bool owner_thread_bound_ = false;
     bool callback_active_ = false;
     bool deferred_stop_ = false;
+    bool audio_clock_started_ = false;
+    bool audio_tail_clock_started_ = false;
 #ifdef _WIN32
     HANDLE content_handle_ = nullptr;
     OVERLAPPED content_lock_{};
@@ -1510,8 +1664,12 @@ class NativePortMovieSession::Impl final {
     std::optional<ProviderSample> provider_pending_;
     std::deque<ProviderSample> provider_video_queue_;
     std::uint64_t provider_video_queue_bytes_ = 0u;
+    std::vector<std::int16_t> provider_audio_batch_;
+    std::uint64_t provider_audio_batch_timestamp_ = 0u;
+    std::uint64_t provider_next_audio_timestamp_ = 0u;
     bool provider_terminal_ = false;
     bool provider_timestamp_initialized_ = false;
+    bool provider_audio_timeline_initialized_ = false;
     std::uint64_t last_provider_timestamp_ = 0u;
     ComPtr<IMFSourceReader> reader_;
     ComPtr<IMFByteStream> byte_stream_;

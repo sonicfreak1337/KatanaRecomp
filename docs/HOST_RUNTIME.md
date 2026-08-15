@@ -19,6 +19,23 @@ Shutdown setzt Puffer zurueck, loest Header und schliesst das Geraet. Ohne
 verfuegbares Audiogeraet bleibt der Recording-Pfad nutzbar. Nicht implementierte
 Plattformen behaupten keine native Audioausgabe.
 
+Der native PCM-Endpunktvertrag `3` stellt zusaetzlich einen monotonen
+Host-Wiedergabecursor in PCM-Frames bereit. Native Decoder begrenzen ihre
+Vorhaltequeue damit gegen die vom Ausgabegeraet tatsaechlich konsumierten
+Frames und nicht gegen die groebere Freigabe kompletter WaveOut-Puffer. Der
+Cursor ist auf die eingereichten Frames begrenzt; Backends ohne feinere
+Geraeteposition duerfen konservativ auf vollstaendig abgeschlossene Puffer
+zurueckfallen.
+
+Die Positionsabfrage ist vom guenstigen Puffer-Retirement getrennt: `poll()`
+darf waehrend eines Fuellevorgangs mehrfach laufen, `refresh_playback_position()`
+wird jedoch genau einmal je aeusserem Audio- oder Movie-Pump aufgerufen. Damit
+fragt kein einzelner Mix- oder Codecblock den WaveOut-Treiber wiederholt ab.
+Der Sonic-Replay bestaetigt den Effekt: Gegenueber v147 mit etwa `22--70 ms`
+Audio-Pumpzeit und Spitzen bis `337 ms` liegt v148 bei `0,33--1,32 ms` und
+unter `1,9 ms` Spitze; Intro, Titel, Hauptmenue und Charakterauswahl wurden
+erreicht.
+
 Der native Produktport verwendet diesen historischen AICA-/ARM7-Pfad nicht.
 `NativePortAudioEngine` reicht bounded PCM16-Hostfeeds und native
 Codecstimmen an die Plattformausgabe. `NativePortSoundBankEngine` verarbeitet

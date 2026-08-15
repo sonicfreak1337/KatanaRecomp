@@ -1,6 +1,7 @@
 #include "katana/runtime/native_port_audio_engine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -95,6 +96,54 @@ void validate_voice_config(const NativePortAudioVoiceConfig& config) {
                : NativePortAudioEngineFailure::DecoderRead;
 }
 
+[[nodiscard]] std::uint16_t read_be16(
+    const std::span<const std::byte> bytes,
+    const std::size_t offset) {
+    if (offset > bytes.size() || bytes.size() - offset < 2u)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-header-range");
+    return static_cast<std::uint16_t>(
+               std::to_integer<std::uint8_t>(bytes[offset]))
+               << 8u |
+           static_cast<std::uint16_t>(
+               std::to_integer<std::uint8_t>(bytes[offset + 1u]));
+}
+
+[[nodiscard]] std::uint32_t read_be32(
+    const std::span<const std::byte> bytes,
+    const std::size_t offset) {
+    if (offset > bytes.size() || bytes.size() - offset < 4u)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-header-range");
+    return static_cast<std::uint32_t>(
+               std::to_integer<std::uint8_t>(bytes[offset]))
+               << 24u |
+           static_cast<std::uint32_t>(
+               std::to_integer<std::uint8_t>(bytes[offset + 1u]))
+               << 16u |
+           static_cast<std::uint32_t>(
+               std::to_integer<std::uint8_t>(bytes[offset + 2u]))
+               << 8u |
+           static_cast<std::uint32_t>(
+               std::to_integer<std::uint8_t>(bytes[offset + 3u]));
+}
+
+[[nodiscard]] std::uint64_t scale_audio_frame(
+    const std::uint64_t frame,
+    const std::uint32_t source_rate,
+    const std::uint32_t output_rate) {
+    const auto whole = frame / source_rate;
+    const auto remainder = frame % source_rate;
+    if (whole > std::numeric_limits<std::uint64_t>::max() / output_rate)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-frame-overflow");
+    return whole * output_rate +
+           (remainder * output_rate + source_rate / 2u) / source_rate;
+}
+
 } // namespace
 
 NativePortAudioEngineError::NativePortAudioEngineError(
@@ -115,6 +164,143 @@ NativePortAudioEngineError::failure() const noexcept {
 std::uint32_t
 NativePortAudioEngineError::provider_error_code() const noexcept {
     return provider_error_code_;
+}
+
+NativePortAdxStreamMetadata inspect_native_port_adx_content(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding) {
+    // The fixed ADX header ends at byte 24. Non-looping version-3 streams may
+    // begin encoded data at byte 36; looping streams extend the metadata
+    // through byte 43. Read the larger inspection prefix, but do not confuse
+    // its size with the authored payload offset.
+    constexpr std::size_t inspection_header_bytes = 44u;
+    constexpr std::uint64_t minimum_data_start = 36u;
+    constexpr std::uint64_t loop_metadata_end = 44u;
+    std::unique_ptr<NativePortReadOnlyFile> file;
+    try {
+        file = platform.open_content_file(binding);
+    } catch (const NativePortPlatformError& error) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          error.platform_error_code(),
+                          "adx-content-open");
+    } catch (...) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          0u,
+                          "adx-content-open");
+    }
+    if (!file || file->byte_size() < inspection_header_bytes)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-content-size");
+
+    std::array<std::byte, inspection_header_bytes> header{};
+    try {
+        file->read_at(0u, header);
+    } catch (const NativePortPlatformError& error) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          error.platform_error_code(),
+                          "adx-header-read");
+    } catch (...) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          0u,
+                          "adx-header-read");
+    }
+
+    constexpr std::uint8_t adx_fixed_encoding = 3u;
+    constexpr std::uint8_t adx_block_bytes = 18u;
+    constexpr std::uint8_t adx_sample_bits = 4u;
+    if (std::to_integer<std::uint8_t>(header[0]) != 0x80u ||
+        std::to_integer<std::uint8_t>(header[1]) != 0x00u ||
+        std::to_integer<std::uint8_t>(header[4]) != adx_fixed_encoding ||
+        std::to_integer<std::uint8_t>(header[5]) != adx_block_bytes ||
+        std::to_integer<std::uint8_t>(header[6]) != adx_sample_bits)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-header-format");
+
+    NativePortAdxStreamMetadata metadata;
+    metadata.channels = std::to_integer<std::uint8_t>(header[7]);
+    metadata.sample_rate = read_be32(header, 8u);
+    metadata.sample_frames = read_be32(header, 12u);
+    if ((metadata.channels != 1u && metadata.channels != 2u) ||
+        metadata.sample_rate < 8'000u || metadata.sample_rate > 192'000u ||
+        metadata.sample_frames == 0u)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-stream-format");
+
+    const auto data_start = static_cast<std::uint64_t>(read_be16(header, 2u)) + 4u;
+    const auto blocks = (metadata.sample_frames + 31u) / 32u;
+    const auto encoded_bytes_per_block =
+        static_cast<std::uint64_t>(adx_block_bytes) * metadata.channels;
+    if (data_start < minimum_data_start ||
+        blocks > std::numeric_limits<std::uint64_t>::max() /
+                     encoded_bytes_per_block ||
+        data_start > file->byte_size() ||
+        blocks * encoded_bytes_per_block > file->byte_size() - data_start)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-payload-range");
+
+    const auto loop_flag = read_be32(header, 24u);
+    if (loop_flag > 1u)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "adx-loop-flag");
+    if (loop_flag != 0u) {
+        if (data_start < loop_metadata_end)
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                              0u,
+                              "adx-loop-header-range");
+        metadata.loop_start_frame = read_be32(header, 28u);
+        const auto loop_start_byte = read_be32(header, 32u);
+        metadata.loop_end_frame = read_be32(header, 36u);
+        const auto loop_end_byte = read_be32(header, 40u);
+        if (metadata.loop_start_frame >= metadata.loop_end_frame ||
+            metadata.loop_end_frame > metadata.sample_frames ||
+            loop_start_byte < data_start || loop_start_byte >= loop_end_byte ||
+            loop_end_byte > file->byte_size())
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                              0u,
+                              "adx-loop-range");
+        metadata.loop = true;
+    }
+    return metadata;
+}
+
+NativePortAudioVoiceConfig native_port_adx_voice_config(
+    const NativePortAdxStreamMetadata& metadata,
+    const std::uint32_t output_sample_rate,
+    const float gain,
+    const float pan) {
+    if ((metadata.channels != 1u && metadata.channels != 2u) ||
+        metadata.sample_rate == 0u || metadata.sample_frames == 0u ||
+        output_sample_rate < 8'000u || output_sample_rate > 192'000u ||
+        !valid_gain_pan(gain, pan) ||
+        (metadata.loop &&
+         (metadata.loop_start_frame >= metadata.loop_end_frame ||
+          metadata.loop_end_frame > metadata.sample_frames)) ||
+        (!metadata.loop &&
+         (metadata.loop_start_frame != 0u || metadata.loop_end_frame != 0u)))
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidVoiceConfig,
+                          0u,
+                          "adx-voice-config");
+
+    NativePortAudioVoiceConfig config;
+    config.gain = gain;
+    config.pan = pan;
+    config.loop = metadata.loop;
+    if (metadata.loop) {
+        config.loop_start_frame = scale_audio_frame(
+            metadata.loop_start_frame, metadata.sample_rate, output_sample_rate);
+        config.loop_end_frame = scale_audio_frame(
+            metadata.loop_end_frame, metadata.sample_rate, output_sample_rate);
+        if (config.loop_start_frame >= config.loop_end_frame)
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidVoiceConfig,
+                              0u,
+                              "adx-loop-scale");
+    }
+    return config;
 }
 
 class NativePortAudioEngine::Impl final {
@@ -383,6 +569,7 @@ class NativePortAudioEngine::Impl final {
         require_owner_thread();
         try {
             output_->poll();
+            output_->refresh_playback_position();
         } catch (...) {
             fail_audio_engine(NativePortAudioEngineFailure::HostAudio,
                               0u,
@@ -396,13 +583,29 @@ class NativePortAudioEngine::Impl final {
                               output_snapshot.error_code,
                               "output-state");
 
+        // WAVEHDR ownership is released only after a complete submitted block
+        // finishes.  NativePortAudioSnapshot::queued_frames is consequently a
+        // conservative storage/lifetime count and can overstate the samples
+        // the device still has left to play by almost one mix block.  At a
+        // 60-Hz service boundary that error consumed nearly the entire jitter
+        // margin and produced periodic endpoint underruns.  Drive the mixer
+        // from the monotone device sample cursor instead; submitted frames are
+        // still the authoritative upper bound if a host driver reports a
+        // stale or rounded position.
+        const auto remaining_output_frames = [&]() noexcept {
+            const auto played = std::min(
+                output_snapshot.submitted_frames,
+                output_->playback_position_frames());
+            return output_snapshot.submitted_frames - played;
+        };
+
         std::uint32_t decoder_reads_remaining =
             config_.maximum_decoder_reads_per_pump;
-        while (output_snapshot.queued_frames <
+        while (remaining_output_frames() <
                config_.target_output_queue_frames) {
             const auto queue_room =
                 config_.target_output_queue_frames -
-                static_cast<std::uint32_t>(output_snapshot.queued_frames);
+                static_cast<std::uint32_t>(remaining_output_frames());
             const auto requested_frames =
                 std::min(config_.mix_block_frames, queue_room);
             const auto mixed_frames =
@@ -590,9 +793,14 @@ class NativePortAudioEngine::Impl final {
         request.requested_audio_sample_rate = config_.output_format.sample_rate;
         request.maximum_audio_queue_frames =
             config_.maximum_buffered_frames_per_voice;
+        // Codec providers still validate the complete bounded request even
+        // when video is not required: an input may advertise an unexpected
+        // video stream which the audio engine then rejects below. Keep the
+        // unused surface at the provider's smallest representable BGRA pixel
+        // instead of passing an internally invalid one-byte budget.
         request.maximum_video_queue_frames = 1u;
-        request.maximum_video_frame_bytes = 1u;
-        request.maximum_video_queue_bytes = 1u;
+        request.maximum_video_frame_bytes = 4u;
+        request.maximum_video_queue_bytes = 4u;
         request.require_audio = 1u;
         request.require_video = 0u;
 
