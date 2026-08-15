@@ -243,11 +243,33 @@ struct NativePortMaterializedTextureAsset final {
     std::string name;
     std::optional<std::uint32_t> global_index;
     std::uint32_t archive_ordinal = 0u;
+    NativePortTextureAssetPixelFormat source_pixel_format =
+        NativePortTextureAssetPixelFormat::Rgb565;
+    NativePortTextureAssetDataFormat source_data_format =
+        NativePortTextureAssetDataFormat::Rectangle;
+    std::uint64_t source_encoded_bytes = 0u;
     std::uint32_t guest_token = 0u;
     NativePortTextureHandle texture;
     NativePortExtent extent;
     std::uint32_t mip_levels = 1u;
 };
+
+// Semantic source-layout projection for an SDK-owned guest texture
+// descriptor. The format bits intentionally exclude a texture-memory address:
+// native adapters bind that storage/lifetime in guest RAM while the host GPU
+// remains authoritative for pixels. This is resource metadata, not a PVR
+// device or packet model.
+struct NativePortTextureGuestDescriptorLayout final {
+    std::uint32_t tsp_size_bits = 0u;
+    std::uint32_t tcw_format_bits = 0u;
+    NativePortExtent extent;
+    std::uint64_t source_encoded_bytes = 0u;
+    std::uint32_t mip_levels = 1u;
+};
+
+[[nodiscard]] NativePortTextureGuestDescriptorLayout
+native_port_texture_guest_descriptor_layout(
+    const NativePortMaterializedTextureAsset& texture);
 
 // Explicit archive lifetime. Title adapters may keep several independently
 // verified archives resident and release them at their native SDK unload

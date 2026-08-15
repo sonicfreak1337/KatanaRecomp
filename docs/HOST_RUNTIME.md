@@ -30,8 +30,14 @@ AICA-Register, ARM7, Kommandoringe, Interrupts und G2-DMA werden nicht
 nachgebildet. Generation-gepruefte Handles, bounded Queues/Budgets und
 threadgebundene Mutationen enden bei unbekannten Formaten fail-closed.
 
-Soundbankvertrag `4` ergaenzt eine bounded Predecode-Grenze, die dieselben
-PCM16-/PCM8-/ADPCM-Decoder und denselben Samplecache wie Live-Noten nutzt.
+Soundbankvertrag `6` ergaenzt eine bounded Predecode-Grenze und den
+identitaetsgebundenen `SPSR`-PCM-Stream-Ring-Vertrag im 2-MiB-Manatee-
+Layoutfenster. Ringbereiche sind ausgerichtet, ueberlappungsfrei und ueber
+Generationen gebunden; es wird kein Gast-Sound-RAM und keine AICA-Oberflaeche
+erzeugt. Payloadlose `SFPW`-Einheiten werden als Layoutreservierung validiert,
+waehrend befuellte `SOSB`-Einheiten bis zur separat bewiesenen One-shot-ABI
+typisiert abgebrochen werden. Die Predecode-Grenze nutzt weiterhin dieselben
+PCM16-/PCM8-/ADPCM-Decoder und denselben Samplecache wie Live-Noten.
 Der Sonic-Korpus belegt `122` Collections, `52.253.920` Bytes, `7.139`
 Splits, `5.596` Sequenzen, `40.294` Events und `4.698` eindeutige Samples
 (`115` PCM16, `246` PCM8, `4.337` ADPCM; `94.889.624` Frames). Damit werden

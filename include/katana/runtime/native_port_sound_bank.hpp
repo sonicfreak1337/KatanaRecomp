@@ -5,12 +5,15 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_sound_bank_contract_version = 4u;
+inline constexpr std::uint32_t native_port_sound_bank_contract_version = 6u;
+inline constexpr std::uint32_t native_port_manatee_sound_layout_bytes =
+    2u * 1024u * 1024u;
 
 enum class NativePortSoundBankFailure : std::uint8_t {
     None,
@@ -23,6 +26,7 @@ enum class NativePortSoundBankFailure : std::uint8_t {
     InvalidProgramBank,
     InvalidSequenceBank,
     InvalidSequence,
+    InvalidPcmStreamRing,
     UnsupportedController,
     UnsupportedEffect,
     InvalidSample,
@@ -67,6 +71,44 @@ struct NativePortSoundCollectionHandle final {
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return slot != 0xFFFFFFFFu && generation != 0u;
     }
+};
+
+// Semantic units authored inside a Manatee MLT collection.  This is a host
+// content contract, not an AICA memory-map or command-ring abstraction.
+// Titles whose SDK still performs the historical unit-registration step can
+// validate and bind that intent against the already parsed native collection.
+enum class NativePortSoundCollectionUnitKind : std::uint8_t {
+    ProgramBank,
+    SequenceBank,
+    OneShotBank,
+    PcmStreamRing,
+    EffectProgramBank,
+    EffectOutputBank,
+    EffectProgramWork,
+};
+
+// SPSR is authored Manatee layout metadata for one bounded PCM stream ring.
+// The offset is retained solely to validate the title's static MLT contract;
+// no guest sound-RAM allocation or AICA memory surface is created.  A later
+// native stream provider feeds decoded PCM through NativePortAudioEngine.
+struct NativePortSoundPcmStreamRingConfig final {
+    std::uint8_t bank = 0u;
+    std::uint32_t layout_offset = 0u;
+    std::uint32_t byte_size = 0u;
+};
+
+struct NativePortSoundPcmStreamRingHandle final {
+    std::uint32_t slot = 0xFFFFFFFFu;
+    std::uint32_t generation = 0u;
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return slot != 0xFFFFFFFFu && generation != 0u;
+    }
+};
+
+struct NativePortSoundPcmStreamRingSnapshot final {
+    NativePortSoundPcmStreamRingConfig config;
+    bool bound = false;
 };
 
 struct NativePortSoundSequenceHandle final {
@@ -178,6 +220,8 @@ struct NativePortSoundBankSnapshot final {
     std::uint32_t active_collections = 0u;
     std::uint32_t active_sequences = 0u;
     std::uint32_t active_voices = 0u;
+    std::uint32_t active_pcm_stream_rings = 0u;
+    std::uint64_t reserved_pcm_stream_bytes = 0u;
     std::uint64_t feed_buffered_frames = 0u;
 };
 
@@ -211,6 +255,15 @@ class NativePortSoundBankEngine final {
     [[nodiscard]] bool has_sequence(NativePortSoundCollectionHandle collection,
                                     std::uint8_t bank,
                                     std::uint16_t sequence) const;
+    [[nodiscard]] bool has_collection_unit(
+        NativePortSoundCollectionHandle collection,
+        NativePortSoundCollectionUnitKind kind,
+        std::uint8_t bank) const;
+    [[nodiscard]] NativePortSoundPcmStreamRingHandle bind_pcm_stream_ring(
+        const NativePortSoundPcmStreamRingConfig& config);
+    void release_pcm_stream_ring(NativePortSoundPcmStreamRingHandle ring);
+    [[nodiscard]] NativePortSoundPcmStreamRingSnapshot
+    pcm_stream_ring_snapshot(NativePortSoundPcmStreamRingHandle ring) const;
     // Bounded eager validation/preload for every unique sample referenced by
     // the collection. This uses the same PCM16/PCM8/ADPCM decoder and cache as
     // live notes, avoiding first-note stalls without exposing AICA memory.

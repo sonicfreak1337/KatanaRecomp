@@ -13,6 +13,7 @@
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
+#include "katana/analysis/native_sdk_provider_analysis.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/boot_analysis_cache.hpp"
 #include "katana/codegen/cache.hpp"
@@ -14913,6 +14914,39 @@ std::string native_product_main(
            "                  << \" bootstrap_phase=\"\n"
            "                  << static_cast<unsigned>(context.bootstrap_phase)\n"
            "                  << '\\n';\n"
+           "        std::cerr << \"KATANA_RUNTIME_STOP_FRONTIER {\\\"version\\\":2\"\n"
+           "                  << \",\\\"stop_reason\\\":\"\n"
+           "                  << static_cast<unsigned>(context.stop_reason)\n"
+           "                  << \",\\\"pc\\\":\" << cpu.pc\n"
+           "                  << \",\\\"pr\\\":\" << cpu.pr\n"
+           "                  << \",\\\"active_instruction\\\":\"\n"
+           "                  << cpu.active_instruction_pc\n"
+           "                  << \",\\\"active_instruction_physical\\\":\"\n"
+           "                  << cpu.active_instruction_physical_pc\n"
+           "                  << \",\\\"active_block\\\":\"\n"
+           "                  << cpu.active_block_virtual_start\n"
+           "                  << \",\\\"active_block_physical\\\":\"\n"
+           "                  << cpu.active_block_physical_start\n"
+           "                  << \",\\\"active_block_size\\\":\"\n"
+           "                  << cpu.active_block_size\n"
+           "                  << \",\\\"gpr\\\":[\";\n"
+           "        for (std::size_t index = 0u; index < cpu.r.size(); ++index) {\n"
+           "            if (index != 0u) std::cerr << ',';\n"
+           "            std::cerr << cpu.r[index];\n"
+           "        }\n"
+           "        std::cerr << ']'\n"
+           "                  << \",\\\"gbr\\\":\" << cpu.gbr\n"
+           "                  << \",\\\"vbr\\\":\" << cpu.vbr\n"
+           "                  << \",\\\"sr\\\":\" << cpu.sr\n"
+           "                  << \",\\\"mach\\\":\" << cpu.mach\n"
+           "                  << \",\\\"macl\\\":\" << cpu.macl\n"
+           "                  << \",\\\"fpul\\\":\" << cpu.fpul\n"
+           "                  << \",\\\"fpscr\\\":\" << cpu.fpscr\n"
+           "                  << \",\\\"retired_guest_instructions\\\":\"\n"
+           "                  << cpu.retired_guest_instructions\n"
+           "                  << \",\\\"attempted_guest_instructions\\\":\"\n"
+           "                  << cpu.attempted_guest_instructions\n"
+           "                  << \"}\\n\";\n"
            "        if (direct_launch) {\n"
            "            std::cerr << \"Press Enter to close.\" << std::flush;\n"
            "            std::cin.get();\n"
@@ -19700,6 +19734,7 @@ std::set<std::uint32_t> native_port_external_progress_wait_sites(
         // provider must replace the owning boundary.  Larger/mixed loops stay
         // diagnostic until their internal call/write effects are proven.
         if (!loop.counter_instruction_addresses.empty() ||
+            !loop.local_progress_evidence.empty() ||
             loop.block_addresses.size() != 1u)
             continue;
         if (loop.classification ==
@@ -21315,10 +21350,19 @@ std::string native_port_hook_requirements_json(
         if (!node.symbol.empty()) symbols.try_emplace(node.address, node.symbol);
     }
 
+    const auto local_progress_loop_count = static_cast<std::size_t>(
+        std::ranges::count_if(audit.loops, [](const auto& loop) {
+            return !loop.local_progress_evidence.empty();
+        }));
+    std::size_t local_progress_evidence_count = 0u;
+    for (const auto& loop : audit.loops)
+        local_progress_evidence_count +=
+            loop.local_progress_evidence.size();
+
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hook-requirements.v5",
+        "katana.native-port-hook-requirements.v6",
         "native-port-hook-requirements");
     output << ",\"definition_present\":"
            << (definition != nullptr ? "true" : "false")
@@ -21352,6 +21396,10 @@ std::string native_port_hook_requirements_json(
            << ambiguous_native_progress_wait_sites
            << ",\"unmapped_native_progress_wait_sites\":"
            << unmapped_native_progress_wait_sites
+           << ",\"local_progress_loop_count\":"
+           << local_progress_loop_count
+           << ",\"local_progress_evidence_count\":"
+           << local_progress_evidence_count
            << ",\"dynamic_memory_sites\":"
            << audit.unresolved_memory_instruction_sites.size()
            << ",\"dynamic_memory_policy\":"
@@ -21361,6 +21409,36 @@ std::string native_port_hook_requirements_json(
     for (std::size_t index = 0u; index < global_gap_reasons.size(); ++index) {
         if (index != 0u) output << ',';
         output << katana::io::quote_json(global_gap_reasons[index]);
+    }
+    output << "],\"local_progress_loops\":[";
+    std::size_t local_progress_loop_index = 0u;
+    for (const auto& loop : audit.loops) {
+        if (loop.local_progress_evidence.empty()) continue;
+        if (local_progress_loop_index++ != 0u) output << ',';
+        output << "{\"header_address\":" << loop.header_address
+               << ",\"latch_address\":" << loop.latch_address
+               << ",\"backedge_instruction_address\":"
+               << loop.backedge_instruction_address
+               << ",\"evidence\":[";
+        for (std::size_t index = 0u;
+             index < loop.local_progress_evidence.size(); ++index) {
+            if (index != 0u) output << ',';
+            const auto& evidence =
+                loop.local_progress_evidence[index];
+            output << "{\"condition_instruction_address\":"
+                   << evidence.condition_instruction_address
+                   << ",\"progress_instruction_address\":"
+                   << evidence.progress_instruction_address
+                   << ",\"register_index\":"
+                   << static_cast<unsigned>(evidence.register_index)
+                   << ",\"kind\":"
+                   << katana::io::quote_json(
+                          katana::analysis::
+                              hardware_loop_local_progress_kind_name(
+                                  evidence.kind))
+                   << '}';
+        }
+        output << "]}";
     }
     output << "],\"native_progress_waits\":[";
     std::size_t progress_wait_index = 0u;
@@ -21417,6 +21495,32 @@ std::string native_port_hook_requirements_json(
                    << ",\"owner_candidates\":[";
             const auto owners = native_port_covering_function_entries(
                 program_index, address);
+            std::size_t owner_index = 0u;
+            for (const auto owner : owners) {
+                if (owner_index++ != 0u) output << ',';
+                output << owner;
+            }
+            output << "]}";
+        }
+        output << "],\"matching_write_candidates_truncated\":"
+               << (loop.matching_write_candidates_truncated
+                       ? "true"
+                       : "false")
+               << ",\"matching_write_candidates\":[";
+        for (std::size_t index = 0u;
+             index < loop.matching_write_candidates.size(); ++index) {
+            if (index != 0u) output << ',';
+            const auto& write = loop.matching_write_candidates[index];
+            output << "{\"instruction_address\":"
+                   << write.instruction_address
+                   << ",\"guest_address\":" << write.guest_address
+                   << ",\"canonical_address\":"
+                   << write.canonical_address
+                   << ",\"width\":"
+                   << static_cast<unsigned>(write.width)
+                   << ",\"owner_candidates\":[";
+            const auto owners = native_port_covering_function_entries(
+                program_index, write.instruction_address);
             std::size_t owner_index = 0u;
             for (const auto owner : owners) {
                 if (owner_index++ != 0u) output << ',';
@@ -21725,6 +21829,126 @@ std::string native_port_hook_requirements_json(
                    << current_hook->second->covered_size << '}';
         }
         output << '}';
+    }
+    output << "]}";
+    return output.str();
+}
+
+std::string native_sdk_provider_candidates_json(
+    const std::span<const katana::analysis::NativeSdkProviderCandidate>
+        candidates,
+    const katana::runtime::NativePortDefinition* const definition) {
+    std::map<katana::analysis::NativeSdkProviderFamily, std::size_t>
+        family_counts;
+    for (const auto& candidate : candidates)
+        ++family_counts[candidate.family];
+
+    std::ostringstream output;
+    output << "{\"schema\":\"katana.native-sdk-provider-candidates.v2\""
+           << ",\"candidate_count\":" << candidates.size()
+           << ",\"family_count\":" << family_counts.size()
+           << ",\"families\":[";
+    std::size_t family_index = 0u;
+    for (const auto& [family, count] : family_counts) {
+        if (family_index++ != 0u) output << ',';
+        output << "{\"family\":"
+               << katana::io::quote_json(
+                      katana::analysis::native_sdk_provider_family_name(
+                          family))
+               << ",\"candidate_count\":" << count << '}';
+    }
+    output << "],\"candidates\":[";
+    for (std::size_t index = 0u; index < candidates.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& candidate = candidates[index];
+        const katana::runtime::NativePortHookBinding* hook = nullptr;
+        if (definition != nullptr) {
+            const auto found = std::find_if(
+                definition->hooks.begin(), definition->hooks.end(),
+                [&](const auto& value) {
+                    return value.guest_address == candidate.entry_address;
+                });
+            if (found != definition->hooks.end()) hook = &*found;
+        }
+        const bool bound =
+            hook != nullptr &&
+            hook->kind ==
+                katana::runtime::NativePortHookKind::FunctionEntry &&
+            hook->original_policy ==
+                katana::runtime::NativePortHookOriginalPolicy::
+                    ReplacesOriginal &&
+            hook->covered_size == candidate.covered_size &&
+            hook->code_identity == candidate.code_identity;
+        output << "{\"family\":"
+               << katana::io::quote_json(
+                      katana::analysis::native_sdk_provider_family_name(
+                          candidate.family))
+               << ",\"entry_address\":" << candidate.entry_address
+               << ",\"covered_size\":" << candidate.covered_size
+               << ",\"code_identity\":"
+               << katana::io::quote_json(candidate.code_identity)
+               << ",\"boundary_proof\":"
+               << katana::io::quote_json(
+                      katana::analysis::
+                          native_sdk_provider_boundary_proof_name(
+                              candidate.boundary_proof))
+               << ",\"resource_reference\":";
+        if (!candidate.resource_reference.has_value()) {
+            output << "null";
+        } else {
+            const auto& resource = *candidate.resource_reference;
+            output << "{\"kind\":"
+                   << katana::io::quote_json(
+                          katana::analysis::
+                              native_sdk_resource_reference_kind_name(
+                                  resource.kind))
+                   << ",\"owner_record_stride\":"
+                   << resource.owner_record_stride
+                   << ",\"reference_field_offset\":"
+                   << resource.reference_field_offset
+                   << ",\"descriptor_stride\":"
+                   << resource.descriptor_stride
+                   << ",\"minimum_descriptor_bytes\":"
+                   << resource.minimum_descriptor_bytes
+                   << ",\"observed_read_offsets\":[";
+            for (std::size_t offset_index = 0u;
+                 offset_index < resource.observed_read_offsets.size();
+                 ++offset_index) {
+                if (offset_index != 0u) output << ',';
+                output << resource.observed_read_offsets[offset_index];
+            }
+            output << "],\"observed_write_offsets\":[";
+            for (std::size_t offset_index = 0u;
+                 offset_index < resource.observed_write_offsets.size();
+                 ++offset_index) {
+                if (offset_index != 0u) output << ',';
+                output << resource.observed_write_offsets[offset_index];
+            }
+            output << "],\"evidence_sites\":[";
+            for (std::size_t site_index = 0u;
+                 site_index < resource.evidence_sites.size();
+                 ++site_index) {
+                if (site_index != 0u) output << ',';
+                output << resource.evidence_sites[site_index];
+            }
+            output << "]}";
+        }
+        output
+               << ",\"bound\":" << (bound ? "true" : "false")
+               << ",\"bound_symbol\":";
+        if (bound)
+            output << katana::io::quote_json(hook->symbol);
+        else
+            output << "null";
+        output << ",\"evidence\":[";
+        for (std::size_t evidence_index = 0u;
+             evidence_index < candidate.evidence.size();
+             ++evidence_index) {
+            if (evidence_index != 0u) output << ',';
+            output << katana::io::quote_json(
+                candidate.evidence[evidence_index]);
+        }
+        output << "]}";
     }
     output << "]}";
     return output.str();
@@ -22640,7 +22864,7 @@ static PortExportResult export_dreamcast_port_project_impl(
     const auto metadata_overrides_hash =
         katana::io::sha256_bytes(metadata_override_identity.str());
     std::vector<ProjectArtifact> artifacts;
-    artifacts.reserve(partitions.size() + 9u);
+    artifacts.reserve(partitions.size() + 10u);
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
         auto functions = select_functions(emitted_program, partition);
         std::unordered_set<std::uint32_t> local_function_entries;
@@ -23024,6 +23248,18 @@ static PortExportResult export_dreamcast_port_project_impl(
             current_call_graph,
             prepared.image,
             latent_aot.modules);
+    const auto native_sdk_provider_candidates =
+        katana::analysis::discover_native_sdk_provider_candidates(
+            prepared.image,
+            prepared.analysis.recursive.instructions);
+    report_progress(
+        options,
+        "native-sdk-provider-candidates:" +
+            std::to_string(native_sdk_provider_candidates.size()));
+    auto native_sdk_provider_candidates_artifact =
+        native_sdk_provider_candidates_json(
+            native_sdk_provider_candidates,
+            native_port_definition);
     bool metadata_cache_hit = false;
     std::string metadata_cache_key;
     if (partition_cache) {
@@ -23293,6 +23529,9 @@ static PortExportResult export_dreamcast_port_project_impl(
     artifacts.push_back(
         {"metadata/native-hook-requirements.json",
          std::move(native_hook_requirements_json)});
+    artifacts.push_back(
+        {"metadata/native-sdk-provider-candidates.json",
+         std::move(native_sdk_provider_candidates_artifact)});
     artifacts.push_back({"metadata/source-map.json", std::move(source_map_json)});
     artifacts.push_back({"metadata/cfg.json", std::move(control_flow_graph_json)});
     artifacts.push_back({"metadata/cfg.dot", std::move(control_flow_graph_dot)});

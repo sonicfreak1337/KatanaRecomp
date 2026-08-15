@@ -1829,6 +1829,12 @@ namespace {
                 texture.name,
                 texture.global_index,
                 texture.archive_ordinal,
+                texture.source_pixel_format,
+                texture.source_data_format,
+                static_cast<std::uint64_t>(
+                    pvr_data_layout(texture.extent,
+                                    texture.source_data_format, 0u)
+                        .encoded_bytes),
                 0u,
                 {},
                 texture.extent,
@@ -1948,6 +1954,70 @@ NativePortMaterializedTextureArchive materialize_native_port_pvr_texture(
                 encoded.size()),
             binding.byte_identity, registry, generation, limits);
     }, "materialize-pvr-content");
+}
+
+NativePortTextureGuestDescriptorLayout
+native_port_texture_guest_descriptor_layout(
+    const NativePortMaterializedTextureAsset& texture) {
+    if (texture.extent.width < minimum_pvr_dimension ||
+        texture.extent.height < minimum_pvr_dimension ||
+        texture.extent.width > maximum_pvr_dimension ||
+        texture.extent.height > maximum_pvr_dimension ||
+        !std::has_single_bit(texture.extent.width) ||
+        !std::has_single_bit(texture.extent.height) ||
+        texture.source_encoded_bytes == 0u || texture.mip_levels == 0u)
+        fail(NativePortTextureAssetFailure::InvalidDimensions, 0u,
+             "guest-descriptor-layout");
+
+    const auto expected_layout = pvr_data_layout(
+        texture.extent, texture.source_data_format, 0u);
+    const auto expected_mip_levels =
+        has_mipmaps(texture.source_data_format)
+            ? std::bit_width(texture.extent.width)
+            : 1u;
+    if (texture.source_encoded_bytes != expected_layout.encoded_bytes ||
+        texture.mip_levels != expected_mip_levels)
+        fail(NativePortTextureAssetFailure::InvalidPvrt, 0u,
+             "guest-descriptor-source-identity");
+
+    const auto width_exponent =
+        std::countr_zero(texture.extent.width) - 3u;
+    const auto height_exponent =
+        std::countr_zero(texture.extent.height) - 3u;
+    if (width_exponent > 7u || height_exponent > 7u)
+        fail(NativePortTextureAssetFailure::InvalidDimensions, 0u,
+             "guest-descriptor-size-bits");
+
+    std::uint32_t tcw =
+        static_cast<std::uint32_t>(texture.source_pixel_format) << 27u;
+    switch (texture.source_data_format) {
+    case NativePortTextureAssetDataFormat::SquareTwiddled:
+        break;
+    case NativePortTextureAssetDataFormat::SquareTwiddledMipmaps:
+        tcw |= 1u << 31u;
+        break;
+    case NativePortTextureAssetDataFormat::VectorQuantized:
+    case NativePortTextureAssetDataFormat::SmallVectorQuantized:
+        tcw |= 1u << 30u;
+        break;
+    case NativePortTextureAssetDataFormat::VectorQuantizedMipmaps:
+    case NativePortTextureAssetDataFormat::SmallVectorQuantizedMipmaps:
+        tcw |= (1u << 30u) | (1u << 31u);
+        break;
+    case NativePortTextureAssetDataFormat::Rectangle:
+        tcw |= 1u << 26u;
+        break;
+    default:
+        fail(NativePortTextureAssetFailure::UnsupportedDataFormat, 0u,
+             "guest-descriptor-data-format");
+    }
+
+    return NativePortTextureGuestDescriptorLayout{
+        (width_exponent << 3u) | height_exponent,
+        tcw,
+        texture.extent,
+        texture.source_encoded_bytes,
+        texture.mip_levels};
 }
 
 void release_native_port_texture_archive(

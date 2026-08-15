@@ -558,8 +558,9 @@ void apply_local_transfer(RegisterConstants& state,
 
 std::vector<ConstantTraceEntry>
 propagate_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
-                    const RegisterConstants& initial,
-                    const katana::io::ExecutableImage* image) {
+                     const RegisterConstants& initial,
+                     const katana::io::ExecutableImage* image,
+                     const bool reset_at_control_flow_targets) {
     RegisterConstants state = initial;
     std::vector<ConstantTraceEntry> trace;
     trace.reserve(lines.size());
@@ -575,7 +576,9 @@ propagate_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
             clear_constants(state);
             clear_after_delay_slot.reset();
         }
-        if (control_flow_targets.contains(line.address)) clear_constants(state);
+        if (reset_at_control_flow_targets &&
+            control_flow_targets.contains(line.address))
+            clear_constants(state);
         ConstantTraceEntry entry;
         entry.address = line.address;
         entry.before = state;
@@ -618,22 +621,30 @@ general_register_write_mask(const katana::sh4::DecodedInstruction& instruction) 
 
 std::vector<ConstantTraceEntry>
 propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
-                          const RegisterConstants& initial) {
-    return propagate_constants(lines, initial, nullptr);
+                           const RegisterConstants& initial) {
+    return propagate_constants(lines, initial, nullptr, true);
 }
 
 std::vector<ConstantTraceEntry>
 propagate_local_constants(const std::span<const katana::sh4::DisassemblyLine> lines,
-                          const katana::io::ExecutableImage& image,
-                          const RegisterConstants& initial) {
-    return propagate_constants(lines, initial, &image);
+                           const katana::io::ExecutableImage& image,
+                           const RegisterConstants& initial) {
+    return propagate_constants(lines, initial, &image, true);
+}
+
+std::vector<ConstantTraceEntry>
+propagate_basic_block_constants(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image,
+    const RegisterConstants& initial) {
+    return propagate_constants(lines, initial, &image, false);
 }
 
 RegisterValueAnalysis
 analyze_register_values(const std::span<const katana::sh4::DisassemblyLine> lines,
                         const RegisterConstants& initial) {
     RegisterValueAnalysis analysis;
-    analysis.trace = propagate_constants(lines, initial, nullptr);
+    analysis.trace = propagate_constants(lines, initial, nullptr, true);
     for (std::size_t index = 0; index < lines.size(); ++index) {
         if (lines[index].instruction.kind != katana::sh4::InstructionKind::Jmp &&
             lines[index].instruction.kind != katana::sh4::InstructionKind::Jsr &&

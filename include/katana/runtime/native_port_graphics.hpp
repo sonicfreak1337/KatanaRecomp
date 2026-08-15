@@ -12,12 +12,15 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 6u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 7u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
     std::uint32_t width = 0u;
     std::uint32_t height = 0u;
+
+    friend bool operator==(const NativePortExtent&,
+                           const NativePortExtent&) = default;
 };
 
 struct NativePortAspectRatio final {
@@ -293,15 +296,31 @@ enum class NativePortShadingMode : std::uint8_t {
     FlatLastVertex,
 };
 
+enum class NativePortTriangleAreaSpace : std::uint8_t {
+    // The submitted vertex X/Y values already use the coordinate system in
+    // which the threshold was defined.
+    Submitted,
+    // Apply the draw transform, perform the homogeneous divide, then map NDC
+    // into small_triangle_reference_extent before measuring the determinant.
+    // This lets fixed-function guests retain their logical raster threshold
+    // independently of the host render/output resolution.
+    LogicalViewportAfterTransform,
+};
+
 struct NativePortRasterizerState final {
     NativePortCullMode cull = NativePortCullMode::Back;
     NativePortFillMode fill = NativePortFillMode::Solid;
     NativePortShadingMode shading = NativePortShadingMode::Smooth;
     // Zero disables small-triangle rejection. A positive value rejects a
-    // triangle when the absolute XY determinant in the submitted vertex
-    // coordinate space is below this threshold. Directional culling is
-    // applied independently through cull.
+    // triangle when the absolute XY determinant in small_triangle_area_space
+    // is below this threshold. Directional culling is applied independently
+    // through cull.
     float small_triangle_area_threshold = 0.0f;
+    NativePortTriangleAreaSpace small_triangle_area_space =
+        NativePortTriangleAreaSpace::Submitted;
+    // Required only for LogicalViewportAfterTransform. It describes the
+    // guest renderer's logical raster surface, not the native output size.
+    NativePortExtent small_triangle_reference_extent;
     bool front_counter_clockwise = false;
     bool depth_clip_enabled = true;
     friend bool operator==(const NativePortRasterizerState&,

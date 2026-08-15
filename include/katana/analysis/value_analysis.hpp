@@ -102,8 +102,17 @@ propagate_local_constants(std::span<const katana::sh4::DisassemblyLine> lines,
 
 [[nodiscard]] std::vector<ConstantTraceEntry>
 propagate_local_constants(std::span<const katana::sh4::DisassemblyLine> lines,
-                          const katana::io::ExecutableImage& image,
-                          const RegisterConstants& initial = {});
+                           const katana::io::ExecutableImage& image,
+                           const RegisterConstants& initial = {});
+
+// Basic-block callers have already split and joined every control-flow target.
+// Unlike the function-local helper above, this preserves the supplied ingress
+// state at the first instruction even when a backedge targets that instruction.
+[[nodiscard]] std::vector<ConstantTraceEntry>
+propagate_basic_block_constants(
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image,
+    const RegisterConstants& initial = {});
 
 [[nodiscard]] RegisterValueAnalysis
 analyze_register_values(std::span<const katana::sh4::DisassemblyLine> lines,

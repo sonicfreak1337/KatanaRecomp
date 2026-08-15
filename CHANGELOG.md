@@ -4,6 +4,22 @@
 
 ### Geaendert
 
+- Der native Manatee-Vertrag erkennt und bindet jetzt authored `SPSR`-Einheiten
+  als begrenzte PCM-Stream-Ringe: 2 MiB Layoutfenster, 4-Byte-Ausrichtung,
+  Bereichs-/Ueberlappungspruefung, generation-gepruefte Handles sowie
+  idempotentes Rebind und explizites Release. Payloadlose `SFPW`-Layouts
+  werden korrekt validiert; unbekannte beziehungsweise befuellte `SOSB`-
+  Payloads bleiben typisiert unsupported, statt als SMPB geraten zu werden.
+  Der PAL-Titel registrierte im v141-Lauf drei identitaetsgebundene Ringe
+  (Bank 15 `0x1FBFC0/0x4000`, Bank 14 `0x1F7F80/0x4000`, Bank 13
+  `0x1F3F40/0x4000`). Danach lief der animierte Titel bis zum Testende ohne
+  Audio-/AOT-/Runtime-Abbruch. Der Export zaehlt `6.088` Funktionen in `176`
+  Partitionen, `41/41` Latent-Module/Quellen, `19.250` Blockidentitaeten,
+  `529` Funktionsidentitaeten, `1.587` Cross-Image-Transfers sowie
+  `243` Hardware-Sites mit `191` offenen Gaps und `3` Progress-Waits.
+  Runtime-ABI `114` und Soundbankvertrag `6` binden den Stand; ein
+  Hauptmenue-Nachweis ist aus diesem Lauf nicht abgeleitet.
+
 - Der neue titel-/SDK-semantische `NativePortSaveProvider` bildet bis zu
   vier Controller mit je sechs Speicherendpunkten auf die bereits atomaren
   Plattformrecords ab, ohne Maple- oder VMU-Geraetemodell. Query, List, Read,

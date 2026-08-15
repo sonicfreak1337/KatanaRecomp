@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 5u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 7u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
 // Public bound for NativePortSaveKey::slot_id. Higher-level semantic save
 // providers must be able to validate their composed keys before host I/O.
@@ -84,6 +84,21 @@ struct NativePortContentFileSnapshot final {
     std::uint64_t bytes_read = 0u;
 };
 
+// One exact host file projected into an immutable logical address range.
+// The logical domain is title-defined (for example an archive extent or a
+// package offset); it is deliberately not a GD-ROM/device address.  A bounded
+// trailing fill permits source formats whose logical allocation is aligned
+// beyond the exact identity-bound file length.
+struct NativePortContentRangeBinding final {
+    NativePortContentFileBinding file;
+    std::uint64_t logical_offset = 0u;
+    std::uint64_t logical_byte_size = 0u;
+    std::byte trailing_fill = std::byte{0u};
+};
+
+inline constexpr std::uint64_t
+    native_port_content_range_maximum_trailing_fill_bytes = 65'535u;
+
 // Locked, identity-verified random access to one bound content range. The
 // source handle denies write/delete sharing for its complete lifetime.
 class NativePortReadOnlyFile final {
@@ -104,6 +119,44 @@ class NativePortReadOnlyFile final {
     class Impl;
     explicit NativePortReadOnlyFile(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
+
+    friend class NativePortPlatformServices;
+};
+
+// Identity-verified random access through a title's logical content range.
+// Reads may cross only from the exact file bytes into the declared bounded
+// trailing fill; holes, overlaps and out-of-range requests fail closed.
+class NativePortReadOnlyContentRange final {
+  public:
+    ~NativePortReadOnlyContentRange();
+
+    NativePortReadOnlyContentRange(const NativePortReadOnlyContentRange&) =
+        delete;
+    NativePortReadOnlyContentRange& operator=(
+        const NativePortReadOnlyContentRange&) = delete;
+    NativePortReadOnlyContentRange(NativePortReadOnlyContentRange&&) = delete;
+    NativePortReadOnlyContentRange& operator=(
+        NativePortReadOnlyContentRange&&) = delete;
+
+    [[nodiscard]] std::string_view logical_id() const noexcept;
+    [[nodiscard]] std::uint64_t logical_offset() const noexcept;
+    [[nodiscard]] std::uint64_t logical_byte_size() const noexcept;
+    [[nodiscard]] bool contains(std::uint64_t offset,
+                                std::uint64_t byte_size) const noexcept;
+    void read_at(std::uint64_t offset, std::span<std::byte> destination);
+    [[nodiscard]] NativePortContentFileSnapshot snapshot() const;
+
+  private:
+    NativePortReadOnlyContentRange(
+        std::unique_ptr<NativePortReadOnlyFile> file,
+        std::uint64_t logical_offset,
+        std::uint64_t logical_byte_size,
+        std::byte trailing_fill);
+
+    std::unique_ptr<NativePortReadOnlyFile> file_;
+    std::uint64_t logical_offset_ = 0u;
+    std::uint64_t logical_byte_size_ = 0u;
+    std::byte trailing_fill_ = std::byte{0u};
 
     friend class NativePortPlatformServices;
 };
@@ -219,6 +272,8 @@ class NativePortPlatformServices final {
 
     [[nodiscard]] std::unique_ptr<NativePortReadOnlyFile> open_content_file(
         const NativePortContentFileBinding& binding);
+    [[nodiscard]] std::unique_ptr<NativePortReadOnlyContentRange>
+    open_content_range(const NativePortContentRangeBinding& binding);
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads();
     [[nodiscard]] bool set_gamepad_vibration(

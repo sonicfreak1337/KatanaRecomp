@@ -1000,6 +1000,7 @@ add_library(katana_core_objects OBJECT
     src/analysis/control_flow_report.cpp
     src/analysis/control_flow_analysis.cpp
     src/analysis/static_callback_inventory.cpp
+    src/analysis/native_sdk_provider_analysis.cpp
     src/analysis/symbol_names.cpp
     src/analysis/graph_export.cpp
     src/ir/lower.cpp

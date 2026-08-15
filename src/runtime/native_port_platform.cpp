@@ -712,10 +712,12 @@ enum class NativeGamepadSourceKind : std::uint8_t {
     XInput,
     DualSense,
     DualShock,
+    Keyboard,
 };
 
 constexpr std::uint64_t xinput_device_domain = 0x0100000000000000ull;
 constexpr std::uint64_t joystick_device_domain = 0x0200000000000000ull;
+constexpr std::uint64_t keyboard_device_domain = 0x0300000000000000ull;
 constexpr std::uint64_t input_device_domain_mask = 0xFF00000000000000ull;
 constexpr std::uint64_t input_device_slot_mask = 0x00000000FFFFFFFFull;
 
@@ -857,6 +859,8 @@ enumerate_native_joystick_identities() {
         return 1u;
     case NativeGamepadSourceKind::XInput:
         return 2u;
+    case NativeGamepadSourceKind::Keyboard:
+        return 3u;
     }
     return 3u;
 }
@@ -866,6 +870,58 @@ void add_button(std::uint32_t& buttons,
                 const NativePortGamepadButton destination) noexcept {
     if (pressed)
         buttons |= native_port_gamepad_button_mask(destination);
+}
+
+[[nodiscard]] bool foreground_process_is_current() noexcept {
+    const auto foreground = GetForegroundWindow();
+    if (foreground == nullptr) return false;
+    DWORD process_id = 0u;
+    static_cast<void>(GetWindowThreadProcessId(foreground, &process_id));
+    return process_id == GetCurrentProcessId();
+}
+
+[[nodiscard]] NativePortGamepadState keyboard_gamepad_state() noexcept {
+    NativePortGamepadState result;
+    result.connected = true;
+    if (!foreground_process_is_current()) return result;
+    const auto pressed = [](const int virtual_key) noexcept {
+        return (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
+    };
+    add_button(result.buttons,
+               pressed(VK_UP),
+               NativePortGamepadButton::DpadUp);
+    add_button(result.buttons,
+               pressed(VK_DOWN),
+               NativePortGamepadButton::DpadDown);
+    add_button(result.buttons,
+               pressed(VK_LEFT),
+               NativePortGamepadButton::DpadLeft);
+    add_button(result.buttons,
+               pressed(VK_RIGHT),
+               NativePortGamepadButton::DpadRight);
+    add_button(result.buttons,
+               pressed(VK_RETURN),
+               NativePortGamepadButton::Menu);
+    add_button(result.buttons,
+               pressed(VK_BACK),
+               NativePortGamepadButton::View);
+    add_button(result.buttons, pressed('Z'), NativePortGamepadButton::A);
+    add_button(result.buttons, pressed('X'), NativePortGamepadButton::B);
+    add_button(result.buttons, pressed('A'), NativePortGamepadButton::X);
+    add_button(result.buttons, pressed('S'), NativePortGamepadButton::Y);
+    add_button(result.buttons,
+               pressed('Q'),
+               NativePortGamepadButton::LeftShoulder);
+    add_button(result.buttons,
+               pressed('W'),
+               NativePortGamepadButton::RightShoulder);
+    return result;
+}
+
+void merge_keyboard_gamepad(NativePortGamepadState& destination,
+                            const NativePortGamepadState& keyboard) noexcept {
+    destination.connected = destination.connected || keyboard.connected;
+    destination.buttons |= keyboard.buttons;
 }
 
 void add_pov_buttons(std::uint32_t& buttons, const DWORD pov) noexcept {
@@ -1718,6 +1774,15 @@ class NativePortPlatformServices::Impl final {
                    !known_independent_xinput(candidate.device_id);
         });
 
+        const auto keyboard = keyboard_gamepad_state();
+        if (candidates.empty()) {
+            NativeGamepadCandidate candidate;
+            candidate.device_id = keyboard_device_domain | 1u;
+            candidate.kind = NativeGamepadSourceKind::Keyboard;
+            candidate.state = keyboard;
+            candidates.push_back(candidate);
+        }
+
         std::ranges::sort(candidates, [](const auto& left, const auto& right) {
             const auto left_priority = source_priority(left.kind);
             const auto right_priority = source_priority(right.kind);
@@ -1790,6 +1855,8 @@ class NativePortPlatformServices::Impl final {
             }
 
             auto destination = candidates[*placement[slot]].state;
+            if (slot == 0u)
+                merge_keyboard_gamepad(destination, keyboard);
             const auto& previous = input_snapshot_.gamepads[slot];
             if (old_device_id == new_device_id && previous.connected) {
                 destination.packet_number = previous.packet_number;
@@ -2242,6 +2309,66 @@ NativePortContentFileSnapshot NativePortReadOnlyFile::snapshot() const {
     return impl_->snapshot();
 }
 
+NativePortReadOnlyContentRange::NativePortReadOnlyContentRange(
+    std::unique_ptr<NativePortReadOnlyFile> file,
+    const std::uint64_t logical_offset,
+    const std::uint64_t logical_byte_size,
+    const std::byte trailing_fill)
+    : file_(std::move(file)),
+      logical_offset_(logical_offset),
+      logical_byte_size_(logical_byte_size),
+      trailing_fill_(trailing_fill) {}
+
+NativePortReadOnlyContentRange::~NativePortReadOnlyContentRange() = default;
+
+std::string_view NativePortReadOnlyContentRange::logical_id() const noexcept {
+    return file_->logical_id();
+}
+
+std::uint64_t NativePortReadOnlyContentRange::logical_offset() const noexcept {
+    return logical_offset_;
+}
+
+std::uint64_t
+NativePortReadOnlyContentRange::logical_byte_size() const noexcept {
+    return logical_byte_size_;
+}
+
+bool NativePortReadOnlyContentRange::contains(
+    const std::uint64_t offset,
+    const std::uint64_t byte_size) const noexcept {
+    return offset >= logical_offset_ && offset - logical_offset_ <=
+               logical_byte_size_ &&
+           byte_size <= logical_byte_size_ - (offset - logical_offset_);
+}
+
+void NativePortReadOnlyContentRange::read_at(
+    const std::uint64_t offset,
+    const std::span<std::byte> destination) {
+    if (!contains(offset, destination.size()))
+        fail_platform(NativePortPlatformFailure::ContentRead,
+                      0u,
+                      "content-logical-range");
+    const auto relative = offset - logical_offset_;
+    const auto exact_bytes = file_->byte_size();
+    if (relative < exact_bytes) {
+        const auto readable = static_cast<std::size_t>(
+            std::min<std::uint64_t>(destination.size(),
+                                    exact_bytes - relative));
+        file_->read_at(relative, destination.first(readable));
+        std::fill(destination.begin() + readable,
+                  destination.end(),
+                  trailing_fill_);
+    } else {
+        std::fill(destination.begin(), destination.end(), trailing_fill_);
+    }
+}
+
+NativePortContentFileSnapshot
+NativePortReadOnlyContentRange::snapshot() const {
+    return file_->snapshot();
+}
+
 NativePortPlatformServices::NativePortPlatformServices(
     const NativePortPlatformConfig& config)
     : impl_(std::make_unique<Impl>(config)) {}
@@ -2260,6 +2387,26 @@ std::unique_ptr<NativePortReadOnlyFile>
 NativePortPlatformServices::open_content_file(
     const NativePortContentFileBinding& binding) {
     return impl_->open_content_file(binding);
+}
+
+std::unique_ptr<NativePortReadOnlyContentRange>
+NativePortPlatformServices::open_content_range(
+    const NativePortContentRangeBinding& binding) {
+    if (binding.logical_byte_size < binding.file.byte_size ||
+        binding.logical_byte_size - binding.file.byte_size >
+            native_port_content_range_maximum_trailing_fill_bytes ||
+        binding.logical_offset >
+            std::numeric_limits<std::uint64_t>::max() -
+                binding.logical_byte_size)
+        fail_platform(NativePortPlatformFailure::InvalidConfig,
+                      0u,
+                      "content-logical-binding");
+    auto file = impl_->open_content_file(binding.file);
+    return std::unique_ptr<NativePortReadOnlyContentRange>(
+        new NativePortReadOnlyContentRange(std::move(file),
+                                           binding.logical_offset,
+                                           binding.logical_byte_size,
+                                           binding.trailing_fill));
 }
 
 NativePortInputSnapshot NativePortPlatformServices::poll_gamepads() {

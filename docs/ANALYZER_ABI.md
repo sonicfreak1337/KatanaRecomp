@@ -1,9 +1,9 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `53`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 109, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 23, Portprojektvertrag 101 und Native-Port-
-Profilvertrag 22. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
+Der aktuelle oeffentliche Analyzervertrag ist Version `55`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 114, Block-ABI 5, PlatformServices-ABI 14,
+Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
+Profilvertrag 23. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40 und Port-Metadata-Cache-
 Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.

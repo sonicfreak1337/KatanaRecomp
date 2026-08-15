@@ -336,10 +336,14 @@ class NativePortSoundBankEngine::Impl final {
         std::vector<std::uint8_t> bytes;
         std::array<std::optional<ProgramBank>, maximum_mlt_banks> program_banks;
         std::array<std::optional<SequenceBank>, maximum_mlt_banks> sequence_banks;
+        std::array<std::optional<NativePortSoundPcmStreamRingConfig>,
+                   maximum_mlt_banks>
+            authored_pcm_stream_rings;
         std::array<EffectOutput, maximum_effect_buses> effect_outputs{};
         bool qsound_reverb_medium = false;
         bool effect_program_present = false;
         bool effect_output_present = false;
+        bool effect_work_present = false;
         std::optional<std::uint8_t> effect_bank;
         std::vector<double> effect_sends;
         std::array<std::vector<double>, 4u> effect_delay;
@@ -536,6 +540,96 @@ class NativePortSoundBankEngine::Impl final {
                collection.sequence_banks[bank]->sequences[sequence].has_value();
     }
 
+    [[nodiscard]] bool has_collection_unit(
+        const NativePortSoundCollectionHandle handle,
+        const NativePortSoundCollectionUnitKind kind,
+        const std::uint8_t bank) const {
+        require_owner_thread();
+        const auto& collection = require_collection(handle);
+        switch (kind) {
+        case NativePortSoundCollectionUnitKind::ProgramBank:
+            return bank < maximum_mlt_banks &&
+                   collection.program_banks[bank].has_value();
+        case NativePortSoundCollectionUnitKind::SequenceBank:
+            return bank < maximum_mlt_banks &&
+                   collection.sequence_banks[bank].has_value();
+        case NativePortSoundCollectionUnitKind::OneShotBank:
+            // SOSB decoding is deliberately not inferred from SMPB.  A
+            // collection cannot advertise a usable native one-shot bank
+            // until its distinct payload contract has been parsed.
+            return false;
+        case NativePortSoundCollectionUnitKind::PcmStreamRing:
+            return bank < maximum_mlt_banks &&
+                   collection.authored_pcm_stream_rings[bank].has_value();
+        case NativePortSoundCollectionUnitKind::EffectProgramBank:
+            return collection.effect_program_present &&
+                   collection.effect_bank == bank;
+        case NativePortSoundCollectionUnitKind::EffectOutputBank:
+            return collection.effect_output_present &&
+                   collection.effect_bank == bank;
+        case NativePortSoundCollectionUnitKind::EffectProgramWork:
+            return collection.effect_work_present &&
+                   collection.effect_bank == bank;
+        }
+        return false;
+    }
+
+    [[nodiscard]] NativePortSoundPcmStreamRingHandle bind_pcm_stream_ring(
+        const NativePortSoundPcmStreamRingConfig& config) {
+        require_owner_thread();
+        if (config.bank >= maximum_mlt_banks || config.byte_size == 0u ||
+            (config.layout_offset & 3u) != 0u ||
+            (config.byte_size & 3u) != 0u ||
+            config.layout_offset > native_port_manatee_sound_layout_bytes ||
+            config.byte_size >
+                native_port_manatee_sound_layout_bytes - config.layout_offset)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidPcmStreamRing,
+                            "pcm-ring-range");
+
+        auto& slot = pcm_stream_rings_[config.bank];
+        if (slot.value.has_value()) {
+            const auto& current = *slot.value;
+            if (current.bank == config.bank &&
+                current.layout_offset == config.layout_offset &&
+                current.byte_size == config.byte_size)
+                return {config.bank, slot.generation};
+            fail_sound_bank(NativePortSoundBankFailure::InvalidPcmStreamRing,
+                            "pcm-ring-bank-bound");
+        }
+
+        const auto begin = static_cast<std::uint64_t>(config.layout_offset);
+        const auto end = begin + config.byte_size;
+        for (const auto& candidate : pcm_stream_rings_) {
+            if (!candidate.value.has_value()) continue;
+            const auto candidate_begin =
+                static_cast<std::uint64_t>(candidate.value->layout_offset);
+            const auto candidate_end =
+                candidate_begin + candidate.value->byte_size;
+            if (begin < candidate_end && candidate_begin < end)
+                fail_sound_bank(
+                    NativePortSoundBankFailure::InvalidPcmStreamRing,
+                    "pcm-ring-overlap");
+        }
+        slot.value = config;
+        return {config.bank, slot.generation};
+    }
+
+    void release_pcm_stream_ring(
+        const NativePortSoundPcmStreamRingHandle handle) {
+        require_owner_thread();
+        auto& slot = require_pcm_stream_ring_slot(handle);
+        slot.value.reset();
+        bump_generation(slot.generation);
+    }
+
+    [[nodiscard]] NativePortSoundPcmStreamRingSnapshot
+    pcm_stream_ring_snapshot(
+        const NativePortSoundPcmStreamRingHandle handle) const {
+        require_owner_thread();
+        const auto& slot = require_pcm_stream_ring_slot(handle);
+        return {*slot.value, true};
+    }
+
     void predecode_collection_samples(
         const NativePortSoundCollectionHandle handle) {
         require_owner_thread();
@@ -617,6 +711,28 @@ class NativePortSoundBankEngine::Impl final {
         return *require_collection_slot(handle).value;
     }
 
+    [[nodiscard]] Slot<NativePortSoundPcmStreamRingConfig>&
+    require_pcm_stream_ring_slot(
+        const NativePortSoundPcmStreamRingHandle handle) {
+        if (!handle || handle.slot >= pcm_stream_rings_.size() ||
+            pcm_stream_rings_[handle.slot].generation != handle.generation ||
+            !pcm_stream_rings_[handle.slot].value.has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidHandle,
+                            "pcm-ring-handle");
+        return pcm_stream_rings_[handle.slot];
+    }
+
+    [[nodiscard]] const Slot<NativePortSoundPcmStreamRingConfig>&
+    require_pcm_stream_ring_slot(
+        const NativePortSoundPcmStreamRingHandle handle) const {
+        if (!handle || handle.slot >= pcm_stream_rings_.size() ||
+            pcm_stream_rings_[handle.slot].generation != handle.generation ||
+            !pcm_stream_rings_[handle.slot].value.has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidHandle,
+                            "pcm-ring-handle");
+        return pcm_stream_rings_[handle.slot];
+    }
+
     [[nodiscard]] bool collection_in_use(
         const NativePortSoundCollectionHandle handle) const noexcept {
         for (const auto& slot : sequences_)
@@ -658,11 +774,21 @@ class NativePortSoundBankEngine::Impl final {
                      static_cast<std::uint64_t>(unit_count) * 32u,
                      NativePortSoundBankFailure::InvalidMlt,
                      "mlt-unit-table");
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> unit_regions;
+        unit_regions.reserve(unit_count);
         for (std::uint32_t unit = 0u; unit < unit_count; ++unit) {
             const auto record = 32u + static_cast<std::uint64_t>(unit) * 32u;
             const auto bank = bytes.u8(record + 4u,
                                        NativePortSoundBankFailure::InvalidMlt,
                                        "mlt-bank");
+            const auto layout_offset = bytes.u32(
+                record + 8u,
+                NativePortSoundBankFailure::InvalidMlt,
+                "mlt-layout-offset");
+            const auto layout_size = bytes.u32(
+                record + 12u,
+                NativePortSoundBankFailure::InvalidMlt,
+                "mlt-layout-size");
             const auto file_offset = bytes.u32(
                 record + 16u,
                 NativePortSoundBankFailure::InvalidMlt,
@@ -677,6 +803,54 @@ class NativePortSoundBankEngine::Impl final {
                 fail_sound_bank(NativePortSoundBankFailure::InvalidMlt,
                                 "mlt-payload-presence");
             const bool has_payload = offset_present;
+            const bool program = bytes.magic(record, "SMPB");
+            const bool sequence = bytes.magic(record, "SMSB");
+            const bool one_shot = bytes.magic(record, "SOSB");
+            const bool stream_ring = bytes.magic(record, "SPSR");
+            const bool effect_program = bytes.magic(record, "SFPB");
+            const bool effect_output = bytes.magic(record, "SFOB");
+            const bool effect_work = bytes.magic(record, "SFPW");
+            if (!(program || sequence || one_shot || stream_ring ||
+                  effect_program || effect_output || effect_work))
+                fail_sound_bank(NativePortSoundBankFailure::UnsupportedUnit,
+                                "mlt-unit-type");
+            if (bank >= maximum_mlt_banks || layout_size == 0u ||
+                (layout_offset & 3u) != 0u || (layout_size & 3u) != 0u ||
+                layout_offset > native_port_manatee_sound_layout_bytes ||
+                layout_size >
+                    native_port_manatee_sound_layout_bytes - layout_offset)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidMlt,
+                                "mlt-layout-range");
+            const auto layout_end = layout_offset + layout_size;
+            for (const auto [existing_begin, existing_end] : unit_regions)
+                if (layout_offset < existing_end &&
+                    existing_begin < layout_end)
+                    fail_sound_bank(NativePortSoundBankFailure::InvalidMlt,
+                                    "mlt-layout-overlap");
+            unit_regions.emplace_back(layout_offset, layout_end);
+
+            if (stream_ring) {
+                if ((has_payload && file_size != 0u) ||
+                    collection.authored_pcm_stream_rings[bank].has_value())
+                    fail_sound_bank(
+                        NativePortSoundBankFailure::InvalidPcmStreamRing,
+                        "psr-unit");
+                collection.authored_pcm_stream_rings[bank] =
+                    NativePortSoundPcmStreamRingConfig{
+                        bank, layout_offset, layout_size};
+                continue;
+            }
+            if (effect_work) {
+                if (has_payload && file_size != 0u)
+                    fail_sound_bank(NativePortSoundBankFailure::UnsupportedUnit,
+                                    "fpw-payload");
+                bind_effect_unit(collection,
+                                 bank,
+                                 collection.effect_work_present,
+                                 "fpw-duplicate");
+                collection.effect_work_present = true;
+                continue;
+            }
             if (!has_payload) continue;
             const auto payload = bytes.span(
                 file_offset,
@@ -684,42 +858,39 @@ class NativePortSoundBankEngine::Impl final {
                 NativePortSoundBankFailure::InvalidMlt,
                 "mlt-payload");
             const BoundedBytes payload_bytes(payload);
-            if (bytes.magic(record, "SMPB")) {
-                if (bank >= maximum_mlt_banks ||
-                    collection.program_banks[bank].has_value())
+            if (program) {
+                if (collection.program_banks[bank].has_value())
                     fail_sound_bank(
                         NativePortSoundBankFailure::InvalidProgramBank,
                         "mpb-bank");
                 collection.program_banks[bank] =
                     parse_program_bank(payload, bank);
-            } else if (bytes.magic(record, "SMSB")) {
-                if (bank >= maximum_mlt_banks ||
-                    collection.sequence_banks[bank].has_value())
+            } else if (sequence) {
+                if (collection.sequence_banks[bank].has_value())
                     fail_sound_bank(
                         NativePortSoundBankFailure::InvalidSequenceBank,
                         "msb-bank");
                 collection.sequence_banks[bank] = parse_sequence_bank(payload);
-            } else if (bytes.magic(record, "SFPB")) {
+            } else if (effect_program) {
                 bind_effect_unit(collection,
                                  bank,
                                  collection.effect_program_present,
                                  "fpb-duplicate");
                 parse_effect_program(collection, payload_bytes);
                 collection.effect_program_present = true;
-            } else if (bytes.magic(record, "SFOB")) {
+            } else if (effect_output) {
                 bind_effect_unit(collection,
                                  bank,
                                  collection.effect_output_present,
                                  "fob-duplicate");
                 parse_effect_output(collection, payload_bytes);
                 collection.effect_output_present = true;
-            } else if (bytes.magic(record, "SFPW")) {
-                if (!payload.empty())
-                    fail_sound_bank(NativePortSoundBankFailure::UnsupportedUnit,
-                                    "fpw-payload");
             } else {
+                // SOSB has a distinct one-shot payload ABI.  Accept its
+                // payloadless layout reservation, but never reinterpret a
+                // populated one as an SMPB program bank.
                 fail_sound_bank(NativePortSoundBankFailure::UnsupportedUnit,
-                                "mlt-unit-type");
+                                "osb-payload");
             }
         }
         if (collection.effect_program_present !=
@@ -1931,6 +2102,11 @@ class NativePortSoundBankEngine::Impl final {
             slot.value.reset();
             bump_generation(slot.generation);
         }
+        for (auto& slot : pcm_stream_rings_) {
+            if (!slot.value.has_value()) continue;
+            slot.value.reset();
+            bump_generation(slot.generation);
+        }
         // No live handle can now retain a collection. Use the same validated
         // unload path so counters and generations cannot drift.
         unload_all_collections();
@@ -2028,6 +2204,12 @@ class NativePortSoundBankEngine::Impl final {
                     : 0u;
         for (const auto& slot : voices_)
             result.active_voices += slot.value.has_value() ? 1u : 0u;
+        for (const auto& slot : pcm_stream_rings_) {
+            if (!slot.value.has_value()) continue;
+            ++result.active_pcm_stream_rings;
+            saturating_add(result.reserved_pcm_stream_bytes,
+                           slot.value->byte_size);
+        }
         result.feed_buffered_frames = audio_.voice_snapshot(feed_).buffered_frames;
         return result;
     }
@@ -3318,6 +3500,8 @@ class NativePortSoundBankEngine::Impl final {
     std::vector<Slot<SynthVoice>> voices_;
     std::vector<Slot<VoiceGroup>> groups_;
     std::vector<Slot<MidiPort>> ports_;
+    std::array<Slot<NativePortSoundPcmStreamRingConfig>, maximum_mlt_banks>
+        pcm_stream_rings_{};
     std::vector<double> mix_;
     std::vector<std::int16_t> output_;
     std::uint64_t current_render_frame_ = 0u;
@@ -3368,6 +3552,30 @@ bool NativePortSoundBankEngine::has_sequence(
     const std::uint8_t bank,
     const std::uint16_t sequence) const {
     return impl_->has_sequence(collection, bank, sequence);
+}
+
+bool NativePortSoundBankEngine::has_collection_unit(
+    const NativePortSoundCollectionHandle collection,
+    const NativePortSoundCollectionUnitKind kind,
+    const std::uint8_t bank) const {
+    return impl_->has_collection_unit(collection, kind, bank);
+}
+
+NativePortSoundPcmStreamRingHandle
+NativePortSoundBankEngine::bind_pcm_stream_ring(
+    const NativePortSoundPcmStreamRingConfig& config) {
+    return impl_->bind_pcm_stream_ring(config);
+}
+
+void NativePortSoundBankEngine::release_pcm_stream_ring(
+    const NativePortSoundPcmStreamRingHandle ring) {
+    impl_->release_pcm_stream_ring(ring);
+}
+
+NativePortSoundPcmStreamRingSnapshot
+NativePortSoundBankEngine::pcm_stream_ring_snapshot(
+    const NativePortSoundPcmStreamRingHandle ring) const {
+    return impl_->pcm_stream_ring_snapshot(ring);
 }
 
 void NativePortSoundBankEngine::predecode_collection_samples(

@@ -53,6 +53,12 @@ enum class HardwareLoopClassification : std::uint8_t {
     Unknown
 };
 
+enum class HardwareLoopLocalProgressKind : std::uint8_t {
+    IntegerInduction,
+    AddressPostIncrement,
+    PointerTraversal
+};
+
 // Ordered from complete product support to a missing mapping. Address summaries retain the
 // weakest capability observed across all access widths and directions at that address.
 enum class HardwareRuntimeSupport : std::uint8_t {
@@ -127,6 +133,21 @@ struct HardwareLoopAccessEvidence {
     bool guards_loop = false;
 };
 
+struct HardwareLoopWriteCandidate {
+    std::uint32_t instruction_address = 0u;
+    std::uint32_t guest_address = 0u;
+    std::uint32_t canonical_address = 0u;
+    std::uint8_t width = 0u;
+};
+
+struct HardwareLoopLocalProgressEvidence {
+    std::uint32_t condition_instruction_address = 0u;
+    std::uint32_t progress_instruction_address = 0u;
+    std::uint8_t register_index = 0u;
+    HardwareLoopLocalProgressKind kind =
+        HardwareLoopLocalProgressKind::IntegerInduction;
+};
+
 struct HardwareNaturalLoop {
     std::uint32_t header_address = 0u;
     std::uint32_t latch_address = 0u;
@@ -136,7 +157,18 @@ struct HardwareNaturalLoop {
     std::vector<std::uint32_t> unresolved_guard_read_instruction_addresses;
     std::vector<std::uint32_t> block_addresses;
     std::vector<std::uint32_t> counter_instruction_addresses;
+    // A loop whose exit dependency changes through one of these bounded,
+    // loop-local operations is a traversal/counter rather than an external
+    // progress wait. Evidence is tied to the controlling condition and the
+    // exact induction/pointer instruction; unrelated arithmetic cannot
+    // discharge a provider requirement.
+    std::vector<HardwareLoopLocalProgressEvidence> local_progress_evidence;
     std::vector<HardwareLoopAccessEvidence> accesses;
+    // Resolved image-wide writes overlapping a resolved RAM-poll guard.  They
+    // are candidates rather than assumed producers: the native provider still
+    // has to prove owner, ABI, ordering and the value transition.
+    std::vector<HardwareLoopWriteCandidate> matching_write_candidates;
+    bool matching_write_candidates_truncated = false;
 };
 
 struct DreamcastHardwareAudit {
@@ -192,6 +224,8 @@ audit_dreamcast_hardware(const io::ExecutableImage& image,
 [[nodiscard]] const char* hardware_access_kind_name(HardwareAccessKind kind) noexcept;
 [[nodiscard]] const char*
 hardware_loop_classification_name(HardwareLoopClassification classification) noexcept;
+[[nodiscard]] const char* hardware_loop_local_progress_kind_name(
+    HardwareLoopLocalProgressKind kind) noexcept;
 [[nodiscard]] const char* hardware_runtime_support_name(HardwareRuntimeSupport support) noexcept;
 [[nodiscard]] std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit);
 [[nodiscard]] std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,

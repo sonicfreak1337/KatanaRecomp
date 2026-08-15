@@ -803,6 +803,17 @@ void write_hardware_loop(
     write_u32_vector(output, value.counter_instruction_addresses);
     write_vector(
         output,
+        value.local_progress_evidence,
+        [](Writer& writer,
+           const katana::analysis::HardwareLoopLocalProgressEvidence&
+               evidence) {
+            writer.u32(evidence.condition_instruction_address);
+            writer.u32(evidence.progress_instruction_address);
+            writer.u8(evidence.register_index);
+            writer.enumeration(evidence.kind);
+        });
+    write_vector(
+        output,
         value.accesses,
         [](Writer& writer,
            const katana::analysis::HardwareLoopAccessEvidence& access) {
@@ -817,6 +828,17 @@ void write_hardware_loop(
             writer.enumeration(access.runtime_support);
             writer.boolean(access.guards_loop);
         });
+    write_vector(
+        output,
+        value.matching_write_candidates,
+        [](Writer& writer,
+           const katana::analysis::HardwareLoopWriteCandidate& candidate) {
+            writer.u32(candidate.instruction_address);
+            writer.u32(candidate.guest_address);
+            writer.u32(candidate.canonical_address);
+            writer.u8(candidate.width);
+        });
+    output.boolean(value.matching_write_candidates_truncated);
 }
 
 [[nodiscard]] katana::analysis::HardwareNaturalLoop
@@ -833,6 +855,22 @@ read_hardware_loop(Reader& input) {
         read_u32_vector(input);
     value.block_addresses = read_u32_vector(input);
     value.counter_instruction_addresses = read_u32_vector(input);
+    value.local_progress_evidence =
+        read_vector<katana::analysis::HardwareLoopLocalProgressEvidence>(
+            input,
+            [](Reader& reader) {
+                katana::analysis::HardwareLoopLocalProgressEvidence
+                    evidence;
+                evidence.condition_instruction_address = reader.u32();
+                evidence.progress_instruction_address = reader.u32();
+                evidence.register_index = reader.u8();
+                evidence.kind = reader.enumeration(
+                    katana::analysis::HardwareLoopLocalProgressKind::
+                        IntegerInduction,
+                    katana::analysis::HardwareLoopLocalProgressKind::
+                        PointerTraversal);
+                return evidence;
+            });
     value.accesses =
         read_vector<katana::analysis::HardwareLoopAccessEvidence>(
             input,
@@ -858,6 +896,18 @@ read_hardware_loop(Reader& input) {
                 access.guards_loop = reader.boolean();
                 return access;
             });
+    value.matching_write_candidates =
+        read_vector<katana::analysis::HardwareLoopWriteCandidate>(
+            input,
+            [](Reader& reader) {
+                katana::analysis::HardwareLoopWriteCandidate candidate;
+                candidate.instruction_address = reader.u32();
+                candidate.guest_address = reader.u32();
+                candidate.canonical_address = reader.u32();
+                candidate.width = reader.u8();
+                return candidate;
+            });
+    value.matching_write_candidates_truncated = input.boolean();
     return value;
 }
 

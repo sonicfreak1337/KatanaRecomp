@@ -30,6 +30,15 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
+Der aktuelle v141-Export bindet den bisher fehlenden SPSR-Layoutschritt
+generisch: drei titelrelevante PCM-Stream-Ringe wurden bounded registriert,
+danach blieb der native Audio-/AOT-Pfad bis zum Testende stabil. Die sichtbare
+Kontaktfolge zeigt Sega, Sonic-Team und den animierten Titel; der zweite
+synthetische Startimpuls erzeugte keinen Press-Edge, daher ist das Hauptmenue
+noch nicht als erreicht zu werten. Die Closure-Zahlen dieses Exports sind
+`6.088` Funktionen, `176` Partitionen, `243` Hardware-Sites, `191` Gaps und
+`3` Progress-Waits; `1.250` Sites sind durch bewiesene Hooks ersetzt.
+
 Die native Audiogrundlage ist abgeschlossen. `NativePortAudioEngine` und
 `NativePortSoundBankEngine` bilden die titelnahe Manatee-/MW-Soundsemantik
 direkt auf Host-PCM ab; es existiert keine AICA-/ARM7-/Sound-RAM-

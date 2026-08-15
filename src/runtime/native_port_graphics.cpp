@@ -182,12 +182,24 @@ template <std::size_t Size>
            shading == NativePortShadingMode::FlatLastVertex;
 }
 
+[[nodiscard]] bool valid_triangle_area_space(
+    const NativePortTriangleAreaSpace space) noexcept {
+    return space == NativePortTriangleAreaSpace::Submitted ||
+           space ==
+               NativePortTriangleAreaSpace::LogicalViewportAfterTransform;
+}
+
 [[nodiscard]] bool valid_rasterizer(
     const NativePortRasterizerState& rasterizer) noexcept {
     return valid_cull(rasterizer.cull) && valid_fill(rasterizer.fill) &&
            valid_shading(rasterizer.shading) &&
+           valid_triangle_area_space(rasterizer.small_triangle_area_space) &&
            std::isfinite(rasterizer.small_triangle_area_threshold) &&
-           rasterizer.small_triangle_area_threshold >= 0.0f;
+           rasterizer.small_triangle_area_threshold >= 0.0f &&
+           (rasterizer.small_triangle_area_threshold == 0.0f ||
+            rasterizer.small_triangle_area_space ==
+                NativePortTriangleAreaSpace::Submitted ||
+            valid_extent(rasterizer.small_triangle_reference_extent));
 }
 
 [[nodiscard]] bool valid_filter(const NativePortTextureFilter filter) noexcept {
@@ -826,6 +838,47 @@ class NativePortGraphicsDevice::Impl final {
                            ? static_cast<std::uint32_t>(element)
                            : indices[element];
             };
+            const auto triangle_area_position =
+                [&](const NativePortVertex& vertex,
+                    std::array<double, 2u>& result) {
+                    if (packet.rasterizer.small_triangle_area_space ==
+                        NativePortTriangleAreaSpace::Submitted) {
+                        result = {vertex.position[0], vertex.position[1]};
+                        return true;
+                    }
+
+                    std::array<double, 4u> clip{};
+                    const std::array<double, 4u> source{
+                        vertex.position[0], vertex.position[1],
+                        vertex.position[2], 1.0};
+                    for (std::size_t column = 0u; column < 4u; ++column) {
+                        for (std::size_t row = 0u; row < 4u; ++row) {
+                            clip[column] +=
+                                source[row] *
+                                packet.transform.values[row * 4u + column];
+                        }
+                    }
+                    if (!std::ranges::all_of(
+                            clip, [](const double value) {
+                                return std::isfinite(value);
+                            }) ||
+                        clip[3u] <= 0.0)
+                        return false;
+
+                    const auto ndc_x = clip[0u] / clip[3u];
+                    const auto ndc_y = clip[1u] / clip[3u];
+                    result = {
+                        (ndc_x + 1.0) * 0.5 *
+                            packet.rasterizer.small_triangle_reference_extent
+                                .width,
+                        (1.0 - ndc_y) * 0.5 *
+                            packet.rasterizer.small_triangle_reference_extent
+                                .height};
+                    return std::ranges::all_of(
+                        result, [](const double value) {
+                            return std::isfinite(value);
+                        });
+                };
             const auto append_triangle =
                 [&](const std::size_t first,
                     const std::size_t second,
@@ -834,14 +887,22 @@ class NativePortGraphicsDevice::Impl final {
                     NativePortVertex a = vertices[source_index(first)];
                     NativePortVertex b = vertices[source_index(second)];
                     NativePortVertex c = vertices[source_index(third)];
-                    const auto determinant =
-                        (static_cast<double>(b.position[0]) - a.position[0]) *
-                            (static_cast<double>(c.position[1]) - a.position[1]) -
-                        (static_cast<double>(b.position[1]) - a.position[1]) *
-                            (static_cast<double>(c.position[0]) - a.position[0]);
-                    if (std::abs(determinant) <
-                        packet.rasterizer.small_triangle_area_threshold)
-                        return;
+                    std::array<double, 2u> area_a{};
+                    std::array<double, 2u> area_b{};
+                    std::array<double, 2u> area_c{};
+                    if (packet.rasterizer.small_triangle_area_threshold > 0.0f &&
+                        triangle_area_position(a, area_a) &&
+                        triangle_area_position(b, area_b) &&
+                        triangle_area_position(c, area_c)) {
+                        const auto determinant =
+                            (area_b[0u] - area_a[0u]) *
+                                (area_c[1u] - area_a[1u]) -
+                            (area_b[1u] - area_a[1u]) *
+                                (area_c[0u] - area_a[0u]);
+                        if (std::abs(determinant) <
+                            packet.rasterizer.small_triangle_area_threshold)
+                            return;
+                    }
                     if (packet.rasterizer.shading ==
                         NativePortShadingMode::FlatLastVertex) {
                         const auto& flat = vertices[source_index(provoking)];
@@ -976,6 +1037,9 @@ class NativePortGraphicsDevice::Impl final {
         // host rasterizer objects.
         host_rasterizer.shading = NativePortShadingMode::Smooth;
         host_rasterizer.small_triangle_area_threshold = 0.0f;
+        host_rasterizer.small_triangle_area_space =
+            NativePortTriangleAreaSpace::Submitted;
+        host_rasterizer.small_triangle_reference_extent = {};
         auto* const rasterizer = resolve_rasterizer_state(host_rasterizer);
         auto* const sampler = resolve_sampler_state(packet.sampler);
         constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};

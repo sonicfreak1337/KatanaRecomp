@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -1102,6 +1103,10 @@ std::size_t controlling_instruction_index(const BasicBlock& block) noexcept {
                : last;
 }
 
+constexpr std::uint16_t loop_register_bit(const std::uint8_t index) noexcept {
+    return static_cast<std::uint16_t>(1u << index);
+}
+
 bool is_potential_memory_load(const sh4::InstructionKind kind) noexcept {
     using K = sh4::InstructionKind;
     switch (kind) {
@@ -1126,6 +1131,97 @@ bool is_potential_memory_load(const sh4::InstructionKind kind) noexcept {
     default:
         return false;
     }
+}
+
+bool is_postincrement_memory_load(const sh4::InstructionKind kind) noexcept {
+    using K = sh4::InstructionKind;
+    switch (kind) {
+    case K::MovByteLoadPostIncrement:
+    case K::MovWordLoadPostIncrement:
+    case K::MovLongLoadPostIncrement:
+    case K::LoadSpecialRegisterPostIncrement:
+    case K::FmovLoadPostIncrement:
+    case K::MultiplyAccumulateWord:
+    case K::MultiplyAccumulateLong:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::uint16_t memory_read_address_register_mask(
+    const sh4::DecodedInstruction& instruction) noexcept {
+    using K = sh4::InstructionKind;
+    const auto source = loop_register_bit(instruction.source_register);
+    const auto destination = loop_register_bit(instruction.destination_register);
+    switch (instruction.kind) {
+    case K::MovByteLoad:
+    case K::MovWordLoad:
+    case K::MovLongLoad:
+    case K::MovByteLoadPostIncrement:
+    case K::MovWordLoadPostIncrement:
+    case K::MovLongLoadPostIncrement:
+    case K::MovByteLoadDisplacement:
+    case K::MovWordLoadDisplacement:
+    case K::MovLongLoadDisplacement:
+    case K::TestAndSetByte:
+    case K::Prefetch:
+    case K::LoadSpecialRegisterPostIncrement:
+    case K::FmovLoad:
+    case K::FmovLoadPostIncrement:
+        return source;
+    case K::MovByteLoadR0Indexed:
+    case K::MovWordLoadR0Indexed:
+    case K::MovLongLoadR0Indexed:
+    case K::FmovLoadR0Indexed:
+        return static_cast<std::uint16_t>(source | loop_register_bit(0u));
+    case K::TestByteImmediate:
+    case K::AndByteImmediate:
+    case K::XorByteImmediate:
+    case K::OrByteImmediate:
+        return loop_register_bit(0u);
+    case K::MultiplyAccumulateWord:
+    case K::MultiplyAccumulateLong:
+        return static_cast<std::uint16_t>(source | destination);
+    default:
+        return 0u;
+    }
+}
+
+std::optional<HardwareLoopLocalProgressKind> local_progress_kind(
+    const sh4::DisassemblyLine& line,
+    const std::uint8_t register_index,
+    const RegisterConstants& before) noexcept {
+    using K = sh4::InstructionKind;
+    const auto& instruction = line.instruction;
+    if (instruction.kind == K::AddImmediate &&
+        instruction.destination_register == register_index &&
+        instruction.immediate != 0)
+        return HardwareLoopLocalProgressKind::IntegerInduction;
+    if ((instruction.kind == K::AddRegister ||
+         instruction.kind == K::SubRegister) &&
+        instruction.destination_register == register_index &&
+        instruction.source_register != register_index) {
+        const auto step = before.registers[instruction.source_register];
+        if (step.has_value() && *step != 0u)
+            return HardwareLoopLocalProgressKind::IntegerInduction;
+    }
+    if (is_postincrement_memory_load(instruction.kind) &&
+        instruction.source_register == register_index) {
+        const bool same_integer_load_register =
+            (instruction.kind == K::MovByteLoadPostIncrement ||
+             instruction.kind == K::MovWordLoadPostIncrement ||
+             instruction.kind == K::MovLongLoadPostIncrement) &&
+            instruction.destination_register == register_index;
+        if (!same_integer_load_register)
+            return HardwareLoopLocalProgressKind::AddressPostIncrement;
+    }
+    if (is_potential_memory_load(instruction.kind) &&
+        instruction.destination_register == register_index &&
+        (memory_read_address_register_mask(instruction) &
+         loop_register_bit(register_index)) != 0u)
+        return HardwareLoopLocalProgressKind::PointerTraversal;
+    return std::nullopt;
 }
 
 bool is_syntactic_memory_read(const sh4::InstructionKind kind) noexcept {
@@ -1219,10 +1315,6 @@ std::uint16_t condition_register_mask(const sh4::DecodedInstruction& instruction
     default:
         return 0u;
     }
-}
-
-constexpr std::uint16_t loop_register_bit(const std::uint8_t index) noexcept {
-    return static_cast<std::uint16_t>(1u << index);
 }
 
 std::optional<std::uint16_t>
@@ -1410,6 +1502,89 @@ void repair_contextual_delay_slot_edges(std::vector<BasicBlock>& blocks,
     }
 }
 
+std::vector<RegisterConstants> propagate_cfg_block_constants(
+    const std::vector<BasicBlock>& blocks,
+    const std::vector<std::vector<std::size_t>>& successors,
+    const std::vector<bool>& roots,
+    const io::ExecutableImage& image) {
+    struct EntryState final {
+        RegisterConstants constants;
+        bool initialized = false;
+    };
+
+    std::vector<EntryState> entries(blocks.size());
+    std::deque<std::size_t> worklist;
+    std::vector<bool> queued(blocks.size(), false);
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (!roots[index]) continue;
+        entries[index].initialized = true;
+        worklist.push_back(index);
+        queued[index] = true;
+    }
+
+    const auto join = [](EntryState& destination,
+                         const RegisterConstants& incoming) {
+        if (!destination.initialized) {
+            destination.constants = incoming;
+            destination.initialized = true;
+            return true;
+        }
+        bool changed = false;
+        for (std::size_t reg = 0u;
+             reg < destination.constants.registers.size(); ++reg) {
+            auto& current = destination.constants.registers[reg];
+            if (!current.has_value()) continue;
+            if (!incoming.registers[reg].has_value() ||
+                *incoming.registers[reg] != *current) {
+                current.reset();
+                destination.constants.sources[reg].clear();
+                changed = true;
+            } else if (destination.constants.sources[reg] !=
+                       incoming.sources[reg]) {
+                destination.constants.sources[reg] = "cfg-join";
+            }
+        }
+        return changed;
+    };
+
+    // The must-constant lattice can initialize a block once and can then only
+    // discard at most sixteen register constants.  The explicit budget makes
+    // malformed or unexpectedly cyclic CFG input fail closed instead of
+    // leaving a speculative predecessor value in the hardware audit.
+    const auto budget = std::max<std::size_t>(
+        1u, blocks.size() * (RegisterConstants{}.registers.size() + 2u));
+    std::size_t evaluations = 0u;
+    while (!worklist.empty() && evaluations++ < budget) {
+        const auto block_index = worklist.front();
+        worklist.pop_front();
+        queued[block_index] = false;
+
+        auto output = entries[block_index].constants;
+        if (!blocks[block_index].lines.empty()) {
+            const auto trace = propagate_basic_block_constants(
+                blocks[block_index].lines, image, output);
+            output = trace.back().after;
+        }
+        for (const auto successor : successors[block_index]) {
+            // A callable/external entry always has an unknown incoming ABI
+            // state even if the same address is also reached internally.
+            if (roots[successor]) continue;
+            if (!join(entries[successor], output) || queued[successor])
+                continue;
+            worklist.push_back(successor);
+            queued[successor] = true;
+        }
+    }
+    if (!worklist.empty()) return std::vector<RegisterConstants>(blocks.size());
+
+    std::vector<RegisterConstants> result(blocks.size());
+    for (std::size_t index = 0u; index < blocks.size(); ++index) {
+        if (entries[index].initialized)
+            result[index] = std::move(entries[index].constants);
+    }
+    return result;
+}
+
 std::vector<HardwareNaturalLoop>
 find_natural_hardware_loops(const io::ExecutableImage& image,
                             const ControlFlowAnalysisResult& analysis) {
@@ -1479,6 +1654,60 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
     for (std::size_t index = 0u; index < blocks.size(); ++index) {
         if (!reachable[index]) roots[index] = true;
     }
+    const auto block_entry_constants = propagate_cfg_block_constants(
+        blocks, successors, roots, image);
+
+    std::vector<HardwareLoopWriteCandidate> resolved_linear_writes;
+    for (std::size_t block_index = 0u;
+         block_index < blocks.size(); ++block_index) {
+        const auto& block = blocks[block_index];
+        const auto trace = propagate_basic_block_constants(
+            block.lines, image, block_entry_constants[block_index]);
+        const auto gbr_trace = propagate_local_gbr(block.lines, trace);
+        for (std::size_t line_index = 0u;
+             line_index < block.lines.size(); ++line_index) {
+            if (!is_memory_access_instruction(
+                    block.lines[line_index].instruction.kind))
+                continue;
+            const auto access_set = effective_accesses(
+                block.lines[line_index], trace[line_index].before,
+                gbr_trace[line_index]);
+            for (const auto& access : access_set.accesses) {
+                if (access.kind != HardwareAccessKind::Write) continue;
+                const auto projected_address = project_runtime_image_access(
+                    image, block.lines[line_index].address,
+                    access.address, access.width);
+                const auto description = describe_image_access(
+                    image, projected_address, access.width);
+                if (!is_linear_loop_memory(description)) continue;
+                resolved_linear_writes.push_back({
+                    block.lines[line_index].address,
+                    projected_address,
+                    loop_canonical_address(description),
+                    access.width});
+            }
+        }
+    }
+    std::sort(resolved_linear_writes.begin(), resolved_linear_writes.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.instruction_address,
+                                  left.canonical_address,
+                                  left.width) <
+                         std::tie(right.instruction_address,
+                                  right.canonical_address,
+                                  right.width);
+              });
+    resolved_linear_writes.erase(
+        std::unique(resolved_linear_writes.begin(),
+                    resolved_linear_writes.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.instruction_address ==
+                                   right.instruction_address &&
+                               left.canonical_address ==
+                                   right.canonical_address &&
+                               left.width == right.width;
+                    }),
+        resolved_linear_writes.end());
 
     const auto synthetic_root = blocks.size();
     std::vector<std::vector<std::size_t>> dominator_successors = successors;
@@ -1620,7 +1849,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
             std::unordered_map<std::uint32_t, bool> syntactic_read_by_instruction;
             for (const auto block_index : member_indices) {
                 const auto& block = blocks[block_index];
-                const auto trace = propagate_local_constants(block.lines, image);
+                const auto trace = propagate_basic_block_constants(
+                    block.lines, image, block_entry_constants[block_index]);
                 const auto gbr_trace = propagate_local_gbr(block.lines, trace);
                 for (std::size_t line_index = 0u; line_index < block.lines.size(); ++line_index) {
                     if (!is_memory_access_instruction(block.lines[line_index].instruction.kind))
@@ -1657,6 +1887,172 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     }
                 }
             }
+
+            const auto append_local_progress =
+                [&](const std::uint32_t condition_address,
+                    const sh4::DisassemblyLine& progress_line,
+                    const std::uint8_t register_index,
+                    const HardwareLoopLocalProgressKind kind) {
+                    loop.local_progress_evidence.push_back(
+                        {condition_address,
+                         progress_line.address,
+                         register_index,
+                         kind});
+                };
+            const auto record_guard_address_progress =
+                [&](const std::uint32_t condition_address,
+                    const std::uint32_t guard_read_address) {
+                    // External-progress admission currently consumes only
+                    // one-block loops. For that exact shape, a bounded cyclic
+                    // backward slice over the guard-address expression proves
+                    // whether the guarded read advances locally between
+                    // iterations. Unsupported definitions stop their slice;
+                    // unrelated arithmetic cannot satisfy the proof.
+                    if (member_indices.size() != 1u) return;
+                    const auto block_index = member_indices.front();
+                    const auto& block = blocks[block_index];
+                    const auto found = std::ranges::find_if(
+                        block.lines,
+                        [&](const auto& line) {
+                            return line.address == guard_read_address;
+                        });
+                    if (found == block.lines.end()) return;
+                    const auto read_index = static_cast<std::size_t>(
+                        std::distance(block.lines.begin(), found));
+                    const auto address_registers =
+                        memory_read_address_register_mask(found->instruction);
+                    if (address_registers == 0u) return;
+                    const auto trace = propagate_basic_block_constants(
+                        block.lines,
+                        image,
+                        block_entry_constants[block_index]);
+
+                    // Follow the guard address through the complete local
+                    // register expression, rather than considering only the
+                    // register named by the final load.  Table scans commonly
+                    // form an address through MOV/SHLL/ADD before advancing an
+                    // index, while linked-record traversals load the next
+                    // index/pointer through a second register.  Both are local
+                    // progress, but neither is visible at the final address
+                    // register alone.
+                    //
+                    // The walk is cyclic because a loop-carried update may be
+                    // in the backedge delay slot, after the guarded read in
+                    // linear address order.  Every accepted proof is still
+                    // tied to an exact writer inside this one-block natural
+                    // loop.  Exhausting the bounded state budget merely leaves
+                    // the loop classified as externally driven.
+                    struct AddressProgressState final {
+                        std::uint8_t register_index = 0u;
+                        std::size_t cursor = 0u;
+                        std::size_t pointer_load_index = 0u;
+
+                        bool operator==(const AddressProgressState&) const =
+                            default;
+                    };
+                    const auto no_pointer_load = block.lines.size();
+                    std::deque<AddressProgressState> pending;
+                    std::vector<AddressProgressState> visited;
+                    for (std::uint8_t register_index = 0u;
+                         register_index < 16u; ++register_index) {
+                        const auto register_mask =
+                            loop_register_bit(register_index);
+                        if ((address_registers & register_mask) == 0u)
+                            continue;
+                        pending.push_back(
+                            {register_index, read_index, no_pointer_load});
+                    }
+
+                    constexpr std::size_t max_progress_states = 1024u;
+                    while (!pending.empty() &&
+                           visited.size() < max_progress_states) {
+                        const auto state = pending.front();
+                        pending.pop_front();
+                        if (std::ranges::find(visited, state) != visited.end())
+                            continue;
+                        visited.push_back(state);
+
+                        if (state.pointer_load_index != no_pointer_load) {
+                            const auto& pointer_load =
+                                block.lines[state.pointer_load_index];
+                            if (pointer_load.instruction.destination_register ==
+                                state.register_index) {
+                                append_local_progress(
+                                    condition_address,
+                                    pointer_load,
+                                    state.register_index,
+                                    HardwareLoopLocalProgressKind::
+                                        PointerTraversal);
+                                continue;
+                            }
+                        }
+
+                        std::optional<std::size_t> writer_index;
+                        for (std::size_t distance = 0u;
+                             distance < block.lines.size(); ++distance) {
+                            const auto candidate_index =
+                                (state.cursor + block.lines.size() - distance) %
+                                block.lines.size();
+                            if ((general_register_write_mask(
+                                     block.lines[candidate_index].instruction) &
+                                 loop_register_bit(state.register_index)) == 0u)
+                                continue;
+                            writer_index = candidate_index;
+                            break;
+                        }
+                        if (!writer_index.has_value()) continue;
+
+                        const auto& writer = block.lines[*writer_index];
+                        const auto kind = local_progress_kind(
+                            writer,
+                            state.register_index,
+                            trace[*writer_index].before);
+                        if (kind.has_value()) {
+                            append_local_progress(condition_address,
+                                                  writer,
+                                                  state.register_index,
+                                                  *kind);
+                            continue;
+                        }
+
+                        const auto previous_index =
+                            (*writer_index + block.lines.size() - 1u) %
+                            block.lines.size();
+                        if (is_potential_memory_load(
+                                writer.instruction.kind) &&
+                            writer.instruction.destination_register ==
+                                state.register_index) {
+                            const auto pointer_address_registers =
+                                memory_read_address_register_mask(
+                                    writer.instruction);
+                            for (std::uint8_t input_register = 0u;
+                                 input_register < 16u; ++input_register) {
+                                if ((pointer_address_registers &
+                                     loop_register_bit(input_register)) == 0u)
+                                    continue;
+                                pending.push_back(
+                                    {input_register,
+                                     previous_index,
+                                     *writer_index});
+                            }
+                            continue;
+                        }
+
+                        const auto inputs =
+                            guard_input_registers(writer.instruction);
+                        if (!inputs.has_value()) continue;
+                        for (std::uint8_t input_register = 0u;
+                             input_register < 16u; ++input_register) {
+                            if ((*inputs & loop_register_bit(input_register)) ==
+                                0u)
+                                continue;
+                            pending.push_back(
+                                {input_register,
+                                 previous_index,
+                                 state.pointer_load_index});
+                        }
+                    }
+                };
 
             enum class GuardReadResolution : std::uint8_t {
                 NotARead,
@@ -1733,6 +2129,8 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     if (mark_direct_guard_access(condition_line.address) !=
                         GuardReadResolution::ResolvedAddress)
                         loop.unresolved_guard_access = true;
+                    record_guard_address_progress(condition_line.address,
+                                                  condition_line.address);
                     continue;
                 }
                 if (condition.kind == sh4::InstructionKind::FcmpEqual ||
@@ -1743,9 +2141,13 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     if (!has_unresolved_fcmp_guard) {
                         for (const auto& [instruction_address, is_read] :
                              syntactic_read_by_instruction) {
-                            if (is_read)
+                            if (is_read) {
                                 loop.unresolved_guard_read_instruction_addresses.push_back(
                                     instruction_address);
+                                record_guard_address_progress(
+                                    condition_line.address,
+                                    instruction_address);
+                            }
                         }
                         has_unresolved_fcmp_guard = true;
                     }
@@ -1782,6 +2184,9 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                                     GuardReadResolution::ResolvedAddress) {
                                     provenance_complete = false;
                                 }
+                                record_guard_address_progress(
+                                    condition_line.address,
+                                    writer.address);
                             }
                             const auto non_value_outputs =
                                 static_cast<std::uint16_t>(writes & ~loaded_register);
@@ -1800,6 +2205,26 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                             continue;
                         }
 
+                        const auto writer_trace =
+                            propagate_basic_block_constants(
+                                blocks[writer_block].lines,
+                                image,
+                                block_entry_constants[writer_block]);
+                        for (std::uint8_t register_index = 0u;
+                             register_index < 16u; ++register_index) {
+                            const auto register_mask =
+                                loop_register_bit(register_index);
+                            if ((writes & register_mask) == 0u) continue;
+                            const auto kind = local_progress_kind(
+                                writer,
+                                register_index,
+                                writer_trace[writer_position].before);
+                            if (kind.has_value())
+                                append_local_progress(condition_line.address,
+                                                      writer,
+                                                      register_index,
+                                                      *kind);
+                        }
                         const auto inputs = guard_input_registers(writer.instruction);
                         required_registers =
                             static_cast<std::uint16_t>(required_registers & ~writes);
@@ -1830,6 +2255,32 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
             std::sort(loop.block_addresses.begin(), loop.block_addresses.end());
             std::sort(loop.counter_instruction_addresses.begin(),
                       loop.counter_instruction_addresses.end());
+            std::sort(loop.local_progress_evidence.begin(),
+                      loop.local_progress_evidence.end(),
+                      [](const auto& left, const auto& right) {
+                          return std::tie(
+                                     left.condition_instruction_address,
+                                     left.progress_instruction_address,
+                                     left.register_index,
+                                     left.kind) <
+                                 std::tie(
+                                     right.condition_instruction_address,
+                                     right.progress_instruction_address,
+                                     right.register_index,
+                                     right.kind);
+                      });
+            loop.local_progress_evidence.erase(
+                std::unique(loop.local_progress_evidence.begin(),
+                            loop.local_progress_evidence.end(),
+                            [](const auto& left, const auto& right) {
+                                return left.condition_instruction_address ==
+                                           right.condition_instruction_address &&
+                                       left.progress_instruction_address ==
+                                           right.progress_instruction_address &&
+                                       left.register_index == right.register_index &&
+                                       left.kind == right.kind;
+                            }),
+                loop.local_progress_evidence.end());
             std::sort(loop.unresolved_guard_read_instruction_addresses.begin(),
                       loop.unresolved_guard_read_instruction_addresses.end());
             loop.unresolved_guard_read_instruction_addresses.erase(
@@ -1848,6 +2299,50 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                                                                  right.width);
                       });
             loop.classification = classify_loop(loop);
+            constexpr std::size_t maximum_matching_write_candidates = 256u;
+            for (const auto& guard : loop.accesses) {
+                if (!guard.guards_loop || !guard.linear_memory ||
+                    guard.kind != HardwareAccessKind::Read)
+                    continue;
+                const auto guard_begin =
+                    static_cast<std::uint64_t>(guard.canonical_address);
+                const auto guard_end = guard_begin + guard.width;
+                for (const auto& write : resolved_linear_writes) {
+                    const auto write_begin =
+                        static_cast<std::uint64_t>(write.canonical_address);
+                    const auto write_end = write_begin + write.width;
+                    if (guard_begin >= write_end || write_begin >= guard_end)
+                        continue;
+                    if (loop.matching_write_candidates.size() ==
+                        maximum_matching_write_candidates) {
+                        loop.matching_write_candidates_truncated = true;
+                        break;
+                    }
+                    loop.matching_write_candidates.push_back(write);
+                }
+                if (loop.matching_write_candidates_truncated) break;
+            }
+            std::sort(loop.matching_write_candidates.begin(),
+                      loop.matching_write_candidates.end(),
+                      [](const auto& left, const auto& right) {
+                          return std::tie(left.instruction_address,
+                                          left.canonical_address,
+                                          left.width) <
+                                 std::tie(right.instruction_address,
+                                          right.canonical_address,
+                                          right.width);
+                      });
+            loop.matching_write_candidates.erase(
+                std::unique(loop.matching_write_candidates.begin(),
+                            loop.matching_write_candidates.end(),
+                            [](const auto& left, const auto& right) {
+                                return left.instruction_address ==
+                                           right.instruction_address &&
+                                       left.canonical_address ==
+                                           right.canonical_address &&
+                                       left.width == right.width;
+                            }),
+                loop.matching_write_candidates.end());
             loops.push_back(std::move(loop));
         }
     }
@@ -2152,6 +2647,19 @@ hardware_loop_classification_name(const HardwareLoopClassification classificatio
     return "unknown";
 }
 
+const char* hardware_loop_local_progress_kind_name(
+    const HardwareLoopLocalProgressKind kind) noexcept {
+    switch (kind) {
+    case HardwareLoopLocalProgressKind::IntegerInduction:
+        return "integer_induction";
+    case HardwareLoopLocalProgressKind::AddressPostIncrement:
+        return "address_postincrement";
+    case HardwareLoopLocalProgressKind::PointerTraversal:
+        return "pointer_traversal";
+    }
+    return "integer_induction";
+}
+
 const char* hardware_runtime_support_name(const HardwareRuntimeSupport support) noexcept {
     switch (support) {
     case HardwareRuntimeSupport::Implemented:
@@ -2220,6 +2728,17 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
             if (index != 0u) output << ',';
             output << hex8(loop.counter_instruction_addresses[index]);
         }
+        output << " local_progress=";
+        for (std::size_t index = 0u;
+             index < loop.local_progress_evidence.size(); ++index) {
+            if (index != 0u) output << ',';
+            const auto& evidence = loop.local_progress_evidence[index];
+            output << hardware_loop_local_progress_kind_name(evidence.kind)
+                   << '@' << hex8(evidence.progress_instruction_address)
+                   << ":r" << static_cast<unsigned>(evidence.register_index)
+                   << ":condition="
+                   << hex8(evidence.condition_instruction_address);
+        }
         output << '\n';
         for (const auto& access : loop.accesses) {
             output << "  access=" << hex8(access.instruction_address)
@@ -2260,7 +2779,7 @@ std::string format_hardware_audit_text(const DreamcastHardwareAudit& audit) {
 std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                                        const bool include_accesses) {
     std::ostringstream output;
-    io::write_json_report_header(output, "katana.hardware-audit.v5", "dreamcast_hardware_audit");
+    io::write_json_report_header(output, "katana.hardware-audit.v6", "dreamcast_hardware_audit");
     output << ",\"scope\":" << io::quote_json(audit.scope)
            << ",\"image_bytes\":" << audit.image_bytes
            << ",\"reachable_instructions\":" << audit.reachable_instructions
@@ -2339,6 +2858,27 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
         for (std::size_t site = 0u; site < loop.counter_instruction_addresses.size(); ++site) {
             if (site != 0u) output << ',';
             output << io::quote_json(hex8(loop.counter_instruction_addresses[site]));
+        }
+        output << "],\"local_progress_evidence\":[";
+        for (std::size_t evidence_index = 0u;
+             evidence_index < loop.local_progress_evidence.size();
+             ++evidence_index) {
+            if (evidence_index != 0u) output << ',';
+            const auto& evidence =
+                loop.local_progress_evidence[evidence_index];
+            output << "{\"condition_instruction_address\":"
+                   << io::quote_json(
+                          hex8(evidence.condition_instruction_address))
+                   << ",\"progress_instruction_address\":"
+                   << io::quote_json(
+                          hex8(evidence.progress_instruction_address))
+                   << ",\"register_index\":"
+                   << static_cast<unsigned>(evidence.register_index)
+                   << ",\"kind\":"
+                   << io::quote_json(
+                          hardware_loop_local_progress_kind_name(
+                              evidence.kind))
+                   << '}';
         }
         output << "],\"accesses\":[";
         for (std::size_t access_index = 0u; access_index < loop.accesses.size(); ++access_index) {
