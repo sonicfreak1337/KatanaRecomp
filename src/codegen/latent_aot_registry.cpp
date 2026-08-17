@@ -4516,9 +4516,19 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             explicit_tail_prologue_discovered =
                 !discovered_offsets.empty();
             for (const auto offset : analysis_entry_offsets) {
+                const auto entry_address =
+                    candidate.source_address + offset;
+                // A backward tail transfer does not by itself turn an exact
+                // callback root into an interior entry.  Demotion is valid
+                // only when another retained function already owns the entry
+                // instruction.  Otherwise removing the root loses its prefix
+                // blocks even though the earlier shared tail body remains
+                // locally reachable from that function.
                 if (latent_function_root_reaches_before_entry(
-                        discovery_program,
-                        candidate.source_address + offset))
+                        discovery_program, entry_address) &&
+                    std::binary_search(strict_interior_addresses.begin(),
+                                       strict_interior_addresses.end(),
+                                       entry_address))
                     demoted_entry_offsets.push_back(offset);
             }
             if (discovered_offsets.empty() &&
@@ -6061,11 +6071,38 @@ LatentAotDiscovery discover_latent_aot_modules(
             result.modules.push_back(
                 std::move(*candidate.module));
         else {
-            if (candidates_have_explicit_entries[index])
-                throw std::runtime_error(
-                    "latent-aot-entry-hint-analysis-rejected:" +
-                    std::string(latent_aot_rejection_name(
-                        candidate.rejection)));
+            if (candidates_have_explicit_entries[index]) {
+                const auto& rejected = candidates[index];
+                std::ostringstream message;
+                message << "latent-aot-entry-hint-analysis-rejected:"
+                        << latent_aot_rejection_name(candidate.rejection)
+                        << ":candidate-index=" << index
+                        << ":source-address=0x" << std::hex
+                        << std::uppercase << rejected.source_address
+                        << ":decoded-identity=" << rejected.byte_identity
+                        << ":decoded-size=0x" << rejected.size
+                        << ":entry-offsets=";
+                for (std::size_t entry_index = 0u;
+                     entry_index < rejected.explicit_entry_offsets.size();
+                     ++entry_index) {
+                    if (entry_index != 0u) message << ',';
+                    message << "0x"
+                            << rejected.explicit_entry_offsets[entry_index];
+                }
+                if (!rejected.source_bindings.empty()) {
+                    const auto& binding = rejected.source_bindings.front();
+                    message << ":source-binding=" << binding.byte_identity
+                            << "@0x" << binding.disc_byte_offset
+                            << ":0x" << binding.byte_size
+                            << ":transform="
+                            << (binding.transform ==
+                                        LatentAotSourceTransform::SegaPrs
+                                    ? "sega-prs"
+                                    : "identity");
+                }
+                message << ":detail=" << candidate.rejection_detail;
+                throw std::runtime_error(message.str());
+            }
             ++result.rejected_files;
         }
     }
