@@ -91,16 +91,19 @@ int main() {
 
     require(
         [] {
-            const std::vector oversized = {function(0x8C100000u, 4097u)};
-            try {
-                static_cast<void>(
-                    katana::codegen::partition_translation_units(oversized, {1u, 4096u}));
-            } catch (const std::length_error&) {
-                return true;
-            }
-            return false;
+            const std::vector oversized = {
+                function(0x8C100000u, 4097u),
+                function(0x8C103000u, 1u)};
+            const auto partitions =
+                katana::codegen::partition_translation_units(
+                    oversized, {2u, 4096u});
+            return partitions.size() == 2u &&
+                   partitions[0].function_indices.size() == 1u &&
+                   partitions[0].instruction_count == 4097u &&
+                   partitions[1].function_indices.size() == 1u &&
+                   partitions[1].instruction_count == 1u;
         }(),
-        "Einzelfunktion oberhalb des Instruktionslimits wird still akzeptiert.");
+        "Unteilbare Einzelfunktion oberhalb des weichen TU-Budgets zieht eine Nachbarfunktion mit.");
     require(
         [] {
             try {

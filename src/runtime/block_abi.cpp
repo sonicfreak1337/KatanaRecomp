@@ -1,8 +1,10 @@
 #include "katana/runtime/block_abi.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -17,6 +19,24 @@ struct ActiveCodeAddressMapping {
 
 thread_local std::vector<ActiveCodeAddressMapping> active_code_address_mappings;
 thread_local std::uint64_t next_code_address_mapping_token = 1u;
+thread_local std::uint64_t code_address_mapping_generation = 1u;
+
+struct CodeAddressLookupCacheEntry final {
+    std::uint64_t generation = 0u;
+    std::uint64_t begin = 0u;
+    std::uint64_t end = 0u;
+    std::int64_t delta = 0;
+};
+
+constexpr std::size_t code_address_lookup_cache_size = 64u;
+static_assert((code_address_lookup_cache_size &
+               (code_address_lookup_cache_size - 1u)) == 0u);
+thread_local std::array<CodeAddressLookupCacheEntry,
+                        code_address_lookup_cache_size>
+    relocate_code_address_cache;
+thread_local std::array<CodeAddressLookupCacheEntry,
+                        code_address_lookup_cache_size>
+    unrelocate_code_address_cache;
 
 constexpr std::uint64_t guest_address_space_extent =
     static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
@@ -32,6 +52,76 @@ std::uint64_t allocate_mapping_token() noexcept {
     auto token = next_code_address_mapping_token++;
     if (token == 0u) token = next_code_address_mapping_token++;
     return token;
+}
+
+void invalidate_code_address_lookup_cache() noexcept {
+    if (++code_address_mapping_generation != 0u) return;
+    code_address_mapping_generation = 1u;
+    relocate_code_address_cache = {};
+    unrelocate_code_address_cache = {};
+}
+
+template <bool Reverse>
+std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
+    auto& cache = Reverse ? unrelocate_code_address_cache
+                          : relocate_code_address_cache;
+    const auto cache_index =
+        ((static_cast<std::size_t>(address) >> 12u) ^
+         (static_cast<std::size_t>(address) >> 20u)) &
+        (code_address_lookup_cache_size - 1u);
+    auto& cached = cache[cache_index];
+    if (cached.generation == code_address_mapping_generation &&
+        static_cast<std::uint64_t>(address) >= cached.begin &&
+        static_cast<std::uint64_t>(address) < cached.end)
+        return static_cast<std::uint32_t>(
+            static_cast<std::int64_t>(address) + cached.delta);
+
+    std::uint64_t begin = 0u;
+    std::uint64_t end = guest_address_space_extent;
+    std::int64_t delta = 0;
+    std::optional<std::size_t> selected;
+    for (std::size_t index = active_code_address_mappings.size();
+         index != 0u; --index) {
+        const auto& mapping =
+            active_code_address_mappings[index - 1u].mapping;
+        const auto start = Reverse ? mapping.runtime_start
+                                   : mapping.source_start;
+        if (!contains(address, start, mapping.extent)) continue;
+        selected = index - 1u;
+        begin = start;
+        end = static_cast<std::uint64_t>(start) + mapping.extent;
+        delta = Reverse
+                    ? static_cast<std::int64_t>(mapping.source_start) -
+                          mapping.runtime_start
+                    : static_cast<std::int64_t>(mapping.runtime_start) -
+                          mapping.source_start;
+        break;
+    }
+
+    const auto constrain_gap = [&](const CodeAddressMapping& mapping) {
+        const auto start = Reverse ? mapping.runtime_start
+                                   : mapping.source_start;
+        const auto mapping_end =
+            static_cast<std::uint64_t>(start) + mapping.extent;
+        if (mapping_end <= address)
+            begin = std::max(begin, mapping_end);
+        else if (start > address)
+            end = std::min(end, static_cast<std::uint64_t>(start));
+    };
+    if (selected.has_value()) {
+        // A newer overlapping mapping has priority. Shrink the cached interval
+        // around this address so a neighboring address can never reuse the
+        // older result across such an overlap.
+        for (std::size_t index = *selected + 1u;
+             index < active_code_address_mappings.size(); ++index)
+            constrain_gap(active_code_address_mappings[index].mapping);
+    } else {
+        for (const auto& mapping : active_code_address_mappings)
+            constrain_gap(mapping.mapping);
+    }
+    cached = {code_address_mapping_generation, begin, end, delta};
+    return static_cast<std::uint32_t>(
+        static_cast<std::int64_t>(address) + delta);
 }
 
 bool requires_target(const BlockEndKind kind) noexcept {
@@ -71,37 +161,18 @@ void validate_code_address_mapping(const CodeAddressMapping& mapping) {
 }
 
 std::uint32_t relocate_code_address(const std::uint32_t source_address) noexcept {
-    for (auto mapping = active_code_address_mappings.rbegin();
-         mapping != active_code_address_mappings.rend();
-         ++mapping) {
-        if (!contains(source_address,
-                      mapping->mapping.source_start,
-                      mapping->mapping.extent))
-            continue;
-        const auto offset = source_address - mapping->mapping.source_start;
-        return mapping->mapping.runtime_start + offset;
-    }
-    return source_address;
+    return lookup_code_address<false>(source_address);
 }
 
 std::uint32_t unrelocate_code_address(const std::uint32_t runtime_address) noexcept {
-    for (auto mapping = active_code_address_mappings.rbegin();
-         mapping != active_code_address_mappings.rend();
-         ++mapping) {
-        if (!contains(runtime_address,
-                      mapping->mapping.runtime_start,
-                      mapping->mapping.extent))
-            continue;
-        const auto offset = runtime_address - mapping->mapping.runtime_start;
-        return mapping->mapping.source_start + offset;
-    }
-    return runtime_address;
+    return lookup_code_address<true>(runtime_address);
 }
 
 ScopedCodeAddressMapping::ScopedCodeAddressMapping(const CodeAddressMapping mapping) {
     validate_code_address_mapping(mapping);
     token_ = allocate_mapping_token();
     active_code_address_mappings.push_back({token_, mapping});
+    invalidate_code_address_lookup_cache();
 }
 
 ScopedCodeAddressMapping::~ScopedCodeAddressMapping() noexcept {
@@ -110,6 +181,7 @@ ScopedCodeAddressMapping::~ScopedCodeAddressMapping() noexcept {
                                     [this](const auto& entry) { return entry.token == token_; });
     if (found == active_code_address_mappings.rend()) return;
     active_code_address_mappings.erase(std::next(found).base());
+    invalidate_code_address_lookup_cache();
 }
 
 void validate_block_entry(const CpuState& cpu,

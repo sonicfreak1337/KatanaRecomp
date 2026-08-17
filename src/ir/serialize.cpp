@@ -244,6 +244,8 @@ const char* dynamic_target_class_name(const DynamicTargetClass value) noexcept {
         return "runtime-only";
     case DynamicTargetClass::Unresolved:
         return "unresolved";
+    case DynamicTargetClass::ExactGuarded:
+        return "exact-guarded";
     }
     return "unresolved";
 }

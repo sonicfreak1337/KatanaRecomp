@@ -19,7 +19,7 @@ stable_partition_address_key(const std::uint32_t address) noexcept {
 
 struct PartitionOptions {
     std::size_t maximum_functions = 128u;
-    std::size_t maximum_instructions = 4096u;
+    std::size_t maximum_instructions = 2048u;
 };
 
 struct TranslationUnitPartition {

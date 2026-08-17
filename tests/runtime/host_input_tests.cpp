@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -237,6 +238,36 @@ int main() {
                 throws<std::invalid_argument>(
                     [&] { static_cast<void>(timeline->poll(source, 1u)); }),
             "Replaysequenz- oder Gastzyklusregression wird akzeptiert.");
+
+    ControllerInputRecording recording(8u);
+    const auto recording_state_a = normalized_profile.value();
+    const std::array slots_a{recording_state_a, ControllerState{}, ControllerState{}, ControllerState{}};
+    const auto recording_state_b = ControllerState{};
+    const std::array slots_b{recording_state_b, normalized_profile.value(), ControllerState{}, ControllerState{}};
+    recording.append(40u, slots_a);
+    recording.append(41u, slots_b);
+    require(recording.frame_count() == 2u &&
+                recording.sample_slot(40u, 0u) == recording_state_a &&
+                recording.sample_slot(41u, 1u) == normalized_profile.value() &&
+                recording.sample(39u) == ControllerState{} &&
+                recording.sample_slot(42u, 0u) == ControllerState{},
+            "Gebundene Mehrslot-Aufzeichnung ist nicht frame-indexiert.");
+    require(throws<std::invalid_argument>([&] { recording.append(43u, slots_a); }),
+            "Mehrslot-Aufzeichnung akzeptiert keinen Frame-Sprung.");
+    const auto recording_path =
+        std::filesystem::temp_directory_path() / "katana-controller-input-test.kin1";
+    recording.save(recording_path, "test-input-identity");
+    auto loaded_recording =
+        ControllerInputRecording::load(recording_path, "test-input-identity", 8u);
+    require(loaded_recording.frames() == recording.frames() &&
+                loaded_recording.sample_slot(41u, 1u) == normalized_profile.value() &&
+                throws<std::runtime_error>([&] {
+                    static_cast<void>(ControllerInputRecording::load(
+                        recording_path, "wrong-input-identity", 8u));
+                }),
+            "Aufzeichnung validiert Identitaet oder Serialisierung nicht fail-closed.");
+    std::error_code recording_cleanup_error;
+    std::filesystem::remove(recording_path, recording_cleanup_error);
 
     FakeGamepadSource concurrent_source;
     auto concurrent_a = sample(300u, HostControllerKind::XInput);

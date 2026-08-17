@@ -38,8 +38,10 @@ inline constexpr std::uint64_t
         64ull * 1024ull * 1024ull;
 
 // A local, export-time-only request for a native entry in an exact disc module.
-// The offset is meaningful only for the exact byte identity and logical disc
-// location; it is never inferred from mutable runtime memory.
+// byte_size binds the encoded disc extent. byte_identity and
+// module_relative_offset bind the executable view: for an identity source
+// that is the same extent, while a declared transform such as Sega PRS binds
+// the decoded bytes. The offset is never inferred from mutable runtime memory.
 struct LatentAotEntryHint {
     std::string byte_identity;
     std::uint64_t disc_byte_offset = 0u;
@@ -79,6 +81,19 @@ struct LatentAotExternalCallbackSink final {
         const LatentAotExternalCallbackSink&) const = default;
 };
 
+// Identity-bound primary-image function which persists an incoming 32-bit
+// argument. This alone is not executable-pointer evidence. Latent discovery
+// may consume it only after proving that the argument is an affine local
+// record-table address and pairing the record shape with a separately proven
+// callback-field sink.
+struct LatentAotExternalPersistentPointerSink final {
+    std::uint32_t function_address = 0u;
+    std::uint8_t argument_mask = 0u;
+
+    [[nodiscard]] bool operator==(
+        const LatentAotExternalPersistentPointerSink&) const = default;
+};
+
 // Identity-bound primary-image record walker which loads a callback from a
 // fixed-width field and invokes it indirectly. A latent module may pair this
 // shape only with an exact local code literal stored through a proven
@@ -103,9 +118,10 @@ struct LatentAotDiscoveryOptions {
     // Optional persistent, local-only negative analysis cache. The caller must place it
     // below its existing private codegen-cache root; neither this path nor a
     // cache key survives into exported product metadata. Persistent caching is
-    // Each cache layer is enabled only when its own exact build-bound
-    // implementation identity is present; empty identities deliberately
-    // disable the corresponding layer.
+    // Each cache layer is enabled only when an exact build-bound identity is
+    // present. Legacy callers that supply only analysis_implementation_identity
+    // bind both layers to that stronger identity; an explicit cache identity
+    // may separate the IR-cache codec from the persistent FVA epoch.
     std::filesystem::path analysis_cache_root;
     // Pure analyzer/FVA semantics and persistent epoch codec identity.
     std::string analysis_implementation_identity;
@@ -115,9 +131,9 @@ struct LatentAotDiscoveryOptions {
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;
     std::size_t maximum_total_directory_bytes = 16u * 1024u * 1024u;
-    // Maximum number of unique heuristic templates analyzed. Byte-identical
-    // later extents may still be hashed within maximum_total_file_bytes so
-    // their source bindings are not lost.
+    // Maximum number of unique identity-source heuristic templates analyzed.
+    // Byte-identical later extents may still be hashed within
+    // maximum_total_file_bytes so their source bindings are not lost.
     std::size_t maximum_candidate_files = 128u;
     std::size_t maximum_file_bytes =
         katana::runtime::maximum_native_aot_template_extent;
@@ -130,6 +146,12 @@ struct LatentAotDiscoveryOptions {
     // Separate cap for deterministically transformed module bytes. This keeps
     // only admitted decoded code candidates bounded in analysis memory.
     std::size_t maximum_total_transformed_bytes = 64u * 1024u * 1024u;
+    // Transformed entry-zero heuristics have an independent cardinality cap.
+    // Complete embedded entry tables remain authoritative and use their own
+    // fail-closed source-binding cap.  Keeping the two heuristic classes
+    // separate prevents referenced raw files from crowding executable
+    // compressed modules out before either class reaches full analysis.
+    std::size_t maximum_transformed_candidate_files = 128u;
     std::size_t maximum_workers = 64u;
     std::size_t maximum_entry_scan_instructions = 1024u;
     std::size_t maximum_native_instructions_per_module = 32768u;
@@ -148,6 +170,11 @@ struct LatentAotDiscoveryOptions {
     // primary-image function boundaries and persistent callback stores.
     std::span<const LatentAotExternalCallbackSink>
         external_callback_sinks;
+    // Sorted, unique subset of external_code_targets proven to persist a
+    // caller-supplied word beyond the call. The module must independently
+    // prove an affine local descriptor address before this contract applies.
+    std::span<const LatentAotExternalPersistentPointerSink>
+        external_persistent_pointer_sinks;
     // Sorted, unique field-load/call shapes from identity-bound primary code.
     std::span<const LatentAotExternalCallbackFieldSink>
         external_callback_field_sinks;

@@ -355,6 +355,12 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                           instruction.source_address,
                           "Runtime-only-Kontrollfluss darf keine geratenen Ziele tragen.");
             }
+            if (instruction.dynamic_target_class == DynamicTargetClass::ExactGuarded &&
+                instruction.resolved_targets.size() != 1u) {
+                add_issue(issues,
+                          instruction.source_address,
+                          "Exact-Guarded-Kontrollfluss benoetigt genau ein erlaubtes Ziel.");
+            }
             if (instruction.branch_register_relative &&
                 instruction.operation != Operation::JumpRegister &&
                 instruction.operation != Operation::CallRegister) {

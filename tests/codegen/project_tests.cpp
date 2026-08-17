@@ -123,7 +123,21 @@ int main() {
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("JOB_POOL_COMPILE") !=
                     std::string::npos &&
-                serial_snapshot.at("CMakeLists.txt").find("/Od /Ob0") !=
+                serial_snapshot.at("CMakeLists.txt").find("/O1 /Ob0") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_AOT_HOT_SOURCES") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt").find("/O2 /Ob2") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("SKIP_PRECOMPILE_HEADERS") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_PERSISTENT_COMPILER_CACHE_ACTIVE") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_PERSISTENT_COMPILER_CACHE_USE_PCH") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
                         .find("MSVC_DEBUG_INFORMATION_FORMAT") !=

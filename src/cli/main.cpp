@@ -4831,6 +4831,123 @@ bool safe_regular_port_file_exists(
     return true;
 }
 
+struct CompilerCacheBinding final {
+    std::string launcher;
+    std::optional<std::filesystem::path> managed_storage;
+};
+
+[[nodiscard]] bool same_existing_path(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right) {
+    try {
+        std::error_code equivalent_error;
+        const auto equivalent =
+            std::filesystem::equivalent(left, right, equivalent_error);
+        if (!equivalent_error) return equivalent;
+        std::error_code left_error;
+        std::error_code right_error;
+        const auto left_canonical =
+            std::filesystem::weakly_canonical(left, left_error);
+        const auto right_canonical =
+            std::filesystem::weakly_canonical(right, right_error);
+        if (!left_error && !right_error)
+            return left_canonical == right_canonical;
+        return left.lexically_normal() == right.lexically_normal();
+    } catch (...) {
+        return false;
+    }
+}
+
+[[nodiscard]] bool is_katana_host_build_launcher(
+    const std::string_view launcher) {
+    auto filename = std::filesystem::path(launcher).filename().string();
+    std::transform(
+        filename.begin(), filename.end(), filename.begin(),
+        [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+    return filename == "katana-recomp" ||
+           filename == "katana-recomp.exe" ||
+           filename == "katana-host-cl-wrapper" ||
+           filename == "katana-host-cl-wrapper.exe" ||
+           filename == "katana-host-link-wrapper" ||
+           filename == "katana-host-link-wrapper.exe";
+}
+
+[[nodiscard]] bool compiler_cache_would_recurse(
+    const std::string_view launcher) {
+    if (launcher.empty() || is_katana_host_build_launcher(launcher))
+        return true;
+    return same_existing_path(
+        std::filesystem::path(launcher),
+        current_process_executable_path());
+}
+
+#ifdef _WIN32
+[[nodiscard]] bool prepare_managed_compiler_cache_storage(
+    const std::filesystem::path& storage) {
+    std::error_code storage_error;
+    std::filesystem::create_directories(storage, storage_error);
+    if (storage_error) return false;
+    const auto status =
+        std::filesystem::symlink_status(storage, storage_error);
+    return !storage_error &&
+           status.type() == std::filesystem::file_type::directory &&
+           !std::filesystem::is_symlink(status);
+}
+#endif
+
+std::optional<CompilerCacheBinding> configured_compiler_cache_binding() {
+    if (const auto configured =
+            configured_environment_value("KATANA_COMPILER_CACHE"))
+        return CompilerCacheBinding{*configured, std::nullopt};
+    if (const auto configured =
+            configured_environment_value("CMAKE_CXX_COMPILER_LAUNCHER"))
+        return CompilerCacheBinding{*configured, std::nullopt};
+    if (!katana::build_contract::configured_compiler_launcher.empty())
+        return CompilerCacheBinding{
+            std::string(
+                katana::build_contract::configured_compiler_launcher),
+            std::nullopt};
+#ifdef _WIN32
+    // The desktop dependency installer places the freely redistributable
+    // sccache binary and its persistent object store below LOCALAPPDATA.
+    // Discover that managed installation for ordinary CLI/double-click
+    // exports too; requiring an environment variable made the generated
+    // project report a cache while the instrumented compile wrapper still
+    // invoked cl.exe directly.
+    if (const auto local_app_data =
+            configured_environment_value("LOCALAPPDATA")) {
+        const auto managed_root =
+            std::filesystem::path(*local_app_data) / "KatanaRecomp";
+        constexpr std::string_view managed_sccache_version = "0.17.0";
+        const auto versioned_directory =
+            managed_root / "tools" /
+            ("sccache-v" + std::string(managed_sccache_version));
+        const auto target_directory =
+            "sccache-v" + std::string(managed_sccache_version) +
+            "-x86_64-pc-windows-msvc";
+        // Keep the managed layout deterministic, but accept both the
+        // unpacked release directory used by the installer and its flat
+        // equivalent used by older local dependency bundles.
+        const std::array<std::filesystem::path, 3u> launchers{
+            versioned_directory / target_directory / "sccache.exe",
+            versioned_directory / "sccache.exe",
+            managed_root / "tools" / target_directory / "sccache.exe"};
+        for (const auto& launcher : launchers) {
+            if (safe_regular_port_file_exists(
+                    launcher, "Verwalteter MSVC-Objektcache"))
+                return CompilerCacheBinding{
+                    launcher.generic_string(),
+                    managed_root / "compiler-cache" /
+                        ("sccache-v" +
+                         std::string(managed_sccache_version))};
+        }
+    }
+#endif
+    return std::nullopt;
+}
+
 std::string read_safe_small_port_file(
     const std::filesystem::path& path,
     const std::size_t maximum_size,
@@ -6253,6 +6370,35 @@ void copy_validated_port_distribution(
     }
 }
 
+[[nodiscard]] bool regular_file_contains_token(
+    const std::filesystem::path& path,
+    const std::string_view token) {
+    constexpr std::size_t chunk_bytes = 1024u * 1024u;
+    constexpr std::size_t maximum_token_bytes = 512u;
+    if (token.empty() || token.size() > maximum_token_bytes)
+        return false;
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::vector<char> chunk(chunk_bytes);
+    std::string tail;
+    tail.reserve(token.size() - 1u);
+    while (input) {
+        input.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        const auto read = input.gcount();
+        if (read <= 0) break;
+        std::string scan;
+        scan.reserve(tail.size() + static_cast<std::size_t>(read));
+        scan.append(tail);
+        scan.append(chunk.data(), static_cast<std::size_t>(read));
+        if (scan.find(token) != std::string::npos) return true;
+        const auto retained =
+            std::min(token.size() - 1u, scan.size());
+        tail.assign(scan.end() - static_cast<std::ptrdiff_t>(retained),
+                    scan.end());
+    }
+    return !input.bad() && tail.find(token) != std::string::npos;
+}
+
 void remove_invalid_generated_artifact_tree(
     const std::filesystem::path& workspace) {
     const auto normalized_workspace =
@@ -6792,11 +6938,10 @@ bool valid_latent_aot_entry_hint(
     const LatentAotEntryHintArgument& hint) noexcept {
     return valid_latent_aot_entry_identity(hint.byte_identity) &&
            (hint.disc_byte_offset % latent_aot_entry_disc_sector_size) == 0u &&
-           hint.byte_size >= 2u && (hint.byte_size & 1u) == 0u &&
+           hint.byte_size != 0u &&
            hint.byte_size <=
                katana::runtime::maximum_native_aot_template_extent &&
            (hint.module_relative_offset & 1u) == 0u &&
-           hint.module_relative_offset <= hint.byte_size - 2u &&
            hint.disc_byte_offset <=
                std::numeric_limits<std::uint64_t>::max() - hint.byte_size;
 }
@@ -6841,7 +6986,7 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
         text.find('@', at + 1u) != std::string_view::npos)
         throw std::invalid_argument(
             "--latent-aot-entry erwartet "
-            "sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
+            "sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
             "<module-relative-offset>.");
     const auto identity = text.substr(0u, at);
     const auto fields = text.substr(at + 1u);
@@ -6857,7 +7002,7 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
         !valid_latent_aot_entry_identity(identity))
         throw std::invalid_argument(
             "--latent-aot-entry erwartet "
-            "sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
+            "sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
             "<module-relative-offset>.");
     const auto disc_byte_offset = parse_latent_aot_entry_integer(
         fields.substr(0u, first_separator), "Disc-Byteoffset");
@@ -6867,11 +7012,10 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
     const auto module_relative_offset = parse_latent_aot_entry_integer(
         fields.substr(second_separator + 1u), "Modulentryoffset");
     if ((disc_byte_offset % latent_aot_entry_disc_sector_size) != 0u ||
-        byte_size < 2u || byte_size > std::numeric_limits<std::uint32_t>::max() ||
-        (byte_size & 1u) != 0u ||
+        byte_size == 0u ||
+        byte_size > std::numeric_limits<std::uint32_t>::max() ||
         module_relative_offset > std::numeric_limits<std::uint32_t>::max() ||
         (module_relative_offset & 1u) != 0u ||
-        module_relative_offset + 2u > byte_size ||
         disc_byte_offset > std::numeric_limits<std::uint64_t>::max() - byte_size)
         throw std::invalid_argument(
             "--latent-aot-entry besitzt eine ungueltige Modulbindung.");
@@ -7028,10 +7172,18 @@ std::vector<std::uint8_t> load_runtime_image_payload(
     std::error_code status_error;
     const auto status =
         std::filesystem::symlink_status(path, status_error);
-    if (status_error || !std::filesystem::is_regular_file(status) ||
-        unsafe_port_filesystem_link(path, status))
+    if (status_error)
         throw std::invalid_argument(
-            "Runtime-Image-Payload muss eine regulaere Nicht-Symlink-Datei sein.");
+            "Runtime-Image-Payloadstatus konnte nicht gelesen werden: " +
+            path.string() + ": " + status_error.message());
+    if (!std::filesystem::is_regular_file(status))
+        throw std::invalid_argument(
+            "Runtime-Image-Payload ist keine regulaere Datei: " +
+            path.string());
+    if (unsafe_port_filesystem_link(path, status))
+        throw std::invalid_argument(
+            "Runtime-Image-Payload besitzt ein unsicheres Reparse-Attribut: " +
+            path.string());
     const auto canonical =
         std::filesystem::canonical(path, status_error);
     if (status_error)
@@ -7993,6 +8145,8 @@ int export_port_project(const std::filesystem::path& source_path,
             verified_native_port
                 ? &verified_native_port->definition()
                 : nullptr;
+        export_options.native_port_artifact_identity =
+            native_port_artifact_identity;
         export_options.game_project_runtime_image_payloads =
             runtime_image_payloads;
         export_options.native_port_bootstrap_write_payloads =
@@ -8133,16 +8287,12 @@ int export_port_project(const std::filesystem::path& source_path,
             throw std::invalid_argument(
                 "KATANA_PORT_HOST_BUILD_CONFIGURATION muss RelWithDebInfo "
                 "oder Release sein.");
-        auto compiler_launcher =
-            configured_environment_value("KATANA_COMPILER_CACHE");
-        if (!compiler_launcher)
-            compiler_launcher =
-                configured_environment_value(
-                    "CMAKE_CXX_COMPILER_LAUNCHER");
-        if (!compiler_launcher &&
-            !katana::build_contract::configured_compiler_launcher.empty())
-            compiler_launcher = std::string(
-                katana::build_contract::configured_compiler_launcher);
+        const auto compiler_cache_binding =
+            configured_compiler_cache_binding();
+        const auto compiler_launcher =
+            compiler_cache_binding
+                ? std::optional(compiler_cache_binding->launcher)
+                : std::nullopt;
 #ifdef _WIN32
         const auto host_compiler =
             configured_environment_value("KATANA_PORT_CXX_COMPILER")
@@ -8382,12 +8532,25 @@ int export_port_project(const std::filesystem::path& source_path,
             " -DCMAKE_BUILD_TYPE=" + host_build_configuration +
             " -DKATANA_PORT_BUILD_PROFILE=" + build_profile;
 #ifdef _WIN32
-        if (host_compiler == "msvc")
-            configure +=
-                " -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded";
+        if (host_compiler == "msvc" || host_compiler == "clang-cl") {
+            configure += " -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=";
+            if (host_build_configuration == "RelWithDebInfo")
+                configure += "Embedded";
+        }
 #endif
         configure +=
             " -DKATANA_PORT_RUNTIME_PROFILE=" + port_runtime_profile;
+        configure +=
+            std::string(" -DKATANA_PERSISTENT_COMPILER_CACHE_ACTIVE=") +
+            (compiler_launcher ? "ON" : "OFF");
+        // The generated CMake option is cached across exports. Force the
+        // cache-compatible choice whenever an MSVC object cache is active so
+        // a prior PCH build cannot keep injecting /Fp and silently make every
+        // generated translation unit non-cacheable.
+        if ((host_compiler == "msvc" || host_compiler == "clang-cl") &&
+            compiler_launcher)
+            configure +=
+                " -DKATANA_PERSISTENT_COMPILER_CACHE_USE_PCH=OFF";
         if (native_adapter_source_dir.has_value())
             configure +=
                 " -DKATANA_NATIVE_ADAPTER_SOURCE_DIR=" +
@@ -8643,8 +8806,18 @@ int export_port_project(const std::filesystem::path& source_path,
             throw katana::cli::Error(
                 katana::cli::ExitCode::BuildFailure,
                 "Hostbuild-TU-Plan ist unerwartet leer.");
-        // katana_generated always enables one CMake-generated PCH compile
-        // edge in addition to every listed generated/support source.
+        // katana_generated normally enables one CMake-generated PCH compile
+        // edge. The MSVC-compatible cache path deliberately disables that
+        // edge because /Fp would make every object non-cacheable.
+        const std::uint64_t generated_pch_translation_units =
+#ifdef _WIN32
+            ((host_compiler == "msvc" || host_compiler == "clang-cl") &&
+             compiler_launcher)
+                ? 0u
+                : 1u;
+#else
+            1u;
+#endif
         std::uint64_t native_translation_unit_supplement = 0u;
         if (verified_native_port) {
             const auto supplement =
@@ -8659,15 +8832,18 @@ int export_port_project(const std::filesystem::path& source_path,
         }
         if (generated_translation_units >
                 std::numeric_limits<std::uint64_t>::max() -
-                    support_translation_units - 1u ||
-            generated_translation_units + support_translation_units + 1u >
+                    support_translation_units -
+                    generated_pch_translation_units ||
+            generated_translation_units + support_translation_units +
+                    generated_pch_translation_units >
                 std::numeric_limits<std::uint64_t>::max() -
                     native_translation_unit_supplement)
             throw katana::cli::Error(
                 katana::cli::ExitCode::BuildFailure,
                 "Hostbuild-TU-Plan ist numerisch ungueltig.");
         const auto planned_translation_units =
-            generated_translation_units + support_translation_units + 1u +
+            generated_translation_units + support_translation_units +
+            generated_pch_translation_units +
             native_translation_unit_supplement;
         auto built_executable = build_path / target_name;
 #ifdef _WIN32
@@ -8757,6 +8933,20 @@ int export_port_project(const std::filesystem::path& source_path,
         auto windows_host_build_environment =
             "set \"KATANA_HOST_BUILD_EVENT_ROOT=" +
             host_build_event_root.string() + "\" && ";
+        if (compiler_cache_binding &&
+            compiler_cache_binding->managed_storage &&
+            !configured_environment_value("SCCACHE_DIR")) {
+            const auto storage =
+                compiler_cache_binding->managed_storage->string();
+            if (storage.find_first_of("\"\r\n") != std::string::npos ||
+                !prepare_managed_compiler_cache_storage(
+                    *compiler_cache_binding->managed_storage))
+                throw std::runtime_error(
+                    "Verwalteter Compiler-Cache besitzt keinen sicheren "
+                    "persistenten Speicherpfad.");
+            windows_host_build_environment +=
+                "set \"SCCACHE_DIR=" + storage + "\" && ";
+        }
         if (!use_ninja) {
             if (!windows_configured_host_tools)
                 throw std::runtime_error(
@@ -8842,6 +9032,20 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto built_executable_identity =
             katana::io::capture_input_provenance(
                 "built-host-executable", built_executable);
+        if (verified_native_port) {
+            const auto expected_marker =
+                std::string("KATANA_NATIVE_PORT_BUILD_IDENTITY_V1:") +
+                native_port_artifact_identity;
+            if (!regular_file_contains_token(
+                    built_executable, expected_marker)) {
+                host_build_progress.fail();
+                throw katana::cli::Error(
+                    katana::cli::ExitCode::BuildFailure,
+                    "Hostprogramm und ausgewaehlte Native-Port-Definition "
+                    "besitzen abweichende Identitaeten; Publikation wurde "
+                    "verweigert.");
+            }
+        }
         const auto unchanged_existing_artifact =
             previous_executable_identity &&
             previous_executable_identity->size ==
@@ -9110,7 +9314,7 @@ void print_usage(std::ostream& output) {
               "[--telemetry-jsonl <Datei>] "
               "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
-              "<sha256:<64-lowerhex>@<disc-byte-offset>:<module-byte-size>:"
+              "<sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
               "<module-relative-offset>>]... "
               "[--latent-aot-entry-file <Datei>]...\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
@@ -9256,14 +9460,37 @@ int main(const int argc, char* argv[]) {
             if (mode == "--direct" &&
                 *kind == katana::cli::HostBuildToolKind::Compile) {
                 const auto transparent_cache =
-                    configured_environment_value("KATANA_COMPILER_CACHE");
+                    configured_compiler_cache_binding();
                 if (transparent_cache &&
-                    *transparent_cache != real_tool) {
-                    if (transparent_cache->find_first_of(";\r\n\"") !=
+                    transparent_cache->launcher != real_tool) {
+                    if (transparent_cache->launcher.find_first_of(
+                            ";\r\n\"") !=
                         std::string::npos)
                         return 125;
+                    // The instrumented Katana launcher is the outer layer;
+                    // binding it (or one of the copied host wrappers) as the
+                    // cache would re-enter this dispatch path indefinitely.
+                    // Fail closed for explicit self-references instead of
+                    // silently compiling without the requested cache.
+                    if (compiler_cache_would_recurse(
+                            transparent_cache->launcher))
+                        return 125;
+#ifdef _WIN32
+                    if (transparent_cache->managed_storage) {
+                        if (!configured_environment_value("SCCACHE_DIR")) {
+                            if (!prepare_managed_compiler_cache_storage(
+                                    *transparent_cache->managed_storage))
+                                return 125;
+                            const auto storage =
+                                transparent_cache->managed_storage->string();
+                            if (_putenv_s("SCCACHE_DIR", storage.c_str()) !=
+                                0)
+                                return 125;
+                        }
+                    }
+#endif
                     arguments.push_back(argv[5]);
-                    real_tool = *transparent_cache;
+                    real_tool = transparent_cache->launcher;
                 }
             }
             for (int index = 6; index < argc; ++index)

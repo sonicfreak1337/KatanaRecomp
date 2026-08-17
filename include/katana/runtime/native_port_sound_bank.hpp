@@ -356,6 +356,9 @@ class NativePortSoundBankEngine final {
     [[nodiscard]] NativePortSoundBankSnapshot snapshot() const;
 
   private:
+    static void pump_audio_with_cached_playback_position(
+        NativePortAudioEngine& audio);
+
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

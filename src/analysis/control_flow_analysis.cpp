@@ -579,9 +579,9 @@ class IncrementalCfaScanCache final {
         for (const auto address : dirty_addresses) {
             if (lines_.contains(address))
                 dirty_component_starts.insert(shard_start(address));
-            mark_affected_dispatches(
-                address, telemetry.jump_table_instruction_visits);
         }
+        mark_affected_dispatches(
+            dirty_addresses, telemetry.jump_table_instruction_visits);
 
         const auto old_component_starts = dirty_component_starts;
         for (const auto begin : old_component_starts)
@@ -767,6 +767,8 @@ class IncrementalCfaScanCache final {
     };
 
     static constexpr std::size_t maximum_recognition_lookback = 48u;
+    static constexpr std::uint32_t maximum_recognition_window_bytes =
+        static_cast<std::uint32_t>(maximum_recognition_lookback * 2u);
     static constexpr std::uint32_t orphan_shard_bytes = 4096u;
 
     [[nodiscard]] static bool contiguous(
@@ -852,27 +854,82 @@ class IncrementalCfaScanCache final {
     }
 
     void mark_affected_dispatches(
-        const std::uint32_t address,
+        const std::set<std::uint32_t>& dirty_addresses,
         std::size_t& instruction_visits) {
-        auto current = lines_.lower_bound(address);
-        if (current == lines_.end()) return;
-        if (current->first != address) {
-            if (current == lines_.begin()) return;
-            --current;
+        // Every old dirty-address walk only observes the first contiguous
+        // 48-instruction suffix starting at the greatest decoded address not
+        // greater than the dirty address.  Several dirty bytes normally map
+        // to overlapping suffixes, so visiting each suffix independently
+        // makes the same decoded instructions dominate an otherwise
+        // incremental CFA round.  Coalesce only the physical visit: an
+        // indirect dispatch is still marked iff at least one of the original
+        // contiguous 48-instruction windows contains it.
+        std::vector<std::uint32_t> window_starts;
+        window_starts.reserve(dirty_addresses.size());
+        for (const auto address : dirty_addresses) {
+            auto current = lines_.lower_bound(address);
+            if (current == lines_.end()) continue;
+            if (current->first != address) {
+                if (current == lines_.begin()) continue;
+                --current;
+            }
+            window_starts.push_back(current->first);
         }
-        auto previous = current;
-        for (std::size_t distance = 0u;
-             current != lines_.end() &&
-             distance <= maximum_recognition_lookback;
-             ++distance, ++current) {
-            ++instruction_visits;
-            if (distance != 0u &&
-                !contiguous(previous->second, current->second))
-                break;
-            if (is_indirect_dispatch(
-                    current->second.instruction.kind))
-                last_changed_dispatches_.insert(current->first);
-            previous = current;
+        if (window_starts.empty()) return;
+        std::sort(window_starts.begin(), window_starts.end());
+        window_starts.erase(
+            std::unique(window_starts.begin(), window_starts.end()),
+            window_starts.end());
+
+        const auto window_end = [](const std::uint32_t begin) noexcept {
+            return begin > std::numeric_limits<std::uint32_t>::max() -
+                               maximum_recognition_window_bytes
+                       ? std::numeric_limits<std::uint32_t>::max()
+                       : begin + maximum_recognition_window_bytes;
+        };
+
+        std::size_t group_begin = 0u;
+        while (group_begin < window_starts.size()) {
+            auto group_end = window_end(window_starts[group_begin]);
+            auto group_limit = group_begin + 1u;
+            // Merge only numerically overlapping windows.  Contiguity is
+            // checked again below, so a decoded-image gap cannot make a
+            // dispatch visible to a window that previously stopped there.
+            while (group_limit < window_starts.size() &&
+                   window_starts[group_limit] <= group_end) {
+                group_end = std::max(
+                    group_end, window_end(window_starts[group_limit]));
+                ++group_limit;
+            }
+
+            auto current = lines_.lower_bound(window_starts[group_begin]);
+            const katana::sh4::DisassemblyLine* previous = nullptr;
+            std::optional<std::uint32_t> active_window_end;
+            auto next_window = group_begin;
+            while (current != lines_.end() && current->first <= group_end) {
+                ++instruction_visits;
+                if (previous != nullptr &&
+                    !contiguous(*previous, current->second))
+                    active_window_end.reset();
+                while (next_window < group_limit &&
+                       window_starts[next_window] <= current->first) {
+                    // Every start came from lines_, hence an earlier start
+                    // can only be reached through a contiguous predecessor
+                    // or across a gap that has just reset the active window.
+                    const auto end = window_end(window_starts[next_window]);
+                    if (!active_window_end.has_value() ||
+                        *active_window_end < end)
+                        active_window_end = end;
+                    ++next_window;
+                }
+                if (active_window_end.has_value() &&
+                    current->first <= *active_window_end &&
+                    is_indirect_dispatch(current->second.instruction.kind))
+                    last_changed_dispatches_.insert(current->first);
+                previous = &current->second;
+                ++current;
+            }
+            group_begin = group_limit;
         }
     }
 
@@ -1328,17 +1385,21 @@ struct StaticCodePointerChain {
     std::set<std::uint32_t> definition_sites;
     bool complete = false;
     bool preceding_call = false;
+    bool exact_target_guard = false;
+    ExactGuardRejectionReason exact_target_rejection_reason =
+        ExactGuardRejectionReason::None;
 };
 
 // Resolve the common compiler form
 //
 //   mov.l @(literal,pc), rN  [; mov rN,rM] [; add #imm,rM] ; jsr/jmp @rM
 //
-// without promoting it to complete control-flow proof.  The candidate merely
-// becomes guarded AOT inventory.  Every incoming CFG path must reach the same
-// unique writer chain, no call may intervene, and the final address must pass
-// the normal executable-image decoder validation.  MOVA is admitted under the
-// same contract for compiler-generated local thunk addresses.
+// without promoting mutable/runtime values to complete control-flow proof.
+// Every incoming CFG path must reach the same unique writer chain.  A chain is
+// eligible for an exact edge only when its source bytes are readable,
+// non-writable image bytes, no call intervenes, and the final address is an
+// immutable executable entry.  MOVA is admitted under the same contract for
+// compiler-generated local thunk addresses.
 StaticCodePointerChain resolve_static_code_pointer_chain(
     const WriterSliceIndex& index,
     const std::span<const katana::sh4::DisassemblyLine> lines,
@@ -1346,6 +1407,7 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
     std::uint32_t before_address,
     std::uint8_t register_index) {
     StaticCodePointerChain result;
+    const auto dispatch_address = before_address;
     std::int64_t addend = 0;
     std::set<std::pair<std::uint32_t, std::uint8_t>> visited;
     constexpr std::size_t maximum_chain_depth = 8u;
@@ -1415,6 +1477,115 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
         if (!validation.valid()) return result;
         result.target = validation.resolved_address;
         result.complete = true;
+        const auto immutable_image_proof =
+            [&](const std::uint32_t address,
+                const bool require_executable,
+                const std::size_t width)
+            -> const katana::io::ImageImmutableRange* {
+            const auto* segment = image.find_segment(address, width);
+            if (segment == nullptr || !segment->permissions.readable ||
+                segment->source_kind ==
+                    katana::io::ImageSourceKind::RuntimeMemory ||
+                (require_executable && !segment->permissions.executable))
+                return nullptr;
+            return image.find_immutable_range(address, width);
+        };
+        const auto* const target_segment = image.find_segment(
+            validation.resolved_address, 2u);
+        bool target_opcode_known = false;
+        if (target_segment != nullptr) {
+            const auto target_offset =
+                target_segment->byte_offset(validation.resolved_address);
+            if (target_offset.has_value() &&
+                *target_offset <= target_segment->bytes.size() &&
+                target_segment->bytes.size() - *target_offset >= 2u)
+                target_opcode_known = katana::sh4::decode(
+                    katana::io::read_u16_le(target_segment->bytes, *target_offset))
+                                          .is_known();
+        }
+        // The exact edge is an identity-bound proof over the complete
+        // dispatch chain, not merely over its terminal literal load.  Every
+        // writer and the dispatch instruction itself must remain executable
+        // immutable bytes in this same ExecutableImage; otherwise a mutable
+        // intermediate register writer could redirect the chain between the
+        // static analysis and the guarded runtime edge.
+        const auto* const dispatch_proof =
+            immutable_image_proof(dispatch_address, true, 2u);
+        const auto* const writer_proof =
+            immutable_image_proof(writer->address, true, 2u);
+        const auto* const target_proof =
+            immutable_image_proof(validation.resolved_address, true, 2u);
+        const bool immutable_dispatch = dispatch_proof != nullptr;
+        const bool immutable_writer = writer_proof != nullptr;
+        const bool immutable_target = target_proof != nullptr;
+        bool immutable_literal = immutable_writer;
+        const katana::io::ImageImmutableRange* literal_proof =
+            writer_proof;
+        if (writer->instruction.kind == K::MovLongLoadPcRelative) {
+            const auto literal_address =
+                ((writer->address + 4u) & ~3u) +
+                static_cast<std::uint32_t>(writer->instruction.displacement);
+            const auto resolved_literal = image.resolve_segment_address(literal_address, 4u);
+            literal_proof = resolved_literal.has_value()
+                                ? immutable_image_proof(*resolved_literal, false, 4u)
+                                : nullptr;
+            immutable_literal = literal_proof != nullptr;
+        }
+        const auto same_proof = [](const katana::io::ImageImmutableRange* left,
+                                   const katana::io::ImageImmutableRange* right) {
+            return left != nullptr && right != nullptr &&
+                   left->generation == right->generation &&
+                   left->identity == right->identity;
+        };
+        bool immutable_definition_sites = !result.definition_sites.empty();
+        bool same_image = dispatch_proof != nullptr;
+        for (const auto definition : result.definition_sites) {
+            const auto* const proof =
+                immutable_image_proof(definition, true, 2u);
+            if (proof == nullptr) {
+                immutable_definition_sites = false;
+                continue;
+            }
+            same_image = same_image && same_proof(dispatch_proof, proof);
+        }
+        same_image = same_image &&
+                     same_proof(dispatch_proof, writer_proof) &&
+                     same_proof(dispatch_proof, literal_proof) &&
+                     same_proof(dispatch_proof, target_proof);
+        result.exact_target_guard =
+            target_opcode_known && !result.preceding_call &&
+            immutable_dispatch && immutable_definition_sites &&
+            immutable_literal && immutable_target && same_image;
+        if (!result.exact_target_guard) {
+            if (result.preceding_call)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::PrecedingCall;
+            else if (target_segment == nullptr ||
+                     !target_segment->permissions.executable)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::TargetNotExecutable;
+            else if (!target_opcode_known)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::UnknownTargetOpcode;
+            else if (!immutable_dispatch)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::DispatchImmutableProofMissing;
+            else if (!immutable_writer)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::WriterImmutableProofMissing;
+            else if (!immutable_definition_sites)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::DefinitionImmutableProofMissing;
+            else if (!immutable_literal)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::LiteralImmutableProofMissing;
+            else if (!immutable_target)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::TargetImmutableProofMissing;
+            else if (!same_image)
+                result.exact_target_rejection_reason =
+                    ExactGuardRejectionReason::ImageIdentityMismatch;
+        }
         return result;
     }
     return result;
@@ -1431,6 +1602,9 @@ void classify_dynamic_sites(
             resolution.status == ResolutionStatus::Resolved &&
             control_flow_evidence_complete(resolution.evidence))
             continue;
+        resolution.exact_target_guard = false;
+        resolution.exact_guard_rejection_reason =
+            ExactGuardRejectionReason::None;
         const auto dispatch = std::lower_bound(
             lines.begin(),
             lines.end(),
@@ -1462,24 +1636,64 @@ void classify_dynamic_sites(
             resolution.preceding_call = resolution.preceding_call ||
                                         static_chain.preceding_call;
             if (static_chain.complete && static_chain.target.has_value()) {
+                const auto target = *static_chain.target;
+                const auto contains_other_target =
+                    [target](const std::vector<std::uint32_t>& values) {
+                        return std::any_of(
+                            values.begin(), values.end(),
+                            [target](const auto value) { return value != target; });
+                    };
+                const bool existing_target_conflict =
+                    (resolution.target.has_value() &&
+                     *resolution.target != target) ||
+                    contains_other_target(resolution.targets) ||
+                    contains_other_target(resolution.analysis_candidates);
                 resolution.definition_sites.assign(
                     static_chain.definition_sites.begin(),
                     static_chain.definition_sites.end());
                 resolution.definition_complete =
                     !static_chain.preceding_call;
-                resolution.analysis_candidates.push_back(*static_chain.target);
+                resolution.analysis_candidates.push_back(target);
                 std::sort(resolution.analysis_candidates.begin(),
                           resolution.analysis_candidates.end());
                 resolution.analysis_candidates.erase(
                     std::unique(resolution.analysis_candidates.begin(),
                                 resolution.analysis_candidates.end()),
                     resolution.analysis_candidates.end());
-                if (resolution.status == ResolutionStatus::Unresolved) {
-                    resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+                if (static_chain.exact_target_guard &&
+                    !existing_target_conflict &&
+                    resolution.analysis_candidates.size() == 1u) {
+                    // The immutable writer chain is a complete, single-target
+                    // edge. Keep the candidate as provenance for the exporter,
+                    // while the target itself becomes a guarded CFG edge. The
+                    // emitter must reject any live mismatch rather than pass it
+                    // to the global RuntimeOnly dispatcher.
+                    resolution.target = target;
+                    resolution.targets.clear();
+                    resolution.status = ResolutionStatus::Guarded;
+                    resolution.evidence = ControlFlowEvidence::GuardedComplete;
                     resolution.evidence_origins = {
                         AnalysisEvidenceOrigin::LocalValue};
                     resolution.reason =
-                        "runtime-contract-static-code-pointer-chain";
+                        "exact-immutable-pc-relative-code-pointer-chain";
+                    resolution.value_source =
+                        "immutable-image-literal-chain";
+                    resolution.exact_target_guard = true;
+                    resolution.exact_guard_rejection_reason =
+                        ExactGuardRejectionReason::None;
+                } else {
+                    resolution.exact_guard_rejection_reason =
+                        existing_target_conflict ||
+                                resolution.analysis_candidates.size() != 1u
+                            ? ExactGuardRejectionReason::ConflictingTargets
+                            : static_chain.exact_target_rejection_reason;
+                    if (resolution.status == ResolutionStatus::Unresolved) {
+                        resolution.evidence = ControlFlowEvidence::RuntimeOnly;
+                        resolution.evidence_origins = {
+                            AnalysisEvidenceOrigin::LocalValue};
+                        resolution.reason =
+                            "runtime-contract-static-code-pointer-chain";
+                    }
                 }
             }
         }
@@ -2580,6 +2794,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     GuardedCodeInventory static_callback_inventory;
     std::vector<StaticCallbackSinkContract>
         final_static_callback_sinks;
+    std::vector<StaticPersistentPointerSinkContract>
+        final_static_persistent_pointer_sinks;
     std::vector<StaticCallbackFieldSinkContract>
         final_static_callback_field_sinks;
     bool static_callback_contracts_materialized = false;
@@ -2603,7 +2819,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             default_maximum_resolution_root_artifacts,
         detail::FunctionValueAnalysisSession::
             default_maximum_resolution_epoch_retained_bytes,
-        options.pre_reserved_function_value_ready_budget);
+        options.pre_reserved_function_value_ready_budget,
+        options.function_value_cache_memory_budget);
     static_assert(
         maximum_persistent_function_analysis_epoch_blob_bytes ==
         detail::FunctionValueAnalysisSession::
@@ -3339,7 +3556,6 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             snapshot_candidate_dispatch_index.clear();
         }
         recursive_index.apply(recursive_snapshot);
-
         // Exact non-root boundaries constrain ownership without reviving
         // unreachable metadata. Once ordinary recursive control flow has
         // actually reached such a boundary, however, it must become its own
@@ -3989,6 +4205,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     non_root_function_entry_hints,
                     guarded_native_entry_shapes,
                     &final_static_callback_sinks,
+                    &final_static_persistent_pointer_sinks,
                     &final_static_callback_field_sinks);
             static_callback_contracts_materialized = true;
             auto& callback_candidates =
@@ -4691,7 +4908,7 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                             0u,
                             std::move(cause),
                             &pending_seed_changes,
-                             &seed_telemetry) ||
+                            &seed_telemetry) ||
                         changed;
                 };
                 if (source_sites.empty()) {
@@ -4980,6 +5197,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     }
     analysis.static_callback_sinks =
         std::move(final_static_callback_sinks);
+    analysis.static_persistent_pointer_sinks =
+        std::move(final_static_persistent_pointer_sinks);
     analysis.static_callback_field_sinks =
         std::move(final_static_callback_field_sinks);
     analysis.static_callback_contracts_materialized =
@@ -5144,6 +5363,15 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     for (const auto& entry : analysis.guarded_aot_entries)
         final_block_leaders.push_back(entry.guest_address);
     std::vector<std::uint32_t> final_normal_entry_leaders;
+    // Image entry points are authoritative normal-entry contexts even when
+    // the same physical halfword is also the delay slot of a preceding
+    // branch. Seed facts retain EntryPoint provenance, so the origin-empty
+    // filter below cannot be used as a proxy for this contract.
+    for (const auto entry : image.entry_points()) {
+        const auto validation = validate_committed_code_address(image, entry);
+        if (validation.valid())
+            final_normal_entry_leaders.push_back(validation.resolved_address);
+    }
     for (const auto& seed : analysis.seed_facts) {
         if (seed.origins.empty())
             final_normal_entry_leaders.push_back(seed.target_address);
@@ -5319,6 +5547,38 @@ guarded_aot_entry_rejection_reason_name(
         return "segment-byte-offset-unavailable";
     case GuardedAotEntryRejectionReason::EntryBytesUnavailable:
         return "entry-bytes-unavailable";
+    }
+    return "unknown";
+}
+
+const char*
+exact_guard_rejection_reason_name(
+    const ExactGuardRejectionReason reason) noexcept {
+    switch (reason) {
+    case ExactGuardRejectionReason::None:
+        return "none";
+    case ExactGuardRejectionReason::PrecedingCall:
+        return "preceding-call";
+    case ExactGuardRejectionReason::ConflictingTargets:
+        return "conflicting-targets";
+    case ExactGuardRejectionReason::TargetNotExecutable:
+        return "target-not-executable";
+    case ExactGuardRejectionReason::UnknownTargetOpcode:
+        return "unknown-target-opcode";
+    case ExactGuardRejectionReason::DispatchImmutableProofMissing:
+        return "dispatch-immutable-proof-missing";
+    case ExactGuardRejectionReason::DefinitionImmutableProofMissing:
+        return "definition-immutable-proof-missing";
+    case ExactGuardRejectionReason::WriterImmutableProofMissing:
+        return "writer-immutable-proof-missing";
+    case ExactGuardRejectionReason::LiteralImmutableProofMissing:
+        return "literal-immutable-proof-missing";
+    case ExactGuardRejectionReason::TargetImmutableProofMissing:
+        return "target-immutable-proof-missing";
+    case ExactGuardRejectionReason::ImageIdentityMismatch:
+        return "image-identity-mismatch";
+    case ExactGuardRejectionReason::Count:
+        break;
     }
     return "unknown";
 }

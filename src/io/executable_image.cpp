@@ -187,12 +187,14 @@ ExecutableImage::ExecutableImage(
       symbols_(other.symbols_),
       relocations_(other.relocations_),
       address_aliases_(other.address_aliases_),
+      immutable_ranges_(other.immutable_ranges_),
       guest_call_abi_(other.guest_call_abi_),
       initial_snapshot_policy_(other.initial_snapshot_policy_),
       initial_snapshot_entry_(other.initial_snapshot_entry_),
       address_model_(other.address_model_),
       analysis_instance_identity_(
-          allocate_executable_image_identity()) {}
+          allocate_executable_image_identity()),
+      immutable_generation_(other.immutable_generation_) {}
 
 ExecutableImage&
 ExecutableImage::operator=(const ExecutableImage& other) {
@@ -204,6 +206,7 @@ ExecutableImage::operator=(const ExecutableImage& other) {
     symbols_.swap(replacement.symbols_);
     relocations_.swap(replacement.relocations_);
     address_aliases_.swap(replacement.address_aliases_);
+    immutable_ranges_.swap(replacement.immutable_ranges_);
     std::swap(guest_call_abi_,
               replacement.guest_call_abi_);
     std::swap(initial_snapshot_policy_,
@@ -211,7 +214,17 @@ ExecutableImage::operator=(const ExecutableImage& other) {
     std::swap(initial_snapshot_entry_,
               replacement.initial_snapshot_entry_);
     std::swap(address_model_, replacement.address_model_);
-    mark_analysis_mutation();
+    std::swap(immutable_generation_, replacement.immutable_generation_);
+    // Assignment replaces the complete analyzed view. Preserve the
+    // replacement's immutable proof; ordinary in-place mutation uses
+    // mark_analysis_mutation() and intentionally invalidates such proofs.
+    if (analysis_revision_ ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        analysis_instance_identity_ = allocate_executable_image_identity();
+        analysis_revision_ = 0u;
+    } else {
+        ++analysis_revision_;
+    }
     return *this;
 }
 
@@ -223,12 +236,14 @@ ExecutableImage::ExecutableImage(
       symbols_(std::move(other.symbols_)),
       relocations_(std::move(other.relocations_)),
       address_aliases_(std::move(other.address_aliases_)),
+      immutable_ranges_(std::move(other.immutable_ranges_)),
       guest_call_abi_(other.guest_call_abi_),
       initial_snapshot_policy_(other.initial_snapshot_policy_),
       initial_snapshot_entry_(other.initial_snapshot_entry_),
       address_model_(other.address_model_),
       analysis_instance_identity_(
-          allocate_executable_image_identity()) {
+          allocate_executable_image_identity()),
+      immutable_generation_(other.immutable_generation_) {
     other.mark_analysis_mutation();
 }
 
@@ -241,16 +256,32 @@ ExecutableImage::operator=(ExecutableImage&& other) noexcept {
     symbols_ = std::move(other.symbols_);
     relocations_ = std::move(other.relocations_);
     address_aliases_ = std::move(other.address_aliases_);
+    auto moved_immutable_ranges = std::move(other.immutable_ranges_);
     guest_call_abi_ = other.guest_call_abi_;
     initial_snapshot_policy_ = other.initial_snapshot_policy_;
     initial_snapshot_entry_ = other.initial_snapshot_entry_;
     address_model_ = other.address_model_;
-    mark_analysis_mutation();
+    immutable_generation_ = other.immutable_generation_;
+    if (analysis_revision_ ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        analysis_instance_identity_ = allocate_executable_image_identity();
+        analysis_revision_ = 0u;
+    } else {
+        ++analysis_revision_;
+    }
+    immutable_ranges_ = std::move(moved_immutable_ranges);
+    for (auto& range : immutable_ranges_)
+        range.generation = immutable_generation_;
     other.mark_analysis_mutation();
     return *this;
 }
 
 void ExecutableImage::mark_analysis_mutation() noexcept {
+    immutable_ranges_.clear();
+    if (immutable_generation_ == std::numeric_limits<std::uint64_t>::max())
+        immutable_generation_ = 1u;
+    else
+        ++immutable_generation_;
     if (analysis_revision_ ==
         std::numeric_limits<std::uint64_t>::max()) {
         analysis_instance_identity_ =
@@ -436,6 +467,53 @@ void ExecutableImage::add_address_alias(ImageAddressAlias alias) {
     mark_analysis_mutation();
 }
 
+void ExecutableImage::add_immutable_range(ImageImmutableRange range) {
+    if (range.size == 0u || range.identity.empty())
+        throw std::invalid_argument(
+            "Ein unveraenderlicher Imagebereich braucht Groesse und Identitaet.");
+    const auto end = static_cast<std::uint64_t>(range.address) + range.size;
+    if (end > kAddressSpaceSize)
+        throw std::out_of_range(
+            "Ein unveraenderlicher Imagebereich ueberschreitet den 32-Bit-Adressraum.");
+    if (range.size > std::numeric_limits<std::size_t>::max())
+        throw std::out_of_range(
+            "Ein unveraenderlicher Imagebereich ist fuer den Host zu gross.");
+    const auto* segment = find_segment(
+        range.address, static_cast<std::size_t>(range.size));
+    if (segment == nullptr || !segment->permissions.readable ||
+        segment->source_kind == ImageSourceKind::RuntimeMemory ||
+        range.size > segment->bytes.size() ||
+        static_cast<std::uint64_t>(range.address) -
+                static_cast<std::uint64_t>(segment->virtual_address) >
+            segment->bytes.size() - static_cast<std::size_t>(range.size))
+        throw std::invalid_argument(
+            "Ein unveraenderlicher Imagebereich liegt nicht vollstaendig in "
+            "einem lesbaren Nicht-Runtime-Segment.");
+    for (const auto& existing : immutable_ranges_) {
+        if (ranges_overlap(
+                range.address, end, existing.address,
+                static_cast<std::uint64_t>(existing.address) + existing.size))
+            throw std::invalid_argument(
+                "Unveraenderliche Imagebereiche duerfen sich nicht ueberlappen.");
+    }
+    range.generation = immutable_generation_;
+    immutable_ranges_.push_back(std::move(range));
+    std::sort(
+        immutable_ranges_.begin(), immutable_ranges_.end(),
+        [](const auto& left, const auto& right) {
+            return left.address < right.address;
+        });
+    // Keep the proof in the analysis/cache identity without invalidating the
+    // ranges just inserted. Any later ordinary image mutation goes through
+    // mark_analysis_mutation(), which clears them and advances the generation.
+    if (analysis_revision_ == std::numeric_limits<std::uint64_t>::max()) {
+        analysis_instance_identity_ = allocate_executable_image_identity();
+        analysis_revision_ = 0u;
+    } else {
+        ++analysis_revision_;
+    }
+}
+
 void ExecutableImage::set_guest_call_abi(const GuestCallAbi abi) noexcept {
     if (guest_call_abi_ == abi) return;
     guest_call_abi_ = abi;
@@ -491,6 +569,31 @@ std::span<const ImageRelocation> ExecutableImage::relocations() const noexcept {
 
 std::span<const ImageAddressAlias> ExecutableImage::address_aliases() const noexcept {
     return address_aliases_;
+}
+
+std::span<const ImageImmutableRange>
+ExecutableImage::immutable_ranges() const noexcept {
+    return immutable_ranges_;
+}
+
+std::uint64_t ExecutableImage::immutable_generation() const noexcept {
+    return immutable_generation_;
+}
+
+const ImageImmutableRange*
+ExecutableImage::find_immutable_range(
+    const std::uint32_t address, const std::size_t width) const noexcept {
+    if (width == 0u) return nullptr;
+    const auto candidate_begin = static_cast<std::uint64_t>(address);
+    const auto candidate_end = candidate_begin + width;
+    for (const auto& range : immutable_ranges_) {
+        const auto begin = static_cast<std::uint64_t>(range.address);
+        const auto end = begin + range.size;
+        if (candidate_begin >= begin && candidate_end >= candidate_begin &&
+            candidate_end <= end && range.generation == immutable_generation_)
+            return &range;
+    }
+    return nullptr;
 }
 
 GuestCallAbi ExecutableImage::guest_call_abi() const noexcept {

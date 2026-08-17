@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <thread>
@@ -15,6 +17,8 @@
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+
+#include <timeapi.h>
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -32,6 +36,8 @@ constexpr std::uint32_t maximum_graphics_dimension = 16'384u;
 constexpr std::size_t maximum_graphics_title_bytes = 1'024u;
 constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
 constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
+constexpr std::uint32_t minimum_dynamic_vertex_buffer_bytes = 1u << 20u;
+constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
 
 [[nodiscard]] std::string copy_validated_graphics_title(
     const std::string_view title) {
@@ -397,6 +403,35 @@ void wait_until_monotonic_nanoseconds(const std::uint64_t deadline) {
                 std::chrono::nanoseconds::rep>(bounded))));
 }
 
+void acquire_frame_pacing_timer_resolution(
+    const NativePortFramePacingConfig& config) {
+#ifdef _WIN32
+    if (config.enabled) {
+        constexpr UINT requested_period_milliseconds = 1u;
+        const auto result = timeBeginPeriod(requested_period_milliseconds);
+        if (result != TIMERR_NOERROR)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::UnsupportedHost,
+                static_cast<std::uint32_t>(result),
+                "frame-pacing-timer-resolution");
+    }
+#else
+    static_cast<void>(config);
+#endif
+}
+
+void release_frame_pacing_timer_resolution(
+    const NativePortFramePacingConfig& config) noexcept {
+#ifdef _WIN32
+    if (config.enabled) {
+        constexpr UINT requested_period_milliseconds = 1u;
+        static_cast<void>(timeEndPeriod(requested_period_milliseconds));
+    }
+#else
+    static_cast<void>(config);
+#endif
+}
+
 [[nodiscard]] NativePortPixelRect fit_aspect(
     const NativePortPixelRect outer,
     const NativePortAspectRatio aspect) noexcept {
@@ -546,6 +581,7 @@ constexpr std::uint32_t draw_flag_texture_alpha = 1u << 7u;
 constexpr std::uint32_t draw_texture_combine_shift = 8u;
 constexpr std::uint32_t draw_alpha_test_enabled = 1u << 8u;
 constexpr std::uint32_t draw_flag_homogeneous_reciprocal_clip = 1u << 16u;
+constexpr std::uint32_t draw_flag_texture_present = 1u << 17u;
 
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
@@ -575,6 +611,7 @@ class NativePortGraphicsDevice::Impl final {
           config_(config), owner_thread_(std::this_thread::get_id()) {
         config_.title = title_storage_;
         validate_graphics_config(config_);
+        initialize_frame_capture();
         create_window();
         try {
             create_device();
@@ -797,6 +834,10 @@ class NativePortGraphicsDevice::Impl final {
                                         frame.clear_color.data());
         context_->ClearDepthStencilView(
             depth_view_.Get(), D3D11_CLEAR_DEPTH, frame.clear_depth, 0u);
+        vertex_buffer_write_offset_ = 0u;
+        index_buffer_write_offset_ = 0u;
+        vertex_buffer_discarded_ = false;
+        index_buffer_discarded_ = false;
         frame_open_ = true;
         saturating_increment(snapshot_.begun_frames);
     }
@@ -945,12 +986,17 @@ class NativePortGraphicsDevice::Impl final {
         }
 
         ensure_vertex_buffer(vertices.size_bytes());
-        upload_dynamic(vertex_buffer_.Get(), vertices.data(),
-                       vertices.size_bytes());
+        const auto vertex_buffer_offset = upload_dynamic(
+            vertex_buffer_.Get(), vertex_buffer_capacity_,
+            vertex_buffer_write_offset_, vertex_buffer_discarded_,
+            vertices.data(), vertices.size_bytes(), "vertex-buffer-map");
+        UINT index_buffer_offset = 0u;
         if (!indices.empty()) {
             ensure_index_buffer(indices.size_bytes());
-            upload_dynamic(index_buffer_.Get(), indices.data(),
-                           indices.size_bytes());
+            index_buffer_offset = upload_dynamic(
+                index_buffer_.Get(), index_buffer_capacity_,
+                index_buffer_write_offset_, index_buffer_discarded_,
+                indices.data(), indices.size_bytes(), "index-buffer-map");
         }
 
         DrawConstants constants{};
@@ -962,10 +1008,23 @@ class NativePortGraphicsDevice::Impl final {
         constants.material_emission = packet.material.emission;
         constants.scene_ambient = packet.lighting.ambient;
         constants.fog_color = packet.fog.color;
-        for (std::size_t index = 0u;
-             index < native_port_fog_table_entries; ++index)
-            constants.fog_lookup_table[index / 4u][index % 4u] =
-                packet.fog.lookup_table[index];
+        if ((packet.fog.mode == NativePortFogMode::LookupTable ||
+             packet.fog.mode == NativePortFogMode::LookupTablePrimary) &&
+            (!fog_lookup_table_valid_ ||
+             last_fog_lookup_table_ != packet.fog.lookup_table)) {
+            FogTableConstants fog_constants{};
+            std::memcpy(fog_constants.lookup_table.data(),
+                        packet.fog.lookup_table.data(),
+                        sizeof(packet.fog.lookup_table));
+            context_->UpdateSubresource(fog_table_constants_.Get(),
+                                        0u,
+                                        nullptr,
+                                        &fog_constants,
+                                        0u,
+                                        0u);
+            last_fog_lookup_table_ = packet.fog.lookup_table;
+            fog_lookup_table_valid_ = true;
+        }
         constants.fog_parameters = {
             packet.fog.start, packet.fog.end, packet.fog.density, 0.0f};
         constants.depth_parameters = {
@@ -1002,6 +1061,8 @@ class NativePortGraphicsDevice::Impl final {
             material_flags |= draw_flag_primary_alpha;
         if (packet.material.use_texture_alpha)
             material_flags |= draw_flag_texture_alpha;
+        if (packet.texture)
+            material_flags |= draw_flag_texture_present;
         material_flags |=
             static_cast<std::uint32_t>(packet.material.texture_combine)
             << draw_texture_combine_shift;
@@ -1050,18 +1111,23 @@ class NativePortGraphicsDevice::Impl final {
         context_->IASetInputLayout(input_layout_.Get());
         context_->IASetPrimitiveTopology(primitive_topology(topology));
         const UINT stride = sizeof(NativePortVertex);
-        const UINT offset = 0u;
         context_->IASetVertexBuffers(
-            0u, 1u, vertex_buffer_.GetAddressOf(), &stride, &offset);
+            0u, 1u, vertex_buffer_.GetAddressOf(), &stride,
+            &vertex_buffer_offset);
         if (!indices.empty())
             context_->IASetIndexBuffer(
-                index_buffer_.Get(), DXGI_FORMAT_R32_UINT, 0u);
+                index_buffer_.Get(), DXGI_FORMAT_R32_UINT,
+                index_buffer_offset);
         context_->VSSetShader(draw_vertex_shader_.Get(), nullptr, 0u);
         context_->VSSetConstantBuffers(
             0u, 1u, draw_constants_.GetAddressOf());
         context_->PSSetShader(draw_pixel_shader_.Get(), nullptr, 0u);
-        context_->PSSetConstantBuffers(
-            0u, 1u, draw_constants_.GetAddressOf());
+        const std::array<ID3D11Buffer*, 2u> pixel_constant_buffers{
+            draw_constants_.Get(), fog_table_constants_.Get()};
+        context_->PSSetConstantBuffers(0u,
+                                       static_cast<UINT>(
+                                           pixel_constant_buffers.size()),
+                                       pixel_constant_buffers.data());
         context_->PSSetSamplers(0u, 1u, &sampler);
         auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
                                     : white_view_.Get();
@@ -1146,6 +1212,7 @@ class NativePortGraphicsDevice::Impl final {
                  operation);
         }
         snapshot_.occluded = false;
+        capture_completed_frame(snapshot_.presented_frames + 1u);
         saturating_increment(snapshot_.presented_frames);
     }
 
@@ -1198,7 +1265,8 @@ class NativePortGraphicsDevice::Impl final {
             const auto target_ratio =
                 static_cast<double>(target.width) / target.height;
             const auto source_ratio =
-                static_cast<double>(image.extent.width) / image.extent.height;
+                static_cast<double>(source_aspect.numerator) /
+                source_aspect.denominator;
             if (source_ratio > target_ratio) {
                 const auto visible = static_cast<float>(target_ratio / source_ratio);
                 u0 = (1.0f - visible) * 0.5f;
@@ -1259,8 +1327,6 @@ class NativePortGraphicsDevice::Impl final {
         std::array<float, 4u> scene_ambient{};
         std::array<float, 4u> fog_color{};
         std::array<std::array<float, 4u>,
-                   native_port_fog_table_entries / 4u> fog_lookup_table{};
-        std::array<std::array<float, 4u>,
                    native_port_maximum_directional_lights> light_directions{};
         std::array<std::array<float, 4u>,
                    native_port_maximum_directional_lights> light_colors{};
@@ -1271,6 +1337,13 @@ class NativePortGraphicsDevice::Impl final {
     };
 
     static_assert(sizeof(DrawConstants) % 16u == 0u);
+
+    struct FogTableConstants final {
+        std::array<std::array<float, 4u>,
+                   native_port_fog_table_entries / 4u> lookup_table{};
+    };
+
+    static_assert(sizeof(FogTableConstants) % 16u == 0u);
 
     struct BlendStateSlot final {
         NativePortBlendState key;
@@ -1560,6 +1633,14 @@ class NativePortGraphicsDevice::Impl final {
         check(device_->CreateBuffer(
                   &constant_description, nullptr, draw_constants_.GetAddressOf()),
               "draw-constants");
+        FogTableConstants initial_fog_constants{};
+        D3D11_SUBRESOURCE_DATA initial_fog_data{};
+        initial_fog_data.pSysMem = &initial_fog_constants;
+        constant_description.ByteWidth = sizeof(FogTableConstants);
+        check(device_->CreateBuffer(&constant_description,
+                                    &initial_fog_data,
+                                    fog_table_constants_.GetAddressOf()),
+              "fog-table-constants");
     }
 
     [[nodiscard]] std::size_t pipeline_state_count() const noexcept {
@@ -1853,9 +1934,9 @@ class NativePortGraphicsDevice::Impl final {
                      NativePortDepthCoordinateMode::
                          ReciprocalPositiveHomogeneousClip &&
                  vertex.fog_coordinate < 0.0f) ||
-                (packet.depth.test_enabled &&
-                 packet.depth_mapping.mode ==
+                (packet.depth_mapping.mode ==
                      NativePortDepthCoordinateMode::ReciprocalPositive &&
+                 (packet.depth.test_enabled || packet.texture) &&
                  vertex.depth_coordinate <= 0.0f))
                 fail(NativePortGraphicsFailure::InvalidDraw,
                      0u,
@@ -1899,7 +1980,11 @@ class NativePortGraphicsDevice::Impl final {
     void ensure_vertex_buffer(const std::size_t byte_size) {
         if (byte_size <= vertex_buffer_capacity_) return;
         const auto required = static_cast<UINT>(byte_size);
-        const auto capacity = next_buffer_capacity(required);
+        const auto maximum = static_cast<UINT>(
+            config_.maximum_transient_vertices * sizeof(NativePortVertex));
+        const auto preferred = std::min(maximum,
+                                        minimum_dynamic_vertex_buffer_bytes);
+        const auto capacity = next_buffer_capacity(std::max(required, preferred));
         D3D11_BUFFER_DESC description{};
         description.ByteWidth = capacity;
         description.Usage = D3D11_USAGE_DYNAMIC;
@@ -1914,12 +1999,18 @@ class NativePortGraphicsDevice::Impl final {
                  "vertex-buffer");
         vertex_buffer_ = std::move(replacement);
         vertex_buffer_capacity_ = capacity;
+        vertex_buffer_write_offset_ = 0u;
+        vertex_buffer_discarded_ = false;
     }
 
     void ensure_index_buffer(const std::size_t byte_size) {
         if (byte_size <= index_buffer_capacity_) return;
         const auto required = static_cast<UINT>(byte_size);
-        const auto capacity = next_buffer_capacity(required);
+        const auto maximum = static_cast<UINT>(
+            config_.maximum_transient_indices * sizeof(std::uint32_t));
+        const auto preferred = std::min(maximum,
+                                        minimum_dynamic_index_buffer_bytes);
+        const auto capacity = next_buffer_capacity(std::max(required, preferred));
         D3D11_BUFFER_DESC description{};
         description.ByteWidth = capacity;
         description.Usage = D3D11_USAGE_DYNAMIC;
@@ -1934,20 +2025,42 @@ class NativePortGraphicsDevice::Impl final {
                  "index-buffer");
         index_buffer_ = std::move(replacement);
         index_buffer_capacity_ = capacity;
+        index_buffer_write_offset_ = 0u;
+        index_buffer_discarded_ = false;
     }
 
-    void upload_dynamic(ID3D11Buffer* const buffer,
-                        const void* const source,
-                        const std::size_t byte_size) {
+    [[nodiscard]] UINT upload_dynamic(ID3D11Buffer* const buffer,
+                                      const UINT capacity,
+                                      UINT& write_offset,
+                                      bool& discarded,
+                                      const void* const source,
+                                      const std::size_t byte_size,
+                                      const char* const operation) {
+        const auto required = static_cast<UINT>(byte_size);
+        if (required > capacity || write_offset > capacity)
+            fail(NativePortGraphicsFailure::ResourceLimit, 0u, operation);
+
+        D3D11_MAP map_type = D3D11_MAP_WRITE_NO_OVERWRITE;
+        UINT upload_offset = write_offset;
+        if (!discarded || required > capacity - write_offset) {
+            map_type = D3D11_MAP_WRITE_DISCARD;
+            upload_offset = 0u;
+            write_offset = 0u;
+            discarded = true;
+        }
         D3D11_MAPPED_SUBRESOURCE mapped{};
         const auto result = context_->Map(
-            buffer, 0u, D3D11_MAP_WRITE_DISCARD, 0u, &mapped);
+            buffer, 0u, map_type, 0u, &mapped);
         if (FAILED(result))
             fail(NativePortGraphicsFailure::DeviceLost,
-                 static_cast<std::uint32_t>(result),
-                 "buffer-map");
-        std::memcpy(mapped.pData, source, byte_size);
+                  static_cast<std::uint32_t>(result),
+                  operation);
+        std::memcpy(static_cast<std::uint8_t*>(mapped.pData) + upload_offset,
+                    source,
+                    byte_size);
         context_->Unmap(buffer, 0u);
+        write_offset = upload_offset + required;
+        return upload_offset;
     }
 
     void upload_texture(TextureSlot& slot,
@@ -2036,6 +2149,203 @@ class NativePortGraphicsDevice::Impl final {
         context_->RSSetScissorRects(1u, &scissor);
     }
 
+    [[nodiscard]] std::wstring environment_value(
+        const wchar_t* const name) const {
+        SetLastError(ERROR_SUCCESS);
+        const auto required = GetEnvironmentVariableW(name, nullptr, 0u);
+        if (required == 0u) {
+            const auto error = GetLastError();
+            if (error == ERROR_SUCCESS || error == ERROR_ENVVAR_NOT_FOUND)
+                return {};
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                static_cast<std::uint32_t>(error),
+                "graphics-capture-environment");
+        }
+        std::wstring value(required, L'\0');
+        const auto written =
+            GetEnvironmentVariableW(name, value.data(), required);
+        if (written == 0u || written >= required)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                static_cast<std::uint32_t>(GetLastError()),
+                "graphics-capture-environment");
+        value.resize(written);
+        return value;
+    }
+
+    [[nodiscard]] std::uint64_t environment_unsigned(
+        const wchar_t* const name,
+        const std::uint64_t fallback,
+        const char* const operation) const {
+        const auto value = environment_value(name);
+        if (value.empty()) return fallback;
+        std::uint64_t result = 0u;
+        for (const auto character : value) {
+            if (character < L'0' || character > L'9')
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidConfig,
+                    1u,
+                    operation);
+            const auto digit =
+                static_cast<std::uint64_t>(character - L'0');
+            if (result >
+                (std::numeric_limits<std::uint64_t>::max() - digit) / 10u)
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidConfig,
+                    1u,
+                    operation);
+            result = result * 10u + digit;
+        }
+        return result;
+    }
+
+    void initialize_frame_capture() {
+        const auto directory = environment_value(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_DIRECTORY");
+        if (directory.empty()) return;
+        capture_directory_ = std::filesystem::path(directory);
+        capture_start_frame_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME",
+            1u,
+            "graphics-capture-start");
+        capture_end_frame_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME",
+            std::numeric_limits<std::uint64_t>::max(),
+            "graphics-capture-end");
+        capture_interval_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL",
+            60u,
+            "graphics-capture-interval");
+        if (capture_start_frame_ == 0u || capture_interval_ == 0u ||
+            capture_interval_ > 1'000'000u ||
+            capture_end_frame_ < capture_start_frame_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-capture-range");
+        std::error_code error;
+        std::filesystem::create_directories(capture_directory_, error);
+        if (error)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::ResourceCreation,
+                static_cast<std::uint32_t>(error.value()),
+                "graphics-capture-directory");
+        capture_enabled_ = true;
+    }
+
+    [[nodiscard]] bool should_capture_frame(
+        const std::uint64_t frame) const noexcept {
+        return capture_enabled_ && frame >= capture_start_frame_ &&
+               frame <= capture_end_frame_ &&
+               (frame - capture_start_frame_) % capture_interval_ == 0u;
+    }
+
+    void capture_completed_frame(const std::uint64_t frame) {
+        if (!should_capture_frame(frame)) return;
+        if (!capture_readback_) {
+            D3D11_TEXTURE2D_DESC description{};
+            render_texture_->GetDesc(&description);
+            description.Usage = D3D11_USAGE_STAGING;
+            description.BindFlags = 0u;
+            description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            description.MiscFlags = 0u;
+            const auto result = device_->CreateTexture2D(
+                &description, nullptr, capture_readback_.GetAddressOf());
+            if (FAILED(result))
+                fail(NativePortGraphicsFailure::ResourceCreation,
+                     static_cast<std::uint32_t>(result),
+                     "graphics-capture-readback");
+        }
+
+        context_->CopyResource(capture_readback_.Get(), render_texture_.Get());
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const auto map_result = context_->Map(
+            capture_readback_.Get(), 0u, D3D11_MAP_READ, 0u, &mapped);
+        if (FAILED(map_result))
+            fail(NativePortGraphicsFailure::DeviceLost,
+                 static_cast<std::uint32_t>(map_result),
+                 "graphics-capture-map");
+        struct Unmap final {
+            ID3D11DeviceContext* context = nullptr;
+            ID3D11Resource* resource = nullptr;
+            ~Unmap() {
+                if (context != nullptr && resource != nullptr)
+                    context->Unmap(resource, 0u);
+            }
+        } unmap{context_.Get(), capture_readback_.Get()};
+
+        const auto width = config_.render_extent.width;
+        const auto height = config_.render_extent.height;
+        const auto row_bytes = static_cast<std::size_t>(width) * 4u;
+        const auto pixel_bytes = row_bytes * static_cast<std::size_t>(height);
+        capture_pixels_.resize(pixel_bytes);
+        const auto* const source =
+            static_cast<const std::uint8_t*>(mapped.pData);
+        for (std::uint32_t output_y = 0u; output_y < height; ++output_y) {
+            const auto source_y = height - output_y - 1u;
+            const auto* const source_row =
+                source + static_cast<std::size_t>(source_y) * mapped.RowPitch;
+            auto* const output_row =
+                capture_pixels_.data() +
+                static_cast<std::size_t>(output_y) * row_bytes;
+            for (std::uint32_t x = 0u; x < width; ++x) {
+                output_row[x * 4u + 0u] = source_row[x * 4u + 2u];
+                output_row[x * 4u + 1u] = source_row[x * 4u + 1u];
+                output_row[x * 4u + 2u] = source_row[x * 4u + 0u];
+                output_row[x * 4u + 3u] = source_row[x * 4u + 3u];
+            }
+        }
+        unmap.context->Unmap(unmap.resource, 0u);
+        unmap.context = nullptr;
+        unmap.resource = nullptr;
+
+        constexpr std::uint32_t header_bytes = 54u;
+        if (pixel_bytes >
+            std::numeric_limits<std::uint32_t>::max() - header_bytes)
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 1u,
+                 "graphics-capture-size");
+        std::array<std::uint8_t, header_bytes> header{};
+        const auto store_u16 = [&](const std::size_t offset,
+                                   const std::uint16_t value) {
+            header[offset] = static_cast<std::uint8_t>(value);
+            header[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto store_u32 = [&](const std::size_t offset,
+                                   const std::uint32_t value) {
+            for (std::size_t byte = 0u; byte < 4u; ++byte)
+                header[offset + byte] = static_cast<std::uint8_t>(
+                    value >> static_cast<unsigned>(byte * 8u));
+        };
+        header[0] = static_cast<std::uint8_t>('B');
+        header[1] = static_cast<std::uint8_t>('M');
+        store_u32(2u, header_bytes + static_cast<std::uint32_t>(pixel_bytes));
+        store_u32(10u, header_bytes);
+        store_u32(14u, 40u);
+        store_u32(18u, width);
+        store_u32(22u, height);
+        store_u16(26u, 1u);
+        store_u16(28u, 32u);
+        store_u32(34u, static_cast<std::uint32_t>(pixel_bytes));
+
+        const auto output_path = capture_directory_ /
+            (L"frame-" + std::to_wstring(frame) + L".bmp");
+        std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
+        if (!output)
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 1u,
+                 "graphics-capture-open");
+        output.write(reinterpret_cast<const char*>(header.data()),
+                     static_cast<std::streamsize>(header.size()));
+        output.write(reinterpret_cast<const char*>(capture_pixels_.data()),
+                     static_cast<std::streamsize>(capture_pixels_.size()));
+        if (!output)
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 1u,
+                 "graphics-capture-write");
+    }
+
     [[nodiscard]] static NativePortTextureHandle make_texture_handle(
         const std::uint32_t index,
         const std::uint32_t generation) noexcept {
@@ -2099,6 +2409,7 @@ class NativePortGraphicsDevice::Impl final {
     ComPtr<ID3D11Texture2D> render_texture_;
     ComPtr<ID3D11RenderTargetView> render_target_;
     ComPtr<ID3D11ShaderResourceView> render_view_;
+    ComPtr<ID3D11Texture2D> capture_readback_;
     ComPtr<ID3D11Texture2D> depth_texture_;
     ComPtr<ID3D11DepthStencilView> depth_view_;
     ComPtr<ID3D11VertexShader> draw_vertex_shader_;
@@ -2107,10 +2418,17 @@ class NativePortGraphicsDevice::Impl final {
     ComPtr<ID3D11PixelShader> composite_pixel_shader_;
     ComPtr<ID3D11InputLayout> input_layout_;
     ComPtr<ID3D11Buffer> draw_constants_;
+    ComPtr<ID3D11Buffer> fog_table_constants_;
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> index_buffer_;
     UINT vertex_buffer_capacity_ = 0u;
     UINT index_buffer_capacity_ = 0u;
+    UINT vertex_buffer_write_offset_ = 0u;
+    UINT index_buffer_write_offset_ = 0u;
+    bool vertex_buffer_discarded_ = false;
+    bool index_buffer_discarded_ = false;
+    std::array<float, native_port_fog_table_entries> last_fog_lookup_table_{};
+    bool fog_lookup_table_valid_ = false;
     std::vector<NativePortVertex> prepared_vertices_;
     std::vector<BlendStateSlot> blend_states_;
     std::vector<DepthStateSlot> depth_states_;
@@ -2121,6 +2439,13 @@ class NativePortGraphicsDevice::Impl final {
 
     std::vector<TextureSlot> texture_slots_;
     std::vector<std::uint32_t> free_texture_slots_;
+    std::filesystem::path capture_directory_;
+    std::vector<std::uint8_t> capture_pixels_;
+    std::uint64_t capture_start_frame_ = 1u;
+    std::uint64_t capture_end_frame_ =
+        std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t capture_interval_ = 60u;
+    bool capture_enabled_ = false;
     std::uint64_t texture_bytes_ = 0u;
     std::uint32_t live_textures_ = 0u;
     NativePortTextureHandle image_texture_;
@@ -2265,6 +2590,7 @@ NativePortDesktopHost::NativePortDesktopHost(
     : graphics_(desktop_graphics_config(graphics_config,
                                         frame_pacing_config)),
       frame_pacing_config_(frame_pacing_config) {
+    acquire_frame_pacing_timer_resolution(frame_pacing_config_);
     frame_pacing_snapshot_.simulation_rate_hz =
         frame_pacing_config_.simulation_rate_hz;
     frame_pacing_snapshot_.presentation_rate_hz =
@@ -2272,7 +2598,9 @@ NativePortDesktopHost::NativePortDesktopHost(
     frame_pacing_snapshot_.enabled = frame_pacing_config_.enabled;
 }
 
-NativePortDesktopHost::~NativePortDesktopHost() = default;
+NativePortDesktopHost::~NativePortDesktopHost() {
+    release_frame_pacing_timer_resolution(frame_pacing_config_);
+}
 
 std::uint64_t NativePortDesktopHost::monotonic_time_nanoseconds()
     const noexcept {
@@ -2380,26 +2708,48 @@ void NativePortDesktopHost::paced_present() {
     const bool simulation_late =
         now > next_simulation_deadline_nanoseconds_;
     if (now >= next_simulation_deadline_nanoseconds_) {
-        // Never issue rapid catch-up frames. A late native frame is presented
-        // once, then both clocks restart from the actual completion time.
+        // A normal host wait resumes a little after its deadline. Preserve the
+        // phase for that sub-frame lateness instead of accumulating scheduler
+        // overshoot into title time. Only a complete additional missed
+        // simulation interval reanchors the clocks; catch-up updates are never
+        // issued.
         present_and_record(false);
         saturating_increment(frame_pacing_snapshot_.simulation_frames);
         now = monotonic_time_nanoseconds();
-        next_simulation_deadline_nanoseconds_ = now;
-        next_presentation_deadline_nanoseconds_ = now;
-        simulation_deadline_remainder_ = 0u;
-        presentation_deadline_remainder_ = 0u;
         advance_frame_deadline(
             next_simulation_deadline_nanoseconds_,
             simulation_deadline_remainder_,
             frame_pacing_config_.simulation_rate_hz);
-        advance_frame_deadline(
-            next_presentation_deadline_nanoseconds_,
-            presentation_deadline_remainder_,
-            frame_pacing_config_.presentation_rate_hz);
+        if (next_presentation_deadline_nanoseconds_ <= now)
+            advance_frame_deadline(
+                next_presentation_deadline_nanoseconds_,
+                presentation_deadline_remainder_,
+                frame_pacing_config_.presentation_rate_hz);
+        while (next_presentation_deadline_nanoseconds_ <= now) {
+            saturating_increment(
+                frame_pacing_snapshot_.missed_presentation_deadlines);
+            advance_frame_deadline(
+                next_presentation_deadline_nanoseconds_,
+                presentation_deadline_remainder_,
+                frame_pacing_config_.presentation_rate_hz);
+        }
         if (simulation_late)
             saturating_increment(
                 frame_pacing_snapshot_.late_simulation_frames);
+        if (next_simulation_deadline_nanoseconds_ <= now) {
+            next_simulation_deadline_nanoseconds_ = now;
+            next_presentation_deadline_nanoseconds_ = now;
+            simulation_deadline_remainder_ = 0u;
+            presentation_deadline_remainder_ = 0u;
+            advance_frame_deadline(
+                next_simulation_deadline_nanoseconds_,
+                simulation_deadline_remainder_,
+                frame_pacing_config_.simulation_rate_hz);
+            advance_frame_deadline(
+                next_presentation_deadline_nanoseconds_,
+                presentation_deadline_remainder_,
+                frame_pacing_config_.presentation_rate_hz);
+        }
         return;
     }
 
@@ -2412,12 +2762,18 @@ void NativePortDesktopHost::paced_present() {
             frame_pacing_snapshot_.missed_presentation_deadlines);
         present_and_record(false);
         now = monotonic_time_nanoseconds();
-        next_presentation_deadline_nanoseconds_ = now;
-        presentation_deadline_remainder_ = 0u;
         advance_frame_deadline(
             next_presentation_deadline_nanoseconds_,
             presentation_deadline_remainder_,
             frame_pacing_config_.presentation_rate_hz);
+        while (next_presentation_deadline_nanoseconds_ <= now) {
+            saturating_increment(
+                frame_pacing_snapshot_.missed_presentation_deadlines);
+            advance_frame_deadline(
+                next_presentation_deadline_nanoseconds_,
+                presentation_deadline_remainder_,
+                frame_pacing_config_.presentation_rate_hz);
+        }
     } else {
         wait_until_monotonic_nanoseconds(
             next_presentation_deadline_nanoseconds_);
@@ -2520,13 +2876,16 @@ cbuffer DrawConstants : register(b0) {
     float4 material_emission;
     float4 scene_ambient;
     float4 fog_color;
-    float4 fog_lookup_table[32];
     float4 light_directions[4];
     float4 light_colors[4];
     float4 fog_parameters;
     float4 depth_parameters;
     float4 material_parameters;
     uint4 pipeline_flags;
+};
+
+cbuffer FogTableConstants : register(b1) {
+    float4 fog_lookup_table[32];
 };
 
 struct DrawVertexInput {
@@ -2542,11 +2901,12 @@ struct DrawVertexInput {
 struct DrawVertexOutput {
     float4 position : SV_Position;
     float2 texcoord : TEXCOORD0;
-    float4 color : COLOR0;
+    noperspective float4 color : COLOR0;
     float3 normal : NORMAL0;
-    float4 secondary_color : COLOR1;
-    float fog_coordinate : TEXCOORD1;
+    noperspective float4 secondary_color : COLOR1;
+    noperspective float fog_coordinate : TEXCOORD1;
     noperspective float depth_coordinate : TEXCOORD2;
+    noperspective float2 reciprocal_texcoord : TEXCOORD3;
 };
 
 DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
@@ -2565,6 +2925,8 @@ DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     output.secondary_color = input.secondary_color;
     output.fog_coordinate = input.fog_coordinate;
     output.depth_coordinate = input.depth_coordinate;
+    output.reciprocal_texcoord =
+        output.texcoord * input.depth_coordinate;
     return output;
 }
 
@@ -2612,6 +2974,8 @@ struct DrawPixelOutput {
 DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     const uint flags = pipeline_flags.x;
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
+    const bool screen_space_reciprocal =
+        (flags & 0x20u) != 0u && !homogeneous_reciprocal_clip;
     const float reciprocal_coordinate = max(
         homogeneous_reciprocal_clip
             ? input.position.w
@@ -2623,6 +2987,7 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     const bool specular_enabled = (flags & 0x08u) != 0u;
     const bool primary_alpha_enabled = (flags & 0x40u) != 0u;
     const bool texture_alpha_enabled = (flags & 0x80u) != 0u;
+    const bool texture_present = (flags & 0x20000u) != 0u;
     float4 primary = material_diffuse;
     float3 post_color = material_emission.rgb;
     if (lighting_enabled) {
@@ -2660,23 +3025,31 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
         primary = float4(fog_color.rgb, primary_fog);
     }
 
-    float4 texture_color = draw_texture.Sample(draw_sampler, input.texcoord);
-    if (!texture_alpha_enabled) texture_color.a = 1.0;
-    const uint texture_combine = (flags >> 8u) & 0xffu;
-    float4 result = primary * texture_color;
-    if (texture_combine == 1u) {
-        result = texture_color;
-    } else if (texture_combine == 2u) {
-        result.rgb = lerp(primary.rgb, texture_color.rgb, texture_color.a);
-        result.a = primary.a;
-    } else if (texture_combine == 3u) {
-        result = primary + texture_color;
-    } else if (texture_combine == 4u) {
-        result.rgb = primary.rgb * texture_color.rgb;
-        result.a = texture_color.a;
+    float4 result = primary;
+    if (texture_present) {
+        const float2 texture_coordinate = screen_space_reciprocal
+            ? input.reciprocal_texcoord / input.depth_coordinate
+            : input.texcoord;
+        float4 texture_color =
+            draw_texture.Sample(draw_sampler, texture_coordinate);
+        if (!texture_alpha_enabled) texture_color.a = 1.0;
+        const uint texture_combine = (flags >> 8u) & 0xffu;
+        result = primary * texture_color;
+        if (texture_combine == 1u) {
+            result = texture_color;
+        } else if (texture_combine == 2u) {
+            result.rgb = lerp(primary.rgb, texture_color.rgb, texture_color.a);
+            result.a = primary.a;
+        } else if (texture_combine == 3u) {
+            result = primary + texture_color;
+        } else if (texture_combine == 4u) {
+            result.rgb = primary.rgb * texture_color.rgb;
+            result.a = texture_color.a;
+        }
     }
     result.rgb += post_color;
-    if (secondary_color_enabled) result += input.secondary_color;
+    if (secondary_color_enabled)
+        result.rgb = saturate(result.rgb + input.secondary_color.rgb);
 
     const uint alpha_test = pipeline_flags.w;
     if ((alpha_test & 0x100u) != 0u &&

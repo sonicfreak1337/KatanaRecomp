@@ -25,12 +25,12 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 109, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 115, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 53, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 56, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
-Portprojektvertrag 101, Native-Port-Profilvertrag 22 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `7`.
+Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
+Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
 Port-Metadata-Cache-Schema: `12`.
 Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
@@ -40,7 +40,7 @@ Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
 
 Der Windows-Native-Port bindet XInput sowie die explizit identifizierten
-WinMM-Layouts von DualSense und DualShock an Plattformvertrag `5`. Die Sony-
+WinMM-Layouts von DualSense und DualShock an Plattformvertrag `8`. Die Sony-
 Identitaet stammt aus dem nativen DirectInput-VID/PID- und
 Geraeteinstanzvertrag, nicht aus WinMM-Multimedia-IDs. Unbekannte
 HID-Buttonordnungen werden nicht als semantische Controllerbelegung geraten.
@@ -639,8 +639,8 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 109, Analyzer-ABI 53, Portprojektvertrag 101 und
-Native-Port-Profilvertrag 22. Davon getrennt verwendet `GameProject` Vertrag 8 und
+KR-5005-Stand verwendet Runtime-ABI 115, Analyzer-ABI 56, Portprojektvertrag 103 und
+Native-Port-Profilvertrag 23. Davon getrennt verwendet `GameProject` Vertrag 8 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
@@ -648,7 +648,7 @@ Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4
 Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
 ist nicht automatisch freigegeben.
 
-`GameProjectArtifact` Format 6 transportiert fuer Spielprojektvertrag 7 die deklarativen,
+`GameProjectArtifact` Format 6 transportiert fuer Spielprojektvertrag 8 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
 Funktionsgrenzen, Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole,
 Codeidentitaeten und Direct-Boot-Konfiguration. Native Hookzeiger und private
@@ -725,12 +725,16 @@ vorhandene optimierte Konfiguration.
 `EXCLUDE_FROM_ALL` eingebunden. Generierte AOT-TUs verwenden die native
 Produktheader-Allowlist sowie eine PCH; der historische
 `aot_runtime_abi.hpp`-Vertrag wird nicht als Produkt-SDK installiert.
-Der normale Portexport verwendet fuer Bring-up standardmaessig den schnellen
-Release-Hostbuild: nur generierte AOT-TUs werden mit `/Od /Ob0` und einem
-eigenen, auf MSVC standardmaessig vier Worker breiten Ninja-Pool kompiliert.
+Der normale Portexport verwendet fuer Bring-up standardmaessig den schnellen,
+spielbaren Release-Hostbuild: nur generierte AOT-TUs werden mit `/O1 /Ob0` und einem
+eigenen, auf MSVC standardmaessig zwoelf Worker breiten Ninja-Pool kompiliert.
 Runtime, Titeladapter und Bootstrap bleiben optimiert; der separate
 `gate`-Build erzeugt das voll optimierte Produkt. Eine gemeinsame `/Zi`-/`/FS`-
-PDB ist im AOT-Pfad ausgeschlossen.
+PDB ist im AOT-Pfad ausgeschlossen. Unoptimierte `/Od`-AOT-Builds sind reine
+Compilerdiagnose und kein Produktlaufnachweis.
+Ein bounded `KATANA_AOT_HOT_SOURCES`-Profil optimiert ausschliesslich bis zu 64
+im vorherigen Lauf gemessene und im aktuellen Export vorhandene AOT-Quellen;
+die restliche statische Closure bleibt inkrementell wiederverwendbar.
 
 Profile und Toolchainauswahl:
 [Portbuildprofile](docs/PORT_BUILD_PROFILES.md)

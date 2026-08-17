@@ -122,6 +122,57 @@ weiterhin ausschliesslich den Replay- beziehungsweise neutralen Inputpfad.
 Live- und Replay-Mapleantworten fuer dieselben Transaktionszyklen bytegleich
 bleiben.
 
+Fuer laengere Diagnosen gibt es zusaetzlich `ControllerInputRecording`. Es
+speichert kompakte, zusammenhaengende Frame-Samples fuer alle vier Maple-
+Controllerplaetze. Das Replay ist frame-indexiert, bounded und liest im
+Hotpath weder Dateien noch allokiert es Speicher. Die Datei bindet sich an
+die native Controller-Vertragsversion und eine vom Produkt gelieferte
+Build-/Content-Identitaet; falsche Version, Identitaet, Slotzahl, Dateigroesse
+oder Framefolge wird typisiert abgelehnt. Der generierte Port aktiviert den
+Pfad ausschliesslich opt-in ueber:
+
+```text
+KATANA_CONTROLLER_INPUT_REPLAY=<capture.kin1>
+KATANA_CONTROLLER_INPUT_REPLAY_IDENTITY=<gebundene-identitaet>
+```
+
+Ohne beide Variablen bleibt die normale Hostpolling- und Keyboard-Timeline
+aktiv. `ControllerInputRecording::append()` ist fuer Diagnose- oder
+Harness-Code der bounded Capture-Einstieg; die Datei wird erst ausserhalb des
+Frame-Hotpaths mit `save()` geschrieben.
+
+Der native Produktpfad besitzt zusaetzlich einen identitaetsgebundenen
+`NativePortPlatformServices`-Trace fuer genau die vier
+`NativePortGamepadState`-Slots, die `context.platform->poll_gamepads()` liefert.
+Er wird ausschliesslich ueber einen expliziten Startmodus aktiviert:
+
+```text
+game.exe --record-input <capture.kat1>
+game.exe --replay-input <capture.kat1>
+```
+
+Ein normaler Doppelklick auf `game.exe` aktiviert weder Record noch Replay.
+Record und Replay sind gegenseitig exklusiv. Die Datei wird vor dem Lauf
+vollstaendig geladen und auf Plattformvertrag, Slotzahl, Identitaet,
+Framebudget, monotone Pollsequenzen und Wertebereiche geprueft. Replay ersetzt
+den XInput-/WinMM-Poll vollstaendig; im Frame-Hotpath gibt es dann weder
+Datei-I/O, Locks noch Allokationen. Recording schreibt in einen vorreservierten
+bounded Puffer und zugleich in ein vorallokiertes, speichergemapptes Journal.
+Der Frame-Hotpath fuehrt dadurch weiterhin keine Dateisystemaufrufe, Locks oder
+Allokationen aus. Jeder vollstaendig geschriebene Frame wird erst danach im
+Journal als committed markiert; beim Prozessende bleibt deshalb auch nach
+einem harten Produktabbruch ein replayfaehiger Praefix erhalten.
+`finalize_clean_shutdown()` kompaktiert ihn ueber einen atomaren
+Temp-to-target-Replacement. Ein kontrollierter typisierter Fehler tut dasselbe
+beim Owner-Thread-Unwind; ein Maschinen-/Dateisystemausfall ausserhalb des
+Prozesses ist keine Persistenzgarantie. Der generierte Produktport liefert
+automatisch eine stabile Kompatibilitaetsidentitaet aus Projekt- und
+Original-Contentidentitaet. Eine Aufnahme bleibt dadurch ueber neue Katana-
+Builds hinweg verwendbar, wird fuer ein anderes Spiel oder andere
+Executable-Bytes aber vor dem ersten Poll abgelehnt.
+Direkte Bibliotheksnutzer setzen dieselben Pfade und die Identitaet ueber
+`NativePortPlatformConfig`; es gibt keinen impliziten Environment-Fallback.
+
 `HostRuntimeSession` akzeptiert streng steigende Sequenzen und monotone
 Gastzyklen. Fokusverlust/Pause stoppen Media-Clock und Audio. Resume setzt sie
 fort. Close, Shutdown und jeder Fehlerpfad stoppen Audio und Media-Clock und

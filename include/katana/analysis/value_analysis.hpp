@@ -5,6 +5,7 @@
 #include "katana/sh4/disassembler.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -51,6 +52,27 @@ enum class IndirectControlFlowOriginClass : std::uint8_t {
     RuntimePointer
 };
 
+enum class ExactGuardRejectionReason : std::uint8_t {
+    None,
+    PrecedingCall,
+    ConflictingTargets,
+    TargetNotExecutable,
+    UnknownTargetOpcode,
+    DispatchImmutableProofMissing,
+    DefinitionImmutableProofMissing,
+    WriterImmutableProofMissing,
+    LiteralImmutableProofMissing,
+    TargetImmutableProofMissing,
+    ImageIdentityMismatch,
+    Count
+};
+
+inline constexpr std::size_t exact_guard_rejection_reason_count =
+    static_cast<std::size_t>(ExactGuardRejectionReason::Count);
+
+[[nodiscard]] const char*
+exact_guard_rejection_reason_name(ExactGuardRejectionReason reason) noexcept;
+
 [[nodiscard]] const char*
 indirect_control_flow_origin_class_name(IndirectControlFlowOriginClass origin) noexcept;
 
@@ -74,6 +96,16 @@ struct IndirectControlFlowResolution {
     std::vector<std::uint32_t> definition_sites;
     bool definition_complete = false;
     bool preceding_call = false;
+    // This is stronger than ordinary guarded inventory: the target comes
+    // from one immutable, image-bound PC-relative writer chain with no
+    // intervening call. Code generation must allow only this target and fail
+    // closed if the live register differs.
+    bool exact_target_guard = false;
+    // Why an otherwise statically decoded literal chain was not admitted as
+    // an exact guarded edge.  None means that no complete exact-chain attempt
+    // reached the immutable-proof gate.
+    ExactGuardRejectionReason exact_guard_rejection_reason =
+        ExactGuardRejectionReason::None;
     katana::sh4::InstructionKind instruction_kind = katana::sh4::InstructionKind::Unknown;
     std::vector<std::uint32_t> analysis_candidates;
 };

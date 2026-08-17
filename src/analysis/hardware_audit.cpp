@@ -755,6 +755,319 @@ struct EffectiveAccessSet {
     bool complete = false;
 };
 
+// A small class of SH-4 startup routines walks an image-owned table of
+// {destination,value} pairs and performs one indirect store per row.  The
+// ordinary constant lattice quite deliberately does not turn the destination
+// loaded from that table into one guessed scalar address.  Keep this audit
+// side resolver equally conservative: it only admits a table when the table
+// pointer is an immutable, initial-image value, the load/store shape proves
+// that the dynamic store consumes the table destination, and a terminator is
+// observed within a hard bound.
+struct TableDrivenAccessResolution final {
+    bool recognized = false;
+    EffectiveAccessSet access_set;
+};
+
+constexpr std::size_t maximum_hardware_table_entries = 256u;
+constexpr std::size_t maximum_hardware_table_lookback = 64u;
+
+bool is_identity_bound_initial_segment(const io::ExecutableImage& image,
+                                       const io::ImageSegment& segment) noexcept {
+    if (!segment.permissions.readable ||
+        segment.load_phase != io::ImageLoadPhase::Initial ||
+        segment.source_kind == io::ImageSourceKind::RuntimeMemory)
+        return false;
+    if (!segment.permissions.writable) return true;
+    return image.initial_snapshot_policy() ==
+           io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent;
+}
+
+std::optional<std::uint32_t> read_identity_bound_table_word(
+    const io::ExecutableImage& image,
+    const io::ImageSegment& segment,
+    const std::uint32_t address) {
+    if (!segment.contains(address, 4u) || !is_identity_bound_initial_segment(image, segment))
+        return std::nullopt;
+    try {
+        return image.read_u32_le(address);
+    } catch (...) {
+        // A malformed or partially committed source segment is not a table
+        // proof.  The hardware audit must remain fail-closed here.
+        return std::nullopt;
+    }
+}
+
+TableDrivenAccessResolution scan_identity_bound_hardware_table(
+    const io::ExecutableImage& image,
+    const std::uint32_t table_address) {
+    TableDrivenAccessResolution result;
+    const auto* table_segment = image.find_segment(table_address, 8u);
+    if (table_segment == nullptr ||
+        !is_identity_bound_initial_segment(image, *table_segment))
+        return result;
+
+    result.recognized = true;
+    result.access_set.complete = false;
+    for (std::size_t index = 0u; index < maximum_hardware_table_entries; ++index) {
+        const auto entry_offset = static_cast<std::uint64_t>(index) * 8u;
+        const auto entry_address = static_cast<std::uint64_t>(table_address) + entry_offset;
+        if (entry_address > static_cast<std::uint64_t>(
+                                std::numeric_limits<std::uint32_t>::max()) - 4u) {
+            result.access_set.accesses.clear();
+            return result;
+        }
+        const auto entry = static_cast<std::uint32_t>(entry_address);
+        // Requiring the complete pair to remain in the same identity-bound
+        // segment prevents a sentinel in a neighboring/latent image from
+        // completing this table accidentally.
+        const auto destination = read_identity_bound_table_word(image, *table_segment, entry);
+        if (!destination.has_value()) {
+            result.access_set.accesses.clear();
+            return result;
+        }
+        if (*destination == 0u) {
+            result.access_set.complete = true;
+            return result;
+        }
+        const auto value = read_identity_bound_table_word(image, *table_segment, entry + 4u);
+        if (!value.has_value()) {
+            result.access_set.accesses.clear();
+            return result;
+        }
+        // The owner contract writes a 32-bit value to a 32-bit destination.
+        // An unaligned target is not silently normalized into a different
+        // hardware register and therefore invalidates the table proof.
+        if ((*destination & 3u) != 0u) {
+            result.access_set.accesses.clear();
+            result.access_set.complete = false;
+            return result;
+        }
+        result.access_set.accesses.push_back(
+            {*destination, HardwareAccessKind::Write, 4u});
+    }
+    // A bound was reached without a null terminator.  Preserve no partial
+    // target set: callers will keep the dynamic site unresolved instead of
+    // converting a truncated scan into a positive closure claim.
+    result.access_set.accesses.clear();
+    result.access_set.complete = false;
+    return result;
+}
+
+bool is_pc_relative_table_pointer_load(const sh4::DisassemblyLine& line) noexcept {
+    return line.instruction.kind == sh4::InstructionKind::MovLongLoadPcRelative;
+}
+
+bool is_table_destination_load(const sh4::DisassemblyLine& line,
+                               const std::uint8_t table_register,
+                               const std::uint8_t destination_register) noexcept {
+    return line.instruction.kind == sh4::InstructionKind::MovLongLoad &&
+           line.instruction.source_register == table_register &&
+           line.instruction.destination_register == destination_register;
+}
+
+bool is_table_value_load(const sh4::DisassemblyLine& line,
+                         const std::uint8_t table_register,
+                         const std::uint8_t value_register) noexcept {
+    return line.instruction.kind == sh4::InstructionKind::MovLongLoadDisplacement &&
+           line.instruction.source_register == table_register &&
+           line.instruction.destination_register == value_register &&
+           line.instruction.displacement == 4;
+}
+
+bool register_is_unmodified(
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::size_t first,
+    const std::size_t last,
+    const std::uint8_t register_index) noexcept {
+    if (first > last || last > lines.size() || register_index >= 16u) return false;
+    const auto mask = static_cast<std::uint16_t>(1u << register_index);
+    for (std::size_t index = first; index < last; ++index)
+        if ((general_register_write_mask(lines[index].instruction) & mask) != 0u)
+            return false;
+    return true;
+}
+
+bool has_table_terminator_guard(
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::size_t loop_load_index,
+    const std::size_t store_index) noexcept {
+    if (loop_load_index >= store_index || store_index >= lines.size()) return false;
+    const auto& loop_load = lines[loop_load_index].instruction;
+    if (loop_load.kind != sh4::InstructionKind::MovLongLoad) return false;
+    const auto terminator_register = loop_load.destination_register;
+    for (std::size_t test_index = loop_load_index + 1u;
+         test_index + 1u < store_index;
+         ++test_index) {
+        const auto& test = lines[test_index].instruction;
+        if (test.kind != sh4::InstructionKind::TestRegister ||
+            test.source_register != terminator_register ||
+            test.destination_register != terminator_register ||
+            !register_is_unmodified(
+                lines, loop_load_index + 1u, test_index, terminator_register))
+            continue;
+        const auto& branch_line = lines[test_index + 1u];
+        if (branch_line.instruction.control_flow !=
+                sh4::ControlFlowKind::ConditionalBranch ||
+            (branch_line.instruction.kind != sh4::InstructionKind::Bt &&
+             branch_line.instruction.kind != sh4::InstructionKind::BtS) ||
+            !branch_line.target_address.has_value() ||
+            *branch_line.target_address <= lines[store_index].address)
+            continue;
+        return true;
+    }
+    return false;
+}
+
+bool has_bounded_table_backedge(
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::size_t pointer_index,
+    const std::size_t store_index,
+    const std::uint8_t table_register) noexcept {
+    if (store_index + 2u >= lines.size()) return false;
+    const auto& branch_line = lines[store_index + 1u];
+    const auto& delay_line = lines[store_index + 2u];
+    if (branch_line.address != lines[store_index].address + 2u ||
+        delay_line.address != branch_line.address + 2u ||
+        branch_line.instruction.control_flow !=
+            sh4::ControlFlowKind::UnconditionalBranch ||
+        !branch_line.target_address.has_value() ||
+        *branch_line.target_address <= lines[pointer_index].address ||
+        *branch_line.target_address >= lines[store_index].address ||
+        !delay_line.is_delay_slot ||
+        delay_line.instruction.kind != sh4::InstructionKind::AddImmediate ||
+        delay_line.instruction.destination_register != table_register ||
+        delay_line.instruction.immediate != 8)
+        return false;
+    const auto loop_load = std::find_if(
+        lines.begin() + static_cast<std::ptrdiff_t>(pointer_index + 1u),
+        lines.begin() + static_cast<std::ptrdiff_t>(store_index),
+        [&](const auto& line) {
+            return line.address == *branch_line.target_address &&
+                   line.instruction.kind == sh4::InstructionKind::MovLongLoad &&
+                   line.instruction.source_register == table_register;
+        });
+    if (loop_load == lines.begin() + static_cast<std::ptrdiff_t>(store_index))
+        return false;
+    const auto loop_load_index =
+        static_cast<std::size_t>(loop_load - lines.begin());
+    return register_is_unmodified(
+               lines, pointer_index + 1u, loop_load_index, table_register) &&
+           has_table_terminator_guard(lines, loop_load_index, store_index);
+}
+
+bool contiguous_instruction_window(
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::size_t first,
+    const std::size_t last) noexcept {
+    if (first > last || last >= lines.size()) return false;
+    for (std::size_t index = first + 1u; index <= last; ++index)
+        if (lines[index].address != lines[index - 1u].address + 2u) return false;
+    return true;
+}
+
+bool table_window_has_only_local_control_flow(
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::size_t first,
+    const std::size_t last) noexcept {
+    for (std::size_t index = first; index <= last; ++index) {
+        const auto flow = lines[index].instruction.control_flow;
+        if (flow != sh4::ControlFlowKind::None &&
+            flow != sh4::ControlFlowKind::ConditionalBranch)
+            return false;
+    }
+    return true;
+}
+
+TableDrivenAccessResolution resolve_table_driven_store(
+    const io::ExecutableImage& image,
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::size_t store_index,
+    std::unordered_map<std::uint32_t, TableDrivenAccessResolution>& table_cache) {
+    TableDrivenAccessResolution unresolved;
+    if (store_index >= lines.size() ||
+        lines[store_index].instruction.kind != sh4::InstructionKind::MovLongStore)
+        return unresolved;
+    const auto first = store_index > maximum_hardware_table_lookback
+                           ? store_index - maximum_hardware_table_lookback
+                           : 0u;
+    for (std::size_t pointer_index = first; pointer_index < store_index; ++pointer_index) {
+        if (!is_pc_relative_table_pointer_load(lines[pointer_index])) continue;
+        if (!contiguous_instruction_window(lines, pointer_index, store_index)) continue;
+        // A table proof may not cross a return, call, or unconditional branch.
+        // Conditional loop guards are permitted because the owner pattern
+        // tests the destination sentinel before the indirect store.
+        if (!table_window_has_only_local_control_flow(lines, pointer_index, store_index))
+            continue;
+        const auto window = lines.subspan(pointer_index, store_index - pointer_index + 1u);
+        const auto trace = propagate_local_constants(window, image);
+        if (trace.empty()) continue;
+        const auto& pointer_load = lines[pointer_index].instruction;
+        const auto table_pointer = trace.front().after.registers[
+            pointer_load.destination_register];
+        if (!table_pointer.has_value() ||
+            trace.front().after.sources[pointer_load.destination_register].find(
+                "guarded-writable") != std::string::npos)
+            continue;
+        const auto cached = table_cache.find(*table_pointer);
+        const auto& table = cached != table_cache.end()
+                                ? cached->second
+                                : table_cache.emplace(
+                                      *table_pointer,
+                                      scan_identity_bound_hardware_table(image, *table_pointer))
+                                      .first->second;
+        if (!table.recognized) continue;
+        const auto table_register = pointer_load.destination_register;
+        if (!has_bounded_table_backedge(
+                lines, pointer_index, store_index, table_register))
+            continue;
+        const auto store_value_register =
+            lines[store_index].instruction.source_register;
+        for (std::size_t destination_index = pointer_index + 1u;
+             destination_index < store_index;
+             ++destination_index) {
+            const auto destination_register =
+                lines[destination_index].instruction.destination_register;
+            if (!is_table_destination_load(lines[destination_index],
+                                           table_register,
+                                           destination_register))
+                continue;
+            const auto destination_trace_index = destination_index - pointer_index;
+            if (destination_trace_index >= trace.size() ||
+                trace[destination_trace_index].before.registers[table_register] !=
+                    table_pointer ||
+                !register_is_unmodified(
+                    lines, pointer_index + 1u, destination_index, table_register))
+                continue;
+            bool has_value_load = false;
+            std::size_t value_index = 0u;
+            for (std::size_t candidate_index = pointer_index + 1u;
+                 candidate_index < store_index;
+                 ++candidate_index) {
+                if (is_table_value_load(
+                        lines[candidate_index], table_register, store_value_register) &&
+                    candidate_index - pointer_index < trace.size() &&
+                    trace[candidate_index - pointer_index]
+                            .before.registers[table_register] == table_pointer &&
+                    register_is_unmodified(
+                        lines, pointer_index + 1u, candidate_index, table_register)) {
+                    has_value_load = true;
+                    value_index = candidate_index;
+                    break;
+                }
+            }
+            if (!has_value_load ||
+                lines[store_index].instruction.destination_register != destination_register ||
+                !register_is_unmodified(
+                    lines, destination_index + 1u, store_index, destination_register) ||
+                !register_is_unmodified(
+                    lines, value_index + 1u, store_index, store_value_register))
+                continue;
+            return table;
+        }
+    }
+    return unresolved;
+}
+
 std::uint32_t project_runtime_image_access(
     const io::ExecutableImage& image,
     const std::uint32_t instruction_address,
@@ -2400,6 +2713,46 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
     };
     std::map<std::uint32_t, MemorySiteAggregate> complete_memory_sites;
     std::map<ReferenceKey, AggregatedReference> aggregated_references;
+    std::unordered_map<std::uint32_t, TableDrivenAccessResolution>
+        table_driven_store_resolutions;
+    std::unordered_map<std::uint32_t, TableDrivenAccessResolution> table_scan_cache;
+    table_scan_cache.reserve(64u);
+    if (analysis.instruction_arena) {
+        const auto instructions = std::span<const sh4::DisassemblyLine>(
+            analysis.recursive.instructions.data(),
+            analysis.recursive.instructions.size());
+        table_driven_store_resolutions.reserve(instructions.size() / 32u + 1u);
+        for (std::size_t index = 0u; index < instructions.size(); ++index) {
+            if (instructions[index].instruction.kind != sh4::InstructionKind::MovLongStore)
+                continue;
+            auto resolution = resolve_table_driven_store(
+                image, instructions, index, table_scan_cache);
+            if (!resolution.recognized) continue;
+            const auto [existing, inserted] = table_driven_store_resolutions.try_emplace(
+                instructions[index].address);
+            if (inserted) {
+                existing->second = std::move(resolution);
+                continue;
+            }
+            // Multiple CFG contexts may expose the same store.  A complete
+            // table proof survives only when every context is complete; the
+            // target union remains useful for reporting possible hardware
+            // sites, but never upgrades an incomplete scan.
+            existing->second.access_set.complete =
+                existing->second.access_set.complete && resolution.access_set.complete;
+            for (const auto& access : resolution.access_set.accesses) {
+                const auto duplicate = std::find_if(
+                    existing->second.access_set.accesses.begin(),
+                    existing->second.access_set.accesses.end(),
+                    [&access](const auto& current) {
+                        return current.address == access.address &&
+                               current.kind == access.kind && current.width == access.width;
+                    });
+                if (duplicate == existing->second.access_set.accesses.end())
+                    existing->second.access_set.accesses.push_back(access);
+            }
+        }
+    }
     if (analysis.instruction_arena) {
         for (const auto& span : analysis.block_spans) {
             const auto lines = span.view(*analysis.instruction_arena);
@@ -2407,8 +2760,14 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
             const auto gbr_trace = propagate_local_gbr(lines, trace);
             for (std::size_t index = 0u; index < lines.size(); ++index) {
                 if (!is_memory_access_instruction(lines[index].instruction.kind)) continue;
-                const auto access_set =
+                auto access_set =
                     effective_accesses(lines[index], trace[index].before, gbr_trace[index]);
+                if (!access_set.complete) {
+                    const auto table = table_driven_store_resolutions.find(lines[index].address);
+                    if (table != table_driven_store_resolutions.end() &&
+                        table->second.recognized)
+                        access_set = table->second.access_set;
+                }
                 const auto shape =
                     memory_access_shape(lines[index].instruction);
                 const auto [site, inserted] = complete_memory_sites.emplace(

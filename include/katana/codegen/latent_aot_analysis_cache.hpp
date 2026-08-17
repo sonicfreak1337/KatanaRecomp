@@ -11,7 +11,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t latent_aot_analysis_cache_schema_version = 6u;
+inline constexpr std::uint32_t latent_aot_analysis_cache_schema_version = 7u;
 inline constexpr std::uint32_t latent_aot_analysis_address_layout_schema = 1u;
 // Positive artifacts contain untrusted, unoptimized IR. Current bytes can
 // authenticate every retained instruction but cannot prove that the cached

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -91,6 +92,31 @@ int main() {
             "Ein Zugriff ueber das Segmentende wurde akzeptiert.");
     require(std::string(segment_kind_name(SegmentKind::Unknown)) == "unknown",
             "Unknown-Name ist instabil.");
+
+    ExecutableImage immutable_image;
+    immutable_image.add_segment(code_segment());
+    immutable_image.add_immutable_range(
+        {0x8C010000u, 4u, "synthetic-code-identity-v1", 0u});
+    const auto immutable_generation = immutable_image.immutable_generation();
+    require(immutable_image.find_immutable_range(0x8C010000u, 4u) != nullptr,
+            "Identitaetsgebundener Imagebereich wurde nicht aufgenommen.");
+    ExecutableImage immutable_copy = immutable_image;
+    ExecutableImage immutable_copy_assignment;
+    immutable_copy_assignment = immutable_image;
+    ExecutableImage immutable_move = std::move(immutable_copy);
+    ExecutableImage immutable_move_assignment;
+    immutable_move_assignment = std::move(immutable_copy_assignment);
+    require(immutable_move.find_immutable_range(0x8C010000u, 4u) != nullptr &&
+                immutable_move_assignment.find_immutable_range(
+                    0x8C010000u, 4u) != nullptr &&
+                immutable_move.immutable_generation() == immutable_generation &&
+                immutable_move_assignment.immutable_generation() ==
+                    immutable_generation,
+            "Copy/Move verlor die gebundene unveraenderliche Imageansicht.");
+    immutable_move.write_u32_le(0x8C010000u, 0x000B0009u);
+    require(immutable_move.find_immutable_range(0x8C010000u, 2u) == nullptr &&
+                immutable_move.immutable_generation() != immutable_generation,
+            "Eine Bytemutation liess einen veralteten Immutable-Proof aktiv.");
 
     ExecutableImage relocated;
     relocated.add_segment(

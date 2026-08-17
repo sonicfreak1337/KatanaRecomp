@@ -116,10 +116,20 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
     for (const auto address : additional_leaders) {
         if (const auto leader = address_to_index.find(address); leader != address_to_index.end()) {
             // A boundary alone is not proof that a physical delay slot also
-            // has a normal-entry context. Ignoring that split keeps the owner
-            // paired with its slot; direct and resolved targets above remain
-            // authoritative normal-entry evidence.
-            if (!lines[leader->second].is_delay_slot ||
+            // has a normal-entry context. The canonical line may have lost
+            // its delay-slot marker when the same physical instruction was
+            // also decoded from a normal context, so recognize the pair from
+            // the preceding delayed opcode as well. Ignoring an unproven
+            // split keeps the owner paired with its slot; direct and resolved
+            // targets above remain authoritative normal-entry evidence.
+            const bool follows_physical_delay_owner =
+                leader->second > 0u &&
+                lines[leader->second - 1u].address + 2u ==
+                    lines[leader->second].address &&
+                !lines[leader->second - 1u].is_delay_slot &&
+                lines[leader->second - 1u].instruction.has_delay_slot;
+            if ((!lines[leader->second].is_delay_slot &&
+                 !follows_physical_delay_owner) ||
                 normal_entry_leaders.contains(leader->second))
                 leaders.insert(leader->second);
         }
@@ -160,6 +170,22 @@ build_basic_blocks(const std::span<const katana::sh4::DisassemblyLine> lines,
         block.lines.insert(block.lines.end(),
                            lines.begin() + static_cast<std::ptrdiff_t>(first_index),
                            lines.begin() + static_cast<std::ptrdiff_t>(copy_end));
+        // The recursive instruction arena stores one canonical line per
+        // physical address. If that halfword was also decoded from a normal
+        // entry, the canonical line can lose its delay-slot tag even though
+        // this block reaches it directly from the preceding delayed owner.
+        // Restore the execution-context role inside the owner block. A
+        // separately materialized normal-entry block starts at the same
+        // address without the owner in front of it and therefore keeps the
+        // independent non-slot context below.
+        for (std::size_t line_index = 1u;
+             line_index < block.lines.size(); ++line_index) {
+            const auto& owner = block.lines[line_index - 1u];
+            auto& slot = block.lines[line_index];
+            if (!owner.is_delay_slot && owner.instruction.has_delay_slot &&
+                owner.address + 2u == slot.address)
+                slot.is_delay_slot = true;
+        }
         if (overlaps_normal_delay_slot) {
             // A branch may target its own delay-slot address. The physical
             // instruction then has two contexts: it closes the owner block as

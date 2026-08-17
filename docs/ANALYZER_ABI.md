@@ -1,15 +1,33 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `55`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 114, Block-ABI 5, PlatformServices-ABI 14,
+Der aktuelle oeffentliche Analyzervertrag ist Version `56`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 115, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
-Directives-Version 5, Native-AOT-Emissionsprofil 40 und Port-Metadata-Cache-
+Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
+und Port-Metadata-Cache-
 Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
 Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
 Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
+
+Analyzer-ABI 56 trennt persistente 32-Bit-Argumentstores von direkten
+Callbackregistraren. Latente Module duerfen einen solchen Primary-Image-Sink
+nur mit einem per SH-4-Datenfluss bewiesenen lokalen Descriptoranfang plus
+`Index * Stride` und einem unabhaengig bewiesenen Callback-Feld-Walker
+kombinieren. Die bounded Tabelle erlaubt Nullfelder, verlangt mindestens zwei
+lokale Entry-Shapes und einen expliziten Terminator vor 256 Records. Alle
+gewonnenen Entries bleiben guarded; keine indirekte Zielmenge wird dadurch
+vollstaendig. Analyzer-ABI 56 und Boot-Analysecache-Schema 9 binden den neuen
+Analysevertrag, ohne unveraenderte AOT-Emissionen oder Hostobjekte kalt zu
+invalidieren.
+
+Ein exakter Latent-AOT-Entry-Hinweis bindet bei transformierten `.PRS`-
+Quellen den kodierten Disc-Extent, aber die Modulidentitaet und den Entryoffset
+an die strikt dekodierte Executable-Sicht. Im kombinierten Heuristikmodus
+erweitert diese Runtime-Frontier-Evidenz die bereits validierte Rootmenge des
+Moduls; sie darf sie nicht ersetzen oder den PRS-Transform umgehen.
 
 Analyzer-ABI 53 publiziert die kanonischen Callback- und Record-Field-Sinks
 der finalen RuntimeOnly-CFA als Teil von `ControlFlowAnalysisResult`. Der

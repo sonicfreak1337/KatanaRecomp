@@ -379,6 +379,81 @@ constexpr std::uint32_t maximum_resource_descriptor_stride = 4'096u;
     return false;
 }
 
+[[nodiscard]] bool sound_frame_service_shape(
+    const std::span<const Line> lines) noexcept {
+    if (!bounded_function_frame(lines) || lines.size() < 80u ||
+        lines.size() > 112u)
+        return false;
+
+    // A high-level SDK sound server owns one complete title tick. It keeps
+    // the seven callee-saved working registers, brackets the fixed services
+    // with a shared timer/delta pair, then visits a bounded array of active
+    // sound records. This is deliberately a pure SH-4 control/data shape:
+    // no title address, SDK symbol, device aperture or literal target is
+    // part of the provider proof.
+    constexpr std::array<std::uint32_t, 7u> saved_registers{
+        14u, 13u, 12u, 11u, 10u, 9u, 8u};
+    for (std::size_t index = 0u; index < saved_registers.size(); ++index) {
+        if (!instruction(lines[index], Kind::MovLongStorePreDecrement,
+                         15u, saved_registers[index]))
+            return false;
+    }
+    if (lines[7u].instruction.kind !=
+            Kind::StoreSpecialRegisterPreDecrement ||
+        lines[7u].instruction.special_register !=
+            katana::sh4::SpecialRegister::Pr)
+        return false;
+
+    const auto calls = [&](const std::uint8_t reg) {
+        return std::count_if(lines.begin(), lines.end(), [&](const auto& line) {
+            return branch_register(line, Kind::Jsr, reg);
+        });
+    };
+    if (calls(9u) != 6u || calls(8u) != 6u || calls(3u) != 4u ||
+        calls(10u) != 1u)
+        return false;
+
+    const auto loads_shared_service = [&](const std::uint32_t reg) {
+        return std::count_if(lines.begin(), lines.end(), [&](const auto& line) {
+            return instruction(line, Kind::MovLongLoadPcRelative, reg);
+        });
+    };
+    if (loads_shared_service(9u) != 1u || loads_shared_service(8u) != 1u ||
+        loads_shared_service(10u) != 1u)
+        return false;
+
+    const auto duration_publications = std::count_if(
+        lines.begin(), lines.end(), [](const auto& line) {
+            return line.instruction.kind == Kind::MovLongStore &&
+                   line.instruction.source_register == 0u;
+        });
+    if (duration_publications < 6u) return false;
+
+    constexpr std::size_t loop_size = 9u;
+    for (std::size_t index = 0u; index + loop_size <= lines.size(); ++index) {
+        const auto loop = lines.subspan(index, loop_size);
+        if (!instruction(loop[0], Kind::MovRegister, 4u, 12u) ||
+            !instruction(loop[1], Kind::MovByteLoad, 0u, 4u) ||
+            !instruction(loop[2], Kind::CompareEqualImmediate,
+                         0u, std::nullopt, 1) ||
+            loop[3].instruction.kind != Kind::Bf ||
+            !loop[3].target_address.has_value() ||
+            *loop[3].target_address != loop[6].address ||
+            !branch_register(loop[4], Kind::Jsr, 10u) ||
+            loop[5].instruction.kind != Kind::Nop ||
+            !loop[5].is_delay_slot ||
+            !instruction(loop[6], Kind::AddImmediate,
+                         12u, std::nullopt, 116) ||
+            !instruction(loop[7], Kind::CompareHigherOrSame, 12u, 11u) ||
+            loop[8].instruction.kind != Kind::Bf ||
+            !loop[8].target_address.has_value() ||
+            *loop[8].target_address != loop[0].address)
+            continue;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] std::optional<NativeSdkProviderFamily> provider_family(
     const katana::io::ExecutableImage& image,
     const std::span<const Line> lines) noexcept {
@@ -390,6 +465,8 @@ constexpr std::uint32_t maximum_resource_descriptor_stride = 4'096u;
         return NativeSdkProviderFamily::SynchronousContentRangeRead;
     if (sound_bank_chunk_registration_shape(image, lines))
         return NativeSdkProviderFamily::SoundBankChunkRegistration;
+    if (sound_frame_service_shape(lines))
+        return NativeSdkProviderFamily::SoundFrameService;
     return std::nullopt;
 }
 
@@ -419,6 +496,12 @@ constexpr std::uint32_t maximum_resource_descriptor_stride = 4'096u;
                 "paired-sound-resource-publication",
                 "ordinary-title-ram-offset-mirror",
                 "aggregate-sdk-status-return"};
+    case NativeSdkProviderFamily::SoundFrameService:
+        return {"seven-callee-saved-working-registers",
+                "shared-timer-delta-service-brackets",
+                "four-fixed-sound-services",
+                "bounded-active-record-loop-stride-116",
+                "ordinary-title-ram-duration-publication"};
     }
     return {};
 }
@@ -846,6 +929,7 @@ void bind_resource_reference(
             break;
         case NativeSdkProviderFamily::SynchronousContentRangeRead:
         case NativeSdkProviderFamily::SoundBankChunkRegistration:
+        case NativeSdkProviderFamily::SoundFrameService:
             break;
         }
     }
@@ -983,6 +1067,8 @@ std::string_view native_sdk_provider_family_name(
         return "synchronous-content-range-read";
     case NativeSdkProviderFamily::SoundBankChunkRegistration:
         return "sound-bank-chunk-registration";
+    case NativeSdkProviderFamily::SoundFrameService:
+        return "sound-frame-service";
     }
     return "unknown";
 }

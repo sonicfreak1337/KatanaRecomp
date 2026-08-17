@@ -65,6 +65,22 @@ struct ImageAddressAlias {
     std::uint64_t size = 0;
 };
 
+// A post-materialization proof for a committed source-image subrange.  The
+// segment permissions are intentionally not enough here: Dreamcast boot
+// images are mixed RWX segments even when a verified post-bootstrap identity
+// proves that a particular code/literal range is no longer writable.  The
+// generation is owned by ExecutableImage and is invalidated whenever image
+// bytes/layout metadata mutates; identity binds all ranges used by one exact
+// pointer chain to the same authenticated image view.
+struct ImageImmutableRange final {
+    std::uint32_t address = 0u;
+    std::uint64_t size = 0u;
+    std::string identity;
+    std::uint64_t generation = 0u;
+
+    [[nodiscard]] bool operator==(const ImageImmutableRange&) const = default;
+};
+
 struct SegmentPermissions {
     bool readable = false;
     bool writable = false;
@@ -111,6 +127,10 @@ class ExecutableImage {
     void add_symbol(ImageSymbol symbol);
     void add_relocation(ImageRelocation relocation);
     void add_address_alias(ImageAddressAlias alias);
+    // Adds an identity-bound immutable source range.  The range must be fully
+    // backed by one readable, non-runtime committed segment.  This metadata
+    // is deliberately separate from coarse segment permissions.
+    void add_immutable_range(ImageImmutableRange range);
     void set_guest_call_abi(GuestCallAbi abi) noexcept;
     void set_initial_snapshot_policy(InitialSnapshotPolicy policy) noexcept;
     void set_initial_snapshot_entry(std::uint32_t address) noexcept;
@@ -122,6 +142,12 @@ class ExecutableImage {
     [[nodiscard]] std::span<const ImageSymbol> symbols() const noexcept;
     [[nodiscard]] std::span<const ImageRelocation> relocations() const noexcept;
     [[nodiscard]] std::span<const ImageAddressAlias> address_aliases() const noexcept;
+    [[nodiscard]] std::span<const ImageImmutableRange>
+    immutable_ranges() const noexcept;
+    [[nodiscard]] std::uint64_t immutable_generation() const noexcept;
+    [[nodiscard]] const ImageImmutableRange*
+    find_immutable_range(std::uint32_t address,
+                         std::size_t width = 1u) const noexcept;
     [[nodiscard]] GuestCallAbi guest_call_abi() const noexcept;
     [[nodiscard]] InitialSnapshotPolicy initial_snapshot_policy() const noexcept;
     [[nodiscard]] std::optional<std::uint32_t> initial_snapshot_entry() const noexcept;
@@ -150,12 +176,14 @@ class ExecutableImage {
     std::vector<ImageSymbol> symbols_;
     std::vector<ImageRelocation> relocations_;
     std::vector<ImageAddressAlias> address_aliases_;
+    std::vector<ImageImmutableRange> immutable_ranges_;
     GuestCallAbi guest_call_abi_ = GuestCallAbi::Unknown;
     InitialSnapshotPolicy initial_snapshot_policy_ = InitialSnapshotPolicy::ImmutableOnly;
     std::optional<std::uint32_t> initial_snapshot_entry_;
     ImageAddressModel address_model_ = ImageAddressModel::Exact;
     std::uint64_t analysis_instance_identity_ = 0u;
     std::uint64_t analysis_revision_ = 0u;
+    std::uint64_t immutable_generation_ = 1u;
 };
 
 [[nodiscard]] const char* segment_kind_name(SegmentKind kind) noexcept;

@@ -238,6 +238,30 @@ int main() {
         "Ein reiner Delay Slot wurde durch einen zusaetzlichen Boundary-Leader "
         "faelschlich zum Normal-Entry oder vom Owner getrennt.");
 
+    auto mixed_canonical_delay_lines = pure_delay_lines;
+    mixed_canonical_delay_lines[1u].is_delay_slot = false;
+    const auto mixed_canonical_delay_blocks =
+        katana::analysis::build_basic_blocks(
+            mixed_canonical_delay_lines,
+            pure_delay_resolved_edges,
+            pure_delay_additional_leaders);
+    require(
+        mixed_canonical_delay_blocks.size() == 2u &&
+            mixed_canonical_delay_blocks.front().start_address == 0u &&
+            mixed_canonical_delay_blocks.front().end_address == 2u &&
+            mixed_canonical_delay_blocks.front().lines.size() == 2u &&
+            mixed_canonical_delay_blocks.front().lines.back().is_delay_slot &&
+            mixed_canonical_delay_blocks.front().successors ==
+                std::vector<std::uint32_t>{4u} &&
+            std::none_of(
+                mixed_canonical_delay_blocks.begin(),
+                mixed_canonical_delay_blocks.end(),
+                [](const auto& block) {
+                    return block.start_address == 2u;
+                }),
+        "Ein kanonisch als Normal-Kontext dargestellter physischer Delay Slot "
+        "wurde durch einen unbewiesenen Boundary-Leader vom Owner getrennt.");
+
     for (std::uint32_t mask = 0u; mask < 8u; ++mask) {
         std::array<std::uint8_t, 10u> cfg_bytes{
             0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u, 0x0Bu, 0x00u, 0x09u, 0x00u};

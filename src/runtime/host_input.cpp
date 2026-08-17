@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -496,6 +497,205 @@ std::uint64_t ControllerInputReplay::sampled_frames() const noexcept {
 
 const std::vector<ControllerInputChange>& ControllerInputReplay::trace() const noexcept {
     return trace_;
+}
+
+namespace {
+
+constexpr std::uint32_t controller_input_recording_magic = 0x314E494Bu;
+constexpr std::uint32_t controller_input_recording_max_identity_bytes = 128u;
+
+void write_u32(std::ostream& output, const std::uint32_t value) {
+    const std::array<char, 4u> bytes{
+        static_cast<char>(value & 0xFFu),
+        static_cast<char>((value >> 8u) & 0xFFu),
+        static_cast<char>((value >> 16u) & 0xFFu),
+        static_cast<char>((value >> 24u) & 0xFFu)};
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+void write_u64(std::ostream& output, const std::uint64_t value) {
+    for (std::size_t index = 0u; index < 8u; ++index)
+        output.put(static_cast<char>((value >> (index * 8u)) & 0xFFu));
+}
+
+std::uint32_t read_u32(std::istream& input) {
+    std::array<unsigned char, 4u> bytes{};
+    input.read(reinterpret_cast<char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    if (!input) throw std::runtime_error("controller-input-recording-header-truncated");
+    return static_cast<std::uint32_t>(bytes[0]) |
+           (static_cast<std::uint32_t>(bytes[1]) << 8u) |
+           (static_cast<std::uint32_t>(bytes[2]) << 16u) |
+           (static_cast<std::uint32_t>(bytes[3]) << 24u);
+}
+
+std::uint64_t read_u64(std::istream& input) {
+    std::uint64_t value = 0u;
+    for (std::size_t index = 0u; index < 8u; ++index) {
+        const auto byte = input.get();
+        if (byte == std::char_traits<char>::eof())
+            throw std::runtime_error("controller-input-recording-header-truncated");
+        value |= static_cast<std::uint64_t>(static_cast<unsigned char>(byte))
+                 << (index * 8u);
+    }
+    return value;
+}
+
+void validate_recording_identity(const std::string_view identity) {
+    if (identity.empty() || identity.size() > controller_input_recording_max_identity_bytes)
+        throw std::invalid_argument("controller-input-recording-identity-invalid");
+    if (std::any_of(identity.begin(), identity.end(), [](const char value) {
+            const auto byte = static_cast<unsigned char>(value);
+            return byte < 0x20u || byte > 0x7Eu;
+        }))
+        throw std::invalid_argument("controller-input-recording-identity-invalid");
+}
+
+void write_state(std::ostream& output, const ControllerState& state) {
+    write_u32(output,
+              static_cast<std::uint32_t>(state.pressed_buttons) |
+                  (static_cast<std::uint32_t>(state.right_trigger) << 16u) |
+                  (static_cast<std::uint32_t>(state.left_trigger) << 24u));
+    output.put(static_cast<char>(state.joystick_x));
+    output.put(static_cast<char>(state.joystick_y));
+    output.put(static_cast<char>(state.joystick2_x));
+    output.put(static_cast<char>(state.joystick2_y));
+}
+
+ControllerState read_state(std::istream& input) {
+    const auto buttons_and_triggers = read_u32(input);
+    std::array<unsigned char, 4u> axes{};
+    input.read(reinterpret_cast<char*>(axes.data()),
+               static_cast<std::streamsize>(axes.size()));
+    if (!input) throw std::runtime_error("controller-input-recording-frame-truncated");
+    return ControllerState{
+        static_cast<std::uint16_t>(buttons_and_triggers & 0xFFFFu),
+        static_cast<std::uint8_t>((buttons_and_triggers >> 16u) & 0xFFu),
+        static_cast<std::uint8_t>((buttons_and_triggers >> 24u) & 0xFFu),
+        axes[0], axes[1], axes[2], axes[3]};
+}
+
+} // namespace
+
+ControllerInputRecording::ControllerInputRecording(const std::size_t max_frames)
+    : max_frames_(max_frames) {
+    if (max_frames_ == 0u || max_frames_ > controller_input_recording_default_max_frames)
+        throw std::invalid_argument("controller-input-recording-capacity-invalid");
+    frames_.reserve(max_frames_);
+}
+
+void ControllerInputRecording::append(const std::uint64_t frame,
+                                      const std::span<const ControllerState> slots) {
+    if (slots.size() > maple_port_count)
+        throw std::invalid_argument("controller-input-recording-slot-count-invalid");
+    if (frames_.size() >= max_frames_)
+        throw std::length_error("controller-input-recording-capacity-exhausted");
+    if (!have_first_frame_) {
+        first_frame_ = frame;
+        have_first_frame_ = true;
+    } else if (frame != first_frame_ + frames_.size()) {
+        throw std::invalid_argument("controller-input-recording-frame-discontinuity");
+    }
+    Frame captured{};
+    captured.fill(ControllerState{});
+    std::copy(slots.begin(), slots.end(), captured.begin());
+    frames_.push_back(captured);
+}
+
+ControllerState ControllerInputRecording::sample(const std::uint64_t frame) {
+    return sample_slot(frame, 0u);
+}
+
+ControllerState ControllerInputRecording::sample_at(const std::uint64_t frame,
+                                                     const std::uint64_t) {
+    return sample(frame);
+}
+
+ControllerState ControllerInputRecording::sample_slot(const std::uint64_t frame,
+                                                       const std::size_t slot) const {
+    if (slot >= maple_port_count || !have_first_frame_ || frame < first_frame_)
+        return {};
+    const auto offset = frame - first_frame_;
+    if (offset >= frames_.size()) return {};
+    return frames_[static_cast<std::size_t>(offset)][slot];
+}
+
+std::uint64_t ControllerInputRecording::first_frame() const noexcept {
+    return first_frame_;
+}
+
+std::size_t ControllerInputRecording::frame_count() const noexcept {
+    return frames_.size();
+}
+
+std::size_t ControllerInputRecording::max_frames() const noexcept {
+    return max_frames_;
+}
+
+const std::vector<ControllerInputRecording::Frame>&
+ControllerInputRecording::frames() const noexcept {
+    return frames_;
+}
+
+void ControllerInputRecording::save(const std::filesystem::path& path,
+                                    const std::string_view identity) const {
+    validate_recording_identity(identity);
+    if (frames_.size() > std::numeric_limits<std::uint64_t>::max() /
+                              sizeof(Frame))
+        throw std::length_error("controller-input-recording-size-overflow");
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("controller-input-recording-open-failed");
+    write_u32(output, controller_input_recording_magic);
+    write_u32(output, controller_input_recording_version);
+    write_u32(output, native_controller_contract_version);
+    write_u32(output, static_cast<std::uint32_t>(maple_port_count));
+    write_u64(output, static_cast<std::uint64_t>(frames_.size()));
+    write_u64(output, first_frame_);
+    write_u32(output, static_cast<std::uint32_t>(identity.size()));
+    output.write(identity.data(), static_cast<std::streamsize>(identity.size()));
+    for (const auto& frame : frames_)
+        for (const auto& state : frame) write_state(output, state);
+    if (!output) throw std::runtime_error("controller-input-recording-write-failed");
+}
+
+ControllerInputRecording ControllerInputRecording::load(
+    const std::filesystem::path& path,
+    const std::string_view expected_identity,
+    const std::size_t max_frames) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("controller-input-recording-open-failed");
+    if (read_u32(input) != controller_input_recording_magic ||
+        read_u32(input) != controller_input_recording_version ||
+        read_u32(input) != native_controller_contract_version ||
+        read_u32(input) != maple_port_count)
+        throw std::runtime_error("controller-input-recording-contract-mismatch");
+    const auto frame_count = read_u64(input);
+    const auto first_frame = read_u64(input);
+    const auto identity_size = read_u32(input);
+    if (frame_count > max_frames ||
+        identity_size == 0u || identity_size > controller_input_recording_max_identity_bytes ||
+        frame_count > (std::numeric_limits<std::uint64_t>::max() - identity_size) /
+                           (sizeof(Frame) + 1u))
+        throw std::runtime_error("controller-input-recording-bounds-invalid");
+    std::string identity(identity_size, '\0');
+    input.read(identity.data(), static_cast<std::streamsize>(identity.size()));
+    if (!input) throw std::runtime_error("controller-input-recording-identity-truncated");
+    validate_recording_identity(identity);
+    if (!expected_identity.empty() && identity != expected_identity)
+        throw std::runtime_error("controller-input-recording-identity-mismatch");
+
+    ControllerInputRecording recording(max_frames);
+    recording.first_frame_ = first_frame;
+    recording.have_first_frame_ = frame_count != 0u;
+    recording.frames_.reserve(static_cast<std::size_t>(frame_count));
+    for (std::uint64_t frame = 0u; frame < frame_count; ++frame) {
+        Frame captured{};
+        for (auto& state : captured) state = read_state(input);
+        recording.frames_.push_back(captured);
+    }
+    if (input.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error("controller-input-recording-trailing-data");
+    return recording;
 }
 
 const char* host_controller_kind_name(const HostControllerKind kind) noexcept {

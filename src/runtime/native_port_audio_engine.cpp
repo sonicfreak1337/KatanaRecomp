@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <deque>
 #include <limits>
 #include <string>
 #include <thread>
@@ -230,7 +231,8 @@ NativePortAdxStreamMetadata inspect_native_port_adx_content(
                           "adx-stream-format");
 
     const auto data_start = static_cast<std::uint64_t>(read_be16(header, 2u)) + 4u;
-    const auto blocks = (metadata.sample_frames + 31u) / 32u;
+    const auto blocks =
+        (static_cast<std::uint64_t>(metadata.sample_frames) + 31u) / 32u;
     const auto encoded_bytes_per_block =
         static_cast<std::uint64_t>(adx_block_bytes) * metadata.channels;
     if (data_start < minimum_data_start ||
@@ -331,6 +333,7 @@ class NativePortAudioEngine::Impl final {
             static_cast<std::size_t>(config_.mix_block_frames) * 2u);
         mixed_samples_.resize(
             static_cast<std::size_t>(config_.mix_block_frames) * 2u);
+        pending_contributions_.reserve(config_.maximum_voices);
     }
 
     ~Impl() {
@@ -565,11 +568,15 @@ class NativePortAudioEngine::Impl final {
         }
     }
 
-    void pump() {
+    void pump(const bool refresh_playback_position) {
         require_owner_thread();
         try {
             output_->poll();
-            output_->refresh_playback_position();
+            if (refresh_playback_position) {
+                output_->refresh_playback_position();
+                retire_played_output_segments(
+                    output_->playback_position_frames());
+            }
         } catch (...) {
             fail_audio_engine(NativePortAudioEngineFailure::HostAudio,
                               0u,
@@ -608,6 +615,7 @@ class NativePortAudioEngine::Impl final {
                 static_cast<std::uint32_t>(remaining_output_frames());
             const auto requested_frames =
                 std::min(config_.mix_block_frames, queue_room);
+            const auto output_start_frame = output_snapshot.submitted_frames;
             const auto mixed_frames =
                 mix_block(requested_frames, decoder_reads_remaining);
             if (mixed_frames == 0u) break;
@@ -615,15 +623,21 @@ class NativePortAudioEngine::Impl final {
                 static_cast<std::size_t>(mixed_frames) * 2u;
             bool submitted = false;
             try {
+                stage_output_segments(output_start_frame);
                 submitted = output_->submit_pcm_s16(
                     std::span<const std::int16_t>(mixed_samples_.data(),
                                                   sample_count));
             } catch (...) {
+                rollback_staged_output_segments();
                 fail_audio_engine(NativePortAudioEngineFailure::HostAudio,
                                   0u,
                                   "output-submit");
             }
-            if (!submitted) break;
+            if (!submitted) {
+                rollback_staged_output_segments();
+                break;
+            }
+            pending_contributions_.clear();
             saturating_add(submitted_output_frames_, mixed_frames);
             output_snapshot = output_->snapshot();
         }
@@ -638,6 +652,7 @@ class NativePortAudioEngine::Impl final {
                 voice.duration_nanoseconds,
                 voice.decoded_source_frames,
                 voice.mixed_output_frames,
+                voice.played_output_frames,
                 available_frames(voice),
                 voice.loop_count,
                 voice.config.gain,
@@ -670,6 +685,11 @@ class NativePortAudioEngine::Impl final {
     }
 
   private:
+    struct OutputSegment final {
+        std::uint64_t start_frame = 0u;
+        std::uint32_t frames = 0u;
+    };
+
     struct Voice final {
         Impl* owner = nullptr;
         NativePortAudioVoiceSource source =
@@ -692,10 +712,12 @@ class NativePortAudioEngine::Impl final {
         std::uint64_t discard_before_frame = 0u;
         std::uint64_t decoded_source_frames = 0u;
         std::uint64_t mixed_output_frames = 0u;
+        std::uint64_t played_output_frames = 0u;
         std::uint64_t loop_count = 0u;
         std::uint64_t frames_since_restart = 0u;
         std::uint32_t consecutive_empty_loops = 0u;
         std::vector<std::int16_t> pcm;
+        std::deque<OutputSegment> output_segments;
         std::size_t read_frame = 0u;
         bool feed_finished = false;
 
@@ -712,6 +734,59 @@ class NativePortAudioEngine::Impl final {
         std::uint32_t generation = 1u;
         std::unique_ptr<Voice> voice;
     };
+
+    struct PendingContribution final {
+        Voice* voice = nullptr;
+        std::uint32_t frames = 0u;
+    };
+
+    void retire_played_output_segments(
+        const std::uint64_t playback_position) noexcept {
+        for (auto& slot : slots_) {
+            if (!slot.voice) continue;
+            auto& voice = *slot.voice;
+            while (!voice.output_segments.empty()) {
+                auto& segment = voice.output_segments.front();
+                if (playback_position <= segment.start_frame) break;
+                const auto consumed = static_cast<std::uint32_t>(
+                    std::min<std::uint64_t>(
+                        segment.frames,
+                        playback_position - segment.start_frame));
+                saturating_add(voice.played_output_frames, consumed);
+                segment.start_frame += consumed;
+                segment.frames -= consumed;
+                if (segment.frames != 0u) break;
+                voice.output_segments.pop_front();
+            }
+        }
+    }
+
+    void stage_output_segments(const std::uint64_t output_start_frame) {
+        std::size_t staged = 0u;
+        try {
+            for (const auto& contribution : pending_contributions_) {
+                contribution.voice->output_segments.push_back(
+                    {output_start_frame, contribution.frames});
+                ++staged;
+            }
+        } catch (...) {
+            while (staged != 0u) {
+                --staged;
+                pending_contributions_[staged]
+                    .voice->output_segments.pop_back();
+            }
+            pending_contributions_.clear();
+            throw;
+        }
+    }
+
+    void rollback_staged_output_segments() noexcept {
+        for (auto contribution = pending_contributions_.rbegin();
+             contribution != pending_contributions_.rend();
+             ++contribution)
+            contribution->voice->output_segments.pop_back();
+        pending_contributions_.clear();
+    }
 
     void require_owner_thread() const {
         if (std::this_thread::get_id() != owner_thread_)
@@ -1035,6 +1110,7 @@ class NativePortAudioEngine::Impl final {
     [[nodiscard]] std::uint32_t mix_block(
         const std::uint32_t requested_frames,
         std::uint32_t& decoder_reads_remaining) {
+        pending_contributions_.clear();
         bool has_live_voice = false;
         std::uint64_t maximum_available = 0u;
         for (auto& slot : slots_) {
@@ -1092,6 +1168,7 @@ class NativePortAudioEngine::Impl final {
             }
             voice.read_frame += voice_frames;
             saturating_add(voice.mixed_output_frames, voice_frames);
+            pending_contributions_.push_back({&voice, voice_frames});
             compact_pcm(voice);
             if (voice.source == NativePortAudioVoiceSource::PcmFeed &&
                 voice.feed_finished && available_frames(voice) == 0u)
@@ -1118,6 +1195,7 @@ class NativePortAudioEngine::Impl final {
     std::vector<Slot> slots_;
     std::vector<double> mix_accumulation_;
     std::vector<std::int16_t> mixed_samples_;
+    std::vector<PendingContribution> pending_contributions_;
     std::uint64_t created_voices_ = 0u;
     std::uint64_t released_voices_ = 0u;
     std::uint64_t decoder_reads_ = 0u;
@@ -1194,7 +1272,11 @@ void NativePortAudioEngine::stop_all() {
 }
 
 void NativePortAudioEngine::pump() {
-    impl_->pump();
+    impl_->pump(true);
+}
+
+void NativePortAudioEngine::pump_with_cached_playback_position() {
+    impl_->pump(false);
 }
 
 NativePortAudioVoiceSnapshot NativePortAudioEngine::voice_snapshot(

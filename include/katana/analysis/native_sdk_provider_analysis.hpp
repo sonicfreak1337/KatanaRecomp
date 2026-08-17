@@ -21,6 +21,7 @@ enum class NativeSdkProviderFamily : std::uint8_t {
     TextureArchiveRelease,
     SynchronousContentRangeRead,
     SoundBankChunkRegistration,
+    SoundFrameService,
 };
 
 enum class NativeSdkProviderBoundaryProof : std::uint8_t {

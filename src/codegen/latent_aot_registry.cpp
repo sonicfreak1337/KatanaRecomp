@@ -45,24 +45,41 @@ namespace {
 constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
 constexpr std::size_t maximum_latent_aot_runtime_alias_entry_passes = 16u;
+constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::uint32_t latent_aot_runtime_page_size = 4096u;
 constexpr std::uint32_t latent_aot_main_ram_begin = 0x8C000000u;
 constexpr std::uint32_t latent_aot_main_ram_end = 0x8D000000u;
 constexpr std::size_t minimum_latent_aot_runtime_cluster_targets = 16u;
 constexpr std::size_t minimum_latent_aot_prefix_entry_table_targets = 3u;
 constexpr std::size_t maximum_latent_aot_prefix_entry_table_targets = 64u;
+constexpr std::size_t latent_aot_ff_padded_prefix_pointer_count = 2u;
+constexpr std::size_t minimum_latent_aot_inferred_authoritative_entries = 1u;
+constexpr std::size_t maximum_latent_aot_inferred_authoritative_candidates =
+    maximum_latent_aot_source_bindings;
 constexpr std::size_t maximum_latent_aot_indexed_call_table_targets = 64u;
 constexpr std::size_t minimum_latent_aot_indexed_call_table_targets = 2u;
+constexpr std::size_t maximum_latent_aot_descriptor_table_records = 256u;
+constexpr std::size_t minimum_latent_aot_descriptor_table_targets = 2u;
+constexpr std::uint32_t maximum_latent_aot_descriptor_table_stride = 256u;
+constexpr std::uint32_t
+    maximum_latent_aot_descriptor_object_field_displacement = 4096u;
 constexpr std::size_t maximum_latent_aot_file_references = 4096u;
-constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::size_t maximum_analysis_implementation_identity_bytes = 4096u;
-constexpr std::uint64_t latent_aot_module_analysis_base_reserve_bytes =
-    2'560ull * 1024ull * 1024ull;
+// The persistent FunctionValue epoch is live for an entire candidate pass.
+// Its 512 MiB cap therefore remains part of the task admission reservation.
+// The two 1 GiB exact-replay caches and the 1 GiB resolution-ready arena are
+// different: they retain only finalized, pure artifacts and are now bounded
+// child arenas charged to the parent executor at their actual retained size.
+// A full parent evicts such aliases for exact recomputation instead of
+// reducing any logical limit or candidate/root inventory.
+constexpr std::uint64_t latent_aot_module_analysis_structural_reserve_bytes =
+    512ull * 1024ull * 1024ull;
+constexpr std::uint64_t latent_aot_function_value_cache_budget_bytes =
+    2'048ull * 1024ull * 1024ull;
 constexpr std::uint64_t latent_aot_function_value_ready_budget_bytes =
     1'024ull * 1024ull * 1024ull;
 constexpr std::uint64_t latent_aot_module_analysis_reserve_bytes =
-    latent_aot_module_analysis_base_reserve_bytes +
-    latent_aot_function_value_ready_budget_bytes;
+    latent_aot_module_analysis_structural_reserve_bytes;
 constexpr std::string_view latent_aot_analysis_cache_artifact{
     "module-analysis.bin"};
 
@@ -112,8 +129,8 @@ struct DiscFileCandidate {
     std::vector<PreparedLatentAotSourceBinding> source_bindings;
     std::vector<std::uint32_t> entry_offsets;
     std::vector<std::uint32_t> explicit_entry_offsets;
-    // A transformed module may carry its own null-terminated, direct-mapped
-    // entry table at offset zero.  Once the complete bounded table shape,
+    // A transformed module may carry its own bounded, direct-mapped entry
+    // table at offset zero.  Once the complete table shape,
     // module extent and every target have been validated against the exact
     // transformed byte identity, those offsets are authoritative in the same
     // stop-on-miss sense as external exact hints.  Keep the provenance
@@ -141,10 +158,13 @@ bool valid_sha256_identity(const std::string_view identity) noexcept {
 }
 
 bool valid_entry_hint(const LatentAotEntryHint& hint) noexcept {
-    return valid_sha256_identity(hint.byte_identity) && hint.byte_size >= 2u &&
-           (hint.byte_size & 1u) == 0u &&
-           (hint.module_relative_offset & 1u) == 0u &&
-           hint.module_relative_offset <= hint.byte_size - 2u;
+    // byte_size binds the encoded disc extent.  It is deliberately not an
+    // executable-size bound: a transformed source such as Sega PRS may have
+    // an odd encoded size and an entry beyond that compressed byte count.
+    // The identity-specific raw/decoded candidate path validates the aligned
+    // entry against the resolved executable bytes before accepting the hint.
+    return valid_sha256_identity(hint.byte_identity) && hint.byte_size != 0u &&
+           (hint.module_relative_offset & 1u) == 0u;
 }
 
 bool entry_hint_less(const LatentAotEntryHint& left,
@@ -282,6 +302,182 @@ void merge_entry_offsets(std::vector<std::uint32_t>& destination,
                       destination.end());
 }
 
+std::vector<std::uint32_t> latent_program_strict_interior_addresses(
+    const std::span<const katana::ir::Function> program) {
+    std::vector<std::uint32_t> result;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.source_address != function.entry_address)
+                    result.push_back(instruction.source_address);
+            }
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+bool latent_function_root_reaches_before_entry(
+    const std::span<const katana::ir::Function> program,
+    const std::uint32_t entry_address) noexcept {
+    const auto function = std::find_if(
+        program.begin(), program.end(), [&](const auto& candidate) {
+            return candidate.entry_address == entry_address;
+        });
+    if (function == program.end()) return false;
+    return std::any_of(
+        function->blocks.begin(), function->blocks.end(),
+        [&](const auto& block) {
+            return block.start_address < entry_address ||
+                   std::any_of(
+                       block.instructions.begin(), block.instructions.end(),
+                       [&](const auto& instruction) {
+                           return instruction.source_address < entry_address;
+                       });
+        });
+}
+
+std::optional<katana::sh4::DecodedInstruction>
+latent_candidate_instruction_at(
+    const DiscFileCandidate& candidate,
+    const std::uint32_t address) noexcept {
+    const auto module_end =
+        static_cast<std::uint64_t>(candidate.source_address) +
+        candidate.bytes.size();
+    if ((address & 1u) != 0u || address < candidate.source_address ||
+        static_cast<std::uint64_t>(address) + 2u > module_end)
+        return std::nullopt;
+    const auto offset = static_cast<std::size_t>(
+        address - candidate.source_address);
+    const auto opcode = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(candidate.bytes[offset]) |
+        static_cast<std::uint16_t>(
+            static_cast<std::uint16_t>(candidate.bytes[offset + 1u])
+            << 8u));
+    auto decoded = katana::sh4::decode(opcode);
+    if (!decoded.is_known()) return std::nullopt;
+    return decoded;
+}
+
+bool latent_validated_reverse_prologue_start(
+    const DiscFileCandidate& candidate,
+    const std::uint32_t address) noexcept {
+    if (address < candidate.source_address + 4u) return false;
+    const auto previous_return =
+        latent_candidate_instruction_at(candidate, address - 4u);
+    const auto previous_delay =
+        latent_candidate_instruction_at(candidate, address - 2u);
+    if (!previous_return || !previous_delay ||
+        previous_return->kind != katana::sh4::InstructionKind::Rts ||
+        !previous_return->has_delay_slot)
+        return false;
+
+    std::array<bool, 16u> saved_registers{};
+    bool saw_callee_saved_push = false;
+    for (std::size_t instruction_index = 0u;
+         instruction_index < 8u; ++instruction_index) {
+        const auto instruction_address64 =
+            static_cast<std::uint64_t>(address) +
+            instruction_index * 2u;
+        if (instruction_address64 >
+            std::numeric_limits<std::uint32_t>::max())
+            return false;
+        const auto instruction = latent_candidate_instruction_at(
+            candidate,
+            static_cast<std::uint32_t>(instruction_address64));
+        if (!instruction) return false;
+        if (instruction->kind ==
+                katana::sh4::InstructionKind::
+                    MovLongStorePreDecrement &&
+            instruction->destination_register == 15u &&
+            instruction->source_register >= 8u &&
+            instruction->source_register <= 14u) {
+            saved_registers[instruction->source_register] = true;
+            saw_callee_saved_push = true;
+            continue;
+        }
+        if (instruction->kind ==
+                katana::sh4::InstructionKind::MovRegister &&
+            instruction->destination_register >= 8u &&
+            instruction->destination_register <= 14u &&
+            saved_registers[instruction->destination_register])
+            continue;
+        if (instruction->kind ==
+                katana::sh4::InstructionKind::
+                    StoreSpecialRegisterPreDecrement &&
+            instruction->destination_register == 15u &&
+            instruction->special_register ==
+                katana::sh4::SpecialRegister::Pr)
+            return saw_callee_saved_push;
+        return false;
+    }
+    return false;
+}
+
+std::vector<std::uint32_t> latent_explicit_tail_prologue_entry_offsets(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program) {
+    std::vector<std::uint32_t> result;
+    for (const auto explicit_offset : candidate.explicit_entry_offsets) {
+        const auto entry = candidate.source_address + explicit_offset;
+        const auto function = std::find_if(
+            program.begin(), program.end(), [&](const auto& candidate_function) {
+                return candidate_function.entry_address == entry;
+            });
+        if (function == program.end()) continue;
+        for (const auto& block : function->blocks) {
+            if (block.instructions.size() < 2u) continue;
+            std::size_t control_index = block.instructions.size() - 1u;
+            if (block.instructions.back().delay_slot.role ==
+                katana::ir::DelaySlotRole::Slot) {
+                if (control_index == 0u) continue;
+                --control_index;
+            }
+            const auto& control = block.instructions[control_index];
+            if (control.operation != katana::ir::Operation::Branch ||
+                !control.target_address ||
+                *control.target_address >= entry ||
+                !latent_validated_reverse_prologue_start(
+                    candidate, *control.target_address))
+                continue;
+
+            auto restore_pr = std::find_if(
+                block.instructions.begin(),
+                block.instructions.begin() +
+                    static_cast<std::ptrdiff_t>(control_index),
+                [](const auto& instruction) {
+                    return instruction.operation ==
+                               katana::ir::Operation::
+                                   LoadSpecialRegisterPostIncrement &&
+                           instruction.special_register ==
+                               katana::ir::SpecialRegister::Pr &&
+                           instruction.source_register == 15u;
+                });
+            if (restore_pr ==
+                block.instructions.begin() +
+                    static_cast<std::ptrdiff_t>(control_index))
+                continue;
+            const auto epilogue_is_restore_only = std::all_of(
+                std::next(restore_pr), block.instructions.end(),
+                [&](const auto& instruction) {
+                    if (&instruction == &control)
+                        return true;
+                    return instruction.operation ==
+                               katana::ir::Operation::LoadLongPostIncrement ||
+                           instruction.operation ==
+                               katana::ir::Operation::FmovLoadPostIncrement;
+                });
+            if (!epilogue_is_restore_only) continue;
+            result.push_back(
+                *control.target_address - candidate.source_address);
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
 bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept {
     if (candidate.source_bindings.empty() ||
         !std::is_sorted(candidate.source_bindings.begin(),
@@ -327,7 +523,7 @@ bool valid_candidate_entry_offsets(const DiscFileCandidate& candidate) noexcept 
         const bool transformed_prefix_entry_table =
             candidate_has_transformed_source(candidate) &&
             candidate.entry_offsets.size() >=
-                minimum_latent_aot_prefix_entry_table_targets &&
+                minimum_latent_aot_inferred_authoritative_entries &&
             candidate.entry_offsets.size() <=
                 maximum_latent_aot_prefix_entry_table_targets;
         if (!conventional_heuristic_entry &&
@@ -627,12 +823,23 @@ std::vector<std::uint32_t> latent_prefix_entry_table_offsets(
     const std::span<const std::uint8_t> bytes) {
     constexpr auto cell_size = sizeof(std::uint32_t);
     if (bytes.size() <
-        (minimum_latent_aot_prefix_entry_table_targets + 1u) * cell_size)
+        (latent_aot_ff_padded_prefix_pointer_count + 1u) * cell_size)
         return {};
+    const auto cell_at = [&bytes](const std::size_t cell)
+        -> std::optional<std::uint32_t> {
+        const auto offset = cell * cell_size;
+        if (offset > bytes.size() || cell_size > bytes.size() - offset)
+            return std::nullopt;
+        return static_cast<std::uint32_t>(bytes[offset]) |
+               (static_cast<std::uint32_t>(bytes[offset + 1u]) << 8u) |
+               (static_cast<std::uint32_t>(bytes[offset + 2u]) << 16u) |
+               (static_cast<std::uint32_t>(bytes[offset + 3u]) << 24u);
+    };
 
     std::vector<std::uint32_t> targets;
     targets.reserve(maximum_latent_aot_prefix_entry_table_targets);
     bool terminated = false;
+    bool null_table_invalid = false;
     // The cardinality cap applies to non-null targets, not to the terminating
     // cell.  A valid 64-target table therefore needs one additional bounded
     // read for cell 64.  Reject a 65th target instead of silently narrowing
@@ -641,28 +848,86 @@ std::vector<std::uint32_t> latent_prefix_entry_table_offsets(
          cell <= maximum_latent_aot_prefix_entry_table_targets &&
          (cell + 1u) * cell_size <= bytes.size();
          ++cell) {
-        const auto offset = cell * cell_size;
-        const auto raw = static_cast<std::uint32_t>(bytes[offset]) |
-                         (static_cast<std::uint32_t>(bytes[offset + 1u]) << 8u) |
-                         (static_cast<std::uint32_t>(bytes[offset + 2u]) << 16u) |
-                         (static_cast<std::uint32_t>(bytes[offset + 3u]) << 24u);
+        const auto raw = *cell_at(cell);
         if (raw == 0u) {
             terminated = true;
             break;
         }
         if (targets.size() ==
-            maximum_latent_aot_prefix_entry_table_targets)
-            return {};
+            maximum_latent_aot_prefix_entry_table_targets) {
+            null_table_invalid = true;
+            break;
+        }
         const auto normalized = latent_direct_code_address(raw);
         if (!normalized.has_value() ||
             *normalized < latent_aot_main_ram_begin ||
-            *normalized >= latent_aot_main_ram_end)
-            return {};
+            *normalized >= latent_aot_main_ram_end) {
+            null_table_invalid = true;
+            break;
+        }
         targets.push_back(*normalized);
     }
-    if (!terminated ||
-        targets.size() < minimum_latent_aot_prefix_entry_table_targets)
-        return {};
+    if (null_table_invalid || !terminated ||
+        targets.size() < minimum_latent_aot_prefix_entry_table_targets) {
+        targets.clear();
+
+        // Some statically linked modules use a distinct compact header: one
+        // direct entry pointer followed by one same-module anchor pointer and
+        // 0xFFFFFFFF cells up to the first executable byte.  This is not a
+        // relaxed two-element form of the null-terminated table above.  The
+        // second pointer can identify module data, so it must constrain the
+        // bounded relative layout without becoming an executable root.  The
+        // sole returned entry still has to pass decode, early-control-flow,
+        // complete CFG, relocation-closure and emitted-block validation.
+        constexpr auto ff_pointer_count =
+            latent_aot_ff_padded_prefix_pointer_count;
+        constexpr auto ff_header_bytes =
+            static_cast<std::uint32_t>(ff_pointer_count * cell_size);
+        if (bytes.size() < ff_header_bytes + cell_size) return {};
+        for (std::size_t cell = 0u; cell < ff_pointer_count; ++cell) {
+            const auto raw = *cell_at(cell);
+            const auto normalized = latent_direct_code_address(raw);
+            if (!normalized.has_value() ||
+                *normalized < latent_aot_main_ram_begin ||
+                *normalized >= latent_aot_main_ram_end)
+                return {};
+            targets.push_back(*normalized);
+        }
+        if (targets.front() >= targets.back()) return {};
+
+        const auto runtime_base =
+            targets.front() & ~(latent_aot_runtime_page_size - 1u);
+        if (!valid_latent_runtime_base(
+                runtime_base, static_cast<std::uint32_t>(bytes.size())))
+            return {};
+        const auto first_entry_offset = targets.front() - runtime_base;
+        if (first_entry_offset < ff_header_bytes + cell_size ||
+            (first_entry_offset & (cell_size - 1u)) != 0u ||
+            first_entry_offset > latent_aot_runtime_page_size ||
+            first_entry_offset > bytes.size())
+            return {};
+        for (std::uint32_t offset = ff_header_bytes;
+             offset < first_entry_offset; offset += cell_size) {
+            const auto raw = *cell_at(offset / cell_size);
+            if (raw != std::numeric_limits<std::uint32_t>::max()) return {};
+        }
+
+        std::vector<std::uint32_t> pointer_offsets;
+        pointer_offsets.reserve(targets.size());
+        for (const auto target : targets) {
+            if (target < runtime_base) return {};
+            const auto offset = target - runtime_base;
+            if ((offset & 1u) != 0u || offset < first_entry_offset ||
+                 static_cast<std::uint64_t>(offset) + 2u > bytes.size())
+                return {};
+            pointer_offsets.push_back(offset);
+        }
+        if (pointer_offsets.front() != first_entry_offset ||
+            std::adjacent_find(pointer_offsets.begin(), pointer_offsets.end()) !=
+                pointer_offsets.end())
+            return {};
+        return {first_entry_offset};
+    }
 
     std::set<std::uint32_t> unique_targets(targets.begin(), targets.end());
     if (unique_targets.size() != targets.size()) return {};
@@ -1237,6 +1502,432 @@ std::vector<LatentBlockLiteralState> latent_block_literal_inputs(
     return inputs;
 }
 
+struct LatentAffineValue final {
+    bool known = false;
+    std::uint32_t constant = 0u;
+    std::uint32_t scale = 0u;
+    // At most one of the incoming r4..r7 bits may be set.
+    std::uint8_t input_mask = 0u;
+
+    bool operator==(const LatentAffineValue&) const = default;
+};
+
+[[nodiscard]] LatentAffineValue latent_affine_exact(
+    const std::uint32_t value) noexcept {
+    return {true, value, 0u, 0u};
+}
+
+[[nodiscard]] LatentAffineValue latent_affine_input(
+    const std::uint8_t bit) noexcept {
+    return {true, 0u, 1u, bit};
+}
+
+[[nodiscard]] bool latent_affine_single_input(
+    const LatentAffineValue& value) noexcept {
+    return value.known && value.input_mask != 0u &&
+           (value.input_mask & static_cast<std::uint8_t>(
+                                   value.input_mask - 1u)) == 0u;
+}
+
+[[nodiscard]] LatentAffineValue latent_affine_add(
+    const LatentAffineValue& left,
+    const LatentAffineValue& right) noexcept {
+    if (!left.known || !right.known) return {};
+    if (left.input_mask != 0u && right.input_mask != 0u &&
+        left.input_mask != right.input_mask)
+        return {};
+    const auto mask = static_cast<std::uint8_t>(left.input_mask |
+                                                right.input_mask);
+    const auto scale64 = static_cast<std::uint64_t>(left.scale) +
+                         right.scale;
+    if (scale64 > maximum_latent_aot_descriptor_table_stride)
+        return {};
+    return {true,
+            static_cast<std::uint32_t>(left.constant + right.constant),
+            static_cast<std::uint32_t>(scale64), mask};
+}
+
+[[nodiscard]] LatentAffineValue latent_affine_multiply(
+    const LatentAffineValue& left,
+    const LatentAffineValue& right) noexcept {
+    if (!left.known || !right.known) return {};
+    if (left.input_mask != 0u && right.input_mask != 0u) return {};
+    const auto& affine = left.input_mask != 0u ? left : right;
+    const auto& factor = left.input_mask != 0u ? right : left;
+    if (factor.input_mask != 0u) return {};
+    const auto scale64 = static_cast<std::uint64_t>(affine.scale) *
+                         factor.constant;
+    if (scale64 > maximum_latent_aot_descriptor_table_stride)
+        return {};
+    return {true,
+            static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(affine.constant) *
+                factor.constant),
+            static_cast<std::uint32_t>(scale64),
+            affine.input_mask};
+}
+
+struct LatentAffineState final {
+    std::array<LatentAffineValue, 16u> registers{};
+    LatentAffineValue macl;
+    std::optional<std::int32_t> stack_offset{0};
+    std::map<std::int32_t, LatentAffineValue> stack_values;
+
+    bool operator==(const LatentAffineState&) const = default;
+};
+
+[[nodiscard]] std::optional<std::int32_t> latent_stack_address(
+    const LatentAffineState& state,
+    const std::int32_t displacement = 0) noexcept {
+    if (!state.stack_offset.has_value()) return std::nullopt;
+    const auto address = static_cast<std::int64_t>(*state.stack_offset) +
+                         displacement;
+    if (address < std::numeric_limits<std::int32_t>::min() ||
+        address > std::numeric_limits<std::int32_t>::max())
+        return std::nullopt;
+    return static_cast<std::int32_t>(address);
+}
+
+void apply_latent_affine_data_instruction(
+    const DiscFileCandidate& candidate,
+    const katana::ir::Instruction& instruction,
+    LatentAffineState& state) noexcept {
+    using katana::ir::Operation;
+    using katana::ir::SpecialRegister;
+    const auto previous = state;
+    const auto use_def =
+        katana::ir::instruction_register_use_def(instruction);
+    for (std::uint8_t index = 0u; index < state.registers.size(); ++index) {
+        if ((use_def.defs & katana::ir::gpr_register_bit(index)) != 0u)
+            state.registers[index] = {};
+    }
+
+    const auto load_stack = [&](const std::int32_t displacement) {
+        const auto address = latent_stack_address(previous, displacement);
+        if (!address.has_value()) return LatentAffineValue{};
+        const auto found = previous.stack_values.find(*address);
+        return found != previous.stack_values.end()
+                   ? found->second
+                   : LatentAffineValue{};
+    };
+    const auto store_stack = [&](const std::int32_t displacement,
+                                 const LatentAffineValue value) {
+        const auto address = latent_stack_address(state, displacement);
+        if (!address.has_value()) {
+            state.stack_values.clear();
+            return;
+        }
+        state.stack_values.insert_or_assign(*address, value);
+    };
+
+    switch (instruction.operation) {
+    case Operation::MovImmediate:
+    case Operation::Constant32:
+        state.registers[instruction.destination_register] =
+            latent_affine_exact(
+                static_cast<std::uint32_t>(instruction.immediate));
+        break;
+    case Operation::MovRegister:
+        state.registers[instruction.destination_register] =
+            previous.registers[instruction.source_register];
+        break;
+    case Operation::LoadLongPcRelative:
+        if (instruction.effective_address.has_value()) {
+            const auto value = latent_read_u32(
+                candidate, *instruction.effective_address);
+            if (value.has_value())
+                state.registers[instruction.destination_register] =
+                    latent_affine_exact(*value);
+        }
+        break;
+    case Operation::MoveAddressPcRelative:
+        if (instruction.effective_address.has_value())
+            state.registers[instruction.destination_register] =
+                latent_affine_exact(*instruction.effective_address);
+        break;
+    case Operation::AddRegister:
+        state.registers[instruction.destination_register] =
+            latent_affine_add(
+                previous.registers[instruction.destination_register],
+                previous.registers[instruction.source_register]);
+        break;
+    case Operation::AddImmediate:
+        state.registers[instruction.destination_register] =
+            latent_affine_add(
+                previous.registers[instruction.destination_register],
+                latent_affine_exact(static_cast<std::uint32_t>(
+                    instruction.immediate)));
+        if (instruction.destination_register == 15u) {
+            const auto next = latent_stack_address(
+                previous, instruction.immediate);
+            state.stack_offset = next;
+            if (!next.has_value()) state.stack_values.clear();
+        }
+        break;
+    case Operation::MultiplyLong:
+        state.macl = latent_affine_multiply(
+            previous.registers[instruction.destination_register],
+            previous.registers[instruction.source_register]);
+        break;
+    case Operation::StoreSpecialRegister:
+        if (instruction.special_register == SpecialRegister::Macl)
+            state.registers[instruction.destination_register] =
+                previous.macl;
+        break;
+    case Operation::ShiftLogicalLeftOne:
+    case Operation::ShiftArithmeticLeftOne:
+    case Operation::ShiftLogicalLeftTwo:
+    case Operation::ShiftLogicalLeftEight:
+    case Operation::ShiftLogicalLeftSixteen: {
+        const std::uint32_t shift =
+            instruction.operation == Operation::ShiftLogicalLeftTwo
+                ? 2u
+                : instruction.operation == Operation::ShiftLogicalLeftEight
+                      ? 8u
+                      : instruction.operation ==
+                                Operation::ShiftLogicalLeftSixteen
+                            ? 16u
+                            : 1u;
+        state.registers[instruction.destination_register] =
+            latent_affine_multiply(
+                previous.registers[instruction.destination_register],
+                latent_affine_exact(1u << shift));
+        break;
+    }
+    case Operation::StoreLong:
+        if (instruction.destination_register == 15u)
+            store_stack(0, previous.registers[instruction.source_register]);
+        break;
+    case Operation::StoreLongDisplacement:
+        if (instruction.destination_register == 15u)
+            store_stack(instruction.displacement,
+                        previous.registers[instruction.source_register]);
+        break;
+    case Operation::StoreLongPreDecrement:
+        if (instruction.destination_register == 15u) {
+            state.stack_offset = latent_stack_address(previous, -4);
+            if (!state.stack_offset.has_value())
+                state.stack_values.clear();
+            else
+                store_stack(0,
+                            previous.registers[instruction.source_register]);
+        }
+        break;
+    case Operation::LoadLong:
+        if (instruction.source_register == 15u)
+            state.registers[instruction.destination_register] =
+                load_stack(0);
+        break;
+    case Operation::LoadLongDisplacement:
+        if (instruction.source_register == 15u)
+            state.registers[instruction.destination_register] =
+                load_stack(instruction.displacement);
+        break;
+    case Operation::LoadLongPostIncrement:
+        if (instruction.source_register == 15u) {
+            state.registers[instruction.destination_register] =
+                load_stack(0);
+            state.stack_offset = latent_stack_address(previous, 4);
+            if (!state.stack_offset.has_value())
+                state.stack_values.clear();
+        }
+        break;
+    default:
+        if (katana::ir::contains_accumulator_register(
+                instruction.accumulator_effects.writes_if_s_clear,
+                katana::ir::AccumulatorRegister::Macl) ||
+            katana::ir::contains_accumulator_register(
+                instruction.accumulator_effects.writes_if_s_set,
+                katana::ir::AccumulatorRegister::Macl))
+            state.macl = {};
+        break;
+    }
+}
+
+void clear_latent_affine_call_volatile_registers(
+    LatentAffineState& state) noexcept {
+    for (std::uint8_t index = 0u; index <= 7u; ++index)
+        state.registers[index] = {};
+    state.macl = {};
+}
+
+struct LatentAffineTrace final {
+    std::vector<LatentAffineState> before;
+    std::vector<std::optional<LatentAffineState>>
+        transfer_arguments_after_delay;
+    LatentAffineState continuation;
+    bool delay_slots_complete = true;
+};
+
+LatentAffineTrace trace_latent_affine_values(
+    const DiscFileCandidate& candidate,
+    const katana::ir::BasicBlock& block,
+    const LatentAffineState& input) {
+    using katana::ir::DelaySlotRole;
+    using katana::ir::Operation;
+    LatentAffineTrace trace;
+    trace.before.reserve(block.instructions.size());
+    trace.transfer_arguments_after_delay.resize(block.instructions.size());
+    auto state = input;
+    std::optional<std::size_t> delayed_transfer_index;
+    std::optional<std::uint32_t> delayed_transfer_slot;
+    bool delayed_transfer_is_call = false;
+
+    for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
+        const auto& instruction = block.instructions[index];
+        const bool expected_slot = delayed_transfer_index.has_value() &&
+            delayed_transfer_slot.has_value() &&
+            instruction.delay_slot.role == DelaySlotRole::Slot &&
+            instruction.delay_slot.counterpart_address ==
+                block.instructions[*delayed_transfer_index].source_address &&
+            instruction.source_address == *delayed_transfer_slot;
+        if (delayed_transfer_index.has_value() && !expected_slot) {
+            if (delayed_transfer_is_call)
+                clear_latent_affine_call_volatile_registers(state);
+            delayed_transfer_index.reset();
+            delayed_transfer_slot.reset();
+            delayed_transfer_is_call = false;
+            trace.delay_slots_complete = false;
+        }
+
+        trace.before.push_back(state);
+        apply_latent_affine_data_instruction(candidate, instruction, state);
+
+        if (expected_slot) {
+            trace.transfer_arguments_after_delay[*delayed_transfer_index] =
+                state;
+            if (delayed_transfer_is_call)
+                clear_latent_affine_call_volatile_registers(state);
+            delayed_transfer_index.reset();
+            delayed_transfer_slot.reset();
+            delayed_transfer_is_call = false;
+        }
+
+        const bool is_call = instruction.operation == Operation::Call ||
+                             instruction.operation ==
+                                 Operation::CallRegister;
+        const bool is_jump = instruction.operation == Operation::Branch ||
+                             instruction.operation ==
+                                 Operation::JumpRegister;
+        if (!is_call && !is_jump) continue;
+        if (instruction.delay_slot.role == DelaySlotRole::Owner &&
+            instruction.delay_slot.counterpart_address.has_value()) {
+            delayed_transfer_index = index;
+            delayed_transfer_slot =
+                instruction.delay_slot.counterpart_address;
+            delayed_transfer_is_call = is_call;
+        } else {
+            trace.transfer_arguments_after_delay[index] = state;
+            if (is_call)
+                clear_latent_affine_call_volatile_registers(state);
+        }
+    }
+    if (delayed_transfer_index.has_value()) {
+        if (delayed_transfer_is_call)
+            clear_latent_affine_call_volatile_registers(state);
+        trace.delay_slots_complete = false;
+    }
+    trace.continuation = std::move(state);
+    return trace;
+}
+
+struct LatentAffineBlockInput final {
+    bool reachable = false;
+    LatentAffineState state;
+};
+
+[[nodiscard]] bool join_latent_affine_state(
+    LatentAffineState& destination,
+    const LatentAffineState& source) {
+    bool changed = false;
+    for (std::size_t index = 0u; index < destination.registers.size();
+         ++index) {
+        if (destination.registers[index].known &&
+            destination.registers[index] != source.registers[index]) {
+            destination.registers[index] = {};
+            changed = true;
+        }
+    }
+    if (destination.macl.known && destination.macl != source.macl) {
+        destination.macl = {};
+        changed = true;
+    }
+    if (destination.stack_offset != source.stack_offset) {
+        if (destination.stack_offset.has_value() ||
+            !destination.stack_values.empty()) {
+            destination.stack_offset.reset();
+            destination.stack_values.clear();
+            changed = true;
+        }
+        return changed;
+    }
+    for (auto iterator = destination.stack_values.begin();
+         iterator != destination.stack_values.end();) {
+        const auto found = source.stack_values.find(iterator->first);
+        if (found == source.stack_values.end() ||
+            found->second != iterator->second) {
+            iterator = destination.stack_values.erase(iterator);
+            changed = true;
+        } else {
+            ++iterator;
+        }
+    }
+    return changed;
+}
+
+std::vector<LatentAffineBlockInput> latent_affine_block_inputs(
+    const DiscFileCandidate& candidate,
+    const katana::ir::Function& function) {
+    std::vector<LatentAffineBlockInput> inputs(function.blocks.size());
+    std::map<std::uint32_t, std::size_t> block_indexes;
+    for (std::size_t index = 0u; index < function.blocks.size(); ++index)
+        block_indexes.emplace(function.blocks[index].start_address, index);
+    const auto entry = block_indexes.find(function.entry_address);
+    if (entry == block_indexes.end()) return inputs;
+    auto& initial = inputs[entry->second];
+    initial.reachable = true;
+    for (std::uint8_t argument = 0u; argument < 4u; ++argument)
+        initial.state.registers[4u + argument] =
+            latent_affine_input(static_cast<std::uint8_t>(1u << argument));
+
+    std::deque<std::size_t> pending{entry->second};
+    std::vector<bool> queued(function.blocks.size(), false);
+    queued[entry->second] = true;
+    const auto budget =
+        std::max<std::size_t>(1u, function.blocks.size() * 33u);
+    std::size_t evaluations = 0u;
+    while (!pending.empty()) {
+        const auto index = pending.front();
+        pending.pop_front();
+        queued[index] = false;
+        if (++evaluations > budget)
+            throw std::runtime_error(
+                "latent-affine-descriptor-worklist-budget");
+        if (!inputs[index].reachable) continue;
+        const auto trace = trace_latent_affine_values(
+            candidate, function.blocks[index], inputs[index].state);
+        for (const auto successor : function.blocks[index].successors) {
+            const auto found = block_indexes.find(successor);
+            if (found == block_indexes.end()) continue;
+            auto& destination = inputs[found->second];
+            bool changed = false;
+            if (!destination.reachable) {
+                destination.reachable = true;
+                destination.state = trace.continuation;
+                changed = true;
+            } else {
+                changed = join_latent_affine_state(
+                    destination.state, trace.continuation);
+            }
+            if (changed && !queued[found->second]) {
+                pending.push_back(found->second);
+                queued[found->second] = true;
+            }
+        }
+    }
+    return inputs;
+}
+
 using LatentRecordReceiverState =
     std::array<std::optional<std::uint32_t>, 16u>;
 
@@ -1277,6 +1968,26 @@ std::optional<std::uint32_t> latent_external_call_target(
         instruction.target_address.has_value())
         raw = instruction.target_address;
     else if (instruction.operation == Operation::CallRegister &&
+             !instruction.branch_register_relative &&
+             instruction.branch_register < literals.size())
+        raw = literals[instruction.branch_register];
+    if (!raw.has_value() || !resolver.is_external(*raw))
+        return std::nullopt;
+    return latent_direct_code_address(*raw);
+}
+
+std::optional<std::uint32_t> latent_external_transfer_target(
+    const katana::ir::Instruction& instruction,
+    const LatentRegisterLiteralState& literals,
+    const LatentCodeAddressResolver& resolver) noexcept {
+    using katana::ir::Operation;
+    std::optional<std::uint32_t> raw;
+    if ((instruction.operation == Operation::Call ||
+         instruction.operation == Operation::Branch) &&
+        instruction.target_address.has_value())
+        raw = instruction.target_address;
+    else if ((instruction.operation == Operation::CallRegister ||
+              instruction.operation == Operation::JumpRegister) &&
              !instruction.branch_register_relative &&
              instruction.branch_register < literals.size())
         raw = literals[instruction.branch_register];
@@ -1512,6 +2223,665 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
     return result;
 }
 
+struct LatentLocalDescriptorField final {
+    std::uint8_t receiver_input_mask = 0u;
+    std::uint32_t displacement = 0u;
+
+    bool operator==(const LatentLocalDescriptorField&) const = default;
+};
+
+struct LatentLocalDescriptorValue final {
+    bool known = false;
+    std::uint32_t constant = 0u;
+    std::array<std::uint32_t, 16u> coefficients{};
+    std::optional<LatentLocalDescriptorField> field;
+};
+
+using LatentLocalDescriptorState =
+    std::array<LatentLocalDescriptorValue, 16u>;
+
+struct LatentLocalDescriptorContract final {
+    std::uint32_t pointer_field_displacement = 0u;
+    std::uint32_t record_stride = 0u;
+    std::uint32_t callback_field_displacement = 0u;
+
+    bool operator<(const LatentLocalDescriptorContract& other) const noexcept {
+        return std::tie(pointer_field_displacement, record_stride,
+                        callback_field_displacement) <
+               std::tie(other.pointer_field_displacement,
+                        other.record_stride,
+                        other.callback_field_displacement);
+    }
+};
+
+[[nodiscard]] LatentLocalDescriptorValue latent_local_descriptor_exact(
+    const std::uint32_t value) noexcept {
+    LatentLocalDescriptorValue result;
+    result.known = true;
+    result.constant = value;
+    return result;
+}
+
+[[nodiscard]] LatentLocalDescriptorValue latent_local_descriptor_symbol(
+    const std::uint8_t index) noexcept {
+    LatentLocalDescriptorValue result;
+    result.known = true;
+    result.coefficients[index] = 1u;
+    return result;
+}
+
+[[nodiscard]] LatentLocalDescriptorValue
+latent_local_descriptor_block_input(
+    const LatentAffineValue& affine,
+    const std::uint8_t fallback_symbol) noexcept {
+    if (!affine.known)
+        return latent_local_descriptor_symbol(fallback_symbol);
+    if (affine.input_mask == 0u)
+        return affine.scale == 0u
+                   ? latent_local_descriptor_exact(affine.constant)
+                   : LatentLocalDescriptorValue{};
+    if (!latent_affine_single_input(affine) || affine.scale == 0u ||
+        affine.scale > maximum_latent_aot_descriptor_table_stride)
+        return {};
+
+    std::uint8_t argument = 0u;
+    while ((affine.input_mask &
+            static_cast<std::uint8_t>(1u << argument)) == 0u)
+        ++argument;
+    if (argument >= 4u) return {};
+    LatentLocalDescriptorValue result;
+    result.known = true;
+    result.constant = affine.constant;
+    result.coefficients[4u + argument] = affine.scale;
+    return result;
+}
+
+[[nodiscard]] LatentLocalDescriptorValue latent_local_descriptor_add(
+    const LatentLocalDescriptorValue& left,
+    const LatentLocalDescriptorValue& right) noexcept {
+    if (!left.known || !right.known ||
+        (left.field.has_value() && right.field.has_value()))
+        return {};
+    const auto constant = static_cast<std::uint64_t>(left.constant) +
+                          right.constant;
+    if (constant > std::numeric_limits<std::uint32_t>::max()) return {};
+    LatentLocalDescriptorValue result;
+    result.known = true;
+    result.constant = static_cast<std::uint32_t>(constant);
+    result.field = left.field.has_value() ? left.field : right.field;
+    for (std::size_t index = 0u; index < result.coefficients.size(); ++index) {
+        const auto coefficient =
+            static_cast<std::uint64_t>(left.coefficients[index]) +
+            right.coefficients[index];
+        if (coefficient > maximum_latent_aot_descriptor_table_stride)
+            return {};
+        result.coefficients[index] =
+            static_cast<std::uint32_t>(coefficient);
+    }
+    return result;
+}
+
+[[nodiscard]] LatentLocalDescriptorValue latent_local_descriptor_scale(
+    const LatentLocalDescriptorValue& value,
+    const std::uint32_t factor) noexcept {
+    if (!value.known || value.field.has_value()) return {};
+    const auto constant = static_cast<std::uint64_t>(value.constant) * factor;
+    if (constant > std::numeric_limits<std::uint32_t>::max()) return {};
+    auto result = value;
+    result.constant = static_cast<std::uint32_t>(constant);
+    for (auto& coefficient : result.coefficients) {
+        const auto scaled = static_cast<std::uint64_t>(coefficient) * factor;
+        if (scaled > maximum_latent_aot_descriptor_table_stride) return {};
+        coefficient = static_cast<std::uint32_t>(scaled);
+    }
+    return result;
+}
+
+[[nodiscard]] std::optional<std::uint32_t>
+latent_local_descriptor_exact_constant(
+    const LatentLocalDescriptorValue& value) noexcept {
+    if (!value.known || value.field.has_value() ||
+        std::any_of(value.coefficients.begin(), value.coefficients.end(),
+                    [](const auto coefficient) { return coefficient != 0u; }))
+        return std::nullopt;
+    return value.constant;
+}
+
+[[nodiscard]] std::optional<LatentLocalDescriptorField>
+latent_local_descriptor_field_load(
+    const LatentLocalDescriptorValue& receiver,
+    const std::uint32_t displacement) noexcept {
+    if (!receiver.known || receiver.field.has_value())
+        return std::nullopt;
+    std::optional<std::uint8_t> receiver_argument;
+    for (std::uint8_t index = 0u; index < receiver.coefficients.size();
+         ++index) {
+        const auto coefficient = receiver.coefficients[index];
+        if (coefficient == 0u) continue;
+        if (coefficient != 1u || index < 4u || index > 7u ||
+            receiver_argument.has_value())
+            return std::nullopt;
+        receiver_argument = static_cast<std::uint8_t>(index - 4u);
+    }
+    if (!receiver_argument.has_value()) return std::nullopt;
+    const auto total = static_cast<std::uint64_t>(receiver.constant) +
+                       displacement;
+    if (total > maximum_latent_aot_descriptor_object_field_displacement)
+        return std::nullopt;
+    return LatentLocalDescriptorField{
+        static_cast<std::uint8_t>(1u << *receiver_argument),
+        static_cast<std::uint32_t>(total)};
+}
+
+void apply_latent_local_descriptor_instruction(
+    const DiscFileCandidate& candidate,
+    const katana::ir::Instruction& instruction,
+    LatentLocalDescriptorState& state) noexcept {
+    using katana::ir::Operation;
+    const auto previous = state;
+    const auto use_def =
+        katana::ir::instruction_register_use_def(instruction);
+    for (std::uint8_t index = 0u; index < state.size(); ++index) {
+        if ((use_def.defs & katana::ir::gpr_register_bit(index)) != 0u)
+            state[index] = {};
+    }
+
+    switch (instruction.operation) {
+    case Operation::MovImmediate:
+    case Operation::Constant32:
+        state[instruction.destination_register] =
+            latent_local_descriptor_exact(
+                static_cast<std::uint32_t>(instruction.immediate));
+        break;
+    case Operation::MovRegister:
+        state[instruction.destination_register] =
+            previous[instruction.source_register];
+        break;
+    case Operation::LoadLongPcRelative:
+        if (instruction.effective_address.has_value()) {
+            const auto value = latent_read_u32(
+                candidate, *instruction.effective_address);
+            if (value.has_value())
+                state[instruction.destination_register] =
+                    latent_local_descriptor_exact(*value);
+        }
+        break;
+    case Operation::MoveAddressPcRelative:
+        if (instruction.effective_address.has_value())
+            state[instruction.destination_register] =
+                latent_local_descriptor_exact(
+                    *instruction.effective_address);
+        break;
+    case Operation::AddRegister:
+        state[instruction.destination_register] =
+            latent_local_descriptor_add(
+                previous[instruction.destination_register],
+                previous[instruction.source_register]);
+        break;
+    case Operation::AddImmediate:
+        state[instruction.destination_register] =
+            latent_local_descriptor_add(
+                previous[instruction.destination_register],
+                latent_local_descriptor_exact(
+                    static_cast<std::uint32_t>(instruction.immediate)));
+        break;
+    case Operation::ShiftLogicalLeftOne:
+    case Operation::ShiftArithmeticLeftOne:
+    case Operation::ShiftLogicalLeftTwo:
+    case Operation::ShiftLogicalLeftEight:
+    case Operation::ShiftLogicalLeftSixteen: {
+        const std::uint32_t factor =
+            instruction.operation == Operation::ShiftLogicalLeftTwo
+                ? 4u
+                : instruction.operation == Operation::ShiftLogicalLeftEight
+                      ? 256u
+                      : instruction.operation ==
+                                Operation::ShiftLogicalLeftSixteen
+                            ? 65'536u
+                            : 2u;
+        state[instruction.destination_register] =
+            latent_local_descriptor_scale(
+                previous[instruction.destination_register], factor);
+        break;
+    }
+    case Operation::LoadLongDisplacement: {
+        if (instruction.displacement < 0) break;
+        const auto field = latent_local_descriptor_field_load(
+            previous[instruction.source_register],
+            static_cast<std::uint32_t>(instruction.displacement));
+        if (!field.has_value()) break;
+        auto value = latent_local_descriptor_exact(0u);
+        value.field = *field;
+        state[instruction.destination_register] = value;
+        break;
+    }
+    case Operation::LoadLongR0Indexed: {
+        const auto displacement =
+            latent_local_descriptor_exact_constant(previous[0u]);
+        if (!displacement.has_value()) break;
+        const auto field = latent_local_descriptor_field_load(
+            previous[instruction.source_register], *displacement);
+        if (!field.has_value()) break;
+        auto value = latent_local_descriptor_exact(0u);
+        value.field = *field;
+        state[instruction.destination_register] = value;
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+std::set<LatentLocalDescriptorContract>
+latent_local_descriptor_contracts(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program) {
+    using katana::ir::Operation;
+    std::set<LatentLocalDescriptorContract> result;
+    for (const auto& function : program) {
+        const auto affine_inputs =
+            latent_affine_block_inputs(candidate, function);
+        for (std::size_t block_index = 0u;
+             block_index < function.blocks.size(); ++block_index) {
+            if (block_index >= affine_inputs.size() ||
+                !affine_inputs[block_index].reachable)
+                continue;
+            const auto& block = function.blocks[block_index];
+            LatentLocalDescriptorState descriptor_state;
+            for (std::uint8_t index = 0u; index < descriptor_state.size();
+                 ++index) {
+                const auto& affine = affine_inputs[block_index].state
+                                         .registers[index];
+                descriptor_state[index] = latent_local_descriptor_block_input(
+                    affine, index);
+            }
+            std::vector<LatentLocalDescriptorState> before;
+            before.reserve(block.instructions.size());
+            for (std::size_t index = 0u; index < block.instructions.size();
+                 ++index) {
+                before.push_back(descriptor_state);
+                apply_latent_local_descriptor_instruction(
+                    candidate, block.instructions[index],
+                    descriptor_state);
+            }
+
+            for (std::size_t call_index = 0u;
+                 call_index < block.instructions.size(); ++call_index) {
+                const auto& call = block.instructions[call_index];
+                if (call.operation != Operation::CallRegister ||
+                    call.branch_register_relative)
+                    continue;
+                std::optional<std::size_t> load_index;
+                for (auto index = call_index; index-- > 0u;) {
+                    const auto& definition = block.instructions[index];
+                    const auto use_def =
+                        katana::ir::instruction_register_use_def(definition);
+                    if ((use_def.defs & katana::ir::gpr_register_bit(
+                                             call.branch_register)) == 0u)
+                        continue;
+                    if ((definition.operation ==
+                             Operation::LoadLongDisplacement ||
+                         definition.operation ==
+                             Operation::LoadLongR0Indexed) &&
+                        definition.destination_register ==
+                            call.branch_register)
+                        load_index = index;
+                    break;
+                }
+                if (!load_index.has_value() ||
+                    *load_index >= before.size())
+                    continue;
+                const auto& load = block.instructions[*load_index];
+                const auto& address =
+                    before[*load_index][load.source_register];
+                if (!address.known || !address.field.has_value()) continue;
+
+                std::optional<std::uint32_t> callback_displacement;
+                if (load.operation == Operation::LoadLongDisplacement &&
+                    load.displacement >= 0) {
+                    callback_displacement =
+                        static_cast<std::uint32_t>(load.displacement);
+                } else if (load.operation == Operation::LoadLongR0Indexed) {
+                    callback_displacement =
+                        latent_local_descriptor_exact_constant(
+                            before[*load_index][0u]);
+                }
+                if (!callback_displacement.has_value()) continue;
+
+                std::optional<std::uint32_t> stride;
+                bool multiple_variables = false;
+                for (const auto coefficient : address.coefficients) {
+                    if (coefficient == 0u) continue;
+                    if (stride.has_value()) {
+                        multiple_variables = true;
+                        break;
+                    }
+                    stride = coefficient;
+                }
+                if (multiple_variables || !stride.has_value() ||
+                    *stride < sizeof(std::uint32_t) ||
+                    *stride > maximum_latent_aot_descriptor_table_stride ||
+                    (*stride & 3u) != 0u)
+                    continue;
+                const auto callback64 =
+                    static_cast<std::uint64_t>(address.constant) +
+                    *callback_displacement;
+                if (callback64 + sizeof(std::uint32_t) > *stride)
+                    continue;
+                result.insert(
+                    {address.field->displacement, *stride,
+                     static_cast<std::uint32_t>(callback64)});
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<std::uint32_t>
+latent_local_persisted_descriptor_callback_entry_offsets(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program,
+    const std::span<const std::uint32_t> external_code_targets,
+    const std::size_t maximum_entry_scan_instructions) {
+    using katana::ir::Operation;
+    const auto resolver = make_latent_code_address_resolver(
+        candidate, program, external_code_targets);
+    if (!resolver.preferred_runtime_base.has_value()) return {};
+    const auto contracts =
+        latent_local_descriptor_contracts(candidate, program);
+    if (contracts.empty()) return {};
+
+    std::vector<std::uint32_t> result;
+    std::set<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>>
+        inspected_tables;
+    for (const auto& function : program) {
+        const auto affine_inputs =
+            latent_affine_block_inputs(candidate, function);
+        for (std::size_t block_index = 0u;
+             block_index < function.blocks.size(); ++block_index) {
+            if (block_index >= affine_inputs.size() ||
+                !affine_inputs[block_index].reachable)
+                continue;
+            const auto& block = function.blocks[block_index];
+            const auto trace = trace_latent_affine_values(
+                candidate, block, affine_inputs[block_index].state);
+            for (std::size_t index = 0u;
+                 index < block.instructions.size(); ++index) {
+                const auto& store = block.instructions[index];
+                if (store.operation != Operation::StoreLongDisplacement &&
+                    store.operation != Operation::StoreLongR0Indexed)
+                    continue;
+                if (index >= trace.before.size()) continue;
+                const auto& state = trace.before[index];
+                const auto& receiver =
+                    state.registers[store.destination_register];
+                if (!latent_affine_single_input(receiver) ||
+                    receiver.scale != 1u)
+                    continue;
+                std::optional<std::uint32_t> field_displacement;
+                if (store.operation == Operation::StoreLongDisplacement &&
+                    store.displacement >= 0) {
+                    const auto displacement =
+                        static_cast<std::uint64_t>(receiver.constant) +
+                        static_cast<std::uint32_t>(store.displacement);
+                    if (displacement <=
+                        maximum_latent_aot_descriptor_object_field_displacement)
+                        field_displacement =
+                            static_cast<std::uint32_t>(displacement);
+                } else if (store.operation == Operation::StoreLongR0Indexed) {
+                    const auto& index_value = state.registers[0u];
+                    if (index_value.known && index_value.input_mask == 0u &&
+                        index_value.scale == 0u) {
+                        const auto displacement =
+                            static_cast<std::uint64_t>(receiver.constant) +
+                            index_value.constant;
+                        if (displacement <=
+                            maximum_latent_aot_descriptor_object_field_displacement)
+                            field_displacement =
+                                static_cast<std::uint32_t>(displacement);
+                    }
+                }
+                if (!field_displacement.has_value()) continue;
+                const auto& source = state.registers[store.source_register];
+                if (!source.known || source.input_mask != 0u ||
+                    source.scale != 0u)
+                    continue;
+                const auto table = resolver.resolve_local(source.constant);
+                if (!table.has_value() || (*table & 3u) != 0u) continue;
+
+                for (const auto& contract : contracts) {
+                    if (contract.pointer_field_displacement !=
+                        *field_displacement)
+                        continue;
+                    if (!inspected_tables.emplace(
+                            *table, contract.record_stride,
+                            contract.callback_field_displacement)
+                             .second)
+                        continue;
+                    std::vector<std::uint32_t> targets;
+                    bool terminated = false;
+                    for (std::size_t record = 0u;
+                         record <=
+                             maximum_latent_aot_descriptor_table_records;
+                         ++record) {
+                        const auto address64 =
+                            static_cast<std::uint64_t>(*table) +
+                            static_cast<std::uint64_t>(record) *
+                                contract.record_stride +
+                            contract.callback_field_displacement;
+                        if (address64 >
+                            std::numeric_limits<std::uint32_t>::max())
+                            break;
+                        const auto raw = latent_read_u32(
+                            candidate,
+                            static_cast<std::uint32_t>(address64));
+                        if (!raw.has_value()) break;
+                        if (*raw == 0u) continue;
+                        const auto target = resolver.resolve_local(*raw);
+                        if (!target.has_value() || (*target & 1u) != 0u ||
+                            !latent_entry_has_early_control_flow(
+                                candidate, *target,
+                                maximum_entry_scan_instructions)) {
+                            terminated = true;
+                            break;
+                        }
+                        if (record ==
+                            maximum_latent_aot_descriptor_table_records) {
+                            targets.clear();
+                            break;
+                        }
+                        targets.push_back(*target);
+                    }
+                    std::sort(targets.begin(), targets.end());
+                    targets.erase(
+                        std::unique(targets.begin(), targets.end()),
+                        targets.end());
+                    if (!terminated ||
+                        targets.size() <
+                            minimum_latent_aot_descriptor_table_targets)
+                        continue;
+                    for (const auto target : targets) {
+                        result.push_back(
+                            target - candidate.source_address);
+                        if (result.size() >
+                            maximum_prepared_latent_aot_code_pointer_evidence)
+                            throw std::runtime_error(
+                                "Latente lokale Descriptor-Callback-Analyse "
+                                "ueberschreitet ihr Rootbudget.");
+                    }
+                }
+            }
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::vector<std::uint32_t>
+latent_persisted_descriptor_callback_entry_offsets(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program,
+    const std::span<const std::uint32_t> external_code_targets,
+    const std::span<const LatentAotExternalPersistentPointerSink>
+        external_persistent_pointer_sinks,
+    const std::span<const LatentAotExternalCallbackFieldSink>
+        external_callback_field_sinks,
+    const std::size_t maximum_entry_scan_instructions) {
+    using katana::ir::Operation;
+    if (external_persistent_pointer_sinks.empty() ||
+        external_callback_field_sinks.empty())
+        return {};
+    const auto resolver = make_latent_code_address_resolver(
+        candidate, program, external_code_targets);
+    if (!resolver.preferred_runtime_base.has_value()) return {};
+
+    using FieldShape = std::pair<std::int32_t, std::uint8_t>;
+    std::set<FieldShape> field_shapes;
+    for (const auto& sink : external_callback_field_sinks) {
+        if (sink.width == 4u && sink.displacement >= 0)
+            field_shapes.emplace(sink.displacement, sink.width);
+    }
+
+    std::vector<std::uint32_t> result;
+    std::set<std::tuple<std::uint32_t, std::uint32_t, std::int32_t>>
+        inspected_tables;
+    for (const auto& function : program) {
+        const auto literal_inputs =
+            latent_block_literal_inputs(candidate, function);
+        const auto affine_inputs =
+            latent_affine_block_inputs(candidate, function);
+        for (std::size_t block_index = 0u;
+             block_index < function.blocks.size(); ++block_index) {
+            if (block_index >= affine_inputs.size() ||
+                !affine_inputs[block_index].reachable)
+                continue;
+            const auto& block = function.blocks[block_index];
+            const auto literal_trace = trace_latent_block_literals(
+                candidate, block,
+                block_index < literal_inputs.size() &&
+                        literal_inputs[block_index].reachable
+                    ? literal_inputs[block_index].registers
+                    : LatentRegisterLiteralState{});
+            const auto affine_trace = trace_latent_affine_values(
+                candidate, block, affine_inputs[block_index].state);
+            for (std::size_t index = 0u;
+                 index < block.instructions.size(); ++index) {
+                const auto& instruction = block.instructions[index];
+                if (instruction.operation != Operation::Call &&
+                    instruction.operation != Operation::CallRegister &&
+                    instruction.operation != Operation::Branch &&
+                    instruction.operation != Operation::JumpRegister)
+                    continue;
+                if (index >= literal_trace.before.size() ||
+                    index >= affine_trace.transfer_arguments_after_delay.size() ||
+                    !affine_trace.transfer_arguments_after_delay[index]
+                         .has_value())
+                    continue;
+                const auto callee = latent_external_transfer_target(
+                    instruction, literal_trace.before[index], resolver);
+                if (!callee.has_value()) continue;
+                const auto sink = std::lower_bound(
+                    external_persistent_pointer_sinks.begin(),
+                    external_persistent_pointer_sinks.end(), *callee,
+                    [](const auto& candidate_sink,
+                       const std::uint32_t address) {
+                        return candidate_sink.function_address < address;
+                    });
+                if (sink == external_persistent_pointer_sinks.end() ||
+                    sink->function_address != *callee)
+                    continue;
+                const auto& outgoing =
+                    *affine_trace.transfer_arguments_after_delay[index];
+                for (std::uint8_t argument = 0u; argument < 4u;
+                     ++argument) {
+                    if ((sink->argument_mask & static_cast<std::uint8_t>(
+                                                  1u << argument)) == 0u)
+                        continue;
+                    const auto& descriptor =
+                        outgoing.registers[4u + argument];
+                    if (!latent_affine_single_input(descriptor) ||
+                        descriptor.scale < 4u ||
+                        descriptor.scale >
+                            maximum_latent_aot_descriptor_table_stride ||
+                        (descriptor.scale & 3u) != 0u)
+                        continue;
+                    const auto table =
+                        resolver.resolve_local(descriptor.constant);
+                    if (!table.has_value() || (*table & 3u) != 0u)
+                        continue;
+                    for (const auto [displacement, width] : field_shapes) {
+                        static_cast<void>(width);
+                        if (static_cast<std::uint64_t>(displacement) + 4u >
+                            descriptor.scale)
+                            continue;
+                        if (!inspected_tables.emplace(
+                                *table, descriptor.scale, displacement)
+                                 .second)
+                            continue;
+                        std::vector<std::uint32_t> targets;
+                        bool terminated = false;
+                        for (std::size_t record = 0u;
+                             record <=
+                                 maximum_latent_aot_descriptor_table_records;
+                             ++record) {
+                            const auto address64 =
+                                static_cast<std::uint64_t>(*table) +
+                                static_cast<std::uint64_t>(record) *
+                                    descriptor.scale +
+                                static_cast<std::uint32_t>(displacement);
+                            if (address64 >
+                                std::numeric_limits<std::uint32_t>::max())
+                                break;
+                            const auto raw = latent_read_u32(
+                                candidate,
+                                static_cast<std::uint32_t>(address64));
+                            if (!raw.has_value()) break;
+                            if (*raw == 0u) continue;
+                            const auto target =
+                                resolver.resolve_local(*raw);
+                            if (!target.has_value() ||
+                                (*target & 1u) != 0u ||
+                                !latent_entry_has_early_control_flow(
+                                    candidate, *target,
+                                    maximum_entry_scan_instructions)) {
+                                terminated = true;
+                                break;
+                            }
+                            if (record ==
+                                maximum_latent_aot_descriptor_table_records) {
+                                targets.clear();
+                                break;
+                            }
+                            targets.push_back(*target);
+                        }
+                        std::sort(targets.begin(), targets.end());
+                        targets.erase(
+                            std::unique(targets.begin(), targets.end()),
+                            targets.end());
+                        if (!terminated ||
+                            targets.size() <
+                                minimum_latent_aot_descriptor_table_targets)
+                            continue;
+                        for (const auto target : targets) {
+                            result.push_back(
+                                target - candidate.source_address);
+                            if (result.size() >
+                                maximum_prepared_latent_aot_code_pointer_evidence)
+                                throw std::runtime_error(
+                                    "Latente Descriptor-Callback-Analyse "
+                                    "ueberschreitet ihr Rootbudget.");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
 std::vector<std::uint32_t> latent_indexed_call_table_entry_offsets(
     const DiscFileCandidate& candidate,
     const std::span<const katana::ir::Function> program,
@@ -1633,6 +3003,34 @@ std::vector<std::uint32_t> latent_runtime_alias_call_entry_offsets(
         candidate, program, external_code_targets);
     if (!resolver.preferred_runtime_base.has_value()) return {};
 
+    // A direct local BSR is independent evidence that its destination is a
+    // callable function entry even when stripped boundaries caused the first
+    // analysis pass to retain it only as an interior block. This lets a
+    // literal-fed JMP to the same destination prove a tail call without
+    // admitting ordinary computed case transfers.
+    std::set<std::uint32_t> direct_local_call_entries;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.operation != Operation::Call ||
+                    !instruction.target_address.has_value())
+                    continue;
+                const auto target = resolver.resolve_local_with_evidence(
+                    *instruction.target_address);
+                if (!target.has_value() || !target->exact ||
+                    (target->target & 1u) != 0u ||
+                    target->target < candidate.source_address)
+                    continue;
+                const auto offset =
+                    target->target - candidate.source_address;
+                if (offset <= candidate.bytes.size() &&
+                    candidate.bytes.size() - offset >=
+                        sizeof(std::uint16_t))
+                    direct_local_call_entries.insert(target->target);
+            }
+        }
+    }
+
     std::vector<std::uint32_t> result;
     for (const auto& function : program) {
         const auto block_inputs =
@@ -1649,10 +3047,11 @@ std::vector<std::uint32_t> latent_runtime_alias_call_entry_offsets(
             for (std::size_t index = 0u; index < block.instructions.size();
                  ++index) {
                 const auto& instruction = block.instructions[index];
-                // JSR establishes an independent function entry. A literal-
-                // fed JMP may instead be an intra-function case transfer, so
-                // it remains covered by the existing known-block resolver.
-                if (instruction.operation != Operation::CallRegister ||
+                const bool register_call =
+                    instruction.operation == Operation::CallRegister;
+                const bool register_jump =
+                    instruction.operation == Operation::JumpRegister;
+                if ((!register_call && !register_jump) ||
                     instruction.branch_register_relative)
                     continue;
                 const auto& literals = trace.before[index];
@@ -1665,10 +3064,15 @@ std::vector<std::uint32_t> latent_runtime_alias_call_entry_offsets(
                         instruction.branch_register);
                 if (!raw.has_value()) continue;
                 const auto target = resolver.resolve_local(*raw);
-                if (!target.has_value() ||
-                    resolver.function_entries.contains(*target) ||
-                    (*target & 1u) != 0u ||
+                if (!target.has_value() || (*target & 1u) != 0u ||
                     *target < candidate.source_address)
+                    continue;
+                if (register_call &&
+                    resolver.function_entries.contains(*target))
+                    continue;
+                if (register_jump &&
+                    (resolver.function_entries.contains(*target) ||
+                     !direct_local_call_entries.contains(*target)))
                     continue;
                 const auto offset = *target - candidate.source_address;
                 if (offset > candidate.bytes.size() ||
@@ -1720,8 +3124,9 @@ LatentExternalCallbackResolution resolve_latent_external_callbacks(
             for (std::size_t index = 0u; index < block.instructions.size();
                  ++index) {
                 const auto& instruction = block.instructions[index];
-                if (instruction.operation == Operation::CallRegister &&
-                    !instruction.branch_register_relative) {
+                if (instruction.operation == Operation::Call ||
+                    (instruction.operation == Operation::CallRegister &&
+                     !instruction.branch_register_relative)) {
                     const auto inspect_callback_call = [&]() {
                         if (index >= trace.before.size() ||
                             index >=
@@ -1732,14 +3137,19 @@ LatentExternalCallbackResolution resolve_latent_external_callbacks(
                         const auto& literals = trace.before[index];
                         const auto& outgoing =
                             *trace.call_arguments_after_delay[index];
-                        auto raw_callee =
-                            instruction.branch_register < literals.size()
-                                ? literals[instruction.branch_register]
-                                : std::nullopt;
-                        if (!raw_callee.has_value())
-                            raw_callee = latent_block_register_literal(
-                                candidate, block, index,
-                                instruction.branch_register);
+                        std::optional<std::uint32_t> raw_callee;
+                        if (instruction.operation == Operation::Call) {
+                            raw_callee = instruction.target_address;
+                        } else {
+                            raw_callee =
+                                instruction.branch_register < literals.size()
+                                    ? literals[instruction.branch_register]
+                                    : std::nullopt;
+                            if (!raw_callee.has_value())
+                                raw_callee = latent_block_register_literal(
+                                    candidate, block, index,
+                                    instruction.branch_register);
+                        }
                         if (!raw_callee.has_value()) return;
                         const auto callee =
                             resolver.resolve(*raw_callee, true);
@@ -2982,6 +4392,14 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     auto analysis_entry_offsets = candidate.entry_offsets;
     for (const auto offset : analysis_entry_offsets)
         image.add_entry_point(candidate.source_address + offset);
+    // A transformed PRS module is admitted only with an exact decoded-byte
+    // identity.  Bind that identity after all image-root mutations so the
+    // proof is not invalidated by add_entry_point().
+    image.add_immutable_range(
+        {candidate.source_address,
+         candidate.bytes.size(),
+         candidate.byte_identity,
+         0u});
 
     katana::analysis::ControlFlowAnalysisResult analysis;
     detail::StructuredControlFlowProgress control_flow_progress(
@@ -2997,9 +4415,20 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         options.maximum_native_instructions_per_module;
     analysis_options.maximum_contexts =
         options.maximum_analysis_contexts;
-    katana::analysis::AnalysisMemoryBudget function_value_ready_budget(
+    auto& analysis_memory_budget =
+        katana::analysis::global_analysis_memory_budget();
+    katana::analysis::AnalysisMemoryBudget function_value_cache_budget(
+        static_cast<std::size_t>(
+            latent_aot_function_value_cache_budget_bytes),
+        &analysis_memory_budget,
         static_cast<std::size_t>(
             latent_aot_function_value_ready_budget_bytes));
+    katana::analysis::AnalysisMemoryBudget function_value_ready_budget(
+        static_cast<std::size_t>(
+            latent_aot_function_value_ready_budget_bytes),
+        &analysis_memory_budget);
+    analysis_options.function_value_cache_memory_budget =
+        &function_value_cache_budget;
     analysis_options.pre_reserved_function_value_ready_budget =
         &function_value_ready_budget;
     analysis_options.persistent_function_analysis_epoch_import_blob =
@@ -3013,6 +4442,7 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         katana::analysis::ResolutionRetentionLimitReason::None};
     bool runtime_alias_entry_fixpoint_complete = false;
     std::vector<katana::ir::Function> stable_discovery_program;
+    std::vector<std::uint32_t> non_function_entry_offsets;
     for (std::size_t pass = 0u;
          pass < maximum_latent_aot_runtime_alias_entry_passes; ++pass) {
         resolution_retention_limit_reason.store(
@@ -3062,63 +4492,169 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         }
 
         std::vector<std::uint32_t> discovered_offsets;
+        std::vector<std::uint32_t> demoted_entry_offsets;
+        std::vector<std::uint32_t> strict_interior_addresses;
         std::vector<katana::ir::Function> discovery_program;
+        bool explicit_tail_prologue_discovered = false;
         try {
             const auto safepoints =
                 katana::ir::architectural_safepoint_block_leaders(analysis);
             discovery_program =
                 katana::ir::lower_program(analysis, safepoints);
-            discovered_offsets = latent_runtime_alias_call_entry_offsets(
-                candidate, discovery_program,
-                options.external_code_targets,
-                options.maximum_entry_scan_instructions);
-            const auto indexed_call_table_offsets =
-                latent_indexed_call_table_entry_offsets(
+            strict_interior_addresses =
+                latent_program_strict_interior_addresses(
+                    discovery_program);
+            const auto explicit_tail_prologue_offsets =
+                latent_explicit_tail_prologue_entry_offsets(
+                    candidate, discovery_program);
+            for (const auto offset : explicit_tail_prologue_offsets) {
+                if (!std::binary_search(analysis_entry_offsets.begin(),
+                                        analysis_entry_offsets.end(),
+                                        offset))
+                    discovered_offsets.push_back(offset);
+            }
+            explicit_tail_prologue_discovered =
+                !discovered_offsets.empty();
+            for (const auto offset : analysis_entry_offsets) {
+                if (latent_function_root_reaches_before_entry(
+                        discovery_program,
+                        candidate.source_address + offset))
+                    demoted_entry_offsets.push_back(offset);
+            }
+            if (discovered_offsets.empty() &&
+                demoted_entry_offsets.empty()) {
+                discovered_offsets = latent_runtime_alias_call_entry_offsets(
                     candidate, discovery_program,
                     options.external_code_targets,
                     options.maximum_entry_scan_instructions);
-            discovered_offsets.insert(
-                discovered_offsets.end(),
-                indexed_call_table_offsets.begin(),
-                indexed_call_table_offsets.end());
-            const auto callback_resolution =
-                resolve_latent_external_callbacks(
-                    candidate, discovery_program,
-                    options.external_code_targets,
-                    options.external_callback_sinks,
-                    options.maximum_entry_scan_instructions);
-            discovered_offsets.insert(discovered_offsets.end(),
-                                      callback_resolution.local_entry_offsets.begin(),
-                                      callback_resolution.local_entry_offsets.end());
-            const auto record_callback_offsets =
-                latent_record_callback_entry_offsets(
-                    candidate, discovery_program,
-                    options.external_code_targets,
-                    options.external_callback_field_sinks,
-                    options.maximum_entry_scan_instructions);
-            discovered_offsets.insert(
-                discovered_offsets.end(),
-                record_callback_offsets.begin(),
-                record_callback_offsets.end());
-            std::sort(discovered_offsets.begin(),
-                      discovered_offsets.end());
-            discovered_offsets.erase(
-                std::unique(discovered_offsets.begin(),
-                            discovered_offsets.end()),
-                discovered_offsets.end());
+                const auto indexed_call_table_offsets =
+                    latent_indexed_call_table_entry_offsets(
+                        candidate, discovery_program,
+                        options.external_code_targets,
+                        options.maximum_entry_scan_instructions);
+                discovered_offsets.insert(
+                    discovered_offsets.end(),
+                    indexed_call_table_offsets.begin(),
+                    indexed_call_table_offsets.end());
+                const auto callback_resolution =
+                    resolve_latent_external_callbacks(
+                        candidate, discovery_program,
+                        options.external_code_targets,
+                        options.external_callback_sinks,
+                        options.maximum_entry_scan_instructions);
+                discovered_offsets.insert(
+                    discovered_offsets.end(),
+                    callback_resolution.local_entry_offsets.begin(),
+                    callback_resolution.local_entry_offsets.end());
+                const auto record_callback_offsets =
+                    latent_record_callback_entry_offsets(
+                        candidate, discovery_program,
+                        options.external_code_targets,
+                        options.external_callback_field_sinks,
+                        options.maximum_entry_scan_instructions);
+                discovered_offsets.insert(
+                    discovered_offsets.end(),
+                    record_callback_offsets.begin(),
+                    record_callback_offsets.end());
+                const auto local_descriptor_callback_offsets =
+                    latent_local_persisted_descriptor_callback_entry_offsets(
+                        candidate, discovery_program,
+                        options.external_code_targets,
+                        options.maximum_entry_scan_instructions);
+                discovered_offsets.insert(
+                    discovered_offsets.end(),
+                    local_descriptor_callback_offsets.begin(),
+                    local_descriptor_callback_offsets.end());
+                const auto descriptor_callback_offsets =
+                    latent_persisted_descriptor_callback_entry_offsets(
+                        candidate, discovery_program,
+                        options.external_code_targets,
+                        options.external_persistent_pointer_sinks,
+                        options.external_callback_field_sinks,
+                        options.maximum_entry_scan_instructions);
+                discovered_offsets.insert(
+                    discovered_offsets.end(),
+                    descriptor_callback_offsets.begin(),
+                    descriptor_callback_offsets.end());
+                std::sort(discovered_offsets.begin(),
+                          discovered_offsets.end());
+                discovered_offsets.erase(
+                    std::unique(discovered_offsets.begin(),
+                                discovered_offsets.end()),
+                    discovered_offsets.end());
+            }
         } catch (const std::bad_alloc&) {
             throw;
         } catch (const std::exception&) {
             return reject_candidate(
                 LatentAotAnalysisRejection::ProgramInvalid);
         }
+        if (explicit_tail_prologue_discovered) {
+            if (analysis_entry_offsets.size() >
+                    options.maximum_functions_per_module ||
+                discovered_offsets.size() >
+                    options.maximum_functions_per_module -
+                        analysis_entry_offsets.size())
+                return reject_candidate(
+                    LatentAotAnalysisRejection::FunctionBudgetExceeded);
+            for (const auto offset : discovered_offsets)
+                image.add_entry_point(candidate.source_address + offset);
+            merge_entry_offsets(analysis_entry_offsets, discovered_offsets);
+            continue;
+        }
+        if (!demoted_entry_offsets.empty()) {
+            // An authoritative callback/continuation address must remain a
+            // dispatch requirement, but it is not a second ABI function when
+            // its lowered graph reaches backward into another owner. Rebuild
+            // the root set without those entries; the final EntryBlockMissing
+            // gate still requires every original candidate entry to be
+            // materialized by the retained owner.
+            if (demoted_entry_offsets.size() == analysis_entry_offsets.size())
+                return reject_candidate(
+                    LatentAotAnalysisRejection::ProgramInvalid);
+            merge_entry_offsets(non_function_entry_offsets,
+                                demoted_entry_offsets);
+            analysis_entry_offsets.erase(
+                std::remove_if(
+                    analysis_entry_offsets.begin(),
+                    analysis_entry_offsets.end(),
+                    [&](const auto offset) {
+                        return std::binary_search(
+                            demoted_entry_offsets.begin(),
+                            demoted_entry_offsets.end(), offset);
+                    }),
+                analysis_entry_offsets.end());
+            std::vector<std::uint32_t> retained_entry_addresses;
+            retained_entry_addresses.reserve(analysis_entry_offsets.size());
+            for (const auto offset : analysis_entry_offsets)
+                retained_entry_addresses.push_back(
+                    candidate.source_address + offset);
+            image.replace_entry_points(retained_entry_addresses);
+            continue;
+        }
         discovered_offsets.erase(
             std::remove_if(
                 discovered_offsets.begin(), discovered_offsets.end(),
                 [&](const auto offset) {
-                    return std::binary_search(analysis_entry_offsets.begin(),
-                                              analysis_entry_offsets.end(),
-                                              offset);
+                    if (std::binary_search(analysis_entry_offsets.begin(),
+                                           analysis_entry_offsets.end(),
+                                           offset))
+                        return true;
+                    if (std::binary_search(non_function_entry_offsets.begin(),
+                                           non_function_entry_offsets.end(),
+                                           offset))
+                        return true;
+                    // A locally discovered callback value which names an
+                    // instruction already owned by the current reachable
+                    // program is not an independent function root. Re-seeding
+                    // it would analyze backward loops under a second ABI
+                    // context and can produce divergent IR owners. Exact
+                    // candidate entries were installed before this fixpoint;
+                    // inferred interior labels therefore remain fail-closed.
+                    return std::binary_search(
+                        strict_interior_addresses.begin(),
+                        strict_interior_addresses.end(),
+                        candidate.source_address + offset);
                 }),
             discovered_offsets.end());
         if (discovered_offsets.empty()) {
@@ -3260,9 +4796,13 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
         options.maximum_analysis_contexts;
     inputs.analyzer_abi = katana::analysis::abi_version;
     std::ostringstream external_contract;
+    const std::string_view cache_implementation_identity =
+        !options.analysis_cache_implementation_identity.empty()
+            ? std::string_view{options.analysis_cache_implementation_identity}
+            : std::string_view{options.analysis_implementation_identity};
     external_contract << 's'
-                      << options.analysis_cache_implementation_identity.size()
-                      << ':' << options.analysis_cache_implementation_identity
+                      << cache_implementation_identity.size()
+                      << ':' << cache_implementation_identity
                       << ';' << 't' << options.external_code_targets.size()
                       << ';';
     for (const auto target : options.external_code_targets)
@@ -3270,6 +4810,12 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
     external_contract << 'c' << options.external_callback_sinks.size()
                       << ';';
     for (const auto& sink : options.external_callback_sinks)
+        external_contract << sink.function_address << ':'
+                          << +sink.argument_mask << ';';
+    external_contract << 'p'
+                      << options.external_persistent_pointer_sinks.size()
+                      << ';';
+    for (const auto& sink : options.external_persistent_pointer_sinks)
         external_contract << sink.function_address << ':'
                           << +sink.argument_mask << ';';
     external_contract << 'f'
@@ -3323,6 +4869,11 @@ std::string candidate_epoch_cache_key(
         append_value(sink.function_address);
         append_value(sink.argument_mask);
     }
+    append_value(options.external_persistent_pointer_sinks.size());
+    for (const auto& sink : options.external_persistent_pointer_sinks) {
+        append_value(sink.function_address);
+        append_value(sink.argument_mask);
+    }
     append_value(options.external_callback_field_sinks.size());
     for (const auto& sink : options.external_callback_field_sinks) {
         append_value(sink.function_address);
@@ -3350,7 +4901,8 @@ CandidateAnalysisOutcome analyze_candidate(
     std::string cache_key;
     bool cache_entry_absent = true;
     if (cache != nullptr &&
-        !options.analysis_cache_implementation_identity.empty()) {
+        (!options.analysis_cache_implementation_identity.empty() ||
+         !options.analysis_implementation_identity.empty())) {
         try {
             cache_key = make_latent_aot_analysis_cache_key(
                 candidate_cache_key_inputs(candidate, options));
@@ -3561,7 +5113,9 @@ LatentAotDiscovery discover_latent_aot_modules(
         options.maximum_directory_bytes >
             std::numeric_limits<std::uint32_t>::max() ||
         options.maximum_total_directory_bytes < options.maximum_directory_bytes ||
-        (heuristic_discovery && options.maximum_candidate_files == 0u) ||
+        (heuristic_discovery &&
+         (options.maximum_candidate_files == 0u ||
+          options.maximum_transformed_candidate_files == 0u)) ||
         options.maximum_file_bytes < minimum_candidate_bytes ||
         options.maximum_file_bytes >
             katana::runtime::maximum_native_aot_template_extent ||
@@ -3607,6 +5161,30 @@ LatentAotDiscovery discover_latent_aot_modules(
         std::any_of(
             options.external_callback_sinks.begin(),
             options.external_callback_sinks.end(),
+            [&](const auto& sink) {
+                return sink.argument_mask == 0u ||
+                       (sink.argument_mask & 0xf0u) != 0u ||
+                       !std::binary_search(
+                           options.external_code_targets.begin(),
+                           options.external_code_targets.end(),
+                           sink.function_address);
+            }) ||
+        options.external_persistent_pointer_sinks.size() > 65'536u ||
+        !std::is_sorted(
+            options.external_persistent_pointer_sinks.begin(),
+            options.external_persistent_pointer_sinks.end(),
+            [](const auto& left, const auto& right) {
+                return left.function_address < right.function_address;
+            }) ||
+        std::adjacent_find(
+            options.external_persistent_pointer_sinks.begin(),
+            options.external_persistent_pointer_sinks.end(),
+            [](const auto& left, const auto& right) {
+                return left.function_address == right.function_address;
+            }) != options.external_persistent_pointer_sinks.end() ||
+        std::any_of(
+            options.external_persistent_pointer_sinks.begin(),
+            options.external_persistent_pointer_sinks.end(),
             [&](const auto& sink) {
                 return sink.argument_mask == 0u ||
                        (sink.argument_mask & 0xf0u) != 0u ||
@@ -3777,8 +5355,11 @@ LatentAotDiscovery discover_latent_aot_modules(
 
     LatentAotDiscovery result;
     std::vector<DiscFileCandidate> candidates;
-    candidates.reserve(std::min(files.size(), options.maximum_candidate_files) +
-                       std::min(files.size(), normalized_entry_hints.size()));
+    candidates.reserve(
+        std::min(files.size(), options.maximum_candidate_files) +
+        std::min(files.size(), normalized_entry_hints.size()) +
+        std::min(files.size(),
+                 maximum_latent_aot_inferred_authoritative_candidates));
     std::vector<bool> candidates_have_explicit_entries;
     candidates_have_explicit_entries.reserve(candidates.capacity());
     std::map<std::pair<std::string, std::uint32_t>, std::size_t>
@@ -3829,6 +5410,7 @@ LatentAotDiscovery discover_latent_aot_modules(
     std::uint64_t examined_file_bytes = 0u;
     std::uint64_t examined_transform_source_bytes = 0u;
     std::size_t source_binding_count = 0u;
+    std::size_t transformed_candidate_bytes = 0u;
     std::set<std::pair<std::uint64_t, std::uint32_t>> exact_file_extents;
     for (const auto& file : files) {
         const auto& entry = file.second;
@@ -3838,29 +5420,38 @@ LatentAotDiscovery discover_latent_aot_modules(
              hint_index < normalized_entry_hints.size();
              ++hint_index) {
             const auto& hint = normalized_entry_hints[hint_index];
+            // byte_size binds the exact encoded disc extent; for PRS the
+            // identity and module-relative bounds are checked after decode.
             if (hint.disc_byte_offset == disc_byte_offset &&
                 hint.byte_size == entry.size)
                 extent_hint_indices.push_back(hint_index);
         }
-        if (extent_hint_indices.empty() ||
-            exact_file_extents.contains({disc_byte_offset, entry.size}))
+        if (extent_hint_indices.empty())
             continue;
+        const bool sega_prs = disc_file_uses_sega_prs(file.first);
         if (disc_byte_offset > source->size() ||
             entry.size > source->size() - disc_byte_offset)
             throw std::runtime_error("Latente Discdatei liegt ausserhalb der Discquelle.");
         if (entry.size > options.maximum_file_bytes)
             throw std::runtime_error(
                 "latent-aot-entry-hint-file-budget");
-        if (entry.size >
-            options.maximum_total_file_bytes - examined_file_bytes)
+        const auto source_budget_used =
+            sega_prs ? examined_transform_source_bytes : examined_file_bytes;
+        const auto source_budget =
+            sega_prs ? options.maximum_total_transform_source_bytes
+                     : options.maximum_total_file_bytes;
+        if (entry.size > source_budget - source_budget_used)
             throw std::runtime_error(
                 "latent-aot-entry-hint-total-budget");
-        auto bytes = filesystem.read_file(entry, entry.size);
-        if (bytes.size() != entry.size)
+        auto source_bytes = filesystem.read_file(entry, entry.size);
+        if (source_bytes.size() != entry.size)
             throw std::runtime_error("Latente Discdatei wurde abgeschnitten gelesen.");
-        examined_file_bytes += bytes.size();
+        if (sega_prs)
+            examined_transform_source_bytes += source_bytes.size();
+        else
+            examined_file_bytes += source_bytes.size();
         ++result.examined_files;
-        result.examined_bytes += bytes.size();
+        result.examined_bytes += source_bytes.size();
         {
             katana::ProgressCounterSnapshot counters;
             counters.discovered = files.size();
@@ -3869,7 +5460,36 @@ LatentAotDiscovery discover_latent_aot_modules(
                 result.examined_bytes,
                 std::move(counters));
         }
-        auto byte_identity =
+        const auto source_byte_identity =
+            "sha256:" + katana::io::sha256_bytes(std::string_view(
+                            reinterpret_cast<const char*>(source_bytes.data()),
+                            source_bytes.size()));
+        auto transform = LatentAotSourceTransform::Identity;
+        auto bytes = std::move(source_bytes);
+        if (sega_prs) {
+            ++result.prs_files_examined;
+            try {
+                bytes = katana::detail::decompress_sega_prs(
+                    bytes, options.maximum_file_bytes,
+                    options.maximum_file_bytes);
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const katana::detail::PrsDecodeError&) {
+                ++result.prs_files_rejected;
+                continue;
+            }
+            ++result.prs_files_decoded;
+            result.prs_decoded_bytes += bytes.size();
+            transform = LatentAotSourceTransform::SegaPrs;
+            if (bytes.size() >
+                options.maximum_total_transformed_bytes -
+                    transformed_candidate_bytes)
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-transformed-budget");
+            transformed_candidate_bytes += bytes.size();
+        }
+        const auto candidate_size = static_cast<std::uint32_t>(bytes.size());
+        const auto byte_identity =
             "sha256:" + katana::io::sha256_bytes(std::string_view(
                             reinterpret_cast<const char*>(bytes.data()), bytes.size()));
         std::vector<std::size_t> matching_entry_hints;
@@ -3888,16 +5508,50 @@ LatentAotDiscovery discover_latent_aot_modules(
         explicit_entry_offsets.erase(
             std::unique(explicit_entry_offsets.begin(), explicit_entry_offsets.end()),
             explicit_entry_offsets.end());
+        if (std::any_of(
+                explicit_entry_offsets.begin(), explicit_entry_offsets.end(),
+                [&](const auto offset) {
+                    return (offset & 1u) != 0u ||
+                           static_cast<std::uint64_t>(offset) + 2u >
+                               candidate_size;
+                }))
+            throw std::runtime_error("latent-aot-entry-hint-offset-invalid");
         auto source_binding = make_source_binding(
-            LatentAotSourceTransform::Identity, byte_identity,
+            transform, source_byte_identity,
             disc_byte_offset, entry.size);
+        auto entry_offsets = explicit_entry_offsets;
+        if (heuristic_discovery) {
+            auto inferred_entry_offsets =
+                sega_prs ? latent_prefix_entry_table_offsets(bytes)
+                         : std::vector<std::uint32_t>{};
+            const bool inferred_authoritative_entry_table =
+                !inferred_entry_offsets.empty();
+            if (inferred_entry_offsets.empty())
+                inferred_entry_offsets.push_back(0u);
+            DiscFileCandidate inferred_candidate{
+                candidate_size,
+                0u,
+                std::move(bytes),
+                byte_identity,
+                {source_binding},
+                inferred_entry_offsets,
+                {},
+                inferred_authoritative_entry_table};
+            const bool inferred_candidate_valid =
+                !candidate_source_shape_rejection(
+                    inferred_candidate, options).has_value();
+            bytes = std::move(inferred_candidate.bytes);
+            if (inferred_candidate_valid)
+                merge_entry_offsets(entry_offsets,
+                                    inferred_entry_offsets);
+        }
         const auto candidate_key =
-            std::pair{byte_identity, entry.size};
+            std::pair{byte_identity, candidate_size};
         const auto existing =
             candidate_by_byte_identity_and_size.find(candidate_key);
         if (existing != candidate_by_byte_identity_and_size.end()) {
             auto& candidate = candidates[existing->second];
-            if (candidate.size != entry.size)
+            if (candidate.size != candidate_size)
                 throw std::runtime_error(
                     "latent-aot-entry-hint-byte-identity-size-mismatch");
             if (source_binding_count >= maximum_latent_aot_source_bindings)
@@ -3906,9 +5560,9 @@ LatentAotDiscovery discover_latent_aot_modules(
             if (insert_source_binding(candidate, std::move(source_binding)))
                 ++source_binding_count;
             merge_entry_offsets(candidate.entry_offsets,
-                                explicit_entry_offsets);
-            merge_entry_offsets(candidate.explicit_entry_offsets,
-                                explicit_entry_offsets);
+                                entry_offsets);
+            candidate.explicit_entry_offsets = candidate.entry_offsets;
+            candidate.inferred_authoritative_entry_table = false;
         } else {
             if (known_identities.contains(byte_identity))
                 throw std::runtime_error(
@@ -3916,15 +5570,14 @@ LatentAotDiscovery discover_latent_aot_modules(
             if (source_binding_count >= maximum_latent_aot_source_bindings)
                 throw std::runtime_error(
                     "latent-aot-source-binding-budget");
-            const auto entry_offsets = explicit_entry_offsets;
             if (!place_candidate(
-                    {entry.size,
+                    {candidate_size,
                      0u,
                      std::move(bytes),
                      byte_identity,
                      {std::move(source_binding)},
                      entry_offsets,
-                     explicit_entry_offsets,
+                     entry_offsets,
                      false},
                     true))
                 break;
@@ -3932,14 +5585,16 @@ LatentAotDiscovery discover_latent_aot_modules(
                 std::move(candidate_key), candidates.size() - 1u);
             known_identities.insert(byte_identity);
             ++source_binding_count;
+            if (sega_prs) ++result.prs_candidates_admitted;
         }
         for (const auto hint_index : matching_entry_hints)
             matched_entry_hints[hint_index] = true;
         exact_file_extents.emplace(disc_byte_offset, entry.size);
     }
 
-    std::size_t heuristic_candidate_count = 0u;
-    std::size_t transformed_candidate_bytes = 0u;
+    std::size_t identity_heuristic_candidate_count = 0u;
+    std::size_t transformed_heuristic_candidate_count = 0u;
+    std::size_t inferred_authoritative_candidate_count = 0u;
     if (heuristic_discovery) {
         for (const auto file_index : heuristic_file_order) {
             const auto& file = files[file_index];
@@ -3955,6 +5610,15 @@ LatentAotDiscovery discover_latent_aot_modules(
             const auto disc_byte_offset = disc_byte_offset_for(entry);
             if (exact_file_extents.contains({disc_byte_offset, entry.size}))
                 continue;
+            std::vector<std::size_t> extent_hint_indices;
+            for (std::size_t hint_index = 0u;
+                 hint_index < normalized_entry_hints.size();
+                 ++hint_index) {
+                const auto& hint = normalized_entry_hints[hint_index];
+                if (hint.disc_byte_offset == disc_byte_offset &&
+                    hint.byte_size == entry.size)
+                    extent_hint_indices.push_back(hint_index);
+            }
             const auto& source_budget_used =
                 sega_prs ? examined_transform_source_bytes
                          : examined_file_bytes;
@@ -4015,6 +5679,32 @@ LatentAotDiscovery discover_latent_aot_modules(
                 "sha256:" + katana::io::sha256_bytes(std::string_view(
                                 reinterpret_cast<const char*>(bytes.data()),
                                 bytes.size()));
+            std::vector<std::size_t> matching_entry_hints;
+            std::vector<std::uint32_t> explicit_entry_offsets;
+            for (const auto hint_index : extent_hint_indices) {
+                const auto& hint = normalized_entry_hints[hint_index];
+                if (hint.byte_identity == byte_identity) {
+                    matching_entry_hints.push_back(hint_index);
+                    explicit_entry_offsets.push_back(
+                        hint.module_relative_offset);
+                }
+            }
+            std::sort(explicit_entry_offsets.begin(),
+                      explicit_entry_offsets.end());
+            explicit_entry_offsets.erase(
+                std::unique(explicit_entry_offsets.begin(),
+                            explicit_entry_offsets.end()),
+                explicit_entry_offsets.end());
+            if (std::any_of(
+                    explicit_entry_offsets.begin(),
+                    explicit_entry_offsets.end(),
+                    [&](const auto offset) {
+                        return (offset & 1u) != 0u ||
+                               static_cast<std::uint64_t>(offset) + 2u >
+                                   candidate_size;
+                    }))
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-offset-invalid");
             const auto candidate_key =
                 std::pair{byte_identity, candidate_size};
             if (!known_identities.insert(byte_identity).second) {
@@ -4031,6 +5721,18 @@ LatentAotDiscovery discover_latent_aot_modules(
                             candidates[existing->second],
                             std::move(source_binding)))
                         ++source_binding_count;
+                    if (!matching_entry_hints.empty()) {
+                        auto& candidate = candidates[existing->second];
+                        merge_entry_offsets(candidate.entry_offsets,
+                                            explicit_entry_offsets);
+                        candidate.explicit_entry_offsets =
+                            candidate.entry_offsets;
+                        candidate.inferred_authoritative_entry_table = false;
+                        for (const auto hint_index : matching_entry_hints)
+                            matched_entry_hints[hint_index] = true;
+                        exact_file_extents.emplace(disc_byte_offset,
+                                                   entry.size);
+                    }
                 }
                 continue;
             }
@@ -4040,9 +5742,13 @@ LatentAotDiscovery discover_latent_aot_modules(
             auto entry_offsets = sega_prs
                                      ? latent_prefix_entry_table_offsets(bytes)
                                      : std::vector<std::uint32_t>{};
-            const bool inferred_authoritative_entry_table =
+            const bool inferred_prefix_entry_table =
                 !entry_offsets.empty();
             if (entry_offsets.empty()) entry_offsets.push_back(0u);
+            if (!matching_entry_hints.empty()) {
+                merge_entry_offsets(entry_offsets, explicit_entry_offsets);
+                explicit_entry_offsets = entry_offsets;
+            }
             DiscFileCandidate candidate{
                 candidate_size,
                 0u,
@@ -4050,8 +5756,17 @@ LatentAotDiscovery discover_latent_aot_modules(
                 byte_identity,
                 {std::move(source_binding)},
                 entry_offsets,
-                {},
-                inferred_authoritative_entry_table};
+                matching_entry_hints.empty() ? std::vector<std::uint32_t>{}
+                                              : explicit_entry_offsets,
+                matching_entry_hints.empty()
+                    ? inferred_prefix_entry_table
+                    : false};
+            // Candidate slots and the expensive whole-module analysis are a
+            // bounded resource.  Reject byte shapes that already fail the
+            // identity-bound entry/decode/early-control-flow contract before
+            // they can crowd later executable PRS modules out of the
+            // candidate inventory.  Full CFG, relocation and emitted-block
+            // closure still run after admission.
             if (candidate_source_shape_rejection(candidate, options)) {
                 ++result.rejected_files;
                 continue;
@@ -4061,21 +5776,56 @@ LatentAotDiscovery discover_latent_aot_modules(
                     options.maximum_total_transformed_bytes -
                         transformed_candidate_bytes) {
                 result.prs_decoded_budget_exhausted = true;
-                ++result.rejected_files;
-                continue;
+                throw std::runtime_error(
+                    candidate.inferred_authoritative_entry_table
+                        ? "latent-aot-authoritative-transformed-byte-budget"
+                        : "latent-aot-heuristic-transformed-byte-budget");
             }
-            if (heuristic_candidate_count ==
-                options.maximum_candidate_files)
-                continue;
+            // A complete table embedded in immutable transformed bytes is an
+            // authoritative RuntimeOnly root contract, not an ordinary
+            // opcode-shape heuristic.  Keep it behind its own hard cap so a
+            // directory full of smaller generic candidates cannot crowd a
+            // later statically linked module out.  Crossing that cap aborts
+            // instead of silently losing an authoritative root.
+            if (candidate.inferred_authoritative_entry_table) {
+                if (inferred_authoritative_candidate_count ==
+                    maximum_latent_aot_inferred_authoritative_candidates)
+                    throw std::runtime_error(
+                        "latent-aot-authoritative-candidate-budget");
+            } else if (sega_prs) {
+                if (transformed_heuristic_candidate_count ==
+                    options.maximum_transformed_candidate_files)
+                    throw std::runtime_error(
+                        "latent-aot-transformed-heuristic-candidate-budget");
+            } else if (identity_heuristic_candidate_count ==
+                       options.maximum_candidate_files) {
+                throw std::runtime_error(
+                    "latent-aot-identity-heuristic-candidate-budget");
+            }
             if (sega_prs)
                 transformed_candidate_bytes += candidate.bytes.size();
-            if (!place_candidate(std::move(candidate), false))
-                break;
+            const bool inferred_authoritative_entry_table =
+                candidate.inferred_authoritative_entry_table;
+            if (!place_candidate(std::move(candidate), false)) {
+                throw std::runtime_error(
+                    inferred_authoritative_entry_table
+                        ? "latent-aot-authoritative-source-range-budget"
+                        : "latent-aot-heuristic-source-range-budget");
+            }
             candidate_by_byte_identity_and_size.emplace(
                 candidate_key, candidates.size() - 1u);
             ++source_binding_count;
-            ++heuristic_candidate_count;
+            if (inferred_authoritative_entry_table)
+                ++inferred_authoritative_candidate_count;
+            else if (sega_prs)
+                ++transformed_heuristic_candidate_count;
+            else
+                ++identity_heuristic_candidate_count;
             if (sega_prs) ++result.prs_candidates_admitted;
+            for (const auto hint_index : matching_entry_hints)
+                matched_entry_hints[hint_index] = true;
+            if (!matching_entry_hints.empty())
+                exact_file_extents.emplace(disc_byte_offset, entry.size);
         }
     }
 
@@ -4101,7 +5851,7 @@ LatentAotDiscovery discover_latent_aot_modules(
             katana::ProgressUnit::Modules,
             candidates.size(),
             "latent-aot-candidates");
-    const auto configured_candidate_workers = std::min(
+    const auto requested_candidate_workers = std::min(
         {candidates.size(),
          options.maximum_workers,
          katana::analysis::global_analysis_executor().maximum_jobs()});
@@ -4133,6 +5883,32 @@ LatentAotDiscovery discover_latent_aot_modules(
             analysis_executor.memory_budget().capacity());
     candidate_work.transient_bytes =
         latent_aot_module_transient_bytes(maximum_candidate_bytes);
+    // Keep one complete resolution-ready arena available independently of
+    // candidate count.  Its 1 GiB cap is a pre-existing logical contract;
+    // this is admission only, not a smaller budget.  The cache arenas are
+    // parent-accounted and preserve the same headroom before retaining a
+    // replay alias, so a wave cannot fill the executor and strand every
+    // canonical root waiting for its first finalized result.
+    const auto memory_capacity =
+        analysis_executor.memory_budget().capacity();
+    constexpr auto ready_headroom = static_cast<std::size_t>(
+        latent_aot_function_value_ready_budget_bytes);
+    if (candidate_work.transient_bytes > memory_capacity ||
+        ready_headroom > memory_capacity -
+                             candidate_work.transient_bytes)
+        throw katana::analysis::AnalysisMemoryBudgetExceeded(
+            candidate_work.transient_bytes >
+                    std::numeric_limits<std::size_t>::max() -
+                        ready_headroom
+                ? std::numeric_limits<std::size_t>::max()
+                : candidate_work.transient_bytes + ready_headroom,
+            memory_capacity);
+    const auto memory_admitted_candidate_workers =
+        (memory_capacity - ready_headroom) /
+        candidate_work.transient_bytes;
+    const auto configured_candidate_workers = std::min(
+        requested_candidate_workers,
+        std::max<std::size_t>(1u, memory_admitted_candidate_workers));
     candidate_work.quantum = 1u;
     std::atomic_size_t started_candidates = 0u;
     {
@@ -4149,7 +5925,7 @@ LatentAotDiscovery discover_latent_aot_modules(
         analysis_executor,
         std::move(candidate_work),
         candidates.size(),
-        options.maximum_workers,
+        configured_candidate_workers,
         nullptr,
         [&](const std::size_t index) {
             const auto started =

@@ -13,6 +13,8 @@ class GuardedNativeEntryShapeCache;
 
 using StaticCallbackSinkContract =
     katana::analysis::StaticCallbackSinkContract;
+using StaticPersistentPointerSinkContract =
+    katana::analysis::StaticPersistentPointerSinkContract;
 using StaticCallbackFieldSinkContract =
     katana::analysis::StaticCallbackFieldSinkContract;
 
@@ -39,6 +41,8 @@ discover_static_callback_field_offsets(
     GuardedNativeEntryShapeCache& native_entry_shapes,
     std::vector<StaticCallbackSinkContract>* callback_sink_contracts =
         nullptr,
+    std::vector<StaticPersistentPointerSinkContract>*
+        persistent_pointer_sink_contracts = nullptr,
     std::vector<StaticCallbackFieldSinkContract>*
         callback_field_sink_contracts = nullptr);
 

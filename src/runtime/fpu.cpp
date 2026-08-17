@@ -6,6 +6,14 @@
 #include <cstdint>
 #include <limits>
 
+#if defined(__SSE__) || defined(_M_X64) || \
+    (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+#include <xmmintrin.h>
+#define KATANA_RUNTIME_HAS_SSE_ROUNDING 1
+#else
+#define KATANA_RUNTIME_HAS_SSE_ROUNDING 0
+#endif
+
 namespace katana::runtime {
 namespace {
 
@@ -14,18 +22,48 @@ constexpr std::uint64_t canonical_double_nan = 0x7FF7FFFFFFFFFFFFull;
 
 class ScopedHostRounding final {
   public:
-    explicit ScopedHostRounding(const CpuState& cpu) noexcept : previous_(std::fegetround()) {
+    explicit ScopedHostRounding(const CpuState& cpu) noexcept {
+#if KATANA_RUNTIME_HAS_SSE_ROUNDING
+        const std::uint32_t current = _mm_getcsr();
+        previous_ = current & _MM_ROUND_MASK;
+        const std::uint32_t requested =
+            (cpu.read_fpscr() & fpscr_rounding_mode_mask) == 1u
+                ? _MM_ROUND_TOWARD_ZERO
+                : _MM_ROUND_NEAREST;
+        changed_ = requested != previous_;
+        if (changed_) {
+            _mm_setcsr((current & ~_MM_ROUND_MASK) | requested);
+        }
+#else
+        previous_ = std::fegetround();
         const int requested =
             (cpu.read_fpscr() & fpscr_rounding_mode_mask) == 1u ? FE_TOWARDZERO : FE_TONEAREST;
-        static_cast<void>(std::fesetround(requested));
+        changed_ = requested != previous_;
+        if (changed_) {
+            static_cast<void>(std::fesetround(requested));
+        }
+#endif
     }
 
     ~ScopedHostRounding() {
+        if (!changed_) {
+            return;
+        }
+#if KATANA_RUNTIME_HAS_SSE_ROUNDING
+        const std::uint32_t current = _mm_getcsr();
+        _mm_setcsr((current & ~_MM_ROUND_MASK) | previous_);
+#else
         static_cast<void>(std::fesetround(previous_));
+#endif
     }
 
   private:
+#if KATANA_RUNTIME_HAS_SSE_ROUNDING
+    std::uint32_t previous_ = _MM_ROUND_NEAREST;
+#else
     int previous_ = FE_TONEAREST;
+#endif
+    bool changed_ = false;
 };
 
 std::uint8_t even_register(const std::uint8_t index) noexcept {
@@ -307,3 +345,5 @@ void fpu_convert_single_to_double(CpuState& cpu, const std::uint8_t destination)
 }
 
 } // namespace katana::runtime
+
+#undef KATANA_RUNTIME_HAS_SSE_ROUNDING

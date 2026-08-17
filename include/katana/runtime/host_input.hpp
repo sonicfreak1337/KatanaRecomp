@@ -4,14 +4,20 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace katana::runtime {
 
 inline constexpr std::uint32_t native_controller_contract_version = 1u;
+inline constexpr std::uint32_t controller_input_recording_version = 1u;
+inline constexpr std::size_t controller_input_recording_default_max_frames = 360'000u;
 
 enum class HostControllerKind : std::uint8_t {
     None,
@@ -172,6 +178,53 @@ class ControllerInputReplay final : public HostInputBackend {
   private:
     std::vector<ControllerInputChange> trace_;
     std::uint64_t sampled_frames_ = 0u;
+};
+
+// A bounded, contiguous frame capture for deterministic diagnostics. The
+// recording owns no host handles and its sample path is a constant-time array
+// lookup with no locking, allocation, or filesystem access. The binary format
+// is intentionally independent of a title or platform backend; callers bind
+// it to a build/content identity when saving and loading.
+class ControllerInputRecording final : public HostInputBackend {
+  public:
+    using Frame = std::array<ControllerState, maple_port_count>;
+
+    explicit ControllerInputRecording(
+        std::size_t max_frames = controller_input_recording_default_max_frames);
+
+    ControllerInputRecording(const ControllerInputRecording&) = delete;
+    ControllerInputRecording& operator=(const ControllerInputRecording&) = delete;
+    ControllerInputRecording(ControllerInputRecording&&) noexcept = default;
+    ControllerInputRecording& operator=(ControllerInputRecording&&) noexcept = default;
+
+    // Frames must be appended consecutively. This keeps replay frame lookup
+    // O(1) and makes dropped/duplicated capture frames fail closed.
+    void append(std::uint64_t frame, std::span<const ControllerState> slots);
+    [[nodiscard]] ControllerState sample(std::uint64_t frame) override;
+    [[nodiscard]] ControllerState sample_at(std::uint64_t frame,
+                                             std::uint64_t guest_cycle) override;
+    [[nodiscard]] ControllerState sample_slot(std::uint64_t frame,
+                                               std::size_t slot) const;
+
+    [[nodiscard]] std::uint64_t first_frame() const noexcept;
+    [[nodiscard]] std::size_t frame_count() const noexcept;
+    [[nodiscard]] std::size_t max_frames() const noexcept;
+    [[nodiscard]] const std::vector<Frame>& frames() const noexcept;
+
+    // Identity is stored in the file header and must be supplied by the
+    // caller. Loading with an expected identity rejects mismatched captures.
+    void save(const std::filesystem::path& path,
+              std::string_view identity) const;
+    [[nodiscard]] static ControllerInputRecording
+    load(const std::filesystem::path& path,
+         std::string_view expected_identity = {},
+         std::size_t max_frames = controller_input_recording_default_max_frames);
+
+  private:
+    std::vector<Frame> frames_;
+    std::size_t max_frames_ = 0u;
+    std::uint64_t first_frame_ = 0u;
+    bool have_first_frame_ = false;
 };
 
 [[nodiscard]] bool native_gamepad_input_available() noexcept;

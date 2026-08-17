@@ -303,7 +303,13 @@ class NativePortSoundBankEngine::Impl final {
     struct ProgramBank final {
         std::vector<Program> programs;
         std::vector<std::array<std::uint8_t, 128u>> velocity_curves;
-        std::span<const std::uint8_t> payload;
+        // Keep collection-relative ownership coordinates, never a view into
+        // Collection::bytes. Collections move when they are inserted into or
+        // compacted within the slot table; a persisted span would then retain
+        // the old vector allocation and turn the first later sample decode
+        // into a use-after-move.
+        std::uint32_t payload_offset = 0u;
+        std::uint32_t payload_size = 0u;
         std::uint8_t bank = 0u;
     };
 
@@ -864,7 +870,7 @@ class NativePortSoundBankEngine::Impl final {
                         NativePortSoundBankFailure::InvalidProgramBank,
                         "mpb-bank");
                 collection.program_banks[bank] =
-                    parse_program_bank(payload, bank);
+                    parse_program_bank(payload, file_offset, file_size, bank);
             } else if (sequence) {
                 if (collection.sequence_banks[bank].has_value())
                     fail_sound_bank(
@@ -919,6 +925,8 @@ class NativePortSoundBankEngine::Impl final {
 
     [[nodiscard]] ProgramBank parse_program_bank(
         const std::span<const std::uint8_t> payload,
+        const std::uint32_t payload_offset,
+        const std::uint32_t payload_size,
         const std::uint8_t bank) {
         const BoundedBytes bytes(payload);
         if (!bytes.magic(0u, "SMPB") ||
@@ -956,7 +964,8 @@ class NativePortSoundBankEngine::Impl final {
                      NativePortSoundBankFailure::InvalidProgramBank,
                      "mpb-velocity-table");
         ProgramBank result;
-        result.payload = payload;
+        result.payload_offset = payload_offset;
+        result.payload_size = payload_size;
         result.bank = bank;
         result.programs.resize(program_count);
         result.velocity_curves.resize(velocity_count);
@@ -1436,13 +1445,12 @@ class NativePortSoundBankEngine::Impl final {
                              NativePortSoundBankFailure::InvalidSequence,
                              "msd-sysex");
                 cursor += size;
-                const auto [ignored, next] = read_variable(first, cursor);
-                static_cast<void>(ignored);
+                const auto [step, next] = read_variable(first, cursor);
                 cursor = next;
                 Event event;
                 event.kind = EventKind::SysEx;
                 event.tick = current_tick;
-                event.step = static_cast<std::uint32_t>(first) + step_extension;
+                event.step = step + step_extension;
                 step_extension = 0u;
                 append_event(event);
                 return {cursor, true};
@@ -2132,7 +2140,8 @@ class NativePortSoundBankEngine::Impl final {
                 output_.data(), static_cast<std::size_t>(frames) * 2u);
             if (!audio_.submit_pcm_s16(feed_, samples)) break;
             ++blocks;
-            audio_.pump();
+            NativePortSoundBankEngine::
+                pump_audio_with_cached_playback_position(audio_);
         }
         collect_stale_groups_and_ports();
     }
@@ -2623,7 +2632,15 @@ class NativePortSoundBankEngine::Impl final {
                             "decoded-sample-budget");
         auto decoded = std::make_shared<std::vector<std::int16_t>>();
         decoded->reserve(split.loop_end);
-        const BoundedBytes bytes(bank.payload);
+        if (bank.payload_offset > collection.bytes.size() ||
+            bank.payload_size >
+                collection.bytes.size() - bank.payload_offset)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidSample,
+                            "sample-bank-payload");
+        const auto payload = std::span<const std::uint8_t>(collection.bytes)
+                                 .subspan(bank.payload_offset,
+                                          bank.payload_size);
+        const BoundedBytes bytes(payload);
         if (split.format == SampleFormat::Pcm16) {
             for (std::uint32_t frame = 0u; frame < split.loop_end; ++frame) {
                 const auto value = bytes.u16(
@@ -3767,6 +3784,11 @@ void NativePortSoundBankEngine::unload_all_collections() {
 void NativePortSoundBankEngine::stop_all() { impl_->stop_all(); }
 
 void NativePortSoundBankEngine::reset() { impl_->reset(); }
+
+void NativePortSoundBankEngine::pump_audio_with_cached_playback_position(
+    NativePortAudioEngine& audio) {
+    audio.pump_with_cached_playback_position();
+}
 
 void NativePortSoundBankEngine::pump() { impl_->pump(); }
 

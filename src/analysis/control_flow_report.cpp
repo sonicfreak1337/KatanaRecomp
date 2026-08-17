@@ -806,6 +806,12 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
         }
         output << "],\"definition_complete\":" << (value.definition_complete ? "true" : "false")
                << ",\"preceding_call\":" << (value.preceding_call ? "true" : "false")
+               << ",\"exact_target_guard\":"
+               << (value.exact_target_guard ? "true" : "false")
+               << ",\"exact_guard_rejection_reason\":"
+               << katana::io::quote_json(
+                      exact_guard_rejection_reason_name(
+                          value.exact_guard_rejection_reason))
                << ",\"reason\":" << katana::io::quote_json(value.reason) << '}';
     }
     output << ']';

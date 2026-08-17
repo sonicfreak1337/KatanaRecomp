@@ -243,6 +243,7 @@ dynamic_dispatch_site_class_name(const katana::ir::BasicBlock& block) noexcept {
     switch (terminal->dynamic_target_class) {
     case C::GuardedComplete:
     case C::GuardedPartial:
+    case C::ExactGuarded:
         return "Guarded";
     case C::RuntimeOnly:
         return "RuntimeOnly";
@@ -3280,6 +3281,8 @@ const char* dynamic_dispatch_name(const katana::ir::Instruction& instruction,
     case katana::ir::DynamicTargetClass::GuardedComplete:
     case katana::ir::DynamicTargetClass::GuardedPartial:
         return call ? "guarded_call" : "guarded_jump";
+    case katana::ir::DynamicTargetClass::ExactGuarded:
+        return call ? "exact_guarded_call" : "exact_guarded_jump";
     case katana::ir::DynamicTargetClass::NotApplicable:
     case katana::ir::DynamicTargetClass::Unresolved:
         return call ? "unresolved_call" : "unresolved_jump";
@@ -3810,6 +3813,11 @@ void emit_terminal(std::ostringstream& output,
             registers);
         if (single_block) {
             if (instruction.resolved_targets.empty()) {
+                if (instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::ExactGuarded) {
+                    emit_indent(output, indent);
+                    output << "exact_guarded_jump(cpu, jump_target, 0u);\n";
+                }
                 emit_indent(output, indent);
                 output << "return;\n";
                 return;
@@ -3848,8 +3856,16 @@ void emit_terminal(std::ostringstream& output,
             }
             emit_indent(output, indent + 1);
             output << "default:\n";
-            emit_indent(output, indent + 2);
-            output << "return;\n";
+            if (instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::ExactGuarded &&
+                instruction.resolved_targets.size() == 1u) {
+                emit_indent(output, indent + 2);
+                output << "exact_guarded_jump(cpu, jump_target, "
+                       << hex32(instruction.resolved_targets.front()) << ");\n";
+            } else {
+                emit_indent(output, indent + 2);
+                output << "return;\n";
+            }
             emit_indent(output, indent);
             output << "}\n";
             return;
@@ -3908,7 +3924,12 @@ void emit_terminal(std::ostringstream& output,
                 emit_multi_block_completion(
                     output, indent + 2, single_block, false, registers);
                 emit_indent(output, indent + 2);
-                output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
+                output << dynamic_dispatch_name(instruction, false)
+                       << "(cpu, jump_target";
+                if (instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::ExactGuarded)
+                    output << ", " << hex32(target);
+                output << ");\n";
                 emit_indent(output, indent + 2);
                 output << "return;\n";
             }
@@ -3918,7 +3939,15 @@ void emit_terminal(std::ostringstream& output,
         emit_multi_block_completion(
             output, indent + 2, single_block, false, registers);
         emit_indent(output, indent + 2);
-        output << dynamic_dispatch_name(instruction, false) << "(cpu, jump_target);\n";
+        if (instruction.dynamic_target_class ==
+                katana::ir::DynamicTargetClass::ExactGuarded &&
+            instruction.resolved_targets.size() == 1u) {
+            output << "exact_guarded_jump(cpu, jump_target, "
+                   << hex32(instruction.resolved_targets.front()) << ");\n";
+        } else {
+            output << dynamic_dispatch_name(instruction, false)
+                   << "(cpu, jump_target);\n";
+        }
         emit_indent(output, indent + 2);
         output << "return;\n";
         emit_indent(output, indent);
@@ -4049,14 +4078,30 @@ void emit_terminal(std::ostringstream& output,
                         output << "}\n";
                     }
                     emit_indent(output, indent + 2);
-                    output << "return;\n";
+                    if (owner_entry.has_value()) {
+                        output << "return;\n";
+                    } else if (instruction.dynamic_target_class ==
+                               katana::ir::DynamicTargetClass::ExactGuarded) {
+                        output << "exact_guarded_call(cpu, call_target, "
+                               << hex32(target) << ");\n";
+                    } else {
+                        output << "return;\n";
+                    }
                     emit_indent(output, indent + 1);
                     output << "}\n";
                 }
                 emit_indent(output, indent + 1);
                 output << "default:\n";
-                emit_indent(output, indent + 2);
-                output << "return;\n";
+                if (instruction.dynamic_target_class ==
+                        katana::ir::DynamicTargetClass::ExactGuarded &&
+                    instruction.resolved_targets.size() == 1u) {
+                    emit_indent(output, indent + 2);
+                    output << "exact_guarded_call(cpu, call_target, "
+                           << hex32(instruction.resolved_targets.front()) << ");\n";
+                } else {
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
+                }
                 emit_indent(output, indent);
                 output << "}\n";
                 return;
@@ -4119,6 +4164,8 @@ void emit_terminal(std::ostringstream& output,
                     katana::ir::DynamicTargetClass::RuntimeOnly ||
                 instruction.dynamic_target_class ==
                     katana::ir::DynamicTargetClass::GuardedComplete ||
+                instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::ExactGuarded ||
                 instruction.dynamic_target_class ==
                     katana::ir::DynamicTargetClass::GuardedPartial;
             if (guarded_local_block_chaining && can_dispatch_nested_call) {
@@ -4200,7 +4247,13 @@ void emit_terminal(std::ostringstream& output,
             emit_multi_block_completion(
                 output, indent, single_block, false, registers);
             emit_indent(output, indent);
-            output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
+            if (instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::ExactGuarded) {
+                output << "exact_guarded_call(cpu, call_target, 0u);\n";
+            } else {
+                output << dynamic_dispatch_name(instruction, true)
+                       << "(cpu, call_target);\n";
+            }
         } else {
             emit_indent(output, indent);
             output << "switch (" << unrelocated_code_address("call_target") << ") {\n";
@@ -4226,7 +4279,12 @@ void emit_terminal(std::ostringstream& output,
                     emit_multi_block_completion(
                         output, indent + 2, single_block, false, registers);
                     emit_indent(output, indent + 2);
-                    output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
+                    output << dynamic_dispatch_name(instruction, true)
+                           << "(cpu, call_target";
+                    if (instruction.dynamic_target_class ==
+                        katana::ir::DynamicTargetClass::ExactGuarded)
+                        output << ", " << hex32(target);
+                    output << ");\n";
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 }
@@ -4236,7 +4294,15 @@ void emit_terminal(std::ostringstream& output,
             emit_multi_block_completion(
                 output, indent + 2, single_block, false, registers);
             emit_indent(output, indent + 2);
-            output << dynamic_dispatch_name(instruction, true) << "(cpu, call_target);\n";
+            if (instruction.dynamic_target_class ==
+                    katana::ir::DynamicTargetClass::ExactGuarded &&
+                instruction.resolved_targets.size() == 1u) {
+                output << "exact_guarded_call(cpu, call_target, "
+                       << hex32(instruction.resolved_targets.front()) << ");\n";
+            } else {
+                output << dynamic_dispatch_name(instruction, true)
+                       << "(cpu, call_target);\n";
+            }
             emit_indent(output, indent);
             output << "}\n";
         }
@@ -5207,6 +5273,10 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         declarations << "void resolved_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void guarded_jump(CpuState& cpu, std::uint32_t target);\n"
+                     << "void exact_guarded_call(CpuState& cpu, std::uint32_t target, "
+                        "std::uint32_t allowed_target);\n"
+                     << "void exact_guarded_jump(CpuState& cpu, std::uint32_t target, "
+                        "std::uint32_t allowed_target);\n"
                      << "void runtime_only_call(CpuState& cpu, std::uint32_t target);\n"
                      << "void runtime_only_jump(CpuState& cpu, std::uint32_t target);\n"
                      << "void unresolved_call(CpuState& cpu, std::uint32_t target);\n"
@@ -5219,6 +5289,10 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                      << "::guarded_call(__VA_ARGS__)\n"
                      << "#define guarded_jump(...) ::" << request.symbol_namespace
                      << "::guarded_jump(__VA_ARGS__)\n"
+                     << "#define exact_guarded_call(...) ::" << request.symbol_namespace
+                     << "::exact_guarded_call(__VA_ARGS__)\n"
+                     << "#define exact_guarded_jump(...) ::" << request.symbol_namespace
+                     << "::exact_guarded_jump(__VA_ARGS__)\n"
                      << "#define runtime_only_call(...) ::" << request.symbol_namespace
                      << "::runtime_only_call(__VA_ARGS__)\n"
                      << "#define runtime_only_jump(...) ::" << request.symbol_namespace
@@ -5234,6 +5308,28 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                      << "#define resolved_call(...) unresolved_call(__VA_ARGS__)\n"
                      << "#define guarded_call(...) unresolved_call(__VA_ARGS__)\n"
                      << "#define guarded_jump(...) unresolved_jump(__VA_ARGS__)\n"
+                     << "#define exact_guarded_call(cpu, target, allowed) do { \\\n"
+                        "    const auto exact_guarded_source = [](const std::uint32_t address) noexcept { \\\n"
+                        "        auto canonical = address; \\\n"
+                        "        if ((canonical >> 29u) < 6u) canonical = \\\n"
+                        "            katana::runtime::canonical_physical_address(canonical) | 0x80000000u; \\\n"
+                        "        return katana::runtime::unrelocate_code_address(canonical); \\\n"
+                        "    }; \\\n"
+                        "    if (exact_guarded_source((target)) != exact_guarded_source((allowed))) \\\n"
+                        "        throw std::runtime_error(\"exact static target mismatch\"); \\\n"
+                        "    unresolved_call((cpu), (target)); \\\n"
+                        "} while (false)\n"
+                     << "#define exact_guarded_jump(cpu, target, allowed) do { \\\n"
+                        "    const auto exact_guarded_source = [](const std::uint32_t address) noexcept { \\\n"
+                        "        auto canonical = address; \\\n"
+                        "        if ((canonical >> 29u) < 6u) canonical = \\\n"
+                        "            katana::runtime::canonical_physical_address(canonical) | 0x80000000u; \\\n"
+                        "        return katana::runtime::unrelocate_code_address(canonical); \\\n"
+                        "    }; \\\n"
+                        "    if (exact_guarded_source((target)) != exact_guarded_source((allowed))) \\\n"
+                        "        throw std::runtime_error(\"exact static target mismatch\"); \\\n"
+                        "    unresolved_jump((cpu), (target)); \\\n"
+                        "} while (false)\n"
                      << "#define runtime_only_call(...) unresolved_call(__VA_ARGS__)\n"
                      << "#define runtime_only_jump(...) unresolved_jump(__VA_ARGS__)\n\n";
     }

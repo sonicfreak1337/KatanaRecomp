@@ -765,6 +765,7 @@ struct NativePortLoadedAotBinder::Impl final {
     struct ActiveBinding final {
         std::size_t module_index = 0u;
         std::uint32_t runtime_start = 0u;
+        std::uint64_t code_generation = 0u;
         std::unique_ptr<ScopedCodeAddressMapping> mapping;
     };
 
@@ -870,6 +871,17 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
     }
     if (match == nullptr) return false;
 
+    // Binding verifies the complete immutable AOT identity once and registers
+    // every emitted block with the write observer. Re-hashing a block on every
+    // dispatch turns a static overlay into an O(code-size) runtime hot path.
+    // The observer generation is the authoritative O(1) proof that no bound
+    // executable byte changed since activation.
+    if (impl_->immutable_guard.write_detected() ||
+        match->code_generation != impl_->immutable_guard.generation())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-entry-code-generation");
+
     const auto& module = impl_->modules[match->module_index];
     const auto match_runtime_start =
         canonical_native_port_runtime_alias(match->runtime_start);
@@ -895,12 +907,6 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
             NativePortContractFailure::AotContractViolation,
             detail.str());
     }
-    const auto bytes = native_port_direct_bytes(
-        impl_->cpu, runtime_target, block->byte_size);
-    if (!bytes.has_value() || sha256_identity(*bytes) != block->sha256)
-        throw NativePortContractError(
-            NativePortContractFailure::AotContractViolation,
-            "loaded-aot-entry-identity-mismatch");
     return true;
 }
 
@@ -1011,7 +1017,8 @@ bool NativePortLoadedAotBinder::bind_entry(
         throw;
     }
     impl_->active.push_back(
-        {match->module_index, match->runtime_start, std::move(mapping)});
+        {match->module_index, match->runtime_start,
+         impl_->immutable_guard.generation(), std::move(mapping)});
     return true;
 }
 

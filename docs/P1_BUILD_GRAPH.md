@@ -59,8 +59,10 @@ Konfigurieren, durch `static_assert` oder an der Analyzer-Linkmarke sichtbar.
 ## Compiler- und Profilmatrix
 
 Generierte Spielports unterscheiden `bringup` und `gate`. Bring-up verwendet
-optimiertes `RelWithDebInfo` ohne LTCG/IPO und bevorzugt schnellen Link sowie
-PCH. Gate aktiviert vollstaendige Optimierung und IPO, sofern die Toolchain
+optimiertes `RelWithDebInfo` ohne LTCG/IPO und bevorzugt schnellen Link. Ohne
+persistenten Objektcache kann PCH genutzt werden; mit MSVC-`sccache` bleiben
+die einzelnen AOT-Objekte ohne `/Fp` cachebar. Gate aktiviert vollstaendige
+Optimierung und IPO, sofern die Toolchain
 dies unterstuetzt. Compiler, Linker, Profil und Generator erhalten getrennte
 inkrementelle Buildordner. Der Quellbaum-Fallback wird
 `EXCLUDE_FROM_ALL` eingebunden; bevorzugt wird das installierte Runtimepaket.
@@ -84,6 +86,14 @@ lokalen `build-current/` nachvollziehbar.
 `KATANA_COMPILER_CACHE` nimmt einen absoluten Pfad oder einen Programmnamen wie
 `ccache`/`sccache` an. CI trennt den Cache nach Compiler und Profil, meldet
 Cachetreffer und schreibt Build- sowie Testdauer in die Jobzusammenfassung.
+Auf Windows wird bei nicht gesetztem Override außerdem eine vorhandene, vom
+Desktop-Installer verwaltete `sccache`-0.17.0-Installation unter
+`%LOCALAPPDATA%/KatanaRecomp/tools` automatisch erkannt. Ihr persistenter Store
+liegt unter `%LOCALAPPDATA%/KatanaRecomp/compiler-cache/sccache-v0.17.0`.
+Der instrumentierte Ninja-Launcher reicht den echten Compiler durch `sccache`
+und weist Katana- beziehungsweise Host-Wrapper als rekursive Cacheziele
+zurück; dadurch bleibt der Cache tatsächlich aktiv, ohne in die
+Buildtelemetrie zurückzuspringen.
 
 Alle Tests tragen `gate` und genau ein primaeres Subsystemlabel. Lokale
 Testpresets stellen `runtime-shard`, `analysis-shard`, `codegen-shard` und

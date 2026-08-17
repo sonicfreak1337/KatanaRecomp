@@ -108,7 +108,7 @@ int main() {
             "Gemischte Zugriffsbreiten behalten nicht die schwaechste Runtime-Capability.");
 
     const auto json = katana::analysis::format_hardware_audit_json(audit);
-    require(json.find("\"schema\":\"katana.hardware-audit.v5\"") != std::string::npos &&
+    require(json.find("\"schema\":\"katana.hardware-audit.v6\"") != std::string::npos &&
                 json.find("\"scope\":\"executable_image\"") != std::string::npos &&
                 json.find("\"support_reason\":\"sort_dma_transfer_path_missing\"") !=
                     std::string::npos &&

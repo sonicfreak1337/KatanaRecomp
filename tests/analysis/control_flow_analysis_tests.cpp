@@ -734,12 +734,245 @@ int main() {
                                          edge.target_address == 0x20u);
                              }),
             "Kandidat-only ABI-Fluss fror einen Runtime-Dispatcher als statische Kante ein.");
+
+    auto exact_stored_callback_image = stored_callback_image;
+    exact_stored_callback_image.add_immutable_range(
+        {0u, 0x50u, "synthetic-stored-callback-v1", 0u});
+    const auto exact_stored_callback =
+        katana::analysis::analyze_control_flow(exact_stored_callback_image);
+    const auto exact_registrar_call = std::find_if(
+        exact_stored_callback.indirect_control_flow.begin(),
+        exact_stored_callback.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x04u;
+        });
+    require(
+        exact_registrar_call !=
+                exact_stored_callback.indirect_control_flow.end() &&
+            exact_registrar_call->status ==
+                katana::analysis::ResolutionStatus::Guarded &&
+            exact_registrar_call->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedComplete &&
+            exact_registrar_call->target == 0x20u &&
+            exact_registrar_call->exact_target_guard &&
+            exact_registrar_call->exact_guard_rejection_reason ==
+                katana::analysis::ExactGuardRejectionReason::None,
+        "Identitaetsgebundene unveraenderliche Literal-Kette wurde nicht "
+        "als exakte fail-closed AOT-Kante zugelassen.");
+
+    auto partial_literal_image = stored_callback_image;
+    partial_literal_image.add_immutable_range(
+        {0u, 0x16u, "synthetic-stored-callback-v1", 0u});
+    partial_literal_image.add_immutable_range(
+        {0x20u, 0x30u, "synthetic-stored-callback-v1", 0u});
+    const auto partial_literal_callback =
+        katana::analysis::analyze_control_flow(partial_literal_image);
+    const auto partial_literal_call = std::find_if(
+        partial_literal_callback.indirect_control_flow.begin(),
+        partial_literal_callback.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x04u;
+        });
+    require(
+        partial_literal_call !=
+                partial_literal_callback.indirect_control_flow.end() &&
+            !partial_literal_call->exact_target_guard &&
+            partial_literal_call->exact_guard_rejection_reason ==
+                katana::analysis::ExactGuardRejectionReason::
+                    LiteralImmutableProofMissing,
+        "Eine nur halb gebundene 32-Bit-Literalzelle wurde als exakte "
+        "AOT-Kante akzeptiert oder falsch klassifiziert: exact=" +
+            std::to_string(
+                partial_literal_call !=
+                        partial_literal_callback.indirect_control_flow.end()
+                    ? partial_literal_call->exact_target_guard
+                    : false) +
+            " reason=" +
+            (partial_literal_call !=
+                     partial_literal_callback.indirect_control_flow.end()
+                 ? katana::analysis::exact_guard_rejection_reason_name(
+                       partial_literal_call->exact_guard_rejection_reason)
+                 : "missing"));
+
     const auto stored_callback_ir = katana::ir::lower_program(stored_callback);
     require(std::any_of(stored_callback_ir.begin(),
                         stored_callback_ir.end(),
                         [](const auto& function) { return function.entry_address == 0x30u; }) &&
                 katana::ir::verify_program(stored_callback_ir).empty(),
             "Gespeicherter Codepointer erreichte das native IR-Inventar nicht.");
+
+    auto stored_delay_slot_callback_image = stored_callback_image;
+    stored_delay_slot_callback_image.write_u32_le(0x10u, 0x32u);
+    stored_delay_slot_callback_image.write_u32_le(
+        0x30u, 0xE400430Bu); // jsr @r3; mov #0,r4 (physical delay slot)
+    stored_delay_slot_callback_image.write_u32_le(
+        0x34u, 0x0009000Bu); // rts; nop
+    const auto stored_delay_slot_callback =
+        katana::analysis::analyze_control_flow(
+            stored_delay_slot_callback_image);
+    require(
+        find_function(stored_delay_slot_callback, 0x32u) == nullptr &&
+            !has_instruction(stored_delay_slot_callback, 0x32u) &&
+            find_guarded_aot_entry(stored_delay_slot_callback, 0x32u) ==
+                nullptr,
+        "Ein gespeicherter Codepointer promovierte einen physischen "
+        "Delay Slot ohne unabhaengigen Normal-Entry-Beweis.");
+
+    const auto caller_bounded_indexed_literal_image = [](
+        const bool complete_second_caller,
+        const bool exact_literal_base,
+        const std::uint16_t indexed_store_opcode,
+        const bool unknown_store_source_path = false) {
+        constexpr std::uint32_t image_base = 0x8C010000u;
+        std::vector<std::uint8_t> bytes(0x64u, 0x09u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] =
+                static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] =
+                static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] =
+                static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] =
+                static_cast<std::uint8_t>(value >> 24u);
+        };
+        put_u16(0x00u, 0xE500u); // caller 0: mov #0,r5
+        put_u16(0x02u, 0xB00Du); // bsr 0x20
+        put_u16(0x04u, 0x0009u); // delay
+        put_u16(0x06u, 0x000Bu); // rts
+        put_u16(0x08u, 0x0009u); // delay
+
+        put_u16(0x10u, complete_second_caller
+                             ? 0xE501u   // caller 1: mov #1,r5
+                             : 0x0009u); // unknown incoming r5
+        put_u16(0x12u, 0xB005u); // bsr 0x20
+        put_u16(0x14u, 0x0009u); // delay
+        put_u16(0x16u, 0x000Bu); // rts
+        put_u16(0x18u, 0x0009u); // delay
+
+        put_u16(0x20u, 0x6653u); // callee: mov r5,r6
+        put_u16(0x22u, 0x4608u); // shll2 r6
+        put_u16(0x24u, unknown_store_source_path
+                             ? 0x8901u  // bt 0x2a, retaining unknown r5
+                             : 0x0009u);
+        put_u16(0x26u, 0x0009u);
+        put_u16(0x28u, 0xD505u); // target literal at +0x40 -> r5
+        put_u16(0x2Au, exact_literal_base
+                             ? 0xD006u   // base literal at +0x44 -> r0
+                             : 0x6043u); // mov r4,r0: no literal identity
+        put_u16(0x2Cu, indexed_store_opcode);
+        put_u16(0x2Eu, 0x000Bu); // rts
+        put_u16(0x30u, 0x0009u); // delay
+        put_u32(0x40u, image_base + 0x60u);
+        put_u32(0x44u, 0x8C88FDD8u);
+        put_u16(0x60u, 0x000Bu); // guarded callback target: rts
+        put_u16(0x62u, 0x0009u); // delay
+
+        katana::io::ExecutableImage image;
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::
+                EntryPointStraightLineQuiescent);
+        image.add_segment({".persistent-indexed-literal",
+                           image_base,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-caller-bounded-indexed-literal"});
+        image.add_entry_point(image_base);
+        image.add_entry_point(image_base + 0x10u);
+        return image;
+    };
+    katana::analysis::AnalysisOverrides persistent_literal_hints;
+    persistent_literal_hints.mode =
+        katana::analysis::AnalysisDirectiveMode::Hint;
+    persistent_literal_hints.function_entry_hints.push_back(
+        {0x8C010060u, 1u});
+    const auto persistent_indexed_literal =
+        katana::analysis::analyze_control_flow(
+            caller_bounded_indexed_literal_image(true, true, 0x0656u),
+            &persistent_literal_hints);
+    const auto* persistent_literal_handler =
+        find_function(persistent_indexed_literal, 0x8C010060u);
+    const auto* persistent_literal_guard =
+        find_guarded_aot_entry(persistent_indexed_literal, 0x8C010060u);
+    require(
+        persistent_literal_handler != nullptr &&
+            persistent_literal_handler->origins ==
+                std::vector{
+                    katana::analysis::FunctionOrigin::StoredCodeAddress} &&
+            persistent_literal_guard != nullptr &&
+            persistent_literal_guard->origins ==
+                std::vector{
+                    katana::analysis::GuardedAotEntryOrigin::
+                        StoredCodeAddress} &&
+            persistent_literal_guard->source_sites ==
+                std::vector<std::uint32_t>{0x8C010002u,
+                                           0x8C010012u,
+                                           0x8C01002Cu} &&
+            persistent_literal_guard->source_objects ==
+                std::vector<std::uint32_t>{0x8C010020u} &&
+            has_instruction(persistent_indexed_literal, 0x8C010060u) &&
+            persistent_indexed_literal.static_callback_contracts_materialized &&
+            katana::analysis::guarded_aot_inventory_complete(
+                persistent_indexed_literal),
+        "Callergebundener, global indexierter Funktionsliteral-Store "
+        "erreichte die bewachte native AOT-Closure nicht.");
+
+    const auto unknown_caller_indexed_literal =
+        katana::analysis::analyze_control_flow(
+            caller_bounded_indexed_literal_image(false, true, 0x0656u),
+            &persistent_literal_hints);
+    require(find_function(unknown_caller_indexed_literal, 0x8C010060u) ==
+                nullptr &&
+                find_guarded_aot_entry(unknown_caller_indexed_literal,
+                                       0x8C010060u) == nullptr &&
+                !has_instruction(unknown_caller_indexed_literal,
+                                 0x8C010060u),
+            "Unvollstaendige Caller-Domaene wurde als persistente "
+            "Funktionszeiger-Closure akzeptiert.");
+
+    const auto unproven_base_indexed_literal =
+        katana::analysis::analyze_control_flow(
+            caller_bounded_indexed_literal_image(true, false, 0x0656u),
+            &persistent_literal_hints);
+    require(find_function(unproven_base_indexed_literal, 0x8C010060u) ==
+                nullptr &&
+                find_guarded_aot_entry(unproven_base_indexed_literal,
+                                       0x8C010060u) == nullptr,
+            "Plausibler, aber nicht literal-identischer Tabellenzeiger wurde "
+            "als persistente Funktionszeiger-Closure akzeptiert.");
+
+    const auto narrow_store_indexed_literal =
+        katana::analysis::analyze_control_flow(
+            caller_bounded_indexed_literal_image(true, true, 0x0655u),
+            &persistent_literal_hints);
+    require(find_function(narrow_store_indexed_literal, 0x8C010060u) ==
+                nullptr &&
+                find_guarded_aot_entry(narrow_store_indexed_literal,
+                                       0x8C010060u) == nullptr,
+            "Nicht-32-bittiger Tabellenstore wurde als persistente "
+            "Funktionszeiger-Closure akzeptiert.");
+
+    const auto incomplete_source_indexed_literal =
+        katana::analysis::analyze_control_flow(
+            caller_bounded_indexed_literal_image(true, true, 0x0656u,
+                                                  true),
+            &persistent_literal_hints);
+    require(find_function(incomplete_source_indexed_literal, 0x8C010060u) ==
+                nullptr &&
+                find_guarded_aot_entry(incomplete_source_indexed_literal,
+                                       0x8C010060u) == nullptr,
+            "Nur auf einem Storepfad vollstaendiger Code-Literalwert wurde "
+            "als persistente Funktionszeiger-Closure akzeptiert.");
 
     const auto decode_boundary_phase_image = [] {
         std::vector<std::uint8_t> bytes(0x22u, 0x09u);
@@ -790,16 +1023,22 @@ int main() {
         [](const auto& resolution) {
             return resolution.instruction_address == 0x08u;
         });
+    const auto decode_boundary_call_found =
+        decode_boundary_call != decode_boundary_phase.indirect_control_flow.end();
     require(
         !decode_boundary_phase.function_budget_exhausted &&
             decode_boundary_call !=
                 decode_boundary_phase.indirect_control_flow.end() &&
             decode_boundary_call->status ==
-                katana::analysis::ResolutionStatus::Guarded &&
+                katana::analysis::ResolutionStatus::Unresolved &&
             decode_boundary_call->evidence ==
-                katana::analysis::ControlFlowEvidence::GuardedPartial &&
-            decode_boundary_call->reason.ends_with(
-                "-decode-candidate-only") &&
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            decode_boundary_call->reason ==
+                "runtime-contract-merged-contexts" &&
+            decode_boundary_call->target == std::nullopt &&
+            decode_boundary_call->targets.empty() &&
+            decode_boundary_call->analysis_candidates ==
+                std::vector<std::uint32_t>{0x20u} &&
             has_instruction(decode_boundary_phase, 0x20u) &&
             !std::binary_search(
                 decode_boundary_phase.recursive
@@ -808,7 +1047,28 @@ int main() {
                     .proven_instruction_addresses.end(),
                 0x20u),
         "Decode-Boundary-Phasenwechsel blieb zyklisch, exportierte einen "
-        "stalen ProvenComplete-Vertrag oder verlor den Resolution-Seed.");
+        "stalen ProvenComplete-Vertrag oder verlor den Runtime-Kandidaten: "
+        "found=" + std::to_string(decode_boundary_call_found) +
+            " status=" +
+            std::to_string(
+                decode_boundary_call_found
+                    ? static_cast<int>(decode_boundary_call->status)
+                    : -1) +
+            " evidence=" +
+            std::to_string(
+                decode_boundary_call_found
+                    ? static_cast<int>(decode_boundary_call->evidence)
+                    : -1) +
+            " reason=" +
+            (decode_boundary_call_found ? decode_boundary_call->reason
+                                        : std::string{"missing"}) +
+            " decoded=" +
+            std::to_string(has_instruction(decode_boundary_phase, 0x20u)) +
+            " proven=" +
+            std::to_string(std::binary_search(
+                decode_boundary_phase.recursive.proven_instruction_addresses.begin(),
+                decode_boundary_phase.recursive.proven_instruction_addresses.end(),
+                0x20u)));
 
     const auto reconciled_candidate_call_image = [] {
         std::vector<std::uint8_t> bytes(0x200u, 0x09u);
@@ -848,14 +1108,17 @@ int main() {
         // it and feed the resulting private candidate carrier back into ABI
         // contract construction.
         put_u16(0x140u, 0xD307u); // mov.l @(0x160,pc),r3 -> C 0x180
-        put_u16(0x142u, 0x2742u); // mov.l r4,@r7 (independent sink anchor)
-        put_u16(0x144u, 0xA002u); // bra 0x14C
-        put_u16(0x146u, 0x0009u);
+        put_u16(0x142u, 0xD708u); // mov.l @(0x164,pc),r7 -> fixed sink
+        put_u16(0x144u, 0x2742u); // mov.l r4,@r7 (independent sink anchor)
+        put_u16(0x146u, 0xA001u); // bra 0x14C
+        put_u16(0x148u, 0x0009u);
+        put_u16(0x14Au, 0x0009u);
         put_u16(0x14Cu, 0x430Bu); // jsr @r3
         put_u16(0x14Eu, 0x0009u);
         put_u16(0x150u, 0x000Bu);
         put_u16(0x152u, 0x0009u);
         put_u32(0x160u, 0x180u);
+        put_u32(0x164u, 0x1F8u);
 
         // C consumes only ABI stack slot zero and persists that callback.
         put_u16(0x180u, 0x64F2u); // mov.l @r15,r4
@@ -914,7 +1177,17 @@ int main() {
             silent_progress_after.pulse_threads_started ==
                 silent_progress_before.pulse_threads_started,
         "Deaktivierter CFA-Progress aktivierte trotzdem den internen "
-        "Function-Value-Callback oder Heartbeat-Thread.");
+        "Function-Value-Callback oder Heartbeat-Thread: budget=" +
+            std::to_string(
+                silent_reconciled_candidate_call.function_budget_exhausted) +
+            " callback=" +
+            std::to_string(silent_progress_before.callback_activations) +
+            "->" +
+            std::to_string(silent_progress_after.callback_activations) +
+            " pulse=" +
+            std::to_string(silent_progress_before.pulse_threads_started) +
+            "->" +
+            std::to_string(silent_progress_after.pulse_threads_started));
     const auto enabled_progress_before = silent_progress_after;
     const auto reconciled_candidate_call =
         katana::analysis::analyze_control_flow(

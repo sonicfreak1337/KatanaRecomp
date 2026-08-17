@@ -12,7 +12,9 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_audio_engine_contract_version = 3u;
+class NativePortSoundBankEngine;
+
+inline constexpr std::uint32_t native_port_audio_engine_contract_version = 4u;
 
 enum class NativePortAudioEngineFailure : std::uint8_t {
     None,
@@ -125,6 +127,9 @@ struct NativePortAudioVoiceSnapshot final {
     std::uint64_t duration_nanoseconds = 0u;
     std::uint64_t decoded_source_frames = 0u;
     std::uint64_t mixed_output_frames = 0u;
+    // Frames from this voice that the monotone host-device cursor has
+    // actually crossed. This excludes the endpoint's submitted queue horizon.
+    std::uint64_t played_output_frames = 0u;
     std::uint64_t buffered_frames = 0u;
     std::uint64_t loop_count = 0u;
     float gain = 1.0f;
@@ -195,6 +200,13 @@ class NativePortAudioEngine final {
     [[nodiscard]] NativePortAudioEngineSnapshot snapshot() const;
 
   private:
+    friend class NativePortSoundBankEngine;
+
+    // Composite providers may refill a software voice several times during
+    // one outer pump. The first pump samples the host master cursor; later
+    // refill passes retire buffers and mix against that same sample.
+    void pump_with_cached_playback_position();
+
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

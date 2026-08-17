@@ -10367,6 +10367,22 @@ void apply_transfer(AbstractState& state,
                 if (validate_decode_candidate(image, candidate).valid())
                     loaded.inventory_pc_relative_code_literal_values.push_back(candidate);
             }
+        } else if (width == 4u) {
+            // An earlier imprecise write can correctly make the ordinary
+            // memory value Top without invalidating the positive fact that
+            // the source image contains a code pointer in this exact
+            // PC-relative literal cell. Retain that one source-bound value as
+            // guarded inventory evidence. It never completes the dynamic
+            // load: runtime dispatch remains authoritative and an overwritten,
+            // unlisted value still fails closed.
+            const auto source_literal = read_image_value(
+                image,
+                base + static_cast<std::uint32_t>(instruction.displacement),
+                width);
+            if (source_literal.has_value() &&
+                validate_decode_candidate(image, source_literal->value).valid())
+                loaded.inventory_pc_relative_code_literal_values.push_back(
+                    source_literal->value);
         }
         synchronize_inventory_provenance(loaded);
         state.stack_offsets[instruction.destination_register].reset();
@@ -13987,11 +14003,21 @@ void observe_stored_code_addresses(
             walk_diagnostics->inventory_candidate_values_truncated = true;
         return;
     }
+    // A contextual unknown is a fatal inventory loss only when no finite
+    // positive candidate lane survived to this guarded sink.  When exact
+    // code/PC-literal candidates are still present they remain useful as
+    // GuardedPartial roots; the live memory load stays authoritative and any
+    // unlisted runtime value still stops at dispatch.  Treating the ordinary
+    // scalar Top as candidate truncation in that case discarded the very
+    // terminal-tail callbacks this positive inventory is designed to retain.
+    const bool contextual_candidate_unrepresented =
+        contextual_candidate_top(value) &&
+        !has_finite_inventory_candidate_values(value);
     if (walk_diagnostics != nullptr) {
         walk_diagnostics->inventory_candidate_values_truncated =
             walk_diagnostics->inventory_candidate_values_truncated ||
             inventory_candidate_values_truncated(value) ||
-            contextual_candidate_top(value);
+            contextual_candidate_unrepresented;
         walk_diagnostics->abi_stack_base_unresolved =
             walk_diagnostics->abi_stack_base_unresolved ||
             carries_unresolved_stack_callback(value);
@@ -17586,7 +17612,8 @@ void compose_abi_stack_argument_reads(
 void preserve_abi_flow_result_inventory_provenance(
     AbiPersistentStoreFlowState& state,
     const katana::sh4::DecodedInstruction& instruction,
-    const std::array<std::uint32_t, 16u>& incoming_sources) {
+    const std::array<std::uint32_t, 16u>& incoming_sources,
+    const std::uint16_t precisely_classified_result_registers = 0u) {
     using K = katana::sh4::InstructionKind;
     auto written_registers = general_register_write_mask(instruction);
     const bool banked_sr_clobber =
@@ -17627,6 +17654,14 @@ void preserve_abi_flow_result_inventory_provenance(
 
     for (std::uint8_t index = 0u; index < 16u; ++index) {
         if ((written_registers & register_bit(index)) == 0u || index == 15u)
+            continue;
+        // Exact stack loads are value transfers from a proven stack cell, not
+        // arithmetic transformations of their address register. The narrow
+        // ABI flow above has already assigned the cell's provenance. OR-ing
+        // the base-register provenance back into the loaded result would make
+        // R15 itself look like a persistable stack pointer and force every
+        // caller stack slot into later candidate-conditioned projections.
+        if ((precisely_classified_result_registers & register_bit(index)) != 0u)
             continue;
         if (banked_sr_clobber && index <= 7u) {
             state.inventory_provenance_taints[index] =
@@ -17745,53 +17780,102 @@ analyze_abi_persistent_store_signature(
 
     struct DelayedCall {
         std::uint32_t call_site = 0u;
-        std::optional<std::uint32_t> return_callee;
         std::vector<std::uint32_t> inventory_callees;
         bool stack_reads_complete = true;
         bool stack_reads_guarded = false;
     };
     const auto apply_call_return =
         [&](AbiPersistentStoreFlowState& state,
-            const std::optional<std::uint32_t> callee) {
-            auto source_mask = abi_argument_taint_mask;
-            if (callee.has_value() && return_sources != nullptr) {
-                if (const auto found = return_sources->find(*callee);
-                    found != return_sources->end())
-                    source_mask = found->second;
+            const std::vector<std::uint32_t>& callees,
+            const bool complete,
+            const bool guarded) {
+            // A guarded candidate edge is complete for the path which can
+            // return to AOT: an unlisted runtime target aborts at the dispatch
+            // guard and therefore has no return continuation to summarize.
+            // This is the same contract used by the sink/read composition
+            // below. Treating it as a wholly unknown call here retained every
+            // caller stack fact and could exhaust the bounded ABI projection
+            // before the selected candidate consumed its exact slot.
+            const auto guarded_return_contract_is_precise = [&] {
+                if (!guarded || complete) return true;
+                if (return_sources == nullptr ||
+                    inventory_provenance_return_sources == nullptr)
+                    return false;
+                for (const auto callee : callees) {
+                    const auto ordinary = return_sources->find(callee);
+                    const auto inventory =
+                        inventory_provenance_return_sources->find(callee);
+                    if (ordinary == return_sources->end() ||
+                        inventory ==
+                            inventory_provenance_return_sources->end() ||
+                        ordinary->second == abi_argument_taint_mask ||
+                        inventory->second == inventory_provenance_source_mask)
+                        return false;
+                }
+                return true;
+            };
+            const bool target_set_usable =
+                !callees.empty() && (complete || guarded) &&
+                guarded_return_contract_is_precise();
+            auto source_mask = std::uint8_t{0u};
+            if (!target_set_usable || return_sources == nullptr) {
+                source_mask = abi_argument_taint_mask;
+            } else {
+                for (const auto callee : callees) {
+                    const auto found = return_sources->find(callee);
+                    if (found == return_sources->end()) {
+                        source_mask = abi_argument_taint_mask;
+                        break;
+                    }
+                    source_mask = static_cast<std::uint8_t>(
+                        source_mask | found->second);
+                }
             }
             const auto returned_taint = compose_abi_return_taint(state, source_mask);
-            auto provenance_sources = inventory_provenance_source_mask;
-            if (callee.has_value() &&
-                inventory_provenance_return_sources != nullptr) {
-                if (const auto found =
-                        inventory_provenance_return_sources->find(*callee);
-                    found != inventory_provenance_return_sources->end())
-                    provenance_sources = found->second;
+            auto provenance_sources = std::uint32_t{0u};
+            if (!target_set_usable ||
+                inventory_provenance_return_sources == nullptr) {
+                provenance_sources = inventory_provenance_source_mask;
+            } else {
+                for (const auto callee : callees) {
+                    const auto found =
+                        inventory_provenance_return_sources->find(callee);
+                    if (found ==
+                        inventory_provenance_return_sources->end()) {
+                        provenance_sources = inventory_provenance_source_mask;
+                        break;
+                    }
+                    provenance_sources |= found->second;
+                }
             }
             const auto returned_inventory_provenance =
                 compose_inventory_provenance_sources(
                     state, provenance_sources);
-            if (!callee.has_value() ||
+            if (!target_set_usable ||
                 inventory_stack_mutation_alias_creations == nullptr) {
                 state.creates_current_stack_epoch_alias = true;
                 state.conditional_current_stack_epoch_alias_sources |=
                     inventory_provenance_source_mask;
             } else {
-                const auto found = inventory_stack_mutation_alias_creations->find(
-                    *callee);
-                const auto contract =
-                    found == inventory_stack_mutation_alias_creations->end()
-                        ? static_cast<std::uint32_t>(
-                              inventory_provenance_source_mask |
-                              inventory_stack_alias_creation_unconditional)
-                        : found->second;
-                state.conditional_current_stack_epoch_alias_sources |=
-                    compose_inventory_provenance_sources(
-                        state,
-                        contract & inventory_provenance_source_mask);
-                if ((contract & inventory_stack_alias_creation_unconditional) !=
-                    0u)
-                    state.creates_current_stack_epoch_alias = true;
+                for (const auto callee : callees) {
+                    const auto found =
+                        inventory_stack_mutation_alias_creations->find(callee);
+                    if (found ==
+                        inventory_stack_mutation_alias_creations->end()) {
+                        state.creates_current_stack_epoch_alias = true;
+                        state.conditional_current_stack_epoch_alias_sources |=
+                            inventory_provenance_source_mask;
+                        break;
+                    }
+                    const auto contract = found->second;
+                    state.conditional_current_stack_epoch_alias_sources |=
+                        compose_inventory_provenance_sources(
+                            state,
+                            contract & inventory_provenance_source_mask);
+                    if ((contract &
+                         inventory_stack_alias_creation_unconditional) != 0u)
+                        state.creates_current_stack_epoch_alias = true;
+                }
             }
             for (std::uint8_t index = 0u; index <= 7u; ++index)
                 clear_abi_flow_register(state, index);
@@ -18106,6 +18190,37 @@ analyze_abi_persistent_store_signature(
             const auto local_stack_alias_creation_is_unconditional =
                 stack_store_creates_current_epoch_alias_unconditionally(
                     state, line.instruction);
+            const auto precisely_classified_result_registers = [&] {
+                using K = katana::sh4::InstructionKind;
+                const auto& instruction = line.instruction;
+                switch (instruction.kind) {
+                case K::MovLongLoad:
+                case K::MovLongLoadDisplacement:
+                case K::MovLongLoadPostIncrement: {
+                    const auto displacement =
+                        instruction.kind == K::MovLongLoadDisplacement
+                            ? instruction.displacement
+                            : 0;
+                    return state.stack_derived[instruction.source_register] &&
+                                   !abi_stack_slots(
+                                        state,
+                                        instruction.source_register,
+                                        displacement)
+                                        .empty()
+                               ? register_bit(
+                                     instruction.destination_register)
+                               : std::uint16_t{0u};
+                }
+                case K::MovLongLoadR0Indexed:
+                    return !abi_r0_indexed_stack_slots(
+                                state, instruction.source_register)
+                                .empty()
+                               ? register_bit(
+                                     instruction.destination_register)
+                               : std::uint16_t{0u};
+                default: return std::uint16_t{0u};
+                }
+            }();
             const auto local_store_sources =
                 apply_abi_persistent_store_flow(
                     state,
@@ -18117,7 +18232,8 @@ analyze_abi_persistent_store_signature(
             preserve_abi_flow_result_inventory_provenance(
                 state,
                 line.instruction,
-                incoming_inventory_provenance_sources);
+                incoming_inventory_provenance_sources,
+                precisely_classified_result_registers);
             if (writes_stack_pointer &&
                 ((r15_was_stack_derived && !state.stack_derived[15u]) ||
                  (!stack_tracking_was_lost && state.stack_tracking_lost))) {
@@ -18185,7 +18301,11 @@ analyze_abi_persistent_store_signature(
                     false,
                     false,
                     false);
-                apply_call_return(state, delayed_call->return_callee);
+                apply_call_return(
+                    state,
+                    delayed_call->inventory_callees,
+                    delayed_call->stack_reads_complete,
+                    delayed_call->stack_reads_guarded);
                 delayed_call.reset();
             }
             const auto call =
@@ -18219,7 +18339,6 @@ analyze_abi_persistent_store_signature(
                 if (line.instruction.has_delay_slot) {
                     delayed_call = DelayedCall{
                         line.address,
-                        return_callee,
                         std::move(inventory_callees),
                         stack_reads_complete,
                         stack_reads_guarded};
@@ -18238,7 +18357,11 @@ analyze_abi_persistent_store_signature(
                         false,
                         false,
                         false);
-                    apply_call_return(state, return_callee);
+                    apply_call_return(
+                        state,
+                        inventory_callees,
+                        stack_reads_complete,
+                        stack_reads_guarded);
                 }
             }
             if (writes_stack_pointer) {
@@ -22423,12 +22546,15 @@ class FunctionEvaluationCache {
                                 maximum_retained_payload_bytes,
                             const bool detailed_telemetry,
                             detail::FunctionEvaluationCacheDecisionObserver
-                                decision_observer = {})
+                                decision_observer = {},
+                            AnalysisMemoryBudget* const
+                                retained_memory_budget = nullptr)
         : maximum_entries_(maximum_entries),
           maximum_retained_payload_bytes_(
               maximum_retained_payload_bytes),
           detailed_telemetry_(detailed_telemetry),
-          decision_observer_(std::move(decision_observer)) {}
+          decision_observer_(std::move(decision_observer)),
+          retained_memory_budget_(retained_memory_budget) {}
 
     void clear() {
         const std::lock_guard lock(mutex_);
@@ -22629,7 +22755,7 @@ class FunctionEvaluationCache {
                          entry_base_payload_bytes &&
                      entries_ < maximum_entries_ &&
                      retained_payload_bytes_ <=
-                         maximum_retained_payload_bytes_ -
+                             maximum_retained_payload_bytes_ -
                              entry_base_payload_bytes;
                 const auto miss_reason =
                     retainable_key
@@ -22642,7 +22768,26 @@ class FunctionEvaluationCache {
                     FunctionEvaluationCacheLookupOutcome::Miss;
                 decision.miss_reason = miss_reason;
                 remember_components(key);
-                if (retainable_key) {
+                auto cache_entry_retained = retainable_key;
+                std::optional<AnalysisMemoryBudget::Lease>
+                    entry_retained_lease;
+                if (cache_entry_retained &&
+                    retained_memory_budget_ != nullptr) {
+                    // The cache is an exact-replay optimization.  A full
+                    // parent budget must evict only completed aliases or
+                    // skip this entry; it must never block a producer while
+                    // holding an analysis lane or reduce a logical budget.
+                    while (!(entry_retained_lease =
+                                 retained_memory_budget_->try_acquire(
+                                     entry_base_payload_bytes))) {
+                        if (ready_lru_.empty()) {
+                            cache_entry_retained = false;
+                            break;
+                        }
+                        erase(ready_lru_.begin()->second, true);
+                    }
+                }
+                if (cache_entry_retained) {
                     producer =
                         std::make_shared<std::promise<Result>>();
                     future = producer->get_future().share();
@@ -22652,6 +22797,8 @@ class FunctionEvaluationCache {
                     entry->serial = ++serial_;
                     entry->retained_payload_bytes =
                         entry_base_payload_bytes;
+                    entry->entry_retained_lease =
+                        std::move(entry_retained_lease);
                     entry->miss_reason = miss_reason;
                     producer_entry = entry.get();
                     buckets_[producer_entry->key.hash].push_back(
@@ -22773,24 +22920,45 @@ class FunctionEvaluationCache {
             producer_entry->ready_result = result;
             const auto artifact_payload_bytes =
                 result->retained_payload_budget_bytes();
-            const auto artifact_size_overflow =
-                artifact_payload_bytes >
+            auto artifact_retainable =
+                artifact_payload_bytes <=
                     std::numeric_limits<std::size_t>::max() -
-                        producer_entry->retained_payload_bytes ||
-                artifact_payload_bytes >
+                        producer_entry->retained_payload_bytes &&
+                artifact_payload_bytes <=
                     std::numeric_limits<std::size_t>::max() -
-                        retained_payload_bytes_;
-            if (!artifact_size_overflow) {
+                        retained_payload_bytes_ &&
+                result->inventory.exact_replay_available();
+            std::optional<AnalysisMemoryBudget::Lease>
+                artifact_retained_lease;
+            if (artifact_retainable) {
+                make_room_for(artifact_payload_bytes, false);
+                artifact_retainable =
+                    retained_payload_bytes_ <=
+                        maximum_retained_payload_bytes_ &&
+                    artifact_payload_bytes <=
+                        maximum_retained_payload_bytes_ -
+                            retained_payload_bytes_;
+                if (artifact_retainable &&
+                    retained_memory_budget_ != nullptr) {
+                    while (!(artifact_retained_lease =
+                                 retained_memory_budget_->try_acquire(
+                                     artifact_payload_bytes))) {
+                        if (ready_lru_.empty()) {
+                            artifact_retainable = false;
+                            break;
+                        }
+                        erase(ready_lru_.begin()->second, true);
+                    }
+                }
+            }
+            if (artifact_retainable) {
                 producer_entry->retained_payload_bytes +=
                     artifact_payload_bytes;
                 retained_payload_bytes_ +=
                     artifact_payload_bytes;
+                producer_entry->artifact_retained_lease =
+                    std::move(artifact_retained_lease);
             }
-            const auto artifact_retainable =
-                !artifact_size_overflow &&
-                result->inventory.exact_replay_available() &&
-                producer_entry->retained_payload_bytes <=
-                    maximum_retained_payload_bytes_;
             const auto retained =
                 artifact_retainable && touch_ready(*producer_entry);
             if (!retained) {
@@ -22852,6 +23020,8 @@ class FunctionEvaluationCache {
         std::uint64_t serial = 0u;
         std::uint64_t last_use = 0u;
         std::size_t retained_payload_bytes = 0u;
+        std::optional<AnalysisMemoryBudget::Lease> entry_retained_lease;
+        std::optional<AnalysisMemoryBudget::Lease> artifact_retained_lease;
         bool ready = false;
         detail::FunctionEvaluationCacheMissReason miss_reason =
             detail::FunctionEvaluationCacheMissReason::Cold;
@@ -23295,6 +23465,7 @@ class FunctionEvaluationCache {
     std::uint64_t next_history_serial_ = 0u;
     bool detailed_telemetry_ = false;
     detail::FunctionEvaluationCacheDecisionObserver decision_observer_;
+    AnalysisMemoryBudget* retained_memory_budget_ = nullptr;
 };
 
 // A run-local physical-work registry for multi-root inventory evaluation.
@@ -23315,9 +23486,11 @@ class MultiRootEvaluationCoordinator final {
     };
 
     explicit MultiRootEvaluationCoordinator(
-        const std::size_t maximum_ready_retained_payload_bytes)
+        const std::size_t maximum_ready_retained_payload_bytes,
+        AnalysisMemoryBudget* const retained_memory_budget = nullptr)
         : maximum_ready_retained_payload_bytes_(
-              maximum_ready_retained_payload_bytes) {}
+              maximum_ready_retained_payload_bytes),
+          retained_memory_budget_(retained_memory_budget) {}
 
     template <typename Compute>
     [[nodiscard]] std::pair<
@@ -23336,6 +23509,7 @@ class MultiRootEvaluationCoordinator final {
         Result ready;
         std::shared_ptr<std::promise<Result>> producer;
         Entry* producer_entry = nullptr;
+        bool uncached_producer = false;
         {
             const std::lock_guard lock(mutex_);
             ++statistics_.requests;
@@ -23370,25 +23544,71 @@ class MultiRootEvaluationCoordinator final {
                 const auto entry_base_payload_bytes =
                     sizeof(Entry) + entry->key_bytes.capacity();
                 make_room_for(entry_base_payload_bytes);
-                producer =
-                    std::make_shared<std::promise<Result>>();
-                future = producer->get_future().share();
-                entry->result = future;
-                entry->serial = ++serial_;
-                entry->retained_payload_bytes =
-                    entry_base_payload_bytes;
-                producer_entry = entry.get();
-                buckets_[key.hash].push_back(std::move(entry));
                 ++statistics_.producers;
-                ++statistics_.entries;
-                saturating_add(
-                    statistics_.retained_payload_bytes,
-                    entry_base_payload_bytes);
+                auto entry_retainable =
+                    entry_base_payload_bytes <=
+                        std::numeric_limits<std::size_t>::max() -
+                            statistics_.retained_payload_bytes;
+                std::optional<AnalysisMemoryBudget::Lease>
+                    entry_retained_lease;
+                if (entry_retainable) {
+                    entry_retainable =
+                        statistics_.retained_payload_bytes <=
+                            maximum_ready_retained_payload_bytes_ &&
+                        entry_base_payload_bytes <=
+                            maximum_ready_retained_payload_bytes_ -
+                                statistics_.retained_payload_bytes;
+                }
+                if (entry_retainable &&
+                    retained_memory_budget_ != nullptr) {
+                    // An in-flight registry entry is a reuse optimization,
+                    // not an analysis prerequisite.  Charge its actual key
+                    // and metadata lifetime to the shared cache arena; when
+                    // no completed alias can be released, compute this root
+                    // directly rather than pinning an unaccounted entry.
+                    while (!(entry_retained_lease =
+                                 retained_memory_budget_->try_acquire(
+                                     entry_base_payload_bytes))) {
+                        if (ready_lru_.empty()) {
+                            entry_retainable = false;
+                            break;
+                        }
+                        erase(ready_lru_.begin()->second, true);
+                    }
+                }
+                if (!entry_retainable) {
+                    uncached_producer = true;
+                } else {
+                    producer =
+                        std::make_shared<std::promise<Result>>();
+                    future = producer->get_future().share();
+                    entry->result = future;
+                    entry->serial = ++serial_;
+                    entry->retained_payload_bytes =
+                        entry_base_payload_bytes;
+                    entry->entry_retained_lease =
+                        std::move(entry_retained_lease);
+                    producer_entry = entry.get();
+                    buckets_[key.hash].push_back(std::move(entry));
+                    ++statistics_.entries;
+                    saturating_add(
+                        statistics_.retained_payload_bytes,
+                        entry_base_payload_bytes);
+                }
             }
         }
         if (ready != nullptr) {
             throw_if_resolution_cancelled(cancel_requested);
             return {std::move(ready), true};
+        }
+        if (uncached_producer) {
+            Result result = compute();
+            throw_if_resolution_cancelled(cancel_requested);
+            if (result == nullptr)
+                throw std::logic_error(
+                    "Multi-Root-Auswertung lieferte kein Artefakt.");
+            global_analysis_executor().notify_waiters();
+            return {std::move(result), false};
         }
         if (producer == nullptr) {
             const EvaluationActivityScope wait{
@@ -23467,21 +23687,50 @@ class MultiRootEvaluationCoordinator final {
             producer_entry->ready_result = result;
             const auto artifact_payload_bytes =
                 result->retained_payload_budget_bytes();
-            const auto artifact_size_overflow =
-                artifact_payload_bytes >
+            auto artifact_retainable =
+                artifact_payload_bytes <=
                     std::numeric_limits<std::size_t>::max() -
-                        producer_entry->retained_payload_bytes ||
-                artifact_payload_bytes >
+                        producer_entry->retained_payload_bytes &&
+                artifact_payload_bytes <=
                     std::numeric_limits<std::size_t>::max() -
                         statistics_.retained_payload_bytes;
-            if (!artifact_size_overflow) {
+            std::optional<AnalysisMemoryBudget::Lease>
+                artifact_retained_lease;
+            if (artifact_retainable) {
+                make_room_for(artifact_payload_bytes);
+                artifact_retainable =
+                    statistics_.retained_payload_bytes <=
+                        maximum_ready_retained_payload_bytes_ &&
+                    artifact_payload_bytes <=
+                        maximum_ready_retained_payload_bytes_ -
+                            statistics_.retained_payload_bytes;
+                if (artifact_retainable &&
+                    retained_memory_budget_ != nullptr) {
+                    // Completed multi-root aliases are optional.  Do not let
+                    // a full process arena turn an exact root into a blocked
+                    // producer: release only LRU-ready aliases, otherwise
+                    // recompute the pure alias at its canonical consumer.
+                    while (!(artifact_retained_lease =
+                                 retained_memory_budget_->try_acquire(
+                                     artifact_payload_bytes))) {
+                        if (ready_lru_.empty()) {
+                            artifact_retainable = false;
+                            break;
+                        }
+                        erase(ready_lru_.begin()->second, true);
+                    }
+                }
+            }
+            if (artifact_retainable) {
                 producer_entry->retained_payload_bytes +=
                     artifact_payload_bytes;
                 statistics_.retained_payload_bytes +=
                     artifact_payload_bytes;
+                producer_entry->artifact_retained_lease =
+                    std::move(artifact_retained_lease);
             }
             const auto retained =
-                !artifact_size_overflow &&
+                artifact_retainable &&
                 producer_entry->retained_payload_bytes <=
                     maximum_ready_retained_payload_bytes_ &&
                 touch_ready(*producer_entry);
@@ -23526,6 +23775,8 @@ class MultiRootEvaluationCoordinator final {
         std::uint64_t serial = 0u;
         std::uint64_t last_use = 0u;
         std::size_t retained_payload_bytes = 0u;
+        std::optional<AnalysisMemoryBudget::Lease> entry_retained_lease;
+        std::optional<AnalysisMemoryBudget::Lease> artifact_retained_lease;
         bool ready = false;
     };
 
@@ -23602,6 +23853,7 @@ class MultiRootEvaluationCoordinator final {
     mutable std::mutex mutex_;
     Statistics statistics_;
     std::size_t maximum_ready_retained_payload_bytes_ = 0u;
+    AnalysisMemoryBudget* retained_memory_budget_ = nullptr;
     std::uint64_t clock_ = 0u;
     std::uint64_t serial_ = 0u;
 };
@@ -29763,11 +30015,13 @@ struct detail::FunctionValueAnalysisSession::Impl {
          const std::size_t maximum_resolution_dependency_nodes,
          const std::size_t maximum_resolution_root_artifacts,
          const std::size_t maximum_resolution_epoch_retained_bytes,
-         AnalysisMemoryBudget* const pre_reserved_resolution_ready_budget)
+         AnalysisMemoryBudget* const pre_reserved_resolution_ready_budget,
+         AnalysisMemoryBudget* const retained_cache_memory_budget)
         : evaluations(maximum_entries,
                       maximum_retained_payload_bytes,
                       detailed_telemetry,
-                      std::move(decision_observer)),
+                      std::move(decision_observer),
+                      retained_cache_memory_budget),
           maximum_resolution_dependency_nodes(
               maximum_resolution_dependency_nodes),
           maximum_resolution_root_artifacts(
@@ -29775,7 +30029,8 @@ struct detail::FunctionValueAnalysisSession::Impl {
           maximum_resolution_epoch_retained_bytes(
               maximum_resolution_epoch_retained_bytes),
           pre_reserved_resolution_ready_budget(
-              pre_reserved_resolution_ready_budget) {
+              pre_reserved_resolution_ready_budget),
+          retained_cache_memory_budget(retained_cache_memory_budget) {
         if (detailed_telemetry) {
             function_value_detailed_cache_sessions_started.fetch_add(
                 1u, std::memory_order_relaxed);
@@ -29917,6 +30172,7 @@ struct detail::FunctionValueAnalysisSession::Impl {
     std::size_t maximum_resolution_root_artifacts = 0u;
     std::size_t maximum_resolution_epoch_retained_bytes = 0u;
     AnalysisMemoryBudget* pre_reserved_resolution_ready_budget = nullptr;
+    AnalysisMemoryBudget* retained_cache_memory_budget = nullptr;
     ResolutionExecutionObserverForTesting
         resolution_execution_observer_for_testing;
     ContextualReturnSchedulerDiagnosticsObserverForTesting
@@ -29938,7 +30194,8 @@ detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
     const std::size_t maximum_resolution_dependency_nodes,
     const std::size_t maximum_resolution_root_artifacts,
     const std::size_t maximum_resolution_epoch_retained_bytes,
-    AnalysisMemoryBudget* const pre_reserved_resolution_ready_budget)
+    AnalysisMemoryBudget* const pre_reserved_resolution_ready_budget,
+    AnalysisMemoryBudget* const retained_cache_memory_budget)
     : impl_(std::make_unique<Impl>(
           maximum_entries,
           maximum_retained_payload_bytes,
@@ -29947,7 +30204,8 @@ detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
           maximum_resolution_dependency_nodes,
           maximum_resolution_root_artifacts,
           maximum_resolution_epoch_retained_bytes,
-          pre_reserved_resolution_ready_budget)) {}
+          pre_reserved_resolution_ready_budget,
+          retained_cache_memory_budget)) {}
 
 detail::FunctionValueAnalysisSession::~FunctionValueAnalysisSession() =
     default;
@@ -30798,7 +31056,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     // reuse the session cache byte limit and may be evicted without changing
     // canonical analysis output.
     MultiRootEvaluationCoordinator multi_root_context_evaluations{
-        session.impl_->evaluations.maximum_retained_payload_bytes()};
+        session.impl_->evaluations.maximum_retained_payload_bytes(),
+        session.impl_->retained_cache_memory_budget};
     std::atomic_size_t multi_root_provenance_links = 0u;
     EvaluationActivityTelemetry evaluation_activity;
     ParallelWorkActivity function_value_parallel_activity;
@@ -46379,16 +46638,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         };
 
         auto& resolution_executor = global_analysis_executor();
-        const auto pre_reserved_resolution_budget =
+        const auto locally_bounded_resolution_budget =
             session.impl_->pre_reserved_resolution_ready_budget != nullptr;
-        auto& resolution_memory = pre_reserved_resolution_budget
+        auto& resolution_memory = locally_bounded_resolution_budget
                                       ? *session.impl_
                                              ->pre_reserved_resolution_ready_budget
                                       : resolution_executor.memory_budget();
+        // An old pre-reserved child was already covered by its enclosing task
+        // lease.  A parent-accounted child keeps the same local cap but must
+        // use the ordinary wait/evict path when the shared parent is full.
+        const auto exclusively_pre_reserved_resolution_budget =
+            locally_bounded_resolution_budget &&
+            !resolution_memory.parent_accounted();
         constexpr std::size_t maximum_resolution_ready_retained_bytes =
             1'024u * 1'024u * 1'024u;
         const auto resolution_dispatch_budget_limit =
-            pre_reserved_resolution_budget
+            locally_bounded_resolution_budget
                 ? resolution_memory.capacity()
                 : std::min(
                       maximum_resolution_ready_retained_bytes,
@@ -46407,7 +46672,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 resolution_dispatch_budget_limit);
         auto slot_storage_lease =
             resolution_memory.try_acquire(slot_storage_bytes);
-        if (!slot_storage_lease && !pre_reserved_resolution_budget) {
+        if (!slot_storage_lease &&
+            !exclusively_pre_reserved_resolution_budget) {
             resolution_executor.help_until([&] {
                 slot_storage_lease =
                     resolution_memory.try_acquire(slot_storage_bytes);
@@ -46482,7 +46748,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         // of the remaining process budget for growth inside the root. The two
         // bounded evaluation caches and ready-result arena are accounted above.
         const auto root_admission_bytes =
-            pre_reserved_resolution_budget
+            exclusively_pre_reserved_resolution_budget
                 ? 0u
                 : std::max<std::size_t>(
                       1u,
@@ -46549,7 +46815,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             if (resolved.has_value()) {
                 try {
                     retained_bytes = ready_payload_bytes(*resolved);
-                    if (pre_reserved_resolution_budget &&
+                    if (locally_bounded_resolution_budget &&
                         retained_bytes >
                         dispatch->maximum_ready_retained_bytes)
                         throw AnalysisMemoryBudgetExceeded(
@@ -46950,7 +47216,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         if (!evicted) break;
                     }
                     if (!result_lease.has_value() &&
-                        !pre_reserved_resolution_budget) {
+                        !exclusively_pre_reserved_resolution_budget) {
                         while (!result_lease.has_value()) {
                             bool evicted_while_helping = false;
                             resolution_executor.help_until([&] {

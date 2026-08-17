@@ -1619,6 +1619,32 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
                                    function.block_addresses.end());
     std::vector<katana::analysis::FunctionBoundary>
         supplemental_candidate_boundaries;
+    std::unordered_set<std::uint32_t> candidate_leader_set(
+        candidate_leaders.begin(), candidate_leaders.end());
+    std::unordered_set<std::uint32_t> candidate_leaders_owned_by_fallthrough;
+    const auto mark_candidate_fallthrough_tail =
+        [&](const std::uint32_t root_address) {
+            auto address = root_address;
+            std::unordered_set<std::uint32_t> visited;
+            while (visited.insert(address).second) {
+                const auto block = source_block_by_start.find(address);
+                if (block == source_block_by_start.end() ||
+                    block->second->lines.empty() ||
+                    block->second->lines.back().address >
+                        std::numeric_limits<std::uint32_t>::max() - 2u)
+                    break;
+                const auto sequential =
+                    block->second->lines.back().address + 2u;
+                if (std::find(block->second->successors.begin(),
+                              block->second->successors.end(),
+                              sequential) == block->second->successors.end() ||
+                    owned_block_entries.contains(sequential))
+                    break;
+                if (candidate_leader_set.contains(sequential))
+                    candidate_leaders_owned_by_fallthrough.insert(sequential);
+                address = sequential;
+            }
+        };
     for (const auto address : candidate_leaders) {
         const auto materialized = std::any_of(
             source_blocks.begin(), source_blocks.end(),
@@ -1630,8 +1656,17 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
                 "Externer Kandidat wurde nicht als Basic Block "
                 "materialisiert: " +
                 std::to_string(address));
-        if (!owned_block_entries.contains(address))
+        if (!owned_block_entries.contains(address) &&
+            !candidate_leaders_owned_by_fallthrough.contains(address)) {
             supplemental_candidate_boundaries.push_back({address, 0u});
+            // Several writable snapshot cells can point into one ordinary
+            // fallthrough body. They all remain independent block leaders and
+            // runtime-dispatch entries, but only the first unowned component
+            // entry becomes a function root. Otherwise every interior
+            // snapshot target manufactures an artificial return boundary and
+            // silently drops the predecessor's fallthrough semantics.
+            mark_candidate_fallthrough_tail(address);
+        }
     }
     if (!supplemental_candidate_boundaries.empty()) {
         function_discovery_boundaries.insert(
@@ -1795,7 +1830,9 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
                             break;
                         case katana::analysis::ControlFlowReportStatus::GuardedComplete:
                             instruction.dynamic_target_class =
-                                DynamicTargetClass::GuardedComplete;
+                                resolution->second->exact_target_guard
+                                    ? DynamicTargetClass::ExactGuarded
+                                    : DynamicTargetClass::GuardedComplete;
                             break;
                         case katana::analysis::ControlFlowReportStatus::GuardedPartial:
                             instruction.dynamic_target_class =

@@ -69,11 +69,31 @@ struct CallbackFieldOrigin final {
     bool operator==(const CallbackFieldOrigin&) const = default;
 };
 
+struct CallbackAffineInput final {
+    // Zero-based ABI argument index: r4..r7.
+    std::uint8_t argument = 0u;
+    std::uint32_t scale = 1u;
+
+    bool operator==(const CallbackAffineInput&) const = default;
+};
+
+struct CallbackPcLiteralIdentity final {
+    std::uint32_t literal_address = 0u;
+    std::uint32_t value = 0u;
+
+    bool operator==(const CallbackPcLiteralIdentity&) const = default;
+};
+
 struct CallbackValue final {
     // Bit 0..3 corresponds to the function's incoming r4..r7.
     std::uint8_t input_mask = 0u;
     std::set<std::uint32_t> constants;
     bool constants_truncated = false;
+    // True only when constants is the complete finite scalar domain on every
+    // path represented by this value. Ordinary positive constants remain
+    // useful without this bit, but caller-bounded closure must not consume
+    // them as an exhaustive argument domain.
+    bool constants_complete = false;
     // Keep executable values in a separate lane. Ordinary scalar joins (mode
     // IDs, sizes, flags, offsets, and table indices) may legitimately widen
     // long before the much smaller callback-address domain does. Letting that
@@ -81,6 +101,10 @@ struct CallbackValue final {
     // incomplete and needlessly broad.
     std::set<std::uint32_t> code_constants;
     bool code_constants_truncated = false;
+    // Exhaustive executable-value domain. This is intentionally stricter
+    // than the positive code lane and is established only by exact literal
+    // loads (and lossless joins of such loads).
+    bool code_constants_complete = false;
     // Record/object receiver identity is a separate proof lane.  Eight
     // ordinary scalars are enough for modes and sizes but not for a function
     // that selects among many identity-bound task records.  Mixing those
@@ -88,10 +112,24 @@ struct CallbackValue final {
     std::set<std::uint32_t> receiver_constants;
     std::vector<ReceiverProgression> receiver_progressions;
     bool receiver_constants_truncated = false;
+    // A 32-bit value loaded from non-stack memory may be a record/object
+    // receiver even when mutable title RAM prevents the static image from
+    // naming its concrete address. Keep that provenance distinct from a
+    // wholly unknown scalar so an indirect load through the value can publish
+    // a conservative callback-field shape. The shape remains positive,
+    // guarded inventory and never completes the dynamic target set.
+    bool memory_derived_receiver = false;
     // Guaranteed power-of-two byte alignment for an otherwise unknown
     // scalar. This keeps the shape of mutable table indices through SHLL
     // operations without pretending that the index value itself is known.
     std::uint32_t minimum_alignment = 1u;
+    // Narrow provenance used only by caller-bounded indexed stores. Any
+    // arithmetic other than a checked constant left shift drops this proof.
+    std::optional<CallbackAffineInput> affine_input;
+    // Identity of a value loaded directly from a PC-relative literal slot.
+    // Keeping the slot as well as the scalar prevents a merely plausible RAM
+    // address from being treated as an identity-bound persistent table.
+    std::optional<CallbackPcLiteralIdentity> pc_literal_identity;
     std::optional<std::int32_t> stack_address;
     bool may_be_stack = false;
     std::vector<CallbackFieldOrigin> field_origins;
@@ -128,16 +166,31 @@ struct CallbackPersistentStore final {
     std::int32_t displacement = 0;
     std::uint32_t instruction_address = 0u;
     std::uint8_t width = 0u;
+    bool indexed_addressing = false;
 
     bool operator==(const CallbackPersistentStore&) const = default;
+};
+
+struct CallbackIndexedPersistentStore final {
+    CallbackValue source;
+    std::optional<CallbackPcLiteralIdentity> base;
+    std::optional<CallbackAffineInput> byte_offset;
+    std::uint32_t instruction_address = 0u;
+    std::uint8_t width = 0u;
+    bool destination_identity_complete = false;
+
+    bool operator==(const CallbackIndexedPersistentStore&) const = default;
 };
 
 struct CallbackFunctionModel final {
     std::uint32_t entry = 0u;
     std::uint8_t local_sink_mask = 0u;
+    std::uint8_t local_persistent_pointer_mask = 0u;
     std::vector<CallbackCall> calls;
     std::vector<CallbackFieldSink> field_sinks;
     std::vector<CallbackPersistentStore> persistent_stores;
+    std::map<std::uint32_t, CallbackIndexedPersistentStore>
+        indexed_persistent_stores;
     std::vector<StoredCodeAddressCandidate> local_candidates;
     bool local_candidates_truncated = false;
     bool field_sinks_truncated = false;
@@ -517,6 +570,33 @@ enum class ReceiverIntersection : std::uint8_t {
                     : ReceiverIntersection::None;
 }
 
+[[nodiscard]] bool same_local_record_receiver(
+    const CallbackValue& left,
+    const CallbackValue& right) {
+    // A load instruction plus the identity of its addressed field is a local
+    // SSA-like receiver origin.  Requiring the complete origin vector keeps
+    // two unrelated heap/list loads in one function distinct even when both
+    // values have otherwise widened to "memory-derived receiver".
+    return left.memory_derived_receiver && right.memory_derived_receiver &&
+           !left.field_origins_truncated &&
+           !right.field_origins_truncated &&
+           !left.field_origins.empty() &&
+           left.field_origins == right.field_origins;
+}
+
+[[nodiscard]] bool exact_executable_default_store(
+    const CallbackPersistentStore& store) {
+    // An exact PC-relative executable default written to one record field is
+    // independent type evidence for alternative incoming values written to
+    // that same field.  This remains positive callback inventory only: it
+    // neither completes the later indirect target set nor authorizes runtime
+    // dispatch without the usual image/entry/byte-identity checks.
+    return !store.indexed_addressing && store.source.input_mask == 0u &&
+           store.source.code_constants_complete &&
+           !store.source.code_constants_truncated &&
+           !store.source.code_constants.empty();
+}
+
 [[nodiscard]] bool add_bounded_receiver_constant(
     CallbackValue& value,
     const std::uint32_t constant) {
@@ -622,18 +702,25 @@ void attach_callback_field_origin(CallbackValue& loaded,
                                   const std::int32_t displacement,
                                   const std::size_t width,
                                   const std::uint32_t instruction_address) {
+    const bool receiver_identity_unknown =
+        receiver.memory_derived_receiver &&
+        receiver.input_mask == 0u &&
+        receiver.receiver_constants.empty() &&
+        receiver.receiver_progressions.empty() &&
+        !receiver.receiver_constants_truncated;
     if (width != sizeof(std::uint32_t) || receiver.may_be_stack ||
         (receiver.input_mask == 0u &&
          receiver.receiver_constants.empty() &&
          receiver.receiver_progressions.empty() &&
-         !receiver.receiver_constants_truncated))
+         !receiver.receiver_constants_truncated &&
+         !receiver_identity_unknown))
         return;
     CallbackFieldOrigin origin;
     origin.receiver_input_mask = receiver.input_mask;
     origin.receiver_constants = receiver.receiver_constants;
     origin.receiver_progressions = receiver.receiver_progressions;
     origin.receiver_constants_truncated =
-        receiver.receiver_constants_truncated;
+        receiver.receiver_constants_truncated || receiver_identity_unknown;
     origin.displacement = displacement;
     origin.width = static_cast<std::uint8_t>(width);
     origin.load_instruction_address = instruction_address;
@@ -691,6 +778,8 @@ void transform_scalar_value(CallbackValue& value,
     }
     for (const auto constant : before.constants)
         add_constant(value, image, transform(constant), native_entry_shapes);
+    value.constants_complete = before.constants_complete &&
+                               !value.constants_truncated;
 }
 
 [[nodiscard]] bool join_value(CallbackValue& destination,
@@ -702,6 +791,8 @@ void transform_scalar_value(CallbackValue& value,
         destination.input_mask | source.input_mask);
     changed = changed || input_mask != destination.input_mask;
     destination.input_mask = input_mask;
+    const bool constants_complete = destination.constants_complete &&
+                                    source.constants_complete;
     if (destination.constants_truncated || source.constants_truncated) {
         changed = changed || !destination.constants_truncated ||
                   !destination.constants.empty();
@@ -712,6 +803,11 @@ void transform_scalar_value(CallbackValue& value,
             changed = add_bounded_scalar_constant(destination, constant) ||
                       changed;
     }
+    const bool joined_constants_complete =
+        constants_complete && !destination.constants_truncated;
+    changed = changed || joined_constants_complete !=
+                              destination.constants_complete;
+    destination.constants_complete = joined_constants_complete;
     if (destination.code_constants_truncated ||
         source.code_constants_truncated) {
         changed = changed || !destination.code_constants_truncated ||
@@ -724,6 +820,14 @@ void transform_scalar_value(CallbackValue& value,
                                                 native_entry_shapes) ||
                       changed;
     }
+    const bool joined_code_constants_complete =
+        destination.code_constants_complete &&
+        source.code_constants_complete &&
+        !destination.code_constants_truncated;
+    changed = changed || joined_code_constants_complete !=
+                              destination.code_constants_complete;
+    destination.code_constants_complete =
+        joined_code_constants_complete;
     if (destination.receiver_constants_truncated ||
         source.receiver_constants_truncated) {
         changed = changed || !destination.receiver_constants_truncated;
@@ -747,10 +851,23 @@ void transform_scalar_value(CallbackValue& value,
                           changed;
         }
     }
+    if (source.memory_derived_receiver &&
+        !destination.memory_derived_receiver) {
+        destination.memory_derived_receiver = true;
+        changed = true;
+    }
     const auto minimum_alignment =
         std::min(destination.minimum_alignment, source.minimum_alignment);
     changed = changed || minimum_alignment != destination.minimum_alignment;
     destination.minimum_alignment = minimum_alignment;
+    if (destination.affine_input != source.affine_input) {
+        changed = changed || destination.affine_input.has_value();
+        destination.affine_input.reset();
+    }
+    if (destination.pc_literal_identity != source.pc_literal_identity) {
+        changed = changed || destination.pc_literal_identity.has_value();
+        destination.pc_literal_identity.reset();
+    }
     if (destination.stack_address != source.stack_address) {
         changed = changed || destination.stack_address.has_value();
         destination.stack_address.reset();
@@ -962,6 +1079,17 @@ void scale_minimum_alignment(CallbackValue& value,
             widened, maximum_static_code_pointer_table_stride));
 }
 
+void scale_affine_input(CallbackValue& value,
+                        const std::uint32_t scale) noexcept {
+    if (!value.affine_input.has_value()) return;
+    if (scale == 0u || value.affine_input->scale >
+                           std::numeric_limits<std::uint32_t>::max() / scale) {
+        value.affine_input.reset();
+        return;
+    }
+    value.affine_input->scale *= scale;
+}
+
 void add_immediate_to_minimum_alignment(CallbackValue& value,
                                         const std::int32_t immediate) noexcept {
     if (immediate == 0) return;
@@ -1059,6 +1187,11 @@ void transform_add_immediate(CallbackValue& value,
     // Arithmetic changes the incoming pointer. It no longer proves that the
     // original ABI parameter itself is stored as a callback.
     if (!stack_pointer) value.input_mask = 0u;
+    if (immediate != 0) {
+        value.affine_input.reset();
+        value.pc_literal_identity.reset();
+        value.code_constants_complete = false;
+    }
 }
 
 [[nodiscard]] std::size_t memory_width(
@@ -1257,10 +1390,19 @@ void observe_persistent_store(CallbackFunctionModel& model,
                               const katana::io::ExecutableImage& image,
                               const CallbackValue& source,
                               const std::uint32_t instruction_address,
-                              const std::size_t width) {
+                              const std::size_t width,
+                              const bool receiver_identity_proven) {
     if (width != 4u) return;
-    model.local_sink_mask = static_cast<std::uint8_t>(
-        model.local_sink_mask | source.input_mask);
+    // A raw field displacement plus an unproven receiver is not an ABI type.
+    // Keep concrete executable literals as guarded positive inventory, but
+    // only advertise an incoming argument as a callback when the store and
+    // the indirect-load sink share an exact or same-local receiver. Otherwise
+    // an ordinary data pointer stored at (for example) record +4 poisons every
+    // caller of the constructor as a higher-order callback API.
+    if (receiver_identity_proven) {
+        model.local_sink_mask = static_cast<std::uint8_t>(
+            model.local_sink_mask | source.input_mask);
+    }
     if (source.code_constants_truncated)
         model.local_candidates_truncated = true;
     // The field offset is derived from an actual indirect-call load. Preserve
@@ -1282,6 +1424,7 @@ void observe_potential_persistent_store(
     const std::int32_t displacement,
     const std::uint32_t instruction_address,
     const std::size_t width,
+    const bool indexed_addressing,
     GuardedNativeEntryShapeCache& native_entry_shapes) {
     if (width != sizeof(std::uint32_t) || receiver.may_be_stack ||
         (source.input_mask == 0u && source.code_constants.empty() &&
@@ -1299,6 +1442,8 @@ void observe_potential_persistent_store(
                                      native_entry_shapes));
         static_cast<void>(join_value(existing->receiver, receiver,
                                      native_entry_shapes));
+        existing->indexed_addressing =
+            existing->indexed_addressing || indexed_addressing;
         return;
     }
     if (model.persistent_stores.size() ==
@@ -1308,7 +1453,62 @@ void observe_potential_persistent_store(
     }
     model.persistent_stores.push_back(
         {source, receiver, displacement, instruction_address,
-         static_cast<std::uint8_t>(width)});
+         static_cast<std::uint8_t>(width), indexed_addressing});
+}
+
+void observe_indexed_persistent_store(
+    CallbackFunctionModel& model,
+    const CallbackValue& source,
+    const CallbackValue& base,
+    const CallbackValue& byte_offset,
+    const std::uint32_t instruction_address,
+    const std::size_t width,
+    GuardedNativeEntryShapeCache& native_entry_shapes) {
+    const bool exact_literal_base =
+        base.constants_complete && !base.constants_truncated &&
+        base.constants.size() == 1u && base.pc_literal_identity.has_value() &&
+        *base.constants.begin() == base.pc_literal_identity->value;
+    const bool identity_complete =
+        width == sizeof(std::uint32_t) && !byte_offset.may_be_stack &&
+        exact_literal_base && byte_offset.affine_input.has_value() &&
+        byte_offset.input_mask == static_cast<std::uint8_t>(
+                                      1u <<
+                                      byte_offset.affine_input->argument);
+
+    const auto existing =
+        model.indexed_persistent_stores.find(instruction_address);
+    if (existing != model.indexed_persistent_stores.end()) {
+        static_cast<void>(join_value(existing->second.source, source,
+                                     native_entry_shapes));
+        const bool same_identity =
+            identity_complete &&
+            existing->second.destination_identity_complete &&
+            existing->second.base == base.pc_literal_identity &&
+            existing->second.byte_offset == byte_offset.affine_input &&
+            existing->second.width == width;
+        existing->second.destination_identity_complete = same_identity;
+        if (!same_identity) {
+            existing->second.base.reset();
+            existing->second.byte_offset.reset();
+        }
+        return;
+    }
+    if (model.indexed_persistent_stores.size() ==
+        maximum_persistent_store_observations) {
+        model.persistent_stores_truncated = true;
+        return;
+    }
+    model.indexed_persistent_stores.emplace(
+        instruction_address,
+        CallbackIndexedPersistentStore{
+            source,
+            exact_literal_base
+                ? base.pc_literal_identity
+                : std::optional<CallbackPcLiteralIdentity>{},
+            byte_offset.affine_input,
+            instruction_address,
+            static_cast<std::uint8_t>(width),
+            identity_complete});
 }
 
 void store_value(CallbackFunctionModel& model,
@@ -1318,7 +1518,8 @@ void store_value(CallbackFunctionModel& model,
                  const std::int32_t displacement,
                  const std::uint32_t instruction_address,
                  const std::size_t width,
-                 GuardedNativeEntryShapeCache& native_entry_shapes) {
+                 GuardedNativeEntryShapeCache& native_entry_shapes,
+                 const bool indexed_addressing = false) {
     const auto stack_address = displaced_stack_address(destination,
                                                        displacement);
     if (stack_address.has_value()) {
@@ -1331,7 +1532,8 @@ void store_value(CallbackFunctionModel& model,
     // persistent callback store, so remain fail-closed and do not promote it.
     observe_potential_persistent_store(
         model, source, destination, displacement,
-        instruction_address, width, native_entry_shapes);
+        instruction_address, width, indexed_addressing,
+        native_entry_shapes);
 }
 
 [[nodiscard]] CallbackValue load_value(const CallbackState& state,
@@ -1343,7 +1545,16 @@ void store_value(CallbackFunctionModel& model,
         const auto found = state.stack_values.find(*stack_address);
         if (found != state.stack_values.end()) return found->second;
     }
-    return {};
+    CallbackValue result;
+    const bool source_has_receiver_provenance =
+        source.input_mask != 0u || !source.constants.empty() ||
+        !source.receiver_constants.empty() ||
+        !source.receiver_progressions.empty() ||
+        source.memory_derived_receiver;
+    result.memory_derived_receiver =
+        width == sizeof(std::uint32_t) && !source.may_be_stack &&
+        source_has_receiver_provenance;
+    return result;
 }
 
 void apply_instruction(CallbackFunctionModel& model,
@@ -1379,6 +1590,8 @@ void apply_instruction(CallbackFunctionModel& model,
         add_constant(state.registers[destination], image,
                      static_cast<std::uint32_t>(instruction.immediate),
                      native_entry_shapes);
+        state.registers[destination].constants_complete =
+            !state.registers[destination].constants_truncated;
         return;
     case K::MovRegister:
         state.registers[destination] = state.registers[source];
@@ -1414,30 +1627,46 @@ void apply_instruction(CallbackFunctionModel& model,
             });
         return;
     case K::ShiftLogicalLeftOne:
-    case K::ShiftArithmeticLeftOne:
+    case K::ShiftArithmeticLeftOne: {
+        const auto affine = state.registers[destination].affine_input;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 1u; });
+        state.registers[destination].affine_input = affine;
+        scale_affine_input(state.registers[destination], 2u);
         scale_minimum_alignment(state.registers[destination], 2u);
         return;
-    case K::ShiftLogicalLeftTwo:
+    }
+    case K::ShiftLogicalLeftTwo: {
+        const auto affine = state.registers[destination].affine_input;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 2u; });
+        state.registers[destination].affine_input = affine;
+        scale_affine_input(state.registers[destination], 4u);
         scale_minimum_alignment(state.registers[destination], 4u);
         return;
-    case K::ShiftLogicalLeftEight:
+    }
+    case K::ShiftLogicalLeftEight: {
+        const auto affine = state.registers[destination].affine_input;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 8u; });
+        state.registers[destination].affine_input = affine;
+        scale_affine_input(state.registers[destination], 256u);
         scale_minimum_alignment(state.registers[destination], 256u);
         return;
-    case K::ShiftLogicalLeftSixteen:
+    }
+    case K::ShiftLogicalLeftSixteen: {
+        const auto affine = state.registers[destination].affine_input;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 16u; });
+        state.registers[destination].affine_input = affine;
+        scale_affine_input(state.registers[destination], 65'536u);
         scale_minimum_alignment(state.registers[destination], 65'536u);
         return;
+    }
     case K::AddImmediate:
         transform_add_immediate(state.registers[destination], image,
                                 native_entry_shapes,
@@ -1450,6 +1679,8 @@ void apply_instruction(CallbackFunctionModel& model,
                            static_cast<std::uint32_t>(instruction.displacement);
         add_constant(state.registers[0u], image, value,
                      native_entry_shapes);
+        state.registers[0u].constants_complete =
+            !state.registers[0u].constants_truncated;
         return;
     }
     case K::MovLongLoadPcRelative: {
@@ -1458,9 +1689,17 @@ void apply_instruction(CallbackFunctionModel& model,
             ((line.address + 4u) & ~3u) +
             static_cast<std::uint32_t>(instruction.displacement);
         if (const auto value = read_image_u32(image, literal_address);
-            value.has_value())
+            value.has_value()) {
             add_constant(state.registers[destination], image, *value,
                          native_entry_shapes);
+            state.registers[destination].constants_complete =
+                !state.registers[destination].constants_truncated;
+            state.registers[destination].pc_literal_identity =
+                CallbackPcLiteralIdentity{literal_address, *value};
+            state.registers[destination].code_constants_complete =
+                !state.registers[destination].code_constants_truncated &&
+                !state.registers[destination].code_constants.empty();
+        }
         // A PC-relative literal proves only the scalar pointer value. Treating
         // the pointed-to bytes as a descriptor table here misclassifies
         // ordinary strings and resources whose first four bytes happen to
@@ -1489,6 +1728,10 @@ void apply_instruction(CallbackFunctionModel& model,
     case K::MovByteStoreR0Indexed:
     case K::MovWordStoreR0Indexed:
     case K::MovLongStoreR0Indexed: {
+        observe_indexed_persistent_store(
+            model, state.registers[source], state.registers[0u],
+            state.registers[destination], line.address, width,
+            native_entry_shapes);
         if (state.registers[0u].constants.size() != 1u ||
             state.registers[0u].constants_truncated)
             return;
@@ -1496,7 +1739,7 @@ void apply_instruction(CallbackFunctionModel& model,
                     state.registers[destination],
                     static_cast<std::int32_t>(
                         *state.registers[0u].constants.begin()),
-                    line.address, width, native_entry_shapes);
+                    line.address, width, native_entry_shapes, true);
         return;
     }
     case K::MovByteStorePreDecrement:
@@ -1695,9 +1938,12 @@ void clobber_call_volatile_registers(CallbackState& state) {
     if (entry == blocks.end()) return model;
 
     CallbackState initial;
-    for (std::uint8_t index = 0u; index < 4u; ++index)
+    for (std::uint8_t index = 0u; index < 4u; ++index) {
         initial.registers[4u + index].input_mask =
             static_cast<std::uint8_t>(1u << index);
+        initial.registers[4u + index].affine_input =
+            CallbackAffineInput{index, 1u};
+    }
     initial.registers[15u].stack_address = 0;
     initial.registers[15u].may_be_stack = true;
 
@@ -1865,6 +2111,19 @@ void canonicalize_candidate(StoredCodeAddressCandidate& candidate) {
     canonicalize(candidate.evidence_callees);
 }
 
+[[nodiscard]] bool persistent_main_ram_span(const std::uint32_t address,
+                                             const std::size_t width) {
+    if (width == 0u) return false;
+    const auto end = static_cast<std::uint64_t>(address) + width - 1u;
+    if (end > std::numeric_limits<std::uint32_t>::max()) return false;
+    const auto first_physical = address & 0x1FFFFFFFu;
+    const auto last_physical =
+        static_cast<std::uint32_t>(end) & 0x1FFFFFFFu;
+    return first_physical >= 0x0C000000u &&
+           last_physical >= first_physical &&
+           last_physical < 0x10000000u;
+}
+
 } // namespace
 
 std::vector<std::int32_t> discover_static_callback_field_offsets(
@@ -1882,10 +2141,14 @@ GuardedCodeInventory analyze_static_callback_inventory(
     GuardedNativeEntryShapeCache& native_entry_shapes,
     std::vector<StaticCallbackSinkContract>* const
         callback_sink_contracts,
+    std::vector<StaticPersistentPointerSinkContract>* const
+        persistent_pointer_sink_contracts,
     std::vector<StaticCallbackFieldSinkContract>* const
         callback_field_sink_contracts) {
     if (callback_sink_contracts != nullptr)
         callback_sink_contracts->clear();
+    if (persistent_pointer_sink_contracts != nullptr)
+        persistent_pointer_sink_contracts->clear();
     if (callback_field_sink_contracts != nullptr)
         callback_field_sink_contracts->clear();
     GuardedCodeInventory inventory;
@@ -1929,7 +2192,8 @@ GuardedCodeInventory analyze_static_callback_inventory(
     }
     leaders.insert(leaders.end(), external_block_entries.begin(),
                    external_block_entries.end());
-    const auto blocks = build_basic_blocks(lines, {}, leaders);
+    const auto blocks = build_basic_blocks(
+        lines, {}, leaders, non_root_function_entry_hints);
     auto functions = discover_functions_from_blocks(blocks, boundaries);
     // A guarded callback or continuation can enter a disconnected CFG
     // component without constituting descriptive function metadata. Such a
@@ -1944,6 +2208,19 @@ GuardedCodeInventory analyze_static_callback_inventory(
     bool supplemented = false;
     for (const auto entry : external_block_entries) {
         if (owned_blocks.contains(entry)) continue;
+        if (native_entry_shapes.is_physical_delay_slot(entry) &&
+            !std::binary_search(non_root_function_entry_hints.begin(),
+                                non_root_function_entry_hints.end(),
+                                entry))
+            continue;
+        const auto containing_block = std::find_if(
+            blocks.begin(), blocks.end(), [&](const auto& candidate) {
+                return candidate.start_address < entry &&
+                       entry <= candidate.end_address;
+            });
+        if (containing_block != blocks.end() &&
+            owned_blocks.contains(containing_block->start_address))
+            continue;
         const auto block = std::find_if(
             blocks.begin(), blocks.end(),
             [&](const auto& candidate) {
@@ -2050,6 +2327,40 @@ GuardedCodeInventory analyze_static_callback_inventory(
     }
     for (auto& [entry, model] : models) {
         for (const auto& store : model.persistent_stores) {
+            model.local_persistent_pointer_mask =
+                static_cast<std::uint8_t>(
+                    model.local_persistent_pointer_mask |
+                    store.source.input_mask);
+            // R0-indexed stores use a separate caller-domain/address proof.
+            // Treating their dynamic index as a record receiver and their
+            // table base as a signed field displacement would allow the older
+            // field-sink path to bypass that proof.
+            if (store.indexed_addressing) continue;
+
+            // Constructors commonly install either a caller-supplied handler
+            // or an exact built-in default into the same freshly allocated
+            // record field.  The matching local receiver origin and exact
+            // executable alternative prove the incoming lane is callback-
+            // typed even when a mutable free-list/list-head transition keeps
+            // the later scheduler receiver identity intentionally abstract.
+            const bool locally_typed_callback =
+                store.source.input_mask != 0u &&
+                std::any_of(
+                    model.persistent_stores.begin(),
+                    model.persistent_stores.end(),
+                    [&](const auto& witness) {
+                        return witness.displacement == store.displacement &&
+                               witness.width == store.width &&
+                               exact_executable_default_store(witness) &&
+                               same_local_record_receiver(store.receiver,
+                                                          witness.receiver);
+                    });
+            if (locally_typed_callback) {
+                observe_persistent_store(model, image, store.source,
+                                         store.instruction_address,
+                                         store.width, true);
+                continue;
+            }
             const auto sinks = field_sinks_by_shape.find(
                 {store.displacement, store.width});
             if (sinks == field_sinks_by_shape.end()) continue;
@@ -2072,7 +2383,7 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 matched = true;
                 observe_persistent_store(model, image, store.source,
                                          store.instruction_address,
-                                         store.width);
+                                         store.width, true);
                 break;
             }
             if (!matched && receiver_may_alias) {
@@ -2084,25 +2395,79 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 // inventory.
                 observe_persistent_store(model, image, store.source,
                                          store.instruction_address,
-                                         store.width);
+                                         store.width, false);
                 ++receiver_may_alias_stores;
             }
         }
     }
 
     std::map<std::uint32_t, std::uint8_t> sink_masks;
+    std::map<std::uint32_t, std::uint8_t> persistent_pointer_masks;
     std::map<std::uint32_t, std::vector<std::pair<std::uint32_t, std::size_t>>>
         callers_by_callee;
     std::deque<std::uint32_t> pending;
     std::set<std::uint32_t> queued;
     for (const auto& [entry, model] : models) {
         sink_masks[entry] = model.local_sink_mask;
+        persistent_pointer_masks[entry] =
+            model.local_persistent_pointer_mask;
         if (model.local_sink_mask != 0u && queued.insert(entry).second)
             pending.push_back(entry);
         for (std::size_t index = 0u; index < model.calls.size(); ++index)
             callers_by_callee[model.calls[index].callee].push_back(
                 {entry, index});
     }
+
+    const auto propagate_masks =
+        [&](std::map<std::uint32_t, std::uint8_t>& masks) {
+            std::deque<std::uint32_t> work;
+            std::set<std::uint32_t> scheduled;
+            for (const auto [entry, mask] : masks) {
+                if (mask != 0u && scheduled.insert(entry).second)
+                    work.push_back(entry);
+            }
+            std::size_t steps = 0u;
+            const auto budget =
+                std::max<std::size_t>(64u, models.size() * 8u);
+            while (!work.empty()) {
+                const auto callee = work.front();
+                work.pop_front();
+                scheduled.erase(callee);
+                if (++steps > budget) {
+                    forwarding_truncated = true;
+                    break;
+                }
+                const auto mask = masks[callee];
+                const auto callers = callers_by_callee.find(callee);
+                if (callers == callers_by_callee.end()) continue;
+                for (const auto& [caller, call_index] : callers->second) {
+                    const auto model = models.find(caller);
+                    if (model == models.end() ||
+                        call_index >= model->second.calls.size())
+                        continue;
+                    std::uint8_t propagated = 0u;
+                    const auto& call = model->second.calls[call_index];
+                    for (std::size_t argument = 0u; argument < 4u;
+                         ++argument) {
+                        if ((mask & static_cast<std::uint8_t>(
+                                        1u << argument)) == 0u)
+                            continue;
+                        propagated = static_cast<std::uint8_t>(
+                            propagated |
+                            call.arguments[argument].input_mask);
+                    }
+                    auto& caller_mask = masks[caller];
+                    const auto next = static_cast<std::uint8_t>(
+                        caller_mask | propagated);
+                    if (next == caller_mask) continue;
+                    caller_mask = next;
+                    if (scheduled.insert(caller).second)
+                        work.push_back(caller);
+                }
+            }
+        };
+
+    propagate_masks(persistent_pointer_masks);
     std::size_t propagation_steps = 0u;
     const auto propagation_budget =
         std::max<std::size_t>(64u, models.size() * 8u);
@@ -2143,6 +2508,18 @@ GuardedCodeInventory analyze_static_callback_inventory(
         for (const auto [function_address, argument_mask] : sink_masks) {
             if (argument_mask == 0u) continue;
             callback_sink_contracts->push_back(
+                {function_address, argument_mask});
+        }
+    }
+
+
+    if (persistent_pointer_sink_contracts != nullptr) {
+        persistent_pointer_sink_contracts->reserve(
+            persistent_pointer_masks.size());
+        for (const auto [function_address, argument_mask] :
+             persistent_pointer_masks) {
+            if (argument_mask == 0u) continue;
+            persistent_pointer_sink_contracts->push_back(
                 {function_address, argument_mask});
         }
     }
@@ -2228,9 +2605,95 @@ GuardedCodeInventory analyze_static_callback_inventory(
     candidate_values_truncated =
         candidate_values_truncated || static_vectors.truncated;
     for (const auto& [entry, model] : models) {
-        static_cast<void>(entry);
         for (const auto& candidate : model.local_candidates)
             merge_candidate(candidate);
+        // Some bootstrap registrars store code literals into a global vector
+        // through an incoming selector. Admit those literals only when the
+        // callee preserves an affine ABI-argument offset, the base retains its
+        // exact PC-literal identity, and every statically known caller supplies
+        // a complete finite argument domain. A plausible RAM address or an
+        // alignment-only index is deliberately insufficient.
+        for (const auto& [store_site, store] :
+             model.indexed_persistent_stores) {
+            static_cast<void>(store_site);
+            if (!store.destination_identity_complete ||
+                !store.base.has_value() ||
+                !store.byte_offset.has_value() ||
+                store.width != sizeof(std::uint32_t))
+                continue;
+            const auto callers = callers_by_callee.find(entry);
+            if (callers == callers_by_callee.end() ||
+                callers->second.empty())
+                continue;
+
+            bool caller_domain_complete = true;
+            std::vector<std::uint32_t> evidence_call_sites;
+            std::set<std::uint32_t> effective_slots;
+            for (const auto& [caller, call_index] : callers->second) {
+                const auto owner = models.find(caller);
+                if (owner == models.end() ||
+                    call_index >= owner->second.calls.size() ||
+                    store.byte_offset->argument >= 4u) {
+                    caller_domain_complete = false;
+                    break;
+                }
+                const auto& call = owner->second.calls[call_index];
+                const auto& argument =
+                    call.arguments[store.byte_offset->argument];
+                if (!argument.constants_complete ||
+                    argument.constants_truncated ||
+                    argument.constants.empty() ||
+                    argument.input_mask != 0u) {
+                    caller_domain_complete = false;
+                    break;
+                }
+                for (const auto constant : argument.constants) {
+                    const auto byte_offset =
+                        static_cast<std::uint64_t>(constant) *
+                        store.byte_offset->scale;
+                    const auto effective =
+                        static_cast<std::uint64_t>(store.base->value) +
+                        byte_offset;
+                    if (byte_offset >
+                            std::numeric_limits<std::uint32_t>::max() ||
+                        effective >
+                            std::numeric_limits<std::uint32_t>::max() ||
+                        (effective & (sizeof(std::uint32_t) - 1u)) != 0u ||
+                        !persistent_main_ram_span(
+                            static_cast<std::uint32_t>(effective),
+                            sizeof(std::uint32_t))) {
+                        caller_domain_complete = false;
+                        break;
+                    }
+                    effective_slots.insert(
+                        static_cast<std::uint32_t>(effective));
+                }
+                if (!caller_domain_complete) break;
+                evidence_call_sites.push_back(call.instruction_address);
+            }
+            // Two or more independently addressed 32-bit slots are the
+            // minimum structural evidence that the literal base owns a table
+            // rather than an arbitrary scalar/heap cell.
+            if (!caller_domain_complete || effective_slots.size() < 2u)
+                continue;
+            if (store.source.code_constants_truncated) {
+                candidate_values_truncated = true;
+                continue;
+            }
+            if (!store.source.code_constants_complete ||
+                store.source.code_constants.empty())
+                continue;
+            for (const auto target : store.source.code_constants) {
+                StoredCodeAddressCandidate candidate;
+                candidate.target_address = target;
+                candidate.guarded = true;
+                candidate.store_instruction_addresses = {
+                    store.instruction_address};
+                candidate.evidence_call_sites = evidence_call_sites;
+                candidate.evidence_callees = {entry};
+                merge_candidate(candidate);
+            }
+        }
         candidate_values_truncated =
             candidate_values_truncated ||
             model.local_candidates_truncated;

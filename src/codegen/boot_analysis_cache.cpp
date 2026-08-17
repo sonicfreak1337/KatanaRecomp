@@ -485,6 +485,8 @@ void write_indirect_resolution(
     write_u32_vector(output, value.definition_sites);
     output.boolean(value.definition_complete);
     output.boolean(value.preceding_call);
+    output.boolean(value.exact_target_guard);
+    output.enumeration(value.exact_guard_rejection_reason);
     output.enumeration(value.instruction_kind);
     write_u32_vector(output, value.analysis_candidates);
 }
@@ -520,6 +522,13 @@ read_indirect_resolution(Reader& input) {
     value.definition_sites = read_u32_vector(input);
     value.definition_complete = input.boolean();
     value.preceding_call = input.boolean();
+    value.exact_target_guard = input.boolean();
+    value.exact_guard_rejection_reason = input.enumeration(
+        katana::analysis::ExactGuardRejectionReason::None,
+        static_cast<katana::analysis::ExactGuardRejectionReason>(
+            static_cast<std::uint8_t>(
+                katana::analysis::ExactGuardRejectionReason::Count) -
+            1u));
     value.instruction_kind = input.enumeration(
         katana::sh4::InstructionKind::Unknown,
         katana::sh4::InstructionKind::Fschg);
@@ -975,6 +984,18 @@ read_static_callback_sink(Reader& input) {
     return {input.u32(), input.u8()};
 }
 
+void write_static_persistent_pointer_sink(
+    Writer& output,
+    const katana::analysis::StaticPersistentPointerSinkContract& value) {
+    output.u32(value.function_address);
+    output.u8(value.argument_mask);
+}
+
+[[nodiscard]] katana::analysis::StaticPersistentPointerSinkContract
+read_static_persistent_pointer_sink(Reader& input) {
+    return {input.u32(), input.u8()};
+}
+
 void write_static_callback_field_sink(
     Writer& output,
     const katana::analysis::StaticCallbackFieldSinkContract& value) {
@@ -1036,6 +1057,10 @@ read_static_callback_field_sink(Reader& input) {
         write_static_callback_sink);
     write_vector(
         output,
+        artifact.analysis.static_persistent_pointer_sinks,
+        write_static_persistent_pointer_sink);
+    write_vector(
+        output,
         artifact.analysis.static_callback_field_sinks,
         write_static_callback_field_sink);
     write_analysis_scalars(output, artifact.analysis);
@@ -1078,6 +1103,9 @@ read_static_callback_field_sink(Reader& input) {
     artifact.analysis.static_callback_sinks =
         read_vector<katana::analysis::StaticCallbackSinkContract>(
             input, read_static_callback_sink);
+    artifact.analysis.static_persistent_pointer_sinks =
+        read_vector<katana::analysis::StaticPersistentPointerSinkContract>(
+            input, read_static_persistent_pointer_sink);
     artifact.analysis.static_callback_field_sinks =
         read_vector<katana::analysis::StaticCallbackFieldSinkContract>(
             input, read_static_callback_field_sink);

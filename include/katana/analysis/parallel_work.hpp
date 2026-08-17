@@ -138,8 +138,19 @@ class AnalysisMemoryBudget final {
         friend class AnalysisMemoryBudget;
     };
 
-    explicit AnalysisMemoryBudget(const std::size_t capacity)
-        : capacity_(capacity) {}
+    // A child keeps its own logical cap while every live lease is charged to
+    // its parent as well.  This lets a phase reserve only memory it actually
+    // retains instead of pessimistically pinning its complete local arena in
+    // the process-wide executor for its entire lifetime.  Parents must
+    // outlive their children; construction is one-way, so a budget graph
+    // cannot contain a cycle.
+    explicit AnalysisMemoryBudget(
+        const std::size_t capacity,
+        AnalysisMemoryBudget* const parent = nullptr,
+        const std::size_t parent_headroom_bytes = 0u)
+        : capacity_(capacity),
+          parent_(parent),
+          parent_headroom_bytes_(parent_headroom_bytes) {}
 
     AnalysisMemoryBudget(const AnalysisMemoryBudget&) = delete;
     AnalysisMemoryBudget& operator=(const AnalysisMemoryBudget&) = delete;
@@ -160,13 +171,38 @@ class AnalysisMemoryBudget final {
         return capacity_ - used();
     }
 
+    [[nodiscard]] bool parent_accounted() const noexcept {
+        return parent_ != nullptr;
+    }
+
     [[nodiscard]] std::optional<Lease> try_acquire(
         const std::size_t bytes) {
+        if (!try_acquire_accounted(bytes, parent_headroom_bytes_))
+            return std::nullopt;
+        return Lease(*this, bytes);
+    }
+
+  private:
+    [[nodiscard]] bool try_acquire_accounted(
+        const std::size_t bytes,
+        const std::size_t root_headroom_bytes) {
         if (bytes > capacity_)
             throw AnalysisMemoryBudgetExceeded(bytes, capacity_);
+        if (parent_ != nullptr &&
+            !parent_->try_acquire_accounted(bytes, root_headroom_bytes))
+            return false;
         auto current = used_.load(std::memory_order_acquire);
         for (;;) {
-            if (bytes > capacity_ - current) return std::nullopt;
+            const auto retained_headroom = parent_ == nullptr
+                                               ? std::min(
+                                                     root_headroom_bytes,
+                                                     capacity_)
+                                               : 0u;
+            if (current > capacity_ - retained_headroom ||
+                bytes > capacity_ - retained_headroom - current) {
+                if (parent_ != nullptr) parent_->release(bytes);
+                return false;
+            }
             if (used_.compare_exchange_weak(
                     current,
                     current + bytes,
@@ -183,16 +219,18 @@ class AnalysisMemoryBudget final {
                    std::memory_order_release,
                    std::memory_order_relaxed)) {
         }
-        return Lease(*this, bytes);
+        return true;
     }
 
-  private:
     void release(const std::size_t bytes) noexcept {
         if (bytes != 0u)
             used_.fetch_sub(bytes, std::memory_order_release);
+        if (parent_ != nullptr) parent_->release(bytes);
     }
 
     const std::size_t capacity_ = 0u;
+    AnalysisMemoryBudget* const parent_ = nullptr;
+    const std::size_t parent_headroom_bytes_ = 0u;
     std::atomic_size_t used_ = 0u;
     std::atomic_size_t peak_ = 0u;
 };

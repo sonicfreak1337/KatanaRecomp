@@ -279,7 +279,10 @@ enum class DynamicTargetClass : std::uint8_t {
     GuardedComplete,
     GuardedPartial,
     RuntimeOnly,
-    Unresolved
+    Unresolved,
+    // A single statically proven target is allowed. Unlike GuardedComplete,
+    // a live mismatch must not fall through to the global runtime dispatcher.
+    ExactGuarded
 };
 
 struct Instruction {

@@ -2,9 +2,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -1264,6 +1271,496 @@ void require_safe_optional_regular_file(
     return root / name;
 }
 
+// The trace is deliberately a private, fixed-format provider behind the
+// platform boundary.  NativePortPlatformServices owns it for the complete
+// run, so poll_gamepads() only copies an already materialised snapshot and
+// never performs I/O, locking, or allocation in replay mode.  Recording
+// reserves both its memory and mapped-journal capacity before the first poll.
+class NativePortInputTrace final {
+  public:
+    static constexpr std::size_t header_bytes = 48u;
+    static constexpr std::size_t frame_count_offset = 24u;
+    static constexpr std::size_t encoded_gamepad_bytes = 52u;
+    static constexpr std::size_t encoded_frame_bytes =
+        16u + native_port_gamepad_count * encoded_gamepad_bytes;
+
+    NativePortInputTrace(std::string identity,
+                         const std::size_t maximum_frames,
+                         const bool replay,
+                         const std::filesystem::path& record_path = {})
+        : identity_(std::move(identity)),
+          maximum_frames_(maximum_frames),
+          replay_(replay) {
+        frames_.reserve(maximum_frames_);
+        if (!replay_ && !record_path.empty()) open_live_journal(record_path);
+    }
+
+    ~NativePortInputTrace() { close_live_journal(); }
+
+    NativePortInputTrace(const NativePortInputTrace&) = delete;
+    NativePortInputTrace& operator=(const NativePortInputTrace&) = delete;
+
+    [[nodiscard]] static std::unique_ptr<NativePortInputTrace> load(
+        const std::filesystem::path& path,
+        const std::string_view expected_identity,
+        const std::size_t maximum_frames) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_FILE_NOT_FOUND,
+                          "input-replay-open");
+
+        std::array<char, 8u> magic{};
+        input.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+        if (!input || magic != std::array<char, 8u>{'K', 'A', 'T', 'A',
+                                                     'N', 'A', 'I', 'R'})
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_DATA,
+                          "input-replay-header");
+        const auto version = read_u32(input, "input-replay-version");
+        const auto contract = read_u32(input, "input-replay-contract");
+        const auto slot_count = read_u32(input, "input-replay-slots");
+        const auto identity_bytes = read_u32(input, "input-replay-identity-size");
+        const auto frame_count = read_u64(input, "input-replay-frame-count");
+        const auto storage_frame_count =
+            read_u64(input, "input-replay-storage-frame-count");
+        const auto frame_bytes = read_u32(input, "input-replay-frame-bytes");
+        const auto reserved = read_u32(input, "input-replay-reserved");
+        if (version != native_port_input_recording_version ||
+            contract != native_port_input_recording_contract_version ||
+            slot_count != native_port_gamepad_count ||
+            identity_bytes == 0u ||
+            identity_bytes > maximum_platform_identifier_bytes ||
+            frame_count > storage_frame_count ||
+            storage_frame_count > maximum_frames ||
+            frame_bytes != encoded_frame_bytes || reserved != 0u)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_REVISION_MISMATCH,
+                          "input-replay-contract");
+        std::string identity(identity_bytes, '\0');
+        input.read(identity.data(), static_cast<std::streamsize>(identity.size()));
+        if (!input || identity != expected_identity)
+            fail_platform(NativePortPlatformFailure::ContentIdentity,
+                          ERROR_INVALID_DATA,
+                          "input-replay-identity");
+
+        auto result = std::make_unique<NativePortInputTrace>(
+            std::move(identity), maximum_frames, true);
+        result->frames_.reserve(static_cast<std::size_t>(frame_count));
+        std::uint64_t previous_sequence = 0u;
+        for (std::uint64_t index = 0u; index < frame_count; ++index) {
+            NativePortInputSnapshot snapshot;
+            snapshot.poll_sequence = read_u64(input, "input-replay-sequence");
+            snapshot.connection_generation =
+                read_u64(input, "input-replay-generation");
+            if (snapshot.poll_sequence == 0u ||
+                (index != 0u && snapshot.poll_sequence <= previous_sequence))
+                fail_platform(NativePortPlatformFailure::InputBackend,
+                              ERROR_INVALID_DATA,
+                              "input-replay-sequence-order");
+            previous_sequence = snapshot.poll_sequence;
+            for (auto& gamepad : snapshot.gamepads)
+                read_gamepad(input, gamepad);
+            result->frames_.push_back(snapshot);
+        }
+        input.seekg(0, std::ios::end);
+        const auto actual_bytes = input.tellg();
+        const auto expected_bytes =
+            static_cast<std::uint64_t>(header_bytes) + identity_bytes +
+            storage_frame_count * encoded_frame_bytes;
+        if (!input || actual_bytes < 0 ||
+            static_cast<std::uint64_t>(actual_bytes) != expected_bytes)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_DATA,
+                          "input-replay-storage-size");
+        return result;
+    }
+
+    void append(const NativePortInputSnapshot& snapshot) {
+        if (replay_) return;
+        if (frames_.size() == maximum_frames_)
+            fail_platform(NativePortPlatformFailure::ResourceLimit,
+                          ERROR_BUFFER_OVERFLOW,
+                          "input-record-frame-budget");
+        frames_.push_back(snapshot);
+        if (journal_view_ != nullptr) {
+            const auto index = frames_.size() - 1u;
+            const auto destination_offset =
+                journal_data_offset_ + index * encoded_frame_bytes;
+            encode_frame(std::span<std::byte>(
+                             journal_view_ + destination_offset,
+                             encoded_frame_bytes),
+                         snapshot);
+            std::atomic_thread_fence(std::memory_order_release);
+            static_assert(frame_count_offset % alignof(LONG64) == 0u);
+            InterlockedExchange64(
+                reinterpret_cast<volatile LONG64*>(journal_view_ +
+                                                    frame_count_offset),
+                static_cast<LONG64>(frames_.size()));
+        }
+    }
+
+    [[nodiscard]] NativePortInputSnapshot next() {
+        if (!replay_ || cursor_ >= frames_.size())
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_HANDLE_EOF,
+                          "input-replay-exhausted");
+        return frames_[cursor_++];
+    }
+
+    void save_atomic(const std::filesystem::path& path) {
+        if (replay_) return;
+        close_live_journal();
+        const auto temporary = std::filesystem::path(path.native() +
+                                                     std::filesystem::path(
+                                                         L".tmp").native());
+        std::error_code cleanup_error;
+        std::filesystem::remove(temporary, cleanup_error);
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_ACCESS_DENIED,
+                          "input-record-open");
+        output.write("KATANAIR", 8);
+        write_u32(output, native_port_input_recording_version);
+        write_u32(output, native_port_input_recording_contract_version);
+        write_u32(output, native_port_gamepad_count);
+        write_u32(output, static_cast<std::uint32_t>(identity_.size()));
+        write_u64(output, frames_.size());
+        write_u64(output, frames_.size());
+        write_u32(output, static_cast<std::uint32_t>(encoded_frame_bytes));
+        write_u32(output, 0u);
+        output.write(identity_.data(),
+                     static_cast<std::streamsize>(identity_.size()));
+        for (const auto& snapshot : frames_) {
+            write_u64(output, snapshot.poll_sequence);
+            write_u64(output, snapshot.connection_generation);
+            for (const auto& gamepad : snapshot.gamepads)
+                write_gamepad(output, gamepad);
+        }
+        output.flush();
+        if (!output)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_WRITE_FAULT,
+                          "input-record-write");
+        output.close();
+        // Never remove an existing trace before publication.  Windows' native
+        // replace operation preserves the same-volume atomicity guarantee for
+        // both first publication and replacement.
+        if (MoveFileExW(extended_path(temporary).c_str(),
+                        extended_path(path).c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return;
+        std::error_code remove_error;
+        std::filesystem::remove(temporary, remove_error);
+        fail_platform(NativePortPlatformFailure::InputBackend,
+                      ERROR_WRITE_FAULT,
+                      "input-record-atomic-rename");
+    }
+
+  private:
+    static void encode_frame(std::span<std::byte> output,
+                             const NativePortInputSnapshot& snapshot) {
+        if (output.size() != encoded_frame_bytes)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INSUFFICIENT_BUFFER,
+                          "input-record-frame-buffer");
+        std::size_t offset = 0u;
+        const auto append_u16 = [&](const std::uint16_t value) {
+            write_little<std::uint16_t>(output, offset, value);
+            offset += sizeof(value);
+        };
+        const auto append_u32 = [&](const std::uint32_t value) {
+            write_little<std::uint32_t>(output, offset, value);
+            offset += sizeof(value);
+        };
+        const auto append_u64 = [&](const std::uint64_t value) {
+            write_little<std::uint64_t>(output, offset, value);
+            offset += sizeof(value);
+        };
+        const auto append_float = [&](const float value) {
+            append_u32(std::bit_cast<std::uint32_t>(value));
+        };
+
+        append_u64(snapshot.poll_sequence);
+        append_u64(snapshot.connection_generation);
+        for (const auto& gamepad : snapshot.gamepads) {
+            append_u32(gamepad.connected ? 1u : 0u);
+            append_u32(gamepad.packet_number);
+            append_u32(gamepad.buttons);
+            append_u16(
+                static_cast<std::uint16_t>(gamepad.left_stick_x_raw));
+            append_u16(
+                static_cast<std::uint16_t>(gamepad.left_stick_y_raw));
+            append_u16(
+                static_cast<std::uint16_t>(gamepad.right_stick_x_raw));
+            append_u16(
+                static_cast<std::uint16_t>(gamepad.right_stick_y_raw));
+            append_u32(gamepad.left_trigger_raw);
+            append_u32(gamepad.right_trigger_raw);
+            append_float(gamepad.left_stick_x);
+            append_float(gamepad.left_stick_y);
+            append_float(gamepad.right_stick_x);
+            append_float(gamepad.right_stick_y);
+            append_float(gamepad.left_trigger);
+            append_float(gamepad.right_trigger);
+        }
+        if (offset != output.size())
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_DATA,
+                          "input-record-frame-size");
+    }
+
+    void open_live_journal(const std::filesystem::path& path) {
+        const auto maximum_payload =
+            maximum_frames_ * encoded_frame_bytes;
+        if (maximum_frames_ != 0u &&
+            maximum_payload / maximum_frames_ != encoded_frame_bytes)
+            fail_platform(NativePortPlatformFailure::ResourceLimit,
+                          ERROR_ARITHMETIC_OVERFLOW,
+                          "input-record-storage-size");
+        const auto total_bytes =
+            static_cast<std::uint64_t>(header_bytes) + identity_.size() +
+            maximum_payload;
+        if (total_bytes >
+            static_cast<std::uint64_t>(std::numeric_limits<SIZE_T>::max()))
+            fail_platform(NativePortPlatformFailure::ResourceLimit,
+                          ERROR_ARITHMETIC_OVERFLOW,
+                          "input-record-storage-size");
+
+        require_safe_optional_regular_file(
+            path, NativePortPlatformFailure::InputBackend,
+            "input-record-path");
+        UniqueHandle file(CreateFileW(
+            extended_path(path).c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ,
+            nullptr,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+                FILE_FLAG_RANDOM_ACCESS,
+            nullptr));
+        if (!file)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          GetLastError(),
+                          "input-record-open");
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (GetFileInformationByHandle(file.get(), &information) == FALSE ||
+            (information.dwFileAttributes &
+             (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0u)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          GetLastError(),
+                          "input-record-handle");
+
+        LARGE_INTEGER end{};
+        end.QuadPart = static_cast<LONGLONG>(total_bytes);
+        if (SetFilePointerEx(file.get(), end, nullptr, FILE_BEGIN) == FALSE ||
+            SetEndOfFile(file.get()) == FALSE)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          GetLastError(),
+                          "input-record-reserve");
+        UniqueHandle mapping(CreateFileMappingW(
+            file.get(),
+            nullptr,
+            PAGE_READWRITE,
+            static_cast<DWORD>(total_bytes >> 32u),
+            static_cast<DWORD>(total_bytes),
+            nullptr));
+        if (!mapping)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          GetLastError(),
+                          "input-record-map");
+        auto* const view = static_cast<std::byte*>(MapViewOfFile(
+            mapping.get(), FILE_MAP_READ | FILE_MAP_WRITE, 0u, 0u, 0u));
+        if (view == nullptr)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          GetLastError(),
+                          "input-record-view");
+
+        const auto unmap_on_failure = [&]() noexcept {
+            static_cast<void>(UnmapViewOfFile(view));
+        };
+        try {
+            std::span<std::byte> header(view, header_bytes + identity_.size());
+            std::fill(header.begin(), header.end(), std::byte{0});
+            std::memcpy(header.data(), "KATANAIR", 8u);
+            write_little<std::uint32_t>(
+                header, 8u, native_port_input_recording_version);
+            write_little<std::uint32_t>(
+                header, 12u, native_port_input_recording_contract_version);
+            write_little<std::uint32_t>(
+                header, 16u,
+                static_cast<std::uint32_t>(native_port_gamepad_count));
+            write_little<std::uint32_t>(
+                header, 20u, static_cast<std::uint32_t>(identity_.size()));
+            write_little<std::uint64_t>(header, frame_count_offset, 0u);
+            write_little<std::uint64_t>(
+                header, 32u, static_cast<std::uint64_t>(maximum_frames_));
+            write_little<std::uint32_t>(
+                header, 40u,
+                static_cast<std::uint32_t>(encoded_frame_bytes));
+            write_little<std::uint32_t>(header, 44u, 0u);
+            std::memcpy(header.data() + header_bytes,
+                        identity_.data(),
+                        identity_.size());
+            if (FlushViewOfFile(view, header.size()) == FALSE ||
+                FlushFileBuffers(file.get()) == FALSE)
+                fail_platform(NativePortPlatformFailure::InputBackend,
+                              GetLastError(),
+                              "input-record-header-flush");
+        } catch (...) {
+            unmap_on_failure();
+            throw;
+        }
+
+        journal_file_ = std::move(file);
+        journal_mapping_ = std::move(mapping);
+        journal_view_ = view;
+        journal_data_offset_ = header_bytes + identity_.size();
+    }
+
+    void close_live_journal() noexcept {
+        if (journal_view_ != nullptr) {
+            const auto committed_bytes =
+                journal_data_offset_ + frames_.size() * encoded_frame_bytes;
+            static_cast<void>(FlushViewOfFile(journal_view_, committed_bytes));
+            static_cast<void>(UnmapViewOfFile(journal_view_));
+            journal_view_ = nullptr;
+        }
+        journal_mapping_.reset();
+        journal_file_.reset();
+        journal_data_offset_ = 0u;
+    }
+
+    static std::uint32_t read_u32(std::ifstream& input, const char* operation) {
+        std::array<unsigned char, 4u> bytes{};
+        input.read(reinterpret_cast<char*>(bytes.data()), 4);
+        if (!input)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_HANDLE_EOF,
+                          operation);
+        return static_cast<std::uint32_t>(bytes[0]) |
+               (static_cast<std::uint32_t>(bytes[1]) << 8u) |
+               (static_cast<std::uint32_t>(bytes[2]) << 16u) |
+               (static_cast<std::uint32_t>(bytes[3]) << 24u);
+    }
+    static std::uint64_t read_u64(std::ifstream& input, const char* operation) {
+        const auto low = read_u32(input, operation);
+        const auto high = read_u32(input, operation);
+        return static_cast<std::uint64_t>(low) |
+               (static_cast<std::uint64_t>(high) << 32u);
+    }
+    static void write_u32(std::ofstream& output, const std::uint32_t value) {
+        const std::array<unsigned char, 4u> bytes{
+            static_cast<unsigned char>(value),
+            static_cast<unsigned char>(value >> 8u),
+            static_cast<unsigned char>(value >> 16u),
+            static_cast<unsigned char>(value >> 24u)};
+        output.write(reinterpret_cast<const char*>(bytes.data()), 4);
+    }
+    static void write_u64(std::ofstream& output, const std::uint64_t value) {
+        write_u32(output, static_cast<std::uint32_t>(value));
+        write_u32(output, static_cast<std::uint32_t>(value >> 32u));
+    }
+    static std::uint16_t read_u16(std::ifstream& input, const char* operation) {
+        std::array<unsigned char, 2u> bytes{};
+        input.read(reinterpret_cast<char*>(bytes.data()), 2);
+        if (!input)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_HANDLE_EOF,
+                          operation);
+        return static_cast<std::uint16_t>(bytes[0]) |
+               (static_cast<std::uint16_t>(bytes[1]) << 8u);
+    }
+    static void write_u16(std::ofstream& output, const std::uint16_t value) {
+        const std::array<unsigned char, 2u> bytes{
+            static_cast<unsigned char>(value),
+            static_cast<unsigned char>(value >> 8u)};
+        output.write(reinterpret_cast<const char*>(bytes.data()), 2);
+    }
+    static float read_float(std::ifstream& input, const char* operation) {
+        return std::bit_cast<float>(read_u32(input, operation));
+    }
+    static void write_float(std::ofstream& output, const float value) {
+        write_u32(output, std::bit_cast<std::uint32_t>(value));
+    }
+    static void read_gamepad(std::ifstream& input,
+                             NativePortGamepadState& gamepad) {
+        const auto connected = read_u32(input, "input-replay-connected");
+        if (connected > 1u)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_DATA,
+                          "input-replay-connected");
+        gamepad.connected = connected != 0u;
+        gamepad.packet_number = read_u32(input, "input-replay-packet");
+        gamepad.buttons = read_u32(input, "input-replay-buttons");
+        gamepad.left_stick_x_raw = static_cast<std::int16_t>(
+            read_u16(input, "input-replay-axis"));
+        gamepad.left_stick_y_raw = static_cast<std::int16_t>(
+            read_u16(input, "input-replay-axis"));
+        gamepad.right_stick_x_raw = static_cast<std::int16_t>(
+            read_u16(input, "input-replay-axis"));
+        gamepad.right_stick_y_raw = static_cast<std::int16_t>(
+            read_u16(input, "input-replay-axis"));
+        const auto left_trigger = read_u32(input, "input-replay-trigger");
+        const auto right_trigger = read_u32(input, "input-replay-trigger");
+        if (left_trigger > 255u || right_trigger > 255u)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_DATA,
+                          "input-replay-trigger-range");
+        gamepad.left_trigger_raw = static_cast<std::uint8_t>(left_trigger);
+        gamepad.right_trigger_raw = static_cast<std::uint8_t>(right_trigger);
+        gamepad.left_stick_x = read_float(input, "input-replay-float");
+        gamepad.left_stick_y = read_float(input, "input-replay-float");
+        gamepad.right_stick_x = read_float(input, "input-replay-float");
+        gamepad.right_stick_y = read_float(input, "input-replay-float");
+        gamepad.left_trigger = read_float(input, "input-replay-float");
+        gamepad.right_trigger = read_float(input, "input-replay-float");
+        const auto axes = {gamepad.left_stick_x, gamepad.left_stick_y,
+                           gamepad.right_stick_x, gamepad.right_stick_y};
+        for (const auto value : axes)
+            if (!std::isfinite(value) || value < -1.0f || value > 1.0f)
+                fail_platform(NativePortPlatformFailure::InputBackend,
+                              ERROR_INVALID_DATA,
+                              "input-replay-axis-range");
+        if (!std::isfinite(gamepad.left_trigger) ||
+            !std::isfinite(gamepad.right_trigger) ||
+            gamepad.left_trigger < 0.0f || gamepad.left_trigger > 1.0f ||
+            gamepad.right_trigger < 0.0f || gamepad.right_trigger > 1.0f)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          ERROR_INVALID_DATA,
+                          "input-replay-trigger-range");
+    }
+    static void write_gamepad(std::ofstream& output,
+                              const NativePortGamepadState& gamepad) {
+        write_u32(output, gamepad.connected ? 1u : 0u);
+        write_u32(output, gamepad.packet_number);
+        write_u32(output, gamepad.buttons);
+        write_u16(output, static_cast<std::uint16_t>(gamepad.left_stick_x_raw));
+        write_u16(output, static_cast<std::uint16_t>(gamepad.left_stick_y_raw));
+        write_u16(output, static_cast<std::uint16_t>(gamepad.right_stick_x_raw));
+        write_u16(output, static_cast<std::uint16_t>(gamepad.right_stick_y_raw));
+        write_u32(output, gamepad.left_trigger_raw);
+        write_u32(output, gamepad.right_trigger_raw);
+        write_float(output, gamepad.left_stick_x);
+        write_float(output, gamepad.left_stick_y);
+        write_float(output, gamepad.right_stick_x);
+        write_float(output, gamepad.right_stick_y);
+        write_float(output, gamepad.left_trigger);
+        write_float(output, gamepad.right_trigger);
+    }
+
+    std::string identity_;
+    std::size_t maximum_frames_ = 0u;
+    bool replay_ = false;
+    std::vector<NativePortInputSnapshot> frames_;
+    std::size_t cursor_ = 0u;
+    UniqueHandle journal_file_;
+    UniqueHandle journal_mapping_;
+    std::byte* journal_view_ = nullptr;
+    std::size_t journal_data_offset_ = 0u;
+};
+
 } // namespace
 
 class NativePortPlatformServices::Impl final {
@@ -1346,26 +1843,79 @@ class NativePortPlatformServices::Impl final {
                           "save-root-boundary");
         open_save_lock();
 
+        const auto& record_path = config.input_record_path;
+        const auto& replay_path = config.input_replay_path;
+        if (!record_path.empty() && !replay_path.empty())
+            fail_platform(NativePortPlatformFailure::InvalidConfig,
+                          ERROR_INVALID_PARAMETER,
+                          "input-record-replay-exclusive");
+        if (!record_path.empty() || !replay_path.empty()) {
+            const auto validated_identity = copy_validated_identifier(
+                config.input_identity,
+                maximum_platform_identifier_bytes,
+                "input-identity");
+            if (!replay_path.empty()) {
+                input_trace_ = NativePortInputTrace::load(
+                    replay_path,
+                    validated_identity,
+                    config.maximum_input_record_frames);
+                input_replay_mode_ = true;
+            } else {
+                input_record_path_ = record_path;
+                input_trace_ = std::make_unique<NativePortInputTrace>(
+                    validated_identity,
+                    config.maximum_input_record_frames,
+                    false,
+                    input_record_path_);
+            }
+        }
+
         xinput_ = load_xinput();
         // A loaded XInput API or at least one configured WinMM driver slot is
         // independent backend evidence. Merely linking winmm.lib does not
         // prove that this machine has a joystick driver.
         const bool gamepad_backend_available =
             xinput_.get_state != nullptr || joyGetNumDevs() != 0u;
-        if (config.require_gamepad_backend && !gamepad_backend_available)
+        if (config.require_gamepad_backend && !gamepad_backend_available &&
+            !input_replay_mode_)
             fail_platform(NativePortPlatformFailure::InputBackend,
                           ERROR_MOD_NOT_FOUND,
                           "gamepad-backend-load");
         telemetry_->snapshot.native_file_backend = true;
         telemetry_->snapshot.native_gamepad_backend =
-            gamepad_backend_available;
+            gamepad_backend_available || input_replay_mode_;
         telemetry_->snapshot.native_save_backend = true;
         telemetry_->snapshot.maximum_save_payload_bytes =
             maximum_save_payload_bytes_;
+        if (!input_replay_mode_) {
+            last_joystick_count_ = joyGetNumDevs();
+            const auto identities = enumerate_native_joystick_identities();
+            joystick_identities_ = identities.has_value()
+                                       ? std::move(*identities)
+                                       : std::vector<NativeJoystickIdentity>{};
+            start_joystick_identity_worker(!identities.has_value());
+        }
     }
 
     ~Impl() noexcept {
         if (std::this_thread::get_id() != owner_thread_) std::terminate();
+        stop_joystick_identity_worker();
+        // A typed native-port stop or an exception still unwinds this owner-
+        // thread object. Preserve that exact input prefix for the next
+        // diagnostic replay; explicit clean finalization remains authoritative
+        // and idempotently suppresses this fallback. Hard process termination
+        // is outside the guarantees of C++ destruction.
+        if (input_trace_ != nullptr && !input_replay_mode_ &&
+            !input_recording_finalized_) {
+            try {
+                input_trace_->save_atomic(input_record_path_);
+                input_recording_finalized_ = true;
+            } catch (...) {
+                // Destructors may not replace the original product failure.
+                // The explicit clean path below continues to report I/O
+                // failures normally.
+            }
+        }
         if (xinput_.set_state != nullptr) {
             XINPUT_VIBRATION stopped{};
             for (std::size_t index = 0u;
@@ -1495,23 +2045,20 @@ class NativePortPlatformServices::Impl final {
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads() {
         require_owner_thread();
+        if (input_replay_mode_) {
+            input_snapshot_ = input_trace_->next();
+            saturating_increment(telemetry_->snapshot.input_polls);
+            telemetry_->snapshot.input_connection_generation =
+                input_snapshot_.connection_generation;
+            return input_snapshot_;
+        }
         std::vector<NativeGamepadCandidate> candidates;
         const auto joystick_count = joyGetNumDevs();
         candidates.reserve(XUSER_MAX_COUNT + joystick_count);
-
-        if (joystick_identity_refresh_polls_ == 0u ||
-            joystick_count != last_joystick_count_) {
-            const auto identities = enumerate_native_joystick_identities();
-            joystick_identities_ = identities.has_value()
-                                       ? std::move(*identities)
-                                       : std::vector<NativeJoystickIdentity>{};
+        consume_joystick_identity_refresh();
+        if (joystick_count != last_joystick_count_) {
             last_joystick_count_ = joystick_count;
-            // A transient DirectInput enumeration failure is fail-closed but
-            // retried on the next poll instead of hiding a valid pad for a
-            // complete refresh interval.
-            joystick_identity_refresh_polls_ = identities.has_value() ? 30u : 0u;
-        } else {
-            --joystick_identity_refresh_polls_;
+            request_joystick_identity_refresh();
         }
 
         if (xinput_.get_state != nullptr) {
@@ -1558,6 +2105,7 @@ class NativePortPlatformServices::Impl final {
             }
         }
 
+        current_connected_joystick_ids_.clear();
         for (UINT source_index = 0u;
              source_index < joystick_count;
              ++source_index) {
@@ -1566,6 +2114,11 @@ class NativePortPlatformServices::Impl final {
                                &capabilities,
                                sizeof(capabilities)) != JOYERR_NOERROR)
                 continue;
+            JOYINFOEX info{};
+            info.dwSize = sizeof(info);
+            info.dwFlags = JOY_RETURNALL;
+            if (joyGetPosEx(source_index, &info) != JOYERR_NOERROR) continue;
+            current_connected_joystick_ids_.push_back(source_index);
             const auto identity = std::ranges::find(
                 joystick_identities_,
                 source_index,
@@ -1574,10 +2127,6 @@ class NativePortPlatformServices::Impl final {
             // layout of an arbitrary HID report. Only identity-bound Sony
             // layouts are admitted through this backend.
             if (identity == joystick_identities_.end()) continue;
-            JOYINFOEX info{};
-            info.dwSize = sizeof(info);
-            info.dwFlags = JOY_RETURNALL;
-            if (joyGetPosEx(source_index, &info) != JOYERR_NOERROR) continue;
 
             NativeGamepadCandidate candidate;
             candidate.device_id =
@@ -1624,6 +2173,10 @@ class NativePortPlatformServices::Impl final {
             destination.right_trigger =
                 static_cast<float>(destination.right_trigger_raw) / 255.0f;
             candidates.push_back(candidate);
+        }
+        if (current_connected_joystick_ids_ != connected_joystick_ids_) {
+            connected_joystick_ids_ = current_connected_joystick_ids_;
+            request_joystick_identity_refresh();
         }
 
         const auto has_device = [&](const std::uint64_t device_id) {
@@ -1874,6 +2427,7 @@ class NativePortPlatformServices::Impl final {
         saturating_increment(telemetry_->snapshot.input_polls);
         telemetry_->snapshot.input_connection_generation =
             input_snapshot_.connection_generation;
+        if (input_trace_ != nullptr) input_trace_->append(input_snapshot_);
         return input_snapshot_;
     }
 
@@ -1885,6 +2439,7 @@ class NativePortPlatformServices::Impl final {
             fail_platform(NativePortPlatformFailure::InvalidController,
                           ERROR_INVALID_PARAMETER,
                           "vibration-controller");
+        if (input_replay_mode_) return false;
         if (!std::isfinite(vibration.low_frequency) ||
             !std::isfinite(vibration.high_frequency) ||
             vibration.low_frequency < 0.0f ||
@@ -2063,6 +2618,15 @@ class NativePortPlatformServices::Impl final {
         return telemetry_->snapshot;
     }
 
+    void finalize_clean_shutdown() {
+        require_owner_thread();
+        if (input_trace_ != nullptr && !input_replay_mode_ &&
+            !input_recording_finalized_) {
+            input_trace_->save_atomic(input_record_path_);
+            input_recording_finalized_ = true;
+        }
+    }
+
   private:
     struct InternalSaveLoad final {
         NativePortSaveLoadResult public_result;
@@ -2090,7 +2654,10 @@ class NativePortPlatformServices::Impl final {
             config.maximum_content_file_bytes == 0u ||
             config.maximum_content_file_bytes > maximum_content_budget_bytes ||
             config.maximum_save_payload_bytes == 0u ||
-            config.maximum_save_payload_bytes > maximum_save_budget_bytes)
+            config.maximum_save_payload_bytes > maximum_save_budget_bytes ||
+            config.maximum_input_record_frames == 0u ||
+            config.maximum_input_record_frames >
+                native_port_input_recording_maximum_frames)
             fail_platform(NativePortPlatformFailure::InvalidConfig,
                           ERROR_INVALID_PARAMETER,
                           "platform-config");
@@ -2205,6 +2772,94 @@ class NativePortPlatformServices::Impl final {
         return result;
     }
 
+    void start_joystick_identity_worker(const bool retry_immediately) {
+        joystick_identity_stop_.store(false, std::memory_order_relaxed);
+        joystick_identity_refresh_requested_.store(
+            retry_immediately, std::memory_order_relaxed);
+        joystick_identity_worker_ = std::thread([this]() noexcept {
+            // DirectInput device construction can take tens of milliseconds
+            // on Windows.  It is discovery work, never part of title input
+            // sampling, so keep it below the timing-critical owner thread.
+            static_cast<void>(SetThreadPriority(
+                GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+            auto refresh_delay = std::chrono::seconds(10);
+            for (;;) {
+                {
+                    std::unique_lock lock(joystick_identity_wait_mutex_);
+                    joystick_identity_wakeup_.wait_for(
+                        lock, refresh_delay, [this]() noexcept {
+                            return joystick_identity_stop_.load(
+                                       std::memory_order_acquire) ||
+                                   joystick_identity_refresh_requested_.load(
+                                       std::memory_order_acquire);
+                        });
+                }
+                if (joystick_identity_stop_.load(std::memory_order_acquire))
+                    return;
+                // A request arriving before this exchange is satisfied by the
+                // enumeration below; one arriving afterwards remains set for
+                // the next loop and cannot be lost.
+                static_cast<void>(joystick_identity_refresh_requested_.exchange(
+                    false, std::memory_order_acq_rel));
+
+                std::optional<std::vector<NativeJoystickIdentity>> identities;
+                try {
+                    identities = enumerate_native_joystick_identities();
+                } catch (...) {
+                    identities = std::nullopt;
+                }
+                if (joystick_identity_stop_.load(std::memory_order_acquire))
+                    return;
+                {
+                    std::scoped_lock lock(joystick_identity_pending_mutex_);
+                    joystick_identity_pending_ =
+                        identities.has_value()
+                            ? std::move(*identities)
+                            : std::vector<NativeJoystickIdentity>{};
+                    joystick_identity_pending_ready_ = true;
+                }
+                // Periodic refresh covers driver-side identity changes that
+                // WinMM does not expose through joyGetNumDevs().  Connected
+                // endpoint changes request an immediate refresh from poll().
+                refresh_delay = identities.has_value()
+                                    ? std::chrono::seconds(10)
+                                    : std::chrono::seconds(5);
+            }
+        });
+    }
+
+    void stop_joystick_identity_worker() noexcept {
+        {
+            // The state transition shares the wait mutex with the predicate
+            // check so notify cannot land between that check and sleeping.
+            std::scoped_lock lock(joystick_identity_wait_mutex_);
+            joystick_identity_stop_.store(true, std::memory_order_release);
+        }
+        joystick_identity_wakeup_.notify_one();
+        if (joystick_identity_worker_.joinable())
+            joystick_identity_worker_.join();
+    }
+
+    void request_joystick_identity_refresh() noexcept {
+        if (!joystick_identity_worker_.joinable()) return;
+        {
+            std::scoped_lock lock(joystick_identity_wait_mutex_);
+            joystick_identity_refresh_requested_.store(
+                true, std::memory_order_release);
+        }
+        joystick_identity_wakeup_.notify_one();
+    }
+
+    void consume_joystick_identity_refresh() {
+        std::unique_lock lock(joystick_identity_pending_mutex_,
+                              std::try_to_lock);
+        if (!lock.owns_lock() || !joystick_identity_pending_ready_) return;
+        // Swapping keeps destruction/allocation of the previous catalog on
+        // the discovery worker's next publication, not on the frame thread.
+        joystick_identities_.swap(joystick_identity_pending_);
+        joystick_identity_pending_ready_ = false;
+    }
+
     void require_owner_thread() const {
         if (std::this_thread::get_id() != owner_thread_)
             fail_platform(NativePortPlatformFailure::ThreadViolation,
@@ -2227,13 +2882,26 @@ class NativePortPlatformServices::Impl final {
     XInputApi xinput_;
     std::vector<NativeJoystickIdentity> joystick_identities_;
     UINT last_joystick_count_ = 0u;
-    unsigned joystick_identity_refresh_polls_ = 0u;
+    std::vector<UINT> connected_joystick_ids_;
+    std::vector<UINT> current_connected_joystick_ids_;
+    std::thread joystick_identity_worker_;
+    std::atomic<bool> joystick_identity_stop_ = false;
+    std::atomic<bool> joystick_identity_refresh_requested_ = false;
+    std::mutex joystick_identity_wait_mutex_;
+    std::condition_variable joystick_identity_wakeup_;
+    std::mutex joystick_identity_pending_mutex_;
+    std::vector<NativeJoystickIdentity> joystick_identity_pending_;
+    bool joystick_identity_pending_ready_ = false;
     std::vector<std::pair<std::uint64_t, std::uint64_t>>
         cross_backend_aliases_;
     std::vector<CrossBackendCorrelationEvidence>
         cross_backend_correlation_;
     std::vector<std::uint64_t> independent_xinput_devices_;
     std::vector<std::uint64_t> last_sony_devices_;
+    std::unique_ptr<NativePortInputTrace> input_trace_;
+    std::filesystem::path input_record_path_;
+    bool input_replay_mode_ = false;
+    bool input_recording_finalized_ = false;
     NativePortInputSnapshot input_snapshot_;
     std::array<std::uint64_t, native_port_gamepad_count> input_device_ids_{};
     std::array<std::uint64_t, native_port_gamepad_count>
@@ -2279,6 +2947,7 @@ class NativePortPlatformServices::Impl final {
     [[nodiscard]] std::uint64_t store_save(
         const NativePortSaveKey&, std::span<const std::byte>) { return 0u; }
     [[nodiscard]] NativePortPlatformSnapshot snapshot() const { return {}; }
+    void finalize_clean_shutdown() {}
 
   private:
     std::filesystem::path empty_;
@@ -2411,6 +3080,10 @@ NativePortPlatformServices::open_content_range(
 
 NativePortInputSnapshot NativePortPlatformServices::poll_gamepads() {
     return impl_->poll_gamepads();
+}
+
+void NativePortPlatformServices::finalize_clean_shutdown() {
+    impl_->finalize_clean_shutdown();
 }
 
 bool NativePortPlatformServices::set_gamepad_vibration(

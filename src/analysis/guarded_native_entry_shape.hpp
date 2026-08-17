@@ -79,14 +79,29 @@ class GuardedNativeEntryShapeCache {
         // Direct users of the cache do not pass the image again. Detect
         // in-place mutations here as well as at the analysis entrypoint.
         bind(*image_);
-        if (const auto cached = results_.find(address); cached != results_.end())
-            return cached->second;
         const auto validation = validate_decode_candidate(*image_, address);
         if (!validation.valid()) {
             return remember(address,
                             GuardedNativeEntryShapeStatus::OutsideImage);
         }
         const auto canonical_address = validation.resolved_address;
+        // A physical delay slot is owned by the immediately preceding
+        // control-transfer instruction. Decoding from the slot in isolation
+        // can still find a perfectly ordinary return and therefore used to
+        // manufacture a plausible-looking guarded callback entry. Only an
+        // independent, explicit normal-entry contract may authorize that
+        // dual-context shape; callers handle that stronger evidence before
+        // consulting this cache.
+        if (canonical_address_is_physical_delay_slot(
+                canonical_address)) {
+            const auto result = remember(
+                canonical_address,
+                GuardedNativeEntryShapeStatus::StructurallyInvalid);
+            results_.insert_or_assign(address, result);
+            return result;
+        }
+        if (const auto cached = results_.find(address); cached != results_.end())
+            return cached->second;
         if (const auto cached = results_.find(canonical_address); cached != results_.end()) {
             results_.insert_or_assign(address, cached->second);
             return cached->second;
@@ -95,6 +110,15 @@ class GuardedNativeEntryShapeCache {
         static_cast<void>(remember(canonical_address, result));
         results_.insert_or_assign(address, result);
         return result;
+    }
+
+    [[nodiscard]] bool
+    is_physical_delay_slot(const std::uint32_t address) {
+        bind(*image_);
+        const auto validation = validate_decode_candidate(*image_, address);
+        return validation.valid() &&
+               canonical_address_is_physical_delay_slot(
+                   validation.resolved_address);
     }
 
     [[nodiscard]] const GuardedNativeEntryShapeStatistics&
@@ -161,6 +185,26 @@ class GuardedNativeEntryShapeCache {
             return {GuardedNativeEntryShapeStatus::StructurallyInvalid,
                     std::nullopt};
         return {GuardedNativeEntryShapeStatus::Valid, instruction};
+    }
+
+    [[nodiscard]] bool
+    canonical_address_is_physical_delay_slot(
+        const std::uint32_t canonical_address) const {
+        if (canonical_address < 2u) return false;
+        const auto previous =
+            validate_decode_candidate(*image_, canonical_address - 2u);
+        if (!previous.valid() || previous.segment == nullptr ||
+            previous.resolved_address + 2u != canonical_address)
+            return false;
+        const auto offset =
+            previous.segment->byte_offset(previous.resolved_address);
+        if (!offset.has_value() ||
+            *offset > previous.segment->bytes.size() ||
+            previous.segment->bytes.size() - *offset < 2u)
+            return false;
+        return katana::sh4::decode(katana::io::read_u16_le(
+                                      previous.segment->bytes, *offset))
+            .has_delay_slot;
     }
 
     [[nodiscard]] GuardedNativeEntryShapeStatus
@@ -639,7 +683,11 @@ class FunctionValueAnalysisSession {
         std::size_t maximum_resolution_epoch_retained_bytes =
             default_maximum_resolution_epoch_retained_bytes,
         AnalysisMemoryBudget* pre_reserved_resolution_ready_budget =
-            nullptr);
+            nullptr,
+        // Optional parent-accounted cache arena. Cache retention is always
+        // optional: a full parent only evicts exact-replay aliases and never
+        // changes logical FVA limits or canonical output.
+        AnalysisMemoryBudget* retained_cache_memory_budget = nullptr);
     ~FunctionValueAnalysisSession();
 
     FunctionValueAnalysisSession(FunctionValueAnalysisSession&&) noexcept;

@@ -63,12 +63,10 @@ partition_translation_units(const std::span<const katana::ir::Function> function
     for (const auto function_index : order) {
         const auto count = instruction_count(functions[function_index]);
         const auto entry = functions[function_index].entry_address;
-        if (count > options.maximum_instructions) {
-            throw std::length_error(
-                "Funktion an Gastadresse " +
-                std::to_string(entry) +
-                " ueberschreitet das Instruktionslimit einer Translation Unit.");
-        }
+        // A guest function remains an indivisible C++ emission unit. A large
+        // function may therefore exceed the soft TU budget, but it always
+        // receives a partition of its own instead of forcing every adjacent
+        // function into the same oversized compiler job.
         const bool crossed_stable_address_region =
             !result.empty() &&
             stable_partition_address_key(result.back().last_entry_address) !=
@@ -77,8 +75,10 @@ partition_translation_units(const std::span<const katana::ir::Function> function
             result.empty() || crossed_stable_address_region ||
             result.back().function_indices.size() >= options.maximum_functions ||
             (result.back().instruction_count != 0u &&
+             (result.back().instruction_count >=
+                  options.maximum_instructions ||
              count > options.maximum_instructions -
-                         std::min(result.back().instruction_count, options.maximum_instructions));
+                         result.back().instruction_count));
         if (needs_partition) {
             result.push_back({result.size()});
         }

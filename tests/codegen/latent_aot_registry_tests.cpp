@@ -110,6 +110,102 @@ std::vector<std::uint8_t> fixture_iso() {
          {23u, "DATA.DAT;1", {0xFFu, 0xFFu, 0xFFu, 0xFFu}}});
 }
 
+std::vector<std::uint8_t> local_descriptor_module(
+    const bool include_pointer_producer,
+    const std::uint32_t descriptor_stride,
+    const std::size_t callback_target_count) {
+    require(descriptor_stride == 44u || descriptor_stride == 48u,
+            "Lokale Descriptor-Fixture erhielt einen unerwarteten Stride.");
+    require(callback_target_count >= 1u && callback_target_count <= 2u,
+            "Lokale Descriptor-Fixture erhielt eine ungueltige Zielzahl.");
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(0x400u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // Entry -> producer(r4 object) -> consumer(r4 object, r5 mutable index).
+    put_u16(0x00u, 0xB01Eu); // bsr 0x40
+    put_u16(0x02u, 0x0009u); // nop (delay)
+    put_u16(0x04u, 0xB03Cu); // bsr 0x80
+    put_u16(0x06u, 0x0009u); // nop (delay)
+    put_u16(0x08u, 0x000Bu); // rts
+    put_u16(0x0Au, 0x0009u); // nop (delay)
+
+    // Store the local table pointer into incoming object field +68.
+    put_u16(0x40u, 0xD107u); // mov.l @(0x60,pc),r1
+    put_u16(0x42u, 0xE044u); // mov #68,r0
+    put_u16(0x44u,
+            include_pointer_producer ? 0x0416u : 0x0009u); // mov.l r1,@(r0,r4)
+    put_u16(0x46u, 0x000Bu); // rts
+    put_u16(0x48u, 0x0009u); // nop (delay)
+    put_u32(0x60u, runtime_base + 0x200u);
+
+    // Form the proven descriptor address from one mutable index and the
+    // persisted object field, then load callback +28.  The positive sequence
+    // mirrors the bounded 3*16 shape used by the title descriptor walker.
+    if (descriptor_stride == 48u) {
+        put_u16(0x80u, 0x6353u); // mov r5,r3
+        put_u16(0x82u, 0x4300u); // shll r3 -> 2*i
+        put_u16(0x84u, 0x6253u); // mov r5,r2
+        put_u16(0x86u, 0x332Cu); // add r2,r3 -> 3*i
+        put_u16(0x88u, 0x4308u); // shll2 r3 -> 12*i
+        put_u16(0x8Au, 0x4308u); // shll2 r3 -> 48*i
+        put_u16(0x8Cu, 0xE044u); // mov #68,r0
+        put_u16(0x8Eu, 0x014Eu); // mov.l @(r0,r4),r1
+        put_u16(0x90u, 0x331Cu); // add r1,r3
+        put_u16(0x92u, 0x5237u); // mov.l @(28,r3),r2
+        put_u16(0x94u, 0x420Bu); // jsr @r2
+        put_u16(0x96u, 0x0009u); // nop (delay)
+        put_u16(0x98u, 0x000Bu); // rts
+        put_u16(0x9Au, 0x0009u); // nop (delay)
+    } else {
+        put_u16(0x80u, 0x6253u); // mov r5,r2
+        put_u16(0x82u, 0x4228u); // shll2 r2 -> 4*i
+        put_u16(0x84u, 0x6323u); // mov r2,r3
+        put_u16(0x86u, 0x4220u); // shll r2 -> 8*i
+        put_u16(0x88u, 0x4220u); // shll r2 -> 16*i
+        put_u16(0x8Au, 0x4220u); // shll r2 -> 32*i
+        put_u16(0x8Cu, 0x323Cu); // add r3,r2 -> 36*i
+        put_u16(0x8Eu, 0x323Cu); // add r3,r2 -> 40*i
+        put_u16(0x90u, 0x323Cu); // add r3,r2 -> 44*i
+        put_u16(0x92u, 0xE044u); // mov #68,r0
+        put_u16(0x94u, 0x014Eu); // mov.l @(r0,r4),r1
+        put_u16(0x96u, 0x312Cu); // add r2,r1
+        put_u16(0x98u, 0xE01Cu); // mov #28,r0
+        put_u16(0x9Au, 0x031Eu); // mov.l @(r0,r1),r3
+        put_u16(0x9Cu, 0x430Bu); // jsr @r3
+        put_u16(0x9Eu, 0x0009u); // nop (delay)
+        put_u16(0xA0u, 0x000Bu); // rts
+        put_u16(0xA2u, 0x0009u); // nop (delay)
+    }
+
+    put_u16(0x100u, 0x000Bu);
+    put_u16(0x102u, 0x0009u);
+    put_u16(0x120u, 0x000Bu);
+    put_u16(0x122u, 0x0009u);
+    put_u32(0x200u + 28u, runtime_base + 0x100u);
+    put_u32(0x230u + 28u,
+            callback_target_count == 2u ? runtime_base + 0x120u
+                                         : 0xDEADBEEFu);
+    put_u32(0x260u + 28u, 0xDEADBEEFu);
+
+    // Two independent, already reachable function pointers bind the runtime
+    // alias without making either descriptor callback a pre-existing root.
+    put_u32(0x300u, runtime_base + 0x40u);
+    put_u32(0x304u, runtime_base + 0x80u);
+    return bytes;
+}
+
 std::string byte_identity(const std::vector<std::uint8_t>& bytes) {
     return "sha256:" + katana::io::sha256_bytes(std::string_view(
                            reinterpret_cast<const char*>(bytes.data()),
@@ -373,12 +469,39 @@ std::string analysis_cache_key_for_module(
     inputs.maximum_analysis_contexts =
         options.maximum_analysis_contexts;
     inputs.analyzer_abi = katana::analysis::abi_version;
+    std::ostringstream external_contract;
+    const std::string_view cache_implementation_identity =
+        !options.analysis_cache_implementation_identity.empty()
+            ? std::string_view{options.analysis_cache_implementation_identity}
+            : std::string_view{options.analysis_implementation_identity};
+    external_contract << 's' << cache_implementation_identity.size() << ':'
+                      << cache_implementation_identity << ';' << 't'
+                      << options.external_code_targets.size() << ';';
+    for (const auto target : options.external_code_targets)
+        external_contract << target << ';';
+    external_contract << 'c' << options.external_callback_sinks.size() << ';';
+    for (const auto& sink : options.external_callback_sinks)
+        external_contract << sink.function_address << ':'
+                          << +sink.argument_mask << ';';
+    external_contract << 'p'
+                      << options.external_persistent_pointer_sinks.size()
+                      << ';';
+    for (const auto& sink : options.external_persistent_pointer_sinks)
+        external_contract << sink.function_address << ':'
+                          << +sink.argument_mask << ';';
+    external_contract << 'f'
+                      << options.external_callback_field_sinks.size() << ';';
+    for (const auto& sink : options.external_callback_field_sinks)
+        external_contract << sink.function_address << ':'
+                          << sink.call_instruction_address << ':'
+                          << sink.load_instruction_address << ':'
+                          << sink.displacement << ':' << +sink.width << ':'
+                          << sink.call << ';';
     inputs.analyzer_implementation_id =
         std::string(
             katana::codegen::latent_aot_analysis_implementation_id) +
         "-" +
-        katana::io::sha256_bytes(
-            options.analysis_implementation_identity);
+        katana::io::sha256_bytes(external_contract.str());
     return katana::codegen::make_latent_aot_analysis_cache_key(inputs);
 }
 
@@ -455,6 +578,81 @@ int main() {
                     module.byte_identity,
             "Latente Registry exportierte nicht die exakte, sortierte "
             "DispatchBlock-Identitaet.");
+
+        const auto discover_local_descriptor =
+            [](const std::vector<std::uint8_t>& bytes,
+               const std::string& identity) {
+                auto disc = std::make_shared<
+                    katana::runtime::MemoryDiscSource>(
+                    fixture_iso_with_files(
+                        {{21u, "DESCRIPTOR.BIN;1", bytes}}),
+                    identity);
+                return katana::codegen::discover_latent_aot_modules(
+                    disc, 0u, 0u);
+            };
+        const auto has_dispatch_entry = [](const auto& result,
+                                           const std::uint32_t offset) {
+            if (result.modules.size() != 1u) return false;
+            const auto& module = result.modules.front();
+            const auto address = module.source_address + offset;
+            const bool has_block = std::any_of(
+                module.program.begin(), module.program.end(),
+                [&](const auto& function) {
+                    return std::any_of(
+                        function.blocks.begin(), function.blocks.end(),
+                        [&](const auto& block) {
+                            return block.start_address == address;
+                        });
+                });
+            const bool has_identity = std::any_of(
+                module.block_identities.begin(), module.block_identities.end(),
+                [&](const auto& identity) {
+                    return identity.source_offset == offset;
+                });
+            return has_block && has_identity;
+        };
+        const auto local_descriptor_positive = discover_local_descriptor(
+            local_descriptor_module(true, 48u, 2u),
+            "synthetic-latent-local-descriptor-positive");
+        require(
+            local_descriptor_positive.modules.size() == 1u &&
+                has_dispatch_entry(local_descriptor_positive, 0x100u) &&
+                has_dispatch_entry(local_descriptor_positive, 0x120u),
+            "Lokale persistierte 48-Byte-Deskriptortabelle wurde nicht als "
+            "gebundene Callback-Rootfamilie materialisiert.");
+
+        const auto local_descriptor_without_producer =
+            discover_local_descriptor(
+                local_descriptor_module(false, 48u, 2u),
+                "synthetic-latent-local-descriptor-no-producer");
+        require(
+            local_descriptor_without_producer.modules.size() == 1u &&
+                !has_dispatch_entry(local_descriptor_without_producer,
+                                    0x100u) &&
+                !has_dispatch_entry(local_descriptor_without_producer,
+                                    0x120u),
+            "Lokale Deskriptortabelle wurde ohne beweisbaren "
+            "Pointer-Producer zur Callback-Rootfamilie erhoben.");
+
+        const auto local_descriptor_wrong_stride = discover_local_descriptor(
+            local_descriptor_module(true, 44u, 2u),
+            "synthetic-latent-local-descriptor-wrong-stride");
+        require(
+            local_descriptor_wrong_stride.modules.size() == 1u &&
+                !has_dispatch_entry(local_descriptor_wrong_stride, 0x100u) &&
+                !has_dispatch_entry(local_descriptor_wrong_stride, 0x120u),
+            "Nicht passende Deskriptor-Strides wurden zu einer Callback-"
+            "Rootfamilie verschmolzen.");
+
+        const auto local_descriptor_single_target = discover_local_descriptor(
+            local_descriptor_module(true, 48u, 1u),
+            "synthetic-latent-local-descriptor-single-target");
+        require(
+            local_descriptor_single_target.modules.size() == 1u &&
+                !has_dispatch_entry(local_descriptor_single_target, 0x100u) &&
+                !has_dispatch_entry(local_descriptor_single_target, 0x120u),
+            "Ein einzelnes Descriptorziel wurde trotz Mindestfamilie als "
+            "Callbacktabelle akzeptiert.");
 
         const auto repeated =
             katana::codegen::discover_latent_aot_modules(source, 0u, 0u);
@@ -724,10 +922,13 @@ int main() {
             "Analyse-relevantes Budget invalidierte den "
             "Latent-AOT-Analysecache nicht.");
 
+        const auto corrupted_analysis_cache_artifacts =
+            analysis_cache_fixture.corrupt_all_artifacts();
         require(
-            analysis_cache_fixture.corrupt_all_artifacts() == 3u,
+            corrupted_analysis_cache_artifacts == 3u,
             "Analysecache-Fixture fand nicht alle sicheren negativen "
-            "Artefakte der drei Schluessel.");
+            "Artefakte der drei Schluessel: count=" +
+                std::to_string(corrupted_analysis_cache_artifacts));
         const auto cache_corrupt =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
@@ -820,6 +1021,77 @@ int main() {
             "wurden nicht als ein Template mit zwei Source-Bindings und "
             "vereinigtem Entryset gruppiert.");
 
+        std::vector<std::uint8_t> reverse_prologue_bytes(0x4Eu, 0u);
+        const auto put_reverse_prologue_opcode =
+            [&reverse_prologue_bytes](const std::size_t offset,
+                                      const std::uint16_t opcode) {
+                reverse_prologue_bytes[offset] =
+                    static_cast<std::uint8_t>(opcode);
+                reverse_prologue_bytes[offset + 1u] =
+                    static_cast<std::uint8_t>(opcode >> 8u);
+            };
+        put_reverse_prologue_opcode(0x00u, 0xB01Eu); // bsr 0x40
+        put_reverse_prologue_opcode(0x02u, 0x0009u); // delay nop
+        put_reverse_prologue_opcode(0x04u, 0x000Bu); // rts
+        put_reverse_prologue_opcode(0x06u, 0x0009u); // delay nop
+        put_reverse_prologue_opcode(0x0Cu, 0x000Bu); // previous rts
+        put_reverse_prologue_opcode(0x0Eu, 0x0009u); // previous delay
+        put_reverse_prologue_opcode(0x10u, 0x2FE6u); // push r14
+        put_reverse_prologue_opcode(0x12u, 0x6E43u); // mov r4,r14
+        put_reverse_prologue_opcode(0x14u, 0x2FD6u); // push r13
+        put_reverse_prologue_opcode(0x16u, 0x4F22u); // push pr
+        put_reverse_prologue_opcode(0x18u, 0x4F26u); // pop pr
+        put_reverse_prologue_opcode(0x1Au, 0x6DF6u); // pop r13
+        put_reverse_prologue_opcode(0x1Cu, 0x000Bu); // rts
+        put_reverse_prologue_opcode(0x1Eu, 0x6EF6u); // pop r14 delay
+        put_reverse_prologue_opcode(0x40u, 0x2FE6u); // push r14
+        put_reverse_prologue_opcode(0x42u, 0x2FD6u); // push r13
+        put_reverse_prologue_opcode(0x44u, 0x4F22u); // push pr
+        put_reverse_prologue_opcode(0x46u, 0x4F26u); // pop pr
+        put_reverse_prologue_opcode(0x48u, 0x6DF6u); // pop r13
+        put_reverse_prologue_opcode(0x4Au, 0xAFE1u); // bra 0x10
+        put_reverse_prologue_opcode(0x4Cu, 0x6EF6u); // pop r14 delay
+        auto reverse_prologue_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(
+                    {{21u, "REVERSE.BIN;1", reverse_prologue_bytes}}),
+                "synthetic-latent-aot-reverse-prologue-disc");
+        const std::array reverse_prologue_hints{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(reverse_prologue_bytes),
+                21u * sector_size,
+                static_cast<std::uint32_t>(reverse_prologue_bytes.size()),
+                0u},
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(reverse_prologue_bytes),
+                21u * sector_size,
+                static_cast<std::uint32_t>(reverse_prologue_bytes.size()),
+                0x40u},
+        };
+        const auto reverse_prologue =
+            katana::codegen::discover_latent_aot_modules(
+                reverse_prologue_source,
+                0u,
+                0u,
+                {},
+                exact_only_options,
+                {},
+                reverse_prologue_hints);
+        require(
+            reverse_prologue.modules.size() == 1u &&
+                reverse_prologue.modules.front().entry_offsets ==
+                    (std::vector<std::uint32_t>{0u, 0x40u}) &&
+                std::any_of(
+                    reverse_prologue.modules.front().program.begin(),
+                    reverse_prologue.modules.front().program.end(),
+                    [&](const auto& function) {
+                        return function.entry_address ==
+                            reverse_prologue.modules.front().source_address +
+                                0x10u;
+                    }),
+            "Exakter Tail-Callback verlor den rueckwaerts normalisierten "
+            "Callee-Saved-Prolog vor STS.L PR.");
+
         bool rejected = false;
 
         const std::vector<std::uint8_t> first_cap_bytes{
@@ -891,6 +1163,70 @@ int main() {
                     std::vector<std::uint32_t>{4u},
             "Exakter Nonzero-Entry wurde durch einen synthetischen Entry 0 "
             "oder dessen Datenheader abgelehnt.");
+
+        const std::array hybrid_entry_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(multi_entry_bytes),
+                21u * sector_size,
+                static_cast<std::uint32_t>(multi_entry_bytes.size()),
+                4u}};
+        const auto hybrid_multi_entry =
+            katana::codegen::discover_latent_aot_modules(
+                multi_entry_source,
+                0u,
+                0u,
+                {},
+                katana::codegen::LatentAotDiscoveryOptions{},
+                {},
+                hybrid_entry_hint);
+        require(
+            hybrid_multi_entry.modules.size() == 1u &&
+                hybrid_multi_entry.modules.front().entry_offsets ==
+                    (std::vector<std::uint32_t>{0u, 4u}),
+            "Zusaetzlicher Exact-Hint ersetzte im Heuristikmodus die bereits "
+            "gefundene konventionelle Modulwurzel statt sie zu erweitern.");
+
+        // Four literal bytes (RTS/NOP) followed by the strict zero-offset
+        // terminator.  The seven-byte encoded extent is intentionally odd:
+        // entry offsets and identities belong to the decoded executable,
+        // while the hint size binds the compressed disc source.
+        const std::vector<std::uint8_t> prs_entry_source{
+            0x2Fu, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x00u, 0x00u};
+        const std::vector<std::uint8_t> prs_entry_decoded{
+            0x0Bu, 0x00u, 0x09u, 0x00u};
+        auto prs_entry_disc =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(
+                    {{21u, "ENTRY.PRS;1", prs_entry_source}}),
+                "synthetic-latent-aot-prs-entry-disc");
+        const std::array prs_entry_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(prs_entry_decoded),
+                21u * sector_size,
+                static_cast<std::uint32_t>(prs_entry_source.size()),
+                0u}};
+        const auto exact_prs_entry =
+            katana::codegen::discover_latent_aot_modules(
+                prs_entry_disc,
+                0u,
+                0u,
+                {},
+                exact_only_options,
+                {},
+                prs_entry_hint);
+        require(
+            exact_prs_entry.modules.size() == 1u &&
+                exact_prs_entry.modules.front().byte_identity ==
+                    byte_identity(prs_entry_decoded) &&
+                exact_prs_entry.modules.front().byte_size ==
+                    prs_entry_decoded.size() &&
+                exact_prs_entry.modules.front().entry_offsets ==
+                    std::vector<std::uint32_t>{0u} &&
+                exact_prs_entry.modules.front().source_bindings.size() == 1u &&
+                exact_prs_entry.modules.front().source_bindings.front().byte_size ==
+                    prs_entry_source.size(),
+            "Exact-Hint band den kodierten PRS-Extent nicht an die "
+            "dekodierte Modulidentitaet und Entry-Sicht.");
 
         const std::vector<std::uint8_t> six_byte_module{
             0x0Bu, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u};

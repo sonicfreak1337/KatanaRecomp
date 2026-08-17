@@ -14,8 +14,16 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 7u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 8u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
+inline constexpr std::uint32_t native_port_input_recording_version = 2u;
+// Replay compatibility is deliberately independent from the wider platform
+// ABI. A Katana rebuild may change saves, content or host plumbing without
+// invalidating an input route for the same identity-bound title.
+inline constexpr std::uint32_t native_port_input_recording_contract_version =
+    1u;
+inline constexpr std::size_t native_port_input_recording_maximum_frames =
+    180'000u;
 // Public bound for NativePortSaveKey::slot_id. Higher-level semantic save
 // providers must be able to validate their composed keys before host I/O.
 inline constexpr std::size_t native_port_save_slot_id_maximum_bytes = 64u;
@@ -30,6 +38,15 @@ struct NativePortPlatformConfig final {
     std::string_view project_id;
     std::uint64_t maximum_content_file_bytes = 16ull * 1024u * 1024u * 1024u;
     std::uint32_t maximum_save_payload_bytes = 16u * 1024u * 1024u;
+    // Optional deterministic input diagnostics. Empty paths disable the
+    // feature. Generated products expose these only through explicit
+    // --record-input / --replay-input launch modes; an ordinary double-click
+    // can therefore never inherit or activate a replay implicitly.
+    std::filesystem::path input_record_path;
+    std::filesystem::path input_replay_path;
+    std::string_view input_identity;
+    std::size_t maximum_input_record_frames =
+        native_port_input_recording_maximum_frames;
     bool require_gamepad_backend = true;
 };
 
@@ -276,6 +293,12 @@ class NativePortPlatformServices final {
     open_content_range(const NativePortContentRangeBinding& binding);
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads();
+    // Compacts an opt-in input journal at a known clean shutdown boundary.
+    // Recording itself is a preallocated mapped journal, so the committed
+    // prefix remains replayable even when a hard process failure bypasses C++
+    // destruction. The owner-thread destructor provides a compact fallback
+    // for controlled diagnostic/contract unwinds.
+    void finalize_clean_shutdown();
     [[nodiscard]] bool set_gamepad_vibration(
         std::uint32_t controller_index,
         const NativePortGamepadVibration& vibration);

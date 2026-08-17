@@ -141,6 +141,20 @@ struct StaticCallbackSinkContract final {
     bool operator==(const StaticCallbackSinkContract&) const = default;
 };
 
+// Canonical primary-image ABI contract for a function which persists an
+// incoming 32-bit argument outside its stack frame.  This does not claim that
+// the word is executable.  A latent-image consumer must independently prove
+// that the argument is an identity-bound record-table address before pairing
+// it with a callback-field sink.
+struct StaticPersistentPointerSinkContract final {
+    std::uint32_t function_address = 0u;
+    // Bit 0..3 corresponds to the function's incoming r4..r7.
+    std::uint8_t argument_mask = 0u;
+
+    bool operator==(
+        const StaticPersistentPointerSinkContract&) const = default;
+};
+
 struct StaticCallbackFieldSinkContract final {
     std::uint32_t function_address = 0u;
     std::uint32_t call_instruction_address = 0u;
@@ -173,6 +187,8 @@ struct ControlFlowAnalysisResult {
     // extraction when materialized is false (for example an ABI mode whose
     // primary fixpoint did not run the callback companion analysis).
     std::vector<StaticCallbackSinkContract> static_callback_sinks;
+    std::vector<StaticPersistentPointerSinkContract>
+        static_persistent_pointer_sinks;
     std::vector<StaticCallbackFieldSinkContract>
         static_callback_field_sinks;
     bool static_callback_contracts_materialized = false;
@@ -530,11 +546,17 @@ struct ControlFlowAnalysisOptions {
         std::numeric_limits<std::size_t>::max();
     std::size_t maximum_contexts =
         std::numeric_limits<std::size_t>::max();
-    // Optional non-owning child budget for FVA resolution results. The
-    // caller must keep it alive for this synchronous analysis and include
-    // its full capacity in an enclosing global executor reservation.
+    // Optional non-owning child budget for FVA resolution results.  When the
+    // child is parent-accounted, only retained result bytes are charged to
+    // the enclosing executor; a temporarily full parent evicts/recomputes
+    // pure finalized roots instead of changing the logical result budget.
     AnalysisMemoryBudget* pre_reserved_function_value_ready_budget =
         nullptr;
+    // Optional non-owning parent-accounted arena for the two exact-replay
+    // FVA caches.  Cache pressure may only evict completed aliases; it never
+    // prunes a candidate, lowers a bounded analysis limit, or changes the
+    // canonical fixed point.
+    AnalysisMemoryBudget* function_value_cache_memory_budget = nullptr;
     // Optional exact-image FunctionValue epoch. Import is provisional and
     // transactional: any stale, malformed, incompatible or oversized blob is
     // only a cache miss and the complete analysis remains authoritative.
@@ -559,6 +581,8 @@ guarded_aot_entry_origin_name(GuardedAotEntryOrigin origin) noexcept;
 [[nodiscard]] const char*
 guarded_aot_entry_rejection_reason_name(
     GuardedAotEntryRejectionReason reason) noexcept;
+[[nodiscard]] const char*
+exact_guard_rejection_reason_name(ExactGuardRejectionReason reason) noexcept;
 
 [[nodiscard]] ControlFlowAnalysisResult
 analyze_control_flow(const katana::io::ExecutableImage& image,

@@ -11,24 +11,64 @@ KatanaRecomp v0.49 trennt den schnellen Bring-up-Build vom finalen Gatebuild.
 
 `KATANA_PORT_BUILD_PROFILE=bringup` verwendet standardmaessig `Release`, aber
 kompiliert ausschliesslich die sehr grossen generierten AOT-Einheiten mit
-`/Od /Ob0`. Runtime, Titeladapter und Produktbootstrap bleiben normal
-optimiert. Das ist der schnelle Iterationsbuild; das voll optimierte Produkt
-ist weiterhin das Gateprofil.
+`/O1 /Ob0`. Runtime, Titeladapter und Produktbootstrap bleiben normal
+optimiert. Das ist der schnellste Iterationsbuild, der zugleich einen
+spielbaren Produktlauf abbildet; das voll optimierte Produkt ist weiterhin das
+Gateprofil. Ein unoptimierter `/Od`-AOT-Pfad ist kein gueltiger
+Produktlaufnachweis, weil er Gasttempo und Hostlast verfälscht. Das fuer den
+Produktlauf nicht erforderliche AOT-Inlining bleibt im Bring-up-Profil aus, um
+den kalten Hostbuild bounded zu halten.
+
+Ein vorheriger Produktlauf darf bis zu 64 gemessene generierte Quelldateien
+ueber `KATANA_AOT_HOT_SOURCES` an den naechsten inkrementellen Build binden.
+Nur diese exakt im aktuellen Export vorhandenen Quellen erhalten `/O2 /Ob2`.
+Bei einer neuen Partitionierung werden nicht mehr vorhandene Cacheeintraege
+automatisch und verlustfrei verworfen; doppelte oder ueberbudgetierte aktive
+Eintraege werden weiterhin abgelehnt. Damit
+bleibt die statische AOT-Closure unveraendert, waehrend der wiederkehrende
+Titel-/Gameplay-Hotpfad ohne einen erneuten Vollbuild Produkttempo erreicht.
+
+Das Partitionsschema 9 begrenzt normale generierte Einheiten auf 2.048
+Gastinstruktionen beziehungsweise 128 Funktionen. Eine einzelne groessere
+Gastfunktion bleibt atomar in einer eigenen Einheit. Damit bleiben MSVC-
+Optimierung, Parallelitaet und inkrementelle Neubauten bounded, ohne die AOT-
+Closure oder Gastsemantik zu veraendern. Gegenueber dem vorherigen 1.024/64-
+Schema-8-Profil reduziert das die Zahl kalter Compilerstarts deutlich. Das
+davor verwendete 4.096/128-Profil bleibt wegen seiner gemessenen grossen
+MSVC-Optimizer-Arbeitsmengen bewusst ausserhalb des Bring-up-Standards.
+
+Bei MSVC bindet der Exporter den tatsaechlich konfigurierten persistenten
+Compiler-Cache explizit an das Generated-CMake. Dabei wird das targetweite PCH
+fuer `katana_generated` abgeschaltet: MSVC gibt jedem PCH-Verbraucher `/Fp`
+mit, und `sccache` kann diese Aufrufe deshalb nicht als einzelne Objekte
+speichern. Ohne PCH sind die AOT-Objekte content-addressable und ueber kalte
+Portworkspaces hinweg wiederverwendbar. Ein explizit cacheloser Erstbuild darf
+`-DKATANA_PERSISTENT_COMPILER_CACHE_USE_PCH=ON` setzen. Der Standardschalter
+veraendert weder Partitionierung noch `/O1 /Ob0`, die
+gemessenen Hot-Source-Ausnahmen `/O2 /Ob2`, ABI-/Identitaetsbindung oder den
+Analyseumfang. Der dazwischenliegende Katana-Telemetrie-Launcher wird dabei
+nicht faelschlich selbst als Cache behandelt.
 
 MSVC-AOT-Compiles schreiben keine gemeinsame Program Database. Ein expliziter
 `RelWithDebInfo`-Bring-up verwendet eingebettete `/Z7`-Informationen statt
 `/Zi` plus `/FS`. Ninja begrenzt nur den schweren `katana_generated`-Pool auf
-standardmaessig vier Compiler, waehrend Runtime, Adapter, Tools und Link den
+standardmaessig 24 Compiler, waehrend Runtime, Adapter, Tools und Link den
 vollen Hostworker-Vertrag behalten. `KATANA_AOT_COMPILE_JOBS` kann bei einem
 direkt konfigurierten Projekt zwischen `1` und `KATANA_HOST_COMPILE_JOBS`
-gesetzt werden. Native Dispatchquellen enthalten 4.096 statt 512 Eintraege
-pro Shard, damit ein Vollspielport nicht Hunderte triviale Compilerstarts und
-Linkobjekte bezahlt.
+gesetzt werden. Native Produkt-Dispatchquellen enthalten 8.192 Eintraege pro
+Shard, damit ein Vollspielport nicht Hunderte triviale Compilerstarts und
+Linkobjekte bezahlt; der separate allgemeine Runtime-Dispatchvertrag bleibt
+bei seinen kleineren Shards.
 
-Die Auswahl beruht auf dem realen 12C/24T-Sonic-Vollport: vier identische
-schwere AOT-Einheiten brauchten mit vier Workern und `/O1` `16,542 s`, mit
-`/Od` nur `4,560 s`; zwoelf `/O1`-Worker verschlechterten den Durchsatz auf
-`67,456 s` fuer zwoelf Einheiten. Der alte `/O2 + /Zi + /FS`-Pfad lag bei
+Die Auswahl der kleineren Einheiten beruht auf dem realen 12C/24T-Sonic-
+Vollport: Das fruehere Schema mit bis zu 4.096 Instruktionen erzeugte median
+6,3 MiB grosse Quellen und verlor mit zwoelf MSVC-Prozessen Durchsatz. Schema
+9 halbiert dieses normale TU-Budget; dadurch kann der 24er-Pool alle logischen
+Hostkerne nutzen, ohne dieselbe Optimizer-/Speicherkonkurrenz zu erzeugen. Ein
+erster kalter 12er-Lauf erreichte nur 42 von 684 Uebersetzungseinheiten in
+86,479 Sekunden und wurde deshalb verlustfrei mit dem vollstaendigen
+Hostworker-Budget fortgesetzt. Der alte
+`/O2 + /Zi + /FS`-Pfad lag bei
 median `148,606 s` pro grosser Einheit und war kein zulaessiger
 Bring-up-Standard. Der darauffolgende kalte Vollport kompilierte 233 Host-TUs,
 bestand den Post-Link-Audit und beendete den kompletten Export in `408,278 s`;

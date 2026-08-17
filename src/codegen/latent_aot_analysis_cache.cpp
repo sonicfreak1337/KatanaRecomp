@@ -411,7 +411,7 @@ void write_instruction(Writer& output,
         (instruction.forwarded_value_register.has_value() &&
          *instruction.forwarded_value_register > 15u) ||
         enum_u8(instruction.dynamic_target_class) >
-            enum_u8(katana::ir::DynamicTargetClass::Unresolved) ||
+            enum_u8(katana::ir::DynamicTargetClass::ExactGuarded) ||
         enum_u8(instruction.delay_slot.role) >
             enum_u8(katana::ir::DelaySlotRole::Slot) ||
         instruction.resolved_targets.size() > maximum_targets)

@@ -31,7 +31,7 @@ namespace katana::codegen {
 
 inline constexpr std::uint32_t port_project_contract_version =
     build_contract::port_project_contract_version;
-inline constexpr std::uint32_t port_partition_emission_schema_version = 7u;
+inline constexpr std::uint32_t port_partition_emission_schema_version = 9u;
 inline constexpr std::uint32_t port_metadata_cache_schema_version = 12u;
 
 using PortExportProgressCallback =
@@ -103,6 +103,12 @@ struct PortExportOptions {
     // definition and every referenced span for the complete export call.
     const katana::runtime::NativePortDefinition* native_port_definition =
         nullptr;
+    // Exact identity of the verified private artifact which supplied
+    // native_port_definition.  The generated product embeds this identity
+    // and the CLI verifies it again after linking, before publication.  API
+    // callers without an artifact may leave it empty and receive the
+    // definition-derived export identity instead.
+    std::string native_port_artifact_identity;
     // Exact private payloads for descriptor-only runtime images. Every
     // descriptor requires one uniquely identified payload and extra payloads
     // are rejected.
