@@ -41,6 +41,7 @@
 #include "port_export_orchestration.hpp"
 #include "port_build_telemetry.hpp"
 #include "host_build_progress.hpp"
+#include "../runtime/prs_decode.hpp"
 
 #include <algorithm>
 #include <array>
@@ -466,6 +467,7 @@ void observe_port_export_progress(
             std::string_view::npos ||
         phase.find("cycle-exhausted") !=
             std::string_view::npos ||
+        phase.starts_with("latent-primary-root-seed-cache-") ||
         phase.ends_with("-complete");
     if (!recorded_module_timing && !timing_boundary &&
         !phase_timings.should_emit_dynamic_progress(
@@ -953,6 +955,127 @@ int analyze_manifest(const std::filesystem::path& path,
     return 0;
 }
 
+int audit_callback_contracts_manifest(const std::filesystem::path& path,
+                                      const bool json) {
+    const auto project = katana::io::load_project(path);
+    const auto analysis = katana::analysis::analyze_control_flow(project.image);
+    if (!json) {
+        std::cout << "Statische Callback-Vertraege: "
+                  << (analysis.static_callback_contracts_materialized
+                          ? "materialized"
+                          : "not-materialized")
+                  << '\n'
+                  << "Callback-Sinks: "
+                  << analysis.static_callback_sinks.size() << '\n';
+        for (const auto& sink : analysis.static_callback_sinks) {
+            std::cout << "  function=0x" << std::hex << std::uppercase
+                      << sink.function_address << " argument-mask=0x"
+                      << static_cast<unsigned>(sink.argument_mask) << std::dec
+                      << '\n';
+        }
+        std::cout << "Persistent-Pointer-Sinks: "
+                  << analysis.static_persistent_pointer_sinks.size() << '\n';
+        for (const auto& sink : analysis.static_persistent_pointer_sinks) {
+            std::cout << "  function=0x" << std::hex << std::uppercase
+                      << sink.function_address << " argument-mask=0x"
+                      << static_cast<unsigned>(sink.argument_mask) << std::dec
+                      << '\n';
+        }
+        std::cout << "Callback-Field-Sinks: "
+                  << analysis.static_callback_field_sinks.size() << '\n';
+        for (const auto& sink : analysis.static_callback_field_sinks) {
+            std::cout << "  function=0x" << std::hex << std::uppercase
+                      << sink.function_address << " call=0x"
+                      << sink.call_instruction_address << " load=0x"
+                      << sink.load_instruction_address << std::dec
+                      << " displacement=" << sink.displacement
+                      << " width=" << static_cast<unsigned>(sink.width)
+                      << " kind=" << (sink.call ? "call" : "jump") << '\n';
+        }
+        std::cout << "Callback-Record-Tables: "
+                  << analysis.static_callback_record_tables.size() << '\n';
+        for (const auto& table : analysis.static_callback_record_tables) {
+            std::cout << "  function=0x" << std::hex << std::uppercase
+                      << table.function_address << " call=0x"
+                      << table.call_instruction_address << " load=0x"
+                      << table.callback_load_instruction_address
+                      << " sink=0x" << table.callback_sink_address
+                      << std::dec << " header-table-field="
+                      << table.header_table_pointer_displacement
+                      << " stride=" << table.record_stride
+                      << " callback-field="
+                      << table.callback_displacement << " argument="
+                      << static_cast<unsigned>(table.callback_argument)
+                      << " width=" << static_cast<unsigned>(table.width)
+                      << '\n';
+        }
+        return analysis.static_callback_contracts_materialized ? 0 : 2;
+    }
+
+    std::cout << "{\"schema\":\"katana.callback-contract-audit.v1\",";
+    std::cout << "\"materialized\":"
+              << (analysis.static_callback_contracts_materialized
+                      ? "true"
+                      : "false")
+              << ",\"callback_sinks\":[";
+    for (std::size_t index = 0u;
+         index < analysis.static_callback_sinks.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& sink = analysis.static_callback_sinks[index];
+        std::cout << "{\"function_address\":" << sink.function_address
+                  << ",\"argument_mask\":"
+                  << static_cast<unsigned>(sink.argument_mask) << '}';
+    }
+    std::cout << "],\"persistent_pointer_sinks\":[";
+    for (std::size_t index = 0u;
+         index < analysis.static_persistent_pointer_sinks.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& sink = analysis.static_persistent_pointer_sinks[index];
+        std::cout << "{\"function_address\":" << sink.function_address
+                  << ",\"argument_mask\":"
+                  << static_cast<unsigned>(sink.argument_mask) << '}';
+    }
+    std::cout << "],\"callback_field_sinks\":[";
+    for (std::size_t index = 0u;
+         index < analysis.static_callback_field_sinks.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& sink = analysis.static_callback_field_sinks[index];
+        std::cout << "{\"function_address\":" << sink.function_address
+                  << ",\"call_instruction_address\":"
+                  << sink.call_instruction_address
+                  << ",\"load_instruction_address\":"
+                  << sink.load_instruction_address
+                  << ",\"displacement\":" << sink.displacement
+                  << ",\"width\":" << static_cast<unsigned>(sink.width)
+                  << ",\"call\":" << (sink.call ? "true" : "false")
+                  << '}';
+    }
+    std::cout << "],\"callback_record_tables\":[";
+    for (std::size_t index = 0u;
+         index < analysis.static_callback_record_tables.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& table = analysis.static_callback_record_tables[index];
+        std::cout << "{\"function_address\":" << table.function_address
+                  << ",\"call_instruction_address\":"
+                  << table.call_instruction_address
+                  << ",\"callback_load_instruction_address\":"
+                  << table.callback_load_instruction_address
+                  << ",\"callback_sink_address\":"
+                  << table.callback_sink_address
+                  << ",\"header_table_pointer_displacement\":"
+                  << table.header_table_pointer_displacement
+                  << ",\"record_stride\":" << table.record_stride
+                  << ",\"callback_displacement\":"
+                  << table.callback_displacement
+                  << ",\"callback_argument\":"
+                  << static_cast<unsigned>(table.callback_argument)
+                  << ",\"width\":"
+                  << static_cast<unsigned>(table.width) << '}';
+    }
+    std::cout << "]}\n";
+    return analysis.static_callback_contracts_materialized ? 0 : 2;
+}
+
 katana::analysis::DreamcastHardwareAudit analyze_disc_hardware(const std::filesystem::path& path) {
     const auto disc = katana::platform::load_dreamcast_gdi_boot(path);
     const auto image = katana::platform::make_dreamcast_disc_executable(
@@ -974,6 +1097,199 @@ int audit_disc_hardware(const std::filesystem::path& path,
     else
         std::cout << katana::analysis::format_hardware_audit_text(audit);
     return katana::cli::hardware_audit_failed(audit, fail_on_gap, strict) ? 2 : 0;
+}
+
+std::vector<std::uint8_t> load_latent_aot_module_audit_bytes(
+    const std::filesystem::path& input_path) {
+    const auto path = std::filesystem::absolute(input_path).lexically_normal();
+    const auto status = std::filesystem::symlink_status(path);
+    if (!std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status))
+        throw std::invalid_argument(
+            "latent-aot-module-audit erwartet eine regulaere Nicht-Symlink-Datei.");
+    const auto size = std::filesystem::file_size(path);
+    if (size == 0u ||
+        size > katana::runtime::maximum_native_aot_template_extent ||
+        size > std::numeric_limits<std::size_t>::max())
+        throw std::invalid_argument(
+            "latent-aot-module-audit besitzt eine ungueltige Modulgroesse.");
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input || static_cast<std::uintmax_t>(input.tellg()) != size)
+        throw std::runtime_error(
+            "latent-aot-module-audit konnte das Modul nicht stabil oeffnen.");
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    if (!input || input.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error(
+            "latent-aot-module-audit konnte das Modul nicht stabil lesen.");
+    return bytes;
+}
+
+int audit_latent_aot_module_cli(
+    const std::filesystem::path& path,
+    const std::uint32_t source_address,
+    std::vector<std::uint32_t> entry_offsets,
+    std::vector<katana::codegen::LatentAotExternalCallbackSink>
+        external_callback_sinks,
+    const std::optional<std::uint32_t> runtime_base,
+    const bool sega_prs,
+    const bool json) {
+    std::sort(entry_offsets.begin(), entry_offsets.end());
+    entry_offsets.erase(
+        std::unique(entry_offsets.begin(), entry_offsets.end()),
+        entry_offsets.end());
+    if (entry_offsets.empty())
+        throw std::invalid_argument(
+            "latent-aot-module-audit benoetigt mindestens einen --entry.");
+    const auto bytes = load_latent_aot_module_audit_bytes(path);
+    katana::codegen::LatentAotDiscoveryOptions options;
+    options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+    options.completeness_policy =
+        katana::codegen::LatentAotCompletenessPolicy::
+            ExactRuntimeOnlyStopOnMiss;
+    std::sort(
+        external_callback_sinks.begin(), external_callback_sinks.end(),
+        [](const auto& left, const auto& right) {
+            return left.function_address < right.function_address;
+        });
+    std::vector<katana::codegen::LatentAotExternalCallbackSink>
+        merged_external_callback_sinks;
+    for (const auto& sink : external_callback_sinks) {
+        if (!merged_external_callback_sinks.empty() &&
+            merged_external_callback_sinks.back().function_address ==
+                sink.function_address) {
+            merged_external_callback_sinks.back().argument_mask |=
+                sink.argument_mask;
+        } else {
+            merged_external_callback_sinks.push_back(sink);
+        }
+    }
+    std::vector<std::uint32_t> external_code_targets;
+    external_code_targets.reserve(merged_external_callback_sinks.size());
+    for (const auto& sink : merged_external_callback_sinks)
+        external_code_targets.push_back(sink.function_address);
+    options.external_code_targets = external_code_targets;
+    options.external_callback_sinks = merged_external_callback_sinks;
+    if (!json)
+        options.progress =
+            katana::ProgressReporter(observe_structured_progress);
+    const auto audit = runtime_base.has_value()
+                           ? (sega_prs
+                                  ? katana::codegen::
+                                        audit_latent_aot_sega_prs_module(
+                                            bytes, source_address,
+                                            entry_offsets, *runtime_base,
+                                            options)
+                                  : katana::codegen::audit_latent_aot_module(
+                                        bytes, source_address, entry_offsets,
+                                        *runtime_base, options))
+                           : (sega_prs
+                                  ? katana::codegen::
+                                        audit_latent_aot_sega_prs_module(
+                                            bytes, source_address,
+                                            entry_offsets, options)
+                                  : katana::codegen::audit_latent_aot_module(
+                                        bytes, source_address, entry_offsets,
+                                        options));
+    if (!json) {
+        std::cout << "Latent-AOT-Modulaudit: "
+                  << (audit.admitted ? "admitted" : "rejected") << '\n'
+                  << "Byte-Identitaet: " << audit.byte_identity << '\n'
+                  << "Modulgroesse: " << audit.byte_size << '\n'
+                  << "Initiale Roots: " << audit.initial_entry_offsets.size()
+                  << '\n'
+                  << "Finale Roots: " << audit.final_entry_offsets.size()
+                  << '\n'
+                  << "Emittierte Bloecke/Funktionen: "
+                  << audit.emitted_block_offsets.size() << '/'
+                  << audit.emitted_function_offsets.size()
+                  << '\n'
+                  << "Inferierte Runtime-Basis: 0x" << std::hex
+                  << std::uppercase << audit.inferred_runtime_base << std::dec
+                  << " (identity-consistent="
+                  << (audit.inferred_runtime_base_identity_consistent
+                          ? "true"
+                          : "false")
+                  << ")\n"
+                  << "Analysierte Funktionen: "
+                  << audit.analyzed_function_offsets.size() << '\n';
+        for (const auto& diagnostic : audit.loader_tail_diagnostics) {
+            std::cout << "pass=" << diagnostic.analysis_pass
+                      << " root=0x" << std::hex << std::uppercase
+                      << diagnostic.root_offset
+                      << " block=0x" << diagnostic.block_offset
+                      << " literal=0x" << diagnostic.literal_offset
+                      << " raw=0x" << diagnostic.raw_target
+                      << " target=0x" << diagnostic.target_offset
+                      << std::dec << " status="
+                      << katana::codegen::
+                             latent_aot_loader_tail_audit_status_name(
+                                 diagnostic.status)
+                      << '\n';
+        }
+        if (!audit.admitted)
+            std::cout << "Ablehnung: " << audit.rejection
+                      << " (" << audit.rejection_detail << ")\n";
+        return audit.admitted ? 0 : 2;
+    }
+
+    std::cout << "{\"schema\":\"katana.latent-aot-module-audit.v1\",";
+    std::cout << "\"admitted\":"
+              << (audit.admitted ? "true" : "false") << ',';
+    std::cout << "\"byte_identity\":"
+              << katana::io::quote_json(audit.byte_identity) << ',';
+    std::cout << "\"byte_size\":" << audit.byte_size << ',';
+    std::cout << "\"source_address\":" << audit.source_address << ',';
+    const auto write_offsets = [](const std::span<const std::uint32_t> values) {
+        std::cout << '[';
+        for (std::size_t index = 0u; index < values.size(); ++index) {
+            if (index != 0u) std::cout << ',';
+            std::cout << values[index];
+        }
+        std::cout << ']';
+    };
+    std::cout << "\"initial_entry_offsets\":";
+    write_offsets(audit.initial_entry_offsets);
+    std::cout << ",\"final_entry_offsets\":";
+    write_offsets(audit.final_entry_offsets);
+    std::cout << ",\"emitted_block_offsets\":";
+    write_offsets(audit.emitted_block_offsets);
+    std::cout << ",\"emitted_function_offsets\":";
+    write_offsets(audit.emitted_function_offsets);
+    std::cout << ",\"inferred_runtime_base\":"
+              << audit.inferred_runtime_base
+              << ",\"inferred_runtime_base_identity_consistent\":"
+              << (audit.inferred_runtime_base_identity_consistent
+                      ? "true"
+                      : "false")
+              << ",\"analyzed_function_offsets\":";
+    write_offsets(audit.analyzed_function_offsets);
+    std::cout << ",\"loader_tail_diagnostics\":[";
+    for (std::size_t index = 0u;
+         index < audit.loader_tail_diagnostics.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& diagnostic = audit.loader_tail_diagnostics[index];
+        std::cout << "{\"pass\":" << diagnostic.analysis_pass
+                  << ",\"root_offset\":" << diagnostic.root_offset
+                  << ",\"block_offset\":" << diagnostic.block_offset
+                  << ",\"literal_offset\":" << diagnostic.literal_offset
+                  << ",\"raw_target\":" << diagnostic.raw_target
+                  << ",\"target_offset\":" << diagnostic.target_offset
+                  << ",\"status\":"
+                  << katana::io::quote_json(
+                         katana::codegen::
+                             latent_aot_loader_tail_audit_status_name(
+                                 diagnostic.status))
+                  << '}';
+    }
+    std::cout << "],\"rejection\":"
+              << katana::io::quote_json(audit.rejection)
+              << ",\"rejection_detail\":"
+              << katana::io::quote_json(audit.rejection_detail)
+              << "}\n";
+    return audit.admitted ? 0 : 2;
 }
 
 struct DiscAuditSetEntry {
@@ -9280,6 +9596,7 @@ void print_usage(std::ostream& output) {
               "[--external-evidence <katana-sh4-sst-conformance.json>]\n"
            << "  katana-recomp analyze <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp analyze-json <Projektmanifest> [Override-Datei]\n"
+           << "  katana-recomp callback-contract-audit <Projektmanifest> [--json]\n"
            << "  katana-recomp cfg-json <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp cfg-dot <Projektmanifest> [Override-Datei]\n"
            << "  katana-recomp callgraph-json <Projektmanifest> [Override-Datei]\n"
@@ -9288,6 +9605,10 @@ void print_usage(std::ostream& output) {
               "[--fail-on-gap|--strict]\n"
            << "  katana-recomp disc-audit-set <Verzeichnis> [--json] [--jobs N] "
               "[--fail-on-gap|--strict]\n"
+           << "  katana-recomp latent-aot-module-audit <Modul.bin> "
+              "--source-address <0xAdresse> --entry <0xOffset>... "
+              "[--external-callback-sink <0xAdresse>:<0xMaske>]... "
+              "[--runtime-base <0xAdresse>] [--sega-prs] [--json]\n"
            << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] "
               "[--include-sensitive]\n"
            << "  katana-recomp disasm <Datei> [Basisadresse [Dateioffset [Byteanzahl]]]\n"
@@ -9694,6 +10015,107 @@ int main(const int argc, char* argv[]) {
         if (argc == 2 && std::string_view(argv[1]) == "--version") {
             std::cout << "KatanaRecomp " << KATANA_RECOMP_VERSION << '\n';
             return exit_status(ExitCode::Success);
+        }
+        if (argc >= 7 &&
+            std::string_view(argv[1]) ==
+                "latent-aot-module-audit") {
+            std::optional<std::uint32_t> source_address;
+            std::optional<std::uint32_t> runtime_base;
+            std::vector<std::uint32_t> entry_offsets;
+            std::vector<katana::codegen::LatentAotExternalCallbackSink>
+                external_callback_sinks;
+            bool sega_prs = false;
+            bool json = false;
+            for (int index = 3; index < argc; ++index) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--json") {
+                    if (json)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erhielt --json doppelt.");
+                    json = true;
+                } else if (option == "--sega-prs") {
+                    if (sega_prs)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erhielt --sega-prs doppelt.");
+                    sega_prs = true;
+                } else if (option == "--source-address") {
+                    if (source_address.has_value() || ++index >= argc)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erwartet genau eine "
+                            "--source-address.");
+                    source_address = parse_hex_value(
+                        argv[index],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Modulaudit-Quelladresse");
+                } else if (option == "--runtime-base") {
+                    if (runtime_base.has_value() || ++index >= argc)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erwartet hoechstens eine "
+                            "--runtime-base.");
+                    runtime_base = parse_hex_value(
+                        argv[index],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Modulaudit-Runtime-Basis");
+                } else if (option == "--entry") {
+                    if (++index >= argc)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erwartet nach --entry "
+                            "einen Offset.");
+                    entry_offsets.push_back(parse_hex_value(
+                        argv[index],
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Der Modulaudit-Entry"));
+                } else if (option == "--external-callback-sink") {
+                    if (++index >= argc)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erwartet nach "
+                            "--external-callback-sink Adresse:Maske.");
+                    const std::string value(argv[index]);
+                    const auto separator = value.find(':');
+                    if (separator == std::string::npos || separator == 0u ||
+                        separator + 1u == value.size())
+                        throw std::invalid_argument(
+                            "--external-callback-sink erwartet "
+                            "Adresse:Maske.");
+                    const auto function_address = parse_hex_value(
+                        value.substr(0u, separator),
+                        std::numeric_limits<std::uint32_t>::max(),
+                        "Die Callback-Sink-Adresse");
+                    const auto argument_mask = parse_hex_value(
+                        value.substr(separator + 1u), 0x0fu,
+                        "Die Callback-Sink-Argumentmaske");
+                    if (argument_mask == 0u)
+                        throw std::invalid_argument(
+                            "Die Callback-Sink-Argumentmaske darf nicht null "
+                            "sein.");
+                    external_callback_sinks.push_back({
+                        function_address,
+                        static_cast<std::uint8_t>(argument_mask)});
+                } else {
+                    throw std::invalid_argument(
+                        "Unbekannte latent-aot-module-audit-Option: " +
+                        std::string(option));
+                }
+            }
+            if (!source_address.has_value())
+                throw std::invalid_argument(
+                    "latent-aot-module-audit benoetigt --source-address.");
+            return audit_latent_aot_module_cli(
+                std::filesystem::path(argv[2]),
+                *source_address,
+                std::move(entry_offsets),
+                std::move(external_callback_sinks),
+                runtime_base,
+                sega_prs,
+                json);
+        }
+        if ((argc == 3 || argc == 4) &&
+            std::string_view(argv[1]) == "callback-contract-audit") {
+            if (argc == 4 && std::string_view(argv[3]) != "--json")
+                throw std::invalid_argument(
+                    "callback-contract-audit kennt nur --json.");
+            return audit_callback_contracts_manifest(
+                std::filesystem::path(argv[2]), argc == 4);
         }
         if (argc >= 2 && std::string_view(argv[1]) == "isa-report") {
             bool json = false;

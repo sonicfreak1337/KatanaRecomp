@@ -18,6 +18,7 @@
 #include "katana/codegen/boot_analysis_cache.hpp"
 #include "katana/codegen/cache.hpp"
 #include "katana/codegen/cpp_emitter.hpp"
+#include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/naming.hpp"
 #include "katana/codegen/native_aot_profile.hpp"
@@ -590,6 +591,237 @@ std::string persistent_boot_epoch_cache_key(
         }
     }
     return katana::io::sha256_bytes(material.str());
+}
+
+constexpr std::uint32_t latent_primary_root_seed_cache_schema = 1u;
+constexpr std::size_t maximum_latent_primary_root_seed_count = 4'096u;
+constexpr std::size_t maximum_latent_primary_root_seed_cache_bytes =
+    96u * 1024u;
+constexpr std::string_view latent_primary_root_seed_artifact_name{
+    "latent-primary-roots-v1.txt"};
+constexpr std::string_view latent_primary_root_seed_magic{
+    "KATANA_LATENT_PRIMARY_ROOTS_V1"};
+
+std::string latent_primary_root_seed_semantic_identity(
+    const PortExportOptions& options,
+    const std::string_view disc_project_identity,
+    const std::uint32_t data_track_lba,
+    const std::uint32_t extent_lba_bias,
+    const PortAnalysisMode analysis_mode) {
+    std::ostringstream material;
+    append_persistent_epoch_key_field(
+        material, "katana-latent-primary-root-seed-contract-v1");
+    append_persistent_epoch_key_value(
+        material, latent_primary_root_seed_cache_schema);
+    append_persistent_epoch_key_value(material, katana::analysis::abi_version);
+    append_persistent_epoch_key_value(material, katana::runtime::abi_version);
+    append_persistent_epoch_key_value(
+        material, latent_aot_analysis_cache_schema_version);
+    append_persistent_epoch_key_value(
+        material, latent_aot_analysis_ir_schema);
+    append_persistent_epoch_key_value(
+        material, latent_aot_analysis_optimizer_schema);
+    append_persistent_epoch_key_field(
+        material, latent_aot_analysis_implementation_id);
+    append_persistent_epoch_key_field(material, disc_project_identity);
+    append_persistent_epoch_key_value(material, data_track_lba);
+    append_persistent_epoch_key_value(material, extent_lba_bias);
+    append_persistent_epoch_key_value(
+        material,
+        static_cast<std::underlying_type_t<PortAnalysisMode>>(
+            analysis_mode));
+    append_persistent_epoch_key_value(
+        material,
+        static_cast<std::underlying_type_t<LatentAotDiscoveryMode>>(
+            options.latent_aot_discovery_mode));
+    append_persistent_epoch_key_field(
+        material, options.analysis_implementation_identity);
+    append_persistent_epoch_key_field(
+        material, options.analysis_cache_implementation_identity);
+    append_persistent_epoch_key_field(
+        material, options.codegen_implementation_identity);
+    append_persistent_epoch_key_field(material, options.tool_version);
+    append_persistent_epoch_key_field(material, options.console_profile);
+    if (options.game_project != nullptr)
+        append_persistent_epoch_key_field(
+            material, game_project_export_identity(*options.game_project));
+    else
+        append_persistent_epoch_key_field(material, {});
+    append_persistent_epoch_key_field(
+        material, native_port_export_identity(options.native_port_definition));
+    append_persistent_epoch_key_field(
+        material, options.native_port_artifact_identity);
+
+    std::vector<LatentAotEntryHint> hints(
+        options.latent_aot_entry_hints.begin(),
+        options.latent_aot_entry_hints.end());
+    std::sort(hints.begin(), hints.end(), [](const auto& left, const auto& right) {
+        return std::tie(left.byte_identity,
+                        left.disc_byte_offset,
+                        left.byte_size,
+                        left.module_relative_offset) <
+               std::tie(right.byte_identity,
+                        right.disc_byte_offset,
+                        right.byte_size,
+                        right.module_relative_offset);
+    });
+    append_persistent_epoch_key_value(material, hints.size());
+    for (const auto& hint : hints) {
+        append_persistent_epoch_key_field(material, hint.byte_identity);
+        append_persistent_epoch_key_value(material, hint.disc_byte_offset);
+        append_persistent_epoch_key_value(material, hint.byte_size);
+        append_persistent_epoch_key_value(
+            material, hint.module_relative_offset);
+    }
+
+    std::vector<std::uint32_t> resume_entries(
+        options.native_aot_resume_entries.begin(),
+        options.native_aot_resume_entries.end());
+    std::sort(resume_entries.begin(), resume_entries.end());
+    resume_entries.erase(
+        std::unique(resume_entries.begin(), resume_entries.end()),
+        resume_entries.end());
+    append_persistent_epoch_key_value(material, resume_entries.size());
+    for (const auto entry : resume_entries)
+        append_persistent_epoch_key_value(material, entry);
+
+    std::vector<std::pair<std::string, std::string>> runtime_payloads;
+    runtime_payloads.reserve(options.game_project_runtime_image_payloads.size());
+    for (const auto& payload : options.game_project_runtime_image_payloads) {
+        runtime_payloads.emplace_back(
+            payload.image_id,
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(payload.bytes.data()),
+                payload.bytes.size())));
+    }
+    std::sort(runtime_payloads.begin(), runtime_payloads.end());
+    append_persistent_epoch_key_value(material, runtime_payloads.size());
+    for (const auto& [image_id, identity] : runtime_payloads) {
+        append_persistent_epoch_key_field(material, image_id);
+        append_persistent_epoch_key_field(material, identity);
+    }
+
+    std::vector<std::pair<std::uint32_t, std::string>> bootstrap_payloads;
+    bootstrap_payloads.reserve(
+        options.native_port_bootstrap_write_payloads.size());
+    for (const auto& payload : options.native_port_bootstrap_write_payloads) {
+        bootstrap_payloads.emplace_back(
+            payload.guest_address,
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(payload.bytes.data()),
+                payload.bytes.size())));
+    }
+    std::sort(bootstrap_payloads.begin(), bootstrap_payloads.end());
+    append_persistent_epoch_key_value(material, bootstrap_payloads.size());
+    for (const auto& [address, identity] : bootstrap_payloads) {
+        append_persistent_epoch_key_value(material, address);
+        append_persistent_epoch_key_field(material, identity);
+    }
+    return katana::io::sha256_bytes(material.str());
+}
+
+std::string serialize_latent_primary_root_seeds(
+    const std::string_view cache_key,
+    const std::span<const std::uint32_t> roots) {
+    if (roots.empty() ||
+        roots.size() > maximum_latent_primary_root_seed_count ||
+        !std::is_sorted(roots.begin(), roots.end()) ||
+        std::adjacent_find(roots.begin(), roots.end()) != roots.end())
+        throw std::invalid_argument(
+            "Latent-Primary-Root-Cache besitzt keine kanonischen Roots.");
+    std::ostringstream body;
+    body << latent_primary_root_seed_magic << '\n'
+         << cache_key << '\n'
+         << roots.size() << '\n';
+    body << std::hex << std::setfill('0');
+    for (const auto root : roots)
+        body << std::setw(8) << root << '\n';
+    auto payload = body.str();
+    payload += katana::io::sha256_bytes(payload);
+    payload.push_back('\n');
+    if (payload.size() > maximum_latent_primary_root_seed_cache_bytes)
+        throw std::length_error(
+            "Latent-Primary-Root-Cache ueberschreitet sein Bytebudget.");
+    return payload;
+}
+
+std::optional<std::vector<std::uint32_t>>
+parse_latent_primary_root_seeds(
+    const std::string_view expected_cache_key,
+    const std::string_view payload) {
+    if (payload.empty() || payload.back() != '\n' ||
+        payload.size() > maximum_latent_primary_root_seed_cache_bytes)
+        return std::nullopt;
+    const auto checksum_delimiter =
+        payload.rfind('\n', payload.size() - 2u);
+    if (checksum_delimiter == std::string_view::npos)
+        return std::nullopt;
+    const auto body = payload.substr(0u, checksum_delimiter + 1u);
+    const auto checksum = payload.substr(
+        checksum_delimiter + 1u,
+        payload.size() - checksum_delimiter - 2u);
+    if (checksum.size() != 64u ||
+        checksum != katana::io::sha256_bytes(body))
+        return std::nullopt;
+
+    std::istringstream input{std::string(body)};
+    std::string line;
+    if (!std::getline(input, line) || line != latent_primary_root_seed_magic ||
+        !std::getline(input, line) || line != expected_cache_key ||
+        !std::getline(input, line))
+        return std::nullopt;
+    std::size_t count = 0u;
+    const auto count_parse = std::from_chars(
+        line.data(), line.data() + line.size(), count, 10);
+    if (count_parse.ec != std::errc{} ||
+        count_parse.ptr != line.data() + line.size() || count == 0u ||
+        count > maximum_latent_primary_root_seed_count)
+        return std::nullopt;
+    std::vector<std::uint32_t> roots;
+    roots.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        if (!std::getline(input, line) || line.size() != 8u)
+            return std::nullopt;
+        std::uint32_t root = 0u;
+        const auto root_parse = std::from_chars(
+            line.data(), line.data() + line.size(), root, 16);
+        if (root_parse.ec != std::errc{} ||
+            root_parse.ptr != line.data() + line.size())
+            return std::nullopt;
+        roots.push_back(root);
+    }
+    if (std::getline(input, line) || !std::is_sorted(roots.begin(), roots.end()) ||
+        std::adjacent_find(roots.begin(), roots.end()) != roots.end())
+        return std::nullopt;
+    return roots;
+}
+
+bool validate_latent_primary_root_seeds(
+    const katana::io::ExecutableImage& image,
+    const std::span<const std::uint32_t> roots,
+    const std::uint32_t boot_address,
+    const std::size_t boot_size) {
+    if (roots.empty() ||
+        roots.size() > maximum_latent_primary_root_seed_count ||
+        boot_size > std::numeric_limits<std::uint32_t>::max())
+        return false;
+    const auto boot_end = static_cast<std::uint64_t>(boot_address) + boot_size;
+    katana::analysis::detail::GuardedNativeEntryShapeCache shapes(image);
+    for (const auto root : roots) {
+        if ((root & 1u) != 0u || root < boot_address ||
+            static_cast<std::uint64_t>(root) + 2u > boot_end)
+            return false;
+        const auto validation =
+            katana::analysis::validate_decode_candidate(image, root);
+        if (!validation.valid() || validation.resolved_address != root ||
+            validation.segment == nullptr ||
+            !validation.segment->permissions.executable ||
+            shapes.classify(root) !=
+                katana::analysis::detail::
+                    GuardedNativeEntryShapeStatus::Valid)
+            return false;
+    }
+    return true;
 }
 
 bool game_project_requires_external_runtime_definition(
@@ -2433,6 +2665,27 @@ bool equivalent_ir_block(const katana::ir::BasicBlock& left,
                       left.instructions.end(),
                       right.instructions.begin(),
                        equivalent_ir_instruction);
+}
+
+bool equivalent_native_aot_block_payload(
+    const katana::ir::BasicBlock& left,
+    const katana::ir::BasicBlock& right) {
+    // Function discovery deliberately clips CFG successors at each owner
+    // boundary. Two independently dispatchable entries in one loop/SCC can
+    // therefore lower the same physical block with different *local*
+    // successor sets even though every executable and provenance-bearing
+    // property is identical. Only that owner-relative successor view may be
+    // canonicalized; a payload, guarded-ownership or indirect-edge mismatch
+    // remains a hard product-export error.
+    return left.start_address == right.start_address &&
+           left.guarded_case_ownership_targets ==
+               right.guarded_case_ownership_targets &&
+           left.has_indirect_successor == right.has_indirect_successor &&
+           left.instructions.size() == right.instructions.size() &&
+           std::equal(left.instructions.begin(),
+                      left.instructions.end(),
+                      right.instructions.begin(),
+                      equivalent_ir_instruction);
 }
 
 bool is_exact_return_nop_callback(
@@ -12220,7 +12473,8 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                     block.start_address,
                     EmittedBlock{&block, function.entry_address});
             if (!inserted) {
-                if (!equivalent_ir_block(*existing->second.block, block))
+                if (!equivalent_native_aot_block_payload(
+                        *existing->second.block, block))
                     divergent_block_owners.emplace_back(
                         block.start_address,
                         existing->second.owner,
@@ -15187,6 +15441,22 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const std::span<const PreparedLatentAotModule> latent_modules,
     const katana::runtime::GameProjectDefinition* const game_project,
     const std::string_view native_port_artifact_identity) {
+    for (std::size_t index = 0u; index < latent_modules.size(); ++index) {
+        const auto& module = latent_modules[index];
+        if (module.byte_size == 0u)
+            throw std::runtime_error(
+                "Native Latent-AOT-Modul besitzt keine Bytes.");
+        if (index == 0u) continue;
+        const auto& previous = latent_modules[index - 1u];
+        const auto previous_end =
+            static_cast<std::uint64_t>(previous.source_address) +
+            previous.byte_size;
+        if (previous.source_address >= module.source_address ||
+            previous_end > module.source_address)
+            throw std::runtime_error(
+                "Native Latent-AOT-Module sind nicht streng sortiert und "
+                "disjunkt.");
+    }
     const auto build_identity_marker = native_port_build_identity_marker(
         definition, native_port_artifact_identity);
     const bool post_entry_is_continuation = std::ranges::any_of(
@@ -15329,7 +15599,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 block.start_address,
                 EmittedBlock{&block, function.entry_address});
             if (!inserted) {
-                if (!equivalent_ir_block(*existing->second.block, block))
+                if (!equivalent_native_aot_block_payload(
+                        *existing->second.block, block))
                     divergent_block_owners.emplace_back(
                         block.start_address,
                         existing->second.owner,
@@ -15665,6 +15936,21 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     constexpr std::size_t blocks_per_shard = 8192u;
     const auto shard_count =
         (blocks.size() - 1u) / blocks_per_shard + 1u;
+    if (blocks.size() >
+            std::numeric_limits<std::uint32_t>::max() ||
+        blocks.size() >
+            std::numeric_limits<std::size_t>::max() / 2u)
+        throw std::runtime_error(
+            "Nativer Produktdispatch besitzt zu viele Indexeintraege.");
+    const auto dispatch_index_required = blocks.size() * 2u;
+    std::size_t dispatch_index_capacity = 1u;
+    while (dispatch_index_capacity < dispatch_index_required) {
+        if (dispatch_index_capacity >
+            std::numeric_limits<std::size_t>::max() / 2u)
+            throw std::runtime_error(
+                "Nativer Produktdispatch-Index ist zu gross.");
+        dispatch_index_capacity *= 2u;
+    }
     const auto shard_suffix = [](const std::size_t index) {
         std::ostringstream output;
         output << std::setw(5) << std::setfill('0') << index;
@@ -15853,14 +16139,19 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     output << "}};\n"
               "bool native_loaded_aot_source_address(\n"
               "    const std::uint32_t address) noexcept {\n"
-              "    for (const auto& module : native_loaded_aot_modules) {\n"
-              "        if (address >= module.source_start &&\n"
-              "            static_cast<std::uint64_t>(address) <\n"
-              "                static_cast<std::uint64_t>(module.source_start) +\n"
-              "                    module.byte_size)\n"
-              "            return true;\n"
-              "    }\n"
-              "    return false;\n"
+              "    const auto upper = std::upper_bound(\n"
+              "        native_loaded_aot_modules.begin(),\n"
+              "        native_loaded_aot_modules.end(), address,\n"
+              "        [](const std::uint32_t value, const auto& module) {\n"
+              "            return value < module.source_start;\n"
+              "        });\n"
+              "    if (upper == native_loaded_aot_modules.begin())\n"
+              "        return false;\n"
+              "    auto candidate = upper;\n"
+              "    --candidate;\n"
+              "    return static_cast<std::uint64_t>(address) <\n"
+              "           static_cast<std::uint64_t>(candidate->source_start) +\n"
+              "               candidate->byte_size;\n"
               "}\n"
               "const std::vector<NativePortDispatchEntry>& dispatch_entries() {\n"
               "    static const auto entries = [] {\n"
@@ -15885,6 +16176,74 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    }();\n"
               "    return entries;\n"
               "}\n"
+              "class NativePortDispatchIndex final {\n"
+              "public:\n"
+              "    explicit NativePortDispatchIndex(\n"
+              "        const std::vector<NativePortDispatchEntry>& entries)\n"
+              "        : slots_("
+           << dispatch_index_capacity
+           << "u, 0u) {\n"
+              "        if (entries.empty() ||\n"
+              "            entries.size() > 0xFFFFFFFFull ||\n"
+              "            entries.size() > slots_.size() / 2u)\n"
+              "            throw std::runtime_error(\n"
+              "                \"native-dispatch-index-capacity\");\n"
+              "        const auto mask = slots_.size() - 1u;\n"
+              "        for (std::size_t index = 0u; index < entries.size();\n"
+              "             ++index) {\n"
+              "            auto slot = hash(entries[index].address) & mask;\n"
+              "            bool inserted = false;\n"
+              "            for (std::size_t probe = 0u; probe < slots_.size();\n"
+              "                 ++probe) {\n"
+              "                if (slots_[slot] == 0u) {\n"
+              "                    slots_[slot] =\n"
+              "                        static_cast<std::uint32_t>(index + 1u);\n"
+              "                    inserted = true;\n"
+              "                    break;\n"
+              "                }\n"
+              "                slot = (slot + 1u) & mask;\n"
+              "            }\n"
+              "            if (!inserted)\n"
+              "                throw std::runtime_error(\n"
+              "                    \"native-dispatch-index-full\");\n"
+              "        }\n"
+              "    }\n"
+              "\n"
+              "    const NativePortDispatchEntry* find(\n"
+              "        const std::vector<NativePortDispatchEntry>& entries,\n"
+              "        const std::uint32_t address) const noexcept {\n"
+              "        const auto mask = slots_.size() - 1u;\n"
+              "        auto slot = hash(address) & mask;\n"
+              "        for (std::size_t probe = 0u; probe < slots_.size();\n"
+              "             ++probe) {\n"
+              "            const auto encoded = slots_[slot];\n"
+              "            if (encoded == 0u) return nullptr;\n"
+              "            const auto& entry = entries[encoded - 1u];\n"
+              "            if (entry.address == address) return &entry;\n"
+              "            slot = (slot + 1u) & mask;\n"
+              "        }\n"
+              "        return nullptr;\n"
+              "    }\n"
+              "\n"
+              "private:\n"
+              "    static std::size_t hash(\n"
+              "        const std::uint32_t address) noexcept {\n"
+              "        auto value = address >> 1u;\n"
+              "        value ^= value >> 16u;\n"
+              "        value *= 0x7FEB352Du;\n"
+              "        value ^= value >> 15u;\n"
+              "        value *= 0x846CA68Bu;\n"
+              "        value ^= value >> 16u;\n"
+              "        return static_cast<std::size_t>(value);\n"
+              "    }\n"
+              "\n"
+              "    std::vector<std::uint32_t> slots_;\n"
+              "};\n"
+              "const NativePortDispatchIndex& dispatch_index() {\n"
+              "    static const NativePortDispatchIndex index(\n"
+              "        dispatch_entries());\n"
+              "    return index;\n"
+              "}\n"
               "std::uint32_t normalized_source_address(\n"
               "    const std::uint32_t address) noexcept {\n"
               "    auto canonical = address;\n"
@@ -15897,14 +16256,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "const NativePortDispatchEntry* find_exact_entry(\n"
               "    const std::uint32_t address) {\n"
               "    const auto& entries = dispatch_entries();\n"
-              "    const auto found = std::lower_bound(\n"
-              "        entries.begin(), entries.end(), address,\n"
-              "        [](const auto& entry, const auto value) {\n"
-              "            return entry.address < value;\n"
-              "        });\n"
-              "    return found != entries.end() && found->address == address\n"
-              "               ? &*found\n"
-              "               : nullptr;\n"
+              "    return dispatch_index().find(entries, address);\n"
               "}\n"
               "const NativePortDispatchEntry* find_entry(\n"
               "    const std::uint32_t address) {\n"
@@ -19195,6 +19547,46 @@ std::optional<std::uint32_t> latent_aot_external_code_address(
     return std::nullopt;
 }
 
+std::vector<std::uint32_t> latent_aot_external_data_targets(
+    const katana::io::ExecutableImage& image) {
+    constexpr std::size_t maximum_external_data_targets = 65'536u;
+    std::vector<std::uint32_t> result;
+    for (const auto& segment : image.segments()) {
+        if (!segment.permissions.readable || segment.bytes.size() < 4u)
+            continue;
+        const auto alignment = static_cast<std::size_t>(
+            (4u - (segment.virtual_address & 3u)) & 3u);
+        for (std::size_t offset = alignment;
+             offset <= segment.bytes.size() - 4u; offset += 4u) {
+            const auto raw =
+                static_cast<std::uint32_t>(segment.bytes[offset]) |
+                (static_cast<std::uint32_t>(segment.bytes[offset + 1u])
+                 << 8u) |
+                (static_cast<std::uint32_t>(segment.bytes[offset + 2u])
+                 << 16u) |
+                (static_cast<std::uint32_t>(segment.bytes[offset + 3u])
+                 << 24u);
+            const auto normalized = latent_aot_external_code_address(raw);
+            if (!normalized.has_value() || *normalized < 0x8C000000u ||
+                *normalized >= 0x90000000u || (*normalized & 3u) != 0u)
+                continue;
+            const auto resolved = image.resolve_segment_address(
+                *normalized, 1u);
+            if (resolved.has_value() &&
+                image.find_segment(*resolved, 1u) != nullptr)
+                continue;
+            result.push_back(*normalized);
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    if (result.size() > maximum_external_data_targets)
+        throw std::runtime_error(
+            "Primaerimage ueberschreitet das externe "
+            "Latent-AOT-Datenpointerbudget.");
+    return result;
+}
+
 std::vector<std::uint32_t> latent_aot_declared_external_code_targets(
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port,
@@ -19403,10 +19795,14 @@ latent_aot_analyzed_external_callback_sinks(
     std::vector<LatentAotExternalCallbackFieldSink>* const
         callback_field_sinks = nullptr,
     std::vector<LatentAotExternalPersistentPointerSink>* const
-        persistent_pointer_sinks = nullptr) {
+        persistent_pointer_sinks = nullptr,
+    std::vector<LatentAotExternalCallbackRecordTable>* const
+        callback_record_tables = nullptr) {
     if (callback_field_sinks != nullptr) callback_field_sinks->clear();
     if (persistent_pointer_sinks != nullptr)
         persistent_pointer_sinks->clear();
+    if (callback_record_tables != nullptr)
+        callback_record_tables->clear();
     if (external_code_targets.empty())
         return {};
 
@@ -19416,6 +19812,8 @@ latent_aot_analyzed_external_callback_sinks(
         fallback_discovered_fields;
     std::vector<katana::analysis::StaticPersistentPointerSinkContract>
         fallback_persistent_pointers;
+    std::vector<katana::analysis::StaticCallbackRecordTableContract>
+        fallback_record_tables;
     auto discovered = std::span<const katana::analysis::StaticCallbackSinkContract>(
         analysis.static_callback_sinks);
     auto discovered_fields =
@@ -19424,6 +19822,9 @@ latent_aot_analyzed_external_callback_sinks(
     auto discovered_persistent_pointers =
         std::span<const katana::analysis::StaticPersistentPointerSinkContract>(
             analysis.static_persistent_pointer_sinks);
+    auto discovered_record_tables =
+        std::span<const katana::analysis::StaticCallbackRecordTableContract>(
+            analysis.static_callback_record_tables);
     if (!analysis.static_callback_contracts_materialized) {
         if (analysis.recursive.instructions.empty() ||
             analysis.recursive.functions.empty())
@@ -19444,10 +19845,12 @@ latent_aot_analyzed_external_callback_sinks(
                 entry_shapes,
                 &fallback_discovered,
                 &fallback_persistent_pointers,
-                &fallback_discovered_fields));
+                &fallback_discovered_fields,
+                &fallback_record_tables));
         discovered = fallback_discovered;
         discovered_fields = fallback_discovered_fields;
         discovered_persistent_pointers = fallback_persistent_pointers;
+        discovered_record_tables = fallback_record_tables;
     }
 
     std::map<std::uint32_t, std::uint8_t> masks;
@@ -19525,6 +19928,77 @@ latent_aot_analyzed_external_callback_sinks(
                         callback_field_sinks->end()),
             callback_field_sinks->end());
     }
+    if (callback_record_tables != nullptr) {
+        for (const auto& table : discovered_record_tables) {
+            const auto function = latent_aot_external_code_address(
+                table.function_address);
+            const auto call = latent_aot_external_code_address(
+                table.call_instruction_address);
+            const auto load = latent_aot_external_code_address(
+                table.callback_load_instruction_address);
+            const auto sink = latent_aot_external_code_address(
+                table.callback_sink_address);
+             if (!function.has_value() || !call.has_value() ||
+                 !load.has_value() || !sink.has_value() ||
+                 table.width != 4u || table.callback_argument >= 4u ||
+                 table.header_table_pointer_displacement < 4 ||
+                 (table.header_table_pointer_displacement & 3) != 0 ||
+                 table.header_table_pointer_displacement > 4096 ||
+                 table.callback_displacement < 0 ||
+                (table.callback_displacement & 3) != 0 ||
+                table.record_stride < 4u ||
+                table.record_stride > 256u ||
+                (table.record_stride & 3u) != 0u ||
+                 static_cast<std::uint64_t>(
+                     table.callback_displacement) + 4u >
+                     table.record_stride ||
+                 *call < *function || *load < *function ||
+                 !std::binary_search(external_code_targets.begin(),
+                                     external_code_targets.end(), *function) ||
+                !std::binary_search(external_code_targets.begin(),
+                                    external_code_targets.end(), *sink))
+                continue;
+            callback_record_tables->push_back(
+                {*function,
+                 *call,
+                 *load,
+                 *sink,
+                 table.header_table_pointer_displacement,
+                 table.record_stride,
+                 table.callback_displacement,
+                 table.callback_argument,
+                 table.width});
+        }
+        std::sort(
+            callback_record_tables->begin(),
+            callback_record_tables->end(),
+            [](const auto& left, const auto& right) {
+                return std::tie(
+                           left.function_address,
+                           left.call_instruction_address,
+                           left.callback_load_instruction_address,
+                           left.callback_sink_address,
+                           left.header_table_pointer_displacement,
+                           left.record_stride,
+                           left.callback_displacement,
+                           left.callback_argument,
+                           left.width) <
+                       std::tie(
+                           right.function_address,
+                           right.call_instruction_address,
+                           right.callback_load_instruction_address,
+                           right.callback_sink_address,
+                           right.header_table_pointer_displacement,
+                           right.record_stride,
+                           right.callback_displacement,
+                           right.callback_argument,
+                           right.width);
+            });
+        callback_record_tables->erase(
+            std::unique(callback_record_tables->begin(),
+                        callback_record_tables->end()),
+            callback_record_tables->end());
+    }
     return result;
 }
 
@@ -19579,12 +20053,15 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     const PortExportOptions& options,
     const katana::io::ExecutableImage& image,
     const std::span<const std::uint32_t> external_code_targets,
+    const std::span<const std::uint32_t> external_data_targets,
     const std::span<const LatentAotExternalCallbackSink>
         external_callback_sinks,
     const std::span<const LatentAotExternalPersistentPointerSink>
         external_persistent_pointer_sinks,
     const std::span<const LatentAotExternalCallbackFieldSink>
-        external_callback_field_sinks) {
+        external_callback_field_sinks,
+    const std::span<const LatentAotExternalCallbackRecordTable>
+        external_callback_record_tables) {
     LatentAotDiscoveryOptions result;
     result.mode = options.latent_aot_discovery_mode;
     // Full product export owns an occupied-range inventory for every primary
@@ -19613,10 +20090,13 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     if (!options.analysis_cache_root.empty())
         result.analysis_cache_root = options.analysis_cache_root / "latent";
     result.external_code_targets = external_code_targets;
+    result.external_data_targets = external_data_targets;
     result.external_callback_sinks = external_callback_sinks;
     result.external_persistent_pointer_sinks =
         external_persistent_pointer_sinks;
     result.external_callback_field_sinks = external_callback_field_sinks;
+    result.external_callback_record_tables =
+        external_callback_record_tables;
     return result;
 }
 
@@ -22578,6 +23058,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                 options.game_project,
                 options.native_port_definition,
                 prepared.image);
+        const auto external_data_targets =
+            latent_aot_external_data_targets(prepared.image);
         std::vector<LatentAotExternalCallbackFieldSink>
             declared_external_callback_field_sinks;
         const auto declared_external_callback_sinks =
@@ -22590,9 +23072,11 @@ static PortExportResult export_dreamcast_port_project_impl(
         const auto discovery_options =
             port_latent_aot_discovery_options(
                 options, prepared.image, declared_external_targets,
+                external_data_targets,
                 declared_external_callback_sinks,
                 {},
-                declared_external_callback_field_sinks);
+                declared_external_callback_field_sinks,
+                {});
         report_progress(
             options,
             "latent-aot-external-callback-sinks:" +
@@ -24652,6 +25136,99 @@ PortExportResult export_dreamcast_port_project(
         image, options.native_port_definition);
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
+
+    const auto latent_primary_root_seed_key_identity =
+        !options.analysis_implementation_identity.empty()
+            ? std::string_view{options.analysis_implementation_identity}
+            : std::string_view{
+                  options.analysis_cache_implementation_identity};
+    const bool latent_primary_root_seed_cache_enabled =
+        !options.diagnostic_partial && options.game_project != nullptr &&
+        options.native_port_definition != nullptr &&
+        !options.analysis_cache_root.empty() &&
+        !latent_primary_root_seed_key_identity.empty();
+    std::unique_ptr<CodegenCache> latent_primary_root_seed_cache;
+    std::string latent_primary_root_seed_cache_key;
+    std::string loaded_latent_primary_root_seed_payload;
+    std::vector<std::uint32_t> cached_latent_primary_roots;
+    bool latent_primary_root_seed_cache_hit = false;
+    if (latent_primary_root_seed_cache_enabled) {
+        try {
+            const auto semantic_identity =
+                latent_primary_root_seed_semantic_identity(
+                    options,
+                    katana::platform::dreamcast_disc_project_identity(disc),
+                    disc.data_track_lba,
+                    disc.extent_lba_bias,
+                    analysis_mode);
+            latent_primary_root_seed_cache_key =
+                make_boot_analysis_cache_key(
+                    image,
+                    external_port_overrides
+                        ? &*external_port_overrides
+                        : nullptr,
+                    semantic_identity,
+                    latent_primary_root_seed_key_identity);
+            latent_primary_root_seed_cache =
+                std::make_unique<CodegenCache>(
+                    options.analysis_cache_root /
+                    "latent-primary-roots");
+            if (auto stored =
+                    latent_primary_root_seed_cache->load_bounded(
+                        latent_primary_root_seed_cache_key,
+                        latent_primary_root_seed_artifact_name,
+                        maximum_latent_primary_root_seed_cache_bytes);
+                stored.has_value()) {
+                const auto parsed = parse_latent_primary_root_seeds(
+                    latent_primary_root_seed_cache_key, *stored);
+                if (parsed.has_value() &&
+                    validate_latent_primary_root_seeds(
+                        image,
+                        *parsed,
+                        katana::platform::dreamcast_disc_boot_address,
+                        disc.boot_file.size())) {
+                    loaded_latent_primary_root_seed_payload =
+                        std::move(*stored);
+                    cached_latent_primary_roots = std::move(*parsed);
+                    for (const auto root : cached_latent_primary_roots)
+                        image.add_entry_point(root);
+                    latent_primary_root_seed_cache_hit = true;
+                    report_progress(
+                        options,
+                        "latent-primary-root-seed-cache-hit:" +
+                            std::to_string(
+                                cached_latent_primary_roots.size()));
+                } else {
+                    static_cast<void>(
+                        latent_primary_root_seed_cache
+                            ->erase_bounded_if_matches(
+                                latent_primary_root_seed_cache_key,
+                                latent_primary_root_seed_artifact_name,
+                                *stored,
+                                maximum_latent_primary_root_seed_cache_bytes));
+                    report_progress(
+                        options,
+                        "latent-primary-root-seed-cache-rejected");
+                }
+            } else {
+                report_progress(
+                    options, "latent-primary-root-seed-cache-miss");
+            }
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            latent_primary_root_seed_cache.reset();
+            latent_primary_root_seed_cache_key.clear();
+            loaded_latent_primary_root_seed_payload.clear();
+            cached_latent_primary_roots.clear();
+            latent_primary_root_seed_cache_hit = false;
+            report_progress(
+                options, "latent-primary-root-seed-cache-unavailable");
+        }
+    } else {
+        report_progress(options,
+                        "latent-primary-root-seed-cache-disabled");
+    }
     auto prepared_analysis = prepare_boot_analysis(
         image,
         external_port_overrides ? &*external_port_overrides : nullptr,
@@ -24682,6 +25259,22 @@ PortExportResult export_dreamcast_port_project(
     auto declared_external_targets =
         latent_aot_declared_external_code_targets(
             options.game_project, options.native_port_definition, image);
+    for (const auto root : cached_latent_primary_roots) {
+        const auto external = latent_aot_external_code_address(root);
+        if (!external.has_value())
+            throw std::runtime_error(
+                "Latent-Primary-Root-Cache besitzt keine kanonische "
+                "Primaerimage-Adresse.");
+        const auto insertion = std::lower_bound(
+            declared_external_targets.begin(),
+            declared_external_targets.end(),
+            *external);
+        if (insertion == declared_external_targets.end() ||
+            *insertion != *external)
+            declared_external_targets.insert(insertion, *external);
+    }
+    const auto external_data_targets =
+        latent_aot_external_data_targets(image);
     report_progress(
         options,
         "latent-aot-image-references:" +
@@ -24691,6 +25284,7 @@ PortExportResult export_dreamcast_port_project(
     std::size_t final_external_callback_sink_count = 0u;
     std::size_t final_external_persistent_pointer_sink_count = 0u;
     std::size_t final_external_callback_field_sink_count = 0u;
+    std::size_t final_external_callback_record_table_count = 0u;
     std::size_t final_latent_external_root_count = 0u;
     std::vector<std::uint32_t> latent_external_primary_roots;
     for (std::size_t iteration = 0u;
@@ -24709,13 +25303,16 @@ PortExportResult export_dreamcast_port_project(
             analyzed_external_callback_field_sinks;
         std::vector<LatentAotExternalPersistentPointerSink>
             analyzed_external_persistent_pointer_sinks;
+        std::vector<LatentAotExternalCallbackRecordTable>
+            analyzed_external_callback_record_tables;
         const auto analyzed_external_callback_sinks =
             latent_aot_analyzed_external_callback_sinks(
                 image,
                 prepared_analysis.artifact.analysis,
                 declared_external_targets,
                 &analyzed_external_callback_field_sinks,
-                &analyzed_external_persistent_pointer_sinks);
+                &analyzed_external_persistent_pointer_sinks,
+                &analyzed_external_callback_record_tables);
         const auto external_callback_sinks =
             merge_latent_aot_external_callback_sinks(
                 declared_external_callback_sinks,
@@ -24729,6 +25326,8 @@ PortExportResult export_dreamcast_port_project(
             analyzed_external_persistent_pointer_sinks.size();
         final_external_callback_field_sink_count =
             external_callback_field_sinks.size();
+        final_external_callback_record_table_count =
+            analyzed_external_callback_record_tables.size();
         report_progress(
             options,
             "latent-aot-external-callback-sinks:" +
@@ -24738,14 +25337,19 @@ PortExportResult export_dreamcast_port_project(
                     analyzed_external_persistent_pointer_sinks.size()) +
                 ":field-sinks=" +
                 std::to_string(external_callback_field_sinks.size()) +
+                ":record-tables=" +
+                std::to_string(
+                    analyzed_external_callback_record_tables.size()) +
                 ":iteration=" + std::to_string(iteration) + "-complete");
         const auto discovery_options = port_latent_aot_discovery_options(
             options,
             image,
             declared_external_targets,
+            external_data_targets,
             external_callback_sinks,
             analyzed_external_persistent_pointer_sinks,
-            external_callback_field_sinks);
+            external_callback_field_sinks,
+            analyzed_external_callback_record_tables);
         report_progress(
             options,
             "latent-aot-discovery-fixpoint:" +
@@ -24829,9 +25433,29 @@ PortExportResult export_dreamcast_port_project(
                 final_external_persistent_pointer_sink_count) +
             ":field-sinks=" +
             std::to_string(final_external_callback_field_sink_count) +
+            ":record-tables=" +
+            std::to_string(final_external_callback_record_table_count) +
             ":primary-roots=" +
             std::to_string(final_latent_external_root_count) +
             "-complete");
+    if (latent_primary_root_seed_cache_hit &&
+        !std::includes(
+            latent_external_primary_roots.begin(),
+            latent_external_primary_roots.end(),
+            cached_latent_primary_roots.begin(),
+            cached_latent_primary_roots.end())) {
+        if (latent_primary_root_seed_cache != nullptr &&
+            !loaded_latent_primary_root_seed_payload.empty())
+            static_cast<void>(
+                latent_primary_root_seed_cache->erase_bounded_if_matches(
+                    latent_primary_root_seed_cache_key,
+                    latent_primary_root_seed_artifact_name,
+                    loaded_latent_primary_root_seed_payload,
+                    maximum_latent_primary_root_seed_cache_bytes));
+        throw std::runtime_error(
+            "Latent-Primary-Root-Cache wurde vom autoritativen "
+            "Cross-Image-Fixpunkt nicht bestaetigt.");
+    }
 
     auto& analysis = prepared_analysis.artifact.analysis;
     auto& program = prepared_analysis.artifact.lowered_program;
@@ -24894,6 +25518,47 @@ PortExportResult export_dreamcast_port_project(
         prepared_analysis.cache_hit;
     report.boot_analysis_pipeline_runs =
         boot_analysis_pipeline_runs;
+    if (latent_primary_root_seed_cache != nullptr &&
+        !latent_primary_root_seed_cache_key.empty() &&
+        !latent_external_primary_roots.empty()) {
+        try {
+            const auto serialized = serialize_latent_primary_root_seeds(
+                latent_primary_root_seed_cache_key,
+                latent_external_primary_roots);
+            if (serialized != loaded_latent_primary_root_seed_payload) {
+                if (!loaded_latent_primary_root_seed_payload.empty())
+                    static_cast<void>(
+                        latent_primary_root_seed_cache
+                            ->erase_bounded_if_matches(
+                                latent_primary_root_seed_cache_key,
+                                latent_primary_root_seed_artifact_name,
+                                loaded_latent_primary_root_seed_payload,
+                                maximum_latent_primary_root_seed_cache_bytes));
+                latent_primary_root_seed_cache->store_bounded(
+                    latent_primary_root_seed_cache_key,
+                    latent_primary_root_seed_artifact_name,
+                    serialized,
+                    maximum_latent_primary_root_seed_cache_bytes);
+            }
+            report.checkpoints.push_back(
+                latent_primary_root_seed_cache_hit
+                    ? "latent-primary-root-seed-cache-hit"
+                    : "latent-primary-root-seed-cache-populated");
+            report_progress(
+                options,
+                latent_primary_root_seed_cache_hit
+                    ? "latent-primary-root-seed-cache-hit"
+                    : "latent-primary-root-seed-cache-populated");
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            // The successfully completed export remains authoritative. A
+            // cache publication race or unsafe local cache tree only removes
+            // the incremental optimization from the next run.
+            report.checkpoints.push_back(
+                "latent-primary-root-seed-cache-publish-missed");
+        }
+    }
     if (!options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
         !options.analysis_cache_implementation_identity.empty())

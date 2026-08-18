@@ -166,6 +166,27 @@ struct StaticCallbackFieldSinkContract final {
     bool operator==(const StaticCallbackFieldSinkContract&) const = default;
 };
 
+// A primary-image consumer may obtain one callback from a record array whose
+// base is stored in a header.  This is deliberately a shape contract rather
+// than a target list: a loaded module must independently prove an
+// identity-bound header pointer and a bounded, terminating record table
+// before any local callback entry becomes guarded AOT inventory.
+struct StaticCallbackRecordTableContract final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t callback_load_instruction_address = 0u;
+    std::uint32_t callback_sink_address = 0u;
+    std::int32_t header_table_pointer_displacement = 0;
+    std::uint32_t record_stride = 0u;
+    std::int32_t callback_displacement = 0;
+    // Zero-based ABI argument index: r4..r7.
+    std::uint8_t callback_argument = 0u;
+    std::uint8_t width = 0u;
+
+    bool operator==(
+        const StaticCallbackRecordTableContract&) const = default;
+};
+
 struct ControlFlowAnalysisResult {
     RecursiveAnalysisResult recursive;
     RuntimeCodeCopyAnalysis runtime_code_copies;
@@ -191,6 +212,8 @@ struct ControlFlowAnalysisResult {
         static_persistent_pointer_sinks;
     std::vector<StaticCallbackFieldSinkContract>
         static_callback_field_sinks;
+    std::vector<StaticCallbackRecordTableContract>
+        static_callback_record_tables;
     bool static_callback_contracts_materialized = false;
     std::shared_ptr<const InstructionArena> instruction_arena;
     std::vector<InstructionSpan> block_spans;

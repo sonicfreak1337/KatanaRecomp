@@ -2338,6 +2338,76 @@ int main() {
                 !has_instruction(ordinary_data_pointer, 0x20u),
             "Ein gewoehnlicher codeaehnlicher Datenpointer wurde als Callback katalogisiert.");
 
+    const auto dereferenced_callback_argument_image = [] {
+        std::vector<std::uint8_t> bytes(0x60u, 0x09u);
+        bytes[0x00u] = 0x50u;
+        bytes[0x01u] = 0xE4u; // mov #0x50,r4 (descriptor, not callback)
+        bytes[0x02u] = 0x0Du;
+        bytes[0x03u] = 0xB0u; // bsr 0x20
+        bytes[0x04u] = 0x09u;
+        bytes[0x05u] = 0x00u; // nop (delay)
+        bytes[0x06u] = 0x0Bu;
+        bytes[0x07u] = 0x00u; // rts
+        bytes[0x08u] = 0x09u;
+        bytes[0x09u] = 0x00u; // nop (delay)
+        bytes[0x20u] = 0x42u;
+        bytes[0x21u] = 0x66u; // mov.l @r4,r6
+        bytes[0x22u] = 0x0Du;
+        bytes[0x23u] = 0xB0u; // bsr 0x40
+        bytes[0x24u] = 0x09u;
+        bytes[0x25u] = 0x00u; // nop (delay)
+        bytes[0x26u] = 0x0Bu;
+        bytes[0x27u] = 0x00u; // rts
+        bytes[0x28u] = 0x09u;
+        bytes[0x29u] = 0x00u; // nop (delay)
+        bytes[0x40u] = 0x0Bu;
+        bytes[0x41u] = 0x46u; // jsr @r6
+        bytes[0x42u] = 0x09u;
+        bytes[0x43u] = 0x00u; // nop (delay)
+        bytes[0x44u] = 0x0Bu;
+        bytes[0x45u] = 0x00u; // rts
+        bytes[0x46u] = 0x09u;
+        bytes[0x47u] = 0x00u; // nop (delay)
+        katana::io::ExecutableImage image;
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".dereferenced-callback-argument",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-dereferenced-callback-argument"});
+        image.add_entry_point(0u);
+        return image;
+    }();
+    katana::analysis::AnalysisOverrides dereferenced_callback_hints;
+    dereferenced_callback_hints.mode =
+        katana::analysis::AnalysisDirectiveMode::Hint;
+    dereferenced_callback_hints.function_entry_hints.push_back({0x40u, 1u});
+    const auto dereferenced_callback_argument =
+        katana::analysis::analyze_control_flow(
+            dereferenced_callback_argument_image,
+            &dereferenced_callback_hints);
+    const auto callback_consumer = std::find_if(
+        dereferenced_callback_argument.static_callback_sinks.begin(),
+        dereferenced_callback_argument.static_callback_sinks.end(),
+        [](const auto& sink) { return sink.function_address == 0x40u; });
+    const auto descriptor_consumer = std::find_if(
+        dereferenced_callback_argument.static_callback_sinks.begin(),
+        dereferenced_callback_argument.static_callback_sinks.end(),
+        [](const auto& sink) { return sink.function_address == 0x20u; });
+    require(callback_consumer !=
+                dereferenced_callback_argument.static_callback_sinks.end() &&
+                callback_consumer->argument_mask == 0x04u &&
+                descriptor_consumer ==
+                    dereferenced_callback_argument.static_callback_sinks.end() &&
+                dereferenced_callback_argument.static_callback_contracts_materialized,
+            "Ein durch r4 adressierter Deskriptor wurde selbst als Callbackargument katalogisiert.");
+
     const auto absolute_snapshot_image = [](const katana::io::ImageSourceKind source_kind,
                                             const katana::io::ImageLoadPhase load_phase,
                                             const katana::io::InitialSnapshotPolicy policy) {

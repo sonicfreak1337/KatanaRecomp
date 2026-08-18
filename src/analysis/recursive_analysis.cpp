@@ -82,6 +82,20 @@ containing_function_range(
     return range != nullptr && address != range->start;
 }
 
+[[nodiscard]] std::string delay_slot_boundary_error(
+    const std::uint32_t transfer_address,
+    const std::uint32_t delay_address,
+    const ExactFunctionRange& range) {
+    std::ostringstream output;
+    output << "Explizite Funktionsgrenze trennt einen Delay Slot: transfer=0x"
+           << std::hex << std::uppercase << std::setw(8)
+           << std::setfill('0') << transfer_address
+           << " delay=0x" << std::setw(8) << delay_address
+           << " function=[0x" << std::setw(8) << range.start
+           << ",0x" << std::setw(8) << range.end << ").";
+    return output.str();
+}
+
 void enqueue(std::deque<PendingAddress>& pending,
              std::unordered_set<PendingAddress, PendingAddressHash>& scheduled,
              const std::uint32_t address,
@@ -875,7 +889,8 @@ RecursiveAnalysisResult analyze_reachable_code(const katana::io::ExecutableImage
                     static_cast<std::uint64_t>(delay_address) >=
                         range->end)
                     throw std::invalid_argument(
-                        "Explizite Funktionsgrenze trennt einen Delay Slot.");
+                        delay_slot_boundary_error(
+                            address, delay_address, *range));
                 enqueue(pending, scheduled, delay_address, address, address, evidence);
                 const auto delay_validation = validate_committed_code_address(image, delay_address);
                 if (!delay_validation.valid()) {
@@ -1725,7 +1740,8 @@ RecursiveAnalysisSnapshot RecursiveAnalysisSession::analyze(
                 range != nullptr &&
                 static_cast<std::uint64_t>(delay_address) >= range->end)
                 throw std::invalid_argument(
-                    "Explizite Funktionsgrenze trennt einen Delay Slot.");
+                    delay_slot_boundary_error(
+                        address, delay_address, *range));
             stage_enqueue(delay_address, address, address, work.evidence);
             const auto delay_validation = validate_committed_code_address(
                 image, delay_address);

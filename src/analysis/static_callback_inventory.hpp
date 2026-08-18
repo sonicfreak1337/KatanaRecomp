@@ -17,6 +17,8 @@ using StaticPersistentPointerSinkContract =
     katana::analysis::StaticPersistentPointerSinkContract;
 using StaticCallbackFieldSinkContract =
     katana::analysis::StaticCallbackFieldSinkContract;
+using StaticCallbackRecordTableContract =
+    katana::analysis::StaticCallbackRecordTableContract;
 
 // Returns the sorted, unique record-field displacements which feed an
 // actually decoded indirect call/jump in the supplied image.  These are
@@ -44,6 +46,8 @@ discover_static_callback_field_offsets(
     std::vector<StaticPersistentPointerSinkContract>*
         persistent_pointer_sink_contracts = nullptr,
     std::vector<StaticCallbackFieldSinkContract>*
-        callback_field_sink_contracts = nullptr);
+        callback_field_sink_contracts = nullptr,
+    std::vector<StaticCallbackRecordTableContract>*
+        callback_record_table_contracts = nullptr);
 
 } // namespace katana::analysis::detail

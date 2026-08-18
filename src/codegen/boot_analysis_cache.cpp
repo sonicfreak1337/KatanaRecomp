@@ -1019,6 +1019,38 @@ read_static_callback_field_sink(Reader& input) {
     return value;
 }
 
+void write_static_callback_record_table(
+    Writer& output,
+    const katana::analysis::StaticCallbackRecordTableContract& value) {
+    output.u32(value.function_address);
+    output.u32(value.call_instruction_address);
+    output.u32(value.callback_load_instruction_address);
+    output.u32(value.callback_sink_address);
+    output.u32(static_cast<std::uint32_t>(
+        value.header_table_pointer_displacement));
+    output.u32(value.record_stride);
+    output.u32(static_cast<std::uint32_t>(value.callback_displacement));
+    output.u8(value.callback_argument);
+    output.u8(value.width);
+}
+
+[[nodiscard]] katana::analysis::StaticCallbackRecordTableContract
+read_static_callback_record_table(Reader& input) {
+    katana::analysis::StaticCallbackRecordTableContract value;
+    value.function_address = input.u32();
+    value.call_instruction_address = input.u32();
+    value.callback_load_instruction_address = input.u32();
+    value.callback_sink_address = input.u32();
+    value.header_table_pointer_displacement =
+        static_cast<std::int32_t>(input.u32());
+    value.record_stride = input.u32();
+    value.callback_displacement =
+        static_cast<std::int32_t>(input.u32());
+    value.callback_argument = input.u8();
+    value.width = input.u8();
+    return value;
+}
+
 [[nodiscard]] std::vector<std::uint8_t> serialize_payload(
     const PreparedBootAnalysisArtifact& artifact) {
     Writer output(
@@ -1063,6 +1095,10 @@ read_static_callback_field_sink(Reader& input) {
         output,
         artifact.analysis.static_callback_field_sinks,
         write_static_callback_field_sink);
+    write_vector(
+        output,
+        artifact.analysis.static_callback_record_tables,
+        write_static_callback_record_table);
     write_analysis_scalars(output, artifact.analysis);
     write_vector(
         output, artifact.hardware_loops, write_hardware_loop);
@@ -1109,6 +1145,9 @@ read_static_callback_field_sink(Reader& input) {
     artifact.analysis.static_callback_field_sinks =
         read_vector<katana::analysis::StaticCallbackFieldSinkContract>(
             input, read_static_callback_field_sink);
+    artifact.analysis.static_callback_record_tables =
+        read_vector<katana::analysis::StaticCallbackRecordTableContract>(
+            input, read_static_callback_record_table);
     read_analysis_scalars(input, artifact.analysis);
     artifact.hardware_loops =
         read_vector<katana::analysis::HardwareNaturalLoop>(

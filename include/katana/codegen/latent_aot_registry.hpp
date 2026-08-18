@@ -12,6 +12,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace katana::codegen {
@@ -111,6 +112,26 @@ struct LatentAotExternalCallbackFieldSink final {
         const LatentAotExternalCallbackFieldSink&) const = default;
 };
 
+// Identity-bound primary-image consumer shape for callbacks stored in a
+// loaded-module record array.  The primary image proves the header-pointer
+// field, record stride, callback field and registrar ABI.  Discovery still
+// requires an immutable primary data pointer to the concrete module header
+// and a bounded terminating table in the exact candidate bytes.
+struct LatentAotExternalCallbackRecordTable final {
+    std::uint32_t function_address = 0u;
+    std::uint32_t call_instruction_address = 0u;
+    std::uint32_t callback_load_instruction_address = 0u;
+    std::uint32_t callback_sink_address = 0u;
+    std::int32_t header_table_pointer_displacement = 0;
+    std::uint32_t record_stride = 0u;
+    std::int32_t callback_displacement = 0;
+    std::uint8_t callback_argument = 0u;
+    std::uint8_t width = 0u;
+
+    [[nodiscard]] bool operator==(
+        const LatentAotExternalCallbackRecordTable&) const = default;
+};
+
 struct LatentAotDiscoveryOptions {
     LatentAotDiscoveryMode mode = LatentAotDiscoveryMode::HintsAndHeuristics;
     LatentAotCompletenessPolicy completeness_policy =
@@ -166,6 +187,11 @@ struct LatentAotDiscoveryOptions {
     // identity-bound targets. The list never creates module entries by itself;
     // the exporter performs the final executable-image admission.
     std::span<const std::uint32_t> external_code_targets;
+    // Sorted, unique direct-mapped values found in immutable primary-image
+    // words which point outside the primary image.  They are data identity
+    // only and cannot create code roots without a matching record-table
+    // consumer contract and candidate-local table validation.
+    std::span<const std::uint32_t> external_data_targets;
     // Sorted, unique subset of external_code_targets proven from exact
     // primary-image function boundaries and persistent callback stores.
     std::span<const LatentAotExternalCallbackSink>
@@ -178,7 +204,98 @@ struct LatentAotDiscoveryOptions {
     // Sorted, unique field-load/call shapes from identity-bound primary code.
     std::span<const LatentAotExternalCallbackFieldSink>
         external_callback_field_sinks;
+    std::span<const LatentAotExternalCallbackRecordTable>
+        external_callback_record_tables;
 };
+
+// Permanent, disc-independent diagnostic for one already decoded latent
+// module.  It deliberately executes the same candidate analysis and entry
+// fixpoint as product discovery; the audit is not a second decoder or a test
+// heuristic.  This keeps expensive whole-disc exports out of the diagnostic
+// loop while making every configured loader-tail decision machine-readable.
+enum class LatentAotLoaderTailAuditStatus : std::uint8_t {
+    RuntimeBaseMissing,
+    RootOutOfRange,
+    RootFunctionMissing,
+    TerminalDelaySlotMissing,
+    TerminalRegisterJumpMissing,
+    PrRestoreMissing,
+    EpilogueInvalid,
+    TargetLiteralMissing,
+    TargetUnresolved,
+    RuntimeBaseIdentityMismatch,
+    TargetOutOfRange,
+    TargetControlFlowMissing,
+    Accepted,
+};
+
+[[nodiscard]] std::string_view latent_aot_loader_tail_audit_status_name(
+    LatentAotLoaderTailAuditStatus status) noexcept;
+
+struct LatentAotLoaderTailAuditDiagnostic {
+    std::size_t analysis_pass = 0u;
+    std::uint32_t root_offset = 0u;
+    std::uint32_t block_offset = 0u;
+    std::uint32_t literal_offset = 0u;
+    std::uint32_t raw_target = 0u;
+    std::uint32_t target_offset = 0u;
+    LatentAotLoaderTailAuditStatus status =
+        LatentAotLoaderTailAuditStatus::RootFunctionMissing;
+};
+
+struct LatentAotModuleAuditResult {
+    std::string byte_identity;
+    std::uint32_t byte_size = 0u;
+    std::uint32_t source_address = 0u;
+    std::vector<std::uint32_t> initial_entry_offsets;
+    std::vector<std::uint32_t> final_entry_offsets;
+    // Emitted source owners are reported separately from public runtime roots.
+    // An internal direct target may already be compiled without requiring a
+    // second loaded-module dispatch entry.
+    std::vector<std::uint32_t> emitted_block_offsets;
+    std::vector<std::uint32_t> emitted_function_offsets;
+    // Audit-only visibility into the last local discovery pass.  A runtime
+    // base of zero means that the bounded alias vote did not select one
+    // unique placement; it is never used as an execution fallback.
+    std::uint32_t inferred_runtime_base = 0u;
+    bool inferred_runtime_base_identity_consistent = false;
+    std::vector<std::uint32_t> analyzed_function_offsets;
+    std::vector<LatentAotLoaderTailAuditDiagnostic>
+        loader_tail_diagnostics;
+    bool admitted = false;
+    std::string rejection{"none"};
+    std::string rejection_detail{"none"};
+};
+
+[[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_module(
+    std::span<const std::uint8_t> decoded_bytes,
+    std::uint32_t source_address,
+    std::span<const std::uint32_t> entry_offsets,
+    const LatentAotDiscoveryOptions& options = {});
+
+[[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_module(
+    std::span<const std::uint8_t> decoded_bytes,
+    std::uint32_t source_address,
+    std::span<const std::uint32_t> entry_offsets,
+    std::uint32_t proven_runtime_base,
+    const LatentAotDiscoveryOptions& options = {});
+
+// Product-parity audit for an encoded Sega PRS extent.  The registry owns the
+// bounded decode and retains the encoded source identity in the candidate
+// binding, exactly as whole-disc discovery does.  Callers must not decode PRS
+// themselves and then present an odd-sized result as an Identity source.
+[[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_sega_prs_module(
+    std::span<const std::uint8_t> encoded_bytes,
+    std::uint32_t source_address,
+    std::span<const std::uint32_t> entry_offsets,
+    const LatentAotDiscoveryOptions& options = {});
+
+[[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_sega_prs_module(
+    std::span<const std::uint8_t> encoded_bytes,
+    std::uint32_t source_address,
+    std::span<const std::uint32_t> entry_offsets,
+    std::uint32_t proven_runtime_base,
+    const LatentAotDiscoveryOptions& options = {});
 
 struct LatentAotOccupiedRange {
     std::uint32_t start = 0u;

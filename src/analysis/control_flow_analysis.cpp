@@ -2798,6 +2798,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         final_static_persistent_pointer_sinks;
     std::vector<StaticCallbackFieldSinkContract>
         final_static_callback_field_sinks;
+    std::vector<StaticCallbackRecordTableContract>
+        final_static_callback_record_tables;
     bool static_callback_contracts_materialized = false;
     detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
     const auto guarded_callback_candidate_is_admissible =
@@ -4206,7 +4208,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     guarded_native_entry_shapes,
                     &final_static_callback_sinks,
                     &final_static_persistent_pointer_sinks,
-                    &final_static_callback_field_sinks);
+                    &final_static_callback_field_sinks,
+                    &final_static_callback_record_tables);
             static_callback_contracts_materialized = true;
             auto& callback_candidates =
                 static_callback_inventory.stored_code_addresses;
@@ -5201,6 +5204,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         std::move(final_static_persistent_pointer_sinks);
     analysis.static_callback_field_sinks =
         std::move(final_static_callback_field_sinks);
+    analysis.static_callback_record_tables =
+        std::move(final_static_callback_record_tables);
     analysis.static_callback_contracts_materialized =
         static_callback_contracts_materialized;
     materialize_recursive_result_once();

@@ -16,7 +16,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t boot_analysis_cache_schema_version = 9u;
+inline constexpr std::uint32_t boot_analysis_cache_schema_version = 10u;
 inline constexpr std::uint32_t boot_analysis_cache_ir_schema_version = 3u;
 inline constexpr std::size_t maximum_boot_analysis_cache_artifact_bytes =
     256u * 1024u * 1024u;

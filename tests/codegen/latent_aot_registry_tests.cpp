@@ -773,17 +773,17 @@ int main() {
         require(
             cache_cold.modules.size() == 1u &&
                 cache_cold.rejected_files == 1u &&
-                cache_cold.analysis_candidate_duration_ms.size() == 2u &&
+                cache_cold.analysis_candidate_duration_ms.size() == 1u &&
                 cache_cold.analysis_cache_positive_hits == 0u &&
                 cache_cold.analysis_cache_negative_hits == 0u &&
-                cache_cold.analysis_cache_misses == 2u &&
-                cache_cold.analysis_cache_stores == 1u &&
-                cache_cold.analysis_full_pipeline_runs == 2u &&
+                cache_cold.analysis_cache_misses == 1u &&
+                cache_cold.analysis_cache_stores == 0u &&
+                cache_cold.analysis_full_pipeline_runs == 1u &&
                 saw_module_control_flow_update &&
                 saw_module_function_values &&
                 saw_candidate_executor_telemetry,
-            "Kalter Latent-AOT-Analysecache speicherte den sicher "
-            "source-derived negativen Treffer nicht exakt einmal oder "
+            "Kalter Latent-AOT-Analysecache analysierte einen sicher "
+            "source-derived abweisbaren Kandidaten oder "
                 "meldete keinen inneren CFA/FVA-/Executor-Fortschritt: modules=" +
                 std::to_string(cache_cold.modules.size()) + " rejected=" +
                 std::to_string(cache_cold.rejected_files) + " candidates=" +
@@ -809,7 +809,7 @@ int main() {
         }
         require(
             cache_warm.modules.size() == 1u &&
-                cache_warm.analysis_candidate_duration_ms.size() == 2u &&
+                cache_warm.analysis_candidate_duration_ms.size() == 1u &&
                 cache_warm.modules.front().program.size() ==
                     cache_cold.modules.front().program.size() &&
                 cache_warm.modules.front().program.front().entry_address ==
@@ -820,7 +820,7 @@ int main() {
                     cache_cold.modules.front().block_identities &&
                 cache_warm.rejected_files == 1u &&
                 cache_warm.analysis_cache_positive_hits == 0u &&
-                cache_warm.analysis_cache_negative_hits == 1u &&
+                cache_warm.analysis_cache_negative_hits == 0u &&
                 cache_warm.analysis_cache_misses == 1u &&
                 cache_warm.analysis_cache_stores == 0u &&
                 cache_warm.analysis_full_pipeline_runs == 1u &&
@@ -831,7 +831,7 @@ int main() {
                         std::string(64u, 'a'),
                         cache_cold.modules.front().program),
             "Warmer Latent-AOT-Lauf war nicht kanonisch identisch oder "
-            "verlor den sicheren negativen Shape-Treffer. "
+            "analysierte einen sicheren negativen Shape-Treffer. "
             "positive=" +
                 std::to_string(
                     cache_warm.analysis_cache_positive_hits) +
@@ -880,7 +880,7 @@ int main() {
             cache_subset_forge.modules.size() == 1u &&
                 cache_subset_forge.rejected_files == 1u &&
                 cache_subset_forge.analysis_cache_positive_hits == 0u &&
-                cache_subset_forge.analysis_cache_negative_hits == 1u &&
+                cache_subset_forge.analysis_cache_negative_hits == 0u &&
                 cache_subset_forge.analysis_cache_misses == 1u &&
                 cache_subset_forge.analysis_cache_stores == 0u &&
                 cache_subset_forge.analysis_full_pipeline_runs == 1u &&
@@ -900,11 +900,11 @@ int main() {
                 implementation_key_miss.rejected_files == 1u &&
                 implementation_key_miss.analysis_cache_positive_hits == 0u &&
                 implementation_key_miss.analysis_cache_negative_hits == 0u &&
-                implementation_key_miss.analysis_cache_misses == 2u &&
-                implementation_key_miss.analysis_cache_stores == 1u &&
-                implementation_key_miss.analysis_full_pipeline_runs == 2u,
+                implementation_key_miss.analysis_cache_misses == 1u &&
+                implementation_key_miss.analysis_cache_stores == 0u &&
+                implementation_key_miss.analysis_full_pipeline_runs == 1u,
             "Geaenderte genaue Analyzer-/Exporter-Implementierung "
-            "invalidierte positive und negative Cacheeintraege nicht.");
+            "invalidierte den zugelassenen Cacheeintrag nicht.");
 
         auto changed_cache_options = cached_options;
         ++changed_cache_options.maximum_analysis_contexts;
@@ -916,18 +916,29 @@ int main() {
                 cache_key_miss.rejected_files == 1u &&
                 cache_key_miss.analysis_cache_positive_hits == 0u &&
                 cache_key_miss.analysis_cache_negative_hits == 0u &&
-                cache_key_miss.analysis_cache_misses == 2u &&
-                cache_key_miss.analysis_cache_stores == 1u &&
-                cache_key_miss.analysis_full_pipeline_runs == 2u,
+                cache_key_miss.analysis_cache_misses == 1u &&
+                cache_key_miss.analysis_cache_stores == 0u &&
+                cache_key_miss.analysis_full_pipeline_runs == 1u,
             "Analyse-relevantes Budget invalidierte den "
             "Latent-AOT-Analysecache nicht.");
 
+        katana::codegen::CodegenCache(
+            analysis_cache_fixture.path)
+            .store_bounded(
+                positive_cache_key,
+                "module-analysis.bin",
+                std::string_view(
+                    reinterpret_cast<const char*>(
+                        subset_artifact.data()),
+                    subset_artifact.size()),
+                katana::codegen::
+                    maximum_latent_aot_analysis_cache_artifact_bytes);
         const auto corrupted_analysis_cache_artifacts =
             analysis_cache_fixture.corrupt_all_artifacts();
         require(
-            corrupted_analysis_cache_artifacts == 3u,
-            "Analysecache-Fixture fand nicht alle sicheren negativen "
-            "Artefakte der drei Schluessel: count=" +
+            corrupted_analysis_cache_artifacts == 1u,
+            "Analysecache-Fixture fand das zugelassene positive "
+            "Artefakt nicht: count=" +
                 std::to_string(corrupted_analysis_cache_artifacts));
         const auto cache_corrupt =
             katana::codegen::discover_latent_aot_modules(
@@ -941,10 +952,10 @@ int main() {
                 cache_corrupt.rejected_files == 1u &&
                 cache_corrupt.analysis_cache_positive_hits == 0u &&
                 cache_corrupt.analysis_cache_negative_hits == 0u &&
-                cache_corrupt.analysis_cache_misses == 2u &&
+                cache_corrupt.analysis_cache_misses == 1u &&
                 cache_corrupt.analysis_cache_corrupt_entries == 1u &&
-                cache_corrupt.analysis_cache_stores == 1u &&
-                cache_corrupt.analysis_full_pipeline_runs == 2u,
+                cache_corrupt.analysis_cache_stores == 0u &&
+                cache_corrupt.analysis_full_pipeline_runs == 1u,
             "Korrupter Latent-AOT-Analysecache wurde nicht fail-closed "
             "als Miss neu analysiert und begrenzt repariert.");
 
@@ -1080,7 +1091,7 @@ int main() {
         require(
             reverse_prologue.modules.size() == 1u &&
                 reverse_prologue.modules.front().entry_offsets ==
-                    (std::vector<std::uint32_t>{0u, 0x40u}) &&
+                    (std::vector<std::uint32_t>{0u, 0x10u, 0x40u}) &&
                 std::any_of(
                     reverse_prologue.modules.front().program.begin(),
                     reverse_prologue.modules.front().program.end(),

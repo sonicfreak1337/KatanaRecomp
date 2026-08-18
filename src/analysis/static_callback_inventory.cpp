@@ -84,9 +84,45 @@ struct CallbackPcLiteralIdentity final {
     bool operator==(const CallbackPcLiteralIdentity&) const = default;
 };
 
+struct CallbackScaledIndexOrigin final {
+    std::uint32_t load_instruction_address = 0u;
+    std::uint32_t scale = 1u;
+
+    bool operator==(const CallbackScaledIndexOrigin&) const = default;
+};
+
+struct CallbackTablePointerOrigin final {
+    std::int32_t header_table_pointer_displacement = 0;
+
+    bool operator==(const CallbackTablePointerOrigin&) const = default;
+};
+
+struct CallbackRecordPointerOrigin final {
+    std::int32_t header_table_pointer_displacement = 0;
+    std::uint32_t record_stride = 0u;
+
+    bool operator==(const CallbackRecordPointerOrigin&) const = default;
+};
+
+struct CallbackRecordLoadOrigin final {
+    std::int32_t header_table_pointer_displacement = 0;
+    std::uint32_t record_stride = 0u;
+    std::int32_t record_displacement = 0;
+    std::uint32_t load_instruction_address = 0u;
+
+    bool operator==(const CallbackRecordLoadOrigin&) const = default;
+};
+
 struct CallbackValue final {
     // Bit 0..3 corresponds to the function's incoming r4..r7.
     std::uint8_t input_mask = 0u;
+    // Subset of input_mask whose bits still denote the byte-identical incoming
+    // ABI value.  input_mask intentionally tracks broad address/data influence
+    // through memory loads; callback-sink contracts must not consume that
+    // broader lane because a pointer to a descriptor is not the callback word
+    // stored in the descriptor.  Only register moves, exact stack spills and
+    // zero-valued arithmetic preserve this identity lane.
+    std::uint8_t direct_input_mask = 0u;
     std::set<std::uint32_t> constants;
     bool constants_truncated = false;
     // True only when constants is the complete finite scalar domain on every
@@ -130,6 +166,15 @@ struct CallbackValue final {
     // Keeping the slot as well as the scalar prevents a merely plausible RAM
     // address from being treated as an identity-bound persistent table.
     std::optional<CallbackPcLiteralIdentity> pc_literal_identity;
+    // Structural provenance for descriptor tables whose header supplies a
+    // record base and whose runtime selector is expanded into a bounded byte
+    // stride.  This lane deliberately carries no address or target value: it
+    // only survives lossless register moves/arithmetic and is consumed later
+    // by the identity-bound latent-module scanner.
+    std::optional<CallbackScaledIndexOrigin> scaled_index_origin;
+    std::optional<CallbackTablePointerOrigin> table_pointer_origin;
+    std::optional<CallbackRecordPointerOrigin> record_pointer_origin;
+    std::optional<CallbackRecordLoadOrigin> record_load_origin;
     std::optional<std::int32_t> stack_address;
     bool may_be_stack = false;
     std::vector<CallbackFieldOrigin> field_origins;
@@ -791,6 +836,11 @@ void transform_scalar_value(CallbackValue& value,
         destination.input_mask | source.input_mask);
     changed = changed || input_mask != destination.input_mask;
     destination.input_mask = input_mask;
+    const auto direct_input_mask = static_cast<std::uint8_t>(
+        destination.direct_input_mask | source.direct_input_mask);
+    changed = changed ||
+              direct_input_mask != destination.direct_input_mask;
+    destination.direct_input_mask = direct_input_mask;
     const bool constants_complete = destination.constants_complete &&
                                     source.constants_complete;
     if (destination.constants_truncated || source.constants_truncated) {
@@ -867,6 +917,22 @@ void transform_scalar_value(CallbackValue& value,
     if (destination.pc_literal_identity != source.pc_literal_identity) {
         changed = changed || destination.pc_literal_identity.has_value();
         destination.pc_literal_identity.reset();
+    }
+    if (destination.scaled_index_origin != source.scaled_index_origin) {
+        changed = changed || destination.scaled_index_origin.has_value();
+        destination.scaled_index_origin.reset();
+    }
+    if (destination.table_pointer_origin != source.table_pointer_origin) {
+        changed = changed || destination.table_pointer_origin.has_value();
+        destination.table_pointer_origin.reset();
+    }
+    if (destination.record_pointer_origin != source.record_pointer_origin) {
+        changed = changed || destination.record_pointer_origin.has_value();
+        destination.record_pointer_origin.reset();
+    }
+    if (destination.record_load_origin != source.record_load_origin) {
+        changed = changed || destination.record_load_origin.has_value();
+        destination.record_load_origin.reset();
     }
     if (destination.stack_address != source.stack_address) {
         changed = changed || destination.stack_address.has_value();
@@ -1090,6 +1156,49 @@ void scale_affine_input(CallbackValue& value,
     value.affine_input->scale *= scale;
 }
 
+void scale_index_origin(CallbackValue& value,
+                        const std::uint32_t scale) noexcept {
+    if (!value.scaled_index_origin.has_value()) return;
+    if (scale == 0u ||
+        value.scaled_index_origin->scale >
+            maximum_static_code_pointer_table_stride / scale) {
+        value.scaled_index_origin.reset();
+        return;
+    }
+    value.scaled_index_origin->scale *= scale;
+}
+
+void attach_record_load_origin(CallbackValue& loaded,
+                               const CallbackValue& base,
+                               const std::int32_t displacement,
+                               const std::size_t width,
+                               const std::uint32_t instruction_address) {
+    if (width != sizeof(std::uint32_t) || displacement < 0 ||
+        (displacement & 3) != 0 || base.may_be_stack)
+        return;
+    if (base.record_pointer_origin.has_value()) {
+        const auto& record = *base.record_pointer_origin;
+        if (record.record_stride < sizeof(std::uint32_t) ||
+            static_cast<std::uint64_t>(displacement) +
+                    sizeof(std::uint32_t) >
+                record.record_stride)
+            return;
+        loaded.record_load_origin = CallbackRecordLoadOrigin{
+            record.header_table_pointer_displacement,
+            record.record_stride,
+            displacement,
+            instruction_address};
+        return;
+    }
+    // A self-describing table stores its element count immediately before
+    // the table pointer. Requiring at least one preceding word rules out a
+    // raw pointer-valued array base; the module scanner later proves the
+    // exact count, end address, entries, image identity and generation.
+    if (displacement >= static_cast<std::int32_t>(sizeof(std::uint32_t)))
+        loaded.table_pointer_origin =
+            CallbackTablePointerOrigin{displacement};
+}
+
 void add_immediate_to_minimum_alignment(CallbackValue& value,
                                         const std::int32_t immediate) noexcept {
     if (immediate == 0) return;
@@ -1188,8 +1297,12 @@ void transform_add_immediate(CallbackValue& value,
     // original ABI parameter itself is stored as a callback.
     if (!stack_pointer) value.input_mask = 0u;
     if (immediate != 0) {
+        value.direct_input_mask = 0u;
         value.affine_input.reset();
         value.pc_literal_identity.reset();
+        value.table_pointer_origin.reset();
+        value.record_pointer_origin.reset();
+        value.record_load_origin.reset();
         value.code_constants_complete = false;
     }
 }
@@ -1401,7 +1514,7 @@ void observe_persistent_store(CallbackFunctionModel& model,
     // caller of the constructor as a higher-order callback API.
     if (receiver_identity_proven) {
         model.local_sink_mask = static_cast<std::uint8_t>(
-            model.local_sink_mask | source.input_mask);
+            model.local_sink_mask | source.direct_input_mask);
     }
     if (source.code_constants_truncated)
         model.local_candidates_truncated = true;
@@ -1598,73 +1711,167 @@ void apply_instruction(CallbackFunctionModel& model,
         return;
     case K::ExtendUnsignedByte:
         state.registers[destination] = state.registers[source];
+        {
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value & 0xFFu; });
+        state.registers[destination].scaled_index_origin = index_origin;
+        }
         return;
     case K::ExtendUnsignedWord:
         state.registers[destination] = state.registers[source];
+        {
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value & 0xFFFFu; });
+        state.registers[destination].scaled_index_origin = index_origin;
+        }
         return;
     case K::ExtendSignedByte:
         state.registers[destination] = state.registers[source];
+        {
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) {
                 return static_cast<std::uint32_t>(static_cast<std::int32_t>(
                     static_cast<std::int8_t>(value)));
             });
+        state.registers[destination].scaled_index_origin = index_origin;
+        }
         return;
     case K::ExtendSignedWord:
         state.registers[destination] = state.registers[source];
+        {
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) {
                 return static_cast<std::uint32_t>(static_cast<std::int32_t>(
                     static_cast<std::int16_t>(value)));
             });
+        state.registers[destination].scaled_index_origin = index_origin;
+        }
         return;
     case K::ShiftLogicalLeftOne:
     case K::ShiftArithmeticLeftOne: {
         const auto affine = state.registers[destination].affine_input;
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 1u; });
         state.registers[destination].affine_input = affine;
+        state.registers[destination].scaled_index_origin = index_origin;
         scale_affine_input(state.registers[destination], 2u);
+        scale_index_origin(state.registers[destination], 2u);
         scale_minimum_alignment(state.registers[destination], 2u);
         return;
     }
     case K::ShiftLogicalLeftTwo: {
         const auto affine = state.registers[destination].affine_input;
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 2u; });
         state.registers[destination].affine_input = affine;
+        state.registers[destination].scaled_index_origin = index_origin;
         scale_affine_input(state.registers[destination], 4u);
+        scale_index_origin(state.registers[destination], 4u);
         scale_minimum_alignment(state.registers[destination], 4u);
         return;
     }
     case K::ShiftLogicalLeftEight: {
         const auto affine = state.registers[destination].affine_input;
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 8u; });
         state.registers[destination].affine_input = affine;
+        state.registers[destination].scaled_index_origin = index_origin;
         scale_affine_input(state.registers[destination], 256u);
+        scale_index_origin(state.registers[destination], 256u);
         scale_minimum_alignment(state.registers[destination], 256u);
         return;
     }
     case K::ShiftLogicalLeftSixteen: {
         const auto affine = state.registers[destination].affine_input;
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
         transform_scalar_value(
             state.registers[destination], image, native_entry_shapes,
             [](const std::uint32_t value) { return value << 16u; });
         state.registers[destination].affine_input = affine;
+        state.registers[destination].scaled_index_origin = index_origin;
         scale_affine_input(state.registers[destination], 65'536u);
+        scale_index_origin(state.registers[destination], 65'536u);
         scale_minimum_alignment(state.registers[destination], 65'536u);
+        return;
+    }
+    case K::AndImmediate: {
+        const auto index_origin =
+            state.registers[destination].scaled_index_origin;
+        set_unknown(state.registers[destination]);
+        state.registers[destination].scaled_index_origin = index_origin;
+        return;
+    }
+    case K::AndRegister: {
+        const auto left = state.registers[destination];
+        set_unknown(state.registers[destination]);
+        // A mask changes the selector domain, but every surviving selector
+        // is still expanded by the subsequently proven byte stride. The
+        // origin is structural rather than a claim that the scalar transform
+        // remained affine.
+        state.registers[destination].scaled_index_origin =
+            left.scaled_index_origin;
+        return;
+    }
+    case K::AddRegister: {
+        const auto left = state.registers[destination];
+        const auto right = state.registers[source];
+        std::optional<CallbackScaledIndexOrigin> index_origin;
+        if (left.scaled_index_origin.has_value() &&
+            right.scaled_index_origin.has_value() &&
+            left.scaled_index_origin->load_instruction_address ==
+                right.scaled_index_origin->load_instruction_address &&
+            left.scaled_index_origin->scale <=
+                maximum_static_code_pointer_table_stride -
+                    right.scaled_index_origin->scale) {
+            index_origin = left.scaled_index_origin;
+            index_origin->scale += right.scaled_index_origin->scale;
+        }
+
+        std::optional<CallbackRecordPointerOrigin> record_origin;
+        const auto combine_record =
+            [&](const CallbackValue& table,
+                const CallbackValue& index) {
+                if (!table.table_pointer_origin.has_value() ||
+                    !index.scaled_index_origin.has_value() ||
+                    index.scaled_index_origin->scale <
+                        sizeof(std::uint32_t) ||
+                    index.scaled_index_origin->scale >
+                        maximum_static_code_pointer_table_stride ||
+                    (index.scaled_index_origin->scale & 3u) != 0u)
+                    return;
+                record_origin = CallbackRecordPointerOrigin{
+                    table.table_pointer_origin
+                        ->header_table_pointer_displacement,
+                    index.scaled_index_origin->scale};
+            };
+        combine_record(left, right);
+        if (!record_origin.has_value()) combine_record(right, left);
+
+        set_unknown(state.registers[destination]);
+        state.registers[destination].scaled_index_origin = index_origin;
+        state.registers[destination].record_pointer_origin = record_origin;
         return;
     }
     case K::AddImmediate:
@@ -1771,7 +1978,11 @@ void apply_instruction(CallbackFunctionModel& model,
                                          native_entry_shapes));
             attach_callback_field_origin(loaded_value, base, 0u, width,
                                          line.address);
+            attach_record_load_origin(loaded_value, base, 0, width,
+                                      line.address);
         }
+        loaded_value.scaled_index_origin =
+            CallbackScaledIndexOrigin{line.address, 1u};
         state.registers[destination] = std::move(loaded_value);
         return;
     }
@@ -1792,7 +2003,12 @@ void apply_instruction(CallbackFunctionModel& model,
             attach_callback_field_origin(loaded_value, base,
                                          instruction.displacement, width,
                                          line.address);
+            attach_record_load_origin(loaded_value, base,
+                                      instruction.displacement, width,
+                                      line.address);
         }
+        loaded_value.scaled_index_origin =
+            CallbackScaledIndexOrigin{line.address, 1u};
         state.registers[destination] = std::move(loaded_value);
         return;
     }
@@ -1825,6 +2041,8 @@ void apply_instruction(CallbackFunctionModel& model,
                     static_cast<std::int32_t>(*index.constants.begin()),
                     width, line.address);
         }
+        loaded_value.scaled_index_origin =
+            CallbackScaledIndexOrigin{line.address, 1u};
         state.registers[destination] = std::move(loaded_value);
         return;
     }
@@ -1843,7 +2061,11 @@ void apply_instruction(CallbackFunctionModel& model,
                                          native_entry_shapes));
             attach_callback_field_origin(loaded, base, 0u, width,
                                          line.address);
+            attach_record_load_origin(loaded, base, 0, width,
+                                      line.address);
         }
+        loaded.scaled_index_origin =
+            CallbackScaledIndexOrigin{line.address, 1u};
         transform_add_immediate(state.registers[source], image,
                                 native_entry_shapes,
                                 static_cast<std::int32_t>(width),
@@ -1941,6 +2163,8 @@ void clobber_call_volatile_registers(CallbackState& state) {
     for (std::uint8_t index = 0u; index < 4u; ++index) {
         initial.registers[4u + index].input_mask =
             static_cast<std::uint8_t>(1u << index);
+        initial.registers[4u + index].direct_input_mask =
+            static_cast<std::uint8_t>(1u << index);
         initial.registers[4u + index].affine_input =
             CallbackAffineInput{index, 1u};
     }
@@ -2035,7 +2259,7 @@ void clobber_call_volatile_registers(CallbackState& state) {
                 const auto& branch = branch_before_delay;
                 model.local_sink_mask = static_cast<std::uint8_t>(
                     model.local_sink_mask |
-                    branch.input_mask);
+                    branch.direct_input_mask);
                 if (branch.field_origins_truncated)
                     model.field_sinks_truncated = true;
                 for (const auto& field : branch.field_origins) {
@@ -2101,6 +2325,39 @@ void clobber_call_volatile_registers(CallbackState& state) {
     return model;
 }
 
+[[nodiscard]] std::optional<StaticCallbackRecordTableContract>
+callback_record_table_contract(
+    const FunctionInfo& function,
+    const CallbackCall& call,
+    const std::uint8_t callback_argument) {
+    if (callback_argument >= 4u) return std::nullopt;
+    const auto& argument = call.arguments[callback_argument];
+    if (!argument.record_load_origin.has_value()) return std::nullopt;
+    const auto& origin = *argument.record_load_origin;
+    if (origin.header_table_pointer_displacement <
+            static_cast<std::int32_t>(sizeof(std::uint32_t)) ||
+        (origin.header_table_pointer_displacement & 3) != 0 ||
+        origin.record_stride < sizeof(std::uint32_t) ||
+        origin.record_stride > maximum_static_code_pointer_table_stride ||
+        (origin.record_stride & 3u) != 0u ||
+        origin.record_displacement < 0 ||
+        (origin.record_displacement & 3) != 0 ||
+        static_cast<std::uint64_t>(origin.record_displacement) +
+                sizeof(std::uint32_t) >
+            origin.record_stride)
+        return std::nullopt;
+    return StaticCallbackRecordTableContract{
+        function.entry_address,
+        call.instruction_address,
+        origin.load_instruction_address,
+        call.callee,
+        origin.header_table_pointer_displacement,
+        origin.record_stride,
+        origin.record_displacement,
+        callback_argument,
+        static_cast<std::uint8_t>(sizeof(std::uint32_t))};
+}
+
 void canonicalize_candidate(StoredCodeAddressCandidate& candidate) {
     auto canonicalize = [](auto& values) {
         std::sort(values.begin(), values.end());
@@ -2144,13 +2401,17 @@ GuardedCodeInventory analyze_static_callback_inventory(
     std::vector<StaticPersistentPointerSinkContract>* const
         persistent_pointer_sink_contracts,
     std::vector<StaticCallbackFieldSinkContract>* const
-        callback_field_sink_contracts) {
+        callback_field_sink_contracts,
+    std::vector<StaticCallbackRecordTableContract>* const
+        callback_record_table_contracts) {
     if (callback_sink_contracts != nullptr)
         callback_sink_contracts->clear();
     if (persistent_pointer_sink_contracts != nullptr)
         persistent_pointer_sink_contracts->clear();
     if (callback_field_sink_contracts != nullptr)
         callback_field_sink_contracts->clear();
+    if (callback_record_table_contracts != nullptr)
+        callback_record_table_contracts->clear();
     GuardedCodeInventory inventory;
     inventory.raw_stored_candidate_budget = maximum_inventory_candidates;
     inventory.candidate_budget = maximum_inventory_candidates;
@@ -2344,7 +2605,7 @@ GuardedCodeInventory analyze_static_callback_inventory(
             // typed even when a mutable free-list/list-head transition keeps
             // the later scheduler receiver identity intentionally abstract.
             const bool locally_typed_callback =
-                store.source.input_mask != 0u &&
+                store.source.direct_input_mask != 0u &&
                 std::any_of(
                     model.persistent_stores.begin(),
                     model.persistent_stores.end(),
@@ -2492,7 +2753,8 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 if ((sink & static_cast<std::uint8_t>(1u << argument)) == 0u)
                     continue;
                 propagated = static_cast<std::uint8_t>(
-                    propagated | call.arguments[argument].input_mask);
+                    propagated |
+                    call.arguments[argument].direct_input_mask);
             }
             auto& caller_sink = sink_masks[caller];
             const auto next = static_cast<std::uint8_t>(caller_sink |
@@ -2510,6 +2772,60 @@ GuardedCodeInventory analyze_static_callback_inventory(
             callback_sink_contracts->push_back(
                 {function_address, argument_mask});
         }
+    }
+
+    if (callback_record_table_contracts != nullptr) {
+        std::map<std::uint32_t, const FunctionInfo*> functions_by_entry;
+        for (const auto& function : functions)
+            functions_by_entry.emplace(function.entry_address, &function);
+        for (const auto& [entry, model] : models) {
+            const auto function = functions_by_entry.find(entry);
+            if (function == functions_by_entry.end()) continue;
+            for (const auto& call : model.calls) {
+                const auto sink = sink_masks.find(call.callee);
+                if (sink == sink_masks.end()) continue;
+                for (std::uint8_t argument = 0u; argument < 4u;
+                     ++argument) {
+                    if ((sink->second & static_cast<std::uint8_t>(
+                                            1u << argument)) == 0u)
+                        continue;
+                    const auto contract = callback_record_table_contract(
+                        *function->second, call, argument);
+                    if (contract.has_value())
+                        callback_record_table_contracts->push_back(
+                            *contract);
+                }
+            }
+        }
+        std::sort(
+            callback_record_table_contracts->begin(),
+            callback_record_table_contracts->end(),
+            [](const auto& left, const auto& right) {
+                return std::tie(
+                           left.function_address,
+                           left.call_instruction_address,
+                           left.callback_load_instruction_address,
+                           left.callback_sink_address,
+                           left.header_table_pointer_displacement,
+                           left.record_stride,
+                           left.callback_displacement,
+                           left.callback_argument,
+                           left.width) <
+                       std::tie(
+                           right.function_address,
+                           right.call_instruction_address,
+                           right.callback_load_instruction_address,
+                           right.callback_sink_address,
+                           right.header_table_pointer_displacement,
+                           right.record_stride,
+                           right.callback_displacement,
+                           right.callback_argument,
+                           right.width);
+            });
+        callback_record_table_contracts->erase(
+            std::unique(callback_record_table_contracts->begin(),
+                        callback_record_table_contracts->end()),
+            callback_record_table_contracts->end());
     }
 
 
