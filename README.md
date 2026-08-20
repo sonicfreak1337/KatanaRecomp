@@ -25,9 +25,9 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 115, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 116, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 56, Function-Analysis-Epoch-Schema 28, lokales
+Analyzer-ABI 57, Function-Analysis-Epoch-Schema 28, lokales
 In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
@@ -54,7 +54,24 @@ Backendbereitschaft und Hotplug bleiben
 fail-closed. Der Runtime-/CLI-Build ist sauber; der physische DualSense-
 Menutest steht aus, bis ein Nutzer am System ist.
 
-Die native Soundbank-Grenze steht auf Vertrag `4` und bildet Manatee-
+Der aktuelle agentische Analyseworkflow publiziert eine transaktionale,
+identitaetsgebundene Materialization-World samt Frontier- und Resume-Ledger.
+Runtimebeobachtungen bleiben `ObservedHint` und erzeugen weder AOT-Roots noch
+Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
+generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
+vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
+Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
+Source-Stand Runtime-ABI 116 / Analyzer-ABI 57; historische Exportzahlen
+darunter bleiben als solche gekennzeichnet.
+
+Der naechste Produkt-Export ist derzeit bewusst gesperrt: Der neue Analyzer
+muss zuerst einen vollstaendigen `analyze-port`-Lauf mit materiellem Root-/
+Modul-/Abdeckungsgewinn und expliziten Unknowns liefern. Fehlende
+Disassembly ist kein Unreachability-Beweis; geladene Overlays werden nur mit
+Identitaet und Generation akzeptiert. Bis zum expliziten Gate bleibt der
+aktuelle v141-Export der letzte Produktnachweis.
+
+Die native Soundbank-Grenze steht auf Vertrag `6` und bildet Manatee-
 Spielabsicht direkt auf Host-PCM ab. MLT/SMPB/SMSB/SFPB/SFOB/SFPW,
 PCM16/PCM8/AICA-ADPCM, Programme, Layer/Splits, Sequenzen, Loops,
 Controller, Pitch/Pan/Sends, Huelle, Filter/LFO und die im Korpus belegte
@@ -68,7 +85,8 @@ Sequenzports bereit, behaelt Controls vor dem ersten Bind und behandelt Stop
 beziehungsweise Note-off auf gueltigen ungebundenen Ports idempotent.
 Eine identitaetsgebundene Titelcollection wird im nativen Ablauf geladen.
 
-Der aktuelle v114-Export umfasst `5.778` Funktionen in `167` Partitionen.
+Der folgende v114-Export ist eine historische Vergleichsmessung und umfasst
+`5.778` Funktionen in `167` Partitionen.
 Die Hardwareclosure enthaelt `1.423` bekannte Sites und `1.423` offene
 Anforderungen (`1.371` hook-missing, `51` Progress-Waits, `1`
 Root-Ownership); `1.110` Sites werden durch vollstaendige Hooks ersetzt und

@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 7u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 8u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -71,6 +71,10 @@ struct NativePortGraphicsConfig final {
     bool synchronize_present = true;
     std::uint32_t maximum_textures = 4'096u;
     std::uint64_t maximum_texture_bytes = 1ull << 30u;
+    // Persistent meshes are immutable after creation. Geometry changes use a
+    // destroy/create generation boundary so stale handles fail closed.
+    std::uint32_t maximum_meshes = 65'536u;
+    std::uint64_t maximum_mesh_bytes = 1ull << 30u;
     std::uint32_t maximum_transient_vertices = 1'048'576u;
     std::uint32_t maximum_transient_indices = 3'145'728u;
     // Shared upper bound for lazily materialized blend, depth, rasterizer and
@@ -276,6 +280,13 @@ struct NativePortDepthMapping final {
     float logarithm_divisor = 34.0f;
 };
 
+enum class NativePortDepthBufferConvention : std::uint8_t {
+    // Ordinary D3D clip-space depth: near is zero, far is one.
+    Forward,
+    // Positive reciprocal depth: nearer fragments produce larger values.
+    ReciprocalPositive,
+};
+
 enum class NativePortCullMode : std::uint8_t {
     None,
     Front,
@@ -453,6 +464,30 @@ struct NativePortVertex final {
     float depth_coordinate = 0.0f;
 };
 
+struct NativePortMeshHandle final {
+    std::uint64_t value = 0u;
+    [[nodiscard]] explicit constexpr operator bool() const noexcept {
+        return value != 0u;
+    }
+    friend constexpr bool operator==(NativePortMeshHandle,
+                                     NativePortMeshHandle) = default;
+};
+
+// Explicit immutable geometry ownership. Creation validates the complete
+// source, performs only transform-independent flat-last/small-triangle
+// conversion, and uploads persistent GPU buffers exactly once. Ordinary
+// triangle strips remain strips when no conversion is required.
+struct NativePortMeshConfig final {
+    std::span<const NativePortVertex> vertices;
+    std::span<const std::uint32_t> indices;
+    NativePortPrimitiveTopology topology =
+        NativePortPrimitiveTopology::TriangleList;
+    NativePortShadingMode shading = NativePortShadingMode::Smooth;
+    // Zero disables rejection. A positive threshold is measured only in the
+    // submitted vertex XY space so it is independent of per-draw transforms.
+    float small_triangle_area_threshold = 0.0f;
+};
+
 struct NativePortMatrix4x4 final {
     // Row-major. The shader evaluates row-vector position * transform.
     std::array<float, 16u> values{
@@ -465,6 +500,10 @@ struct NativePortMatrix4x4 final {
 struct NativePortDrawPacket final {
     std::span<const NativePortVertex> vertices;
     std::span<const std::uint32_t> indices;
+    // Mutually exclusive with vertices/indices. topology, shading and the
+    // submitted-space small-triangle threshold must match the immutable mesh
+    // creation contract; all remaining state stays dynamic per draw.
+    NativePortMeshHandle mesh;
     NativePortMatrix4x4 transform;
     NativePortMatrix4x4 normal_transform;
     NativePortTextureHandle texture;
@@ -485,15 +524,23 @@ struct NativePortDrawPacket final {
 struct NativePortFrameConfig final {
     std::array<float, 4u> clear_color{0.0f, 0.0f, 0.0f, 1.0f};
     float clear_depth = 1.0f;
+    NativePortDepthBufferConvention depth_buffer =
+        NativePortDepthBufferConvention::Forward;
 };
 
 struct NativePortGraphicsSnapshot final {
     std::uint64_t begun_frames = 0u;
     std::uint64_t presented_frames = 0u;
     std::uint64_t draw_calls = 0u;
+    // All texture and geometry transfers combined.
     std::uint64_t uploaded_bytes = 0u;
+    std::uint64_t transient_geometry_uploaded_bytes = 0u;
+    std::uint64_t persistent_geometry_uploaded_bytes = 0u;
+    std::uint64_t persistent_mesh_draw_calls = 0u;
     std::uint64_t swap_chain_resizes = 0u;
+    std::uint64_t persistent_mesh_bytes = 0u;
     std::uint32_t live_textures = 0u;
+    std::uint32_t live_meshes = 0u;
     std::uint32_t platform_error_code = 0u;
     bool hardware_accelerated = false;
     bool frame_open = false;
@@ -532,6 +579,10 @@ class NativePortGraphicsDevice final {
         NativePortTextureHandle texture,
         std::span<const NativePortImageView> mip_levels);
     void destroy_texture(NativePortTextureHandle texture);
+
+    [[nodiscard]] NativePortMeshHandle create_mesh(
+        const NativePortMeshConfig& config);
+    void destroy_mesh(NativePortMeshHandle mesh);
 
     void begin_frame(const NativePortFrameConfig& config = {});
     void draw(const NativePortDrawPacket& packet);

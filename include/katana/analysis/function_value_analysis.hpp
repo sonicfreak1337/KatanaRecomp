@@ -33,7 +33,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 4u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 5u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -195,6 +195,10 @@ struct InventorySavedStackEpochSummary {
     bool present = false;
     bool unresolved = false;
     bool tracks_current_epoch = false;
+    // Bounded coordinates of the saved pointer relative to the active r15
+    // epoch.  A single entry is exact; multiple entries are an uncorrelated
+    // MAY-set and must not be used for exact slot erasure.
+    std::vector<std::int32_t> current_epoch_base_offsets;
     bool candidate_payload_lost = false;
     // Depth-capped nested saved-SP lineage with no candidate payload. This is
     // an alias fact, deliberately distinct from candidate_payload_lost.
@@ -205,6 +209,11 @@ struct InventorySavedStackEpochSummary {
     // Outer coordinate loss must not turn an inner saved-SP into a direct
     // callback.  Keep the bounded nested epoch alternatives separately.
     std::vector<InventorySavedStackEpochSummary> unresolved_nested_epochs;
+    // A join between the still-current epoch and an already detached epoch
+    // must preserve payload correlation.  This bounded top-level partition
+    // contains at most one channel of each origin; unlike nested_epochs these
+    // entries are alternatives for this saved pointer itself.
+    std::vector<InventorySavedStackEpochSummary> origin_channels;
 
     bool operator==(const InventorySavedStackEpochSummary&) const = default;
 };
@@ -302,15 +311,18 @@ struct FunctionValueSummary {
     InventoryCandidateCarrier current_stack_epoch_mutation_carrier;
     InventorySavedStackEpochSummary current_stack_epoch_mutation_epoch;
     bool current_stack_epoch_mutation_callback_loss = false;
-    // Bounded top for payload-free aliases whose exact storage identity was
-    // widened away inside this function (stack=1, memory=2).
+    // Bounded detached-origin channel for payload-free aliases whose exact
+    // storage identity was widened away (stack=1, memory=2).
     std::uint8_t inventory_unresolved_saved_stack_alias_sources = 0u;
-    // Current-epoch tracking is scoped to the same lost storage domain as
-    // `inventory_unresolved_saved_stack_alias_sources` (stack=1, memory=2).
-    // A single shared bool would let a stack-only mutation poison a retained
-    // memory alias (and vice versa).
+    // Independent current-origin channel for the same storage domains.  A
+    // source bit may exist in both masks after a join; neither channel then
+    // subsumes or re-scopes the other.
     std::uint8_t inventory_unresolved_saved_stack_alias_tracks_current_sources = 0u;
     bool inventory_unresolved_stack_callback_loss = false;
+    // Sticky loss caused by a proven callback-like mutation through an alias
+    // that still names a detached stack epoch.  It must not be replayed into
+    // the caller's current r15 namespace at apply_call.
+    bool inventory_detached_stack_callback_loss = false;
     bool inventory_unresolved_memory_callback_loss = false;
     // Bounded storage-identity loss is scoped to the domain that lost the
     // exact key (stack=1, memory=2).  A stack switch discards only stack.

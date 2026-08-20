@@ -4432,6 +4432,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     image.analysis_instance_identity();
                 function_program_delta.image_revision =
                     image.analysis_revision();
+                function_program_delta.image_immutable_generation =
+                    image.immutable_generation();
                 function_program_delta.kind =
                     full_function_program
                         ? detail::FunctionProgramDeltaKind::Unknown
@@ -5091,6 +5093,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             function_value_session.published_epoch_version();
         terminal_delta.image_identity = image.analysis_instance_identity();
         terminal_delta.image_revision = image.analysis_revision();
+        terminal_delta.image_immutable_generation =
+            image.immutable_generation();
         function_value_session.stage_next_function_program_delta(
             std::move(terminal_delta));
         FunctionValueAnalysisProgressCallback terminal_progress_callback;

@@ -40,18 +40,25 @@ struct ExactFunctionOwnershipRange final {
     std::uint64_t end = 0u;
 };
 
-const ExactFunctionOwnershipRange* exact_function_owner(
+template <typename Callback>
+bool for_each_exact_function_owner(
     const std::span<const ExactFunctionOwnershipRange> ranges,
-    const std::uint32_t address) noexcept {
+    const std::uint32_t address,
+    Callback&& callback) {
     const auto after = std::upper_bound(
         ranges.begin(), ranges.end(), address,
         [](const auto candidate, const auto& range) {
             return candidate < range.entry;
         });
-    if (after == ranges.begin()) return nullptr;
-    const auto& range = *std::prev(after);
-    return static_cast<std::uint64_t>(address) < range.end ? &range
-                                                           : nullptr;
+    bool found = false;
+    auto current = after;
+    while (current != ranges.begin()) {
+        --current;
+        if (static_cast<std::uint64_t>(address) >= current->end) break;
+        found = true;
+        callback(*current);
+    }
+    return found;
 }
 
 } // namespace
@@ -118,20 +125,31 @@ discover_functions_from_blocks(
                   return left.entry < right.entry;
               });
     for (std::size_t index = 1u; index < exact_ranges.size(); ++index) {
-        if (exact_ranges[index].entry < exact_ranges[index - 1u].end)
+        if (exact_ranges[index].entry < exact_ranges[index - 1u].end &&
+            exact_ranges[index].end != exact_ranges[index - 1u].end)
             throw std::invalid_argument(
                 "Explizite Funktionsgrenzen ueberlappen sich.");
     }
 
     std::unordered_map<std::uint32_t, std::set<std::uint32_t>>
         interior_entries_by_owner;
+    const auto record_interior_owners =
+        [&](const std::uint32_t address) {
+            return for_each_exact_function_owner(
+                exact_ranges, address,
+                [&](const auto& owner) {
+                    interior_entries_by_owner[owner.entry].insert(address);
+                });
+        };
     const auto classify_entry = [&](const std::uint32_t address) {
         if (!block_by_start.contains(address)) return;
-        const auto* owner = exact_function_owner(exact_ranges, address);
-        if (owner != nullptr && owner->entry != address) {
-            interior_entries_by_owner[owner->entry].insert(address);
+        // An explicit entry remains an independent function even when two
+        // exact functions share the same suffix. Non-entry targets inside
+        // such a suffix belong to every declared owner and must not create a
+        // synthetic nested function.
+        if (!exact_ends.contains(address) &&
+            record_interior_owners(address))
             return;
-        }
         known_entries.insert(address);
     };
     for (const auto& boundary : seed_boundaries)
@@ -154,15 +172,12 @@ discover_functions_from_blocks(
         if (edge.kind != ResolvedControlFlowKind::Call ||
             !block_by_start.contains(edge.target_address))
             continue;
-        const auto* owner = exact_function_owner(
-            exact_ranges, edge.target_address);
-        if (owner != nullptr && owner->entry != edge.target_address) {
+        if (!exact_ends.contains(edge.target_address) &&
+            record_interior_owners(edge.target_address)) {
             // Guarded or partial indirect-call evidence still denotes a real
             // externally reachable block when it lands inside an exact
-            // function. It must be emitted under that owner, but it must
-            // never manufacture a nested function boundary.
-            interior_entries_by_owner[owner->entry].insert(
-                edge.target_address);
+            // function. It must be emitted under every shared owner, but it
+            // must never manufacture a nested function boundary.
         } else if (control_flow_evidence_complete(
                        resolved_edge_evidence(edge))) {
             classify_entry(edge.target_address);
@@ -197,6 +212,17 @@ discover_functions_from_blocks(
         if (exact_end != exact_ends.end())
             function.size =
                 static_cast<std::uint32_t>(exact_end->second - entry);
+        const auto is_shared_exact_entry =
+            [&](const std::uint32_t candidate) {
+                if (exact_end == exact_ends.end() || candidate == entry)
+                    return false;
+                const auto candidate_end = exact_ends.find(candidate);
+                return candidate_end != exact_ends.end() &&
+                       candidate_end->second == exact_end->second &&
+                       candidate >= entry &&
+                       static_cast<std::uint64_t>(candidate) <
+                           exact_end->second;
+            };
 
         std::deque<std::uint32_t> pending_blocks;
         std::unordered_set<std::uint32_t> visited_blocks;
@@ -216,12 +242,20 @@ discover_functions_from_blocks(
                 continue;
             }
 
-            if (block_address != entry && known_entries.contains(block_address)) {
+            if (block_address != entry &&
+                known_entries.contains(block_address) &&
+                !is_shared_exact_entry(block_address)) {
                 continue;
             }
-            if (const auto* owner = exact_function_owner(
-                    exact_ranges, block_address);
-                owner != nullptr && owner->entry != entry)
+            const bool block_in_current_exact =
+                exact_end != exact_ends.end() &&
+                block_address >= entry &&
+                static_cast<std::uint64_t>(block_address) <
+                    exact_end->second;
+            const bool block_has_exact_owner =
+                for_each_exact_function_owner(
+                    exact_ranges, block_address, [](const auto&) {});
+            if (block_has_exact_owner && !block_in_current_exact)
                 continue;
             if (exact_end != exact_ends.end() &&
                 (block_address < entry ||
@@ -250,20 +284,31 @@ discover_functions_from_blocks(
 
             if (flow == katana::sh4::ControlFlowKind::Call && control.target_address.has_value()) {
                 const auto target = *control.target_address;
-                const auto* target_owner = exact_function_owner(
-                    exact_ranges, target);
-                if (target_owner != nullptr &&
-                    target_owner->entry == entry) {
+                const bool target_is_local_exact_interior =
+                    exact_end != exact_ends.end() &&
+                    target >= entry &&
+                    static_cast<std::uint64_t>(target) <
+                        exact_end->second &&
+                    !exact_ends.contains(target);
+                if (target == entry || target_is_local_exact_interior) {
                     if (block_by_start.contains(target))
                         pending_blocks.push_back(target);
                 } else {
-                    const auto callee = target_owner != nullptr
-                                            ? target_owner->entry
-                                            : target;
-                    function.direct_callees.push_back(callee);
-                    if (block_by_start.contains(callee) &&
-                        !processed_entries.contains(callee))
-                        pending_entries.push_back(callee);
+                    const auto append_callee = [&](const auto callee) {
+                        function.direct_callees.push_back(callee);
+                        if (block_by_start.contains(callee) &&
+                            !processed_entries.contains(callee))
+                            pending_entries.push_back(callee);
+                    };
+                    if (exact_ends.contains(target)) {
+                        append_callee(target);
+                    } else if (!for_each_exact_function_owner(
+                                   exact_ranges, target,
+                                   [&](const auto& owner) {
+                                       append_callee(owner.entry);
+                                   })) {
+                        append_callee(target);
+                    }
                 }
             }
 
@@ -275,25 +320,36 @@ discover_functions_from_blocks(
             for (auto edge = edge_begin; edge != edge_end; ++edge) {
                 if (edge->second->kind == ResolvedControlFlowKind::Call) {
                     const auto target = edge->second->target_address;
-                    const auto* target_owner = exact_function_owner(
-                        exact_ranges, target);
                     function.indirect_call_sites.push_back(control.address);
-                    if (target_owner != nullptr &&
-                        target_owner->entry == entry) {
+                    const bool complete = control_flow_evidence_complete(
+                        resolved_edge_evidence(*edge->second));
+                    const bool target_is_local_exact_interior =
+                        exact_end != exact_ends.end() &&
+                        target >= entry &&
+                        static_cast<std::uint64_t>(target) <
+                            exact_end->second &&
+                        !exact_ends.contains(target);
+                    if (target == entry || target_is_local_exact_interior) {
                         if (control_flow_evidence_complete(
                                 resolved_edge_evidence(*edge->second)) &&
                             block_by_start.contains(target))
                             pending_blocks.push_back(target);
                     } else {
-                        const auto callee = target_owner != nullptr
-                                                ? target_owner->entry
-                                                : target;
-                        function.direct_callees.push_back(callee);
-                        if (control_flow_evidence_complete(
-                                resolved_edge_evidence(*edge->second)) &&
-                            block_by_start.contains(callee) &&
-                            !processed_entries.contains(callee))
-                            pending_entries.push_back(callee);
+                        const auto append_callee = [&](const auto callee) {
+                            function.direct_callees.push_back(callee);
+                            if (complete && block_by_start.contains(callee) &&
+                                !processed_entries.contains(callee))
+                                pending_entries.push_back(callee);
+                        };
+                        if (exact_ends.contains(target)) {
+                            append_callee(target);
+                        } else if (!for_each_exact_function_owner(
+                                       exact_ranges, target,
+                                       [&](const auto& owner) {
+                                           append_callee(owner.entry);
+                                       })) {
+                            append_callee(target);
+                        }
                     }
                 }
             }
@@ -304,11 +360,15 @@ discover_functions_from_blocks(
                     (successor < entry ||
                      static_cast<std::uint64_t>(successor) >=
                          exact_end->second);
-                const auto* successor_owner = exact_function_owner(
-                    exact_ranges, successor);
+                const bool successor_in_current_exact =
+                    exact_end != exact_ends.end() &&
+                    successor >= entry &&
+                    static_cast<std::uint64_t>(successor) <
+                        exact_end->second;
                 const bool crosses_exact_owner =
-                    successor_owner != nullptr &&
-                    successor_owner->entry != entry;
+                    !successor_in_current_exact &&
+                    for_each_exact_function_owner(
+                        exact_ranges, successor, [](const auto&) {});
                 if (crosses_exact_boundary || crosses_exact_owner) {
                     if (flow ==
                             katana::sh4::ControlFlowKind::
@@ -323,7 +383,8 @@ discover_functions_from_blocks(
                     continue;
                 }
 
-                if (successor != entry && known_entries.contains(successor)) {
+                if (successor != entry && known_entries.contains(successor) &&
+                    !is_shared_exact_entry(successor)) {
                     if (flow == katana::sh4::ControlFlowKind::UnconditionalBranch ||
                         flow == katana::sh4::ControlFlowKind::IndirectBranch)
                         function.tail_jump_targets.push_back(successor);
@@ -350,6 +411,79 @@ discover_functions_from_blocks(
     for (std::size_t index = 0; index < functions.size(); ++index) {
         functions[index].id = index;
     }
+
+    const auto function_for_entry =
+        [&](const std::uint32_t entry_address) -> const FunctionInfo* {
+            const auto found = std::lower_bound(
+                functions.begin(), functions.end(), entry_address,
+                [](const FunctionInfo& function, const auto candidate) {
+                    return function.entry_address < candidate;
+                });
+            return found != functions.end() &&
+                           found->entry_address == entry_address
+                       ? &*found
+                       : nullptr;
+        };
+    for (std::size_t group_begin = 0u;
+         group_begin < exact_ranges.size();) {
+        std::size_t group_end = group_begin + 1u;
+        while (group_end < exact_ranges.size() &&
+               exact_ranges[group_end].entry <
+                   exact_ranges[group_begin].end &&
+               exact_ranges[group_end].end ==
+                   exact_ranges[group_begin].end) {
+            ++group_end;
+        }
+        if (group_end - group_begin > 1u) {
+            const FunctionInfo* smallest = nullptr;
+            for (auto index = group_begin; index < group_end; ++index) {
+                const auto* function =
+                    function_for_entry(exact_ranges[index].entry);
+                if (function == nullptr) {
+                    throw std::invalid_argument(
+                        "Explizite Funktionsgrenzen ueberlappen sich.");
+                }
+                if (smallest == nullptr ||
+                    function->block_addresses.size() <
+                        smallest->block_addresses.size()) {
+                    smallest = function;
+                }
+            }
+
+            const auto final_halfword = static_cast<std::uint32_t>(
+                exact_ranges[group_begin].end - 2u);
+            const bool has_proven_shared_tail = std::any_of(
+                smallest->block_addresses.begin(),
+                smallest->block_addresses.end(),
+                [&](const auto block_address) {
+                    const auto block = block_by_start.find(block_address);
+                    if (block == block_by_start.end() ||
+                        blocks[block->second].lines.empty() ||
+                        blocks[block->second].end_address !=
+                            final_halfword) {
+                        return false;
+                    }
+                    for (auto index = group_begin;
+                         index < group_end; ++index) {
+                        const auto* function = function_for_entry(
+                            exact_ranges[index].entry);
+                        if (!std::binary_search(
+                                function->block_addresses.begin(),
+                                function->block_addresses.end(),
+                                block_address)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            if (!has_proven_shared_tail) {
+                throw std::invalid_argument(
+                    "Explizite Funktionsgrenzen ueberlappen sich.");
+            }
+        }
+        group_begin = group_end;
+    }
+
     std::unordered_map<std::uint32_t, std::size_t> owners;
     for (const auto& function : functions) {
         for (const auto block : function.block_addresses)

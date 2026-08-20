@@ -512,8 +512,8 @@ void verify_persistent_function_value_session() {
         diagnostic_progress;
     katana::analysis::detail::GuardedNativeEntryShapeCache
         diagnostic_shapes{image};
-    // This fixture verifies the lower FunctionEvaluation cache itself. Root
-    // artifact reuse would correctly bypass that layer altogether, so force
+    // This fixture verifies that detailed diagnostics remain observational.
+    // Root artifact reuse would bypass the lower layer altogether, so force
     // the explicit fail-closed CPU path for this one diagnostic epoch.
     session.force_full_cpu_recompute_once();
     set_stack_diagnostics_for_serial_fixpoint(true);
@@ -535,15 +535,11 @@ void verify_persistent_function_value_session() {
         !diagnostic_progress.empty() &&
             diagnostic_progress.back().phase == "complete" &&
             diagnostic_progress.back()
-                    .cache_diagnostic_bypass_evaluations != 0u &&
-            diagnostic_progress.back().physical_evaluations ==
-                diagnostic_progress.back()
-                    .cache_diagnostic_bypass_evaluations +
-                    diagnostic_progress.back()
-                        .cache_replay_fallback_recomputes +
-                    diagnostic_progress.back().session_cache_misses,
-        "Der opt-in Diagnose-Cachebypass verletzte die exakte "
-        "Physical=Miss+ReplayFallback+DiagnosticBypass-Bilanz.");
+                    .cache_diagnostic_bypass_evaluations == 0u &&
+            diagnostic_progress.back().physical_evaluations != 0u &&
+            diagnostic_progress.back().full_cpu_recompute_fallbacks == 1u,
+        "Opt-in Diagnostik veraenderte den Cachevertrag oder verlor den "
+        "expliziten CPU-Recompute-Fallback.");
 
     std::vector<std::uint8_t> inventory_bytes(0x48u, 0x09u);
     const auto put_inventory_u16 =
@@ -1999,11 +1995,11 @@ void verify_function_evaluation_cache_telemetry() {
             probe.coordinator_physical_computations == 1u &&
             probe.coordinator_collision_safe &&
             probe.coordinator_failure_pinned &&
-            probe.coordinator_ready_eviction_recomputed &&
-            probe.coordinator_in_flight_eviction_safe,
+            probe.coordinator_ready_admission_fallback_recomputed &&
+            probe.coordinator_concurrent_admission_fallback_independent,
         "Der Multi-Root-Coordinator verlor bei verweigerter Session-"
         "Admission sein exaktes Ergebnis, verletzte das Ready-Bytebudget "
-        "oder evictete laufende Single-Flight-Arbeit.");
+        "oder behielt ohne Arena einen unbudgetierten Single-Flight-Eintrag.");
     require(
         probe.inline_only_artifact_bytes ==
                 probe.inline_only_artifact_owner_bytes &&
@@ -3608,23 +3604,49 @@ contextual_candidate_input_overflow_values(const bool stack_argument) {
                 used_terminal_materializer =
                     used_terminal_materializer ||
                     progress.phase == "terminal-materialized";
-            },
-            warm_shapes,
-            session);
+              },
+              warm_shapes,
+              session);
     require_same_function_value_semantics(cold, warm, false);
-    require(
-        !used_terminal_materializer &&
-            cold.guarded_code_inventory.walk_diagnostics.truncated() &&
-            warm.guarded_code_inventory.walk_diagnostics.truncated() &&
-            warm.resolution_root_artifacts_retained == 0u &&
-            warm.resolution_epoch_retained_bytes == 0u &&
-            warm.resolution_retention_limit_reason ==
-                katana::analysis::ResolutionRetentionLimitReason::
-                    IncompleteRoot &&
-            session.published_epoch_version() == cold_epoch + 1u,
-        "Ein root-spezifisch abgeschnittener Lauf publizierte eine "
-        "partielle Presentation-Epoch oder verlor beim folgenden "
-        "Unchanged/TerminalFull seine Truncation-Diagnose.");
+    const auto indirect_call_site =
+        helper_address + (stack_argument ? 4u : 2u);
+    const auto resolves_callback = [&](const auto& result) {
+        const auto resolution = std::find_if(
+            result.resolutions.begin(),
+            result.resolutions.end(),
+            [&](const auto& candidate) {
+                return candidate.instruction_address == indirect_call_site;
+            });
+        return resolution != result.resolutions.end() &&
+               std::find(resolution->targets.begin(),
+                         resolution->targets.end(),
+                         callback_address) != resolution->targets.end();
+    };
+    const auto cold_truncated =
+        cold.guarded_code_inventory.walk_diagnostics.truncated();
+    if (cold_truncated) {
+        require(
+            !used_terminal_materializer &&
+                warm.guarded_code_inventory.walk_diagnostics.truncated() &&
+                warm.resolution_root_artifacts_retained == 0u &&
+                warm.resolution_epoch_retained_bytes == 0u &&
+                warm.resolution_retention_limit_reason ==
+                    katana::analysis::ResolutionRetentionLimitReason::
+                        IncompleteRoot &&
+                session.published_epoch_version() == cold_epoch + 1u,
+            "Ein root-spezifisch abgeschnittener Lauf publizierte eine "
+            "partielle Presentation-Epoch oder verlor beim folgenden "
+            "Unchanged/TerminalFull seine Truncation-Diagnose.");
+    } else {
+        require(
+            used_terminal_materializer &&
+                !warm.guarded_code_inventory.walk_diagnostics.truncated() &&
+                resolves_callback(cold) && resolves_callback(warm) &&
+                session.published_epoch_version() == cold_epoch,
+            "Eine vollstaendig getrennte Guarded-Context-Familie wurde "
+            "trotz exakter Callbackauflosung als Overflow behandelt oder "
+            "nicht terminal wiederverwendet.");
+    }
     return warm;
 }
 
@@ -7268,25 +7290,29 @@ int main(const int argc, char* argv[]) {
     }
     {
         set_stack_diagnostics_for_serial_fixpoint(true);
-        const auto serial =
+        auto diagnostic =
             multi_callee_memory_saved_stack_alias_values();
         set_stack_diagnostics_for_serial_fixpoint(false);
-        const auto parallel =
+        auto ordinary =
             multi_callee_memory_saved_stack_alias_values();
         require(
-            serial.fixpoint_worker_count == 1u,
-            "Der erzwungene serielle Differentiallauf benutzte mehr als "
-            "einen Fixpoint-Worker.");
+            diagnostic.fixpoint_worker_count != 0u &&
+                diagnostic.fixpoint_worker_count ==
+                    ordinary.fixpoint_worker_count,
+            "Die opt-in Stackdiagnostik veraenderte die verfuegbare "
+            "Fixpoint-Parallelitaet.");
         require(
-            parallel.fixpoint_worker_count <= 1u ||
-                (parallel.maximum_fixpoint_batch_size > 1u &&
-                 parallel.fixpoint_parallel_batches > 0u &&
-                 parallel.fixpoint_stale_repairs > 0u),
+            ordinary.fixpoint_worker_count <= 1u ||
+                (ordinary.maximum_fixpoint_batch_size > 1u &&
+                 ordinary.fixpoint_parallel_batches > 0u &&
+                 ordinary.fixpoint_stale_repairs > 0u),
             "Der reale Function-Value-Fixpunkt erreichte trotz "
             "verfuegbarer Mehrworker-Ausfuehrung keinen versionsvalidierten "
             "parallelen Batch mit Stale-Reparatur.");
         require_same_function_value_semantics(
-            serial, parallel);
+            diagnostic, ordinary);
+        ordinary = {};
+        diagnostic = {};
     }
 
     const auto unique_image =
@@ -7423,6 +7449,13 @@ int main(const int argc, char* argv[]) {
         const auto& duplicate_forwarded_diagnostics =
             duplicate_forwarded.guarded_code_inventory
                 .walk_diagnostics;
+        const auto& duplicate_forwarded_reference_progress =
+            duplicate_forwarded_reference.progress;
+        const auto& duplicate_forwarded_reference_session =
+            duplicate_forwarded_reference.session_statistics;
+        const auto& duplicate_forwarded_reference_diagnostics =
+            duplicate_forwarded_reference.values.guarded_code_inventory
+                .walk_diagnostics;
         const auto duplicate_forwarded_candidate =
             std::find_if(
                 duplicate_forwarded.guarded_code_inventory
@@ -7445,25 +7478,24 @@ int main(const int argc, char* argv[]) {
                     std::vector<std::uint32_t>{0x02u, 0x12u} &&
                 duplicate_forwarded_candidate->evidence_callees.empty() &&
                 duplicate_forwarded_diagnostics
-                        .forwarded_store_evaluation_cache_hits ==
-                    1u &&
+                        .forwarded_store_evaluation_cache_hits == 0u &&
                 duplicate_forwarded_diagnostics
                         .forwarded_store_evaluation_cache_misses ==
-                    1u &&
+                    2u &&
                 duplicate_forwarded_progress
                         .multi_root_context_requests ==
                     2u &&
                 duplicate_forwarded_progress
                         .multi_root_unique_contexts ==
-                    1u &&
+                    2u &&
                 duplicate_forwarded_progress
                             .multi_root_ready_reuses +
                         duplicate_forwarded_progress
                             .multi_root_in_flight_reuses ==
-                    1u &&
+                    0u &&
                 duplicate_forwarded_progress
                         .multi_root_retained_contexts ==
-                    1u &&
+                    0u &&
                 duplicate_forwarded_session.entries == 0u &&
                 duplicate_forwarded_session
                         .retained_payload_bytes ==
@@ -7475,10 +7507,26 @@ int main(const int argc, char* argv[]) {
                             .multi_root_ready_reuses +
                         duplicate_forwarded_progress
                             .multi_root_in_flight_reuses &&
-                !duplicate_forwarded_diagnostics.truncated(),
-            "Zwei semantisch gleiche Forwarded-Kontexte mit verschiedenen "
-            "Root-Callsites wurden physisch erneut ausgewertet oder ihre "
-            "exakte Provenienz/Fail-closed-Semantik wich beim Replay ab "
+                !duplicate_forwarded_diagnostics.truncated() &&
+                duplicate_forwarded_reference_diagnostics
+                        .forwarded_store_evaluation_cache_hits == 1u &&
+                duplicate_forwarded_reference_diagnostics
+                        .forwarded_store_evaluation_cache_misses == 1u &&
+                duplicate_forwarded_reference_progress
+                        .multi_root_context_requests == 2u &&
+                duplicate_forwarded_reference_progress
+                        .multi_root_unique_contexts == 1u &&
+                duplicate_forwarded_reference_progress
+                            .multi_root_ready_reuses +
+                        duplicate_forwarded_reference_progress
+                            .multi_root_in_flight_reuses == 1u &&
+                duplicate_forwarded_reference_progress
+                        .multi_root_retained_contexts == 1u &&
+                duplicate_forwarded_reference_session.entries != 0u &&
+                !duplicate_forwarded_reference_diagnostics.truncated(),
+            "Zwei semantisch gleiche Forwarded-Kontexte verloren beim "
+            "budgetlosen exakten Recompute oder beim budgetierten "
+            "Multi-Root-Replay ihre Provenienz/Fail-closed-Semantik "
             "(candidate=" +
                 std::to_string(
                     has_stored_code_address(duplicate_forwarded, 0x70u)) +
@@ -7490,6 +7538,26 @@ int main(const int argc, char* argv[]) {
                 std::to_string(
                     duplicate_forwarded_diagnostics
                         .forwarded_store_evaluation_cache_misses) +
+                ", multi_requests=" +
+                std::to_string(
+                    duplicate_forwarded_progress
+                        .multi_root_context_requests) +
+                ", multi_unique=" +
+                std::to_string(
+                    duplicate_forwarded_progress
+                        .multi_root_unique_contexts) +
+                ", multi_ready=" +
+                std::to_string(
+                    duplicate_forwarded_progress
+                        .multi_root_ready_reuses) +
+                ", multi_inflight=" +
+                std::to_string(
+                    duplicate_forwarded_progress
+                        .multi_root_in_flight_reuses) +
+                ", multi_retained=" +
+                std::to_string(
+                    duplicate_forwarded_progress
+                        .multi_root_retained_contexts) +
                 ", truncated=" +
                 std::to_string(
                     duplicate_forwarded_diagnostics.truncated()) +
@@ -7564,6 +7632,16 @@ int main(const int argc, char* argv[]) {
         const auto isolated_reuses =
             isolated_progress.multi_root_ready_reuses +
             isolated_progress.multi_root_in_flight_reuses;
+        const auto& isolated_reference_progress =
+            duplicate_isolated_reference.progress;
+        const auto& isolated_reference_session =
+            duplicate_isolated_reference.session_statistics;
+        const auto& isolated_reference_diagnostics =
+            duplicate_isolated_reference.values.guarded_code_inventory
+                .walk_diagnostics;
+        const auto isolated_reference_reuses =
+            isolated_reference_progress.multi_root_ready_reuses +
+            isolated_reference_progress.multi_root_in_flight_reuses;
         const auto isolated_lens_index = static_cast<std::size_t>(
             katana::analysis::EvaluationLens::IsolatedObservation);
         require(
@@ -7578,19 +7656,19 @@ int main(const int argc, char* argv[]) {
                     std::vector<std::uint32_t>{0x02u, 0x12u} &&
                 isolated_candidate->evidence_callees.empty() &&
                 isolated_progress.phase == "complete" &&
-                isolated_progress.multi_root_context_requests >= 2u &&
-                isolated_progress.multi_root_unique_contexts >= 1u &&
-                isolated_reuses >= 1u &&
+                isolated_progress.multi_root_context_requests == 4u &&
+                isolated_progress.multi_root_unique_contexts == 4u &&
+                isolated_reuses == 0u &&
                 isolated_progress.multi_root_context_requests ==
                     isolated_progress.multi_root_unique_contexts +
                         isolated_reuses &&
                 isolated_progress.multi_root_retained_contexts ==
-                    isolated_progress.multi_root_unique_contexts &&
-                isolated_progress.multi_root_retained_payload_bytes != 0u &&
+                    0u &&
+                isolated_progress.multi_root_retained_payload_bytes == 0u &&
                 isolated_progress.multi_root_provenance_links >= 2u &&
                 isolated_progress.evaluation_lenses
                         .requests[isolated_lens_index] ==
-                    1u &&
+                    2u &&
                 isolated_session.entries == 0u &&
                 isolated_session.retained_payload_bytes == 0u &&
                 isolated_session.hits == 0u &&
@@ -7606,11 +7684,30 @@ int main(const int argc, char* argv[]) {
                 isolated_progress
                             .cache_diagnostic_bypass_evaluations &&
                 isolated_progress.cache_replay_fallback_recomputes == 0u &&
-                !isolated_diagnostics.truncated(),
-            "Initial Isolated Store Harvest fuehrte denselben kanonischen "
-            "Kontext trotz cacheloser Session mehrfach aus, verlor echte "
-            "Callsite-/Callee-Provenienz oder meldete ein inkonsistentes "
-            "Multi-Root-Ledger (requests=" +
+                isolated_diagnostics
+                        .forwarded_store_evaluation_cache_hits == 0u &&
+                isolated_diagnostics
+                        .forwarded_store_evaluation_cache_misses == 2u &&
+                !isolated_diagnostics.truncated() &&
+                isolated_reference_progress.multi_root_context_requests ==
+                    4u &&
+                isolated_reference_progress.multi_root_unique_contexts ==
+                    2u &&
+                isolated_reference_reuses == 2u &&
+                isolated_reference_progress.multi_root_retained_contexts ==
+                    2u &&
+                isolated_reference_progress.evaluation_lenses
+                        .requests[isolated_lens_index] == 1u &&
+                isolated_reference_session.entries != 0u &&
+                isolated_reference_diagnostics
+                        .forwarded_store_evaluation_cache_hits == 1u &&
+                isolated_reference_diagnostics
+                        .forwarded_store_evaluation_cache_misses == 1u &&
+                !isolated_reference_diagnostics.truncated(),
+            "Initial Isolated Store Harvest verlor beim budgetlosen exakten "
+            "Recompute oder beim budgetierten Multi-Root-Replay echte "
+            "Callsite-/Callee-Provenienz beziehungsweise sein Ledger "
+            "(requests=" +
                 std::to_string(
                     isolated_progress.multi_root_context_requests) +
                 ", unique=" +
@@ -7800,13 +7897,29 @@ int main(const int argc, char* argv[]) {
                 contextual_candidate_input_overflow_values(stack_argument);
             const auto& diagnostics =
                 overflow.guarded_code_inventory.walk_diagnostics;
+            const auto expected_target = stack_argument ? 0xB0u : 0xA0u;
+            const auto expected_site = stack_argument ? 0x94u : 0x82u;
+            const auto resolution = std::find_if(
+                overflow.resolutions.begin(),
+                overflow.resolutions.end(),
+                [&](const auto& candidate) {
+                    return candidate.instruction_address == expected_site;
+                });
+            const auto complete_context_family =
+                !diagnostics.truncated() &&
+                resolution != overflow.resolutions.end() &&
+                std::find(resolution->targets.begin(),
+                          resolution->targets.end(),
+                          expected_target) != resolution->targets.end();
             require(
-                diagnostics.inventory_candidate_values_truncated &&
-                    diagnostics.truncated() && !overflow.budget_exhausted,
+                ((diagnostics.inventory_candidate_values_truncated &&
+                  diagnostics.truncated()) ||
+                 complete_context_family) &&
+                    !overflow.budget_exhausted,
                 std::string{"Mehr als acht kontextuelle Candidate-"} +
                     (stack_argument ? "Stack-" : "Register-") +
-                    "Argumentwerte gingen ohne fail-closed "
-                    "Truncation-Diagnose verloren.");
+                    "Argumentwerte gingen weder als vollstaendige Guarded-"
+                    "Context-Familie noch mit fail-closed Truncation hervor.");
         }
 
         const auto contextual_budget =

@@ -1,16 +1,26 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `56`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 115, Block-ABI 5, PlatformServices-ABI 14,
+Der aktuelle oeffentliche Analyzervertrag ist Version `57`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
 und Port-Metadata-Cache-
 Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
-Der RuntimeOnly-Bring-up-Meilenstein verwendet diesen unveraenderten
-Analyzer-ABI-Vertrag; der historische Candidate-Resolution-Checkpoint
+Der aktuelle Analyzer-Branch ist noch nicht commit-ready: FVA-Volltest,
+Guarded-Kontextauflosung und das Entfernen temporarer Diagnosen muessen vor
+dem ersten vollstaendigen `analyze-port`-Ergebnis abgeschlossen werden. Der
+letzte RuntimeOnly-Bring-up-Meilenstein verwendet diesen Analyzer-ABI-
+Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
+
+Analyzer-ABI 57 bindet zusaetzlich die transaktionale Materialization-World,
+den Schema-3-Resume-Ledger und die streng identitaetsgebundene Frontier-
+Importgrenze. Beobachtete Runtime-Frontiers bleiben `ObservedHint` und duerfen
+weder CFG-Kanten noch AOT-Roots oder Hardware-Closure erzeugen. Positive
+Produktwiederverwendung bleibt bis zum vollstaendigen Callback-/Target-/
+Hardware-Owner-Beweis deaktiviert.
 
 Analyzer-ABI 56 trennt persistente 32-Bit-Argumentstores von direkten
 Callbackregistraren. Latente Module duerfen einen solchen Primary-Image-Sink

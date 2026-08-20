@@ -1,3 +1,4 @@
+#include "katana/agent/materialization_world.hpp"
 #include "katana/analysis/analysis_overrides.hpp"
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
@@ -73,6 +74,7 @@
 #include <string_view>
 #include <syncstream>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -5268,28 +5270,151 @@ std::string read_safe_small_port_file(
     const std::filesystem::path& path,
     const std::size_t maximum_size,
     const std::string_view description) {
-    if (!safe_regular_port_file_exists(path, description))
-        throw std::runtime_error(
-            std::string(description) + " fehlt.");
-    std::error_code size_error;
-    const auto size = std::filesystem::file_size(path, size_error);
-    if (size_error || size > maximum_size)
-        throw std::runtime_error(
-            std::string(description) +
-            " besitzt keine sichere begrenzte Groesse.");
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
+#ifdef _WIN32
+    // Never perform a path-based size check followed by a second path-based
+    // open.  The handle is opened without following a reparse point and all
+    // size/attribute checks are made against that same handle.
+    const auto handle = CreateFileW(
+        path.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+            FILE_FLAG_SEQUENTIAL_SCAN,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
         throw std::runtime_error(
             std::string(description) +
             " konnte nicht sicher geoeffnet werden.");
-    std::string document{
-        std::istreambuf_iterator<char>(input),
-        std::istreambuf_iterator<char>()};
-    if (input.bad() || document.size() != size)
+    struct ScopedReadHandle final {
+        HANDLE value = INVALID_HANDLE_VALUE;
+
+        ~ScopedReadHandle() noexcept {
+            if (value != INVALID_HANDLE_VALUE)
+                static_cast<void>(CloseHandle(value));
+        }
+    };
+    const ScopedReadHandle scoped_handle{handle};
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    LARGE_INTEGER initial_size{};
+    if (!GetFileInformationByHandleEx(
+            handle,
+            FileAttributeTagInfo,
+            &attributes,
+            sizeof(attributes)) ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0u ||
+        (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
+        !GetFileSizeEx(handle, &initial_size) || initial_size.QuadPart < 0 ||
+        static_cast<unsigned long long>(initial_size.QuadPart) >
+            static_cast<unsigned long long>(maximum_size) ||
+        static_cast<unsigned long long>(initial_size.QuadPart) >
+            static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
         throw std::runtime_error(
             std::string(description) +
-            " konnte nicht vollstaendig gelesen werden.");
+            " besitzt keine sichere begrenzte Groesse.");
+    }
+    const auto size = static_cast<std::size_t>(initial_size.QuadPart);
+    std::string document(size, '\0');
+    std::size_t offset = 0u;
+    while (offset < size) {
+        const auto chunk = static_cast<DWORD>(std::min<std::size_t>(
+            size - offset, static_cast<std::size_t>(1u << 20u)));
+        DWORD read = 0u;
+        if (!ReadFile(
+                handle,
+                document.data() + offset,
+                chunk,
+                &read,
+                nullptr) ||
+            read != chunk) {
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht vollstaendig gelesen werden.");
+        }
+        offset += read;
+    }
+    LARGE_INTEGER final_size{};
+    FILE_ATTRIBUTE_TAG_INFO final_attributes{};
+    const bool stable =
+        GetFileSizeEx(handle, &final_size) != FALSE &&
+        GetFileInformationByHandleEx(
+            handle,
+            FileAttributeTagInfo,
+            &final_attributes,
+            sizeof(final_attributes)) != FALSE &&
+        final_size.QuadPart == initial_size.QuadPart &&
+        (final_attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0u &&
+        (final_attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0u;
+    if (!stable)
+        throw std::runtime_error(
+            std::string(description) +
+            " wurde waehrend des Lesens veraendert.");
     return document;
+#else
+#if !defined(O_NOFOLLOW)
+    // A portable fallback which cannot promise no-follow semantics must not
+    // silently weaken this CLI's artifact boundary.
+    throw std::runtime_error(
+        std::string(description) +
+        " kann auf diesem System ohne O_NOFOLLOW nicht sicher gelesen werden.");
+#else
+    int flags = O_RDONLY | O_NOFOLLOW;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    const int descriptor = ::open(path.c_str(), flags);
+    if (descriptor < 0)
+        throw std::runtime_error(
+            std::string(description) +
+            " konnte nicht sicher geoeffnet werden.");
+    struct ScopedReadDescriptor final {
+        int value = -1;
+
+        ~ScopedReadDescriptor() noexcept {
+            if (value >= 0)
+                static_cast<void>(::close(value));
+        }
+    };
+    const ScopedReadDescriptor scoped_descriptor{descriptor};
+    struct stat initial_status{};
+    if (::fstat(descriptor, &initial_status) != 0 ||
+        !S_ISREG(initial_status.st_mode) || initial_status.st_size < 0 ||
+        static_cast<std::uintmax_t>(initial_status.st_size) > maximum_size ||
+        static_cast<std::uintmax_t>(initial_status.st_size) >
+            static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error(
+            std::string(description) +
+            " besitzt keine sichere begrenzte Groesse.");
+    }
+    const auto size = static_cast<std::size_t>(initial_status.st_size);
+    std::string document(size, '\0');
+    std::size_t offset = 0u;
+    while (offset < size) {
+        const auto read = ::read(
+            descriptor,
+            document.data() + offset,
+            std::min<std::size_t>(size - offset, static_cast<std::size_t>(1u << 20u)));
+        if (read < 0 && errno == EINTR) continue;
+        if (read <= 0) {
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht vollstaendig gelesen werden.");
+        }
+        offset += static_cast<std::size_t>(read);
+    }
+    struct stat final_status{};
+    const bool stable =
+        ::fstat(descriptor, &final_status) == 0 &&
+        S_ISREG(final_status.st_mode) &&
+        final_status.st_size == initial_status.st_size;
+    if (!stable)
+        throw std::runtime_error(
+            std::string(description) +
+            " wurde waehrend des Lesens veraendert.");
+    return document;
+#endif
+#endif
 }
 
 void write_exclusive_safe_port_file(
@@ -5551,6 +5676,152 @@ std::string new_port_publish_transaction_token(
     seed << ':' << ::getpid();
 #endif
     return katana::io::sha256_bytes(seed.str()).substr(0u, 32u);
+}
+
+// Keeps the previous committed analysis generation recoverable until the
+// session-ledger commit has succeeded. Every path is explicit, in the same
+// directory and already protected by the analyze-port sibling lock.
+class AnalysisArtifactRollback final {
+  public:
+    explicit AnalysisArtifactRollback(
+        const std::filesystem::path& root)
+        : root_(root) {
+        PortPublishOutputPaths token_input;
+        token_input.output = root_ / "analysis-generation";
+        token_input.output_identity = katana::io::sha256_bytes(
+            token_input.output.lexically_normal().generic_string());
+        token_ = new_port_publish_transaction_token(token_input);
+    }
+
+    void prepare(const std::filesystem::path& path,
+                 const std::string_view description) {
+        require_safe_replaceable_port_file(root_, path, description);
+        Entry entry;
+        entry.path = path;
+        entry.backup = path.parent_path() /
+            (path.filename().string() + ".katana-backup." + token_);
+        require_safe_replaceable_port_file(
+            root_, entry.backup, "Analyseartefakt-Rollbackdatei");
+        if (safe_regular_port_file_exists(
+                entry.backup, "Analyseartefakt-Rollbackdatei"))
+            throw std::runtime_error(
+                "Analyseartefakt-Rollbackdatei kollidiert.");
+        entry.existed = safe_regular_port_file_exists(path, description);
+        entries_.push_back(entry);
+        if (!entry.existed) return;
+        std::error_code move_error;
+        std::filesystem::rename(path, entry.backup, move_error);
+        if (move_error) {
+            entries_.pop_back();
+            throw std::filesystem::filesystem_error(
+                std::string(description) +
+                    " konnte nicht fuer den Rollback gesichert werden.",
+                path, entry.backup, move_error);
+        }
+    }
+
+    void commit() noexcept {
+        committed_ = true;
+        for (const auto& entry : entries_) {
+            if (!entry.existed) continue;
+            std::error_code cleanup_error;
+            static_cast<void>(
+                std::filesystem::remove(entry.backup, cleanup_error));
+        }
+    }
+
+    ~AnalysisArtifactRollback() noexcept {
+        if (committed_) return;
+        for (auto iterator = entries_.rbegin();
+             iterator != entries_.rend(); ++iterator) {
+            std::error_code status_error;
+            const auto status = std::filesystem::symlink_status(
+                iterator->path, status_error);
+            if (!status_error &&
+                std::filesystem::is_regular_file(status) &&
+                !unsafe_port_filesystem_link(iterator->path, status)) {
+                std::error_code remove_error;
+                static_cast<void>(std::filesystem::remove(
+                    iterator->path, remove_error));
+            }
+            if (!iterator->existed) continue;
+            std::error_code restore_error;
+            std::filesystem::rename(
+                iterator->backup, iterator->path, restore_error);
+        }
+    }
+
+    AnalysisArtifactRollback(const AnalysisArtifactRollback&) = delete;
+    AnalysisArtifactRollback& operator=(
+        const AnalysisArtifactRollback&) = delete;
+
+  private:
+    struct Entry final {
+        std::filesystem::path path;
+        std::filesystem::path backup;
+        bool existed = false;
+    };
+
+    std::filesystem::path root_;
+    std::string token_;
+    std::vector<Entry> entries_;
+    bool committed_ = false;
+};
+
+void write_atomic_analysis_file(
+    const std::filesystem::path& root,
+    const std::filesystem::path& path,
+    const std::span<const std::uint8_t> bytes,
+    const std::string_view description) {
+    require_safe_replaceable_port_file(root, path, description);
+    PortPublishOutputPaths token_input;
+    token_input.output = path;
+    token_input.output_identity = katana::io::sha256_bytes(
+        path.lexically_normal().generic_string());
+    const auto token = new_port_publish_transaction_token(token_input);
+    const auto temporary = path.parent_path() /
+        (path.filename().string() + ".katana-tmp." + token);
+    const auto document = std::string_view(
+        reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    write_exclusive_safe_port_file(
+        temporary, document, "Temporaeres Analyseartefakt");
+    try {
+#ifdef _WIN32
+        if (!MoveFileExW(
+                temporary.c_str(),
+                path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht atomar publiziert werden.");
+#else
+        std::error_code replace_error;
+        std::filesystem::rename(temporary, path, replace_error);
+        if (replace_error)
+            throw std::runtime_error(
+                std::string(description) +
+                " konnte nicht atomar publiziert werden.");
+#endif
+    } catch (...) {
+        std::error_code cleanup_error;
+        static_cast<void>(
+            std::filesystem::remove(temporary, cleanup_error));
+        throw;
+    }
+}
+
+void write_atomic_analysis_file(
+    const std::filesystem::path& root,
+    const std::filesystem::path& path,
+    const std::string_view document,
+    const std::string_view description) {
+    write_atomic_analysis_file(
+        root,
+        path,
+        std::span(
+            reinterpret_cast<const std::uint8_t*>(document.data()),
+            document.size()),
+        description);
 }
 
 void write_port_publish_state(
@@ -7543,6 +7814,1104 @@ std::vector<std::uint8_t> load_runtime_image_payload(
     return bytes;
 }
 
+constexpr std::size_t maximum_runtime_frontier_import_bytes =
+    16u * 1024u * 1024u;
+constexpr std::size_t maximum_runtime_frontier_line_bytes = 16u * 1024u;
+constexpr std::size_t maximum_agent_session_ledger_bytes =
+    4u * 1024u * 1024u;
+constexpr std::size_t maximum_agent_session_line_bytes = 8192u;
+
+struct RuntimeFrontierObservation final {
+    std::string reason;
+    std::uint32_t pc = 0u;
+    std::uint32_t pr = 0u;
+    std::uint32_t runtime_target = 0u;
+    std::uint32_t source_address = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t exit_kind = 0u;
+    std::uint32_t dispatch_site_class = 0u;
+    std::uint32_t active_instruction = 0u;
+    std::uint32_t active_block = 0u;
+    std::uint32_t active_block_size = 0u;
+    std::uint32_t pointer_value = 0u;
+};
+
+struct AgentIterationDelta final {
+    std::size_t resolved_frontiers = 0u;
+    std::size_t new_frontiers = 0u;
+    std::size_t new_runtime_hints = 0u;
+    std::size_t proof_upgrades = 0u;
+    std::size_t proof_downgrades = 0u;
+    std::size_t new_incomplete_roots = 0u;
+    std::size_t resolved_incomplete_roots = 0u;
+};
+
+katana::agent::ExecutableMaterializationWorld load_agent_world(
+    const std::filesystem::path& path,
+    std::string* artifact_sha256 = nullptr);
+
+enum class StrictJsonValueKind : std::uint8_t {
+    String,
+    Number,
+    Boolean,
+    Null,
+};
+
+struct StrictJsonField final {
+    std::string_view key;
+    StrictJsonValueKind kind = StrictJsonValueKind::Null;
+    std::string_view string_value;
+    std::uint64_t number = 0u;
+    bool negative = false;
+    bool boolean = false;
+};
+
+struct StrictJsonObject final {
+    std::array<StrictJsonField, 32u> fields{};
+    std::size_t count = 0u;
+};
+
+[[nodiscard]] bool strict_json_space(const char value) noexcept {
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n';
+}
+
+void strict_json_skip_space(const std::string_view text, std::size_t& cursor) {
+    while (cursor < text.size() && strict_json_space(text[cursor])) ++cursor;
+}
+
+[[nodiscard]] const StrictJsonField* strict_json_field(
+    const StrictJsonObject& object,
+    const std::string_view key) noexcept {
+    const auto found = std::find_if(
+        object.fields.begin(), object.fields.begin() + object.count,
+        [&](const auto& field) { return field.key == key; });
+    return found == object.fields.begin() + object.count ? nullptr : &*found;
+}
+
+void parse_strict_json_object(
+    const std::string_view text,
+    StrictJsonObject& output) {
+    output = {};
+    std::size_t cursor = 0u;
+    strict_json_skip_space(text, cursor);
+    if (cursor == text.size() || text[cursor++] != '{')
+        throw std::invalid_argument("Striktes JSON-Objekt beginnt nicht mit '{'.");
+    strict_json_skip_space(text, cursor);
+    if (cursor < text.size() && text[cursor] == '}') {
+        ++cursor;
+        strict_json_skip_space(text, cursor);
+        if (cursor != text.size())
+            throw std::invalid_argument("Striktes JSON-Objekt besitzt Restdaten.");
+        return;
+    }
+    while (cursor < text.size()) {
+        if (output.count >= output.fields.size() || cursor >= text.size() ||
+            text[cursor++] != '"')
+            throw std::invalid_argument("Striktes JSON besitzt einen ungueltigen Schluessel.");
+        const auto key_begin = cursor;
+        while (cursor < text.size() && text[cursor] != '"') {
+            const auto byte = static_cast<unsigned char>(text[cursor]);
+            if (text[cursor] == '\\' || byte < 0x20u)
+                throw std::invalid_argument("Striktes JSON besitzt einen nicht unterstuetzten String-Escape.");
+            ++cursor;
+        }
+        if (cursor >= text.size())
+            throw std::invalid_argument("Striktes JSON besitzt einen offenen Schluessel.");
+        const auto key = text.substr(key_begin, cursor - key_begin);
+        ++cursor;
+        if (strict_json_field(output, key) != nullptr)
+            throw std::invalid_argument("Striktes JSON besitzt einen doppelten Schluessel.");
+        strict_json_skip_space(text, cursor);
+        if (cursor >= text.size() || text[cursor++] != ':')
+            throw std::invalid_argument("Striktes JSON besitzt keinen Schluesseltrenner.");
+        strict_json_skip_space(text, cursor);
+        auto& field = output.fields[output.count++];
+        field.key = key;
+        if (cursor >= text.size())
+            throw std::invalid_argument("Striktes JSON besitzt keinen Wert.");
+        if (text[cursor] == '"') {
+            ++cursor;
+            const auto value_begin = cursor;
+            while (cursor < text.size() && text[cursor] != '"') {
+                const auto byte = static_cast<unsigned char>(text[cursor]);
+                if (text[cursor] == '\\' || byte < 0x20u)
+                    throw std::invalid_argument("Striktes JSON besitzt einen nicht unterstuetzten Wert-Escape.");
+                ++cursor;
+            }
+            if (cursor >= text.size())
+                throw std::invalid_argument("Striktes JSON besitzt einen offenen Stringwert.");
+            field.kind = StrictJsonValueKind::String;
+            field.string_value = text.substr(value_begin, cursor - value_begin);
+            ++cursor;
+        } else if (text[cursor] == 't' &&
+                   text.substr(cursor, 4u) == "true") {
+            field.kind = StrictJsonValueKind::Boolean;
+            field.boolean = true;
+            cursor += 4u;
+        } else if (text[cursor] == 'f' &&
+                   text.substr(cursor, 5u) == "false") {
+            field.kind = StrictJsonValueKind::Boolean;
+            field.boolean = false;
+            cursor += 5u;
+        } else if (text[cursor] == 'n' &&
+                   text.substr(cursor, 4u) == "null") {
+            field.kind = StrictJsonValueKind::Null;
+            cursor += 4u;
+        } else {
+            if (text[cursor] == '-') {
+                field.negative = true;
+                ++cursor;
+            }
+            const auto digits_begin = cursor;
+            while (cursor < text.size() && text[cursor] >= '0' &&
+                   text[cursor] <= '9')
+                ++cursor;
+            if (cursor == digits_begin ||
+                (text[digits_begin] == '0' && cursor - digits_begin > 1u))
+                throw std::invalid_argument("Striktes JSON besitzt eine ungueltige Zahl.");
+            std::uint64_t value = 0u;
+            const auto conversion = std::from_chars(
+                text.data() + digits_begin,
+                text.data() + cursor,
+                value,
+                10);
+            if (conversion.ec != std::errc{} ||
+                conversion.ptr != text.data() + cursor)
+                throw std::invalid_argument("Striktes JSON besitzt eine ueberlaufende Zahl.");
+            field.kind = StrictJsonValueKind::Number;
+            field.number = value;
+        }
+        strict_json_skip_space(text, cursor);
+        if (cursor >= text.size())
+            throw std::invalid_argument("Striktes JSON endet unvollstaendig.");
+        if (text[cursor] == '}') {
+            ++cursor;
+            strict_json_skip_space(text, cursor);
+            if (cursor != text.size())
+                throw std::invalid_argument("Striktes JSON besitzt Restdaten.");
+            return;
+        }
+        if (text[cursor++] != ',')
+            throw std::invalid_argument("Striktes JSON besitzt keinen Datensatztrenner.");
+        strict_json_skip_space(text, cursor);
+    }
+    throw std::invalid_argument("Striktes JSON endet ohne Abschluss.");
+}
+
+std::uint32_t strict_json_u32(
+    const StrictJsonObject& object,
+    const std::string_view key) {
+    const auto* field = strict_json_field(object, key);
+    if (field == nullptr || field->kind != StrictJsonValueKind::Number ||
+        field->negative || field->number > std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument("Striktes JSON besitzt kein gueltiges u32-Feld " + std::string(key) + '.');
+    return static_cast<std::uint32_t>(field->number);
+}
+
+std::uint64_t strict_json_u64(
+    const StrictJsonObject& object,
+    const std::string_view key) {
+    const auto* field = strict_json_field(object, key);
+    if (field == nullptr || field->kind != StrictJsonValueKind::Number ||
+        field->negative)
+        throw std::invalid_argument("Striktes JSON besitzt kein gueltiges u64-Feld " + std::string(key) + '.');
+    return field->number;
+}
+
+bool strict_json_bool(
+    const StrictJsonObject& object,
+    const std::string_view key) {
+    const auto* field = strict_json_field(object, key);
+    if (field == nullptr || field->kind != StrictJsonValueKind::Boolean)
+        throw std::invalid_argument("Striktes JSON besitzt kein gueltiges Bool-Feld " + std::string(key) + '.');
+    return field->boolean;
+}
+
+std::string strict_json_identifier(
+    const StrictJsonObject& object,
+    const std::string_view key,
+    const std::size_t maximum_length,
+    const bool reason_identifier = false) {
+    const auto* field = strict_json_field(object, key);
+    if (field == nullptr || field->kind != StrictJsonValueKind::String ||
+        field->string_value.empty() || field->string_value.size() > maximum_length)
+        throw std::invalid_argument("Striktes JSON besitzt keinen begrenzten Bezeichner " + std::string(key) + '.');
+    std::string result(field->string_value);
+    for (const auto character : result) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (reason_identifier) {
+            if (!std::isalnum(byte) && character != '-' && character != '_' && character != '.')
+                throw std::invalid_argument("Runtime-Frontier-Grund ist kein stabiler Bezeichner.");
+        } else if (std::isspace(byte) || byte < 0x20u || character == '/' ||
+                   character == '\\' || character == '"') {
+            throw std::invalid_argument("Identitaetsfeld enthaelt unzulaessige Zeichen.");
+        }
+    }
+    return result;
+}
+
+void require_strict_json_keys(
+    const StrictJsonObject& object,
+    const std::span<const std::string_view> expected) {
+    if (object.count != expected.size())
+        throw std::invalid_argument("Striktes JSON besitzt unerwartete oder fehlende Felder.");
+    for (const auto key : expected)
+        if (strict_json_field(object, key) == nullptr)
+            throw std::invalid_argument("Striktes JSON besitzt ein fehlendes Feld " + std::string(key) + '.');
+}
+
+struct RuntimeFrontierImportBinding final {
+    katana::codegen::NativeDiscAnalysisArtifactIdentity identity;
+};
+
+struct RuntimeFrontierImport final {
+    RuntimeFrontierImportBinding binding;
+    std::vector<RuntimeFrontierObservation> observations;
+};
+
+RuntimeFrontierImport load_runtime_frontier_import(
+    const std::filesystem::path& path) {
+    constexpr std::string_view binding_prefix{"KATANA_RUNTIME_FRONTIER_BINDING "};
+    constexpr std::string_view event_prefix{"KATANA_RUNTIME_FRONTIER "};
+    static constexpr std::array<std::string_view, 18u> binding_keys{
+        "version", "analysis_artifact_key", "content_identity",
+        "boot_byte_identity", "project_identity",
+        "analysis_contract_identity", "image_analysis_key",
+        "game_project_identity", "native_port_identity",
+        "native_port_artifact_identity",
+        "analysis_implementation_identity",
+        "analysis_cache_implementation_identity",
+        "codegen_implementation_identity", "analyzer_abi", "backend_abi",
+        "analysis_mode", "disc_volume_start_lba", "disc_extent_lba_bias"};
+    static constexpr std::array<std::string_view, 13u> event_keys{
+        "version", "reason", "pc", "pr", "runtime_target", "source_address",
+        "callsite", "exit_kind", "dispatch_site_class", "active_instruction",
+        "active_block", "active_block_size", "pointer_value"};
+    const auto document = read_safe_small_port_file(
+        path, maximum_runtime_frontier_import_bytes, "Runtime-Frontier-Log");
+    RuntimeFrontierImport result;
+    bool binding_seen = false;
+    bool event_seen = false;
+    std::size_t cursor = 0u;
+    while (cursor < document.size()) {
+        const auto newline = document.find('\n', cursor);
+        auto line = std::string_view(document).substr(
+            cursor,
+            newline == std::string::npos ? document.size() - cursor : newline - cursor);
+        cursor = newline == std::string::npos ? document.size() : newline + 1u;
+        if (line.size() > maximum_runtime_frontier_line_bytes)
+            throw std::invalid_argument("Runtime-Frontier-Zeile ueberschreitet ihr festes Budget.");
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1u);
+        if (line.empty())
+            throw std::invalid_argument("Runtime-Frontier besitzt eine leere Zeile.");
+        if (line.starts_with(binding_prefix)) {
+            if (binding_seen || event_seen)
+                throw std::invalid_argument("Runtime-Frontier-Binding steht nicht exakt am Anfang.");
+            StrictJsonObject object;
+            parse_strict_json_object(line.substr(binding_prefix.size()), object);
+            require_strict_json_keys(object, binding_keys);
+            if (strict_json_u32(object, "version") != 2u)
+                throw std::invalid_argument("Runtime-Frontier-Binding besitzt eine unbekannte Version.");
+            auto& identity = result.binding.identity;
+            identity.key = strict_json_identifier(
+                object, "analysis_artifact_key", 512u);
+            identity.content_identity = strict_json_identifier(
+                object, "content_identity", 512u);
+            identity.boot_byte_identity = strict_json_identifier(
+                object, "boot_byte_identity", 512u);
+            identity.project_identity = strict_json_identifier(
+                object, "project_identity", 512u);
+            identity.analysis_contract_identity = strict_json_identifier(
+                object, "analysis_contract_identity", 512u);
+            identity.image_analysis_key = strict_json_identifier(
+                object, "image_analysis_key", 512u);
+            identity.game_project_identity = strict_json_identifier(
+                object, "game_project_identity", 512u);
+            identity.native_port_identity = strict_json_identifier(
+                object, "native_port_identity", 512u);
+            identity.native_port_artifact_identity = strict_json_identifier(
+                object, "native_port_artifact_identity", 512u);
+            identity.analysis_implementation_identity = strict_json_identifier(
+                object, "analysis_implementation_identity", 512u);
+            identity.analysis_cache_implementation_identity =
+                strict_json_identifier(
+                    object, "analysis_cache_implementation_identity", 512u);
+            identity.codegen_implementation_identity = strict_json_identifier(
+                object, "codegen_implementation_identity", 512u);
+            identity.analyzer_abi = strict_json_u32(object, "analyzer_abi");
+            identity.backend_abi = strict_json_u32(object, "backend_abi");
+            identity.analysis_mode = strict_json_u32(object, "analysis_mode");
+            identity.disc_volume_start_lba = strict_json_u32(
+                object, "disc_volume_start_lba");
+            identity.disc_extent_lba_bias = strict_json_u32(
+                object, "disc_extent_lba_bias");
+            if (katana::codegen::native_disc_analysis_artifact_identity_key(
+                    identity) != identity.key)
+                throw std::invalid_argument(
+                    "Runtime-Frontier-Binding besitzt keinen kanonischen "
+                    "Analyseartefaktschluessel.");
+            binding_seen = true;
+            continue;
+        }
+        if (!line.starts_with(event_prefix) || !binding_seen)
+            throw std::invalid_argument("Runtime-Frontier besitzt eine unbekannte oder ungebundene Zeile.");
+        StrictJsonObject object;
+        parse_strict_json_object(line.substr(event_prefix.size()), object);
+        require_strict_json_keys(object, event_keys);
+        if (strict_json_u32(object, "version") != 1u)
+            throw std::invalid_argument("Runtime-Frontier besitzt kein gueltiges v1-Envelope.");
+        RuntimeFrontierObservation observation;
+        observation.reason = strict_json_identifier(object, "reason", 128u, true);
+        observation.pc = strict_json_u32(object, "pc");
+        observation.pr = strict_json_u32(object, "pr");
+        observation.runtime_target = strict_json_u32(object, "runtime_target");
+        observation.source_address = strict_json_u32(object, "source_address");
+        observation.callsite = strict_json_u32(object, "callsite");
+        observation.exit_kind = strict_json_u32(object, "exit_kind");
+        observation.dispatch_site_class = strict_json_u32(object, "dispatch_site_class");
+        observation.active_instruction = strict_json_u32(object, "active_instruction");
+        observation.active_block = strict_json_u32(object, "active_block");
+        observation.active_block_size = strict_json_u32(object, "active_block_size");
+        observation.pointer_value = strict_json_u32(object, "pointer_value");
+        if (observation.runtime_target == 0u || observation.source_address == 0u ||
+            observation.pointer_value != observation.runtime_target ||
+            (observation.active_block_size != 0u && observation.active_block == 0u))
+            throw std::invalid_argument("Runtime-Frontier verletzt seinen Ziel-/Pointervertrag.");
+        result.observations.push_back(std::move(observation));
+        event_seen = true;
+        if (result.observations.size() > katana::agent::materialization_world_max_frontier)
+            throw std::invalid_argument("Runtime-Frontier-Import ueberschreitet sein Eintragsbudget.");
+    }
+    if (!binding_seen || !event_seen)
+        throw std::invalid_argument("Runtime-Frontier-Log besitzt keine vollstaendige v2-Bindung/v1-Evidence.");
+    const auto key = [](const RuntimeFrontierObservation& item) {
+        return std::tie(item.reason, item.source_address, item.callsite,
+                        item.runtime_target, item.pc, item.pr, item.exit_kind,
+                        item.dispatch_site_class, item.active_instruction,
+                        item.active_block, item.active_block_size, item.pointer_value);
+    };
+    std::sort(result.observations.begin(), result.observations.end(),
+              [&](const auto& left, const auto& right) { return key(left) < key(right); });
+    result.observations.erase(
+        std::unique(result.observations.begin(), result.observations.end(),
+                    [&](const auto& left, const auto& right) { return key(left) == key(right); }),
+        result.observations.end());
+    return result;
+}
+
+std::string agent_hex_address(const std::uint32_t value) {
+    std::ostringstream output;
+    output << "0x" << std::hex << std::setw(8) << std::setfill('0')
+           << value;
+    return output.str();
+}
+
+struct RuntimeHintRecord final {
+    std::string family;
+    std::string owner;
+    std::string site;
+    std::string observation;
+};
+
+std::vector<RuntimeHintRecord> retained_runtime_hints(
+    const katana::agent::ExecutableMaterializationWorld& world) {
+    std::vector<RuntimeHintRecord> result;
+    for (const auto& frontier : world.frontier()) {
+        if (frontier.state != katana::agent::FrontierState::ObservedHint ||
+            frontier.proof !=
+                katana::agent::FrontierProof::RuntimeObservation)
+            continue;
+        const auto prefix =
+            "runtime:" + frontier.family + '|' + frontier.owner + '|' +
+            frontier.site + '|';
+        bool matched = false;
+        for (const auto evidence_id : frontier.evidence) {
+            const auto candidate = std::find_if(
+                world.evidence().begin(),
+                world.evidence().end(),
+                [&](const auto& evidence) {
+                    return evidence.id == evidence_id &&
+                           evidence.kind ==
+                               katana::agent::EvidenceKind::RuntimeObservation &&
+                           evidence.canonical_identity.starts_with(prefix);
+                });
+            if (candidate == world.evidence().end()) continue;
+            matched = true;
+            result.push_back(
+                {frontier.family,
+                 frontier.owner,
+                 frontier.site,
+                 candidate->canonical_identity.substr(prefix.size())});
+        }
+        if (!matched)
+            throw std::invalid_argument(
+                "Materialization-World besitzt ungebundene Runtime-Evidence.");
+    }
+    return result;
+}
+
+RuntimeHintRecord runtime_hint_record(
+    const RuntimeFrontierObservation& item) {
+    RuntimeHintRecord result;
+    result.family = "runtime-frontier:" + item.reason;
+    result.owner = "source-target:" + agent_hex_address(item.source_address);
+    result.site = "callsite:" + agent_hex_address(item.callsite) +
+                  "|runtime-target:" + agent_hex_address(item.runtime_target);
+    std::ostringstream observation;
+    observation << "pc=" << agent_hex_address(item.pc)
+                << ";pr=" << agent_hex_address(item.pr)
+                << ";source=" << agent_hex_address(item.source_address)
+                << ";runtime=" << agent_hex_address(item.runtime_target)
+                << ";callsite=" << agent_hex_address(item.callsite)
+                << ";exit-kind=" << item.exit_kind
+                << ";site-class=" << item.dispatch_site_class
+                << ";active-instruction="
+                << agent_hex_address(item.active_instruction)
+                << ";active-block=" << agent_hex_address(item.active_block)
+                << ";active-block-size=" << item.active_block_size;
+    result.observation = observation.str();
+    return result;
+}
+
+[[nodiscard]] bool has_immutable_agent_evidence(
+    const katana::agent::ExecutableMaterializationWorld& world,
+    const katana::agent::EvidenceKind kind,
+    const std::string_view canonical_identity) noexcept {
+    const auto found = std::find_if(
+        world.evidence().begin(), world.evidence().end(),
+        [&](const auto& evidence) {
+            return evidence.kind == kind && evidence.immutable &&
+                   evidence.canonical_identity == canonical_identity;
+        });
+    return found != world.evidence().end();
+}
+
+[[nodiscard]] bool materialization_world_matches_analysis_identity(
+    const katana::agent::ExecutableMaterializationWorld& world,
+    const katana::codegen::NativeDiscAnalysisArtifactIdentity& identity) noexcept {
+    // The world format predates the aggregate artifact-key field.  Bind every
+    // identity that the world does carry, and reject legacy worlds which omit
+    // any member of this set instead of retaining their runtime hints by
+    // filename or revision alone.
+    if (!has_immutable_agent_evidence(
+            world,
+            katana::agent::EvidenceKind::IdentityBinding,
+            "primary-image:" + identity.boot_byte_identity) ||
+        !has_immutable_agent_evidence(
+            world,
+            katana::agent::EvidenceKind::StaticAnalysis,
+            "analysis-contract:" + identity.analysis_contract_identity) ||
+        !has_immutable_agent_evidence(
+            world,
+            katana::agent::EvidenceKind::IdentityBinding,
+            "native-port:" + identity.native_port_identity + "|" +
+                identity.native_port_artifact_identity))
+        return false;
+    const auto image = std::find_if(
+        world.nodes().begin(), world.nodes().end(),
+        [&](const auto& node) {
+            return node.kind == katana::agent::MaterializationNodeKind::Image &&
+                   node.canonical_identity ==
+                       "image:" + identity.boot_byte_identity &&
+                   node.source_identity == identity.content_identity;
+        });
+    const auto provider = std::find_if(
+        world.nodes().begin(), world.nodes().end(),
+        [&](const auto& node) {
+            return node.kind == katana::agent::MaterializationNodeKind::Provider &&
+                   node.canonical_identity ==
+                       "provider:" + identity.native_port_identity &&
+                   node.source_identity == identity.native_port_artifact_identity;
+        });
+    return image != world.nodes().end() && provider != world.nodes().end();
+}
+
+void validate_runtime_frontier_import_binding(
+    const RuntimeFrontierImport& imported,
+    const katana::codegen::NativeDiscAnalysisResult& analyzed) {
+    const auto& expected = analyzed.analysis_artifact_identity;
+    const auto& actual = imported.binding.identity;
+    if (actual != expected ||
+        katana::codegen::native_disc_analysis_artifact_identity_key(actual) !=
+            expected.key)
+        throw std::invalid_argument(
+            "Runtime-Frontier-Bindung passt nicht exakt zur aktuellen "
+            "Analyseidentitaet.");
+}
+
+std::string serialize_agent_world_json_owned(
+    const katana::agent::ExecutableMaterializationWorld& world) {
+    constexpr std::size_t initial_capacity = 1u * 1024u * 1024u;
+    std::vector<char> buffer(initial_capacity);
+    for (;;) {
+        const auto serialized =
+            katana::agent::serialize_agent_world_json(world, buffer);
+        if (serialized.complete && !serialized.truncated &&
+            serialized.bytes != 0u)
+            return std::string(buffer.data(), serialized.bytes);
+        if (buffer.size() ==
+            katana::agent::materialization_world_max_binary_artifact_bytes)
+            throw std::runtime_error(
+                "Materialization-World-JSON ueberschritt die feste "
+                "Artefaktgrenze.");
+        buffer.resize(std::min(
+            katana::agent::materialization_world_max_binary_artifact_bytes,
+            buffer.size() * 2u));
+    }
+}
+
+std::vector<std::uint8_t> serialize_agent_world_binary_owned(
+    const katana::agent::ExecutableMaterializationWorld& world) {
+    constexpr std::size_t initial_capacity = 1u * 1024u * 1024u;
+    std::vector<std::uint8_t> buffer(initial_capacity);
+    for (;;) {
+        const auto serialized =
+            katana::agent::serialize_agent_world_binary(world, buffer);
+        if (serialized.complete && !serialized.truncated &&
+            serialized.bytes != 0u) {
+            buffer.resize(serialized.bytes);
+            return buffer;
+        }
+        if (buffer.size() ==
+            katana::agent::materialization_world_max_binary_artifact_bytes)
+            throw std::runtime_error(
+                "Materialization-World ueberschritt die feste "
+                "Artefaktgrenze.");
+        buffer.resize(std::min(
+            katana::agent::materialization_world_max_binary_artifact_bytes,
+            buffer.size() * 2u));
+    }
+}
+
+std::size_t refresh_agent_artifacts(
+    katana::codegen::NativeDiscAnalysisResult& analyzed,
+    const std::optional<katana::agent::ExecutableMaterializationWorld>&
+        previous_world,
+    const std::span<const RuntimeFrontierObservation> observations) {
+    katana::agent::ExecutableMaterializationWorld world;
+    if (!katana::agent::parse_agent_world_binary(
+            analyzed.materialization_world_artifact_bytes, world))
+        throw std::runtime_error(
+            "Autoritativer Materialization-World konnte nicht erneut "
+            "validiert werden.");
+    std::vector<RuntimeHintRecord> hints;
+    if (previous_world.has_value())
+        hints = retained_runtime_hints(*previous_world);
+    auto previous_hints = hints;
+    hints.reserve(hints.size() + observations.size());
+    for (const auto& observation : observations)
+        hints.push_back(runtime_hint_record(observation));
+    const auto key = [](const RuntimeHintRecord& item) {
+        return std::tie(
+            item.family, item.owner, item.site, item.observation);
+    };
+    std::sort(
+        hints.begin(), hints.end(),
+        [&](const auto& left, const auto& right) {
+            return key(left) < key(right);
+        });
+    hints.erase(
+        std::unique(
+            hints.begin(), hints.end(),
+            [&](const auto& left, const auto& right) {
+                return key(left) == key(right);
+            }),
+        hints.end());
+    std::sort(
+        previous_hints.begin(), previous_hints.end(),
+        [&](const auto& left, const auto& right) {
+            return key(left) < key(right);
+        });
+    previous_hints.erase(
+        std::unique(
+            previous_hints.begin(), previous_hints.end(),
+            [&](const auto& left, const auto& right) {
+                return key(left) == key(right);
+            }),
+        previous_hints.end());
+    std::size_t accepted_observations = 0u;
+    for (const auto& observation : observations) {
+        const auto record = runtime_hint_record(observation);
+        if (!std::binary_search(
+                previous_hints.begin(), previous_hints.end(), record,
+                [&](const auto& left, const auto& right) {
+                    return key(left) < key(right);
+                }))
+            ++accepted_observations;
+    }
+    for (const auto& hint : hints) {
+        if (!world.add_runtime_hint(
+                hint.family, hint.owner, hint.site, hint.observation))
+            throw std::runtime_error(
+                std::string("Runtime-Evidence konnte nicht fail-closed in "
+                            "den Materialization-World uebernommen werden: ") +
+                katana::agent::world_model_error_name(world.last_error()));
+    }
+    if (!world.validate())
+        throw std::runtime_error(
+            "Materialization-World ist nach Runtime-Evidence ungueltig.");
+    const auto decision = katana::agent::evaluate_agent_decision(world);
+    analyzed.agent_decision =
+        katana::agent::agent_decision_kind_name(decision.kind);
+    analyzed.agent_decision_reason.assign(decision.reason);
+    analyzed.agent_decision_focus = decision.focus.value;
+    analyzed.agent_actionable_frontier = decision.actionable_frontier;
+
+    analyzed.materialization_world_json =
+        serialize_agent_world_json_owned(world);
+    analyzed.materialization_world_artifact_bytes =
+        serialize_agent_world_binary_owned(world);
+    return accepted_observations;
+}
+
+const katana::agent::FrontierEntry* find_agent_frontier(
+    const katana::agent::ExecutableMaterializationWorld& world,
+    const katana::agent::StableId id) noexcept {
+    const auto found = std::find_if(
+        world.frontier().begin(), world.frontier().end(),
+        [&](const auto& entry) { return entry.id == id; });
+    return found == world.frontier().end() ? nullptr : &*found;
+}
+
+const katana::agent::MaterializationNode* find_agent_node(
+    const katana::agent::ExecutableMaterializationWorld& world,
+    const katana::agent::StableId id) noexcept {
+    const auto found = std::find_if(
+        world.nodes().begin(), world.nodes().end(),
+        [&](const auto& entry) { return entry.id == id; });
+    return found == world.nodes().end() ? nullptr : &*found;
+}
+
+unsigned agent_frontier_proof_rank(
+    const katana::agent::FrontierProof proof) noexcept {
+    using katana::agent::FrontierProof;
+    switch (proof) {
+    case FrontierProof::None:
+    case FrontierProof::RuntimeObservation:
+        return 0u;
+    case FrontierProof::StaticDisassembly:
+        return 1u;
+    case FrontierProof::StaticAnalyzer:
+        return 2u;
+    case FrontierProof::IdentityBound:
+    case FrontierProof::ExplicitRejection:
+        return 3u;
+    }
+    return 0u;
+}
+
+unsigned agent_node_proof_rank(
+    const katana::agent::ProofClass proof) noexcept {
+    using katana::agent::ProofClass;
+    switch (proof) {
+    case ProofClass::UnknownMaterialization:
+        return 0u;
+    case ProofClass::GuardedPartial:
+        return 1u;
+    case ProofClass::GuardedComplete:
+        return 2u;
+    case ProofClass::ProvenExact:
+    case ProofClass::NativeReplaced:
+    case ProofClass::Rejected:
+        return 3u;
+    }
+    return 0u;
+}
+
+bool actionable_agent_frontier(
+    const katana::agent::FrontierEntry& entry) noexcept {
+    return entry.state != katana::agent::FrontierState::Closed &&
+           !entry.static_complete;
+}
+
+AgentIterationDelta measure_agent_iteration(
+    const katana::agent::ExecutableMaterializationWorld& before,
+    const katana::agent::ExecutableMaterializationWorld& after) {
+    AgentIterationDelta result;
+    for (const auto& previous : before.frontier()) {
+        const auto* current = find_agent_frontier(after, previous.id);
+        if (actionable_agent_frontier(previous) &&
+            (current == nullptr || !actionable_agent_frontier(*current)))
+            ++result.resolved_frontiers;
+        if (current == nullptr) continue;
+        const auto previous_rank = agent_frontier_proof_rank(previous.proof);
+        const auto current_rank = agent_frontier_proof_rank(current->proof);
+        if ((!previous.static_complete && current->static_complete) ||
+            current_rank > previous_rank)
+            ++result.proof_upgrades;
+        if ((previous.static_complete && !current->static_complete) ||
+            current_rank < previous_rank)
+            ++result.proof_downgrades;
+    }
+    for (const auto& current : after.frontier())
+        if (find_agent_frontier(before, current.id) == nullptr &&
+            actionable_agent_frontier(current)) {
+            if (current.state ==
+                katana::agent::FrontierState::ObservedHint)
+                ++result.new_runtime_hints;
+            else
+                ++result.new_frontiers;
+        }
+    for (const auto& current : after.frontier()) {
+        const auto* previous = find_agent_frontier(before, current.id);
+        if (previous == nullptr ||
+            current.state != katana::agent::FrontierState::ObservedHint ||
+            current.proof != katana::agent::FrontierProof::RuntimeObservation)
+            continue;
+        for (const auto evidence : current.evidence)
+            if (std::find(
+                    previous->evidence.begin(), previous->evidence.end(),
+                    evidence) == previous->evidence.end())
+                ++result.new_runtime_hints;
+    }
+    for (const auto& previous : before.nodes()) {
+        const auto* current = find_agent_node(after, previous.id);
+        if (current == nullptr) continue;
+        const auto previous_rank = agent_node_proof_rank(previous.proof);
+        const auto current_rank = agent_node_proof_rank(current->proof);
+        if ((previous.completeness != katana::agent::Completeness::Complete &&
+             current->completeness == katana::agent::Completeness::Complete) ||
+            current_rank > previous_rank)
+            ++result.proof_upgrades;
+        if ((previous.completeness == katana::agent::Completeness::Complete &&
+             current->completeness != katana::agent::Completeness::Complete) ||
+            current_rank < previous_rank)
+            ++result.proof_downgrades;
+        if (previous.kind == katana::agent::MaterializationNodeKind::AnalysisRoot) {
+            const bool was_incomplete =
+                previous.completeness != katana::agent::Completeness::Complete;
+            const bool is_incomplete =
+                current->completeness != katana::agent::Completeness::Complete;
+            if (!was_incomplete && is_incomplete)
+                ++result.new_incomplete_roots;
+            if (was_incomplete && !is_incomplete)
+                ++result.resolved_incomplete_roots;
+        }
+    }
+    for (const auto& current : after.nodes())
+        if (current.kind ==
+                katana::agent::MaterializationNodeKind::AnalysisRoot &&
+            current.completeness != katana::agent::Completeness::Complete &&
+            find_agent_node(before, current.id) == nullptr)
+            ++result.new_incomplete_roots;
+    return result;
+}
+
+struct AgentSessionLedgerState final {
+    std::optional<std::uint64_t> previous_wall_time_ms;
+    std::string analysis_artifact_id;
+    std::string materialization_world_sha256;
+    std::string materialization_world_json_sha256;
+    std::string analysis_report_sha256;
+    std::optional<std::string> analysis_archive_sha256;
+    bool committed_generation = false;
+};
+
+AgentSessionLedgerState validate_agent_session_ledger(
+    const std::string_view ledger) {
+    AgentSessionLedgerState state;
+    if (ledger.empty()) return state;
+    if (ledger.back() != '\n')
+        throw std::invalid_argument(
+            "Agent-Session-Ledger endet nicht an einer Datensatzgrenze.");
+    static constexpr std::array<std::string_view, 21u> schema_one_keys{
+        "schema", "kind", "task_id", "analysis_artifact_id", "commit",
+        "result", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
+        "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
+        "resolved_incomplete_roots", "analysis_wall_time_ms",
+        "analysis_wall_time_delta_ms", "boot_analysis_cache_hit",
+        "boot_analysis_pipeline_runs", "latent_root_seed_cache_hit",
+        "analysis_artifact_cache_hit", "runtime_frontiers_imported", "next_action"};
+    static constexpr std::array<std::string_view, 22u> schema_two_keys{
+        "schema", "kind", "task_id", "analysis_artifact_id", "commit",
+        "result", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
+        "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
+        "resolved_incomplete_roots", "timing_kind",
+        "telemetry_analysis_wall_time_ms", "telemetry_analysis_wall_time_delta_ms",
+        "boot_analysis_cache_hit", "boot_analysis_pipeline_runs",
+        "latent_root_seed_cache_hit", "analysis_artifact_cache_hit",
+        "runtime_frontiers_imported", "next_action"};
+    static constexpr std::array<std::string_view, 26u> schema_three_keys{
+        "schema", "kind", "task_id", "analysis_artifact_id", "commit",
+        "result", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
+        "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
+        "resolved_incomplete_roots", "timing_kind",
+        "telemetry_analysis_wall_time_ms", "telemetry_analysis_wall_time_delta_ms",
+        "boot_analysis_cache_hit", "boot_analysis_pipeline_runs",
+        "latent_root_seed_cache_hit", "analysis_artifact_cache_hit",
+        "runtime_frontiers_imported", "next_action",
+        "materialization_world_sha256", "materialization_world_json_sha256",
+        "analysis_report_sha256", "analysis_archive_sha256"};
+    static constexpr std::array<std::string_view, 8u> numeric_keys{
+        "task_id", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
+        "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
+        "resolved_incomplete_roots"};
+    std::size_t cursor = 0u;
+    while (cursor < ledger.size()) {
+        const auto newline = ledger.find('\n', cursor);
+        if (newline == std::string_view::npos)
+            throw std::invalid_argument(
+                "Agent-Session-Ledger besitzt eine unvollstaendige Zeile.");
+        const auto line = ledger.substr(cursor, newline - cursor);
+        cursor = newline + 1u;
+        if (line.empty() || line.size() > maximum_agent_session_line_bytes)
+            throw std::invalid_argument(
+                "Agent-Session-Ledger besitzt eine leere oder zu lange Zeile.");
+        StrictJsonObject object;
+        parse_strict_json_object(line, object);
+        const auto schema = strict_json_u32(object, "schema");
+        state.committed_generation = false;
+        state.materialization_world_sha256.clear();
+        state.materialization_world_json_sha256.clear();
+        state.analysis_report_sha256.clear();
+        state.analysis_archive_sha256.reset();
+        if (schema == 1u) {
+            require_strict_json_keys(object, schema_one_keys);
+            state.previous_wall_time_ms =
+                strict_json_u64(object, "analysis_wall_time_ms");
+            const auto* delta = strict_json_field(object, "analysis_wall_time_delta_ms");
+            if (delta == nullptr ||
+                (delta->kind != StrictJsonValueKind::Number &&
+                 delta->kind != StrictJsonValueKind::Null))
+                throw std::invalid_argument("Agent-Session-Ledger besitzt ein ungueltiges Zeitdelta.");
+        } else if (schema == 2u) {
+            require_strict_json_keys(object, schema_two_keys);
+            if (strict_json_identifier(object, "timing_kind", 64u) !=
+                "nondeterministic-telemetry")
+                throw std::invalid_argument("Agent-Session-Ledger besitzt eine ungueltige Zeitsemantik.");
+            state.previous_wall_time_ms =
+                strict_json_u64(object, "telemetry_analysis_wall_time_ms");
+            const auto* delta = strict_json_field(object, "telemetry_analysis_wall_time_delta_ms");
+            if (delta == nullptr ||
+                (delta->kind != StrictJsonValueKind::Number &&
+                 delta->kind != StrictJsonValueKind::Null))
+                throw std::invalid_argument("Agent-Session-Ledger besitzt ein ungueltiges Zeitdelta.");
+        } else if (schema == 3u) {
+            require_strict_json_keys(object, schema_three_keys);
+            if (strict_json_identifier(object, "timing_kind", 64u) !=
+                "nondeterministic-telemetry")
+                throw std::invalid_argument(
+                    "Agent-Session-Ledger besitzt eine ungueltige Zeitsemantik.");
+            state.previous_wall_time_ms = strict_json_u64(
+                object, "telemetry_analysis_wall_time_ms");
+            const auto* delta = strict_json_field(
+                object, "telemetry_analysis_wall_time_delta_ms");
+            if (delta == nullptr ||
+                (delta->kind != StrictJsonValueKind::Number &&
+                 delta->kind != StrictJsonValueKind::Null))
+                throw std::invalid_argument(
+                    "Agent-Session-Ledger besitzt ein ungueltiges Zeitdelta.");
+            state.materialization_world_sha256 = strict_json_identifier(
+                object, "materialization_world_sha256", 64u);
+            state.materialization_world_json_sha256 = strict_json_identifier(
+                object, "materialization_world_json_sha256", 64u);
+            state.analysis_report_sha256 = strict_json_identifier(
+                object, "analysis_report_sha256", 64u);
+            const auto* archive = strict_json_field(
+                object, "analysis_archive_sha256");
+            if (archive == nullptr ||
+                (archive->kind != StrictJsonValueKind::String &&
+                 archive->kind != StrictJsonValueKind::Null))
+                throw std::invalid_argument(
+                    "Agent-Session-Ledger besitzt eine ungueltige "
+                    "Analysearchividentitaet.");
+            if (archive->kind == StrictJsonValueKind::String) {
+                state.analysis_archive_sha256 = strict_json_identifier(
+                    object, "analysis_archive_sha256", 64u);
+            } else {
+                state.analysis_archive_sha256.reset();
+            }
+            state.committed_generation = true;
+        } else {
+            throw std::invalid_argument("Agent-Session-Ledger besitzt eine unbekannte Schema-Version.");
+        }
+        if (strict_json_identifier(object, "kind", 64u) != "katana-agent-session")
+            throw std::invalid_argument("Agent-Session-Ledger besitzt einen ungueltigen Datensatztyp.");
+        state.analysis_artifact_id =
+            strict_json_identifier(object, "analysis_artifact_id", 512u);
+        static_cast<void>(strict_json_identifier(object, "commit", 256u));
+        static_cast<void>(strict_json_identifier(object, "result", 64u));
+        static_cast<void>(strict_json_identifier(object, "next_action", 128u));
+        for (const auto key : numeric_keys)
+            static_cast<void>(strict_json_u64(object, key));
+        static_cast<void>(strict_json_u64(object, "boot_analysis_pipeline_runs"));
+        static_cast<void>(strict_json_u64(object, "runtime_frontiers_imported"));
+        static_cast<void>(strict_json_bool(object, "boot_analysis_cache_hit"));
+        static_cast<void>(strict_json_bool(object, "latent_root_seed_cache_hit"));
+        static_cast<void>(strict_json_bool(object, "analysis_artifact_cache_hit"));
+    }
+    if (!state.previous_wall_time_ms.has_value())
+        throw std::invalid_argument(
+            "Agent-Session-Ledger besitzt keinen messbaren Zeitwert.");
+    return state;
+}
+
+struct CommittedAgentGeneration final {
+    katana::agent::ExecutableMaterializationWorld world;
+    std::string analysis_artifact_id;
+};
+
+CommittedAgentGeneration load_committed_agent_generation(
+    const std::filesystem::path& output_root) {
+    const auto ledger = read_safe_small_port_file(
+        output_root / ".katana" / "agent" / "session.jsonl",
+        maximum_agent_session_ledger_bytes,
+        "Agent-Session-Ledger");
+    const auto state = validate_agent_session_ledger(ledger);
+    if (!state.committed_generation || state.analysis_artifact_id.empty())
+        throw std::invalid_argument(
+            "analyze-port --resume verweigert ein nicht transaktional "
+            "publiziertes Agent-Artefakt.");
+
+    std::string world_sha256;
+    auto world = load_agent_world(
+        output_root / "materialization-world.katana-world",
+        &world_sha256);
+    const auto world_json = read_safe_small_port_file(
+        output_root / "materialization-world.json",
+        katana::agent::materialization_world_max_binary_artifact_bytes,
+        "Materialization-World-JSON");
+    const auto report = read_safe_small_port_file(
+        output_root / "native-disc-analysis.json",
+        maximum_agent_session_ledger_bytes,
+        "NativeDisc-Analysebericht");
+    if (world_sha256 != state.materialization_world_sha256 ||
+        katana::io::sha256_bytes(world_json) !=
+            state.materialization_world_json_sha256 ||
+        katana::io::sha256_bytes(report) != state.analysis_report_sha256)
+        throw std::invalid_argument(
+            "analyze-port --resume verweigert eine unvollstaendige oder "
+            "nachtraeglich veraenderte Analysepublikation.");
+
+    if (state.analysis_archive_sha256.has_value()) {
+        const auto archive = read_safe_small_port_file(
+            output_root / "native-disc-analysis.katana-analysis",
+            katana::codegen::maximum_native_disc_analysis_artifact_bytes,
+            "NativeDisc-Analysearchiv");
+        if (katana::io::sha256_bytes(archive) !=
+            *state.analysis_archive_sha256)
+            throw std::invalid_argument(
+                "analyze-port --resume verweigert ein veraendertes "
+                "NativeDisc-Analysearchiv.");
+    }
+    return {std::move(world), state.analysis_artifact_id};
+}
+
+void append_agent_session_ledger(
+    const std::filesystem::path& output_root,
+    const katana::codegen::NativeDiscAnalysisResult& analyzed,
+    const std::optional<katana::agent::ExecutableMaterializationWorld>&
+        previous_world,
+    const katana::agent::ExecutableMaterializationWorld& current_world,
+    const std::uint64_t analysis_wall_time_ms,
+    const std::size_t imported_runtime_frontiers,
+    const std::string_view materialization_world_sha256,
+    const std::string_view materialization_world_json_sha256,
+    const std::string_view analysis_report_sha256,
+    const std::optional<std::string_view> analysis_archive_sha256) {
+    const auto agent_root = output_root / ".katana" / "agent";
+    ensure_safe_port_directory_chain(
+        output_root, agent_root, "Privates Agent-Session-Verzeichnis");
+    const auto ledger_path = agent_root / "session.jsonl";
+    std::string ledger;
+    if (safe_regular_port_file_exists(
+            ledger_path, "Agent-Session-Ledger"))
+        ledger = read_safe_small_port_file(
+            ledger_path,
+            maximum_agent_session_ledger_bytes,
+            "Agent-Session-Ledger");
+    const auto prior_state = validate_agent_session_ledger(ledger);
+    const auto prior_wall_time = prior_state.previous_wall_time_ms;
+    if (prior_wall_time.has_value() &&
+        *prior_wall_time >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max()))
+        throw std::invalid_argument(
+            "Agent-Session-Ledger besitzt einen ueberlaufenden Zeitwert.");
+    AgentIterationDelta delta;
+    std::uint64_t task_id = analyzed.agent_decision_focus;
+    if (previous_world.has_value()) {
+        delta = measure_agent_iteration(*previous_world, current_world);
+        task_id = katana::agent::evaluate_agent_decision(*previous_world)
+                      .focus.value;
+    }
+    const auto result = !previous_world.has_value()
+        ? "initial"
+        : delta.proof_downgrades != 0u || delta.new_frontiers != 0u ||
+                  delta.new_incomplete_roots != 0u
+            ? "regression"
+            : delta.resolved_frontiers != 0u ||
+                      delta.proof_upgrades != 0u
+                ? "improved"
+                : "no_progress";
+    std::ostringstream line;
+    line << "{\"schema\":3,\"kind\":\"katana-agent-session\""
+         << ",\"task_id\":" << task_id
+         << ",\"analysis_artifact_id\":"
+         << katana::io::quote_json(analyzed.analysis_artifact_identity.key)
+         << ",\"commit\":"
+         << katana::io::quote_json(
+                katana::build_contract::katana_git_commit)
+         << ",\"result\":" << katana::io::quote_json(result)
+         << ",\"resolved_frontiers\":" << delta.resolved_frontiers
+         << ",\"new_frontiers\":" << delta.new_frontiers
+         << ",\"new_runtime_hints\":" << delta.new_runtime_hints
+         << ",\"proof_upgrades\":" << delta.proof_upgrades
+         << ",\"proof_downgrades\":" << delta.proof_downgrades
+         << ",\"new_incomplete_roots\":"
+         << delta.new_incomplete_roots
+         << ",\"resolved_incomplete_roots\":"
+         << delta.resolved_incomplete_roots
+         << ",\"timing_kind\":\"nondeterministic-telemetry\""
+         << ",\"telemetry_analysis_wall_time_ms\":"
+         << analysis_wall_time_ms
+         << ",\"telemetry_analysis_wall_time_delta_ms\":";
+    if (prior_wall_time.has_value())
+        line << static_cast<std::int64_t>(analysis_wall_time_ms) -
+                    static_cast<std::int64_t>(*prior_wall_time);
+    else
+        line << "null";
+    line << ",\"boot_analysis_cache_hit\":"
+         << (analyzed.boot_analysis_cache_hit ? "true" : "false")
+         << ",\"boot_analysis_pipeline_runs\":"
+         << analyzed.boot_analysis_pipeline_runs
+         << ",\"latent_root_seed_cache_hit\":"
+         << (analyzed.latent_primary_root_seed_cache_hit ? "true" : "false")
+         << ",\"analysis_artifact_cache_hit\":"
+         << (analyzed.analysis_artifact_cache_hit ? "true" : "false")
+         << ",\"runtime_frontiers_imported\":"
+         << imported_runtime_frontiers
+         << ",\"next_action\":"
+         << katana::io::quote_json(analyzed.agent_decision)
+         << ",\"materialization_world_sha256\":"
+         << katana::io::quote_json(materialization_world_sha256)
+         << ",\"materialization_world_json_sha256\":"
+         << katana::io::quote_json(materialization_world_json_sha256)
+         << ",\"analysis_report_sha256\":"
+         << katana::io::quote_json(analysis_report_sha256)
+         << ",\"analysis_archive_sha256\":";
+    if (analysis_archive_sha256.has_value())
+        line << katana::io::quote_json(*analysis_archive_sha256);
+    else
+        line << "null";
+    line
+         << "}\n";
+    const auto record = line.str();
+    if (record.size() > maximum_agent_session_line_bytes ||
+        ledger.size() > maximum_agent_session_ledger_bytes -
+                            std::min(
+                                record.size(),
+                                maximum_agent_session_ledger_bytes))
+        throw std::runtime_error(
+            "Agent-Session-Ledger ueberschreitet sein festes Budget.");
+    ledger.append(record);
+    write_atomic_analysis_file(
+        output_root,
+        ledger_path,
+        ledger,
+        "Agent-Session-Ledger");
+}
+
 std::size_t resolved_runtime_jobs() noexcept {
     constexpr std::size_t maximum_jobs = 64u;
     const auto detected = std::clamp<std::size_t>(
@@ -7593,7 +8962,11 @@ int export_port_project(const std::filesystem::path& source_path,
                          const std::optional<std::filesystem::path>&
                              telemetry_jsonl_path = std::nullopt,
                         const PortAnalysisMode analysis_mode =
-                            PortAnalysisMode::PlatformAbi) {
+                            PortAnalysisMode::PlatformAbi,
+                        const bool analysis_only = false,
+                        const bool resume_analysis = false,
+                        const std::optional<std::filesystem::path>&
+                            runtime_frontier_import_path = std::nullopt) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
@@ -7606,6 +8979,18 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--latent-aot-entry ist ausschliesslich fuer vollstaendige "
             "NativeDisc-Produktports erlaubt.");
+    if (analysis_only && boot_executable_artifact)
+        throw std::invalid_argument(
+            "analyze-port akzeptiert nur eine NativeDisc-GDI-Quelle.");
+    if ((resume_analysis || runtime_frontier_import_path.has_value()) &&
+        !analysis_only)
+        throw std::invalid_argument(
+            "--resume und --import-runtime-frontier sind ausschliesslich "
+            "fuer analyze-port erlaubt.");
+    if (runtime_frontier_import_path.has_value() && !resume_analysis)
+        throw std::invalid_argument(
+            "--import-runtime-frontier braucht einen expliziten "
+            "analyze-port --resume-Lauf.");
     const auto analysis_mode_identity =
         port_analysis_mode_identity(analysis_mode);
     if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly &&
@@ -7613,13 +8998,6 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--analysis-mode runtime-only braucht einen vollstaendigen "
             "Produktport mit --game-project.");
-    if (!diagnostic_partial && !native_port_definition_path.has_value())
-        throw std::invalid_argument(
-            "Produktports brauchen --native-port-definition.");
-    if (diagnostic_partial && native_port_definition_path.has_value())
-        throw std::invalid_argument(
-            "--native-port-definition ist ausschliesslich fuer "
-            "vollstaendige Produktports erlaubt.");
     if (!native_aot_resume_entries.empty() &&
         (analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly ||
          diagnostic_partial || boot_executable_artifact ||
@@ -7636,6 +9014,13 @@ int export_port_project(const std::filesystem::path& source_path,
             "Port-Ausgabe darf kein Dateisystemstamm sein.");
     ensure_safe_absolute_directory_chain(
         absolute_output.parent_path(), "Port-Ausgabeelternpfad");
+    if (!diagnostic_partial && !native_port_definition_path.has_value())
+        throw std::invalid_argument(
+            "Produktports brauchen --native-port-definition.");
+    if (diagnostic_partial && native_port_definition_path.has_value())
+        throw std::invalid_argument(
+            "--native-port-definition ist ausschliesslich fuer "
+            "vollstaendige Produktports erlaubt.");
     const auto publish_paths =
         port_publish_output_paths(absolute_output);
     std::shared_ptr<katana::runtime::NativePortArtifact>
@@ -7945,7 +9330,9 @@ int export_port_project(const std::filesystem::path& source_path,
     telemetry_options.host_compile_jobs_effective =
         host_compile_budget.effective;
     telemetry_options.job_kind =
-        boot_executable_artifact
+        analysis_only
+            ? "analyze-port"
+            : boot_executable_artifact
             ? (diagnostic_partial
                    ? "probe-port-executable"
                    : "port-executable")
@@ -7997,17 +9384,21 @@ int export_port_project(const std::filesystem::path& source_path,
         return quoted + "'";
 #endif
     };
-    const ExclusivePortExportLock publish_lock(
-        publish_paths.lock_base);
-    maybe_hold_port_publish_lock_for_test();
-    recover_port_publish_transaction(publish_paths);
-    if (exit_after_port_publish_recovery_for_test()) {
-        telemetry_run.complete();
-        return 0;
+    std::unique_ptr<ExclusivePortExportLock> publish_lock;
+    if (!analysis_only) {
+        publish_lock = std::make_unique<ExclusivePortExportLock>(
+            publish_paths.lock_base);
+        maybe_hold_port_publish_lock_for_test();
+        recover_port_publish_transaction(publish_paths);
+        if (exit_after_port_publish_recovery_for_test()) {
+            telemetry_run.complete();
+            return 0;
+        }
     }
-    static_cast<void>(
-        safe_regular_port_directory_exists(
-            publish_paths.output, "Bestehendes Portpaket"));
+    if (!analysis_only)
+        static_cast<void>(
+            safe_regular_port_directory_exists(
+                publish_paths.output, "Bestehendes Portpaket"));
     std::optional<katana::platform::DreamcastBootExecutableArtifact>
         verified_boot_artifact;
     std::optional<katana::platform::DreamcastDiscBoot>
@@ -8367,6 +9758,325 @@ int export_port_project(const std::filesystem::path& source_path,
     ensure_safe_absolute_directory_chain(
         component_cache_root,
         "Globaler Port-Komponentencache");
+    const auto make_export_options =
+        [&](const std::filesystem::path& codegen_cache_root) {
+            katana::codegen::PortExportOptions export_options{
+                target_name,
+                KATANA_RECOMP_VERSION,
+                {},
+                source_root,
+                diagnostic_partial,
+                console_profile,
+                [&phase_timings](const std::string_view phase) {
+                    observe_port_export_progress(
+                        phase_timings, phase);
+                }};
+            export_options.progress = port_progress;
+            export_options.detailed_analysis_telemetry =
+                normalized_telemetry_jsonl_path.has_value();
+            export_options.analysis_cache_root =
+                component_cache_root;
+            export_options.codegen_cache_root = codegen_cache_root;
+            export_options.analysis_implementation_identity =
+                implementation_identities.analysis;
+            export_options.analysis_cache_implementation_identity =
+                implementation_identities.analysis_cache;
+            export_options.codegen_implementation_identity =
+                implementation_identities.codegen;
+            export_options.game_project =
+                resolved_game_project.has_value()
+                    ? &*resolved_game_project
+                    : nullptr;
+            export_options.native_port_definition =
+                verified_native_port
+                    ? &verified_native_port->definition()
+                    : nullptr;
+            export_options.native_port_artifact_identity =
+                native_port_artifact_identity;
+            export_options.game_project_runtime_image_payloads =
+                runtime_image_payloads;
+            export_options.native_port_bootstrap_write_payloads =
+                bootstrap_write_payloads;
+            export_options.native_aot_resume_entries =
+                native_aot_resume_entries;
+            export_options.latent_aot_entry_hints =
+                normalized_latent_aot_entry_hints;
+            export_options.latent_aot_discovery_mode =
+                latent_aot_discovery_mode;
+            export_options.analysis_artifact_archive_requested =
+                analysis_only;
+            export_options.agent_analysis_artifacts_requested =
+                analysis_only;
+            return export_options;
+        };
+    if (analysis_only) {
+        if (!verified_native_disc)
+            throw std::logic_error(
+                "analyze-port besitzt keine validierte NativeDisc-Quelle.");
+        // The final session-ledger record is the commit marker. Holding one
+        // sibling lock across analysis plus every artifact replacement keeps
+        // concurrent analyze-port runs from interleaving their world, JSON,
+        // report and session ledger generations.
+        const ExclusivePortExportLock analysis_lock(
+            std::filesystem::path(
+                absolute_output.string() + ".katana-analysis"));
+        std::optional<katana::agent::ExecutableMaterializationWorld>
+            previous_world;
+        std::optional<std::string> previous_analysis_artifact_id;
+        if (resume_analysis) {
+            if (!safe_regular_port_directory_exists(
+                    absolute_output,
+                    "Vorheriger Analyseartefaktordner"))
+                throw std::invalid_argument(
+                    "analyze-port --resume braucht einen vorhandenen "
+                    "sicheren Analyseartefaktordner.");
+            auto committed = load_committed_agent_generation(
+                absolute_output);
+            previous_world = std::move(committed.world);
+            previous_analysis_artifact_id =
+                std::move(committed.analysis_artifact_id);
+        }
+        std::optional<RuntimeFrontierImport> runtime_import;
+        if (runtime_frontier_import_path.has_value())
+            runtime_import = load_runtime_frontier_import(
+                *runtime_frontier_import_path);
+        auto analysis_options = make_export_options({});
+        const auto analysis_started = std::chrono::steady_clock::now();
+        auto analyzed =
+            katana::codegen::analyze_native_disc_port(
+                *verified_native_disc,
+                analysis_options,
+                analysis_mode);
+        const auto analysis_wall_time_ms = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - analysis_started)
+                .count());
+        if (previous_world.has_value() &&
+            (!previous_analysis_artifact_id.has_value() ||
+             *previous_analysis_artifact_id !=
+                 analyzed.analysis_artifact_identity.key ||
+             !materialization_world_matches_analysis_identity(
+                 *previous_world, analyzed.analysis_artifact_identity)))
+            throw std::invalid_argument(
+                "--resume verweigert: der vorhandene Materialization-World "
+                "ist nicht exakt an die aktuelle Analyseidentitaet gebunden.");
+        if (runtime_import.has_value())
+            validate_runtime_frontier_import_binding(runtime_import.value(), analyzed);
+        const auto runtime_observations = runtime_import.has_value()
+            ? std::span<const RuntimeFrontierObservation>(
+                  runtime_import->observations.data(),
+                  runtime_import->observations.size())
+            : std::span<const RuntimeFrontierObservation>{};
+        std::size_t accepted_runtime_observations = 0u;
+        if (previous_world.has_value() || !runtime_observations.empty())
+            accepted_runtime_observations = refresh_agent_artifacts(
+                analyzed, previous_world, runtime_observations);
+        std::error_code output_error;
+        auto output_status = std::filesystem::symlink_status(
+            absolute_output, output_error);
+        const bool output_missing =
+            output_error == std::errc::no_such_file_or_directory ||
+            (!output_error &&
+             output_status.type() ==
+                 std::filesystem::file_type::not_found);
+        if (output_missing) {
+            output_error.clear();
+            if (!std::filesystem::create_directory(
+                    absolute_output, output_error) &&
+                output_error)
+                throw std::filesystem::filesystem_error(
+                    "Analyseartefaktordner konnte nicht erstellt werden.",
+                    absolute_output,
+                    output_error);
+            output_status = std::filesystem::symlink_status(
+                absolute_output, output_error);
+        }
+        if (output_error ||
+            !std::filesystem::is_directory(output_status) ||
+            unsafe_port_filesystem_link(
+                absolute_output, output_status))
+            throw std::runtime_error(
+                "Analyseartefaktziel ist kein sicherer lokaler Ordner.");
+        const auto report_path =
+            absolute_output / "native-disc-analysis.json";
+        const auto archive_target_path =
+            absolute_output / "native-disc-analysis.katana-analysis";
+        const auto world_artifact_path =
+            absolute_output / "materialization-world.katana-world";
+        const auto world_json_path =
+            absolute_output / "materialization-world.json";
+        AnalysisArtifactRollback publication(absolute_output);
+        publication.prepare(report_path, "NativeDisc-Analysebericht");
+        publication.prepare(
+            archive_target_path,
+            "Identitaetsgebundenes NativeDisc-Analysearchiv");
+        publication.prepare(
+            world_artifact_path,
+            "Binaeres Materialization-World-Artefakt");
+        publication.prepare(
+            world_json_path,
+            "Materialization-World-JSON");
+        std::optional<std::filesystem::path> analysis_archive_path;
+        if (!analyzed.analysis_artifact_bytes.empty()) {
+            analysis_archive_path = archive_target_path;
+            write_atomic_analysis_file(
+                absolute_output,
+                *analysis_archive_path,
+                analyzed.analysis_artifact_bytes,
+                "Identitaetsgebundenes NativeDisc-Analysearchiv");
+        }
+        if (analyzed.materialization_world_artifact_bytes.empty() ||
+            analyzed.materialization_world_json.empty())
+            throw std::runtime_error(
+                "analyze-port erhielt keinen Materialization-World vom "
+                "autoritativen Analysepfad.");
+        write_atomic_analysis_file(
+            absolute_output,
+            world_artifact_path,
+            analyzed.materialization_world_artifact_bytes,
+            "Binaeres Materialization-World-Artefakt");
+        auto world_json = analyzed.materialization_world_json;
+        world_json.push_back('\n');
+        write_atomic_analysis_file(
+            absolute_output,
+            world_json_path,
+            world_json,
+            "Materialization-World-JSON");
+        std::ostringstream report;
+        report << "{\"schema\":1,\"kind\":\"katana-native-disc-analysis\""
+               << ",\"project_identity\":"
+               << katana::io::quote_json(analyzed.project_identity)
+               << ",\"content_identity\":"
+               << katana::io::quote_json(
+                      verified_install_recipe->content_identity)
+               << ",\"boot_sha256\":"
+               << katana::io::quote_json(
+                      verified_install_recipe->boot_sha256)
+               << ",\"analysis_implementation\":"
+               << katana::io::quote_json(
+                      implementation_identities.analysis)
+               << ",\"primary_functions\":"
+               << analyzed.summary.primary_functions
+               << ",\"combined_functions\":"
+               << analyzed.summary.combined_functions
+               << ",\"latent_modules\":"
+               << analyzed.summary.latent_modules
+               << ",\"external_primary_roots\":"
+               << analyzed.summary.external_primary_roots
+               << ",\"native_resume_entries\":"
+               << analyzed.summary.native_resume_entries
+               << ",\"known_hardware_sites\":"
+               << analyzed.summary.known_hardware_sites
+               << ",\"native_hardware_gaps\":"
+               << analyzed.summary.native_hardware_gaps
+               << ",\"sdk_provider_candidates\":"
+               << analyzed.summary.sdk_provider_candidates
+               << ",\"guarded_inventory_complete\":"
+               << (analyzed.summary.guarded_inventory_complete
+                       ? "true" : "false")
+               << ",\"native_hardware_closure_complete\":"
+               << (analyzed.summary.native_hardware_closure_complete
+                       ? "true" : "false")
+               << ",\"backend_admitted\":"
+               << (analyzed.summary.backend_admitted
+                       ? "true" : "false")
+               << ",\"analysis_artifact_key\":"
+               << katana::io::quote_json(
+                      analyzed.analysis_artifact_identity.key)
+               << ",\"analysis_artifact_cache_hit\":"
+               << (analyzed.analysis_artifact_cache_hit
+                       ? "true" : "false")
+               << ",\"analysis_artifact_cache_published\":"
+               << (analyzed.analysis_artifact_cache_published
+                       ? "true" : "false")
+               << ",\"resume_requested\":"
+               << (resume_analysis ? "true" : "false")
+               << ",\"runtime_frontiers_received\":"
+               << runtime_observations.size()
+               << ",\"runtime_frontiers_imported\":"
+               << accepted_runtime_observations
+               << ",\"runtime_frontiers_rejected\":"
+               << (runtime_observations.size() -
+                   accepted_runtime_observations)
+               << ",\"timing_kind\":\"nondeterministic-telemetry\""
+               << ",\"telemetry_analysis_wall_time_ms\":"
+               << analysis_wall_time_ms
+               << ",\"agent_decision\":"
+               << katana::io::quote_json(analyzed.agent_decision)
+               << ",\"agent_decision_reason\":"
+               << katana::io::quote_json(
+                      analyzed.agent_decision_reason)
+               << ",\"agent_decision_focus\":"
+               << analyzed.agent_decision_focus
+               << ",\"agent_actionable_frontier\":"
+               << analyzed.agent_actionable_frontier
+               << ",\"materialization_world_file\":"
+               << katana::io::quote_json(
+                      world_artifact_path.filename().string())
+               << ",\"materialization_world_json\":"
+               << katana::io::quote_json(
+                      world_json_path.filename().string())
+               << ",\"analysis_artifact_file\":";
+        if (analysis_archive_path.has_value())
+            report << katana::io::quote_json(
+                analysis_archive_path->filename().string());
+        else
+            report << "null";
+        report
+               << "}\n";
+        const auto serialized = report.str();
+        const auto world_artifact_sha256 = katana::io::sha256_bytes(
+            std::string_view(
+                reinterpret_cast<const char*>(
+                    analyzed.materialization_world_artifact_bytes.data()),
+                analyzed.materialization_world_artifact_bytes.size()));
+        const auto world_json_sha256 =
+            katana::io::sha256_bytes(world_json);
+        const auto report_sha256 =
+            katana::io::sha256_bytes(serialized);
+        std::optional<std::string> analysis_archive_sha256;
+        if (!analyzed.analysis_artifact_bytes.empty())
+            analysis_archive_sha256 = katana::io::sha256_bytes(
+                std::string_view(
+                    reinterpret_cast<const char*>(
+                        analyzed.analysis_artifact_bytes.data()),
+                    analyzed.analysis_artifact_bytes.size()));
+        katana::agent::ExecutableMaterializationWorld current_world;
+        if (!katana::agent::parse_agent_world_binary(
+                analyzed.materialization_world_artifact_bytes,
+                current_world))
+            throw std::runtime_error(
+                "Publizierter Materialization-World konnte nicht fuer das "
+                "Agent-Session-Ledger validiert werden.");
+        write_atomic_analysis_file(
+            absolute_output,
+            report_path,
+            serialized,
+            "NativeDisc-Analysebericht");
+        // The report is the generation payload; only after it is atomically
+        // visible may the final ledger line act as the commit marker.  A
+        // failed ledger append therefore leaves a retryable report rather
+        // than a ledger entry pointing at an unpublished generation.
+        append_agent_session_ledger(
+            absolute_output,
+            analyzed,
+            previous_world,
+            current_world,
+            analysis_wall_time_ms,
+            accepted_runtime_observations,
+            world_artifact_sha256,
+            world_json_sha256,
+            report_sha256,
+            analysis_archive_sha256.has_value()
+                ? std::optional<std::string_view>(*analysis_archive_sha256)
+                : std::nullopt);
+        publication.commit();
+        std::cout << "KATANA_ANALYZE_PORT_COMPLETE "
+                  << report_path.string() << '\n'
+                  << std::flush;
+        telemetry_run.complete();
+        return 0;
+    }
     const auto workspace =
         workspace_root /
         (".katana-port-work-" + workspace_key.substr(0u, 12u));
@@ -8426,53 +10136,8 @@ int export_port_project(const std::filesystem::path& source_path,
             workspace,
             workspace / ".katana-codegen-cache",
             "Privater Port-Codegen-Cache");
-        katana::codegen::PortExportOptions export_options{
-            target_name,
-            KATANA_RECOMP_VERSION,
-            {},
-            source_root,
-            diagnostic_partial,
-            console_profile,
-            [&phase_timings](const std::string_view phase) {
-                observe_port_export_progress(
-                    phase_timings, phase);
-            }};
-        export_options.progress = port_progress;
-        // Detailed miss-reason key comparisons are intentionally opt-in: a
-        // normal human progress stream must stay on the zero-overhead key
-        // path, while an explicitly requested JSONL performance trace must
-        // contain the complete primary miss ledger.
-        export_options.detailed_analysis_telemetry =
-            normalized_telemetry_jsonl_path.has_value();
-        export_options.analysis_cache_root =
-            component_cache_root;
-        export_options.codegen_cache_root = workspace / ".katana-codegen-cache";
-        export_options.analysis_implementation_identity =
-            implementation_identities.analysis;
-        export_options.analysis_cache_implementation_identity =
-            implementation_identities.analysis_cache;
-        export_options.codegen_implementation_identity =
-            implementation_identities.codegen;
-        export_options.game_project =
-            resolved_game_project.has_value()
-                ? &*resolved_game_project
-                : nullptr;
-        export_options.native_port_definition =
-            verified_native_port
-                ? &verified_native_port->definition()
-                : nullptr;
-        export_options.native_port_artifact_identity =
-            native_port_artifact_identity;
-        export_options.game_project_runtime_image_payloads =
-            runtime_image_payloads;
-        export_options.native_port_bootstrap_write_payloads =
-            bootstrap_write_payloads;
-        export_options.native_aot_resume_entries =
-            native_aot_resume_entries;
-        export_options.latent_aot_entry_hints =
-            normalized_latent_aot_entry_hints;
-        export_options.latent_aot_discovery_mode =
-            latent_aot_discovery_mode;
+        auto export_options = make_export_options(
+            workspace / ".katana-codegen-cache");
         katana::codegen::PortExportResult report;
         bool whole_export_cache_hit = false;
         if (whole_export_cache_key) {
@@ -9588,6 +11253,310 @@ int export_port_project(const std::filesystem::path& source_path,
     }
 }
 
+katana::agent::ExecutableMaterializationWorld load_agent_world(
+    const std::filesystem::path& path,
+    std::string* artifact_sha256) {
+    const auto document = read_safe_small_port_file(
+        path,
+        katana::agent::materialization_world_max_binary_artifact_bytes,
+        "Materialization-World-Artefakt");
+    if (artifact_sha256 != nullptr)
+        *artifact_sha256 = katana::io::sha256_bytes(document);
+    katana::agent::ExecutableMaterializationWorld world;
+    if (!katana::agent::parse_agent_world_binary(
+            std::span(
+                reinterpret_cast<const std::uint8_t*>(document.data()),
+                document.size()),
+            world))
+        throw std::invalid_argument(
+            "Materialization-World-Artefakt ist ungueltig, beschaedigt oder "
+            "nicht schema-kompatibel.");
+    return world;
+}
+
+std::uint64_t parse_agent_stable_id(const std::string_view text) {
+    auto digits = text;
+    int base = 10;
+    if (digits.starts_with("0x") || digits.starts_with("0X")) {
+        digits.remove_prefix(2u);
+        base = 16;
+    }
+    if (digits.empty())
+        throw std::invalid_argument("Agenten-ID ist leer.");
+    std::uint64_t value = 0u;
+    const auto parsed = std::from_chars(
+        digits.data(), digits.data() + digits.size(), value, base);
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != digits.data() + digits.size() || value == 0u)
+        throw std::invalid_argument(
+            "Agenten-ID muss eine positive dezimale oder 0x-Hex-ID sein.");
+    return value;
+}
+
+void write_agent_string_vector_json(
+    std::ostream& output,
+    const std::vector<std::string>& values) {
+    output << '[';
+    for (std::size_t index = 0u; index < values.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << katana::io::quote_json(values[index]);
+    }
+    output << ']';
+}
+
+void write_agent_frontier_json(
+    std::ostream& output,
+    const katana::agent::FrontierEntry& entry) {
+    output << "{\"id\":" << entry.id.value
+           << ",\"family\":" << katana::io::quote_json(entry.family)
+           << ",\"owner\":" << katana::io::quote_json(entry.owner)
+           << ",\"site\":" << katana::io::quote_json(entry.site)
+           << ",\"state\":"
+           << katana::io::quote_json(
+                  katana::agent::frontier_state_name(entry.state))
+           << ",\"proof\":"
+           << katana::io::quote_json(
+                  katana::agent::frontier_proof_name(entry.proof))
+           << ",\"severity\":"
+           << katana::io::quote_json(
+                  katana::agent::frontier_severity_name(entry.severity))
+           << ",\"missing_proof\":"
+           << katana::io::quote_json(entry.missing_proof)
+           << ",\"fanout\":" << entry.fanout
+           << ",\"runtime_evidence_required\":"
+           << (entry.runtime_evidence_required ? "true" : "false")
+           << ",\"static_complete\":"
+           << (entry.static_complete ? "true" : "false")
+           << ",\"blocked_kind\":"
+           << katana::io::quote_json(
+                  katana::agent::frontier_block_kind_name(
+                      entry.blocked_kind))
+           << ",\"dependency_generation\":"
+           << entry.dependency_generation
+           << ",\"evidence_digest\":" << entry.evidence_digest
+           << ",\"evidence\": [";
+    for (std::size_t index = 0u; index < entry.evidence.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << entry.evidence[index].value;
+    }
+    output << "],\"contracts\":";
+    write_agent_string_vector_json(output, entry.contracts);
+    output << ",\"blocked_sites\":";
+    write_agent_string_vector_json(output, entry.blocked_sites);
+    output << ",\"blocked_functions\":";
+    write_agent_string_vector_json(output, entry.blocked_functions);
+    output << ",\"blocked_roots\":";
+    write_agent_string_vector_json(output, entry.blocked_roots);
+    output << ",\"blocked_modules\":";
+    write_agent_string_vector_json(output, entry.blocked_modules);
+    output << ",\"blocked_materializations\":";
+    write_agent_string_vector_json(output, entry.blocked_materializations);
+    output << ",\"blocked_hardware\":";
+    write_agent_string_vector_json(output, entry.blocked_hardware);
+    output << ",\"causal_chain\":";
+    write_agent_string_vector_json(output, entry.causal_chain);
+    output << ",\"source_paths\":";
+    write_agent_string_vector_json(output, entry.source_paths);
+    output << ",\"source_symbols\":";
+    write_agent_string_vector_json(output, entry.source_symbols);
+    output << ",\"invariants\":";
+    write_agent_string_vector_json(output, entry.invariants);
+    output << ",\"acceptance_criteria\":";
+    write_agent_string_vector_json(output, entry.acceptance_criteria);
+    output << '}';
+}
+
+int next_analysis_task_cli(const std::filesystem::path& artifact) {
+    const auto world = load_agent_world(artifact);
+    katana::agent::AgentTaskView task;
+    const bool has_frontier = katana::agent::next_agent_task(world, task);
+    const auto decision = has_frontier
+        ? task.decision
+        : katana::agent::evaluate_agent_decision(world);
+    std::cout << "{\"schema\":1,\"kind\":\"katana-agent-task\""
+              << ",\"task_id\":" << decision.focus.value
+              << ",\"decision\":"
+              << katana::io::quote_json(
+                     katana::agent::agent_decision_kind_name(
+                         decision.kind))
+              << ",\"reason\":"
+              << katana::io::quote_json(decision.reason)
+              << ",\"focus\":" << decision.focus.value
+              << ",\"actionable_frontier\":"
+              << decision.actionable_frontier
+              << ",\"priority\":"
+              << (has_frontier && task.frontier != nullptr
+                      ? static_cast<unsigned>(task.frontier->severity) + 1u
+                      : 0u)
+              << ",\"category\":";
+    if (has_frontier && task.frontier != nullptr)
+        std::cout << katana::io::quote_json(task.frontier->family);
+    else
+        std::cout << "null";
+    std::cout << ",\"title\":";
+    if (has_frontier && task.frontier != nullptr)
+        std::cout << katana::io::quote_json(
+            task.frontier->missing_proof.empty()
+                ? task.frontier->family
+                : task.frontier->missing_proof);
+    else
+        std::cout << "null";
+    std::cout << ",\"must_not_do\":["
+              << "\"do-not-promote-runtime-hints-to-static-proof\","
+              << "\"do-not-add-runtime-sh4-decoding\","
+              << "\"do-not-add-title-specific-address-seeds\"]"
+              << ",\"acceptance_predicate\":{"
+              << "\"frontier_id\":" << decision.focus.value
+              << ",\"must_be_resolved\":true,"
+              << "\"proof_downgrades\":0,"
+              << "\"new_incomplete_roots\":0}"
+              << ",\"frontier\":";
+    if (has_frontier && task.frontier != nullptr)
+        write_agent_frontier_json(std::cout, *task.frontier);
+    else
+        std::cout << "null";
+    std::cout << "}\n" << std::flush;
+    if (!std::cout)
+        throw std::runtime_error(
+            "Agenten-Task konnte nicht vollstaendig ausgegeben werden.");
+    return 0;
+}
+
+int explain_analysis_frontier_cli(
+    const std::filesystem::path& artifact,
+    const std::uint64_t frontier_id) {
+    const auto world = load_agent_world(artifact);
+    katana::agent::FrontierExplanationView explanation;
+    if (!katana::agent::explain_frontier(
+            world,
+            katana::agent::StableId{frontier_id},
+            explanation) ||
+        explanation.frontier == nullptr)
+        throw std::invalid_argument(
+            "Frontier-ID existiert nicht im Materialization-World-Artefakt.");
+    std::cout << "{\"schema\":1,\"kind\":\"katana-agent-explanation\""
+              << ",\"related_nodes\":" << explanation.related_nodes
+              << ",\"related_evidence\":"
+              << explanation.related_evidence
+              << ",\"frontier\":";
+    write_agent_frontier_json(std::cout, *explanation.frontier);
+    std::cout << "}\n" << std::flush;
+    if (!std::cout)
+        throw std::runtime_error(
+            "Agenten-Erklaerung konnte nicht vollstaendig ausgegeben werden.");
+    return 0;
+}
+
+const char* agent_diff_entity_name(
+    const katana::agent::AgentDiffEntityKind kind) noexcept {
+    switch (kind) {
+    case katana::agent::AgentDiffEntityKind::WorldMetadata:
+        return "world-metadata";
+    case katana::agent::AgentDiffEntityKind::Evidence:
+        return "evidence";
+    case katana::agent::AgentDiffEntityKind::Node:
+        return "node";
+    case katana::agent::AgentDiffEntityKind::Dependency:
+        return "dependency";
+    case katana::agent::AgentDiffEntityKind::Frontier:
+        return "frontier";
+    }
+    return "unknown";
+}
+
+const char* agent_diff_change_name(
+    const katana::agent::AgentDiffChange change) noexcept {
+    switch (change) {
+    case katana::agent::AgentDiffChange::Added:
+        return "added";
+    case katana::agent::AgentDiffChange::Removed:
+        return "removed";
+    case katana::agent::AgentDiffChange::Changed:
+        return "changed";
+    }
+    return "unknown";
+}
+
+int diff_analysis_cli(const std::filesystem::path& before_path,
+                      const std::filesystem::path& after_path) {
+    const auto before = load_agent_world(before_path);
+    const auto after = load_agent_world(after_path);
+    const auto delta = measure_agent_iteration(before, after);
+    const auto measured = katana::agent::diff_agent_worlds(before, after, {});
+    constexpr std::size_t maximum_diff_entries =
+        1u + katana::agent::materialization_world_max_evidence +
+        katana::agent::materialization_world_max_nodes +
+        katana::agent::materialization_world_max_edges +
+        katana::agent::materialization_world_max_frontier;
+    if (!measured.before_valid || !measured.after_valid ||
+        measured.total > maximum_diff_entries)
+        throw std::runtime_error(
+            "Materialization-World-Diff ueberschreitet sein festes Budget.");
+    std::vector<katana::agent::AgentDiffEntry> entries(measured.total);
+    const auto result = katana::agent::diff_agent_worlds(
+        before, after, entries);
+    if (!result.before_valid || !result.after_valid || !result.complete ||
+        result.truncated || result.written != result.total)
+        throw std::runtime_error(
+            "Materialization-World-Diff konnte nicht vollstaendig erzeugt "
+            "werden.");
+    std::cout << "{\"schema\":1,\"kind\":\"katana-agent-diff\""
+              << ",\"change_count\":" << result.total
+              << ",\"agent_result\":"
+              << katana::io::quote_json(
+                     delta.proof_downgrades != 0u ||
+                             delta.new_frontiers != 0u ||
+                             delta.new_incomplete_roots != 0u
+                         ? "regression"
+                         : delta.resolved_frontiers != 0u ||
+                                   delta.proof_upgrades != 0u
+                               ? "improved"
+                               : "no_progress")
+              << ",\"resolved_frontiers\":"
+              << delta.resolved_frontiers
+              << ",\"new_frontiers\":" << delta.new_frontiers
+              << ",\"new_runtime_hints\":"
+              << delta.new_runtime_hints
+              << ",\"proof_upgrades\":" << delta.proof_upgrades
+              << ",\"proof_downgrades\":"
+              << delta.proof_downgrades
+              << ",\"new_incomplete_roots\":"
+              << delta.new_incomplete_roots
+              << ",\"resolved_incomplete_roots\":"
+              << delta.resolved_incomplete_roots
+              << ",\"analysis_wall_time_delta_ms\":null"
+              << ",\"reused_shards\":null"
+              << ",\"recomputed_shards\":null"
+              << ",\"before_decision\":"
+              << katana::io::quote_json(
+                     katana::agent::agent_decision_kind_name(
+                         katana::agent::evaluate_agent_decision(before).kind))
+              << ",\"after_decision\":"
+              << katana::io::quote_json(
+                     katana::agent::agent_decision_kind_name(
+                         katana::agent::evaluate_agent_decision(after).kind))
+              << ",\"changes\":[";
+    for (std::size_t index = 0u; index < entries.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& entry = entries[index];
+        std::cout << "{\"entity\":"
+                  << katana::io::quote_json(
+                         agent_diff_entity_name(entry.entity))
+                  << ",\"change\":"
+                  << katana::io::quote_json(
+                         agent_diff_change_name(entry.change))
+                  << ",\"id\":" << entry.id.value
+                  << ",\"related\":" << entry.related.value
+                  << ",\"variant\":"
+                  << static_cast<unsigned>(entry.variant) << '}';
+    }
+    std::cout << "]}\n" << std::flush;
+    if (!std::cout)
+        throw std::runtime_error(
+            "Agenten-Diff konnte nicht vollstaendig ausgegeben werden.");
+    return 0;
+}
+
 void print_usage(std::ostream& output) {
     output << "Verwendung:\n"
            << "  katana-recomp <Opcode>\n"
@@ -9638,6 +11607,18 @@ void print_usage(std::ostream& output) {
               "<sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
               "<module-relative-offset>>]... "
               "[--latent-aot-entry-file <Datei>]...\n"
+           << "  katana-recomp analyze-port <Quelle.gdi> --output <privater-Analyseordner> "
+              "--target-name <Name> --game-project <Descriptor-Artefakt> "
+              "--native-port-definition <private .katana-native-port> "
+              "[--resume] [--import-runtime-frontier <Produktlog>] "
+              "[dieselben Analyse-/Payload-/Latent-Optionen wie port]\n"
+           << "  katana-recomp next-analysis-task --analysis-artifact "
+              "<materialization-world.katana-world> --format agent-json\n"
+           << "  katana-recomp explain --analysis-artifact "
+              "<materialization-world.katana-world> --frontier <ID> "
+              "--format agent-json\n"
+           << "  katana-recomp diff-analysis --before <world> --after <world> "
+              "--format agent-json\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>] [--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
@@ -10260,12 +12241,98 @@ int main(const int argc, char* argv[]) {
                 std::filesystem::path(argv[4]));
         }
 
+        if (argc >= 2 &&
+            std::string_view(argv[1]) == "next-analysis-task") {
+            std::optional<std::filesystem::path> artifact;
+            std::optional<std::string_view> format;
+            if (((argc - 2) & 1) != 0)
+                throw std::invalid_argument(
+                    "next-analysis-task erwartet Optionspaare.");
+            for (int index = 2; index < argc; index += 2) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--analysis-artifact" && !artifact)
+                    artifact = std::filesystem::path(argv[index + 1]);
+                else if (option == "--format" && !format)
+                    format = std::string_view(argv[index + 1]);
+                else
+                    throw std::invalid_argument(
+                        "next-analysis-task erhielt eine unbekannte oder "
+                        "doppelte Option.");
+            }
+            if (!artifact || format != std::optional<std::string_view>{
+                                           "agent-json"})
+                throw std::invalid_argument(
+                    "next-analysis-task braucht --analysis-artifact und "
+                    "--format agent-json.");
+            return next_analysis_task_cli(*artifact);
+        }
+
+        if (argc >= 2 && std::string_view(argv[1]) == "explain") {
+            std::optional<std::filesystem::path> artifact;
+            std::optional<std::uint64_t> frontier;
+            std::optional<std::string_view> format;
+            if (((argc - 2) & 1) != 0)
+                throw std::invalid_argument(
+                    "explain erwartet Optionspaare.");
+            for (int index = 2; index < argc; index += 2) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--analysis-artifact" && !artifact)
+                    artifact = std::filesystem::path(argv[index + 1]);
+                else if (option == "--frontier" && !frontier)
+                    frontier = parse_agent_stable_id(argv[index + 1]);
+                else if (option == "--format" && !format)
+                    format = std::string_view(argv[index + 1]);
+                else
+                    throw std::invalid_argument(
+                        "explain erhielt eine unbekannte oder doppelte "
+                        "Option.");
+            }
+            if (!artifact || !frontier ||
+                format != std::optional<std::string_view>{"agent-json"})
+                throw std::invalid_argument(
+                    "explain braucht --analysis-artifact, --frontier und "
+                    "--format agent-json.");
+            return explain_analysis_frontier_cli(*artifact, *frontier);
+        }
+
+        if (argc >= 2 &&
+            std::string_view(argv[1]) == "diff-analysis") {
+            std::optional<std::filesystem::path> before;
+            std::optional<std::filesystem::path> after;
+            std::optional<std::string_view> format;
+            if (((argc - 2) & 1) != 0)
+                throw std::invalid_argument(
+                    "diff-analysis erwartet Optionspaare.");
+            for (int index = 2; index < argc; index += 2) {
+                const auto option = std::string_view(argv[index]);
+                if (option == "--before" && !before)
+                    before = std::filesystem::path(argv[index + 1]);
+                else if (option == "--after" && !after)
+                    after = std::filesystem::path(argv[index + 1]);
+                else if (option == "--format" && !format)
+                    format = std::string_view(argv[index + 1]);
+                else
+                    throw std::invalid_argument(
+                        "diff-analysis erhielt eine unbekannte oder "
+                        "doppelte Option.");
+            }
+            if (!before || !after ||
+                format != std::optional<std::string_view>{"agent-json"})
+                throw std::invalid_argument(
+                    "diff-analysis braucht --before, --after und --format "
+                    "agent-json.");
+            return diff_analysis_cli(*before, *after);
+        }
+
         const auto port_command =
             argc >= 2 ? std::string_view(argv[1]) : std::string_view{};
-        if (argc >= 7 && (argc & 1) == 1 &&
-            (port_command == "port" || port_command == "probe-port" ||
+        if (argc >= 7 &&
+            (port_command == "port" || port_command == "analyze-port" ||
+             port_command == "probe-port" ||
              port_command == "port-executable" ||
              port_command == "probe-port-executable")) {
+            const bool analysis_only =
+                port_command == "analyze-port";
             const bool diagnostic_partial =
                 port_command == "probe-port" ||
                 port_command == "probe-port-executable";
@@ -10295,45 +12362,75 @@ int main(const int argc, char* argv[]) {
             bool analysis_mode_seen = false;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
-            for (std::size_t argument = 3u; argument < static_cast<std::size_t>(argc);
+            bool resume_analysis = false;
+            std::optional<std::filesystem::path>
+                runtime_frontier_import_path;
+            std::vector<std::string_view> paired_arguments;
+            paired_arguments.reserve(static_cast<std::size_t>(argc) - 3u);
+            for (std::size_t argument = 3u;
+                 argument < static_cast<std::size_t>(argc);) {
+                const std::string_view option = argv[argument++];
+                if (option == "--resume") {
+                    if (!analysis_only || resume_analysis)
+                        throw std::invalid_argument(
+                            "--resume ist nur einmal fuer analyze-port erlaubt.");
+                    resume_analysis = true;
+                    continue;
+                }
+                if (argument >= static_cast<std::size_t>(argc))
+                    throw std::invalid_argument(
+                        "port erhielt eine Option ohne Wert.");
+                paired_arguments.push_back(option);
+                paired_arguments.push_back(argv[argument++]);
+            }
+            for (std::size_t argument = 0u;
+                 argument < paired_arguments.size();
                  argument += 2u) {
-                const std::string_view option = argv[argument];
+                const auto option = paired_arguments[argument];
+                const auto value = paired_arguments[argument + 1u];
                 if (option == "--output" && !output_path.has_value()) {
-                    output_path = std::filesystem::path(argv[argument + 1u]);
+                    output_path = std::filesystem::path(value);
                 } else if (option == "--target-name" && !target_name.has_value()) {
-                    target_name = argv[argument + 1u];
+                    target_name = value;
                 } else if (option == "--console-profile" && !console_profile_seen) {
-                    console_profile = argv[argument + 1u];
+                    console_profile = value;
                     console_profile_seen = true;
                 } else if (option == "--telemetry-jsonl" &&
                            !telemetry_jsonl_path.has_value()) {
                     telemetry_jsonl_path =
-                        std::filesystem::path(
-                            argv[argument + 1u]);
+                        std::filesystem::path(value);
                 } else if (option == "--game-entry-handoff" &&
                            port_command == "port-executable" &&
                            !game_entry_handoff_path.has_value()) {
                     game_entry_handoff_path =
-                        std::filesystem::path(argv[argument + 1u]);
+                        std::filesystem::path(value);
                 } else if (option == "--game-project" &&
                            (port_command == "port" ||
+                            port_command == "analyze-port" ||
                             port_command == "port-executable") &&
                            !game_project_path.has_value()) {
                     game_project_path =
-                        std::filesystem::path(argv[argument + 1u]);
+                        std::filesystem::path(value);
                 } else if (
                     option == "--native-port-definition" &&
                     (port_command == "port" ||
+                     port_command == "analyze-port" ||
                      port_command == "port-executable") &&
                     !native_port_definition_path.has_value()) {
                     native_port_definition_path =
-                        std::filesystem::path(argv[argument + 1u]);
+                        std::filesystem::path(value);
+                } else if (
+                    option == "--import-runtime-frontier" &&
+                    analysis_only &&
+                    !runtime_frontier_import_path.has_value()) {
+                    runtime_frontier_import_path =
+                        std::filesystem::path(value);
                 } else if (
                     option == "--runtime-image-payload" &&
                     (port_command == "port" ||
+                     port_command == "analyze-port" ||
                      port_command == "port-executable")) {
-                    const std::string_view binding =
-                        argv[argument + 1u];
+                    const std::string_view binding = value;
                     const auto separator = binding.find('=');
                     if (separator == 0u ||
                         separator == std::string_view::npos ||
@@ -10348,9 +12445,9 @@ int main(const int argc, char* argv[]) {
                 } else if (
                     option == "--native-bootstrap-write-payload" &&
                     (port_command == "port" ||
+                     port_command == "analyze-port" ||
                      port_command == "port-executable")) {
-                    const std::string_view binding =
-                        argv[argument + 1u];
+                    const std::string_view binding = value;
                     const auto separator = binding.find('=');
                     if (separator == 0u ||
                         separator == std::string_view::npos ||
@@ -10364,13 +12461,15 @@ int main(const int argc, char* argv[]) {
                         std::filesystem::path(std::string(
                             binding.substr(separator + 1u))));
                 } else if (option == "--latent-aot-entry" &&
-                           port_command == "port") {
+                           (port_command == "port" ||
+                            port_command == "analyze-port")) {
                     latent_aot_entry_hints.push_back(
-                        parse_latent_aot_entry_hint(argv[argument + 1u]));
+                        parse_latent_aot_entry_hint(value));
                 } else if (option == "--latent-aot-entry-file" &&
-                           port_command == "port") {
+                           (port_command == "port" ||
+                            port_command == "analyze-port")) {
                     auto file_hints = load_latent_aot_entry_hint_file(
-                        std::filesystem::path(argv[argument + 1u]));
+                        std::filesystem::path(value));
                     if (file_hints.size() >
                         maximum_latent_aot_entry_hint_arguments -
                             std::min(latent_aot_entry_hints.size(),
@@ -10383,26 +12482,28 @@ int main(const int argc, char* argv[]) {
                         std::make_move_iterator(file_hints.begin()),
                         std::make_move_iterator(file_hints.end()));
                 } else if (option == "--latent-aot-mode" &&
-                           port_command == "port" &&
+                           (port_command == "port" ||
+                            port_command == "analyze-port") &&
                            !latent_aot_discovery_mode_seen) {
                     latent_aot_discovery_mode =
-                        parse_latent_aot_discovery_mode(
-                            argv[argument + 1u]);
+                        parse_latent_aot_discovery_mode(value);
                     latent_aot_discovery_mode_seen = true;
                 } else if (option == "--native-aot-resume-entry" &&
-                           port_command == "port") {
+                           (port_command == "port" ||
+                            port_command == "analyze-port")) {
                     if (native_aot_resume_entries.size() >=
                         maximum_native_aot_resume_entry_arguments)
                         throw std::invalid_argument(
                             "--native-aot-resume-entry ueberschreitet das Argumentbudget.");
                     native_aot_resume_entries.push_back(
-                        parse_native_aot_resume_entry(argv[argument + 1u]));
+                        parse_native_aot_resume_entry(value));
                 } else if (option == "--analysis-mode" &&
                            (port_command == "port" ||
+                            port_command == "analyze-port" ||
                             port_command == "port-executable") &&
                            !analysis_mode_seen) {
                     analysis_mode = parse_port_analysis_mode(
-                        argv[argument + 1u]);
+                        value);
                     analysis_mode_seen = true;
                 } else {
                     throw std::invalid_argument(
@@ -10430,10 +12531,6 @@ int main(const int argc, char* argv[]) {
                 !game_project_path.has_value())
                 throw std::invalid_argument(
                     "--analysis-mode runtime-only braucht --game-project.");
-            if (!diagnostic_partial &&
-                !native_port_definition_path.has_value())
-                throw std::invalid_argument(
-                    "Produktports brauchen --native-port-definition.");
             return export_port_project(std::filesystem::path(argv[2]),
                                        *output_path,
                                        *target_name,
@@ -10449,7 +12546,10 @@ int main(const int argc, char* argv[]) {
                                        latent_aot_discovery_mode,
                                        native_aot_resume_entries,
                                        telemetry_jsonl_path,
-                                       analysis_mode);
+                                       analysis_mode,
+                                       analysis_only,
+                                       resume_analysis,
+                                       runtime_frontier_import_path);
         }
 
         if ((argc == 3 || argc == 4) &&

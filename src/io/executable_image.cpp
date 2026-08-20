@@ -276,12 +276,7 @@ ExecutableImage::operator=(ExecutableImage&& other) noexcept {
     return *this;
 }
 
-void ExecutableImage::mark_analysis_mutation() noexcept {
-    immutable_ranges_.clear();
-    if (immutable_generation_ == std::numeric_limits<std::uint64_t>::max())
-        immutable_generation_ = 1u;
-    else
-        ++immutable_generation_;
+void ExecutableImage::mark_root_set_mutation() noexcept {
     if (analysis_revision_ ==
         std::numeric_limits<std::uint64_t>::max()) {
         analysis_instance_identity_ =
@@ -290,6 +285,15 @@ void ExecutableImage::mark_analysis_mutation() noexcept {
         return;
     }
     ++analysis_revision_;
+}
+
+void ExecutableImage::mark_analysis_mutation() noexcept {
+    immutable_ranges_.clear();
+    if (immutable_generation_ == std::numeric_limits<std::uint64_t>::max())
+        immutable_generation_ = 1u;
+    else
+        ++immutable_generation_;
+    mark_root_set_mutation();
 }
 
 void ExecutableImage::add_segment(ImageSegment segment) {
@@ -357,7 +361,7 @@ void ExecutableImage::add_entry_point(const std::uint32_t address) {
     }
     entry_points_.push_back(address);
     std::sort(entry_points_.begin(), entry_points_.end());
-    mark_analysis_mutation();
+    mark_root_set_mutation();
 }
 
 void ExecutableImage::replace_entry_points(
@@ -368,7 +372,7 @@ void ExecutableImage::replace_entry_points(
         std::unique(replacement.begin(), replacement.end()), replacement.end());
     if (replacement == entry_points_) return;
     entry_points_ = std::move(replacement);
-    mark_analysis_mutation();
+    mark_root_set_mutation();
 }
 
 void ExecutableImage::add_symbol(ImageSymbol symbol) {

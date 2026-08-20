@@ -309,6 +309,27 @@ class NativePortAudioEngine::Impl final {
   private:
     struct Voice;
 
+    class PendingDecoderOwnership final {
+      public:
+        PendingDecoderOwnership(Impl& owner, Voice& voice) noexcept
+            : owner_(owner), voice_(voice) {}
+
+        ~PendingDecoderOwnership() noexcept {
+            if (armed_) owner_.close_decoder(voice_);
+        }
+
+        PendingDecoderOwnership(const PendingDecoderOwnership&) = delete;
+        PendingDecoderOwnership& operator=(
+            const PendingDecoderOwnership&) = delete;
+
+        void disarm() noexcept { armed_ = false; }
+
+      private:
+        Impl& owner_;
+        Voice& voice_;
+        bool armed_ = true;
+    };
+
   public:
     Impl(NativePortPlatformServices& platform,
          const NativePortCodecProvider& codec_provider,
@@ -375,8 +396,14 @@ class NativePortAudioEngine::Impl final {
                               "content-open");
         }
         open_decoder(*voice, voice->config.start_frame);
-
-        return insert_voice(std::move(voice));
+        // open_decoder() transfers the provider handle into Voice before the
+        // slot vector may need to grow. Keep that handle guarded until the
+        // unique_ptr has reached a slot; vector allocation can throw while
+        // the Voice destructor itself deliberately has no provider coupling.
+        PendingDecoderOwnership pending_decoder(*this, *voice);
+        const auto handle = insert_voice(std::move(voice));
+        pending_decoder.disarm();
+        return handle;
     }
 
     [[nodiscard]] NativePortAudioVoiceHandle create_pcm_feed(
@@ -442,8 +469,10 @@ class NativePortAudioEngine::Impl final {
             voice.state = NativePortAudioVoiceState::Completed;
     }
 
+    // The rvalue reference deliberately keeps ownership in the caller until
+    // every potentially allocating slot operation has completed.
     [[nodiscard]] NativePortAudioVoiceHandle insert_voice(
-        std::unique_ptr<Voice> voice) {
+        std::unique_ptr<Voice>&& voice) {
         std::size_t slot_index = slots_.size();
         for (std::size_t index = 0u; index < slots_.size(); ++index) {
             if (!slots_[index].voice) {
@@ -453,7 +482,6 @@ class NativePortAudioEngine::Impl final {
         }
         if (slot_index == slots_.size()) {
             if (slots_.size() == config_.maximum_voices) {
-                close_decoder(*voice);
                 fail_audio_engine(NativePortAudioEngineFailure::ResourceLimit,
                                   0u,
                                   "voice-limit");

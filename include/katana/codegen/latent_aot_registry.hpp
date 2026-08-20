@@ -497,6 +497,14 @@ struct LatentAotDiscovery {
     std::uint32_t source_start,
     std::uint32_t extent) noexcept;
 
+// Rebinds a prepared positive discovery to the current immutable disc bytes.
+// Every encoded source identity, deterministic transform, decoded module,
+// entry/block/function identity and original SH-4 opcode is checked. No
+// analyzer result is inferred or repaired; any mismatch is a clean false.
+[[nodiscard]] bool validate_latent_aot_discovery_source_binding(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    const LatentAotDiscovery& discovery) noexcept;
+
 [[nodiscard]] LatentAotDiscovery discover_latent_aot_modules(
     std::shared_ptr<const katana::runtime::DiscSource> source,
     std::uint32_t volume_start_lba,

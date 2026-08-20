@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -377,6 +378,12 @@ constexpr std::size_t maximum_forwarded_evidence_tokens =
     maximum_fixpoint_iterations;
 constexpr std::size_t maximum_contextual_return_evaluations =
     maximum_fixpoint_iterations;
+// Provenance replay keys are semantic root-local evidence. Their admission
+// limit must never follow the optional exact-replay cache retention budget:
+// memory pressure may evict/recompute cache artifacts, but it cannot shrink
+// analysis evidence or change canonical results.
+constexpr std::size_t maximum_contextual_provenance_replay_key_bytes =
+    1'024u * 1024u * 1024u;
 constexpr std::size_t maximum_inventory_stack_coordinates = 64u;
 constexpr std::size_t maximum_inventory_regions = maximum_guarded_code_inventory;
 constexpr std::size_t maximum_inventory_region_blocks = 256u;
@@ -386,11 +393,63 @@ constexpr std::size_t maximum_inventory_region_blocks = 256u;
 constexpr std::size_t maximum_local_derived_topology_lines = 512u;
 constexpr std::size_t maximum_local_derived_topology_functions = 8u;
 constexpr std::size_t maximum_memory_values = 256u;
+constexpr std::size_t maximum_current_epoch_base_offsets =
+    maximum_inventory_stack_coordinates;
 constexpr std::size_t maximum_parallel_resolution_jobs = 64u;
 constexpr std::size_t minimum_parallel_resolution_functions = 2u;
 constexpr std::size_t maximum_abi_stack_read_top_chain = 16u;
 constexpr std::size_t maximum_evaluation_inventory_replay_bytes =
     256u * 1024u * 1024u;
+
+void normalize_current_epoch_base_offsets(
+    std::vector<std::int32_t>& offsets) {
+    std::erase_if(offsets, [](const auto offset) {
+        return offset < -maximum_stack_distance ||
+               offset > maximum_stack_distance;
+    });
+    std::sort(offsets.begin(), offsets.end());
+    offsets.erase(
+        std::unique(offsets.begin(), offsets.end()), offsets.end());
+    // A truncated base set is not an exact base. Drop the finite prefix
+    // rather than allowing a partial set to authorize unsound slot erasure.
+    if (offsets.size() > maximum_current_epoch_base_offsets)
+        offsets.clear();
+}
+
+void merge_current_epoch_base_offsets(
+    std::vector<std::int32_t>& destination,
+    const bool destination_tracks_current_epoch,
+    const std::vector<std::int32_t>& source,
+    const bool source_tracks_current_epoch) {
+    if (!source_tracks_current_epoch) return;
+    if (!destination_tracks_current_epoch) {
+        destination = source;
+        normalize_current_epoch_base_offsets(destination);
+        return;
+    }
+    // Once a current-channel base has widened to the empty unknown/Top form,
+    // a later finite alternative must not narrow it again.  Empty denotes
+    // absence only while the destination has no current channel at all.
+    if (destination.empty() || source.empty()) {
+        destination.clear();
+        return;
+    }
+    destination.insert(
+        destination.end(), source.begin(), source.end());
+    normalize_current_epoch_base_offsets(destination);
+}
+
+[[nodiscard]] bool canonical_current_epoch_base_offsets(
+    const std::vector<std::int32_t>& offsets) noexcept {
+    return offsets.size() <= maximum_current_epoch_base_offsets &&
+           std::is_sorted(offsets.begin(), offsets.end()) &&
+           std::adjacent_find(offsets.begin(), offsets.end()) ==
+               offsets.end() &&
+           std::all_of(offsets.begin(), offsets.end(), [](const auto offset) {
+               return offset >= -maximum_stack_distance &&
+                      offset <= maximum_stack_distance;
+           });
+}
 enum class AbiStackReadTopReason : std::uint8_t {
     None,
     InvalidSlot,
@@ -697,6 +756,10 @@ struct InventorySavedStackEpoch {
     // active AbstractState stack namespace. A stack switch detaches every
     // surviving reference before the new epoch starts.
     bool tracks_current_epoch = false;
+    // Bounded coordinates of the saved pointer relative to the active r15
+    // epoch. A singleton is exact; multiple entries are an uncorrelated
+    // MAY-set and are never sufficient for exact slot erasure.
+    std::vector<std::int32_t> current_epoch_base_offsets;
     // Sticky evidence that finite callback candidates were discarded when
     // this epoch reached its terminal unresolved top. A consumed top with no
     // candidate loss need not poison unrelated inventory sinks.
@@ -709,6 +772,10 @@ struct InventorySavedStackEpoch {
     // as a direct branch value merely because the original slot was lost.
     InventoryCandidateCarrier unresolved_candidate_carrier;
     std::vector<InventorySavedStackEpoch> unresolved_nested_epochs;
+    // Bounded alternatives for the origin of this saved pointer itself.
+    // A canonical partition contains at most one root-current and one root-
+    // detached channel.  Direct payload fields stay empty while partitioned.
+    std::vector<InventorySavedStackEpoch> origin_channels;
 
     bool operator==(const InventorySavedStackEpoch&) const = default;
 };
@@ -826,10 +893,9 @@ struct AbstractState {
     // never part of an ingress cache identity.
     std::vector<FunctionMemoryWriteRange>
         memory_definitely_written_ranges;
-    // A payload-free saved-SP alias whose exact bounded cell identity was
-    // widened away. Unlike callback loss, this is harmless until the current
-    // stack epoch later receives a relevant callback candidate. Source bits
-    // allow unknown stack/memory loads to materialize the latent value again.
+    // Independent detached/current origin masks for payload-free saved-SP
+    // aliases whose exact bounded cell identity was widened away. A bit may
+    // exist in both masks after a join without collapsing the two origins.
     std::uint8_t inventory_unresolved_saved_stack_alias_sources = 0u;
     std::uint8_t inventory_unresolved_saved_stack_alias_tracks_current_sources = 0u;
     // Ephemeral callee-local watcher for exact saved-SP aliases that were
@@ -839,10 +905,14 @@ struct AbstractState {
     bool inventory_current_stack_epoch_alias_watcher = false;
     // The watched alias can outlive a temporary stack switch. Keep that
     // possibility separate from the currently active epoch so writes on an
-    // unrelated resumed stack do not immediately become loss. Restoring any
-    // saved epoch rearms the current watcher conservatively.
+    // unrelated resumed stack do not immediately become loss. It is never
+    // automatically re-scoped into a subsequently restored r15 epoch.
     bool inventory_detached_stack_epoch_alias_watcher = false;
     bool inventory_unresolved_stack_callback_loss = false;
+    // Proven callback-like mutation through an epoch-bound detached alias.
+    // This is a terminal stack-loss channel, but it remains distinct from
+    // the active r15 loss so calls and stack switches cannot re-scope it.
+    bool inventory_detached_stack_callback_loss = false;
     // Memory-domain direct Top is intentionally distinct from the active
     // stack-domain direct Top. A stack switch discards only the latter.
     bool inventory_unresolved_memory_callback_loss = false;
@@ -1220,6 +1290,7 @@ capture_saved_stack_epoch_evidence_topology(const Epoch& root) {
     constexpr auto slots_begin = node_begin + 1;
     constexpr auto nested_begin = node_begin + 2;
     constexpr auto unresolved_nested_begin = node_begin + 3;
+    constexpr auto origin_channels_begin = node_begin + 4;
     std::vector<std::int32_t> topology;
     const auto append = [&](auto&& self, const auto& epoch) -> void {
         topology.push_back(node_begin);
@@ -1246,6 +1317,11 @@ capture_saved_stack_epoch_evidence_topology(const Epoch& root) {
                 epoch.unresolved_nested_epochs.size()));
         for (const auto& nested : epoch.unresolved_nested_epochs)
             self(self, nested);
+        topology.push_back(origin_channels_begin);
+        topology.push_back(
+            static_cast<std::int32_t>(epoch.origin_channels.size()));
+        for (const auto& channel : epoch.origin_channels)
+            self(self, channel);
     };
     append(append, root);
     return topology;
@@ -1338,6 +1414,8 @@ void for_each_evidence_set(InventorySavedStackEpoch& epoch,
     for_each_evidence_set(epoch.unresolved_candidate_carrier, callback);
     for (auto& nested : epoch.unresolved_nested_epochs)
         for_each_evidence_set(nested, callback);
+    for (auto& channel : epoch.origin_channels)
+        for_each_evidence_set(channel, callback);
 }
 
 template <typename Callback>
@@ -1429,6 +1507,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
     const InventorySavedStackEpoch& right) {
     if (left.present != right.present || left.unresolved != right.unresolved ||
         left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.current_epoch_base_offsets !=
+            right.current_epoch_base_offsets ||
         left.candidate_payload_lost != right.candidate_payload_lost ||
         left.nested_saved_stack_alias_latent !=
             right.nested_saved_stack_alias_latent ||
@@ -1444,7 +1524,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
             right.unresolved_candidate_carrier) ||
         left.slots.size() != right.slots.size() ||
         left.unresolved_nested_epochs.size() !=
-            right.unresolved_nested_epochs.size())
+            right.unresolved_nested_epochs.size() ||
+        left.origin_channels.size() != right.origin_channels.size())
         return false;
     for (std::size_t index = 0u; index < left.slots.size(); ++index) {
         if (!same_inventory_saved_stack_slot_without_evidence(
@@ -1457,6 +1538,14 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
         if (!same_inventory_saved_stack_epoch_without_evidence(
                 left.unresolved_nested_epochs[index],
                 right.unresolved_nested_epochs[index]))
+            return false;
+    }
+    for (std::size_t index = 0u;
+         index < left.origin_channels.size();
+         ++index) {
+        if (!same_inventory_saved_stack_epoch_without_evidence(
+                left.origin_channels[index],
+                right.origin_channels[index]))
             return false;
     }
     return true;
@@ -1474,6 +1563,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
     const InventorySavedStackEpoch& right) {
     if (left.present != right.present || left.unresolved != right.unresolved ||
         left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.current_epoch_base_offsets !=
+            right.current_epoch_base_offsets ||
         left.candidate_payload_lost != right.candidate_payload_lost ||
         left.nested_saved_stack_alias_latent !=
             right.nested_saved_stack_alias_latent ||
@@ -1491,7 +1582,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
             right.unresolved_candidate_carrier) ||
         left.slots.size() != right.slots.size() ||
         left.unresolved_nested_epochs.size() !=
-            right.unresolved_nested_epochs.size())
+            right.unresolved_nested_epochs.size() ||
+        left.origin_channels.size() != right.origin_channels.size())
         return false;
     for (std::size_t index = 0u; index < left.slots.size(); ++index) {
         const auto& left_slot = left.slots[index];
@@ -1517,6 +1609,14 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
         if (!same_inventory_saved_stack_epoch_with_evidence(
                 left.unresolved_nested_epochs[index],
                 right.unresolved_nested_epochs[index]))
+            return false;
+    }
+    for (std::size_t index = 0u;
+         index < left.origin_channels.size();
+         ++index) {
+        if (!same_inventory_saved_stack_epoch_with_evidence(
+                left.origin_channels[index],
+                right.origin_channels[index]))
             return false;
     }
     return true;
@@ -1592,6 +1692,8 @@ void for_each_evidence_set(AbstractState& state, Callback&& callback) {
             right.inventory_detached_stack_epoch_alias_watcher ||
         left.inventory_unresolved_stack_callback_loss !=
             right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_detached_stack_callback_loss !=
+            right.inventory_detached_stack_callback_loss ||
         left.inventory_unresolved_memory_callback_loss !=
             right.inventory_unresolved_memory_callback_loss ||
         left.inventory_callback_loss_identity_truncated_sources !=
@@ -1942,6 +2044,8 @@ class EvidenceProvenanceLens final {
                     &epoch.unresolved_candidate_carrier.callees);
                 for (auto& nested : epoch.unresolved_nested_epochs)
                     self(self, nested);
+                for (auto& channel : epoch.origin_channels)
+                    self(self, channel);
             };
             callee_fields.push_back(
                 &summary.inventory_unresolved_stack_carrier.callees);
@@ -2202,6 +2306,10 @@ bool add_unresolved_saved_stack_alias(
     AbstractState& state,
     std::uint8_t sources,
     bool tracks_current_epoch);
+bool add_unresolved_saved_stack_alias(
+    AbstractState& state,
+    std::uint8_t sources,
+    const InventorySavedStackEpoch& epoch);
 void materialize_unresolved_saved_stack_alias(
     AbstractValue& value,
     const AbstractState& state,
@@ -2228,6 +2336,8 @@ void merge_unresolved_nested_saved_stack_epoch(
     if (left.present != right.present ||
         left.unresolved != right.unresolved ||
         left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.current_epoch_base_offsets !=
+            right.current_epoch_base_offsets ||
         left.candidate_payload_lost !=
             right.candidate_payload_lost ||
         left.nested_saved_stack_alias_latent !=
@@ -2252,7 +2362,8 @@ void merge_unresolved_nested_saved_stack_epoch(
             right.unresolved_candidate_carrier.contextual_candidate_dependency ||
         left.slots.size() != right.slots.size() ||
         left.unresolved_nested_epochs.size() !=
-            right.unresolved_nested_epochs.size())
+            right.unresolved_nested_epochs.size() ||
+        left.origin_channels.size() != right.origin_channels.size())
         return false;
     for (std::size_t index = 0u; index < left.slots.size(); ++index) {
         if (left.slots[index].relative_slot !=
@@ -2277,6 +2388,14 @@ void merge_unresolved_nested_saved_stack_epoch(
                 right.unresolved_nested_epochs[index]))
             return false;
     }
+    for (std::size_t index = 0u;
+         index < left.origin_channels.size();
+         ++index) {
+        if (!same_saved_stack_epoch_shape(
+                left.origin_channels[index],
+                right.origin_channels[index]))
+            return false;
+    }
     return true;
 }
 
@@ -2287,6 +2406,14 @@ void merge_unresolved_nested_saved_stack_epoch(
            carrier.inventory_code_pointer_values_truncated ||
            carrier.inventory_pc_relative_code_literal_values_truncated ||
            carrier.contextual_candidate_dependency;
+}
+
+[[nodiscard]] bool has_callback_candidate_carrier_payload(
+    const InventoryCandidateCarrier& carrier) {
+    return !carrier.inventory_code_pointer_values.empty() ||
+           !carrier.inventory_pc_relative_code_literal_values.empty() ||
+           carrier.inventory_code_pointer_values_truncated ||
+           carrier.inventory_pc_relative_code_literal_values_truncated;
 }
 
 [[nodiscard]] bool has_pending_abi_scalar_payload(
@@ -2326,7 +2453,7 @@ void normalize_inventory_candidate_carrier(
 
 [[nodiscard]] bool has_inventory_saved_stack_slot_candidate_payload(
     const InventorySavedStackSlot& slot) {
-    return has_inventory_candidate_carrier_payload(slot.carrier);
+    return has_callback_candidate_carrier_payload(slot.carrier);
 }
 
 void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
@@ -2336,19 +2463,21 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
 [[nodiscard]] bool has_inventory_saved_stack_epoch_payload(
     const InventorySavedStackEpoch& epoch) {
     return epoch.present || epoch.unresolved || epoch.candidate_payload_lost ||
+           !epoch.current_epoch_base_offsets.empty() ||
            epoch.nested_saved_stack_alias_latent ||
            !epoch.slots.empty() ||
            has_inventory_candidate_carrier_payload(
                epoch.unresolved_candidate_carrier) ||
            has_pending_abi_scalar_payload(
                epoch.unresolved_candidate_carrier) ||
-           !epoch.unresolved_nested_epochs.empty();
+           !epoch.unresolved_nested_epochs.empty() ||
+           !epoch.origin_channels.empty();
 }
 
 [[nodiscard]] bool inventory_saved_stack_epoch_has_candidate_payload_or_top(
     const InventorySavedStackEpoch& epoch) {
     if (epoch.candidate_payload_lost ||
-        has_inventory_candidate_carrier_payload(
+        has_callback_candidate_carrier_payload(
             epoch.unresolved_candidate_carrier))
         return true;
     for (const auto& slot : epoch.slots) {
@@ -2366,7 +2495,74 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
                        [](const InventorySavedStackEpoch& nested) {
                            return inventory_saved_stack_epoch_has_candidate_payload_or_top(
                                nested);
+                       }) ||
+           std::any_of(epoch.origin_channels.begin(),
+                       epoch.origin_channels.end(),
+                       [](const InventorySavedStackEpoch& channel) {
+                           return inventory_saved_stack_epoch_has_candidate_payload_or_top(
+                               channel);
                        });
+}
+
+// A SavedEpoch carried as a value can describe either the active stack or a
+// suspended stack.  Only its current-origin root is a callback-like mutation
+// of the active stack namespace.  A detached root remains a nested MAY value
+// until that value is itself restored; observing its private callback payload
+// here would incorrectly turn a pointer store into immediate Stack-Base-Loss.
+[[nodiscard]] bool
+inventory_saved_stack_epoch_current_root_has_candidate_payload_or_top(
+    const InventorySavedStackEpoch& epoch) {
+    if (!epoch.origin_channels.empty())
+        return std::any_of(
+            epoch.origin_channels.begin(),
+            epoch.origin_channels.end(),
+            [](const InventorySavedStackEpoch& channel) {
+                return inventory_saved_stack_epoch_current_root_has_candidate_payload_or_top(
+                    channel);
+            });
+
+    // Payload in a direct slot belongs to this epoch root. A nested epoch is
+    // another saved pointer and must be classified by its own origin; a
+    // detached nested candidate must never make its current-root container
+    // look like a callback mutation of the active stack.
+    if (epoch.tracks_current_epoch &&
+        (epoch.candidate_payload_lost ||
+         has_callback_candidate_carrier_payload(
+             epoch.unresolved_candidate_carrier) ||
+         std::any_of(
+             epoch.slots.begin(), epoch.slots.end(),
+             [](const InventorySavedStackSlot& slot) {
+                 return has_inventory_saved_stack_slot_candidate_payload(
+                     slot);
+             })))
+        return true;
+
+    // A bounded tree collapse can fold a nested current-origin carrier into
+    // its enclosing node. In that representation the dedicated tracking bit
+    // is the remaining origin proof; retaining Top here is fail-closed
+    // without admitting ordinary detached descendants.
+    if (epoch.nested_saved_stack_alias_tracks_current_epoch &&
+        (epoch.candidate_payload_lost ||
+         has_callback_candidate_carrier_payload(
+             epoch.unresolved_candidate_carrier)))
+        return true;
+
+    for (const auto& slot : epoch.slots)
+        if (std::any_of(
+                slot.nested_epochs.begin(),
+                slot.nested_epochs.end(),
+                [](const InventorySavedStackEpoch& nested) {
+                    return inventory_saved_stack_epoch_current_root_has_candidate_payload_or_top(
+                        nested);
+                }))
+            return true;
+    return std::any_of(
+        epoch.unresolved_nested_epochs.begin(),
+        epoch.unresolved_nested_epochs.end(),
+        [](const InventorySavedStackEpoch& nested) {
+            return inventory_saved_stack_epoch_current_root_has_candidate_payload_or_top(
+                nested);
+        });
 }
 
 [[nodiscard]] bool inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
@@ -2384,12 +2580,19 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
             return true;
     }
     return std::any_of(
-        epoch.unresolved_nested_epochs.begin(),
-        epoch.unresolved_nested_epochs.end(),
-        [](const InventorySavedStackEpoch& nested) {
-            return inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
-                nested);
-        });
+               epoch.unresolved_nested_epochs.begin(),
+               epoch.unresolved_nested_epochs.end(),
+               [](const InventorySavedStackEpoch& nested) {
+                   return inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+                       nested);
+               }) ||
+           std::any_of(
+               epoch.origin_channels.begin(),
+               epoch.origin_channels.end(),
+               [](const InventorySavedStackEpoch& channel) {
+                   return inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+                       channel);
+               });
 }
 
 [[nodiscard]] bool inventory_saved_stack_epoch_has_direct_candidate_top(
@@ -2410,11 +2613,19 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
             return true;
     }
     return std::any_of(
-        epoch.unresolved_nested_epochs.begin(),
-        epoch.unresolved_nested_epochs.end(),
-        [](const InventorySavedStackEpoch& nested) {
-            return inventory_saved_stack_epoch_has_direct_candidate_top(nested);
-        });
+               epoch.unresolved_nested_epochs.begin(),
+               epoch.unresolved_nested_epochs.end(),
+               [](const InventorySavedStackEpoch& nested) {
+                   return inventory_saved_stack_epoch_has_direct_candidate_top(
+                       nested);
+               }) ||
+           std::any_of(
+               epoch.origin_channels.begin(),
+               epoch.origin_channels.end(),
+               [](const InventorySavedStackEpoch& channel) {
+                   return inventory_saved_stack_epoch_has_direct_candidate_top(
+                       channel);
+               });
 }
 
 [[nodiscard]] bool inventory_saved_stack_epoch_tracks_current(
@@ -2435,7 +2646,38 @@ void normalize_inventory_saved_stack_slot(InventorySavedStackSlot& slot) {
                        [](const InventorySavedStackEpoch& nested) {
                            return inventory_saved_stack_epoch_tracks_current(
                                nested);
+                       }) ||
+           std::any_of(epoch.origin_channels.begin(),
+                       epoch.origin_channels.end(),
+                       [](const InventorySavedStackEpoch& channel) {
+                           return inventory_saved_stack_epoch_tracks_current(
+                               channel);
                        });
+}
+
+[[nodiscard]] bool inventory_saved_stack_epoch_root_tracks_current(
+    const InventorySavedStackEpoch& epoch) {
+    if (epoch.origin_channels.empty()) return epoch.tracks_current_epoch;
+    return std::any_of(
+        epoch.origin_channels.begin(),
+        epoch.origin_channels.end(),
+        [](const InventorySavedStackEpoch& channel) {
+            return channel.tracks_current_epoch;
+        });
+}
+
+[[nodiscard]] bool inventory_saved_stack_epoch_has_detached_root(
+    const InventorySavedStackEpoch& epoch) {
+    if (epoch.origin_channels.empty())
+        return has_inventory_saved_stack_epoch_payload(epoch) &&
+               !epoch.tracks_current_epoch;
+    return std::any_of(
+        epoch.origin_channels.begin(),
+        epoch.origin_channels.end(),
+        [](const InventorySavedStackEpoch& channel) {
+            return has_inventory_saved_stack_epoch_payload(channel) &&
+                   !channel.tracks_current_epoch;
+        });
 }
 
 // candidate_payload_lost is the terminal Candidate Top for one saved epoch,
@@ -2612,13 +2854,11 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
 [[nodiscard]] bool summary_saved_stack_epoch_has_candidate_payload_or_top(
     const InventorySavedStackEpochSummary& epoch) {
     if (epoch.candidate_payload_lost ||
-        has_inventory_candidate_carrier_payload(
-            epoch.unresolved_candidate_carrier) ||
-        has_pending_abi_scalar_payload(epoch.unresolved_candidate_carrier))
+        has_callback_candidate_carrier_payload(
+            epoch.unresolved_candidate_carrier))
         return true;
     for (const auto& slot : epoch.slots) {
-        if (has_inventory_candidate_carrier_payload(slot.carrier) ||
-            has_pending_abi_scalar_payload(slot.carrier))
+        if (has_callback_candidate_carrier_payload(slot.carrier))
             return true;
         if (std::any_of(slot.nested_epochs.begin(),
                         slot.nested_epochs.end(),
@@ -2629,12 +2869,19 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
             return true;
     }
     return std::any_of(
-        epoch.unresolved_nested_epochs.begin(),
-        epoch.unresolved_nested_epochs.end(),
-        [](const InventorySavedStackEpochSummary& nested) {
-            return summary_saved_stack_epoch_has_candidate_payload_or_top(
-                nested);
-        });
+               epoch.unresolved_nested_epochs.begin(),
+               epoch.unresolved_nested_epochs.end(),
+               [](const InventorySavedStackEpochSummary& nested) {
+                   return summary_saved_stack_epoch_has_candidate_payload_or_top(
+                       nested);
+               }) ||
+           std::any_of(
+               epoch.origin_channels.begin(),
+               epoch.origin_channels.end(),
+               [](const InventorySavedStackEpochSummary& channel) {
+                   return summary_saved_stack_epoch_has_candidate_payload_or_top(
+                       channel);
+               });
 }
 
 [[nodiscard]] bool summary_saved_stack_epoch_has_direct_candidate_top(
@@ -2655,11 +2902,19 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
             return true;
     }
     return std::any_of(
-        epoch.unresolved_nested_epochs.begin(),
-        epoch.unresolved_nested_epochs.end(),
-        [](const InventorySavedStackEpochSummary& nested) {
-            return summary_saved_stack_epoch_has_direct_candidate_top(nested);
-        });
+               epoch.unresolved_nested_epochs.begin(),
+               epoch.unresolved_nested_epochs.end(),
+               [](const InventorySavedStackEpochSummary& nested) {
+                   return summary_saved_stack_epoch_has_direct_candidate_top(
+                       nested);
+               }) ||
+           std::any_of(
+               epoch.origin_channels.begin(),
+               epoch.origin_channels.end(),
+               [](const InventorySavedStackEpochSummary& channel) {
+                   return summary_saved_stack_epoch_has_direct_candidate_top(
+                       channel);
+               });
 }
 
 [[nodiscard]] bool summary_saved_stack_epoch_tracks_current(
@@ -2676,11 +2931,17 @@ void enforce_saved_stack_epoch_tree_budget(InventorySavedStackEpoch& epoch) {
                         }))
             return true;
     return std::any_of(
-        epoch.unresolved_nested_epochs.begin(),
-        epoch.unresolved_nested_epochs.end(),
-        [](const InventorySavedStackEpochSummary& nested) {
-            return summary_saved_stack_epoch_tracks_current(nested);
-        });
+               epoch.unresolved_nested_epochs.begin(),
+               epoch.unresolved_nested_epochs.end(),
+               [](const InventorySavedStackEpochSummary& nested) {
+                   return summary_saved_stack_epoch_tracks_current(nested);
+               }) ||
+           std::any_of(
+               epoch.origin_channels.begin(),
+               epoch.origin_channels.end(),
+               [](const InventorySavedStackEpochSummary& channel) {
+                   return summary_saved_stack_epoch_tracks_current(channel);
+               });
 }
 
 void normalize_inventory_saved_stack_epoch_summary_candidate_top(
@@ -2856,10 +3117,72 @@ void enforce_saved_stack_epoch_summary_tree_budget(
 void normalize_inventory_saved_stack_epoch(
     InventorySavedStackEpoch& epoch,
     const std::size_t depth = 0u) {
+    if (!epoch.tracks_current_epoch)
+        epoch.current_epoch_base_offsets.clear();
+    if (!epoch.origin_channels.empty()) {
+        // `origin_channels` is a pure, bounded alternative wrapper.  If an
+        // older/intermediate form also carries direct payload, first turn it
+        // into a channel so current and detached facts can never be OR-joined.
+        const bool has_direct_payload =
+            epoch.unresolved || epoch.candidate_payload_lost ||
+            !epoch.current_epoch_base_offsets.empty() ||
+            epoch.nested_saved_stack_alias_latent ||
+            epoch.nested_saved_stack_alias_tracks_current_epoch ||
+            !epoch.slots.empty() ||
+            has_inventory_candidate_carrier_payload(
+                epoch.unresolved_candidate_carrier) ||
+            has_pending_abi_scalar_payload(
+                epoch.unresolved_candidate_carrier) ||
+            !epoch.unresolved_nested_epochs.empty();
+        auto channels = std::move(epoch.origin_channels);
+        if (has_direct_payload) {
+            auto direct = std::move(epoch);
+            direct.origin_channels.clear();
+            channels.push_back(std::move(direct));
+        }
+        epoch = {};
+        std::vector<InventorySavedStackEpoch> flattened;
+        for (auto& channel : channels) {
+            // An origin alternative is not a nested saved stack.  Preserve
+            // the current structural depth so each channel receives the
+            // same tree budget as the unpartitioned representation.
+            normalize_inventory_saved_stack_epoch(channel, depth);
+            if (!channel.origin_channels.empty()) {
+                for (auto& nested_channel : channel.origin_channels)
+                    flattened.push_back(std::move(nested_channel));
+            } else if (has_inventory_saved_stack_epoch_payload(channel)) {
+                flattened.push_back(std::move(channel));
+            }
+        }
+        std::optional<InventorySavedStackEpoch> detached;
+        std::optional<InventorySavedStackEpoch> current;
+        for (const auto& channel : flattened) {
+            auto& target = channel.tracks_current_epoch ? current : detached;
+            if (!target.has_value())
+                target = channel;
+            else
+                static_cast<void>(merge_inventory_saved_stack_epoch(
+                    *target, channel, true));
+        }
+        if (!detached.has_value() || !current.has_value()) {
+            if (detached.has_value())
+                epoch = std::move(*detached);
+            else if (current.has_value())
+                epoch = std::move(*current);
+            return;
+        }
+        epoch.present = true;
+        epoch.origin_channels.push_back(std::move(*detached));
+        epoch.origin_channels.push_back(std::move(*current));
+        return;
+    }
     if (epoch.candidate_payload_lost) {
+        normalize_current_epoch_base_offsets(
+            epoch.current_epoch_base_offsets);
         normalize_inventory_saved_stack_epoch_candidate_top(epoch);
         return;
     }
+    normalize_current_epoch_base_offsets(epoch.current_epoch_base_offsets);
     normalize_inventory_candidate_carrier(
         epoch.unresolved_candidate_carrier);
     if (depth >= maximum_saved_stack_epoch_nesting) {
@@ -2989,10 +3312,67 @@ void merge_inventory_saved_stack_epoch_summary(
 void normalize_inventory_saved_stack_epoch_summary(
     InventorySavedStackEpochSummary& epoch,
     const std::size_t depth = 0u) {
+    if (!epoch.tracks_current_epoch)
+        epoch.current_epoch_base_offsets.clear();
+    if (!epoch.origin_channels.empty()) {
+        const bool has_direct_payload =
+            epoch.unresolved || epoch.candidate_payload_lost ||
+            !epoch.current_epoch_base_offsets.empty() ||
+            epoch.nested_saved_stack_alias_latent ||
+            epoch.nested_saved_stack_alias_tracks_current_epoch ||
+            !epoch.slots.empty() ||
+            has_inventory_candidate_carrier_payload(
+                epoch.unresolved_candidate_carrier) ||
+            has_pending_abi_scalar_payload(
+                epoch.unresolved_candidate_carrier) ||
+            !epoch.unresolved_nested_epochs.empty();
+        auto channels = std::move(epoch.origin_channels);
+        if (has_direct_payload) {
+            auto direct = std::move(epoch);
+            direct.origin_channels.clear();
+            channels.push_back(std::move(direct));
+        }
+        epoch = {};
+        std::vector<InventorySavedStackEpochSummary> flattened;
+        for (auto& channel : channels) {
+            normalize_inventory_saved_stack_epoch_summary(
+                channel, depth);
+            if (!channel.origin_channels.empty()) {
+                for (auto& nested_channel : channel.origin_channels)
+                    flattened.push_back(std::move(nested_channel));
+            } else {
+                flattened.push_back(std::move(channel));
+            }
+        }
+        std::optional<InventorySavedStackEpochSummary> detached;
+        std::optional<InventorySavedStackEpochSummary> current;
+        for (const auto& channel : flattened) {
+            auto& target = channel.tracks_current_epoch ? current : detached;
+            if (!target.has_value())
+                target = channel;
+            else
+                merge_inventory_saved_stack_epoch_summary(
+                    *target, channel);
+        }
+        if (!detached.has_value() || !current.has_value()) {
+            if (detached.has_value())
+                epoch = std::move(*detached);
+            else if (current.has_value())
+                epoch = std::move(*current);
+            return;
+        }
+        epoch.present = true;
+        epoch.origin_channels.push_back(std::move(*detached));
+        epoch.origin_channels.push_back(std::move(*current));
+        return;
+    }
     if (epoch.candidate_payload_lost) {
+        normalize_current_epoch_base_offsets(
+            epoch.current_epoch_base_offsets);
         normalize_inventory_saved_stack_epoch_summary_candidate_top(epoch);
         return;
     }
+    normalize_current_epoch_base_offsets(epoch.current_epoch_base_offsets);
     normalize_inventory_candidate_carrier(
         epoch.unresolved_candidate_carrier);
     if (depth >= maximum_saved_stack_epoch_nesting) {
@@ -3117,8 +3497,7 @@ void normalize_inventory_saved_stack_epoch_summary(
 [[nodiscard]] bool inventory_candidate_carrier_truncated(
     const InventoryCandidateCarrier& carrier) {
     return carrier.inventory_code_pointer_values_truncated ||
-           carrier.inventory_pc_relative_code_literal_values_truncated ||
-           carrier.pending_abi_scalar_values_truncated;
+           carrier.inventory_pc_relative_code_literal_values_truncated;
 }
 
 [[nodiscard]] bool direct_inventory_candidate_carrier_truncated(
@@ -3235,6 +3614,7 @@ void absorb_inventory_saved_stack_slot(
     summary.present = epoch.present;
     summary.unresolved = epoch.unresolved;
     summary.tracks_current_epoch = epoch.tracks_current_epoch;
+    summary.current_epoch_base_offsets = epoch.current_epoch_base_offsets;
     summary.candidate_payload_lost = epoch.candidate_payload_lost;
     summary.nested_saved_stack_alias_latent =
         epoch.nested_saved_stack_alias_latent;
@@ -3257,6 +3637,10 @@ void absorb_inventory_saved_stack_slot(
     for (const auto& nested : epoch.unresolved_nested_epochs)
         summary.unresolved_nested_epochs.push_back(
             summarize_saved_stack_epoch(nested));
+    summary.origin_channels.reserve(epoch.origin_channels.size());
+    for (const auto& channel : epoch.origin_channels)
+        summary.origin_channels.push_back(
+            summarize_saved_stack_epoch(channel));
     normalize_inventory_saved_stack_epoch_summary(summary);
     return summary;
 }
@@ -3267,6 +3651,7 @@ void absorb_inventory_saved_stack_slot(
     epoch.present = summary.present;
     epoch.unresolved = summary.unresolved;
     epoch.tracks_current_epoch = summary.tracks_current_epoch;
+    epoch.current_epoch_base_offsets = summary.current_epoch_base_offsets;
     epoch.candidate_payload_lost = summary.candidate_payload_lost;
     epoch.nested_saved_stack_alias_latent =
         summary.nested_saved_stack_alias_latent;
@@ -3290,6 +3675,10 @@ void absorb_inventory_saved_stack_slot(
     for (const auto& nested : summary.unresolved_nested_epochs)
         epoch.unresolved_nested_epochs.push_back(
             restore_saved_stack_epoch(nested));
+    epoch.origin_channels.reserve(summary.origin_channels.size());
+    for (const auto& channel : summary.origin_channels)
+        epoch.origin_channels.push_back(
+            restore_saved_stack_epoch(channel));
     normalize_inventory_saved_stack_epoch(epoch);
     return epoch;
 }
@@ -3349,6 +3738,13 @@ void merge_slot_nested_saved_stack_epoch(
 void mark_inventory_saved_stack_epoch_unresolved(
     InventorySavedStackEpoch& epoch,
     const bool candidate_payload_lost = false) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            mark_inventory_saved_stack_epoch_unresolved(
+                channel, candidate_payload_lost);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
     // Unresolved is the terminal, absorbing top of this candidate-only
     // domain. Retaining finite slots after reaching top lets translated
     // loop-carried snapshots keep changing forever even though a restore
@@ -3410,6 +3806,13 @@ void mark_inventory_saved_stack_epoch_unresolved(
 void merge_inventory_saved_stack_epoch_top_metadata(
     InventorySavedStackEpoch& destination,
     const InventorySavedStackEpoch& source) {
+    const bool destination_tracks_current_epoch =
+        destination.tracks_current_epoch;
+    merge_current_epoch_base_offsets(
+        destination.current_epoch_base_offsets,
+        destination_tracks_current_epoch,
+        source.current_epoch_base_offsets,
+        source.tracks_current_epoch);
     destination.present = destination.present || source.present;
     destination.tracks_current_epoch =
         destination.tracks_current_epoch || source.tracks_current_epoch;
@@ -3454,11 +3857,79 @@ void merge_inventory_saved_stack_epoch_top_metadata(
     collect(collect, source, false);
 }
 
+void append_inventory_saved_stack_origin_channels(
+    std::vector<InventorySavedStackEpoch>& channels,
+    const InventorySavedStackEpoch& epoch) {
+    if (epoch.origin_channels.empty()) {
+        if (has_inventory_saved_stack_epoch_payload(epoch))
+            channels.push_back(epoch);
+        return;
+    }
+    for (const auto& channel : epoch.origin_channels)
+        append_inventory_saved_stack_origin_channels(channels, channel);
+}
+
 bool merge_inventory_saved_stack_epoch(
     InventorySavedStackEpoch& destination,
     const InventorySavedStackEpoch& source,
     const bool joining_alternatives) {
     const auto original = destination;
+    const bool destination_has_payload =
+        has_inventory_saved_stack_epoch_payload(destination);
+    const bool source_has_payload =
+        has_inventory_saved_stack_epoch_payload(source);
+    const bool requires_origin_partition =
+        !destination.origin_channels.empty() ||
+        !source.origin_channels.empty() ||
+        (destination_has_payload && source_has_payload &&
+         destination.tracks_current_epoch != source.tracks_current_epoch);
+    if (requires_origin_partition) {
+        std::vector<InventorySavedStackEpoch> channels;
+        channels.reserve(4u);
+        append_inventory_saved_stack_origin_channels(
+            channels, destination);
+        append_inventory_saved_stack_origin_channels(channels, source);
+        std::optional<InventorySavedStackEpoch> detached;
+        std::optional<InventorySavedStackEpoch> current;
+        for (auto& channel : channels) {
+            normalize_inventory_saved_stack_epoch(channel);
+            if (!channel.origin_channels.empty()) {
+                std::vector<InventorySavedStackEpoch> flattened;
+                append_inventory_saved_stack_origin_channels(
+                    flattened, channel);
+                for (const auto& flattened_channel : flattened) {
+                    auto& target = flattened_channel.tracks_current_epoch
+                                       ? current
+                                       : detached;
+                    if (!target.has_value())
+                        target = flattened_channel;
+                    else
+                        static_cast<void>(merge_inventory_saved_stack_epoch(
+                            *target, flattened_channel,
+                            joining_alternatives));
+                }
+                continue;
+            }
+            auto& target = channel.tracks_current_epoch ? current : detached;
+            if (!target.has_value())
+                target = std::move(channel);
+            else
+                static_cast<void>(merge_inventory_saved_stack_epoch(
+                    *target, channel, joining_alternatives));
+        }
+        destination = {};
+        if (detached.has_value() && current.has_value()) {
+            destination.present = true;
+            destination.origin_channels.push_back(std::move(*detached));
+            destination.origin_channels.push_back(std::move(*current));
+        } else if (detached.has_value()) {
+            destination = std::move(*detached);
+        } else if (current.has_value()) {
+            destination = std::move(*current);
+        }
+        normalize_inventory_saved_stack_epoch(destination);
+        return destination != original;
+    }
     if (destination.candidate_payload_lost || source.candidate_payload_lost) {
         merge_inventory_saved_stack_epoch_top_metadata(destination, source);
         destination.candidate_payload_lost = true;
@@ -3469,15 +3940,17 @@ bool merge_inventory_saved_stack_epoch(
         joining_alternatives &&
         destination.present != source.present &&
         (destination.present || source.present);
-    const bool incompatible_epoch =
-        joining_alternatives &&
-        destination.tracks_current_epoch !=
-            source.tracks_current_epoch &&
-        (destination.present || source.present);
     const bool translated_alternative =
         joining_alternatives &&
         is_nonzero_uniform_saved_stack_epoch_translation(
             destination, source);
+    const bool destination_tracks_current_epoch =
+        destination.tracks_current_epoch;
+    merge_current_epoch_base_offsets(
+        destination.current_epoch_base_offsets,
+        destination_tracks_current_epoch,
+        source.current_epoch_base_offsets,
+        source.tracks_current_epoch);
     destination.present = destination.present || source.present;
     destination.tracks_current_epoch =
         destination.tracks_current_epoch ||
@@ -3496,8 +3969,7 @@ bool merge_inventory_saved_stack_epoch(
         source.unresolved_candidate_carrier));
     for (const auto& nested : source.unresolved_nested_epochs)
         merge_unresolved_nested_saved_stack_epoch(destination, nested);
-    if (incompatible_presence || incompatible_epoch ||
-        translated_alternative || destination.unresolved ||
+    if (incompatible_presence || translated_alternative || destination.unresolved ||
         source.unresolved) {
         for (const auto& slot : source.slots)
             absorb_inventory_saved_stack_slot(
@@ -3601,6 +4073,8 @@ bool merge_inventory_saved_stack_epoch(
             right.inventory_detached_stack_epoch_alias_watcher ||
         left.inventory_unresolved_stack_callback_loss !=
             right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_detached_stack_callback_loss !=
+            right.inventory_detached_stack_callback_loss ||
         left.inventory_unresolved_memory_callback_loss !=
             right.inventory_unresolved_memory_callback_loss ||
         left.inventory_callback_loss_identity_truncated_sources !=
@@ -3747,6 +4221,8 @@ void emit_forwarded_cap_diagnostic(
             incoming->inventory_detached_stack_epoch_alias_watcher &&
         existing->inventory_unresolved_stack_callback_loss ==
                 incoming->inventory_unresolved_stack_callback_loss &&
+        existing->inventory_detached_stack_callback_loss ==
+                incoming->inventory_detached_stack_callback_loss &&
         existing->inventory_unresolved_memory_callback_loss ==
                 incoming->inventory_unresolved_memory_callback_loss &&
         existing->inventory_callback_loss_identity_truncated_sources ==
@@ -3919,6 +4395,11 @@ bool merge_forwarded_inventory_payload(AbstractState& destination,
         destination.inventory_unresolved_stack_callback_loss = true;
         changed = true;
     }
+    if (source.inventory_detached_stack_callback_loss &&
+        !destination.inventory_detached_stack_callback_loss) {
+        destination.inventory_detached_stack_callback_loss = true;
+        changed = true;
+    }
     if (source.inventory_unresolved_memory_callback_loss &&
         !destination.inventory_unresolved_memory_callback_loss) {
         destination.inventory_unresolved_memory_callback_loss = true;
@@ -4038,6 +4519,8 @@ void restore_summary_epoch_evidence_provenance(
     lens.restore_callees(epoch.unresolved_candidate_carrier.callees);
     for (auto& nested : epoch.unresolved_nested_epochs)
         restore_summary_epoch_evidence_provenance(nested, lens);
+    for (auto& channel : epoch.origin_channels)
+        restore_summary_epoch_evidence_provenance(channel, lens);
     normalize_inventory_saved_stack_epoch_summary(epoch);
 }
 
@@ -4094,6 +4577,8 @@ void clear_summary_epoch_call_sites(InventorySavedStackEpochSummary& epoch) {
     epoch.unresolved_candidate_carrier.call_sites.clear();
     for (auto& nested : epoch.unresolved_nested_epochs)
         clear_summary_epoch_call_sites(nested);
+    for (auto& channel : epoch.origin_channels)
+        clear_summary_epoch_call_sites(channel);
     normalize_inventory_saved_stack_epoch_summary(epoch);
 }
 
@@ -4157,6 +4642,8 @@ void bind_summary_epoch_provenance(InventorySavedStackEpoch& epoch,
         epoch.unresolved_candidate_carrier, call_site, candidate);
     for (auto& nested : epoch.unresolved_nested_epochs)
         bind_summary_epoch_provenance(nested, call_site, candidate);
+    for (auto& channel : epoch.origin_channels)
+        bind_summary_epoch_provenance(channel, call_site, candidate);
     normalize_inventory_saved_stack_epoch(epoch);
 }
 
@@ -4487,6 +4974,10 @@ struct TailIngressCandidates {
     bool complete = true;
     bool requires_code_pointer = false;
     bool observes_abi_arguments = false;
+    // Exact r4-r7/stack sources proven by the target-region persistent-store
+    // and indirect-dispatch fixpoint.  Unlike a function-wide read mask this
+    // authorizes only values that actually reach the inventory sink.
+    std::uint8_t abi_sink_sources = 0u;
 };
 using TailIngressMap =
     std::unordered_map<std::uint32_t, TailIngressCandidates>;
@@ -4656,11 +5147,22 @@ void clear_inventory_stack_coordinates(
 [[nodiscard]] bool has_current_inventory_stack_lineage(
     const AbstractState& state,
     const std::uint8_t register_index) {
-    return state[register_index].inventory_stack_derived ||
-           state.stack_offsets[register_index].has_value() ||
+    const auto& epoch =
+        state[register_index].inventory_saved_stack_epoch;
+    const bool has_current_coordinate =
+        state.stack_offsets[register_index].has_value() ||
            !inventory_stack_coordinates(
                 state, register_index)
                 .empty();
+    // `inventory_stack_derived` is a broad MAY fact and survives loads and
+    // joins.  A concrete detached SavedEpoch explains that fact without
+    // granting permission to re-scope the pointer into the active r15
+    // namespace.  Only an explicit current coordinate/current origin, or a
+    // broad flag with no detached origin at all, denotes current lineage.
+    return has_current_coordinate ||
+           inventory_saved_stack_epoch_root_tracks_current(epoch) ||
+           (state[register_index].inventory_stack_derived &&
+            !inventory_saved_stack_epoch_has_detached_root(epoch));
 }
 
 void synchronize_inventory_provenance(AbstractValue& value) {
@@ -4713,6 +5215,12 @@ void synchronize_inventory_provenance(AbstractValue& value) {
                epoch.unresolved_nested_epochs.end(),
                [](const InventorySavedStackEpoch& nested) {
                    return inventory_saved_stack_epoch_truncated(nested);
+               }) ||
+           std::any_of(
+               epoch.origin_channels.begin(),
+               epoch.origin_channels.end(),
+               [](const InventorySavedStackEpoch& channel) {
+                   return inventory_saved_stack_epoch_truncated(channel);
                });
 }
 
@@ -4770,6 +5278,7 @@ struct InventoryStateLoss final {
         inventory_candidate_values_truncated(state);
     loss.stack_base_unresolved =
         state.inventory_unresolved_stack_callback_loss ||
+        state.inventory_detached_stack_callback_loss ||
         (state.inventory_callback_loss_identity_truncated_sources &
          unresolved_saved_stack_alias_source_stack) != 0u;
     const auto observe = [&](const AbstractValue& value) {
@@ -4845,6 +5354,7 @@ canonical_abstract_state_key(const AbstractState& state);
         state.inventory_current_stack_epoch_alias_watcher ||
         state.inventory_detached_stack_epoch_alias_watcher ||
         state.inventory_unresolved_stack_callback_loss ||
+        state.inventory_detached_stack_callback_loss ||
         state.inventory_unresolved_memory_callback_loss ||
         state.inventory_callback_loss_identity_truncated_sources != 0u ||
         has_inventory_candidate_carrier_payload(
@@ -4852,6 +5362,8 @@ canonical_abstract_state_key(const AbstractState& state);
         has_pending_abi_scalar_payload(
             state.inventory_unresolved_stack_carrier) ||
         has_inventory_candidate_carrier_payload(
+            state.inventory_unresolved_memory_carrier) ||
+        has_pending_abi_scalar_payload(
             state.inventory_unresolved_memory_carrier) ||
         state.inventory_unresolved_stack_epoch.present ||
         state.inventory_unresolved_memory_epoch.present)
@@ -4889,6 +5401,8 @@ canonical_abstract_state_key(const AbstractState& state);
                    carries_stack_callback_payload(stored.second);
         }) ||
            has_inventory_candidate_carrier_payload(
+               state.inventory_unresolved_memory_carrier) ||
+           has_pending_abi_scalar_payload(
                state.inventory_unresolved_memory_carrier) ||
            state.inventory_unresolved_memory_callback_loss ||
            state.inventory_unresolved_memory_epoch.present;
@@ -6144,6 +6658,8 @@ void absorb_unresolved_memory_storage(AbstractState& state,
                                       const AbstractValue& value) {
     absorb_inventory_candidate_payload(
         state.inventory_unresolved_memory_carrier, value);
+    static_cast<void>(absorb_pending_abi_scalar(
+        state.inventory_unresolved_memory_carrier, value));
     if (has_saved_stack_epoch(value)) {
         static_cast<void>(merge_inventory_saved_stack_epoch(
             state.inventory_unresolved_memory_epoch,
@@ -6350,8 +6866,7 @@ void fold_stack_value_into_tail(AbstractState& state,
         static_cast<void>(add_unresolved_saved_stack_alias(
             state,
             unresolved_saved_stack_alias_source_stack,
-            inventory_saved_stack_epoch_tracks_current(
-                folded.inventory_saved_stack_epoch)));
+            folded.inventory_saved_stack_epoch));
         folded.inventory_saved_stack_epoch = {};
     } else if (has_saved_stack_epoch(folded)) {
         // A tail has no stable identity for a suspended stack snapshot. Keep
@@ -6642,6 +7157,11 @@ bool merge_state(AbstractState& destination,
         destination.inventory_unresolved_stack_callback_loss = true;
         changed = true;
     }
+    if (source.inventory_detached_stack_callback_loss &&
+        !destination.inventory_detached_stack_callback_loss) {
+        destination.inventory_detached_stack_callback_loss = true;
+        changed = true;
+    }
     if (source.inventory_unresolved_memory_callback_loss &&
         !destination.inventory_unresolved_memory_callback_loss) {
         destination.inventory_unresolved_memory_callback_loss = true;
@@ -6755,8 +7275,7 @@ bool merge_state(AbstractState& destination,
                 add_unresolved_saved_stack_alias(
                     destination,
                     unresolved_saved_stack_alias_source_stack,
-                    inventory_saved_stack_epoch_tracks_current(
-                        slot->second.inventory_saved_stack_epoch));
+                    slot->second.inventory_saved_stack_epoch);
                 slot->second.inventory_saved_stack_epoch = {};
                 changed = true;
                 if (!has_non_epoch_abstract_fact(slot->second)) {
@@ -6809,8 +7328,7 @@ bool merge_state(AbstractState& destination,
                     add_unresolved_saved_stack_alias(
                         destination,
                         unresolved_saved_stack_alias_source_stack,
-                        inventory_saved_stack_epoch_tracks_current(
-                            candidate.inventory_saved_stack_epoch)) ||
+                        candidate.inventory_saved_stack_epoch) ||
                     changed;
                 candidate.inventory_saved_stack_epoch = {};
                 if (!has_non_epoch_abstract_fact(candidate))
@@ -6841,8 +7359,7 @@ bool merge_state(AbstractState& destination,
                 add_unresolved_saved_stack_alias(
                     destination,
                     unresolved_saved_stack_alias_source_stack,
-                    inventory_saved_stack_epoch_tracks_current(
-                        candidate.inventory_saved_stack_epoch)) ||
+                    candidate.inventory_saved_stack_epoch) ||
                 changed;
             candidate.inventory_saved_stack_epoch = {};
             if (!has_non_epoch_abstract_fact(candidate))
@@ -6896,8 +7413,7 @@ bool merge_state(AbstractState& destination,
                 add_unresolved_saved_stack_alias(
                     destination,
                     unresolved_saved_stack_alias_source_memory,
-                    inventory_saved_stack_epoch_tracks_current(
-                        value->second.inventory_saved_stack_epoch));
+                    value->second.inventory_saved_stack_epoch);
                 value->second.inventory_saved_stack_epoch = {};
                 changed = true;
                 if (!has_non_epoch_abstract_fact(value->second)) {
@@ -6943,11 +7459,10 @@ bool merge_state(AbstractState& destination,
         auto candidate = value;
         if (has_latent_saved_stack_alias(candidate)) {
             changed =
-                add_unresolved_saved_stack_alias(
-                    destination,
-                    unresolved_saved_stack_alias_source_memory,
-                    inventory_saved_stack_epoch_tracks_current(
-                        candidate.inventory_saved_stack_epoch)) ||
+                    add_unresolved_saved_stack_alias(
+                        destination,
+                        unresolved_saved_stack_alias_source_memory,
+                        candidate.inventory_saved_stack_epoch) ||
                 changed;
             candidate.inventory_saved_stack_epoch = {};
             if (!has_non_epoch_abstract_fact(candidate))
@@ -7611,33 +8126,67 @@ void note_imprecise_memory_stack_callback_store(
         add_unresolved_saved_stack_alias(
             state,
             unresolved_saved_stack_alias_source_memory,
-            inventory_saved_stack_epoch_tracks_current(
-                value.inventory_saved_stack_epoch));
+            value.inventory_saved_stack_epoch);
     }
 }
 
 void store_memory_values(AbstractState& state,
                          const std::vector<std::uint32_t>& addresses,
                          const std::size_t width,
-    const AbstractValue& value,
-    const AbstractValue& address_evidence) {
-    if (!address_evidence.known || !address_evidence.complete || addresses.empty()) {
+                         const AbstractValue& value,
+                         const AbstractValue& address_evidence,
+                         const bool inventory_fixed_storage_reference = false) {
+    const auto retain_imprecise_store = [&] {
         state.memory_definitely_written_ranges.clear();
         mark_unknown_memory_write(state);
         note_imprecise_memory_stack_callback_store(
             state, width, value);
         invalidate_memory_values_conservatively(state);
+    };
+    if (!address_evidence.known || addresses.empty()) {
+        retain_imprecise_store();
         return;
     }
     if (std::any_of(addresses.begin(), addresses.end(), [width](const auto address) {
             return width == 0u ||
                    address > std::numeric_limits<std::uint32_t>::max() - (width - 1u);
         })) {
+        retain_imprecise_store();
+        return;
+    }
+    if (!address_evidence.complete) {
+        if (!inventory_fixed_storage_reference) {
+            retain_imprecise_store();
+            return;
+        }
+        // A writable PC-relative literal is guarded ordinary data, but its
+        // finite storage address is still an explicit inventory-only proof.
+        // Preserve only the stored callback/SavedEpoch provenance at those
+        // bounded cells. Ordinary Memory remains unknown and unlisted address
+        // alternatives never become a domain-wide callback alias.
         state.memory_definitely_written_ranges.clear();
         mark_unknown_memory_write(state);
-        note_imprecise_memory_stack_callback_store(
-            state, width, value);
         invalidate_memory_values_conservatively(state);
+        auto stored = value;
+        make_unknown_preserving_provenance(stored);
+        stored.guarded = true;
+        stored.complete = false;
+        const bool carries_inventory =
+            has_direct_inventory_candidate_payload(stored) ||
+            has_saved_stack_epoch(stored) ||
+            carries_unresolved_stack_callback(stored);
+        if (width != 4u || !carries_inventory) return;
+        for (const auto address : addresses) {
+            for (auto existing = state.memory_values.begin();
+                 existing != state.memory_values.end();) {
+                if (memory_ranges_overlap(
+                        existing->first, 4u, address, width))
+                    existing = state.memory_values.erase(existing);
+                else
+                    ++existing;
+            }
+            state.memory_values.insert_or_assign(address, stored);
+        }
         return;
     }
     for (const auto address : addresses)
@@ -7692,9 +8241,7 @@ void store_memory_values(AbstractState& state,
                         add_unresolved_saved_stack_alias(
                             state,
                             unresolved_saved_stack_alias_source_memory,
-                            inventory_saved_stack_epoch_tracks_current(
-                                saved_alias_value
-                                    .inventory_saved_stack_epoch));
+                            saved_alias_value.inventory_saved_stack_epoch);
                 }
                 state.memory_values.clear();
             }
@@ -7735,9 +8282,7 @@ void store_memory_values(AbstractState& state,
                     add_unresolved_saved_stack_alias(
                         state,
                         unresolved_saved_stack_alias_source_memory,
-                        inventory_saved_stack_epoch_tracks_current(
-                            saved_alias_value
-                                .inventory_saved_stack_epoch));
+                        saved_alias_value.inventory_saved_stack_epoch);
             }
             if (std::any_of(
                     state.memory_values.begin(),
@@ -7926,15 +8471,27 @@ void note_bounded_exact_memory_loss(AbstractState& state,
     const AbstractValue& value) {
     return carries_unresolved_stack_callback(value) ||
            inventory_saved_stack_epoch_has_candidate_payload_or_top(
-               value.inventory_saved_stack_epoch) ||
-           inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+               value.inventory_saved_stack_epoch);
+}
+
+[[nodiscard]] bool carries_proven_stack_callback_mutation_payload(
+    const AbstractValue& value) {
+    // Pending ABI scalars deliberately do not participate here. They remain
+    // a MAY lane until an explicit ABI/callback gate promotes them.
+    return has_inventory_candidate_values(value) ||
+           value.inventory_code_pointer_values_truncated ||
+           value.inventory_pc_relative_code_literal_values_truncated ||
+           value.inventory_stack_callback_loss_unresolved ||
+           inventory_saved_stack_epoch_current_root_has_candidate_payload_or_top(
                value.inventory_saved_stack_epoch);
 }
 
 [[nodiscard]] bool has_latent_saved_stack_alias(
     const AbstractValue& value) {
     return has_saved_stack_epoch(value) &&
-           !carries_stack_callback_payload(value);
+           !carries_stack_callback_payload(value) &&
+           !inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+               value.inventory_saved_stack_epoch);
 }
 
 bool add_unresolved_saved_stack_alias(
@@ -7942,22 +8499,22 @@ bool add_unresolved_saved_stack_alias(
     const std::uint8_t sources,
     const bool tracks_current_epoch) {
     if (sources == 0u) return false;
-    const auto merged_sources =
+    const auto merged_detached_sources =
         static_cast<std::uint8_t>(
             state.inventory_unresolved_saved_stack_alias_sources |
-            sources);
+            (tracks_current_epoch ? 0u : sources));
     const auto merged_tracks_current_sources =
         static_cast<std::uint8_t>(
             state.inventory_unresolved_saved_stack_alias_tracks_current_sources |
             (tracks_current_epoch ? sources : 0u));
     bool changed =
-        merged_sources !=
+        merged_detached_sources !=
             state.inventory_unresolved_saved_stack_alias_sources ||
         merged_tracks_current_sources !=
             state
                 .inventory_unresolved_saved_stack_alias_tracks_current_sources;
     state.inventory_unresolved_saved_stack_alias_sources =
-        merged_sources;
+        merged_detached_sources;
     state.inventory_unresolved_saved_stack_alias_tracks_current_sources =
         merged_tracks_current_sources;
     // The source mask is only a load index.  The matching domain epoch owns
@@ -7968,10 +8525,12 @@ bool add_unresolved_saved_stack_alias(
         const auto materialize_domain_alias =
             [tracks_current_epoch](InventorySavedStackEpoch& epoch) {
                 const auto before = epoch;
-                epoch.present = true;
-                epoch.unresolved = true;
-                epoch.tracks_current_epoch =
-                    epoch.tracks_current_epoch || tracks_current_epoch;
+                InventorySavedStackEpoch lane;
+                lane.present = true;
+                lane.unresolved = true;
+                lane.tracks_current_epoch = tracks_current_epoch;
+                static_cast<void>(merge_inventory_saved_stack_epoch(
+                    epoch, lane, true));
                 normalize_inventory_saved_stack_epoch(epoch);
                 return epoch != before;
             };
@@ -7987,21 +8546,43 @@ bool add_unresolved_saved_stack_alias(
     return changed;
 }
 
+bool add_unresolved_saved_stack_alias(
+    AbstractState& state,
+    const std::uint8_t sources,
+    const InventorySavedStackEpoch& epoch) {
+    bool changed = false;
+    if (inventory_saved_stack_epoch_has_detached_root(epoch))
+        changed = add_unresolved_saved_stack_alias(
+                      state, sources, false) ||
+                  changed;
+    if (inventory_saved_stack_epoch_root_tracks_current(epoch))
+        changed = add_unresolved_saved_stack_alias(
+                      state, sources, true) ||
+                  changed;
+    return changed;
+}
+
 void materialize_unresolved_saved_stack_alias(
     AbstractValue& value,
     const AbstractState& state,
     const std::uint8_t source) {
-    if ((state.inventory_unresolved_saved_stack_alias_sources & source) ==
-        0u)
-        return;
-    InventorySavedStackEpoch latent;
-    latent.present = true;
-    latent.unresolved = true;
-    latent.tracks_current_epoch =
+    const bool has_detached =
+        (state.inventory_unresolved_saved_stack_alias_sources & source) != 0u;
+    const bool has_current =
         (state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
          source) != 0u;
-    static_cast<void>(merge_inventory_saved_stack_epoch(
-        value.inventory_saved_stack_epoch, latent, true));
+    if (!has_detached && !has_current)
+        return;
+    const auto materialize = [&](const bool current) {
+        InventorySavedStackEpoch latent;
+        latent.present = true;
+        latent.unresolved = true;
+        latent.tracks_current_epoch = current;
+        static_cast<void>(merge_inventory_saved_stack_epoch(
+            value.inventory_saved_stack_epoch, latent, true));
+    };
+    if (has_detached) materialize(false);
+    if (has_current) materialize(true);
     value.inventory_stack_derived = true;
     value.guarded = true;
     value.complete = false;
@@ -8023,8 +8604,7 @@ void collapse_payload_free_stack_aliases(AbstractState& state) {
             add_unresolved_saved_stack_alias(
                 state,
                 unresolved_saved_stack_alias_source_stack,
-                inventory_saved_stack_epoch_tracks_current(
-                    value->second.inventory_saved_stack_epoch));
+                value->second.inventory_saved_stack_epoch);
             value->second.inventory_saved_stack_epoch = {};
         }
         if (has_direct_stack_callback_loss(value->second)) {
@@ -8045,8 +8625,7 @@ void collapse_payload_free_stack_aliases(AbstractState& state) {
             static_cast<void>(add_unresolved_saved_stack_alias(
                 state,
                 unresolved_saved_stack_alias_source_stack,
-                inventory_saved_stack_epoch_tracks_current(
-                    payload.inventory_saved_stack_epoch)));
+                payload.inventory_saved_stack_epoch));
             payload.inventory_saved_stack_epoch = {};
         }
         if (has_direct_stack_callback_loss(payload)) {
@@ -8077,8 +8656,11 @@ template <std::size_t RegisterCount>
         registers.begin(),
         registers.end(),
         [&](const auto index) {
-            return state[index].inventory_stack_derived ||
-                   state.inventory_stack_may_alias[index];
+            const auto& epoch =
+                state[index].inventory_saved_stack_epoch;
+            return has_current_inventory_stack_lineage(state, index) ||
+                   (state.inventory_stack_may_alias[index] &&
+                    !inventory_saved_stack_epoch_has_detached_root(epoch));
         });
 }
 
@@ -8179,6 +8761,35 @@ template <std::size_t RegisterCount>
 [[nodiscard]] bool inventory_saved_stack_epoch_subsumes(
     const InventorySavedStackEpoch& merged,
     const InventorySavedStackEpoch& observed) {
+    if (!merged.origin_channels.empty() ||
+        !observed.origin_channels.empty()) {
+        const auto channel = [](const InventorySavedStackEpoch& epoch,
+                                const bool current)
+            -> const InventorySavedStackEpoch* {
+            if (epoch.origin_channels.empty())
+                return has_inventory_saved_stack_epoch_payload(epoch) &&
+                               epoch.tracks_current_epoch == current
+                           ? &epoch
+                           : nullptr;
+            const auto found = std::find_if(
+                epoch.origin_channels.begin(),
+                epoch.origin_channels.end(),
+                [&](const auto& candidate) {
+                    return candidate.tracks_current_epoch == current;
+                });
+            return found == epoch.origin_channels.end() ? nullptr : &*found;
+        };
+        for (const bool current : {false, true}) {
+            const auto* const observed_channel = channel(observed, current);
+            if (observed_channel == nullptr) continue;
+            const auto* const merged_channel = channel(merged, current);
+            if (merged_channel == nullptr ||
+                !inventory_saved_stack_epoch_subsumes(
+                    *merged_channel, *observed_channel))
+                return false;
+        }
+        return true;
+    }
     if (!observed.present) return true;
     if (!merged.present ||
         (observed.unresolved && !merged.unresolved) ||
@@ -8192,7 +8803,20 @@ template <std::size_t RegisterCount>
         (!merged.candidate_payload_lost &&
          !inventory_candidate_carrier_subsumes(
              merged.unresolved_candidate_carrier,
-             observed.unresolved_candidate_carrier)))
+            observed.unresolved_candidate_carrier)))
+        return false;
+    // An empty current-base set is the conservative unknown-base MAY value;
+    // a finite merged set cannot subsume it.  Conversely, an unknown merged
+    // base subsumes every finite observed alternative, while two finite sets
+    // use ordinary subset inclusion.
+    if (observed.tracks_current_epoch &&
+        !merged.current_epoch_base_offsets.empty() &&
+        (observed.current_epoch_base_offsets.empty() ||
+         !std::includes(
+             merged.current_epoch_base_offsets.begin(),
+             merged.current_epoch_base_offsets.end(),
+             observed.current_epoch_base_offsets.begin(),
+             observed.current_epoch_base_offsets.end())))
         return false;
     if (merged.candidate_payload_lost) {
         const auto evidence_contains = [](const auto& superset,
@@ -8221,6 +8845,8 @@ template <std::size_t RegisterCount>
                 }
                 for (const auto& child : node.unresolved_nested_epochs)
                     if (!self(self, child)) return false;
+                for (const auto& channel : node.origin_channels)
+                    if (!self(self, channel)) return false;
                 return true;
             };
         const auto nested_alias_required =
@@ -8271,12 +8897,14 @@ template <std::size_t RegisterCount>
                 // either shortcut cover a tracking requirement.
                 const bool child_has_candidate_payload =
                     inventory_saved_stack_epoch_has_candidate_payload_or_top(
-                        child) ||
+                        child);
+                const bool child_has_pending_payload =
                     inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
                         child);
                 const bool child_tracks_current =
                     inventory_saved_stack_epoch_tracks_current(child);
                 if (!child_has_candidate_payload &&
+                    !child_has_pending_payload &&
                     merged.nested_saved_stack_alias_latent &&
                     (!child_tracks_current ||
                      merged.nested_saved_stack_alias_tracks_current_epoch))
@@ -8352,6 +8980,8 @@ template <std::size_t RegisterCount>
          !merged.inventory_detached_stack_epoch_alias_watcher) ||
         (observed.inventory_unresolved_stack_callback_loss &&
          !merged.inventory_unresolved_stack_callback_loss) ||
+        (observed.inventory_detached_stack_callback_loss &&
+         !merged.inventory_detached_stack_callback_loss) ||
         (observed.inventory_unresolved_memory_callback_loss &&
          !merged.inventory_unresolved_memory_callback_loss) ||
         ((observed.inventory_callback_loss_identity_truncated_sources &
@@ -8558,6 +9188,7 @@ template <std::size_t RegisterCount>
     InventorySavedStackEpoch captured;
     captured.present = true;
     captured.tracks_current_epoch = true;
+    captured.current_epoch_base_offsets = coordinates;
     static_cast<void>(merge_inventory_candidate_carrier(
         captured.unresolved_candidate_carrier,
         state.inventory_unresolved_stack_carrier));
@@ -8623,6 +9254,15 @@ template <std::size_t RegisterCount>
                     value.inventory_saved_stack_epoch);
             InventorySavedStackEpoch one;
             one.present = true;
+            // `one` is a structural accumulator for a slot in this captured
+            // root, not an alternative saved-SP origin.  Keep it in the same
+            // current channel; otherwise every appended slot partitions the
+            // growing tree into current/detached origins and turns capture
+            // into recursive quadratic copying.  Reuse the exact root bases
+            // so the current-base lattice is unchanged by the accumulation.
+            one.tracks_current_epoch = true;
+            one.current_epoch_base_offsets =
+                captured.current_epoch_base_offsets;
             one.slots.push_back(std::move(slot));
             static_cast<void>(merge_inventory_saved_stack_epoch(
                 captured, one, false));
@@ -8649,6 +9289,14 @@ template <std::size_t RegisterCount>
                 tail.inventory_stack_callback_loss_unresolved);
         }
     }
+    // A joined register may carry an exact coordinate for its current-origin
+    // alternative and a SavedEpoch for a detached alternative at the same
+    // time.  Capturing the current frame must add that lane, never replace
+    // the already detached namespace.
+    if (has_inventory_saved_stack_epoch_payload(
+            stored.inventory_saved_stack_epoch))
+        static_cast<void>(merge_inventory_saved_stack_epoch(
+            captured, stored.inventory_saved_stack_epoch, true));
     stored.inventory_saved_stack_epoch = std::move(captured);
     return stored;
 }
@@ -8686,10 +9334,20 @@ void merge_saved_stack_epoch_memory_forward(
         const auto forwarded = state.memory_values.find(address);
         if (forwarded == state.memory_values.end()) continue;
         if (has_saved_stack_epoch(forwarded->second)) {
-            static_cast<void>(merge_inventory_saved_stack_epoch(
-                destination.inventory_saved_stack_epoch,
-                forwarded->second.inventory_saved_stack_epoch,
-                true));
+            auto& destination_epoch =
+                destination.inventory_saved_stack_epoch;
+            const auto& forwarded_epoch =
+                forwarded->second.inventory_saved_stack_epoch;
+            // A hit at this exact forwarded address is a definite load, not
+            // an alternative in which the SavedEpoch may be absent.  The
+            // latter would turn an empty destination plus one exact epoch
+            // into unresolved Top.  Preserve an independently loaded epoch
+            // as the only real alternative when one already exists.
+            if (!has_inventory_saved_stack_epoch_payload(destination_epoch))
+                destination_epoch = forwarded_epoch;
+            else
+                static_cast<void>(merge_inventory_saved_stack_epoch(
+                    destination_epoch, forwarded_epoch, true));
         }
         destination.inventory_stack_callback_loss_unresolved =
             destination.inventory_stack_callback_loss_unresolved ||
@@ -8748,18 +9406,17 @@ void invalidate_memory_write_ranges_conservatively(
 }
 
 void mark_current_epoch_saved_snapshots_unresolved(
-    AbstractState& state, const AbstractValue* mutation);
+    AbstractState& state,
+    const AbstractValue* mutation,
+    std::span<const std::pair<std::int32_t, std::size_t>>
+        current_write_alternatives = {});
 
 void invalidate_stack_values_conservatively(AbstractState& state) {
-    // These fallbacks model an unknown/GBR-addressed write which invalidates
-    // the active stack namespace.  A current SavedEpoch is a caller-owned
-    // receiver, so record an epoch-scoped terminal mutation before the
-    // ordinary cells are forgotten; merely clearing stack_values would lose
-    // the returned Summary effect.
-    AbstractValue unknown_stack_mutation;
-    unknown_stack_mutation.inventory_stack_callback_loss_unresolved = true;
-    mark_current_epoch_saved_snapshots_unresolved(
-        state, &unknown_stack_mutation);
+    // The instruction has no representable 32-bit callback payload.  It may
+    // invalidate a current SavedEpoch's coordinates, but an empty watched
+    // epoch remains harmless: only a later restore of an epoch which already
+    // contains real payload can turn that coordinate loss into Stack Top.
+    mark_current_epoch_saved_snapshots_unresolved(state, nullptr);
     for (auto value = state.stack_values.begin();
          value != state.stack_values.end();) {
         if (!has_inventory_candidate_values(value->second) &&
@@ -8816,6 +9473,72 @@ class CurrentStackEpochMutationScope final {
     CurrentStackEpochMutation* previous_ = nullptr;
 };
 
+[[nodiscard]] bool has_representable_stack_write_payload(
+    const AbstractValue& value) {
+    return (value.known && !value.values.empty()) ||
+           has_inventory_candidate_values(value) ||
+           inventory_candidate_values_truncated(value) ||
+           value.contextual_candidate_dependency ||
+           carries_stack_callback_payload(value) ||
+           has_saved_stack_epoch(value);
+}
+
+void erase_saved_stack_slots_overwritten_on_every_alternative(
+    InventorySavedStackEpoch& epoch,
+    const std::span<const std::pair<std::int32_t, std::size_t>>
+        alternatives) {
+    if (alternatives.empty()) return;
+    std::erase_if(epoch.slots, [&](const auto& slot) {
+        const auto slot_begin =
+            static_cast<std::int64_t>(slot.relative_slot);
+        const auto slot_end = slot_begin + 4;
+        return std::all_of(
+            alternatives.begin(), alternatives.end(),
+            [&](const auto& alternative) {
+                const auto begin =
+                    static_cast<std::int64_t>(alternative.first);
+                const auto end = begin +
+                    static_cast<std::int64_t>(alternative.second);
+                return slot_begin < end && begin < slot_end;
+            });
+    });
+}
+
+void merge_saved_stack_write_payload_at_alternatives(
+    InventorySavedStackEpoch& epoch,
+    const std::span<const std::pair<std::int32_t, std::size_t>>
+        alternatives,
+    const AbstractValue& mutation) {
+    if (!has_representable_stack_write_payload(mutation)) return;
+    for (const auto& [relative_offset, width] : alternatives) {
+        if (width != 4u) continue;
+        InventorySavedStackSlot incoming;
+        incoming.relative_slot = relative_offset;
+        absorb_inventory_candidate_payload(incoming.carrier, mutation);
+        static_cast<void>(
+            absorb_pending_abi_scalar(incoming.carrier, mutation));
+        if (has_saved_stack_epoch(mutation))
+            incoming.nested_epochs.push_back(
+                mutation.inventory_saved_stack_epoch);
+        const auto position = std::lower_bound(
+            epoch.slots.begin(), epoch.slots.end(), relative_offset,
+            [](const auto& slot, const auto offset) {
+                return slot.relative_slot < offset;
+            });
+        if (position == epoch.slots.end() ||
+            position->relative_slot != relative_offset) {
+            epoch.slots.insert(position, std::move(incoming));
+            continue;
+        }
+        static_cast<void>(merge_inventory_candidate_carrier(
+            position->carrier, incoming.carrier));
+        for (const auto& nested : incoming.nested_epochs)
+            merge_slot_nested_saved_stack_epoch(*position, nested);
+    }
+    if (mutation.inventory_stack_callback_loss_unresolved)
+        mark_inventory_saved_stack_epoch_unresolved(epoch, true);
+}
+
 void record_current_stack_epoch_mutation(
     const AbstractValue& mutation) {
     if (active_current_stack_epoch_mutation == nullptr) return;
@@ -8841,6 +9564,12 @@ void record_current_stack_epoch_mutation(
 void propagate_current_epoch_mutation(
     InventorySavedStackEpoch& epoch,
     const AbstractValue& mutation) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            propagate_current_epoch_mutation(channel, mutation);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
     for (auto& slot : epoch.slots)
         for (auto& nested : slot.nested_epochs)
             propagate_current_epoch_mutation(nested, mutation);
@@ -8862,12 +9591,73 @@ void propagate_current_epoch_mutation(
             epoch, mutation.inventory_stack_callback_loss_unresolved);
     }
     if (epoch.nested_saved_stack_alias_tracks_current_epoch &&
-        ((mutation.known && !mutation.values.empty()) ||
-         has_direct_inventory_candidate_payload(mutation) ||
-         carries_stack_callback_payload(mutation))) {
+        carries_proven_stack_callback_mutation_payload(mutation)) {
         mark_inventory_saved_stack_epoch_unresolved(epoch, true);
     }
     normalize_inventory_saved_stack_epoch(epoch);
+}
+
+void propagate_current_epoch_pending_carrier(
+    InventorySavedStackEpoch& epoch,
+    const InventoryCandidateCarrier& pending) {
+    if (!has_pending_abi_scalar_payload(pending)) return;
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            propagate_current_epoch_pending_carrier(channel, pending);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+    for (auto& slot : epoch.slots)
+        for (auto& nested : slot.nested_epochs)
+            propagate_current_epoch_pending_carrier(nested, pending);
+    for (auto& nested : epoch.unresolved_nested_epochs)
+        propagate_current_epoch_pending_carrier(nested, pending);
+    if (epoch.tracks_current_epoch) {
+        static_cast<void>(merge_inventory_candidate_carrier(
+            epoch.unresolved_candidate_carrier, pending));
+        epoch.present = true;
+        epoch.unresolved = true;
+    }
+    // A collapsed latent watcher has no exact carrier coordinate.  Pending
+    // MAY data alone is not sufficient to promote that watcher to callback
+    // Top, so it deliberately remains harmless here.
+    normalize_inventory_saved_stack_epoch(epoch);
+}
+
+void propagate_current_epoch_pending_carrier(
+    AbstractState& state,
+    const InventoryCandidateCarrier& carrier) {
+    if (!has_pending_abi_scalar_payload(carrier)) return;
+    InventoryCandidateCarrier pending;
+    pending.pending_abi_scalar_values = carrier.pending_abi_scalar_values;
+    pending.pending_abi_scalar_values_truncated =
+        carrier.pending_abi_scalar_values_truncated;
+    pending.call_sites = carrier.call_sites;
+    pending.callees = carrier.callees;
+    normalize_inventory_candidate_carrier(pending);
+    if (active_current_stack_epoch_mutation != nullptr)
+        static_cast<void>(merge_inventory_candidate_carrier(
+            active_current_stack_epoch_mutation->carrier, pending));
+    propagate_current_epoch_pending_carrier(
+        state.inventory_unresolved_stack_epoch, pending);
+    propagate_current_epoch_pending_carrier(
+        state.inventory_unresolved_memory_epoch, pending);
+    const auto apply = [&](AbstractValue& value) {
+        if (inventory_saved_stack_epoch_tracks_current(
+                value.inventory_saved_stack_epoch))
+            propagate_current_epoch_pending_carrier(
+                value.inventory_saved_stack_epoch, pending);
+    };
+    for (auto& value : state.registers) apply(value);
+    for (auto& [slot, value] : state.stack_values) {
+        static_cast<void>(slot);
+        apply(value);
+    }
+    if (state.stack_tail.present) apply(state.stack_tail.payload);
+    for (auto& [address, value] : state.memory_values) {
+        static_cast<void>(address);
+        apply(value);
+    }
 }
 
 void detach_current_epoch_aliases(
@@ -8875,6 +9665,16 @@ void detach_current_epoch_aliases(
     const InventoryCandidateCarrier& outgoing_carrier,
     const InventorySavedStackEpoch& outgoing_epoch,
     const bool outgoing_callback_loss) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            detach_current_epoch_aliases(
+                channel,
+                outgoing_carrier,
+                outgoing_epoch,
+                outgoing_callback_loss);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
     for (auto& slot : epoch.slots)
         for (auto& nested : slot.nested_epochs)
             detach_current_epoch_aliases(
@@ -8890,11 +9690,8 @@ void detach_current_epoch_aliases(
             outgoing_callback_loss);
 
     const bool outgoing_has_candidate_payload =
-        has_inventory_candidate_carrier_payload(outgoing_carrier) ||
-        has_pending_abi_scalar_payload(outgoing_carrier) ||
-        inventory_saved_stack_epoch_has_candidate_payload_or_top(
-            outgoing_epoch) ||
-        inventory_saved_stack_epoch_has_pending_abi_scalar_payload(
+        has_callback_candidate_carrier_payload(outgoing_carrier) ||
+        inventory_saved_stack_epoch_current_root_has_candidate_payload_or_top(
             outgoing_epoch) ||
         outgoing_callback_loss;
     if (epoch.tracks_current_epoch) {
@@ -8904,6 +9701,7 @@ void detach_current_epoch_aliases(
         if (outgoing_callback_loss)
             mark_inventory_saved_stack_epoch_unresolved(epoch, true);
         epoch.tracks_current_epoch = false;
+        epoch.current_epoch_base_offsets.clear();
     }
     if (epoch.nested_saved_stack_alias_tracks_current_epoch) {
         if (outgoing_has_candidate_payload) {
@@ -8915,7 +9713,14 @@ void detach_current_epoch_aliases(
 }
 
 void clear_current_epoch_tracking(InventorySavedStackEpoch& epoch) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            clear_current_epoch_tracking(channel);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
     epoch.tracks_current_epoch = false;
+    epoch.current_epoch_base_offsets.clear();
     epoch.nested_saved_stack_alias_tracks_current_epoch = false;
     for (auto& slot : epoch.slots)
         for (auto& nested : slot.nested_epochs)
@@ -8925,7 +9730,84 @@ void clear_current_epoch_tracking(InventorySavedStackEpoch& epoch) {
     normalize_inventory_saved_stack_epoch(epoch);
 }
 
+void apply_current_stack_epoch_write(
+    InventorySavedStackEpoch& epoch,
+    const std::span<const std::pair<std::int32_t, std::size_t>>
+        absolute_alternatives,
+    const AbstractValue* const mutation) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            apply_current_stack_epoch_write(
+                channel, absolute_alternatives, mutation);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+    for (auto& slot : epoch.slots)
+        for (auto& nested : slot.nested_epochs)
+            apply_current_stack_epoch_write(
+                nested, absolute_alternatives, mutation);
+    for (auto& nested : epoch.unresolved_nested_epochs)
+        apply_current_stack_epoch_write(
+            nested, absolute_alternatives, mutation);
+    if (!epoch.tracks_current_epoch) {
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+
+    std::vector<std::pair<std::int32_t, std::size_t>>
+        relative_alternatives;
+    // Saved slots are relative to the pointer that captured them, not to the
+    // architectural r15 unconditionally.  A single retained base is the only
+    // correlation strong enough for an exact kill; multi-base/unknown roots
+    // stay MAY and cannot have a finite marker erased safely.
+    if (epoch.current_epoch_base_offsets.size() == 1u) {
+        const auto base = epoch.current_epoch_base_offsets.front();
+        relative_alternatives.reserve(absolute_alternatives.size());
+        for (const auto& [absolute_offset, width] : absolute_alternatives) {
+            const auto relative = static_cast<std::int64_t>(absolute_offset) -
+                static_cast<std::int64_t>(base);
+            if (relative < -maximum_stack_distance ||
+                relative > maximum_stack_distance) {
+                relative_alternatives.clear();
+                break;
+            }
+            relative_alternatives.emplace_back(
+                static_cast<std::int32_t>(relative), width);
+        }
+    }
+    if (!relative_alternatives.empty()) {
+        erase_saved_stack_slots_overwritten_on_every_alternative(
+            epoch, relative_alternatives);
+        if (mutation != nullptr)
+            merge_saved_stack_write_payload_at_alternatives(
+                epoch, relative_alternatives, *mutation);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+
+    if (mutation != nullptr &&
+        has_representable_stack_write_payload(*mutation)) {
+        absorb_inventory_candidate_payload(
+            epoch.unresolved_candidate_carrier, *mutation);
+        static_cast<void>(absorb_pending_abi_scalar(
+            epoch.unresolved_candidate_carrier, *mutation));
+        if (has_saved_stack_epoch(*mutation))
+            merge_unresolved_nested_saved_stack_epoch(
+                epoch, mutation->inventory_saved_stack_epoch);
+        mark_inventory_saved_stack_epoch_unresolved(
+            epoch,
+            mutation->inventory_stack_callback_loss_unresolved);
+    }
+    normalize_inventory_saved_stack_epoch(epoch);
+}
+
 void mark_current_epoch_nodes_unresolved(InventorySavedStackEpoch& epoch) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            mark_current_epoch_nodes_unresolved(channel);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
     for (auto& slot : epoch.slots)
         for (auto& nested : slot.nested_epochs)
             mark_current_epoch_nodes_unresolved(nested);
@@ -8938,7 +9820,9 @@ void mark_current_epoch_nodes_unresolved(InventorySavedStackEpoch& epoch) {
 
 void mark_current_epoch_saved_snapshots_unresolved(
     AbstractState& state,
-    const AbstractValue* const mutation = nullptr) {
+    const AbstractValue* const mutation,
+    const std::span<const std::pair<std::int32_t, std::size_t>>
+        current_write_alternatives) {
     const auto has_current_alias = [&] {
         if (state
                 .inventory_unresolved_saved_stack_alias_tracks_current_sources != 0u ||
@@ -8965,9 +9849,15 @@ void mark_current_epoch_saved_snapshots_unresolved(
                                return tracks_current(stored.second);
                            });
     };
+    const bool watched_callback_mutation =
+        mutation != nullptr &&
+        state.inventory_current_stack_epoch_alias_watcher &&
+        carries_proven_stack_callback_mutation_payload(*mutation);
+    if (watched_callback_mutation)
+        state.inventory_unresolved_stack_callback_loss = true;
     if (mutation != nullptr && has_current_alias())
         record_current_stack_epoch_mutation(*mutation);
-    if (mutation != nullptr) {
+    if (mutation != nullptr && current_write_alternatives.empty()) {
         // Top-level unresolved domains are real MAY aliases, not merely
         // result containers.  Keep their epoch scope while applying the
         // evaluation-local mutation; never flatten their nested Top into the
@@ -8976,46 +9866,27 @@ void mark_current_epoch_saved_snapshots_unresolved(
             state.inventory_unresolved_stack_epoch, *mutation);
         propagate_current_epoch_mutation(
             state.inventory_unresolved_memory_epoch, *mutation);
+    } else if (!current_write_alternatives.empty()) {
+        apply_current_stack_epoch_write(
+            state.inventory_unresolved_stack_epoch,
+            current_write_alternatives,
+            mutation);
+        apply_current_stack_epoch_write(
+            state.inventory_unresolved_memory_epoch,
+            current_write_alternatives,
+            mutation);
     }
-    if (mutation != nullptr) {
-        // Lost current aliases are domain-scoped MAY storage.  Keep a direct
-        // mutation in that domain's SavedEpoch and keep an epoch mutation in
-        // its nested channel.  In particular, neither a memory alias nor the
-        // ephemeral projection watcher may manufacture current-stack state.
-        const auto absorb_lost_alias_mutation =
-            [&](InventorySavedStackEpoch& epoch) {
-                epoch.present = true;
-                epoch.unresolved = true;
-                epoch.tracks_current_epoch = true;
-                absorb_inventory_candidate_payload(
-                    epoch.unresolved_candidate_carrier, *mutation);
-                static_cast<void>(absorb_pending_abi_scalar(
-                    epoch.unresolved_candidate_carrier, *mutation));
-                if (has_saved_stack_epoch(*mutation))
-                    merge_unresolved_nested_saved_stack_epoch(
-                        epoch, mutation->inventory_saved_stack_epoch);
-                if (mutation->inventory_stack_callback_loss_unresolved)
-                    mark_inventory_saved_stack_epoch_unresolved(epoch, true);
-                normalize_inventory_saved_stack_epoch(epoch);
-            };
-        const auto tracked_sources =
-            state.inventory_unresolved_saved_stack_alias_tracks_current_sources;
-        if ((tracked_sources & unresolved_saved_stack_alias_source_stack) !=
-            0u)
-            absorb_lost_alias_mutation(
-                state.inventory_unresolved_stack_epoch);
-        if ((tracked_sources & unresolved_saved_stack_alias_source_memory) !=
-            0u)
-            absorb_lost_alias_mutation(
-                state.inventory_unresolved_memory_epoch);
-        // A projection watcher has no owned storage domain. Its only effect
-        // is the evaluation-local mutation record above, which is replayed
-        // by the caller on still-exact aliases.
-    }
+    // Lost alias sources already own a lane-specific unresolved domain epoch;
+    // the two propagation calls above update only its current lane.  Do not
+    // synthesize another root here, which would collapse a detached lane into
+    // the current namespace after a join.
     const auto mark = [&](AbstractValue& value) {
         auto& epoch = value.inventory_saved_stack_epoch;
         if (!inventory_saved_stack_epoch_tracks_current(epoch)) return;
-        if (mutation != nullptr)
+        if (!current_write_alternatives.empty())
+            apply_current_stack_epoch_write(
+                epoch, current_write_alternatives, mutation);
+        else if (mutation != nullptr)
             propagate_current_epoch_mutation(epoch, *mutation);
         else
             mark_current_epoch_nodes_unresolved(epoch);
@@ -9138,9 +10009,7 @@ void note_unresolved_stack_candidate_store(
     const AbstractValue& stored_value) {
     if (width != 4u ||
         !inventory_stack_coordinates(state, base_register).empty() ||
-        (!state[base_register].inventory_stack_derived &&
-         !carries_unresolved_stack_callback(
-             state[base_register])) ||
+        !has_current_inventory_stack_lineage(state, base_register) ||
         (!has_direct_inventory_candidate_payload(stored_value) &&
          !carries_stack_callback_payload(stored_value)))
         return;
@@ -9190,25 +10059,180 @@ void invalidate_stack_range(AbstractState& state,
         normalize_stack_tail_payload(state.stack_tail.payload);
 }
 
+struct StackWriteDomain final {
+    bool touches_current = false;
+    bool has_current_lineage = false;
+    std::uint16_t detached_register_mask = 0u;
+
+    [[nodiscard]] bool touches_detached() const noexcept {
+        return detached_register_mask != 0u;
+    }
+};
+
+[[nodiscard]] std::optional<std::int32_t>
+r0_indexed_detached_relative_offset(
+    const AbstractState& state,
+    const StackWriteDomain& domain,
+    const std::uint8_t other_register) {
+    if (domain.detached_register_mask == 0u ||
+        std::popcount(domain.detached_register_mask) != 1)
+        return std::nullopt;
+    const auto detached_register = static_cast<std::uint8_t>(
+        std::countr_zero(domain.detached_register_mask));
+    const auto displacement_register =
+        detached_register == 0u ? other_register : 0u;
+    if (detached_register == displacement_register ||
+        state.stack_may_alias[displacement_register] ||
+        state.inventory_stack_may_alias[displacement_register] ||
+        has_inventory_saved_stack_epoch_payload(
+            state[displacement_register].inventory_saved_stack_epoch))
+        return std::nullopt;
+    return bounded_stack_displacement(
+        state[displacement_register], true);
+}
+
+[[nodiscard]] StackWriteDomain classify_stack_write_domain(
+    const AbstractState& state,
+    const std::span<const std::uint8_t> address_registers,
+    const bool has_current_coordinate,
+    const bool may_alias_stack) {
+    StackWriteDomain domain;
+    domain.touches_current = has_current_coordinate;
+    for (const auto register_index : address_registers) {
+        const bool current_lineage =
+            has_current_inventory_stack_lineage(state, register_index);
+        const auto& epoch =
+            state[register_index].inventory_saved_stack_epoch;
+        const bool detached_lineage =
+            inventory_saved_stack_epoch_has_detached_root(epoch);
+        domain.has_current_lineage =
+            domain.has_current_lineage || current_lineage;
+        domain.touches_current =
+            domain.touches_current || current_lineage;
+        if (detached_lineage)
+            domain.detached_register_mask =
+                static_cast<std::uint16_t>(
+                    domain.detached_register_mask |
+                    register_bit(register_index));
+    }
+    // A generic address-MAY fact is not permission to re-scope a concrete
+    // detached SavedEpoch into the active r15 namespace.  It denotes the
+    // current stack only when no epoch-bound detached alias explains it.
+    if (may_alias_stack && !domain.touches_detached())
+        domain.touches_current = true;
+    return domain;
+}
+
+void record_detached_stack_epoch_write(
+    InventorySavedStackEpoch& epoch,
+    const std::optional<std::int32_t> relative_offset,
+    const std::size_t width,
+    const AbstractValue* const value) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels) {
+            if (!channel.tracks_current_epoch)
+                record_detached_stack_epoch_write(
+                    channel, relative_offset, width, value);
+        }
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+    if (!has_inventory_saved_stack_epoch_payload(epoch) ||
+        epoch.tracks_current_epoch)
+        return;
+
+    const bool has_payload =
+        width == 4u && value != nullptr &&
+        has_representable_stack_write_payload(*value);
+    if (!relative_offset.has_value() || epoch.unresolved) {
+        // Coordinate loss is harmless for an empty epoch.  Existing or new
+        // finite payload stays bounded in the epoch-wide MAY carrier, and a
+        // later restore performs the sole Stack-Base-Loss promotion.
+        if (!has_payload) return;
+        if (has_payload) {
+            absorb_inventory_candidate_payload(
+                epoch.unresolved_candidate_carrier, *value);
+            static_cast<void>(absorb_pending_abi_scalar(
+                epoch.unresolved_candidate_carrier, *value));
+            if (has_saved_stack_epoch(*value))
+                merge_unresolved_nested_saved_stack_epoch(
+                    epoch, value->inventory_saved_stack_epoch);
+        }
+        mark_inventory_saved_stack_epoch_unresolved(
+            epoch,
+            has_payload &&
+                value->inventory_stack_callback_loss_unresolved);
+        epoch.tracks_current_epoch = false;
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+
+    const auto begin = static_cast<std::int64_t>(*relative_offset);
+    const auto end = begin + static_cast<std::int64_t>(width);
+    std::erase_if(epoch.slots, [&](const auto& slot) {
+        const auto slot_begin =
+            static_cast<std::int64_t>(slot.relative_slot);
+        const auto slot_end = slot_begin + 4;
+        return slot_begin < end && begin < slot_end;
+    });
+    if (has_payload) {
+        InventorySavedStackSlot stored;
+        stored.relative_slot = *relative_offset;
+        absorb_inventory_candidate_payload(stored.carrier, *value);
+        static_cast<void>(
+            absorb_pending_abi_scalar(stored.carrier, *value));
+        if (has_saved_stack_epoch(*value))
+            stored.nested_epochs.push_back(
+                value->inventory_saved_stack_epoch);
+        if (value->inventory_stack_callback_loss_unresolved) {
+            epoch.slots.push_back(std::move(stored));
+            mark_inventory_saved_stack_epoch_unresolved(epoch, true);
+        } else if (has_inventory_saved_stack_slot_payload_or_nested(stored)) {
+            epoch.slots.push_back(std::move(stored));
+        }
+    }
+    epoch.tracks_current_epoch = false;
+    normalize_inventory_saved_stack_epoch(epoch);
+}
+
+void record_stack_epoch_write(
+    AbstractState& state,
+    const StackWriteDomain& domain,
+    const std::span<const std::pair<std::int32_t, std::size_t>>
+        current_write_alternatives,
+    const std::optional<std::int32_t> detached_relative_offset,
+    const std::size_t width,
+    const AbstractValue* const value) {
+    const auto* const representable_callback_value =
+        width == 4u ? value : nullptr;
+    if (domain.touches_current)
+        mark_current_epoch_saved_snapshots_unresolved(
+            state, representable_callback_value, current_write_alternatives);
+    if (!domain.touches_detached()) return;
+    if (representable_callback_value != nullptr &&
+        carries_proven_stack_callback_mutation_payload(
+            *representable_callback_value))
+        state.inventory_detached_stack_callback_loss = true;
+    for (std::uint8_t index = 0u; index < state.size(); ++index) {
+        if ((domain.detached_register_mask & register_bit(index)) == 0u)
+            continue;
+        record_detached_stack_epoch_write(
+            state[index].inventory_saved_stack_epoch,
+            detached_relative_offset,
+            width,
+            value);
+    }
+    // This records only that another epoch-bound alias can still exist.  It
+    // is not a callback-loss bit and never injects payload into the current
+    // stack namespace.
+    state.inventory_detached_stack_epoch_alias_watcher = true;
+}
+
 void invalidate_stack_write_alternatives(
     AbstractState& state,
     const std::span<const std::pair<std::int32_t, std::size_t>>
         alternatives,
-    const bool may_alias_stack,
-    const bool records_unknown_current_epoch_mutation = false) {
-    // FPU stores have no modeled AbstractValue payload, but a write which can
-    // hit the active stack is still an unknown mutation of every
-    // current-tracking SavedEpoch.  Ordinary Inventory stores supply their
-    // own precise payload through store_stack_value()/store_inventory... and
-    // therefore leave this false.
-    if (records_unknown_current_epoch_mutation &&
-        (may_alias_stack || !alternatives.empty())) {
-        AbstractValue unknown_stack_mutation;
-        unknown_stack_mutation.inventory_stack_callback_loss_unresolved =
-            true;
-        mark_current_epoch_saved_snapshots_unresolved(
-            state, &unknown_stack_mutation);
-    }
+    const bool may_alias_stack) {
     if (alternatives.empty()) {
         if (!may_alias_stack) return;
         for (auto& [slot, stored] : state.stack_values) {
@@ -9260,25 +10284,47 @@ void invalidate_stack_write_alternatives(
 
 void store_stack_value(AbstractState& state,
                        const std::optional<std::int32_t> offset,
-                       const bool may_alias_stack,
+                       const std::span<const std::int32_t> inventory_offsets,
+                       const StackWriteDomain& domain,
+                       const std::optional<std::int32_t>
+                           detached_relative_offset,
                        const bool preserve_guarded_inventory,
                        const std::size_t width,
                        const AbstractValue& value) {
-    const bool relevant_snapshot_mutation =
-        width == 4u &&
-        ((value.known && !value.values.empty()) ||
-         has_inventory_candidate_values(value) ||
-         inventory_candidate_values_truncated(value) ||
-         value.contextual_candidate_dependency ||
-         carries_stack_callback_payload(value));
-    if (relevant_snapshot_mutation &&
-        (offset.has_value() || may_alias_stack))
-        mark_current_epoch_saved_snapshots_unresolved(state, &value);
-    if (width == 4u && !offset.has_value() && may_alias_stack) {
+    std::vector<std::pair<std::int32_t, std::size_t>>
+        current_write_alternatives;
+    if (offset.has_value()) {
+        current_write_alternatives.emplace_back(*offset, width);
+    } else {
+        current_write_alternatives.reserve(inventory_offsets.size());
+        for (const auto inventory_offset : inventory_offsets)
+            current_write_alternatives.emplace_back(
+                inventory_offset, width);
+    }
+    record_stack_epoch_write(
+        state,
+        domain,
+        current_write_alternatives,
+        detached_relative_offset,
+        width,
+        &value);
+    // Semantic MAY-alias invalidates the current stack conservatively, but it
+    // is not positive Inventory provenance.  Only a pointer with retained
+    // current-stack lineage may place this concrete callback into the
+    // unresolved current-epoch carrier.  This prevents arbitrary object
+    // pointers (and detached old-stack aliases) from being re-scoped into a
+    // freshly restored stack namespace.
+    if (width == 4u && !offset.has_value() &&
+        domain.has_current_lineage) {
         absorb_unresolved_stack_storage(state, value);
     }
+    if (!domain.touches_current) return;
     invalidate_stack_range(
-        state, offset, may_alias_stack, preserve_guarded_inventory, width);
+        state,
+        offset,
+        domain.touches_current,
+        preserve_guarded_inventory,
+        width);
     if (offset.has_value() && width == 4u &&
         stack_tail_value_at(state, *offset) != nullptr) {
         fold_stack_value_into_tail(state, *offset, value);
@@ -9305,8 +10351,7 @@ void store_stack_value(AbstractState& state,
             add_unresolved_saved_stack_alias(
                 state,
                 unresolved_saved_stack_alias_source_stack,
-                inventory_saved_stack_epoch_tracks_current(
-                    value.inventory_saved_stack_epoch));
+                value.inventory_saved_stack_epoch);
             return;
         }
         state.stack_values[*offset] = value;
@@ -9319,16 +10364,12 @@ void store_inventory_stack_value(
     AbstractState& state,
     const std::optional<std::int32_t> semantic_offset,
     const std::span<const std::int32_t> inventory_offsets,
+    const bool touches_current,
     const std::size_t width,
     const AbstractValue& value) {
-    if (semantic_offset.has_value() || inventory_offsets.empty())
+    if (!touches_current || semantic_offset.has_value() ||
+        inventory_offsets.empty())
         return;
-    if (width == 4u &&
-        (has_inventory_candidate_values(value) ||
-         inventory_candidate_values_truncated(value) ||
-         value.contextual_candidate_dependency ||
-         carries_stack_callback_payload(value)))
-        mark_current_epoch_saved_snapshots_unresolved(state, &value);
     std::vector<std::pair<std::int32_t, std::size_t>>
         write_alternatives;
     write_alternatives.reserve(inventory_offsets.size());
@@ -9425,29 +10466,47 @@ void load_stack_value(AbstractValue& destination,
     materialize_stack_carrier(destination);
 }
 
+void rebase_saved_stack_epoch_root(
+    InventorySavedStackEpoch& epoch,
+    const std::int32_t delta) {
+    if (!epoch.origin_channels.empty()) {
+        for (auto& channel : epoch.origin_channels)
+            rebase_saved_stack_epoch_root(channel, delta);
+        normalize_inventory_saved_stack_epoch(epoch);
+        return;
+    }
+    if (!epoch.present) return;
+    if (epoch.tracks_current_epoch) {
+        for (auto& base : epoch.current_epoch_base_offsets) {
+            const auto adjusted =
+                static_cast<std::int64_t>(base) + delta;
+            if (adjusted < -maximum_stack_distance ||
+                adjusted > maximum_stack_distance) {
+                epoch.current_epoch_base_offsets.clear();
+                break;
+            }
+            base = static_cast<std::int32_t>(adjusted);
+        }
+    }
+    for (auto& slot : epoch.slots) {
+        const auto relative =
+            static_cast<std::int64_t>(slot.relative_slot) - delta;
+        if (relative < -maximum_stack_distance ||
+            relative > maximum_stack_distance) {
+            mark_inventory_saved_stack_epoch_unresolved(epoch);
+            return;
+        }
+        slot.relative_slot = static_cast<std::int32_t>(relative);
+    }
+    normalize_inventory_saved_stack_epoch(epoch);
+}
+
 void adjust_stack_offset(AbstractState& state,
                          const std::uint8_t register_index,
                          const std::int32_t delta) {
     auto& saved_epoch =
         state[register_index].inventory_saved_stack_epoch;
-    if (saved_epoch.present) {
-        bool rebased = true;
-        for (auto& slot : saved_epoch.slots) {
-            const auto relative =
-                static_cast<std::int64_t>(slot.relative_slot) - delta;
-            if (relative < -maximum_stack_distance ||
-                relative > maximum_stack_distance) {
-                rebased = false;
-                break;
-            }
-            slot.relative_slot =
-                static_cast<std::int32_t>(relative);
-        }
-        if (!rebased) {
-            mark_inventory_saved_stack_epoch_unresolved(
-                saved_epoch);
-        }
-    }
+    rebase_saved_stack_epoch_root(saved_epoch, delta);
     state[register_index].inventory_code_pointer = false;
     state[register_index].inventory_pc_relative_code_literal = false;
     state[register_index].inventory_code_pointer_values.clear();
@@ -9506,20 +10565,7 @@ void branch_inventory_stack_position(
                 mark_inventory_saved_stack_epoch_unresolved(
                     branch);
             }
-            for (auto& slot : branch.slots) {
-                const auto relative =
-                    static_cast<std::int64_t>(
-                        slot.relative_slot) -
-                    delta;
-                if (relative < -maximum_stack_distance ||
-                    relative > maximum_stack_distance) {
-                    mark_inventory_saved_stack_epoch_unresolved(
-                        branch);
-                    break;
-                }
-                slot.relative_slot =
-                    static_cast<std::int32_t>(relative);
-            }
+            rebase_saved_stack_epoch_root(branch, delta);
             static_cast<void>(
                 merge_inventory_saved_stack_epoch(
                     branched_saved_epoch,
@@ -9574,12 +10620,6 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
         stack_pointer.inventory_stack_callback_loss_unresolved;
     auto restored_epoch =
         std::move(stack_pointer.inventory_saved_stack_epoch);
-    const bool restored_saved_epoch =
-        has_inventory_saved_stack_epoch_payload(restored_epoch);
-    const bool restored_epoch_tracks_current =
-        inventory_saved_stack_epoch_tracks_current(restored_epoch);
-    const bool restored_nested_latent_alias =
-        restored_epoch.nested_saved_stack_alias_latent;
     const auto outgoing_stack_carrier =
         state.inventory_unresolved_stack_carrier;
     const auto outgoing_stack_epoch =
@@ -9592,12 +10632,8 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
     state.inventory_detached_stack_epoch_alias_watcher =
         state.inventory_detached_stack_epoch_alias_watcher ||
         state.inventory_current_stack_epoch_alias_watcher ||
-        (state
-                 .inventory_unresolved_saved_stack_alias_sources !=
-             0u &&
-         state
-             .inventory_unresolved_saved_stack_alias_tracks_current_sources !=
-                 0u) ||
+        state.inventory_unresolved_saved_stack_alias_tracks_current_sources !=
+            0u ||
         std::any_of(
             state.stack_values.begin(),
             state.stack_values.end(),
@@ -9653,37 +10689,21 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             outgoing_stack_carrier,
             outgoing_stack_epoch,
             outgoing_stack_callback_loss);
-    if (!inventory_saved_stack_epoch_tracks_current(
-            state.inventory_unresolved_memory_epoch))
+    if ((state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
+         unresolved_saved_stack_alias_source_memory) != 0u) {
+        state.inventory_unresolved_saved_stack_alias_sources =
+            static_cast<std::uint8_t>(
+                state.inventory_unresolved_saved_stack_alias_sources |
+                unresolved_saved_stack_alias_source_memory);
         state.inventory_unresolved_saved_stack_alias_tracks_current_sources =
             static_cast<std::uint8_t>(
                 state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
                 ~unresolved_saved_stack_alias_source_memory);
-    const bool surviving_saved_epoch_alias =
-        std::any_of(
-            state.registers.begin(),
-            state.registers.begin() + 15,
-            [](const auto& value) {
-                return has_saved_stack_epoch(value);
-            }) ||
-        std::any_of(
-            state.memory_values.begin(),
-            state.memory_values.end(),
-            [](const auto& stored) {
-                return has_saved_stack_epoch(stored.second);
-            }) ||
-        // Unlike the outgoing stack domain, the unresolved memory domain
-        // survives this namespace switch.  A detached epoch retained there
-        // is therefore an alias which must re-arm the incoming restore.
-        has_inventory_saved_stack_epoch_payload(
-            state.inventory_unresolved_memory_epoch) ||
-        (state.stack_tail.present &&
-         has_saved_stack_epoch(state.stack_tail.payload));
-    if (restored_saved_epoch &&
-        (state.inventory_detached_stack_epoch_alias_watcher ||
-         surviving_saved_epoch_alias || restored_epoch_tracks_current ||
-         restored_nested_latent_alias))
-        state.inventory_current_stack_epoch_alias_watcher = true;
+    }
+    // Detached aliases remain bound to their captured epoch.  Restoring one
+    // value into r15 does not prove identity with any retained register or
+    // memory copy, so none of those aliases may be re-scoped as a watcher of
+    // the new active stack namespace.
     clear_current_epoch_tracking(restored_epoch);
     // Irrespective of whether the epoch can be detached safely, an
     // architectural stack pointer is never a callback payload.
@@ -9749,17 +10769,7 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
     // Do not re-arm a retained memory-domain alias merely because a different
     // incoming r15 epoch was restored. `detach_current_epoch_aliases` above
     // has already consumed its old-stack tracking relationship.
-    state.inventory_unresolved_saved_stack_alias_tracks_current_sources =
-        static_cast<std::uint8_t>(
-            state.inventory_unresolved_saved_stack_alias_tracks_current_sources &
-            unresolved_saved_stack_alias_source_memory);
-    if (restored_saved_epoch &&
-        (state.inventory_detached_stack_epoch_alias_watcher ||
-         restored_nested_latent_alias))
-        add_unresolved_saved_stack_alias(
-            state,
-            unresolved_saved_stack_alias_source_stack,
-            restored_epoch_tracks_current);
+    state.inventory_unresolved_saved_stack_alias_tracks_current_sources = 0u;
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         const bool was_old_stack_alias =
             state[index].inventory_stack_derived ||
@@ -9788,7 +10798,10 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
     // must fail closed.  Nested child Tops remain inside their exact slots or
     // nested MAY channels below and are deliberately not globalized.
     if (restored_stack_callback_loss ||
-        restored_epoch.candidate_payload_lost)
+        restored_epoch.candidate_payload_lost ||
+        (restored_epoch.unresolved &&
+         (inventory_saved_stack_epoch_has_candidate_payload_or_top(
+              restored_epoch))))
         state.inventory_unresolved_stack_callback_loss = true;
     static_cast<void>(merge_inventory_candidate_carrier(
         state.inventory_unresolved_stack_carrier,
@@ -9816,17 +10829,20 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             slot.carrier.contextual_candidate_dependency;
         restored.call_sites = slot.carrier.call_sites;
         restored.callees = slot.carrier.callees;
-        const bool direct_callback_loss =
-            restored.inventory_stack_callback_loss_unresolved;
         const bool pending_is_incomplete =
             slot.carrier.pending_abi_scalar_values_truncated ||
             slot.carrier.pending_abi_scalar_values.size() >
                 maximum_summary_values;
         if (pending_is_incomplete) {
-            // The exact restored cell is the only sound scope for an
-            // incomplete slot-pending ordinary value.  Do not reclassify it
-            // as an epoch-root payload or promote it before a later ABI gate.
-            restored.inventory_stack_callback_loss_unresolved = true;
+            // Pending ordinary scalars are not callback provenance.  When
+            // their bounded exact set is unavailable, retain Pending Top in
+            // the stack MAY carrier without manufacturing callback loss.
+            InventoryCandidateCarrier pending_top;
+            pending_top.pending_abi_scalar_values_truncated = true;
+            pending_top.call_sites = slot.carrier.call_sites;
+            pending_top.callees = slot.carrier.callees;
+            static_cast<void>(merge_inventory_candidate_carrier(
+                state.inventory_unresolved_stack_carrier, pending_top));
         } else if (!slot.carrier.pending_abi_scalar_values.empty()) {
             // Candidate provenance is correlated with ordinary known values
             // in AbstractValue.  Include the direct candidate MAY-values in
@@ -9844,7 +10860,13 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
             normalize(restored.values);
             if (restored.values.size() > maximum_summary_values) {
                 restored.values.clear();
-                restored.inventory_stack_callback_loss_unresolved = true;
+                InventoryCandidateCarrier pending_top;
+                pending_top.pending_abi_scalar_values_truncated = true;
+                pending_top.call_sites = slot.carrier.call_sites;
+                pending_top.callees = slot.carrier.callees;
+                static_cast<void>(merge_inventory_candidate_carrier(
+                    state.inventory_unresolved_stack_carrier,
+                    pending_top));
             } else {
                 restored.known = true;
             }
@@ -9857,10 +10879,7 @@ void begin_fresh_inventory_stack_epoch(AbstractState& state) {
                     restored.inventory_saved_stack_epoch, nested, true));
         }
         synchronize_inventory_provenance(restored);
-        // A pre-existing direct slot loss has the historical active-stack
-        // meaning.  The pending restore loss above is intentionally scoped
-        // to this exact cell and must not poison the newly restored domain.
-        if (direct_callback_loss)
+        if (restored.inventory_stack_callback_loss_unresolved)
             state.inventory_unresolved_stack_callback_loss = true;
         const auto [stored, inserted] =
             state.stack_values.try_emplace(
@@ -10411,6 +11430,16 @@ void apply_transfer(AbstractState& state,
         const auto offset = stack_slot(state, instruction.destination_register);
         const auto inventory_offsets =
             inventory_stack_slots(state, instruction.destination_register);
+        const std::array<std::uint8_t, 1u> address_registers{
+            instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            offset.has_value() || !inventory_offsets.empty(),
+            (state.stack_may_alias[instruction.destination_register] ||
+             state.inventory_stack_may_alias[
+                 instruction.destination_register]) &&
+                inventory_offsets.empty());
         const auto stored_value = value_with_saved_stack_epoch(
             state, instruction.source_register, width);
         note_unresolved_stack_candidate_store(
@@ -10421,15 +11450,16 @@ void apply_transfer(AbstractState& state,
             stored_value);
         store_stack_value(state,
                           offset,
-                          state.stack_may_alias
-                                  [instruction.destination_register] &&
-                              inventory_offsets.empty(),
+                          inventory_offsets,
+                          write_domain,
+                          0,
                           preserve_guarded_stack_inventory,
                           width,
                           stored_value);
         store_inventory_stack_value(state,
                                     offset,
                                     inventory_offsets,
+                                    write_domain.touches_current,
                                     width,
                                     stored_value);
         if (!offset.has_value()) {
@@ -10437,7 +11467,8 @@ void apply_transfer(AbstractState& state,
                                 displaced_addresses(state[instruction.destination_register], 0u),
                                 width,
                                 stored_value,
-                                state[instruction.destination_register]);
+                                state[instruction.destination_register],
+                                incoming_destination_fixed_storage_reference);
         }
         return;
     }
@@ -10457,6 +11488,16 @@ void apply_transfer(AbstractState& state,
         const auto offset = stack_slot(state, instruction.destination_register);
         const auto inventory_offsets =
             inventory_stack_slots(state, instruction.destination_register);
+        const std::array<std::uint8_t, 1u> address_registers{
+            instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            offset.has_value() || !inventory_offsets.empty(),
+            (state.stack_may_alias[instruction.destination_register] ||
+             state.inventory_stack_may_alias[
+                 instruction.destination_register]) &&
+                inventory_offsets.empty());
         const auto stored_value = value_with_saved_stack_epoch(
             state, instruction.source_register, width);
         note_unresolved_stack_candidate_store(
@@ -10467,15 +11508,16 @@ void apply_transfer(AbstractState& state,
             stored_value);
         store_stack_value(state,
                           offset,
-                          state.stack_may_alias
-                                  [instruction.destination_register] &&
-                              inventory_offsets.empty(),
+                          inventory_offsets,
+                          write_domain,
+                          0,
                           preserve_guarded_stack_inventory,
                           width,
                           stored_value);
         store_inventory_stack_value(state,
                                     offset,
                                     inventory_offsets,
+                                    write_domain.touches_current,
                                     width,
                                     stored_value);
         if (!offset.has_value()) {
@@ -10483,7 +11525,8 @@ void apply_transfer(AbstractState& state,
                                 displaced_addresses(state[instruction.destination_register], 0u),
                                 width,
                                 stored_value,
-                                state[instruction.destination_register]);
+                                state[instruction.destination_register],
+                                incoming_destination_fixed_storage_reference);
         }
         return;
     }
@@ -10500,6 +11543,16 @@ void apply_transfer(AbstractState& state,
             inventory_stack_slots(state,
                                   instruction.destination_register,
                                   instruction.displacement);
+        const std::array<std::uint8_t, 1u> address_registers{
+            instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            offset.has_value() || !inventory_offsets.empty(),
+            (state.stack_may_alias[instruction.destination_register] ||
+             state.inventory_stack_may_alias[
+                 instruction.destination_register]) &&
+                inventory_offsets.empty());
         const auto stored_value = value_with_saved_stack_epoch(
             state, instruction.source_register, width);
         note_unresolved_stack_candidate_store(
@@ -10510,15 +11563,16 @@ void apply_transfer(AbstractState& state,
             stored_value);
         store_stack_value(state,
                           offset,
-                          state.stack_may_alias
-                                  [instruction.destination_register] &&
-                              inventory_offsets.empty(),
+                          inventory_offsets,
+                          write_domain,
+                          instruction.displacement,
                           preserve_guarded_stack_inventory,
                           width,
                           stored_value);
         store_inventory_stack_value(state,
                                     offset,
                                     inventory_offsets,
+                                    write_domain.touches_current,
                                     width,
                                     stored_value);
         if (!offset.has_value()) {
@@ -10528,7 +11582,8 @@ void apply_transfer(AbstractState& state,
                                     static_cast<std::uint32_t>(instruction.displacement)),
                 width,
                 stored_value,
-                state[instruction.destination_register]);
+                state[instruction.destination_register],
+                incoming_destination_fixed_storage_reference);
         }
         return;
     }
@@ -10750,10 +11805,22 @@ void apply_transfer(AbstractState& state,
                 &inventory_coordinate_enumeration_failed);
         const auto may_alias_stack =
             state.stack_may_alias[0u] ||
-            state.stack_may_alias[instruction.destination_register];
+            state.stack_may_alias[instruction.destination_register] ||
+            state.inventory_stack_may_alias[0u] ||
+            state.inventory_stack_may_alias[
+                instruction.destination_register] ||
+            inventory_coordinate_enumeration_failed;
+        const std::array<std::uint8_t, 2u> address_registers{
+            0u, instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            offset.has_value() || !inventory_offsets.empty(),
+            may_alias_stack && inventory_offsets.empty());
         const auto stored_value = value_with_saved_stack_epoch(
             state, instruction.source_register, width);
-        if (inventory_coordinate_enumeration_failed) {
+        if (inventory_coordinate_enumeration_failed &&
+            write_domain.has_current_lineage) {
             absorb_unresolved_stack_storage(state, stored_value);
             if (has_direct_stack_callback_loss(stored_value))
                 state.inventory_unresolved_stack_callback_loss = true;
@@ -10780,15 +11847,19 @@ void apply_transfer(AbstractState& state,
             stored_value);
         store_stack_value(state,
                           offset,
-                          (may_alias_stack ||
-                           inventory_coordinate_enumeration_failed) &&
-                              inventory_offsets.empty(),
+                          inventory_offsets,
+                          write_domain,
+                          r0_indexed_detached_relative_offset(
+                              state,
+                              write_domain,
+                              instruction.destination_register),
                           preserve_guarded_stack_inventory,
                           width,
                           stored_value);
         store_inventory_stack_value(state,
                                     offset,
                                     inventory_offsets,
+                                    write_domain.touches_current,
                                     width,
                                     stored_value);
         auto evidence = state[0u];
@@ -10809,7 +11880,11 @@ void apply_transfer(AbstractState& state,
                                   instruction.destination_register == 0u),
                 width,
                 stored_value,
-                evidence);
+                evidence,
+                (incoming_r0_fixed_storage_reference &&
+                 state[instruction.destination_register].known) ||
+                    (incoming_destination_fixed_storage_reference &&
+                     state[0u].known));
         return;
     }
     case katana::sh4::InstructionKind::FmovStore: {
@@ -10823,18 +11898,34 @@ void apply_transfer(AbstractState& state,
             bases = {*semantic_base};
         std::vector<std::pair<std::int32_t, std::size_t>>
             alternatives;
+        std::vector<std::pair<std::int32_t, std::size_t>>
+            current_epoch_alternatives;
         for (const auto base : bases) {
             alternatives.emplace_back(base, 4u);
             alternatives.emplace_back(base, 8u);
+            current_epoch_alternatives.emplace_back(base, 4u);
         }
+        const std::array<std::uint8_t, 1u> address_registers{
+            instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            !bases.empty(),
+            (state.stack_may_alias[instruction.destination_register] ||
+             state.inventory_stack_may_alias[
+                 instruction.destination_register]) &&
+                bases.empty());
+        record_stack_epoch_write(
+            state,
+            write_domain,
+            current_epoch_alternatives,
+            0,
+            4u,
+            nullptr);
         invalidate_stack_write_alternatives(
             state,
             alternatives,
-            state.stack_may_alias
-                    [instruction.destination_register] ||
-                state.inventory_stack_may_alias
-                    [instruction.destination_register],
-            true);
+            write_domain.touches_current);
         mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
@@ -10850,6 +11941,8 @@ void apply_transfer(AbstractState& state,
             old_bases = {*semantic_base};
         std::vector<std::pair<std::int32_t, std::size_t>>
             alternatives;
+        std::vector<std::pair<std::int32_t, std::size_t>>
+            current_epoch_alternatives;
         for (const auto old_base : old_bases) {
             const auto four_byte_base =
                 static_cast<std::int64_t>(old_base) - 4;
@@ -10858,18 +11951,36 @@ void apply_transfer(AbstractState& state,
             if (four_byte_base >= -maximum_stack_distance)
                 alternatives.emplace_back(
                     static_cast<std::int32_t>(four_byte_base), 4u);
+            if (four_byte_base >= -maximum_stack_distance)
+                current_epoch_alternatives.emplace_back(
+                    static_cast<std::int32_t>(four_byte_base), 4u);
             if (eight_byte_base >= -maximum_stack_distance)
                 alternatives.emplace_back(
                     static_cast<std::int32_t>(eight_byte_base), 8u);
         }
+        const std::array<std::uint8_t, 1u> address_registers{
+            instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            !old_bases.empty(),
+            (state.stack_may_alias[instruction.destination_register] ||
+             state.inventory_stack_may_alias[
+                 instruction.destination_register]) &&
+                old_bases.empty());
+        // FPSCR.SZ selects either [-4, 0) or [-8, 0); only the final word is
+        // overwritten on every path.
+        record_stack_epoch_write(
+            state,
+            write_domain,
+            current_epoch_alternatives,
+            -4,
+            4u,
+            nullptr);
         invalidate_stack_write_alternatives(
             state,
             alternatives,
-            state.stack_may_alias
-                    [instruction.destination_register] ||
-                state.inventory_stack_may_alias
-                    [instruction.destination_register],
-            true);
+            write_domain.touches_current);
         static constexpr std::array<std::int32_t, 2u> decrements{-4, -8};
         branch_inventory_stack_position(
             state, instruction.destination_register, decrements);
@@ -10907,21 +12018,41 @@ void apply_transfer(AbstractState& state,
             bases = {*semantic_base};
         std::vector<std::pair<std::int32_t, std::size_t>>
             alternatives;
+        std::vector<std::pair<std::int32_t, std::size_t>>
+            current_epoch_alternatives;
         for (const auto base : bases) {
             alternatives.emplace_back(base, 4u);
             alternatives.emplace_back(base, 8u);
+            current_epoch_alternatives.emplace_back(base, 4u);
         }
+        const auto may_alias_stack =
+            state.stack_may_alias[0u] ||
+            state.stack_may_alias[instruction.destination_register] ||
+            state.inventory_stack_may_alias[0u] ||
+            state.inventory_stack_may_alias[
+                instruction.destination_register] ||
+            inventory_coordinate_enumeration_failed;
+        const std::array<std::uint8_t, 2u> address_registers{
+            0u, instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            !bases.empty(),
+            may_alias_stack && bases.empty());
+        record_stack_epoch_write(
+            state,
+            write_domain,
+            current_epoch_alternatives,
+            r0_indexed_detached_relative_offset(
+                state,
+                write_domain,
+                instruction.destination_register),
+            4u,
+            nullptr);
         invalidate_stack_write_alternatives(
             state,
             alternatives,
-            state.stack_may_alias[0u] ||
-                state.stack_may_alias
-                    [instruction.destination_register] ||
-                state.inventory_stack_may_alias[0u] ||
-                state.inventory_stack_may_alias
-                    [instruction.destination_register] ||
-                inventory_coordinate_enumeration_failed,
-            true);
+            write_domain.touches_current);
         mark_unknown_memory_write(state);
         invalidate_memory_values_conservatively(state);
         return;
@@ -10963,22 +12094,55 @@ void apply_transfer(AbstractState& state,
         const auto inventory_offsets =
             inventory_stack_slots(
                 state, instruction.destination_register);
-        invalidate_stack_range(state,
-                               offset,
-                               state.stack_may_alias
-                                       [instruction.destination_register] &&
-                                   inventory_offsets.empty(),
-                               preserve_guarded_stack_inventory,
-                               4u);
+        const std::array<std::uint8_t, 1u> address_registers{
+            instruction.destination_register};
+        const auto write_domain = classify_stack_write_domain(
+            state,
+            address_registers,
+            offset.has_value() || !inventory_offsets.empty(),
+            (state.stack_may_alias[instruction.destination_register] ||
+             state.inventory_stack_may_alias[
+                 instruction.destination_register]) &&
+                inventory_offsets.empty());
+        std::vector<std::pair<std::int32_t, std::size_t>>
+            current_epoch_alternatives;
+        if (offset.has_value()) {
+            current_epoch_alternatives.emplace_back(*offset, 4u);
+        } else {
+            current_epoch_alternatives.reserve(inventory_offsets.size());
+            for (const auto inventory_offset : inventory_offsets)
+                current_epoch_alternatives.emplace_back(
+                    inventory_offset, 4u);
+        }
+        record_stack_epoch_write(
+            state,
+            write_domain,
+            current_epoch_alternatives,
+            0,
+            4u,
+            nullptr);
+        if (write_domain.touches_current)
+            invalidate_stack_range(
+                state,
+                offset,
+                true,
+                preserve_guarded_stack_inventory,
+                4u);
         AbstractValue unknown;
         store_inventory_stack_value(
-            state, offset, inventory_offsets, 4u, unknown);
+            state,
+            offset,
+            inventory_offsets,
+            write_domain.touches_current,
+            4u,
+            unknown);
         if (!offset.has_value()) {
             store_memory_values(state,
                                 displaced_addresses(state[instruction.destination_register], 0u),
                                 4u,
                                 unknown,
-                                state[instruction.destination_register]);
+                                state[instruction.destination_register],
+                                incoming_destination_fixed_storage_reference);
         }
         return;
     }
@@ -11424,6 +12588,8 @@ AbstractState make_callee_abi_input(
         caller.inventory_current_stack_epoch_alias_watcher;
     input.inventory_detached_stack_epoch_alias_watcher =
         caller.inventory_detached_stack_epoch_alias_watcher;
+    input.inventory_detached_stack_callback_loss =
+        caller.inventory_detached_stack_callback_loss;
     const auto caller_sp = caller.stack_offsets[15u];
     auto caller_inventory_sp_coordinates =
         inventory_stack_slots(caller, 15u);
@@ -11610,8 +12776,7 @@ AbstractState make_callee_abi_input(
                 add_unresolved_saved_stack_alias(
                     input,
                     unresolved_saved_stack_alias_source_stack,
-                    inventory_saved_stack_epoch_tracks_current(
-                        value.inventory_saved_stack_epoch));
+                    value.inventory_saved_stack_epoch);
             }
             if (caller.stack_tail.present) {
                 const auto& tail = caller.stack_tail.payload;
@@ -11619,8 +12784,7 @@ AbstractState make_callee_abi_input(
                     static_cast<void>(add_unresolved_saved_stack_alias(
                         input,
                         unresolved_saved_stack_alias_source_stack,
-                        inventory_saved_stack_epoch_tracks_current(
-                            tail.inventory_saved_stack_epoch)));
+                        tail.inventory_saved_stack_epoch));
                 input.stack_tail = caller.stack_tail;
                 input.stack_tail.lower_bound = 0;
                 normalize_stack_tail_payload(input.stack_tail.payload);
@@ -11725,8 +12889,7 @@ AbstractState make_callee_abi_input(
             add_unresolved_saved_stack_alias(
                 input,
                 unresolved_saved_stack_alias_source_stack,
-                inventory_saved_stack_epoch_tracks_current(
-                    projected_source.inventory_saved_stack_epoch));
+                projected_source.inventory_saved_stack_epoch);
             projected_source.inventory_saved_stack_epoch = {};
         }
         if (!retain_whole_stack_for_alias_capture &&
@@ -11837,6 +13000,16 @@ AbstractState make_callee_abi_input(
     const katana::io::ExecutableImage& image,
     InventorySavedStackEpoch& epoch,
     const std::optional<std::uint32_t> transfer_site = std::nullopt) {
+    if (!epoch.origin_channels.empty()) {
+        bool promoted = false;
+        for (auto& channel : epoch.origin_channels) {
+            promoted = promote_current_saved_epoch_pending_at_abi_boundary(
+                           image, channel, transfer_site) ||
+                       promoted;
+        }
+        normalize_inventory_saved_stack_epoch(epoch, 0u);
+        return promoted;
+    }
     // A terminal epoch Top owns only a private evidence capsule at its root.
     // It has no finite pending payload to promote, and passing that capsule
     // through the ordinary carrier normalizer would discard retained evidence.
@@ -11845,7 +13018,7 @@ AbstractState make_callee_abi_input(
         // A detached Top remains a suspended namespace.  It is terminal but
         // must not acquire evidence from an unrelated tail ABI boundary.
         if (transfer_site.has_value() &&
-            inventory_saved_stack_epoch_tracks_current(epoch))
+            epoch.tracks_current_epoch)
             epoch.unresolved_candidate_carrier.call_sites.insert(
                 *transfer_site);
         return false;
@@ -12015,10 +13188,101 @@ void promote_tail_code_literal_arguments(
         image, observation, transfer_site);
 }
 
+void promote_contextual_tail_code_arguments(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t transfer_site,
+    AbstractState& observation,
+    const std::uint16_t register_read_mask,
+    const std::uint32_t inventory_provenance_register_read_mask,
+    const std::uint8_t tail_abi_sink_sources,
+    const AbiStackArgumentReadSet* const required_stack_reads) {
+    // Contextual candidate dependency is deliberately not code-pointer
+    // provenance.  It becomes admissible only at this independently proven
+    // tail ABI boundary, and only in lanes the callee is known to consume.
+    // This keeps decode-looking object fields and unrelated scalar registers
+    // out of the inventory while preserving exact values returned by a
+    // bounded helper slice on the way to a candidate registrar.
+    const auto promote_argument = [&](AbstractValue& value) {
+        if (!value.contextual_candidate_dependency) return;
+
+        std::vector<std::uint32_t> promoted;
+        if (value.known && value.values.size() <= maximum_summary_values) {
+            for (const auto candidate : value.values) {
+                const auto validation =
+                    validate_decode_candidate(image, candidate);
+                if (validation.valid())
+                    promoted.push_back(validation.resolved_address);
+            }
+            normalize(promoted);
+        }
+        if (!promoted.empty())
+            mark_inventory_code_pointer_values(value, promoted);
+
+        // An incomplete contextual scalar can hide further valid callback
+        // values.  Consume that uncertainty as code-pointer Top at the proven
+        // sink rather than publishing a partial finite candidate set.
+        if (!value.known || !value.complete ||
+            value.values.size() > maximum_summary_values) {
+            value.inventory_code_pointer_values.clear();
+            value.inventory_code_pointer_values_truncated = true;
+            synchronize_inventory_provenance(value);
+        }
+        if (!promoted.empty() ||
+            value.inventory_code_pointer_values_truncated)
+            value.call_sites.insert(transfer_site);
+    };
+
+    const bool exact_register_reads =
+        register_read_mask != std::numeric_limits<std::uint16_t>::max();
+    const bool exact_inventory_reads =
+        inventory_provenance_register_read_mask !=
+        std::numeric_limits<std::uint32_t>::max();
+    for (std::uint8_t index = 4u; index <= 7u; ++index) {
+        const bool consumed =
+            (exact_register_reads &&
+             (register_read_mask & register_bit(index)) != 0u) ||
+            (exact_inventory_reads &&
+             (inventory_provenance_register_read_mask &
+              (std::uint32_t{1u} << index)) != 0u) ||
+            (tail_abi_sink_sources &
+             static_cast<std::uint8_t>(1u << (index - 4u))) != 0u;
+        if (consumed) promote_argument(observation[index]);
+    }
+
+    // A finite, complete stack-read contract is required.  Unknown stack
+    // ranges cannot authorize contextual scalar promotion.
+    if (required_stack_reads == nullptr ||
+        !valid_complete_stack_read_contract(*required_stack_reads))
+        return;
+    for (const auto slot : required_stack_reads->slots) {
+        if (const auto found = observation.stack_values.find(slot);
+            found != observation.stack_values.end())
+            promote_argument(found->second);
+        else if (observation.stack_tail.present &&
+                 slot >= observation.stack_tail.lower_bound)
+            promote_argument(observation.stack_tail.payload);
+    }
+}
+
 using ObservedCalleeInputs =
     std::map<std::uint32_t, AbstractState>;
 using ObservedCalleeInputIndices =
     std::map<std::uint32_t, std::size_t>;
+
+void mark_guarded_callee_input(AbstractState& observation) {
+    for (auto& value : observation)
+        value.guarded = true;
+    for (auto& [slot, value] : observation.stack_values) {
+        static_cast<void>(slot);
+        value.guarded = true;
+    }
+    if (observation.stack_tail.present)
+        observation.stack_tail.payload.guarded = true;
+    for (auto& [address, value] : observation.memory_values) {
+        static_cast<void>(address);
+        value.guarded = true;
+    }
+}
 
 void observe_callee_arguments(
     const katana::io::ExecutableImage& image,
@@ -12150,20 +13414,8 @@ void observe_callee_arguments(
                 std::move(observation),
                 has_authoritative_complete_stack_contract);
         }
-        if (candidate_callees_guarded) {
-            for (auto& value : observation)
-                value.guarded = true;
-            for (auto& [slot, value] : observation.stack_values) {
-                static_cast<void>(slot);
-                value.guarded = true;
-            }
-            if (observation.stack_tail.present)
-                observation.stack_tail.payload.guarded = true;
-            for (auto& [address, value] : observation.memory_values) {
-                static_cast<void>(address);
-                value.guarded = true;
-            }
-        }
+        if (candidate_callees_guarded)
+            mark_guarded_callee_input(observation);
         if (call_arguments != nullptr) {
             const auto observation_index = call_arguments->size();
             call_arguments->push_back(
@@ -12202,24 +13454,22 @@ void mark_contextual_candidate_abi_arguments(
         std::numeric_limits<std::uint32_t>::max();
     const auto register_provenance_live =
         [&](const std::uint8_t index) {
-            return !provenance_contract_exact ||
+            return provenance_contract_exact &&
                    (effective_inventory_provenance_register_read_mask &
                     (std::uint32_t{1u} << index)) != 0u;
         };
     const auto register_contextual_argument_live =
         [&](const std::uint8_t index) {
             if (index == 15u) return false;
-            // A precise Inventory provenance contract is intentionally
-            // independent of the ordinary ABI-read mask: a provenance-only
-            // r0-r14 value can still flow through a return, store or call
-            // into the guarded candidate sink.  With no such contract keep
-            // the legacy ABI-argument scope as the conservative fallback.
-            return provenance_contract_exact
-                       ? register_provenance_live(index)
-                       : (entry_register_reads & register_bit(index)) != 0u;
+            // Scalar contextual dependence and inventory provenance are
+            // independent may-domains.  An exact provenance slice may add a
+            // provenance-only lane, but it must never erase an ordinary ABI
+            // value that the callee reads into its return/store path.
+            return (entry_register_reads & register_bit(index)) != 0u ||
+                   register_provenance_live(index);
         };
     const bool stack_provenance_live =
-        !provenance_contract_exact ||
+        provenance_contract_exact &&
         (effective_inventory_provenance_register_read_mask &
          inventory_provenance_stack_source) != 0u;
     const bool retain_whole_stack_for_alias_capture =
@@ -12230,10 +13480,9 @@ void mark_contextual_candidate_abi_arguments(
             inventory_stack_alias_creation_contract &
                 inventory_provenance_source_mask);
     const bool observes_stack_domain =
-        stack_provenance_live &&
-        (retain_whole_stack_for_alias_capture ||
-         entry_stack_reads == nullptr || !entry_stack_reads->complete ||
-         !entry_stack_reads->slots.empty());
+        stack_provenance_live || retain_whole_stack_for_alias_capture ||
+        entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+        !entry_stack_reads->slots.empty();
     const auto mark_carrier = [](InventoryCandidateCarrier& carrier) {
         if (has_inventory_candidate_carrier_payload(carrier) ||
             has_pending_abi_scalar_payload(carrier))
@@ -12250,23 +13499,23 @@ void mark_contextual_candidate_abi_arguments(
             }
             for (auto& nested : epoch.unresolved_nested_epochs)
                 self(self, nested);
-    };
+            for (auto& channel : epoch.origin_channels)
+                self(self, channel);
+        };
     for (std::uint8_t index = 0u; index < 15u; ++index) {
         if (register_contextual_argument_live(index))
             state[index].contextual_candidate_dependency = true;
     }
     for (auto& [slot, value] : state.stack_values) {
-        if (stack_provenance_live &&
-            (retain_whole_stack_for_alias_capture ||
-             entry_stack_reads == nullptr || !entry_stack_reads->complete ||
-             std::binary_search(entry_stack_reads->slots.begin(),
-                                entry_stack_reads->slots.end(),
-                                slot)))
+        if (stack_provenance_live || retain_whole_stack_for_alias_capture ||
+            entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+            std::binary_search(entry_stack_reads->slots.begin(),
+                               entry_stack_reads->slots.end(),
+                               slot))
             value.contextual_candidate_dependency = true;
     }
     if (state.stack_tail.present &&
-        stack_provenance_live &&
-        (retain_whole_stack_for_alias_capture ||
+        (stack_provenance_live || retain_whole_stack_for_alias_capture ||
          entry_stack_reads == nullptr || !entry_stack_reads->complete ||
          std::any_of(entry_stack_reads->slots.begin(),
                      entry_stack_reads->slots.end(),
@@ -12302,19 +13551,18 @@ void mark_contextual_candidate_abi_arguments(
         std::numeric_limits<std::uint32_t>::max();
     const auto register_provenance_live =
         [&](const std::uint8_t index) {
-            return !provenance_contract_exact ||
+            return provenance_contract_exact &&
                    (effective_inventory_provenance_register_read_mask &
                     (std::uint32_t{1u} << index)) != 0u;
         };
     const auto register_contextual_argument_live =
         [&](const std::uint8_t index) {
             if (index == 15u) return false;
-            return provenance_contract_exact
-                       ? register_provenance_live(index)
-                       : (entry_register_reads & register_bit(index)) != 0u;
+            return (entry_register_reads & register_bit(index)) != 0u ||
+                   register_provenance_live(index);
         };
     const bool stack_provenance_live =
-        !provenance_contract_exact ||
+        provenance_contract_exact &&
         (effective_inventory_provenance_register_read_mask &
          inventory_provenance_stack_source) != 0u;
     const bool retain_whole_stack_for_alias_capture =
@@ -12332,10 +13580,9 @@ void mark_contextual_candidate_abi_arguments(
             return true;
     }
     const bool may_read_stack =
-        stack_provenance_live &&
-        (retain_whole_stack_for_alias_capture || entry_stack_reads == nullptr ||
-        !entry_stack_reads->complete ||
-        !entry_stack_reads->slots.empty());
+        stack_provenance_live || retain_whole_stack_for_alias_capture ||
+        entry_stack_reads == nullptr || !entry_stack_reads->complete ||
+        !entry_stack_reads->slots.empty();
     const auto epoch_has_contextual_or_candidate_payload =
         [&](auto&& self, const InventorySavedStackEpoch& epoch) -> bool {
             if (epoch.candidate_payload_lost ||
@@ -12354,9 +13601,17 @@ void mark_contextual_candidate_abi_arguments(
                     return true;
             }
             return std::any_of(
-                epoch.unresolved_nested_epochs.begin(),
-                epoch.unresolved_nested_epochs.end(),
-                [&](const auto& nested) { return self(self, nested); });
+                       epoch.unresolved_nested_epochs.begin(),
+                       epoch.unresolved_nested_epochs.end(),
+                       [&](const auto& nested) {
+                           return self(self, nested);
+                       }) ||
+                   std::any_of(
+                       epoch.origin_channels.begin(),
+                       epoch.origin_channels.end(),
+                       [&](const auto& channel) {
+                           return self(self, channel);
+                       });
         };
     if (may_read_stack &&
         (state.inventory_current_stack_epoch_alias_watcher ||
@@ -12364,6 +13619,7 @@ void mark_contextual_candidate_abi_arguments(
         return true;
     if (may_read_stack &&
         (state.inventory_unresolved_stack_callback_loss ||
+         state.inventory_detached_stack_callback_loss ||
          (state.inventory_unresolved_saved_stack_alias_sources &
           unresolved_saved_stack_alias_source_stack) != 0u))
         return true;
@@ -12377,8 +13633,7 @@ void mark_contextual_candidate_abi_arguments(
              state.inventory_unresolved_stack_epoch)))
         return true;
     for (const auto& [slot, value] : state.stack_values) {
-        if (stack_provenance_live &&
-            (retain_whole_stack_for_alias_capture ||
+        if ((stack_provenance_live || retain_whole_stack_for_alias_capture ||
              entry_stack_reads == nullptr || !entry_stack_reads->complete ||
              std::binary_search(entry_stack_reads->slots.begin(),
                                 entry_stack_reads->slots.end(),
@@ -12389,8 +13644,7 @@ void mark_contextual_candidate_abi_arguments(
             return true;
     }
     if (state.stack_tail.present &&
-        stack_provenance_live &&
-        (retain_whole_stack_for_alias_capture ||
+        (stack_provenance_live || retain_whole_stack_for_alias_capture ||
          entry_stack_reads == nullptr || !entry_stack_reads->complete ||
          std::any_of(entry_stack_reads->slots.begin(),
                      entry_stack_reads->slots.end(),
@@ -12404,6 +13658,55 @@ void mark_contextual_candidate_abi_arguments(
     return false;
 }
 
+[[nodiscard]] bool has_explicit_inventory_candidate_abi_argument(
+    const AbstractState& state,
+    const std::uint16_t entry_register_reads,
+    const AbiStackArgumentReadSet* const entry_stack_reads,
+    const std::uint32_t inventory_provenance_register_read_mask =
+        std::numeric_limits<std::uint32_t>::max(),
+    const std::uint32_t inventory_stack_mutation_conditional_sources = 0u,
+    const std::uint32_t inventory_stack_mutation_unconditional_sources = 0u,
+    const std::uint32_t inventory_stack_alias_creation_contract = 0u) {
+    const auto effective_inventory_mask = effective_inventory_provenance_mask(
+        state,
+        inventory_provenance_register_read_mask,
+        inventory_stack_mutation_conditional_sources,
+        inventory_stack_mutation_unconditional_sources,
+        inventory_stack_alias_creation_contract);
+    const auto effective_register_mask = effective_inventory_mask.mask;
+    const bool provenance_contract_exact =
+        effective_register_mask !=
+        std::numeric_limits<std::uint32_t>::max();
+    const auto carries_explicit_candidate = [](const AbstractValue& value) {
+        return !value.inventory_code_pointer_values.empty() ||
+               !value.inventory_pc_relative_code_literal_values.empty() ||
+               value.inventory_code_pointer_values_truncated ||
+               value.inventory_pc_relative_code_literal_values_truncated;
+    };
+    for (std::uint8_t index = 0u; index < 15u; ++index) {
+        const bool register_read =
+            (entry_register_reads & register_bit(index)) != 0u ||
+            (provenance_contract_exact &&
+             (effective_register_mask &
+              (std::uint32_t{1u} << index)) != 0u);
+        if (register_read && carries_explicit_candidate(state[index]))
+            return true;
+    }
+    if (entry_stack_reads == nullptr || !entry_stack_reads->complete)
+        return false;
+    for (const auto slot : entry_stack_reads->slots) {
+        const auto found = state.stack_values.find(slot);
+        if (found != state.stack_values.end() &&
+            carries_explicit_candidate(found->second))
+            return true;
+        if (state.stack_tail.present &&
+            slot >= state.stack_tail.lower_bound &&
+            carries_explicit_candidate(state.stack_tail.payload))
+            return true;
+    }
+    return false;
+}
+
 void observe_inventory_transfers(
     const katana::io::ExecutableImage& image,
     const AbstractState& state,
@@ -12414,6 +13717,7 @@ void observe_inventory_transfers(
     const bool complete,
     const bool requires_code_pointer,
     const bool observes_abi_arguments,
+    const std::uint8_t tail_abi_sink_sources,
     std::vector<FunctionEvaluation::InventoryTransfer>* const transfers,
     GuardedCodeInventoryWalkDiagnostics* const walk_diagnostics,
     const ForwardedRegisterReadMap* const forwarded_register_reads,
@@ -12526,9 +13830,19 @@ void observe_inventory_transfers(
             conditional_mutation_sources,
             unconditional_mutation_sources,
             alias_creation_contract));
-        if (observes_abi_arguments)
+        if (observes_abi_arguments) {
             promote_tail_code_literal_arguments(
                 image, transfer_site, observation);
+            if (guarded && !complete && requires_code_pointer)
+                promote_contextual_tail_code_arguments(
+                    image,
+                    transfer_site,
+                    observation,
+                    register_mask,
+                    inventory_provenance_mask,
+                    tail_abi_sink_sources,
+                    required_stack_reads);
+        }
         // Tail promotion validates only its PC-relative literal and retained
         // carrier domains. Ordinary values first folded here may still need a
         // later independent ABI-boundary validation, so retain pre-ABI Pending
@@ -12540,6 +13854,7 @@ void observe_inventory_transfers(
         bool found_code_pointer = false;
         bool found_unresolved_stack_callback =
             observation.inventory_unresolved_stack_callback_loss ||
+            observation.inventory_detached_stack_callback_loss ||
             observation.inventory_unresolved_memory_callback_loss ||
             observation.inventory_callback_loss_identity_truncated_sources !=
                 0u;
@@ -12593,6 +13908,8 @@ void observe_inventory_transfers(
                 }
                 for (const auto& nested : epoch.unresolved_nested_epochs)
                     self(self, nested);
+                for (const auto& channel : epoch.origin_channels)
+                    self(self, channel);
             };
         const auto observe_code_pointer = [&](const AbstractValue& value) {
             observe_candidate_payload(
@@ -12767,8 +14084,7 @@ void apply_call(AbstractState& state,
                 add_unresolved_saved_stack_alias(
                     state,
                     unresolved_saved_stack_alias_source_stack,
-                    inventory_saved_stack_epoch_tracks_current(
-                        value.inventory_saved_stack_epoch));
+                    value.inventory_saved_stack_epoch);
             }
         }
         if (state.stack_tail.present) {
@@ -12780,8 +14096,7 @@ void apply_call(AbstractState& state,
                 static_cast<void>(add_unresolved_saved_stack_alias(
                     state,
                     unresolved_saved_stack_alias_source_stack,
-                    inventory_saved_stack_epoch_tracks_current(
-                        value.inventory_saved_stack_epoch)));
+                    value.inventory_saved_stack_epoch));
             }
         }
         state.stack_values.clear();
@@ -12884,6 +14199,7 @@ void apply_call(AbstractState& state,
     std::uint8_t returned_unresolved_saved_stack_alias_tracks_current_sources =
         0u;
     bool returned_unresolved_stack_callback_loss = false;
+    bool returned_detached_stack_callback_loss = false;
     std::uint8_t returned_callback_loss_identity_truncated_sources = 0u;
     bool returned_memory_complete = candidate_callees_complete;
     bool returned_memory_initialized = false;
@@ -12944,18 +14260,18 @@ void apply_call(AbstractState& state,
                 !has_inventory_saved_stack_epoch_payload(epoch) &&
                 !callback_loss)
                 return;
+            // Pending scalars remain a distinct MAY channel.  In particular,
+            // Pending Top must survive replay without becoming callback loss
+            // merely because AbstractValue has no ordinary scalar-Top bit.
+            propagate_current_epoch_pending_carrier(state, carrier);
             AbstractValue mutation;
             mutation.guarded = true;
             mutation.complete = false;
             overlay_inventory_candidate_carrier(mutation, carrier);
-            if (!carrier.pending_abi_scalar_values.empty()) {
-                mutation.known = true;
-                mutation.values = carrier.pending_abi_scalar_values;
-            }
             static_cast<void>(merge_inventory_saved_stack_epoch(
                 mutation.inventory_saved_stack_epoch, epoch, true));
             mutation.inventory_stack_callback_loss_unresolved =
-                callback_loss || carrier.pending_abi_scalar_values_truncated;
+                callback_loss;
             if (!has_inventory_transport_payload(mutation) &&
                 (!mutation.known || mutation.values.empty()))
                 return;
@@ -13003,8 +14319,10 @@ void apply_call(AbstractState& state,
                         ++hot_path_diagnostics->bindings_examined;
                     if (hot_path_diagnostics != nullptr)
                         ++hot_path_diagnostics->binding_equality_attempts;
-                    if (same_abstract_state_without_evidence(
-                            binding.input, *observed)) {
+                    const bool binding_exact =
+                        same_abstract_state_without_evidence(
+                            binding.input, *observed);
+                    if (binding_exact) {
                         if (hot_path_diagnostics != nullptr) {
                             ++hot_path_diagnostics->binding_exact_hits;
                             hot_path_diagnostics->maximum_binding_hit_position =
@@ -13095,6 +14413,9 @@ void apply_call(AbstractState& state,
         returned_unresolved_stack_callback_loss =
             returned_unresolved_stack_callback_loss ||
             summary->inventory_unresolved_stack_callback_loss;
+        returned_detached_stack_callback_loss =
+            returned_detached_stack_callback_loss ||
+            summary->inventory_detached_stack_callback_loss;
         returned_unresolved_memory_callback_loss =
             returned_unresolved_memory_callback_loss ||
             summary->inventory_unresolved_memory_callback_loss;
@@ -13503,20 +14824,23 @@ void apply_call(AbstractState& state,
         returned_unresolved_memory_callback_loss;
     const auto retain_returned_alias_source =
         [&](const std::uint8_t source) {
-            if ((returned_unresolved_saved_stack_alias_sources & source) ==
+            if ((returned_unresolved_saved_stack_alias_sources & source) !=
                 0u)
-                return;
-            static_cast<void>(add_unresolved_saved_stack_alias(
-                state,
-                source,
-                (returned_unresolved_saved_stack_alias_tracks_current_sources &
-                 source) != 0u));
+                static_cast<void>(add_unresolved_saved_stack_alias(
+                    state, source, false));
+            if ((returned_unresolved_saved_stack_alias_tracks_current_sources &
+                 source) != 0u)
+                static_cast<void>(add_unresolved_saved_stack_alias(
+                    state, source, true));
         };
     retain_returned_alias_source(unresolved_saved_stack_alias_source_stack);
     retain_returned_alias_source(unresolved_saved_stack_alias_source_memory);
     state.inventory_unresolved_stack_callback_loss =
         state.inventory_unresolved_stack_callback_loss ||
         returned_unresolved_stack_callback_loss;
+    state.inventory_detached_stack_callback_loss =
+        state.inventory_detached_stack_callback_loss ||
+        returned_detached_stack_callback_loss;
     state.inventory_callback_loss_identity_truncated_sources =
         static_cast<std::uint8_t>(
             state.inventory_callback_loss_identity_truncated_sources |
@@ -13976,8 +15300,9 @@ void observe_stored_code_addresses(
         (!value.inventory_pc_relative_code_literal_values.empty() ||
          value.inventory_pc_relative_code_literal_values_truncated);
     if (stack_based && !forwarded_code_pointer_store && !fixed_storage_literal_store) {
-        if (direct_candidate_top && walk_diagnostics != nullptr)
+        if (direct_candidate_top && walk_diagnostics != nullptr) {
             walk_diagnostics->inventory_candidate_values_truncated = true;
+        }
         return;
     }
 
@@ -13999,8 +15324,9 @@ void observe_stored_code_addresses(
                                         (destination_proven_non_stack && !stack_derived);
     if (!persistent_destination && !forwarded_code_pointer_store &&
         !fixed_storage_literal_store) {
-        if (direct_candidate_top && walk_diagnostics != nullptr)
+        if (direct_candidate_top && walk_diagnostics != nullptr) {
             walk_diagnostics->inventory_candidate_values_truncated = true;
+        }
         return;
     }
     // A contextual unknown is a fatal inventory loss only when no finite
@@ -14467,26 +15793,42 @@ FunctionEvaluation evaluate_function(
             bool candidate_callees_complete = false;
             bool requires_code_pointer = false;
             bool observes_abi_arguments = false;
+            std::uint8_t abi_sink_sources = 0u;
         };
         std::optional<DelayedTailIngress> delayed_tail_ingress;
         for (const auto& line : block->lines) {
             throw_if_resolution_cancelled(cancel_requested);
+            const auto tail_ingress = select_evaluation_tail_ingress(
+                line.instruction.control_flow,
+                tail_ingresses,
+                local_tail_ingresses,
+                line.address);
             const bool indirect = line.instruction.kind == katana::sh4::InstructionKind::Jmp ||
                                   line.instruction.kind == katana::sh4::InstructionKind::Jsr ||
                                   line.instruction.kind == katana::sh4::InstructionKind::Braf ||
                                   line.instruction.kind == katana::sh4::InstructionKind::Bsrf;
             if (resolution_mode != ResolutionCollectionMode::None && indirect) {
                 const auto& value = state[line.instruction.branch_register];
+                // A context-tainted Top in the architectural branch register
+                // is not lost target evidence when this exact transfer site
+                // already has a bounded, independently validated tail-ingress
+                // family. The runtime guard remains authoritative for values
+                // outside that family; only the payload transported through
+                // the tail is harvested below.
+                const bool contextual_target_unrepresented =
+                    resolution_mode ==
+                        ResolutionCollectionMode::GuardedInventory &&
+                    contextual_summaries != nullptr &&
+                    contextual_candidate_top(value) &&
+                    (!tail_ingress.has_value() ||
+                     tail_ingress->targets.empty());
                 if (walk_diagnostics != nullptr) {
-                        walk_diagnostics
-                            ->inventory_candidate_values_truncated =
+                    walk_diagnostics
+                        ->inventory_candidate_values_truncated =
                         walk_diagnostics
                             ->inventory_candidate_values_truncated ||
                         inventory_candidate_values_truncated(value) ||
-                        (resolution_mode ==
-                             ResolutionCollectionMode::GuardedInventory &&
-                         contextual_summaries != nullptr &&
-                         contextual_candidate_top(value));
+                        contextual_target_unrepresented;
                     walk_diagnostics->abi_stack_base_unresolved =
                         walk_diagnostics->abi_stack_base_unresolved ||
                         carries_unresolved_stack_callback(value);
@@ -14592,11 +15934,6 @@ FunctionEvaluation evaluate_function(
             const bool call =
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
                 line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall;
-            const auto tail_ingress = select_evaluation_tail_ingress(
-                line.instruction.control_flow,
-                tail_ingresses,
-                local_tail_ingresses,
-                line.address);
             if (!call && guarded_inventory_collector != nullptr) {
                 std::vector<StoredCodeAddressCandidate> stored_candidates;
                 observe_stored_code_addresses(
@@ -14681,6 +16018,7 @@ FunctionEvaluation evaluate_function(
                     delayed_tail_ingress->candidate_callees_complete,
                     delayed_tail_ingress->requires_code_pointer,
                     delayed_tail_ingress->observes_abi_arguments,
+                    delayed_tail_ingress->abi_sink_sources,
                     inventory_transfers,
                     walk_diagnostics,
                     forwarded_register_reads,
@@ -14748,7 +16086,8 @@ FunctionEvaluation evaluate_function(
                         tail_ingress->guarded,
                         tail_ingress->complete,
                         tail_ingress->requires_code_pointer,
-                        tail_ingress->observes_abi_arguments};
+                        tail_ingress->observes_abi_arguments,
+                        tail_ingress->abi_sink_sources};
                 } else {
                     observe_inventory_transfers(image,
                                                 state,
@@ -14759,6 +16098,7 @@ FunctionEvaluation evaluate_function(
                                                 tail_ingress->complete,
                                                 tail_ingress->requires_code_pointer,
                                                 tail_ingress->observes_abi_arguments,
+                                                tail_ingress->abi_sink_sources,
                                                 inventory_transfers,
                                                 walk_diagnostics,
                                                 forwarded_register_reads,
@@ -14869,6 +16209,9 @@ FunctionEvaluation evaluate_function(
         evaluation.summary.inventory_unresolved_stack_callback_loss =
             evaluation.summary.inventory_unresolved_stack_callback_loss ||
             return_state.inventory_unresolved_stack_callback_loss;
+        evaluation.summary.inventory_detached_stack_callback_loss =
+            evaluation.summary.inventory_detached_stack_callback_loss ||
+            return_state.inventory_detached_stack_callback_loss;
         evaluation.summary.inventory_unresolved_memory_callback_loss =
             evaluation.summary.inventory_unresolved_memory_callback_loss ||
             return_state.inventory_unresolved_memory_callback_loss;
@@ -15302,10 +16645,9 @@ FunctionEvaluation evaluate_function(
                 memory.inventory_saved_stack_alias_latent;
             absorb_inventory_candidate_payload(
                 memory.inventory_candidate_carrier, value);
-            merge_inventory_saved_stack_epoch_summary(
-                memory.inventory_saved_stack_epoch,
-                value.inventory_saved_stack_epoch,
-                true);
+            memory.inventory_saved_stack_epoch =
+                summarize_saved_stack_epoch(
+                    value.inventory_saved_stack_epoch);
             memory.values = std::move(value.values);
             evaluation.summary.memory_values.push_back(std::move(memory));
         }
@@ -15410,6 +16752,9 @@ bool recompute_candidate_input_state(CandidateInput& destination) {
         merged.inventory_detached_stack_epoch_alias_watcher =
             merged.inventory_detached_stack_epoch_alias_watcher ||
             state.inventory_detached_stack_epoch_alias_watcher;
+        merged.inventory_detached_stack_callback_loss =
+            merged.inventory_detached_stack_callback_loss ||
+            state.inventory_detached_stack_callback_loss;
         merged.inventory_unresolved_stack_callback_loss =
             merged.inventory_unresolved_stack_callback_loss ||
             state.inventory_unresolved_stack_callback_loss;
@@ -19298,6 +20643,8 @@ AbstractState isolated_store_input(const std::uint32_t call_site,
         observation.inventory_current_stack_epoch_alias_watcher;
     input.inventory_detached_stack_epoch_alias_watcher =
         observation.inventory_detached_stack_epoch_alias_watcher;
+    input.inventory_detached_stack_callback_loss =
+        observation.inventory_detached_stack_callback_loss;
     input.inventory_unresolved_stack_callback_loss =
         retain_stack_inputs &&
         observation.inventory_unresolved_stack_callback_loss;
@@ -19762,10 +21109,10 @@ struct FunctionEvaluationProjection final {
 [[nodiscard]] bool has_current_stack_epoch_mutation_receiver(
     const AbstractState& state) {
     if (state.inventory_current_stack_epoch_alias_watcher ||
-        // A detached watcher is not a present mutation target yet, but a
-        // later SavedEpoch restore can re-arm it before a local write. Keep
-        // the source-side mutation contract live; runtime still decides
-        // whether any concrete mutation reaches the restored alias.
+        // A detached watcher is not a present mutation target. It keeps only
+        // the source slice needed to analyze a later explicit SavedEpoch
+        // restore; the restored value itself must establish a current-origin
+        // receiver before any mutation can be recorded.
         state.inventory_detached_stack_epoch_alias_watcher ||
         state.inventory_unresolved_saved_stack_alias_tracks_current_sources !=
             0u ||
@@ -19885,7 +21232,12 @@ void clear_inventory_transport(AbstractValue& value) {
     value.inventory_pc_relative_code_literal_values.clear();
     value.inventory_code_pointer_values_truncated = false;
     value.inventory_pc_relative_code_literal_values_truncated = false;
-    value.contextual_candidate_dependency = false;
+    // Contextual candidate dependence belongs to the ordinary scalar/stack
+    // value domain, not to Inventory provenance.  A dual projection may prove
+    // the Inventory lane dead while the callee still reads this ordinary ABI
+    // value into a contextual return.  The both-dead projection replaces the
+    // complete value below, so retaining this bit here cannot resurrect a
+    // dead register or promote an Inventory target.
     value.inventory_stack_callback_loss_unresolved = false;
     value.inventory_saved_stack_epoch = {};
     value.call_sites.clear();
@@ -20412,6 +21764,7 @@ inventory_loss_in_evaluation_projection(
     loss.abi_stack_base_unresolved =
         stack_state_sink_observable &&
         (state.inventory_unresolved_stack_callback_loss ||
+         state.inventory_detached_stack_callback_loss ||
          (state.inventory_callback_loss_identity_truncated_sources &
           unresolved_saved_stack_alias_source_stack) != 0u);
     if (stack_state_sink_observable) {
@@ -21023,6 +22376,9 @@ void encode(EvaluationKeyEncoder& key,
     key.append(epoch.present);
     key.append(epoch.unresolved);
     key.append(epoch.tracks_current_epoch);
+    key.append_range(
+        epoch.current_epoch_base_offsets,
+        [&](const auto offset) { key.append(offset); });
     key.append(epoch.candidate_payload_lost);
     key.append(epoch.nested_saved_stack_alias_latent);
     key.append(epoch.nested_saved_stack_alias_tracks_current_epoch);
@@ -21032,6 +22388,7 @@ void encode(EvaluationKeyEncoder& key,
         key.append_size(0u);
         encode(key, epoch.unresolved_candidate_carrier);
         key.append_size(0u);
+        key.append_size(0u);
         return;
     }
     key.append_range(epoch.slots,
@@ -21039,6 +22396,8 @@ void encode(EvaluationKeyEncoder& key,
     encode(key, epoch.unresolved_candidate_carrier);
     key.append_range(epoch.unresolved_nested_epochs,
                      [&](const auto& nested) { encode(key, nested); });
+    key.append_range(epoch.origin_channels,
+                     [&](const auto& channel) { encode(key, channel); });
 }
 
 void encode(EvaluationKeyEncoder& key,
@@ -21054,11 +22413,15 @@ void encode(EvaluationKeyEncoder& key,
     key.append(epoch.present);
     key.append(epoch.unresolved);
     key.append(epoch.tracks_current_epoch);
+    key.append_range(
+        epoch.current_epoch_base_offsets,
+        [&](const auto offset) { key.append(offset); });
     key.append(epoch.candidate_payload_lost);
     key.append(epoch.nested_saved_stack_alias_latent);
     key.append(epoch.nested_saved_stack_alias_tracks_current_epoch);
     if (epoch.candidate_payload_lost) {
         encode(key, epoch.unresolved_candidate_carrier);
+        key.append_size(0u);
         key.append_size(0u);
         key.append_size(0u);
         return;
@@ -21068,6 +22431,8 @@ void encode(EvaluationKeyEncoder& key,
                      [&](const auto& nested) { encode(key, nested); });
     key.append_range(epoch.slots,
                      [&](const auto& slot) { encode(key, slot); });
+    key.append_range(epoch.origin_channels,
+                     [&](const auto& channel) { encode(key, channel); });
 }
 
 void encode(EvaluationKeyEncoder& key,
@@ -21162,6 +22527,7 @@ void encode(EvaluationKeyEncoder& key,
     key.append(state.inventory_current_stack_epoch_alias_watcher);
     key.append(state.inventory_detached_stack_epoch_alias_watcher);
     key.append(state.inventory_unresolved_stack_callback_loss);
+    key.append(state.inventory_detached_stack_callback_loss);
     key.append(state.inventory_unresolved_memory_callback_loss);
     key.append(
         state.inventory_callback_loss_identity_truncated_sources);
@@ -21263,6 +22629,7 @@ void encode(EvaluationKeyEncoder& key,
     key.append(
         summary.inventory_unresolved_saved_stack_alias_tracks_current_sources);
     key.append(summary.inventory_unresolved_stack_callback_loss);
+    key.append(summary.inventory_detached_stack_callback_loss);
     key.append(summary.inventory_unresolved_memory_callback_loss);
     key.append(
         summary.inventory_callback_loss_identity_truncated_sources);
@@ -21298,6 +22665,7 @@ void encode_function_call_effect(
     key.append(
         summary.inventory_unresolved_saved_stack_alias_tracks_current_sources);
     key.append(summary.inventory_unresolved_stack_callback_loss);
+    key.append(summary.inventory_detached_stack_callback_loss);
     key.append(summary.inventory_unresolved_memory_callback_loss);
     key.append(
         summary.inventory_callback_loss_identity_truncated_sources);
@@ -21343,6 +22711,8 @@ void encode_function_call_effect(
     const InventorySavedStackEpochSummary& right) noexcept {
     if (left.present != right.present || left.unresolved != right.unresolved ||
         left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.current_epoch_base_offsets !=
+            right.current_epoch_base_offsets ||
         left.candidate_payload_lost != right.candidate_payload_lost ||
         left.nested_saved_stack_alias_latent !=
             right.nested_saved_stack_alias_latent ||
@@ -21359,7 +22729,8 @@ void encode_function_call_effect(
             right.unresolved_candidate_carrier) ||
         left.slots.size() != right.slots.size() ||
         left.unresolved_nested_epochs.size() !=
-            right.unresolved_nested_epochs.size())
+            right.unresolved_nested_epochs.size() ||
+        left.origin_channels.size() != right.origin_channels.size())
         return false;
     for (std::size_t index = 0u; index < left.slots.size(); ++index) {
         const auto& left_slot = left.slots[index];
@@ -21384,6 +22755,14 @@ void encode_function_call_effect(
         if (!same_inventory_saved_stack_epoch_summary(
                 left.unresolved_nested_epochs[index],
                 right.unresolved_nested_epochs[index]))
+            return false;
+    }
+    for (std::size_t index = 0u;
+         index < left.origin_channels.size();
+         ++index) {
+        if (!same_inventory_saved_stack_epoch_summary(
+                left.origin_channels[index],
+                right.origin_channels[index]))
             return false;
     }
     return true;
@@ -21444,6 +22823,8 @@ void encode_function_call_effect(
             right.inventory_unresolved_saved_stack_alias_tracks_current_sources ||
         left.inventory_unresolved_stack_callback_loss !=
             right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_detached_stack_callback_loss !=
+            right.inventory_detached_stack_callback_loss ||
         left.inventory_unresolved_memory_callback_loss !=
             right.inventory_unresolved_memory_callback_loss ||
         left.inventory_callback_loss_identity_truncated_sources !=
@@ -21498,6 +22879,8 @@ void encode_function_call_effect(
     const InventorySavedStackEpochSummary& right) noexcept {
     if (left.present != right.present || left.unresolved != right.unresolved ||
         left.tracks_current_epoch != right.tracks_current_epoch ||
+        left.current_epoch_base_offsets !=
+            right.current_epoch_base_offsets ||
         left.candidate_payload_lost != right.candidate_payload_lost ||
         left.nested_saved_stack_alias_latent !=
             right.nested_saved_stack_alias_latent ||
@@ -21511,7 +22894,8 @@ void encode_function_call_effect(
             right.unresolved_candidate_carrier) ||
         left.slots.size() != right.slots.size() ||
         left.unresolved_nested_epochs.size() !=
-            right.unresolved_nested_epochs.size())
+            right.unresolved_nested_epochs.size() ||
+        left.origin_channels.size() != right.origin_channels.size())
         return false;
     for (std::size_t index = 0u; index < left.slots.size(); ++index) {
         const auto& left_slot = left.slots[index];
@@ -21536,6 +22920,14 @@ void encode_function_call_effect(
         if (!same_inventory_saved_stack_epoch_summary_without_evidence(
                 left.unresolved_nested_epochs[index],
                 right.unresolved_nested_epochs[index]))
+            return false;
+    }
+    for (std::size_t index = 0u;
+         index < left.origin_channels.size();
+         ++index) {
+        if (!same_inventory_saved_stack_epoch_summary_without_evidence(
+                left.origin_channels[index],
+                right.origin_channels[index]))
             return false;
     }
     return true;
@@ -21598,6 +22990,8 @@ void encode_function_call_effect(
             right.inventory_unresolved_saved_stack_alias_tracks_current_sources ||
         left.inventory_unresolved_stack_callback_loss !=
             right.inventory_unresolved_stack_callback_loss ||
+        left.inventory_detached_stack_callback_loss !=
+            right.inventory_detached_stack_callback_loss ||
         left.inventory_unresolved_memory_callback_loss !=
             right.inventory_unresolved_memory_callback_loss ||
         left.inventory_callback_loss_identity_truncated_sources !=
@@ -21703,6 +23097,19 @@ void merge_inventory_saved_stack_epoch_summary_evidence(
         merge_inventory_saved_stack_epoch_summary_evidence(
             destination.unresolved_nested_epochs.front(),
             source.unresolved_nested_epochs.front());
+    if (destination.origin_channels.size() ==
+        source.origin_channels.size()) {
+        for (std::size_t index = 0u;
+             index < destination.origin_channels.size();
+             ++index) {
+            if (destination.origin_channels[index].tracks_current_epoch !=
+                source.origin_channels[index].tracks_current_epoch)
+                continue;
+            merge_inventory_saved_stack_epoch_summary_evidence(
+                destination.origin_channels[index],
+                source.origin_channels[index]);
+        }
+    }
 }
 
 void merge_function_call_effect_evidence(
@@ -21780,6 +23187,64 @@ void merge_function_call_effect_evidence(
     }
 }
 
+// Function summaries are republished while their callees and contextual
+// subscribers are still reaching a fixpoint.  Exact register, stack-slot and
+// memory-cell results may be replaced by a later evaluation (an exact
+// overwrite must be allowed to clear only its own marker), but a widened
+// unresolved storage domain is an absorbing MAY contract.  Preserve those
+// bounded domains across every publication path so a callback loss cannot be
+// narrowed away by projection or reevaluation.
+//
+// Candidate and pending-scalar lanes remain distinct inside each carrier.
+// Merging a pending scalar therefore keeps it Pending and cannot manufacture
+// callback provenance or any of the explicit loss bits below.
+void widen_function_inventory_storage_contract(
+    FunctionValueSummary& destination,
+    const FunctionValueSummary& previous) {
+    static_cast<void>(merge_inventory_candidate_carrier(
+        destination.inventory_unresolved_stack_carrier,
+        previous.inventory_unresolved_stack_carrier));
+    static_cast<void>(merge_inventory_candidate_carrier(
+        destination.inventory_unresolved_memory_carrier,
+        previous.inventory_unresolved_memory_carrier));
+    static_cast<void>(merge_inventory_candidate_carrier(
+        destination.current_stack_epoch_mutation_carrier,
+        previous.current_stack_epoch_mutation_carrier));
+    // Epoch trees and overwrite ranges are coordinate-bearing deltas.  A
+    // later exact store is allowed to remove its own slot, so replaying an
+    // older tree here would resurrect stale callbacks.  Only the genuinely
+    // coordinate-free carriers and explicit loss/alias domains are sticky;
+    // the freshly evaluated epoch/range topology remains authoritative.
+
+    destination.current_stack_epoch_mutation_callback_loss =
+        destination.current_stack_epoch_mutation_callback_loss ||
+        previous.current_stack_epoch_mutation_callback_loss;
+    destination.inventory_unresolved_saved_stack_alias_sources =
+        static_cast<std::uint8_t>(
+            destination.inventory_unresolved_saved_stack_alias_sources |
+            previous.inventory_unresolved_saved_stack_alias_sources);
+    destination
+        .inventory_unresolved_saved_stack_alias_tracks_current_sources =
+        static_cast<std::uint8_t>(
+            destination
+                .inventory_unresolved_saved_stack_alias_tracks_current_sources |
+            previous
+                .inventory_unresolved_saved_stack_alias_tracks_current_sources);
+    destination.inventory_unresolved_stack_callback_loss =
+        destination.inventory_unresolved_stack_callback_loss ||
+        previous.inventory_unresolved_stack_callback_loss;
+    destination.inventory_detached_stack_callback_loss =
+        destination.inventory_detached_stack_callback_loss ||
+        previous.inventory_detached_stack_callback_loss;
+    destination.inventory_unresolved_memory_callback_loss =
+        destination.inventory_unresolved_memory_callback_loss ||
+        previous.inventory_unresolved_memory_callback_loss;
+    destination.inventory_callback_loss_identity_truncated_sources =
+        static_cast<std::uint8_t>(
+            destination.inventory_callback_loss_identity_truncated_sources |
+            previous.inventory_callback_loss_identity_truncated_sources);
+}
+
 void encode(EvaluationKeyEncoder& key,
             const IndirectCalleeCandidates& candidates) {
     key.append_interned_u32_range(
@@ -21803,6 +23268,7 @@ void encode(EvaluationKeyEncoder& key,
     key.append(candidates.complete);
     key.append(candidates.requires_code_pointer);
     key.append(candidates.observes_abi_arguments);
+    key.append(candidates.abi_sink_sources);
 }
 
 void encode(EvaluationKeyEncoder& key,
@@ -21946,7 +23412,7 @@ make_function_evaluation_cache_key(
     EvaluationKeyEncoder key(collect_component_hashes, omit_evidence);
     // Local schema guard for the exact in-process representation.
     key.select_component(EvaluationKeyComponent::FunctionShape);
-    key.append(std::uint32_t{13u});
+    key.append(std::uint32_t{15u});
     key.append(image.analysis_instance_identity());
     key.append(image.analysis_revision());
     key.append(image.guest_call_abi());
@@ -22230,7 +23696,9 @@ make_function_evaluation_cache_key(
 
 [[nodiscard]] std::size_t retained_heap_bytes(
     const InventorySavedStackEpoch& epoch) noexcept {
-    std::size_t bytes = epoch.slots.capacity() * sizeof(InventorySavedStackSlot);
+    std::size_t bytes =
+        epoch.current_epoch_base_offsets.capacity() * sizeof(std::int32_t) +
+        epoch.slots.capacity() * sizeof(InventorySavedStackSlot);
     for (const auto& slot : epoch.slots) {
         bytes += retained_heap_bytes(slot.carrier);
         // The vector object itself is inline in the slot (already counted
@@ -22245,13 +23713,18 @@ make_function_evaluation_cache_key(
              sizeof(InventorySavedStackEpoch);
     for (const auto& nested : epoch.unresolved_nested_epochs)
         bytes += retained_heap_bytes(nested);
+    bytes += epoch.origin_channels.capacity() *
+             sizeof(InventorySavedStackEpoch);
+    for (const auto& channel : epoch.origin_channels)
+        bytes += retained_heap_bytes(channel);
     return bytes;
 }
 
 [[nodiscard]] std::size_t retained_heap_bytes(
     const InventorySavedStackEpochSummary& epoch) noexcept {
-    std::size_t bytes = epoch.slots.capacity() *
-                        sizeof(InventorySavedStackSlotSummary);
+    std::size_t bytes =
+        epoch.current_epoch_base_offsets.capacity() * sizeof(std::int32_t) +
+        epoch.slots.capacity() * sizeof(InventorySavedStackSlotSummary);
     for (const auto& slot : epoch.slots) {
         bytes += retained_heap_bytes(slot.carrier);
         bytes += slot.nested_epochs.capacity() *
@@ -22264,6 +23737,10 @@ make_function_evaluation_cache_key(
              sizeof(InventorySavedStackEpochSummary);
     for (const auto& nested : epoch.unresolved_nested_epochs)
         bytes += retained_heap_bytes(nested);
+    bytes += epoch.origin_channels.capacity() *
+             sizeof(InventorySavedStackEpochSummary);
+    for (const auto& channel : epoch.origin_channels)
+        bytes += retained_heap_bytes(channel);
     return bytes;
 }
 
@@ -24397,7 +25874,7 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
         const auto first = lookup();
         const auto second = lookup();
         const auto statistics = coordinator.statistics();
-        probe.coordinator_ready_eviction_recomputed =
+        probe.coordinator_ready_admission_fallback_recomputed =
             !first.second && !second.second &&
             first.first != nullptr && second.first != nullptr &&
             computations.load(std::memory_order_relaxed) == 2u &&
@@ -24407,7 +25884,7 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
             statistics.in_flight_reuses == 0u &&
             statistics.entries == 0u &&
             statistics.retained_payload_bytes == 0u &&
-            statistics.evictions == 2u;
+            statistics.evictions == 0u;
         add_statistics(zero_budget_cache.statistics());
     }
 
@@ -24437,28 +25914,29 @@ detail::probe_function_evaluation_cache_telemetry_for_testing() {
             std::launch::async,
             [&] {
                 return coordinator.get_or_compute(
-                    key, [&] { return artifact(); });
+                    key,
+                    [&] {
+                        computations.fetch_add(
+                            1u, std::memory_order_relaxed);
+                        return artifact();
+                    });
             });
-        const auto deadline =
-            std::chrono::steady_clock::now() +
-            std::chrono::seconds{2};
-        while (coordinator.statistics().in_flight_reuses == 0u &&
-               std::chrono::steady_clock::now() < deadline)
-            std::this_thread::yield();
+        const auto second_result = second.get();
         release_producer.set_value();
         const auto first_result = first.get();
-        const auto second_result = second.get();
         const auto statistics = coordinator.statistics();
-        probe.coordinator_in_flight_eviction_safe =
-            !first_result.second && second_result.second &&
-            first_result.first == second_result.first &&
-            computations.load(std::memory_order_relaxed) == 1u &&
+        probe.coordinator_concurrent_admission_fallback_independent =
+            !first_result.second && !second_result.second &&
+            first_result.first != nullptr &&
+            second_result.first != nullptr &&
+            computations.load(std::memory_order_relaxed) == 2u &&
             statistics.requests == 2u &&
-            statistics.producers == 1u &&
-            statistics.in_flight_reuses == 1u &&
+            statistics.producers == 2u &&
+            statistics.ready_reuses == 0u &&
+            statistics.in_flight_reuses == 0u &&
             statistics.entries == 0u &&
             statistics.retained_payload_bytes == 0u &&
-            statistics.evictions == 1u;
+            statistics.evictions == 0u;
     }
 
     {
@@ -24569,7 +26047,7 @@ inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
 // projection/root identity. Contextual MAY-joins are additionally closed
 // through the authoritative hybrid ingress projection before they become a
 // lane or edge identity.
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 28u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 31u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -27970,9 +29448,35 @@ void write_inventory_candidate_carrier(
                            const std::size_t depth) -> bool {
         if (depth > maximum_saved_stack_epoch_nesting ||
             ++nodes > maximum_saved_stack_epoch_nodes ||
+            !canonical_current_epoch_base_offsets(
+                epoch.current_epoch_base_offsets) ||
+            (!epoch.tracks_current_epoch &&
+             !epoch.current_epoch_base_offsets.empty()) ||
             epoch.unresolved_nested_epochs.size() > 1u ||
+            epoch.origin_channels.size() > 2u ||
             !epoch.unresolved_candidate_carrier.call_sites.empty())
             return false;
+        if (!epoch.origin_channels.empty()) {
+            if (epoch.origin_channels.size() != 2u || !epoch.present ||
+                epoch.unresolved || epoch.tracks_current_epoch ||
+                epoch.candidate_payload_lost ||
+                epoch.nested_saved_stack_alias_latent ||
+                epoch.nested_saved_stack_alias_tracks_current_epoch ||
+                !epoch.slots.empty() ||
+                !epoch.unresolved_nested_epochs.empty() ||
+                has_inventory_candidate_carrier_payload(
+                    epoch.unresolved_candidate_carrier) ||
+                has_pending_abi_scalar_payload(
+                    epoch.unresolved_candidate_carrier) ||
+                !epoch.unresolved_candidate_carrier.callees.empty() ||
+                !epoch.origin_channels[0].origin_channels.empty() ||
+                !epoch.origin_channels[1].origin_channels.empty() ||
+                epoch.origin_channels[0].tracks_current_epoch ||
+                !epoch.origin_channels[1].tracks_current_epoch)
+                return false;
+            return self(self, epoch.origin_channels[0], depth) &&
+                   self(self, epoch.origin_channels[1], depth);
+        }
         if (!epoch.present)
             return !epoch.unresolved && !epoch.tracks_current_epoch &&
                    !epoch.candidate_payload_lost &&
@@ -27980,6 +29484,7 @@ void write_inventory_candidate_carrier(
                    !epoch.nested_saved_stack_alias_tracks_current_epoch &&
                    epoch.slots.empty() &&
                    epoch.unresolved_nested_epochs.empty() &&
+                   epoch.origin_channels.empty() &&
                    !has_inventory_candidate_carrier_payload(
                        epoch.unresolved_candidate_carrier) &&
                    !has_pending_abi_scalar_payload(
@@ -27989,6 +29494,7 @@ void write_inventory_candidate_carrier(
         if (epoch.candidate_payload_lost)
             return epoch.unresolved && epoch.slots.empty() &&
                    epoch.unresolved_nested_epochs.empty() &&
+                   epoch.origin_channels.empty() &&
                    !has_inventory_candidate_carrier_payload(
                        epoch.unresolved_candidate_carrier) &&
                    !has_pending_abi_scalar_payload(
@@ -28037,6 +29543,8 @@ void write_inventory_saved_stack_epoch_summary(
     writer.boolean(epoch.present);
     writer.boolean(epoch.unresolved);
     writer.boolean(epoch.tracks_current_epoch);
+    writer.sequence(epoch.current_epoch_base_offsets,
+                    [&](const auto offset) { writer.scalar(offset); });
     writer.boolean(epoch.candidate_payload_lost);
     writer.boolean(epoch.nested_saved_stack_alias_latent);
     writer.boolean(epoch.nested_saved_stack_alias_tracks_current_epoch);
@@ -28054,6 +29562,11 @@ void write_inventory_saved_stack_epoch_summary(
                     [&](const auto& nested) {
                         write_inventory_saved_stack_epoch_summary(
                             writer, nested, depth + 1u);
+                    });
+    writer.sequence(epoch.origin_channels,
+                    [&](const auto& channel) {
+                        write_inventory_saved_stack_epoch_summary(
+                            writer, channel, depth);
                     });
 }
 
@@ -28075,6 +29588,16 @@ read_inventory_saved_stack_epoch_summary(PersistentFunctionEpochReader& reader,
     epoch.present = reader.boolean();
     epoch.unresolved = reader.boolean();
     epoch.tracks_current_epoch = reader.boolean();
+    const auto base_count = reader.count(maximum_current_epoch_base_offsets);
+    epoch.current_epoch_base_offsets.reserve(base_count);
+    for (std::size_t index = 0u; index < base_count; ++index)
+        epoch.current_epoch_base_offsets.push_back(
+            reader.scalar<std::int32_t>());
+    if (!canonical_current_epoch_base_offsets(
+            epoch.current_epoch_base_offsets) ||
+        (!epoch.tracks_current_epoch &&
+         !epoch.current_epoch_base_offsets.empty()))
+        throw PersistentFunctionEpochIncomplete{};
     epoch.candidate_payload_lost = reader.boolean();
     epoch.nested_saved_stack_alias_latent = reader.boolean();
     epoch.nested_saved_stack_alias_tracks_current_epoch = reader.boolean();
@@ -28121,11 +29644,39 @@ read_inventory_saved_stack_epoch_summary(PersistentFunctionEpochReader& reader,
         epoch.unresolved_nested_epochs.push_back(
             read_inventory_saved_stack_epoch_summary(
                 reader, depth + 1u, node_count, slot_count));
+    const auto origin_channel_count = reader.count(2u);
+    epoch.origin_channels.reserve(origin_channel_count);
+    for (std::size_t channel = 0u;
+         channel < origin_channel_count;
+         ++channel)
+        epoch.origin_channels.push_back(
+            read_inventory_saved_stack_epoch_summary(
+                reader, depth, node_count, slot_count));
+    if (!epoch.origin_channels.empty() &&
+        (epoch.origin_channels.size() != 2u || !epoch.present ||
+         epoch.unresolved || epoch.tracks_current_epoch ||
+         epoch.candidate_payload_lost ||
+         epoch.nested_saved_stack_alias_latent ||
+         epoch.nested_saved_stack_alias_tracks_current_epoch ||
+         !epoch.slots.empty() ||
+         !epoch.unresolved_nested_epochs.empty() ||
+         has_inventory_candidate_carrier_payload(
+             epoch.unresolved_candidate_carrier) ||
+         has_pending_abi_scalar_payload(
+             epoch.unresolved_candidate_carrier) ||
+         !epoch.unresolved_candidate_carrier.call_sites.empty() ||
+         !epoch.unresolved_candidate_carrier.callees.empty() ||
+         !epoch.origin_channels[0].origin_channels.empty() ||
+         !epoch.origin_channels[1].origin_channels.empty() ||
+         epoch.origin_channels[0].tracks_current_epoch ||
+         !epoch.origin_channels[1].tracks_current_epoch))
+        throw PersistentFunctionEpochIncomplete{};
     if (!epoch.present &&
         (epoch.unresolved || epoch.tracks_current_epoch ||
          epoch.candidate_payload_lost || epoch.nested_saved_stack_alias_latent ||
          epoch.nested_saved_stack_alias_tracks_current_epoch ||
          !epoch.slots.empty() || !epoch.unresolved_nested_epochs.empty() ||
+         !epoch.origin_channels.empty() ||
          has_inventory_candidate_carrier_payload(
               epoch.unresolved_candidate_carrier) ||
          has_pending_abi_scalar_payload(
@@ -28136,6 +29687,7 @@ read_inventory_saved_stack_epoch_summary(PersistentFunctionEpochReader& reader,
     if (epoch.candidate_payload_lost &&
         (!epoch.unresolved || !epoch.slots.empty() ||
          !epoch.unresolved_nested_epochs.empty() ||
+         !epoch.origin_channels.empty() ||
          has_inventory_candidate_carrier_payload(
              epoch.unresolved_candidate_carrier) ||
          has_pending_abi_scalar_payload(
@@ -28552,6 +30104,7 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
     writer.scalar(
         summary.inventory_unresolved_saved_stack_alias_tracks_current_sources);
     writer.boolean(summary.inventory_unresolved_stack_callback_loss);
+    writer.boolean(summary.inventory_detached_stack_callback_loss);
     writer.boolean(summary.inventory_unresolved_memory_callback_loss);
     writer.scalar(
         summary.inventory_callback_loss_identity_truncated_sources);
@@ -28746,18 +30299,21 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         throw PersistentFunctionEpochIncomplete{};
     summary.inventory_unresolved_saved_stack_alias_tracks_current_sources =
         reader.scalar<std::uint8_t>();
-    if (summary.inventory_unresolved_saved_stack_alias_tracks_current_sources > 3u ||
-        (summary.inventory_unresolved_saved_stack_alias_tracks_current_sources &
-         ~summary.inventory_unresolved_saved_stack_alias_sources) != 0u)
+    if (summary.inventory_unresolved_saved_stack_alias_tracks_current_sources >
+        3u)
         throw PersistentFunctionEpochIncomplete{};
-    if (((summary.inventory_unresolved_saved_stack_alias_sources &
+    const auto unresolved_alias_sources = static_cast<std::uint8_t>(
+        summary.inventory_unresolved_saved_stack_alias_sources |
+        summary.inventory_unresolved_saved_stack_alias_tracks_current_sources);
+    if (((unresolved_alias_sources &
           unresolved_saved_stack_alias_source_stack) != 0u &&
          !summary.inventory_unresolved_stack_epoch.present) ||
-        ((summary.inventory_unresolved_saved_stack_alias_sources &
+        ((unresolved_alias_sources &
           unresolved_saved_stack_alias_source_memory) != 0u &&
          !summary.inventory_unresolved_memory_epoch.present))
         throw PersistentFunctionEpochIncomplete{};
     summary.inventory_unresolved_stack_callback_loss = reader.boolean();
+    summary.inventory_detached_stack_callback_loss = reader.boolean();
     summary.inventory_unresolved_memory_callback_loss = reader.boolean();
     summary.inventory_callback_loss_identity_truncated_sources =
         reader.scalar<std::uint8_t>();
@@ -28773,6 +30329,8 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
         }
         for (const auto& nested : epoch.unresolved_nested_epochs)
             if (self(self, nested)) return true;
+        for (const auto& channel : epoch.origin_channels)
+            if (self(self, channel)) return true;
         return false;
     };
     if (!summary.inventory_unresolved_stack_carrier.call_sites.empty() ||
@@ -30041,9 +31599,16 @@ struct detail::FunctionValueAnalysisSession::Impl {
         const auto identity =
             image.analysis_instance_identity();
         const auto revision = image.analysis_revision();
+        const auto immutable_generation = image.immutable_generation();
         if (bound_image_identity == identity &&
-            bound_image_revision == revision)
+            bound_image_immutable_generation == immutable_generation) {
+            // Entry-point/root metadata advances analysis_revision without
+            // changing the analyzed bytes or FVA shape. Keep all immutable
+            // graph/SCC/summary shards; the caller's exact FunctionProgramDelta
+            // remains responsible for any changed program inputs.
+            bound_image_revision = revision;
             return;
+        }
         evaluations.clear();
         published_epoch.reset();
         pending_terminal_abort_snapshot.reset();
@@ -30114,6 +31679,15 @@ struct detail::FunctionValueAnalysisSession::Impl {
         final_materialized_functions.store(0u, std::memory_order_relaxed);
         bound_image_identity = identity;
         bound_image_revision = revision;
+        bound_image_immutable_generation = immutable_generation;
+    }
+
+    [[nodiscard]] bool image_binding_matches(
+        const katana::io::ExecutableImage& image) const noexcept {
+        return bound_image_identity == image.analysis_instance_identity() &&
+               bound_image_revision == image.analysis_revision() &&
+               bound_image_immutable_generation ==
+                   image.immutable_generation();
     }
 
     std::mutex analysis_mutex;
@@ -30184,6 +31758,7 @@ struct detail::FunctionValueAnalysisSession::Impl {
         PersistentAnalysisBypassReason::None;
     std::uint64_t bound_image_identity = 0u;
     std::uint64_t bound_image_revision = 0u;
+    std::uint64_t bound_image_immutable_generation = 0u;
 };
 
 detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
@@ -30358,8 +31933,7 @@ detail::FunctionValueAnalysisSession::export_persistent_epoch_shards(
         return {};
     const std::lock_guard lock(impl_->analysis_mutex);
     if (impl_->published_epoch == nullptr ||
-        impl_->bound_image_identity != image.analysis_instance_identity() ||
-        impl_->bound_image_revision != image.analysis_revision())
+        !impl_->image_binding_matches(image))
         return {};
     try {
         return write_persistent_function_epoch(
@@ -30548,7 +32122,8 @@ detail::FunctionValueAnalysisSession::import_persistent_epoch_shards(
             .result_materialization = result_materialization,
             .expected_published_epoch_version = imported_version,
             .image_identity = image_identity,
-            .image_revision = image_revision};
+            .image_revision = image_revision,
+            .image_immutable_generation = image.immutable_generation()};
         impl_->analysis_epochs_published.fetch_add(
             1u, std::memory_order_relaxed);
         impl_->resolution_root_artifacts_retained.store(
@@ -30804,7 +32379,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                  : session.impl_->published_epoch->version) &&
         staged_delta->image_identity ==
             image.analysis_instance_identity() &&
-        staged_delta->image_revision == image.analysis_revision();
+        ((staged_delta->image_immutable_generation != 0u &&
+          staged_delta->image_immutable_generation ==
+              image.immutable_generation()) ||
+         (staged_delta->image_immutable_generation == 0u &&
+          staged_delta->image_revision == image.analysis_revision()));
     const bool staged_incremental_analysis =
         staged_delta != nullptr &&
         session.impl_->pending_persistent_analysis_bypass_reason ==
@@ -30816,7 +32395,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             session.impl_->published_epoch->version &&
         staged_delta->image_identity ==
             image.analysis_instance_identity() &&
-        staged_delta->image_revision == image.analysis_revision();
+        ((staged_delta->image_immutable_generation != 0u &&
+          staged_delta->image_immutable_generation ==
+              image.immutable_generation()) ||
+         (staged_delta->image_immutable_generation == 0u &&
+          staged_delta->image_revision == image.analysis_revision()));
     // Exact/Unchanged rounds intentionally pass only their typed journal;
     // empty legacy spans therefore do not mean "no analysis" once a matching
     // immutable program epoch supplies the unchanged portion.
@@ -30849,7 +32432,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      : session.impl_->published_epoch->version) &&
             terminal.image_identity ==
                 image.analysis_instance_identity() &&
-            terminal.image_revision == image.analysis_revision()) {
+            ((terminal.image_immutable_generation != 0u &&
+              terminal.image_immutable_generation ==
+                  image.immutable_generation()) ||
+             (terminal.image_immutable_generation == 0u &&
+              terminal.image_revision == image.analysis_revision()))) {
             const bool pinned_abort_matches =
                 session.impl_->pending_terminal_abort_snapshot.has_value() &&
                 session.impl_->pending_terminal_abort_image_identity ==
@@ -31016,7 +32603,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
              published_epoch_version ||
          program_delta->image_identity !=
              image.analysis_instance_identity() ||
-         program_delta->image_revision != image.analysis_revision())) {
+         (program_delta->image_immutable_generation != 0u
+              ? program_delta->image_immutable_generation !=
+                    image.immutable_generation()
+              : program_delta->image_revision !=
+                    image.analysis_revision()))) {
         persistent_analysis_bypass_reason =
             PersistentAnalysisBypassReason::ProgramDeltaUnrepresentable;
     }
@@ -32424,6 +34015,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         local_delta.expected_published_epoch_version = 0u;
         local_delta.image_identity = image.analysis_instance_identity();
         local_delta.image_revision = image.analysis_revision();
+        local_delta.image_immutable_generation = image.immutable_generation();
         local_session.stage_next_function_program_delta(
             std::move(local_delta));
         detail::GuardedNativeEntryShapeCache local_shapes{image};
@@ -33385,7 +34977,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     inventory_walk_diagnostics.contextual_provenance_replay_capsule_budget =
         maximum_contextual_return_evaluations;
     inventory_walk_diagnostics.contextual_provenance_replay_key_byte_budget =
-        session.impl_->evaluations.maximum_retained_payload_bytes();
+        maximum_contextual_provenance_replay_key_bytes;
     inventory_walk_diagnostics.abi_stack_argument_slot_budget =
         maximum_abi_stack_argument_slots;
     inventory_walk_diagnostics.local_fixpoint_iteration_budget =
@@ -33886,7 +35478,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             callers_by_callee[callee].push_back(function.entry_address);
         for (const auto target : function.tail_jump_targets)
             callers_by_callee[target].push_back(function.entry_address);
-        for (const auto block_address : function.block_addresses) {
+        auto call_blocks = function.block_addresses;
+        call_blocks.push_back(function.entry_address);
+        normalize(call_blocks);
+        for (const auto block_address : call_blocks) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
             summary_candidate_entries_visited += block->second->lines.size();
@@ -35635,7 +37230,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         for (auto& [transfer_site, ingress] : tail_ingresses) {
             inventory_topology_entries_visited += ingress.targets.size();
             for (const auto target : ingress.targets)
-                static_cast<void>(
+                ingress.abi_sink_sources = static_cast<std::uint8_t>(
+                    ingress.abi_sink_sources |
                     cache_tail_target_abi_sink_sources(target));
             const auto target_forwards_abi_to_inventory_sink =
                 std::any_of(
@@ -35669,6 +37265,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             if (owners == function_owners_by_control.end()) continue;
             functions_with_guarded_abi_inventory_tail.insert(
                 owners->second.begin(), owners->second.end());
+        }
+        // Regional continuations use the same exact sink-source contract in
+        // their evaluation/cache identity.  This is a source-flow summary,
+        // not a blanket ABI-read permission.
+        for (auto& [region_entry, regional] :
+             inventory_region_tail_ingresses_by_entry) {
+            static_cast<void>(region_entry);
+            for (auto& [transfer_site, ingress] : regional) {
+                static_cast<void>(transfer_site);
+                for (const auto target : ingress.targets)
+                    ingress.abi_sink_sources =
+                        static_cast<std::uint8_t>(
+                            ingress.abi_sink_sources |
+                            cache_tail_target_abi_sink_sources(target));
+            }
         }
     }
     const auto target_abi_inventory_sink_sources =
@@ -35991,7 +37602,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         // than assuming FunctionInfo will forever be the only call source.
         // Version validation is allowed to over-approximate, never to miss a
         // summary which a speculative evaluation can read.
-        for (const auto block_address : function.block_addresses) {
+        auto dependency_blocks = function.block_addresses;
+        dependency_blocks.push_back(function.entry_address);
+        normalize(dependency_blocks);
+        for (const auto block_address : dependency_blocks) {
             const auto block = block_index.find(block_address);
             if (block == block_index.end()) continue;
             summary_candidate_entries_visited += block->second->lines.size();
@@ -36068,6 +37682,17 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         functions.size(), 0u);
     std::vector<std::uint64_t> fixpoint_input_versions(
         functions.size(), 0u);
+    // A zero-valued internal summary is the global fixpoint's undiscovered
+    // Bottom, not an authoritative memory/callback-loss contract.  Callers
+    // may evaluate against that Bottom to discover inputs, but loss observed
+    // in such a speculative round must be replaceable once every dependency
+    // has published at least once.  After that boundary, the normal sticky
+    // widening contract is authoritative and genuinely monotone.
+    std::vector<std::uint8_t> fixpoint_summary_evaluated(
+        functions.size(), 0u);
+    std::vector<std::uint8_t>
+        fixpoint_inventory_storage_contract_authoritative(
+            functions.size(), 0u);
     if (previous_epoch != nullptr) {
         summary_candidate_entries_visited += functions.size();
         for (std::size_t index = 0u; index < functions.size(); ++index) {
@@ -36083,6 +37708,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             if (summary_dirty_functions.contains(address)) {
                 ++fixpoint_summary_versions[index];
                 ++fixpoint_input_versions[index];
+            } else {
+                fixpoint_summary_evaluated[index] = 1u;
+                fixpoint_inventory_storage_contract_authoritative[index] =
+                    1u;
             }
         }
     }
@@ -36095,6 +37724,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         std::uint64_t input_version = 0u;
         std::vector<std::pair<std::size_t, std::uint64_t>>
             summary_versions;
+        bool inventory_storage_dependencies_evaluated = false;
         std::optional<FunctionEvaluation> evaluation;
         GuardedCodeInventoryWalkDiagnostics diagnostics;
         std::exception_ptr error;
@@ -36662,6 +38292,15 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             item.summary_versions.reserve(
                 fixpoint_summary_dependencies[item.function_index]
                     .size());
+            item.inventory_storage_dependencies_evaluated =
+                std::all_of(
+                    fixpoint_summary_dependencies[item.function_index]
+                        .begin(),
+                    fixpoint_summary_dependencies[item.function_index]
+                        .end(),
+                    [&](const auto dependency) {
+                        return fixpoint_summary_evaluated[dependency] != 0u;
+                    });
             for (const auto dependency :
                  fixpoint_summary_dependencies[item.function_index]) {
                 item.summary_versions.emplace_back(
@@ -36808,8 +38447,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             auto& previous = summaries[item.address];
             widen_function_memory_read_contract(
                 evaluation.summary, previous);
-            if (previous != evaluation.summary) {
+            if (fixpoint_inventory_storage_contract_authoritative
+                    [item.function_index] != 0u)
+                widen_function_inventory_storage_contract(
+                    evaluation.summary, previous);
+            const bool summary_changed =
+                previous != evaluation.summary;
+            const bool first_evaluation =
+                fixpoint_summary_evaluated[item.function_index] == 0u;
+            if (summary_changed)
                 previous = std::move(evaluation.summary);
+            fixpoint_summary_evaluated[item.function_index] = 1u;
+            fixpoint_inventory_storage_contract_authoritative
+                [item.function_index] =
+                    item.inventory_storage_dependencies_evaluated ? 1u : 0u;
+            if (summary_changed || first_evaluation) {
                 ++fixpoint_summary_versions[item.function_index];
                 const auto callers =
                     callers_by_callee.find(item.address);
@@ -37304,8 +38956,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                    input.fixpoint_abi_stack_base_unresolved ||
                    inventory_candidate_values_truncated(input.state);
         };
-    const auto contains_resolution_or_inventory_instruction =
+    struct ResolutionInstructionProfile final {
+        bool local_resolution_work = false;
+        bool sink_literal_source = false;
+    };
+    const auto resolution_instruction_profile =
         [&](const FunctionInfo& function) {
+            auto profile = ResolutionInstructionProfile{};
             resolution_preparation_entries_visited +=
                 function.block_addresses.size();
             for (const auto block_address :
@@ -37316,6 +38973,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     block->second->lines.size();
                 for (const auto& line : block->second->lines) {
                     const auto kind = line.instruction.kind;
+                    if (kind == katana::sh4::InstructionKind::
+                                    MovLongLoadPcRelative ||
+                        kind == katana::sh4::InstructionKind::
+                                    MovWordLoadPcRelative ||
+                        kind == katana::sh4::InstructionKind::
+                                    MoveAddressPcRelative)
+                        profile.sink_literal_source = true;
                     if (kind == katana::sh4::InstructionKind::Jmp ||
                         kind == katana::sh4::InstructionKind::Jsr ||
                         kind == katana::sh4::InstructionKind::Braf ||
@@ -37337,10 +39001,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     MovLongLoadDisplacement ||
                         kind == katana::sh4::InstructionKind::
                                     MovLongLoadR0Indexed)
-                        return true;
+                        profile.local_resolution_work = true;
                 }
             }
-            return false;
+            return profile;
         };
     std::vector<const FunctionInfo*> resolution_functions;
     resolution_functions.reserve(functions.size());
@@ -37352,10 +39016,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             candidate_input != candidate_inputs.end() &&
             candidate_input_requires_owner_validation(
                 candidate_input->second);
-        if (!contains_resolution_or_inventory_instruction(candidate) &&
-            !functions_reaching_guarded_inventory_sink.contains(
-                address) &&
-            !candidate_call_owner_functions.contains(address) &&
+        const auto instruction_profile =
+            resolution_instruction_profile(candidate);
+        const auto contains_instruction =
+            instruction_profile.local_resolution_work;
+        const auto reaches_sink =
+            functions_reaching_guarded_inventory_sink.contains(address);
+        const auto forwards_literal_to_sink =
+            reaches_sink && instruction_profile.sink_literal_source;
+        const auto guarded_abi_tail_owner =
+            functions_with_guarded_abi_inventory_tail.contains(address);
+        const auto candidate_owner =
+            candidate_call_owner_functions.contains(address);
+        if (!contains_instruction && !forwards_literal_to_sink &&
+            !guarded_abi_tail_owner &&
+            !candidate_owner &&
             !owner_loss_validation)
             continue;
         resolution_functions.push_back(&candidate);
@@ -39513,7 +41188,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             maximum_contextual_return_evaluations;
         function_result.walk_diagnostics
             .contextual_provenance_replay_key_byte_budget =
-            session.impl_->evaluations.maximum_retained_payload_bytes();
+            maximum_contextual_provenance_replay_key_bytes;
         function_result.walk_diagnostics.abi_stack_argument_slot_budget =
             maximum_abi_stack_argument_slots;
         function_result.walk_diagnostics.local_fixpoint_iteration_budget =
@@ -40541,8 +42216,34 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         };
         const auto harvest_contextual_candidate_returns = [&] {
             throw_if_resolution_cancelled(cancel_requested);
-            if (!candidate_call_owner_functions.contains(
-                    function->entry_address))
+            const bool candidate_call_root =
+                candidate_call_owner_functions.contains(
+                    function->entry_address);
+            const bool guarded_tail_helper_root =
+                functions_with_guarded_abi_inventory_tail.contains(
+                    function->entry_address) &&
+                std::any_of(
+                    function_result.evaluation.call_arguments.begin(),
+                    function_result.evaluation.call_arguments.end(),
+                    [&](const auto& observation) {
+                        const auto pair = candidate_call_pair_key(
+                            observation.call_site,
+                            observation.callee);
+                        return !candidate_call_pairs.contains(pair) &&
+                               is_semantic_call_pair(
+                                   observation.call_site,
+                                   observation.callee) &&
+                               final_function_by_address.contains(
+                                   observation.callee);
+                    });
+            // A guarded tail owner needs the contextual-return fixpoint only
+            // when its already projected ordinary helper call carries actual
+            // candidate provenance. This retains an exact helper-return chain
+            // without charging unrelated forwarded-tail roots for a complete
+            // contextual session.
+            const bool root_can_forward_candidate_provenance =
+                candidate_call_root || guarded_tail_helper_root;
+            if (!root_can_forward_candidate_provenance)
                 return;
             if (contextual_root_inputs.empty()) return;
             using ContextualLaneId = std::size_t;
@@ -40770,7 +42471,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             std::size_t contextual_provenance_replay_capsules = 0u;
             std::size_t contextual_provenance_replay_key_bytes = 0u;
             const auto contextual_provenance_replay_key_byte_budget =
-                session.impl_->evaluations.maximum_retained_payload_bytes();
+                maximum_contextual_provenance_replay_key_bytes;
             bool contextual_provenance_replay_capsule_budget_exhausted =
                 false;
             bool contextual_provenance_replay_key_byte_budget_exhausted =
@@ -40962,7 +42663,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                      *root_input,
                      *root_input,
                      std::nullopt,
-                     false,
+                     root_can_forward_candidate_provenance,
                      0u,
                      0u});
                 if (collect_contextual_scheduler_diagnostics)
@@ -41798,7 +43499,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             ContextualReadAdmissionFailure::
                                 DetachedAliasWatcher);
                     if (exact_source_state
-                            .inventory_unresolved_stack_callback_loss)
+                            .inventory_unresolved_stack_callback_loss ||
+                        exact_source_state
+                            .inventory_detached_stack_callback_loss)
                         set_failure(
                             ContextualReadAdmissionFailure::
                                 UnresolvedStackCallbackLoss);
@@ -41964,6 +43667,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             after.inventory_detached_stack_epoch_alias_watcher ||
                         before.inventory_unresolved_stack_callback_loss !=
                             after.inventory_unresolved_stack_callback_loss ||
+                        before.inventory_detached_stack_callback_loss !=
+                            after.inventory_detached_stack_callback_loss ||
                         before.inventory_unresolved_memory_callback_loss !=
                             after.inventory_unresolved_memory_callback_loss ||
                         before.inventory_callback_loss_identity_truncated_sources !=
@@ -42382,6 +44087,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         before.unresolved != after.unresolved ||
                         before.tracks_current_epoch !=
                             after.tracks_current_epoch ||
+                        before.current_epoch_base_offsets !=
+                            after.current_epoch_base_offsets ||
                         before.candidate_payload_lost !=
                             after.candidate_payload_lost ||
                         before.nested_saved_stack_alias_latent !=
@@ -42391,7 +44098,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 .nested_saved_stack_alias_tracks_current_epoch ||
                         before.slots.size() != after.slots.size() ||
                         before.unresolved_nested_epochs.size() !=
-                            after.unresolved_nested_epochs.size())
+                            after.unresolved_nested_epochs.size() ||
+                        before.origin_channels.size() !=
+                            after.origin_channels.size())
                         note(ContextualValueDeltaDomain::SavedEpochTopology);
                     if (before.candidate_payload_lost !=
                         after.candidate_payload_lost)
@@ -42486,6 +44195,21 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                  : empty_epoch,
                              index < after.unresolved_nested_epochs.size()
                                  ? after.unresolved_nested_epochs[index]
+                                 : empty_epoch,
+                             result,
+                             self);
+                    }
+                    const auto origin_channel_count = std::max(
+                        before.origin_channels.size(),
+                        after.origin_channels.size());
+                    for (std::size_t index = 0u;
+                         index < origin_channel_count;
+                         ++index) {
+                        self(index < before.origin_channels.size()
+                                 ? before.origin_channels[index]
+                                 : empty_epoch,
+                             index < after.origin_channels.size()
+                                 ? after.origin_channels[index]
                                  : empty_epoch,
                              result,
                              self);
@@ -42683,6 +44407,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             after.inventory_detached_stack_epoch_alias_watcher ||
                         before.inventory_unresolved_stack_callback_loss !=
                             after.inventory_unresolved_stack_callback_loss ||
+                        before.inventory_detached_stack_callback_loss !=
+                            after.inventory_detached_stack_callback_loss ||
                         before.inventory_unresolved_memory_callback_loss !=
                             after.inventory_unresolved_memory_callback_loss ||
                         before.inventory_callback_loss_identity_truncated_sources !=
@@ -44291,13 +46017,18 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             observation.callee);
                         const bool candidate_call =
                             candidate_call_pairs.contains(pair);
-                        const bool contextual_helper_call =
-                            item.candidate_context &&
+                        const bool semantic_call =
                             is_semantic_call_pair(
                                 observation.call_site,
-                                observation.callee) &&
+                                observation.callee);
+                        auto helper_observation = observation.state;
+                        if (item.candidate_context && semantic_call &&
+                            !candidate_call)
+                            mark_observed_code_pointer_arguments(
+                                image, helper_observation);
+                        const bool contextual_candidate_argument =
                             has_contextual_candidate_abi_argument(
-                                observation.state,
+                                helper_observation,
                                 contextual_entry_register_reads(
                                     observation.callee),
                                 contextual_entry_stack_reads(
@@ -44306,9 +46037,26 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     observation.callee),
                                 contextual_mutation_conditional_sources,
                                 contextual_mutation_unconditional_sources,
-                                contextual_alias_creation_contract) &&
-                            requires_contextual_return(
-                                observation.callee);
+                                contextual_alias_creation_contract);
+                        const bool explicit_inventory_candidate_argument =
+                            has_explicit_inventory_candidate_abi_argument(
+                                helper_observation,
+                                contextual_entry_register_reads(
+                                    observation.callee),
+                                contextual_entry_stack_reads(
+                                    observation.callee),
+                                contextual_entry_inventory_provenance_reads(
+                                    observation.callee),
+                                contextual_mutation_conditional_sources,
+                                contextual_mutation_unconditional_sources,
+                                contextual_alias_creation_contract);
+                        const bool contextual_helper_call =
+                            item.candidate_context &&
+                            semantic_call &&
+                            ((contextual_candidate_argument &&
+                              requires_contextual_return(
+                                  observation.callee)) ||
+                             explicit_inventory_candidate_argument);
                         if (!candidate_call &&
                             !contextual_helper_call)
                             continue;
@@ -44316,10 +46064,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                 observation.callee))
                             continue;
                         auto callee_match_input =
-                            observation.state;
+                            std::move(helper_observation);
                         auto callee_context_input =
                             callee_match_input;
-                        if (candidate_call) {
+                        if (candidate_call ||
+                            explicit_inventory_candidate_argument) {
                             mark_contextual_candidate_abi_arguments(
                                 callee_context_input,
                                 contextual_entry_register_reads(
@@ -44435,6 +46184,22 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     callee_read_projection
                                         .inventory_stack_alias_creation_contract);
                             if (projected_match_input.has_value()) {
+                                // Contextual binding lookup observes the ABI
+                                // state through observe_callee_arguments(),
+                                // which first applies this exact dual-domain
+                                // projection and then classifies decode-valid
+                                // r4-r7 scalars at the proven call boundary.
+                                // Keep the stored edge matcher in that same
+                                // canonical space.  This affects only binding
+                                // identity; the semantic lane ingress remains
+                                // the independently projected state below.
+                                mark_observed_code_pointer_arguments(
+                                    image, *projected_match_input);
+                                normalize_stack_tail_summary(
+                                    *projected_match_input,
+                                    true,
+                                    StackTailFoldPendingScalarPolicy::
+                                        OmitAfterAbiBoundary);
                                 if (collect_contextual_return_product_telemetry) {
                                     const auto source_memory_cells =
                                         static_cast<std::uint64_t>(
@@ -44570,6 +46335,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ? *hybrid_match_input
                                     : observation.state,
                                 has_authoritative_complete_stack_contract);
+                        // Contextual lookup applies the guarded-callee marker
+                        // after ABI projection. Keep the edge-local matcher in
+                        // that identical canonical domain: guarded/incomplete
+                        // values remain fail-closed, while their finite child
+                        // summary can still be reused by the originating call.
+                        if (candidate_call)
+                            mark_guarded_callee_input(
+                                callee_edge_match_input);
                         // A Contextual MAY-join can reintroduce ordinary
                         // guarded payload into a domain which an authoritative
                         // hybrid ingress already quotiented.  Close every
@@ -45282,6 +47055,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (current_lane.summary.has_value()) {
                         widen_function_memory_read_contract(
                             candidate_summary, *current_lane.summary);
+                        widen_function_inventory_storage_contract(
+                            candidate_summary, *current_lane.summary);
                         const bool semantic_same =
                             same_function_call_effect_without_evidence(
                                 *current_lane.summary, candidate_summary);
@@ -45453,6 +47228,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                                     ? stable.evidence_lens
                                           ->contextual_summaries()
                                     : &*stable.fallback_bindings;
+                        FunctionEvaluationRequestDiagnostics
+                            stable_request_diagnostics;
                         auto cached = cached_evaluate_function(
                             *final_function_by_address.at(address),
                             inventory_indirect_callees,
@@ -45475,7 +47252,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                             true,
                             TailIngressTargetKind::Function,
                             cancel_requested,
-                            allow_memory_projection);
+                            allow_memory_projection,
+                            &stable_request_diagnostics);
                         stable.evaluation =
                             cached.first->evaluation;
                         if (stable.evidence_lens.has_value()) {
@@ -45942,7 +47720,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         combined.walk_diagnostics.contextual_provenance_replay_capsule_budget =
             maximum_contextual_return_evaluations;
         combined.walk_diagnostics.contextual_provenance_replay_key_byte_budget =
-            session.impl_->evaluations.maximum_retained_payload_bytes();
+            maximum_contextual_provenance_replay_key_bytes;
         combined.walk_diagnostics.abi_stack_argument_slot_budget =
             maximum_abi_stack_argument_slots;
         combined.walk_diagnostics.local_fixpoint_iteration_budget =
@@ -46708,17 +48486,14 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         const auto maximum_active_initial_roots = std::min(
             maximum_parallel_resolution_jobs,
             resolution_executor.maximum_jobs());
-        std::atomic_bool canonical_root_committed = false;
         const auto initial_root_admission_available_locked = [&] {
-            if (!canonical_root_committed.load(
-                    std::memory_order_acquire)) {
-                // Root zero owns the canonical head of line. Its broad
-                // contextual Jacobi waves may use the complete executor and
-                // cache budget without speculative later roots evicting the
-                // very contexts needed to release that head.
-                return dispatch->next_root_to_submit == 0u &&
-                       dispatch->active_initial_roots == 0u;
-            }
+            // Root results remain private until the canonical consumer folds
+            // them in function order.  Admit the bounded leased wave from the
+            // start: serializing every later root behind root zero deadlocks a
+            // root observer (and can strand the executor) when root zero waits
+            // for another admitted root. CriticalPrefix still keeps the head
+            // first, while the ready arena and per-root leases bound all
+            // speculative work.
             return dispatch->active_initial_roots <
                    maximum_active_initial_roots;
         };
@@ -47252,9 +49027,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     break;
                 }
                 commit_resolution_result(std::move(*resolved));
-                if (index == 0u)
-                    canonical_root_committed.store(
-                        true, std::memory_order_release);
                 result_lease.reset();
                 {
                     const std::lock_guard lock(dispatch->mutex);
@@ -47311,8 +49083,6 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             throw std::logic_error(
                 "Parallele Function-Resolution lieferte kein Ergebnis.");
     }
-    if (resolution_root_incomplete)
-        result.budget_exhausted = true;
     result.resolution_root_artifacts_retained =
         result.budget_exhausted
             ? 0u
@@ -47909,6 +49679,8 @@ detail::analyze_function_values_with_guarded_entry_cache(
                     image.analysis_instance_identity();
                 cold_restart_delta.image_revision =
                     image.analysis_revision();
+                cold_restart_delta.image_immutable_generation =
+                    image.immutable_generation();
                 session.impl_->pending_program_delta =
                     std::move(cold_restart_delta);
                 session.impl_->pending_persistent_analysis_bypass_reason =

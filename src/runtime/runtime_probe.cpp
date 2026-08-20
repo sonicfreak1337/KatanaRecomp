@@ -687,6 +687,108 @@ RuntimeProbeFaultEnvelope RuntimeProbeObservationState::fault_envelope(
     return envelope;
 }
 
+RuntimeProbeFaultEnvelopeV2 capture_runtime_probe_fault_v2(
+    const RuntimeProbeObservationState& observations,
+    const RuntimeProbeTermination termination,
+    const CrashCapsule& capsule) noexcept {
+    RuntimeProbeFaultEnvelopeV2 result;
+    result.termination = termination;
+    if (const auto& first_fault = observations.first_fault(); first_fault.has_value()) {
+        result.termination = first_fault->termination;
+        result.first_fault_present = 1u;
+        result.first_fault_cpu = first_fault->cpu;
+    }
+    if (const auto& checkpoint = observations.last_stable_checkpoint(); checkpoint.has_value()) {
+        result.last_checkpoint_present = 1u;
+        result.last_checkpoint = checkpoint->checkpoint;
+        result.last_checkpoint_cpu = checkpoint->cpu;
+    }
+    result.capsule = capsule;
+    return result;
+}
+
+RuntimeProbeFaultSerializedLine serialize_runtime_probe_fault_v2(
+    const RuntimeProbeFaultEnvelopeV2& envelope) noexcept {
+    RuntimeProbeFaultSerializedLine result;
+    crash_capsule_detail::LineWriter writer{result};
+    writer.append("{\"schema\":\"katana.runtime-probe-fault-v2\",\"report_version\":");
+    writer.append_integer(envelope.report_version);
+    writer.append(",\"termination\":\"");
+    writer.append(termination_name(envelope.termination));
+    writer.append("\",\"first_fault_present\":");
+    writer.append(envelope.first_fault_present != 0u ? "true" : "false");
+    writer.append(",\"first_fault\":");
+    if (envelope.first_fault_present == 0u) {
+        writer.append("null");
+    } else {
+        writer.append("{\"pc\":");
+        writer.append_integer(envelope.first_fault_cpu.pc);
+        writer.append(",\"pr\":");
+        writer.append_integer(envelope.first_fault_cpu.pr);
+        writer.append(",\"active_instruction_pc\":");
+        writer.append_integer(envelope.first_fault_cpu.active_instruction_pc);
+        writer.append(",\"active_block\":");
+        writer.append_integer(envelope.first_fault_cpu.active_block_virtual_start);
+        writer.append(",\"exception_generation\":");
+        writer.append_integer(envelope.first_fault_cpu.exception_generation);
+        writer.append(",\"sleeping\":");
+        writer.append(envelope.first_fault_cpu.sleeping ? "true" : "false");
+        writer.append_char('}');
+    }
+    writer.append(",\"last_checkpoint_present\":");
+    writer.append(envelope.last_checkpoint_present != 0u ? "true" : "false");
+    writer.append(",\"last_checkpoint\":");
+    if (envelope.last_checkpoint_present == 0u) {
+        writer.append("null");
+    } else {
+        writer.append("{\"kind\":");
+        writer.append_integer(static_cast<std::uint32_t>(envelope.last_checkpoint));
+        writer.append(",\"pc\":");
+        writer.append_integer(envelope.last_checkpoint_cpu.pc);
+        writer.append(",\"pr\":");
+        writer.append_integer(envelope.last_checkpoint_cpu.pr);
+        writer.append_char('}');
+    }
+    writer.append(",\"capsule\":");
+    const auto capsule_line = serialize_crash_capsule_v2(envelope.capsule);
+    writer.append(capsule_line.view());
+    if (capsule_line.truncated) result.truncated = true;
+    writer.append_char('}');
+    return result;
+}
+
+RuntimeProbeFaultSerializedLine serialize_runtime_probe_fault_v1_fixed(
+    const RuntimeProbeFaultEnvelopeV2& envelope) noexcept {
+    RuntimeProbeFaultSerializedLine result;
+    crash_capsule_detail::LineWriter writer{result};
+    writer.append("{\"schema\":\"katana.runtime-probe-fault\",\"report_version\":");
+    writer.append_integer(runtime_probe_fault_report_version);
+    writer.append(",\"termination\":\"");
+    writer.append(termination_name(envelope.termination));
+    writer.append("\",\"first_fault_present\":");
+    writer.append(envelope.first_fault_present != 0u ? "true" : "false");
+    writer.append(",\"first_fault\":");
+    if (envelope.first_fault_present != 0u) {
+        writer.append_char('"');
+        writer.append(termination_name(envelope.termination));
+        writer.append_char('"');
+    } else {
+        writer.append("null");
+    }
+    writer.append(",\"last_checkpoint_present\":");
+    writer.append(envelope.last_checkpoint_present != 0u ? "true" : "false");
+    writer.append(",\"last_checkpoint\":");
+    if (envelope.last_checkpoint_present != 0u) {
+        writer.append_char('"');
+        writer.append(checkpoint_name(envelope.last_checkpoint));
+        writer.append_char('"');
+    } else {
+        writer.append("null");
+    }
+    writer.append_char('}');
+    return result;
+}
+
 void RuntimeProbeFnv1a64LeV1::append_u8(const std::uint8_t value) noexcept {
     value_ ^= value;
     value_ *= runtime_probe_fnv1a64_prime;

@@ -6,8 +6,21 @@
 
 ## v0.49: Executable-First als Bring-up-Standard
 
+Aktueller Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `57`,
+Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-Profil
+`23`. Die nachfolgenden alten Exportbeispiele sind historische Messungen;
+der v141-SPSR-Lauf ist der aktuelle Produktnachweis.
+
 Der Entwicklungsworkflow trennt die einmalige private Discverarbeitung von
 wiederholter Analyse und Codegeneration:
+
+Fuer vollstaendige Native-Disc-Analyse steht zusaetzlich der agentische,
+transaktionale `analyze-port`-Workflow zur Verfuegung. Er publiziert eine
+Materialization-World, waehlt die naechste statisch beweisbare Frontier und
+importiert gebundene Produktstops nur als Beobachtungshinweise. Befehle,
+Ledger-, Resume-, Frontier- und Cachevertrag stehen in
+[`AGENT_ANALYSIS_WORKFLOW.md`](AGENT_ANALYSIS_WORKFLOW.md). Ein Produktport
+wird erst bei der Agentenentscheidung `BuildPort` erzeugt.
 
 ```powershell
 katana-recomp extract-boot-executable .\disc\game.gdi `

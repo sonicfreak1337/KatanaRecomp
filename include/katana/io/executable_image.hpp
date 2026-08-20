@@ -168,6 +168,10 @@ class ExecutableImage {
     void write_u32_le(std::uint32_t address, std::uint32_t value);
 
   private:
+    // Root-set changes invalidate retained analysis products, but they do not
+    // alter authenticated segment bytes. Keep immutable byte proofs bound
+    // while still advancing the analysis revision used by every cache.
+    void mark_root_set_mutation() noexcept;
     void mark_analysis_mutation() noexcept;
 
     std::filesystem::path source_path_;

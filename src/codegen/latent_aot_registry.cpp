@@ -47,6 +47,10 @@ constexpr std::uint32_t iso_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
 constexpr std::size_t maximum_latent_aot_runtime_alias_entry_passes = 16u;
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
+constexpr std::uint64_t maximum_validated_latent_aot_total_module_bytes =
+    64ull * 1024ull * 1024ull;
+constexpr std::uint64_t maximum_validated_latent_aot_total_source_bytes =
+    256ull * 1024ull * 1024ull;
 constexpr std::uint32_t latent_aot_runtime_page_size = 4096u;
 constexpr std::uint32_t latent_aot_main_ram_begin = 0x8C000000u;
 constexpr std::uint32_t latent_aot_main_ram_end = 0x8D000000u;
@@ -5108,8 +5112,8 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     for (const auto offset : analysis_entry_offsets)
         image.add_entry_point(candidate.source_address + offset);
     // A transformed PRS module is admitted only with an exact decoded-byte
-    // identity.  Bind that identity after all image-root mutations so the
-    // proof is not invalidated by add_entry_point().
+    // identity. Root-set changes advance the analysis revision while keeping
+    // this authenticated byte proof bound for every discovery pass.
     image.add_immutable_range(
         {candidate.source_address,
          candidate.bytes.size(),
@@ -7293,6 +7297,210 @@ LatentAotDiscovery discover_latent_aot_modules(
     discovery_progress.complete(
         result.examined_bytes);
     return result;
+}
+
+bool validate_latent_aot_discovery_source_binding(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    const LatentAotDiscovery& discovery) noexcept {
+    try {
+        if (!source ||
+            discovery.modules.size() >
+                maximum_latent_aot_source_bindings)
+            return false;
+        std::vector<LatentAotOccupiedRange> occupied;
+        occupied.reserve(discovery.modules.size());
+        std::uint64_t total_module_bytes = 0u;
+        std::uint64_t total_source_bytes = 0u;
+        std::uint64_t total_block_identity_bytes = 0u;
+        std::uint64_t total_function_identity_bytes = 0u;
+        std::size_t total_source_bindings = 0u;
+        std::size_t total_blocks = 0u;
+        std::size_t total_functions = 0u;
+        std::size_t total_block_identities = 0u;
+        std::size_t total_function_identities = 0u;
+        for (const auto& module : discovery.modules) {
+            if (module.id.empty() ||
+                !valid_sha256_identity(module.byte_identity) ||
+                module.byte_size == 0u ||
+                module.byte_size >
+                    katana::runtime::maximum_native_aot_template_extent ||
+                (module.source_address & 3u) != 0u ||
+                static_cast<std::uint64_t>(module.source_address) +
+                        module.byte_size >
+                    0x1'0000'0000ull ||
+                module.source_bindings.empty() ||
+                module.source_bindings.size() >
+                    maximum_latent_aot_source_bindings ||
+                !std::is_sorted(module.source_bindings.begin(),
+                                module.source_bindings.end(),
+                                source_binding_less) ||
+                std::adjacent_find(module.source_bindings.begin(),
+                                   module.source_bindings.end()) !=
+                    module.source_bindings.end() ||
+                module.entry_offsets.empty() ||
+                !std::is_sorted(module.entry_offsets.begin(),
+                                module.entry_offsets.end()) ||
+                std::adjacent_find(module.entry_offsets.begin(),
+                                   module.entry_offsets.end()) !=
+                    module.entry_offsets.end() ||
+                module.program.empty() ||
+                !latent_aot_program_is_relocation_closed(
+                    module.program,
+                    module.source_address,
+                    module.byte_size))
+                return false;
+            if (module.byte_size >
+                    maximum_validated_latent_aot_total_module_bytes -
+                        total_module_bytes ||
+                module.source_bindings.size() >
+                    maximum_latent_aot_source_bindings -
+                        total_source_bindings ||
+                module.block_identities.size() >
+                    maximum_prepared_latent_aot_block_identities -
+                        total_block_identities ||
+                module.function_identities.size() >
+                    maximum_prepared_latent_aot_function_identities -
+                        total_function_identities ||
+                module.program.size() >
+                    maximum_prepared_latent_aot_function_identities -
+                        total_functions)
+                return false;
+            total_module_bytes += module.byte_size;
+            total_source_bindings += module.source_bindings.size();
+            total_block_identities += module.block_identities.size();
+            total_function_identities += module.function_identities.size();
+            total_functions += module.program.size();
+
+            const LatentAotOccupiedRange range{
+                module.source_address, module.byte_size};
+            if (std::any_of(occupied.begin(), occupied.end(),
+                            [&](const auto existing) {
+                                return physical_overlap(range, existing);
+                            }))
+                return false;
+            occupied.push_back(range);
+
+            std::vector<std::uint8_t> decoded;
+            for (const auto& binding : module.source_bindings) {
+                if (binding.id.empty() ||
+                    !valid_source_transform(binding.transform) ||
+                    !valid_sha256_identity(binding.byte_identity) ||
+                    binding.byte_size == 0u ||
+                    binding.byte_size >
+                        katana::runtime::maximum_native_aot_template_extent ||
+                    binding.disc_byte_offset > source->size() ||
+                    binding.byte_size >
+                        source->size() - binding.disc_byte_offset)
+                    return false;
+                if (binding.byte_size >
+                    maximum_validated_latent_aot_total_source_bytes -
+                        total_source_bytes)
+                    return false;
+                total_source_bytes += binding.byte_size;
+                auto encoded = source->read(binding.disc_byte_offset,
+                                            binding.byte_size);
+                const auto encoded_identity =
+                    "sha256:" + katana::io::sha256_bytes(
+                        std::string_view(
+                            reinterpret_cast<const char*>(encoded.data()),
+                            encoded.size()));
+                if (encoded_identity != binding.byte_identity)
+                    return false;
+                if (binding.transform ==
+                    LatentAotSourceTransform::SegaPrs) {
+                    decoded = katana::detail::decompress_sega_prs(
+                        encoded,
+                        katana::runtime::maximum_native_aot_template_extent,
+                        katana::runtime::maximum_native_aot_template_extent);
+                } else {
+                    decoded = std::move(encoded);
+                }
+                if (decoded.size() != module.byte_size ||
+                    "sha256:" + katana::io::sha256_bytes(
+                        std::string_view(
+                            reinterpret_cast<const char*>(decoded.data()),
+                            decoded.size())) != module.byte_identity)
+                    return false;
+            }
+
+            katana::ir::require_valid_program(module.program);
+            std::set<std::uint32_t> block_entries;
+            for (const auto& function : module.program) {
+                if (function.blocks.size() >
+                    maximum_prepared_latent_aot_block_identities -
+                        total_blocks)
+                    return false;
+                total_blocks += function.blocks.size();
+                for (const auto& block : function.blocks) {
+                    block_entries.insert(block.start_address);
+                    for (const auto& instruction : block.instructions) {
+                        if ((instruction.source_address & 1u) != 0u ||
+                            instruction.source_address <
+                                module.source_address)
+                            return false;
+                        const auto offset =
+                            instruction.source_address -
+                            module.source_address;
+                        if (offset > decoded.size() ||
+                            decoded.size() - offset < 2u)
+                            return false;
+                        const auto opcode = static_cast<std::uint16_t>(
+                            static_cast<std::uint16_t>(decoded[offset]) |
+                            (static_cast<std::uint16_t>(
+                                 decoded[offset + 1u])
+                             << 8u));
+                        if (opcode != instruction.original_opcode ||
+                            !katana::sh4::decode(opcode).is_known())
+                            return false;
+                    }
+                }
+            }
+            for (const auto offset : module.entry_offsets) {
+                if ((offset & 1u) != 0u || offset >= module.byte_size ||
+                    !block_entries.contains(module.source_address + offset))
+                    return false;
+            }
+            const auto valid_identity = [&](const auto& identity) {
+                return identity.size != 0u &&
+                       valid_sha256_identity(identity.sha256) &&
+                       identity.source_offset <= decoded.size() &&
+                       identity.size <=
+                           decoded.size() - identity.source_offset &&
+                       identity.sha256 ==
+                           "sha256:" + katana::io::sha256_bytes(
+                               std::string_view(
+                                   reinterpret_cast<const char*>(
+                                       decoded.data() +
+                                       identity.source_offset),
+                                   identity.size));
+            };
+            for (const auto& identity : module.block_identities) {
+                if (identity.size >
+                    maximum_prepared_latent_aot_block_identity_bytes -
+                        total_block_identity_bytes)
+                    return false;
+                total_block_identity_bytes += identity.size;
+            }
+            for (const auto& identity : module.function_identities) {
+                if (identity.size >
+                    maximum_prepared_latent_aot_function_identity_bytes -
+                        total_function_identity_bytes)
+                    return false;
+                total_function_identity_bytes += identity.size;
+            }
+            if (module.block_identities.empty() ||
+                !std::all_of(module.block_identities.begin(),
+                             module.block_identities.end(),
+                             valid_identity) ||
+                !std::all_of(module.function_identities.begin(),
+                             module.function_identities.end(),
+                             valid_identity))
+                return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 LatentAotDiscovery discover_latent_aot_modules(

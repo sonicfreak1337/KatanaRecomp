@@ -172,6 +172,46 @@ template <std::size_t Size>
            mapping.logarithm_divisor > 0.0f;
 }
 
+[[nodiscard]] bool reciprocal_depth_mode(
+    const NativePortDepthCoordinateMode mode) noexcept {
+    return mode == NativePortDepthCoordinateMode::ReciprocalPositive ||
+           mode ==
+               NativePortDepthCoordinateMode::ReciprocalPositiveHomogeneousClip;
+}
+
+[[nodiscard]] bool valid_depth_buffer_convention(
+    const NativePortDepthBufferConvention convention) noexcept {
+    return convention == NativePortDepthBufferConvention::Forward ||
+           convention ==
+               NativePortDepthBufferConvention::ReciprocalPositive;
+}
+
+[[nodiscard]] bool compatible_depth_contract(
+    const NativePortDepthBufferConvention convention,
+    const NativePortDepthState& depth,
+    const NativePortDepthMapping& mapping) noexcept {
+    if (!depth.test_enabled) return true;
+    const bool reciprocal = reciprocal_depth_mode(mapping.mode);
+    if (reciprocal !=
+        (convention ==
+         NativePortDepthBufferConvention::ReciprocalPositive))
+        return false;
+    switch (depth.compare) {
+    case NativePortCompareOperation::Less:
+    case NativePortCompareOperation::LessEqual:
+        return !reciprocal;
+    case NativePortCompareOperation::Greater:
+    case NativePortCompareOperation::GreaterEqual:
+        return reciprocal;
+    case NativePortCompareOperation::Never:
+    case NativePortCompareOperation::Equal:
+    case NativePortCompareOperation::NotEqual:
+    case NativePortCompareOperation::Always:
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] bool valid_cull(const NativePortCullMode cull) noexcept {
     return cull == NativePortCullMode::None ||
            cull == NativePortCullMode::Front ||
@@ -336,6 +376,10 @@ void validate_graphics_config(const NativePortGraphicsConfig& config) {
         config.maximum_textures > 1'048'576u ||
         config.maximum_texture_bytes < 4u ||
         config.maximum_texture_bytes > 16ull * 1024u * 1024u * 1024u ||
+        config.maximum_meshes == 0u ||
+        config.maximum_meshes > 1'048'576u ||
+        config.maximum_mesh_bytes < sizeof(NativePortVertex) ||
+        config.maximum_mesh_bytes > 16ull * 1024u * 1024u * 1024u ||
         config.maximum_transient_vertices < 3u ||
         config.maximum_transient_indices < 3u ||
         config.maximum_pipeline_states == 0u ||
@@ -582,7 +626,6 @@ constexpr std::uint32_t draw_texture_combine_shift = 8u;
 constexpr std::uint32_t draw_alpha_test_enabled = 1u << 8u;
 constexpr std::uint32_t draw_flag_homogeneous_reciprocal_clip = 1u << 16u;
 constexpr std::uint32_t draw_flag_texture_present = 1u << 17u;
-
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
 [[nodiscard]] std::wstring utf8_to_wide(std::string_view value);
@@ -605,6 +648,31 @@ constexpr std::uint32_t draw_flag_texture_present = 1u << 17u;
 } // namespace
 
 class NativePortGraphicsDevice::Impl final {
+  private:
+    struct GeometryCapabilities final {
+        bool positive_depth_coordinates = true;
+        bool nonnegative_fog_coordinates = true;
+        bool nonzero_normals = true;
+    };
+
+    struct MeshSlot final {
+        ComPtr<ID3D11Buffer> vertex_buffer;
+        ComPtr<ID3D11Buffer> index_buffer;
+        NativePortPrimitiveTopology source_topology =
+            NativePortPrimitiveTopology::TriangleList;
+        NativePortPrimitiveTopology gpu_topology =
+            NativePortPrimitiveTopology::TriangleList;
+        NativePortShadingMode source_shading =
+            NativePortShadingMode::Smooth;
+        float source_small_triangle_area_threshold = 0.0f;
+        GeometryCapabilities capabilities;
+        std::uint64_t byte_size = 0u;
+        std::uint32_t vertex_count = 0u;
+        std::uint32_t index_count = 0u;
+        std::uint32_t generation = 0u;
+        bool live = false;
+    };
+
   public:
     explicit Impl(const NativePortGraphicsConfig& config)
         : title_storage_(copy_validated_graphics_title(config.title)),
@@ -815,6 +883,161 @@ class NativePortGraphicsDevice::Impl final {
         free_texture_slots_.push_back(index);
     }
 
+    [[nodiscard]] NativePortMeshHandle create_mesh(
+        const NativePortMeshConfig& mesh) {
+        require_owner_thread();
+        if (!valid_shading(mesh.shading) ||
+            !std::isfinite(mesh.small_triangle_area_threshold) ||
+            mesh.small_triangle_area_threshold < 0.0f)
+            fail(NativePortGraphicsFailure::InvalidResource,
+                 0u,
+                 "mesh-preprocess-state");
+
+        const auto remaining_mesh_bytes =
+            config_.maximum_mesh_bytes - mesh_bytes_;
+        const auto persistent_vertex_limit = static_cast<std::size_t>(
+            std::min<std::uint64_t>(remaining_mesh_bytes,
+                                    std::numeric_limits<UINT>::max()) /
+            sizeof(NativePortVertex));
+        const auto persistent_index_limit = static_cast<std::size_t>(
+            std::min<std::uint64_t>(remaining_mesh_bytes,
+                                    std::numeric_limits<UINT>::max()) /
+            sizeof(std::uint32_t));
+
+        static_cast<void>(validate_geometry(
+            mesh.vertices,
+            mesh.indices,
+            mesh.topology,
+            persistent_vertex_limit,
+            persistent_index_limit,
+            NativePortGraphicsFailure::InvalidResource,
+            "mesh-layout",
+            "mesh-index",
+            "mesh-vertex",
+            "mesh-topology"));
+
+        auto vertices = mesh.vertices;
+        auto indices = mesh.indices;
+        auto topology = mesh.topology;
+        std::vector<NativePortVertex> prepared;
+        NativePortRasterizerState preprocessing;
+        preprocessing.shading = mesh.shading;
+        preprocessing.small_triangle_area_threshold =
+            mesh.small_triangle_area_threshold;
+        preprocessing.small_triangle_area_space =
+            NativePortTriangleAreaSpace::Submitted;
+        preprocess_geometry(vertices,
+                            indices,
+                            topology,
+                            preprocessing,
+                            NativePortMatrix4x4{},
+                            persistent_vertex_limit,
+                            prepared,
+                            NativePortGraphicsFailure::InvalidResource,
+                            "mesh-triangle-preprocess-topology",
+                            "mesh-triangle-preprocess-budget");
+
+        const auto capabilities = validate_geometry(
+            vertices,
+            indices,
+            topology,
+            persistent_vertex_limit,
+            persistent_index_limit,
+            NativePortGraphicsFailure::InvalidResource,
+            "mesh-prepared-layout",
+            "mesh-prepared-index",
+            "mesh-prepared-vertex",
+            "mesh-prepared-topology");
+
+        const auto vertex_bytes =
+            static_cast<std::uint64_t>(vertices.size_bytes());
+        const auto index_bytes =
+            static_cast<std::uint64_t>(indices.size_bytes());
+        if (vertex_bytes > std::numeric_limits<std::uint64_t>::max() -
+                               index_bytes)
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 0u,
+                 "mesh-byte-overflow");
+        const auto byte_size = vertex_bytes + index_bytes;
+        if (byte_size > config_.maximum_mesh_bytes - mesh_bytes_)
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 0u,
+                 "mesh-byte-budget");
+
+        const bool reuse_slot = !free_mesh_slots_.empty();
+        const auto index = reuse_slot
+                               ? free_mesh_slots_.back()
+                               : static_cast<std::uint32_t>(mesh_slots_.size());
+        if (!reuse_slot && mesh_slots_.size() >= config_.maximum_meshes)
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 0u,
+                 "mesh-count-budget");
+        const auto generation = reuse_slot ? mesh_slots_[index].generation : 1u;
+
+        auto vertex_buffer = create_immutable_buffer(
+            vertices.data(),
+            vertices.size_bytes(),
+            D3D11_BIND_VERTEX_BUFFER,
+            "mesh-vertex-buffer");
+        auto index_buffer = create_immutable_buffer(
+            indices.data(),
+            indices.size_bytes(),
+            D3D11_BIND_INDEX_BUFFER,
+            "mesh-index-buffer");
+
+        if (reuse_slot)
+            free_mesh_slots_.pop_back();
+        else
+            mesh_slots_.emplace_back();
+        auto& slot = mesh_slots_[index];
+        slot.vertex_buffer = std::move(vertex_buffer);
+        slot.index_buffer = std::move(index_buffer);
+        slot.source_topology = mesh.topology;
+        slot.gpu_topology = topology;
+        slot.source_shading = mesh.shading;
+        slot.source_small_triangle_area_threshold =
+            mesh.small_triangle_area_threshold;
+        slot.capabilities = capabilities;
+        slot.byte_size = byte_size;
+        slot.vertex_count = static_cast<std::uint32_t>(vertices.size());
+        slot.index_count = static_cast<std::uint32_t>(indices.size());
+        slot.generation = generation;
+        slot.live = true;
+        mesh_bytes_ += byte_size;
+        ++live_meshes_;
+        saturating_add(snapshot_.uploaded_bytes, byte_size);
+        saturating_add(snapshot_.persistent_geometry_uploaded_bytes,
+                       byte_size);
+        return make_mesh_handle(index, slot.generation);
+    }
+
+    void destroy_mesh(const NativePortMeshHandle handle) {
+        require_owner_thread();
+        auto& slot = resolve_mesh(handle);
+        const auto index = mesh_handle_index(handle);
+        const bool retire_generation =
+            slot.generation == std::numeric_limits<std::uint32_t>::max();
+        // Allocate free-list storage before invalidating a reusable resource
+        // so an allocation failure leaves ownership unchanged. A slot whose
+        // final generation was observed is retired permanently instead of
+        // wrapping and making an ancient handle valid again.
+        if (!retire_generation) free_mesh_slots_.push_back(index);
+        mesh_bytes_ -= slot.byte_size;
+        if (live_meshes_ != 0u) --live_meshes_;
+        slot.vertex_buffer.Reset();
+        slot.index_buffer.Reset();
+        slot.source_topology = NativePortPrimitiveTopology::TriangleList;
+        slot.gpu_topology = NativePortPrimitiveTopology::TriangleList;
+        slot.source_shading = NativePortShadingMode::Smooth;
+        slot.source_small_triangle_area_threshold = 0.0f;
+        slot.capabilities = {};
+        slot.byte_size = 0u;
+        slot.vertex_count = 0u;
+        slot.index_count = 0u;
+        slot.live = false;
+        if (!retire_generation) ++slot.generation;
+    }
+
     void begin_frame(const NativePortFrameConfig& frame) {
         require_owner_thread();
         poll_events();
@@ -828,6 +1051,13 @@ class NativePortGraphicsDevice::Impl final {
             !std::isfinite(frame.clear_depth) || frame.clear_depth < 0.0f ||
             frame.clear_depth > 1.0f)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "frame-clear");
+        if (!valid_depth_buffer_convention(frame.depth_buffer) ||
+            (frame.depth_buffer == NativePortDepthBufferConvention::Forward
+                 ? frame.clear_depth != 1.0f
+                 : frame.clear_depth != 0.0f))
+            fail(NativePortGraphicsFailure::InvalidFrame,
+                 0u,
+                 "frame-depth-contract");
         context_->OMSetRenderTargets(
             1u, render_target_.GetAddressOf(), depth_view_.Get());
         context_->ClearRenderTargetView(render_target_.Get(),
@@ -838,6 +1068,7 @@ class NativePortGraphicsDevice::Impl final {
         index_buffer_write_offset_ = 0u;
         vertex_buffer_discarded_ = false;
         index_buffer_discarded_ = false;
+        frame_depth_buffer_ = frame.depth_buffer;
         frame_open_ = true;
         saturating_increment(snapshot_.begun_frames);
     }
@@ -846,157 +1077,91 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-outside-frame");
-        validate_draw(packet);
+        auto* const mesh_slot = packet.mesh != NativePortMeshHandle{}
+                                    ? &resolve_mesh(packet.mesh)
+                                    : nullptr;
+        validate_draw(packet, mesh_slot);
 
         auto vertices = packet.vertices;
         auto indices = packet.indices;
         auto topology = packet.topology;
-        const bool preprocess_triangles =
-            packet.rasterizer.shading ==
-                NativePortShadingMode::FlatLastVertex ||
-            packet.rasterizer.small_triangle_area_threshold > 0.0f;
-        if (preprocess_triangles) {
-            if (topology != NativePortPrimitiveTopology::TriangleList &&
-                topology != NativePortPrimitiveTopology::TriangleStrip)
-                fail(NativePortGraphicsFailure::InvalidDraw,
-                     0u,
-                     "draw-triangle-preprocess-topology");
-            const auto element_count = indices.empty()
-                                           ? vertices.size()
-                                           : indices.size();
-            const auto triangle_count =
-                topology == NativePortPrimitiveTopology::TriangleList
-                    ? element_count / 3u
-                    : element_count - 2u;
-            if (triangle_count > config_.maximum_transient_vertices / 3u)
-                fail(NativePortGraphicsFailure::ResourceLimit,
-                     0u,
-                     "draw-triangle-preprocess-budget");
-            prepared_vertices_.clear();
-            prepared_vertices_.reserve(triangle_count * 3u);
-            const auto source_index = [&](const std::size_t element) {
-                return indices.empty()
-                           ? static_cast<std::uint32_t>(element)
-                           : indices[element];
-            };
-            const auto triangle_area_position =
-                [&](const NativePortVertex& vertex,
-                    std::array<double, 2u>& result) {
-                    if (packet.rasterizer.small_triangle_area_space ==
-                        NativePortTriangleAreaSpace::Submitted) {
-                        result = {vertex.position[0], vertex.position[1]};
-                        return true;
-                    }
-
-                    std::array<double, 4u> clip{};
-                    const std::array<double, 4u> source{
-                        vertex.position[0], vertex.position[1],
-                        vertex.position[2], 1.0};
-                    for (std::size_t column = 0u; column < 4u; ++column) {
-                        for (std::size_t row = 0u; row < 4u; ++row) {
-                            clip[column] +=
-                                source[row] *
-                                packet.transform.values[row * 4u + column];
-                        }
-                    }
-                    if (!std::ranges::all_of(
-                            clip, [](const double value) {
-                                return std::isfinite(value);
-                            }) ||
-                        clip[3u] <= 0.0)
-                        return false;
-
-                    const auto ndc_x = clip[0u] / clip[3u];
-                    const auto ndc_y = clip[1u] / clip[3u];
-                    result = {
-                        (ndc_x + 1.0) * 0.5 *
-                            packet.rasterizer.small_triangle_reference_extent
-                                .width,
-                        (1.0 - ndc_y) * 0.5 *
-                            packet.rasterizer.small_triangle_reference_extent
-                                .height};
-                    return std::ranges::all_of(
-                        result, [](const double value) {
-                            return std::isfinite(value);
-                        });
-                };
-            const auto append_triangle =
-                [&](const std::size_t first,
-                    const std::size_t second,
-                    const std::size_t third,
-                    const std::size_t provoking) {
-                    NativePortVertex a = vertices[source_index(first)];
-                    NativePortVertex b = vertices[source_index(second)];
-                    NativePortVertex c = vertices[source_index(third)];
-                    std::array<double, 2u> area_a{};
-                    std::array<double, 2u> area_b{};
-                    std::array<double, 2u> area_c{};
-                    if (packet.rasterizer.small_triangle_area_threshold > 0.0f &&
-                        triangle_area_position(a, area_a) &&
-                        triangle_area_position(b, area_b) &&
-                        triangle_area_position(c, area_c)) {
-                        const auto determinant =
-                            (area_b[0u] - area_a[0u]) *
-                                (area_c[1u] - area_a[1u]) -
-                            (area_b[1u] - area_a[1u]) *
-                                (area_c[0u] - area_a[0u]);
-                        if (std::abs(determinant) <
-                            packet.rasterizer.small_triangle_area_threshold)
-                            return;
-                    }
-                    if (packet.rasterizer.shading ==
-                        NativePortShadingMode::FlatLastVertex) {
-                        const auto& flat = vertices[source_index(provoking)];
-                        a.color = b.color = c.color = flat.color;
-                        a.secondary_color = b.secondary_color =
-                            c.secondary_color = flat.secondary_color;
-                        a.normal = b.normal = c.normal = flat.normal;
-                    }
-                    prepared_vertices_.push_back(a);
-                    prepared_vertices_.push_back(b);
-                    prepared_vertices_.push_back(c);
-                };
-            if (topology == NativePortPrimitiveTopology::TriangleList) {
-                for (std::size_t element = 0u; element < element_count;
-                     element += 3u)
-                    append_triangle(
-                        element, element + 1u, element + 2u, element + 2u);
-            } else {
-                for (std::size_t element = 0u; element + 2u < element_count;
-                     ++element) {
-                    if ((element & 1u) == 0u)
-                        append_triangle(element,
-                                        element + 1u,
-                                        element + 2u,
-                                        element + 2u);
-                    else
-                        append_triangle(element + 1u,
-                                        element,
-                                        element + 2u,
-                                        element + 2u);
-                }
-            }
-            vertices = prepared_vertices_;
-            indices = {};
-            topology = NativePortPrimitiveTopology::TriangleList;
+        if (mesh_slot != nullptr) {
+            topology = mesh_slot->gpu_topology;
+            require_geometry_capabilities(packet, mesh_slot->capabilities);
+        } else {
+            auto capabilities = validate_geometry(
+                vertices,
+                indices,
+                topology,
+                config_.maximum_transient_vertices,
+                config_.maximum_transient_indices,
+                NativePortGraphicsFailure::InvalidDraw,
+                "draw-layout",
+                "draw-index",
+                "draw-vertex",
+                "draw-topology");
+            const bool preprocessing_required =
+                packet.rasterizer.shading ==
+                    NativePortShadingMode::FlatLastVertex ||
+                packet.rasterizer.small_triangle_area_threshold > 0.0f;
+            preprocess_geometry(vertices,
+                                indices,
+                                topology,
+                                packet.rasterizer,
+                                packet.transform,
+                                config_.maximum_transient_vertices,
+                                prepared_vertices_,
+                                NativePortGraphicsFailure::InvalidDraw,
+                                "draw-triangle-preprocess-topology",
+                                "draw-triangle-preprocess-budget");
             if (vertices.empty()) {
                 saturating_increment(snapshot_.draw_calls);
                 return;
             }
+            if (preprocessing_required) {
+                capabilities = validate_geometry(
+                    vertices,
+                    indices,
+                    topology,
+                    config_.maximum_transient_vertices,
+                    config_.maximum_transient_indices,
+                    NativePortGraphicsFailure::InvalidDraw,
+                    "draw-prepared-layout",
+                    "draw-prepared-index",
+                    "draw-prepared-vertex",
+                    "draw-prepared-topology");
+            }
+            require_geometry_capabilities(packet, capabilities);
         }
 
-        ensure_vertex_buffer(vertices.size_bytes());
-        const auto vertex_buffer_offset = upload_dynamic(
-            vertex_buffer_.Get(), vertex_buffer_capacity_,
-            vertex_buffer_write_offset_, vertex_buffer_discarded_,
-            vertices.data(), vertices.size_bytes(), "vertex-buffer-map");
+        ID3D11Buffer* bound_vertex_buffer = nullptr;
+        ID3D11Buffer* bound_index_buffer = nullptr;
+        UINT vertex_buffer_offset = 0u;
         UINT index_buffer_offset = 0u;
-        if (!indices.empty()) {
-            ensure_index_buffer(indices.size_bytes());
-            index_buffer_offset = upload_dynamic(
-                index_buffer_.Get(), index_buffer_capacity_,
-                index_buffer_write_offset_, index_buffer_discarded_,
-                indices.data(), indices.size_bytes(), "index-buffer-map");
+        UINT vertex_count = 0u;
+        UINT index_count = 0u;
+        if (mesh_slot != nullptr) {
+            bound_vertex_buffer = mesh_slot->vertex_buffer.Get();
+            bound_index_buffer = mesh_slot->index_buffer.Get();
+            vertex_count = mesh_slot->vertex_count;
+            index_count = mesh_slot->index_count;
+        } else {
+            ensure_vertex_buffer(vertices.size_bytes());
+            vertex_buffer_offset = upload_dynamic(
+                vertex_buffer_.Get(), vertex_buffer_capacity_,
+                vertex_buffer_write_offset_, vertex_buffer_discarded_,
+                vertices.data(), vertices.size_bytes(), "vertex-buffer-map");
+            bound_vertex_buffer = vertex_buffer_.Get();
+            vertex_count = static_cast<UINT>(vertices.size());
+            if (!indices.empty()) {
+                ensure_index_buffer(indices.size_bytes());
+                index_buffer_offset = upload_dynamic(
+                    index_buffer_.Get(), index_buffer_capacity_,
+                    index_buffer_write_offset_, index_buffer_discarded_,
+                    indices.data(), indices.size_bytes(), "index-buffer-map");
+                bound_index_buffer = index_buffer_.Get();
+                index_count = static_cast<UINT>(indices.size());
+            }
         }
 
         DrawConstants constants{};
@@ -1112,11 +1277,11 @@ class NativePortGraphicsDevice::Impl final {
         context_->IASetPrimitiveTopology(primitive_topology(topology));
         const UINT stride = sizeof(NativePortVertex);
         context_->IASetVertexBuffers(
-            0u, 1u, vertex_buffer_.GetAddressOf(), &stride,
+            0u, 1u, &bound_vertex_buffer, &stride,
             &vertex_buffer_offset);
-        if (!indices.empty())
+        if (index_count != 0u)
             context_->IASetIndexBuffer(
-                index_buffer_.Get(), DXGI_FORMAT_R32_UINT,
+                bound_index_buffer, DXGI_FORMAT_R32_UINT,
                 index_buffer_offset);
         context_->VSSetShader(draw_vertex_shader_.Get(), nullptr, 0u);
         context_->VSSetConstantBuffers(
@@ -1132,15 +1297,15 @@ class NativePortGraphicsDevice::Impl final {
         auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
                                     : white_view_.Get();
         context_->PSSetShaderResources(0u, 1u, &view);
-        if (indices.empty())
-            context_->Draw(static_cast<UINT>(vertices.size()), 0u);
+        if (index_count == 0u)
+            context_->Draw(vertex_count, 0u);
         else
-            context_->DrawIndexed(static_cast<UINT>(indices.size()),
-                                  0u,
-                                  0);
+            context_->DrawIndexed(index_count, 0u, 0);
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
         saturating_increment(snapshot_.draw_calls);
+        if (mesh_slot != nullptr)
+            saturating_increment(snapshot_.persistent_mesh_draw_calls);
     }
 
     void present() {
@@ -1311,6 +1476,8 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         auto result = snapshot_;
         result.live_textures = live_textures_;
+        result.live_meshes = live_meshes_;
+        result.persistent_mesh_bytes = mesh_bytes_;
         result.hardware_accelerated = device_ != nullptr;
         result.frame_open = frame_open_;
         return result;
@@ -1889,76 +2056,55 @@ class NativePortGraphicsDevice::Impl final {
         saturating_increment(snapshot_.swap_chain_resizes);
     }
 
-    void validate_draw(const NativePortDrawPacket& packet) {
-        if (!valid_viewport_target(packet.viewport) ||
-            !valid_topology(packet.topology) ||
-            !valid_blend(packet.blend) ||
-            !valid_depth(packet.depth) ||
-            !valid_depth_mapping(packet.depth_mapping) ||
-            !valid_rasterizer(packet.rasterizer) ||
-            !valid_sampler(packet.sampler) ||
-            !valid_material(packet.material) ||
-            !valid_lighting(packet.lighting) ||
-            !valid_fog(packet.fog) ||
-            !valid_alpha_test(packet.alpha_test) ||
-            packet.vertices.empty() ||
-            packet.vertices.size() > config_.maximum_transient_vertices ||
-            packet.indices.size() > config_.maximum_transient_indices ||
-            packet.vertices.size_bytes() > std::numeric_limits<UINT>::max() ||
-            packet.indices.size_bytes() > std::numeric_limits<UINT>::max() ||
-            !finite_array(packet.transform.values) ||
-            !finite_array(packet.normal_transform.values))
-            fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-layout");
-        for (const auto index : packet.indices) {
-            if (index >= packet.vertices.size())
-                fail(NativePortGraphicsFailure::InvalidDraw,
-                     0u,
-                     "draw-index");
+    [[nodiscard]] GeometryCapabilities validate_geometry(
+        const std::span<const NativePortVertex> vertices,
+        const std::span<const std::uint32_t> indices,
+        const NativePortPrimitiveTopology topology,
+        const std::size_t maximum_vertices,
+        const std::size_t maximum_indices,
+        const NativePortGraphicsFailure failure,
+        const char* const layout_operation,
+        const char* const index_operation,
+        const char* const vertex_operation,
+        const char* const topology_operation) {
+        if (!valid_topology(topology) || vertices.empty() ||
+            vertices.size() > maximum_vertices ||
+            indices.size() > maximum_indices ||
+            vertices.size_bytes() > std::numeric_limits<UINT>::max() ||
+            indices.size_bytes() > std::numeric_limits<UINT>::max())
+            fail(failure, 0u, layout_operation);
+        for (const auto index : indices) {
+            if (index >= vertices.size()) fail(failure, 0u, index_operation);
         }
-        for (const auto& vertex : packet.vertices) {
-            const auto finite = [](const float value) {
-                return std::isfinite(value);
-            };
-            if (!std::all_of(vertex.position.begin(),
-                             vertex.position.end(), finite) ||
-                !std::all_of(vertex.texture_coordinate.begin(),
-                             vertex.texture_coordinate.end(), finite) ||
-                !std::all_of(vertex.color.begin(), vertex.color.end(), finite) ||
-                !std::all_of(vertex.normal.begin(), vertex.normal.end(), finite) ||
-                !std::all_of(vertex.secondary_color.begin(),
-                             vertex.secondary_color.end(), finite) ||
+
+        GeometryCapabilities capabilities;
+        for (const auto& vertex : vertices) {
+            if (!finite_array(vertex.position) ||
+                !finite_array(vertex.texture_coordinate) ||
+                !finite_array(vertex.color) || !finite_array(vertex.normal) ||
+                !finite_array(vertex.secondary_color) ||
                 !std::isfinite(vertex.fog_coordinate) ||
-                !std::isfinite(vertex.depth_coordinate) ||
-                (packet.fog.mode != NativePortFogMode::Disabled &&
-                 packet.depth_mapping.mode !=
-                     NativePortDepthCoordinateMode::
-                         ReciprocalPositiveHomogeneousClip &&
-                 vertex.fog_coordinate < 0.0f) ||
-                (packet.depth_mapping.mode ==
-                     NativePortDepthCoordinateMode::ReciprocalPositive &&
-                 (packet.depth.test_enabled || packet.texture) &&
-                 vertex.depth_coordinate <= 0.0f))
-                fail(NativePortGraphicsFailure::InvalidDraw,
-                     0u,
-                     "draw-vertex");
-            if (packet.material.lighting_enabled ||
-                packet.material.texture_coordinates ==
-                    NativePortTextureCoordinateSource::NormalSphere) {
-                const auto length_squared =
-                    vertex.normal[0] * vertex.normal[0] +
-                    vertex.normal[1] * vertex.normal[1] +
-                    vertex.normal[2] * vertex.normal[2];
-                if (!std::isfinite(length_squared) || length_squared <= 0.0f)
-                    fail(NativePortGraphicsFailure::InvalidDraw,
-                         0u,
-                         "draw-normal");
-            }
+                !std::isfinite(vertex.depth_coordinate))
+                fail(failure, 0u, vertex_operation);
+            capabilities.positive_depth_coordinates =
+                capabilities.positive_depth_coordinates &&
+                vertex.depth_coordinate > 0.0f;
+            capabilities.nonnegative_fog_coordinates =
+                capabilities.nonnegative_fog_coordinates &&
+                vertex.fog_coordinate >= 0.0f;
+            const auto length_squared =
+                vertex.normal[0] * vertex.normal[0] +
+                vertex.normal[1] * vertex.normal[1] +
+                vertex.normal[2] * vertex.normal[2];
+            capabilities.nonzero_normals =
+                capabilities.nonzero_normals &&
+                std::isfinite(length_squared) && length_squared > 0.0f;
         }
-        const auto element_count = packet.indices.empty()
-                                       ? packet.vertices.size()
-                                       : packet.indices.size();
+
+        const auto element_count =
+            indices.empty() ? vertices.size() : indices.size();
         const bool valid_count = [&] {
-            switch (packet.topology) {
+            switch (topology) {
             case NativePortPrimitiveTopology::PointList:
                 return element_count >= 1u;
             case NativePortPrimitiveTopology::LineList:
@@ -1972,9 +2118,224 @@ class NativePortGraphicsDevice::Impl final {
             }
             return false;
         }();
-        if (!valid_count)
-            fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-topology");
+        if (!valid_count) fail(failure, 0u, topology_operation);
+        return capabilities;
+    }
+
+    void require_geometry_capabilities(
+        const NativePortDrawPacket& packet,
+        const GeometryCapabilities& capabilities) {
+        if ((packet.fog.mode != NativePortFogMode::Disabled &&
+             packet.depth_mapping.mode !=
+                 NativePortDepthCoordinateMode::
+                     ReciprocalPositiveHomogeneousClip &&
+             !capabilities.nonnegative_fog_coordinates) ||
+            (packet.depth_mapping.mode ==
+                 NativePortDepthCoordinateMode::ReciprocalPositive &&
+             (packet.depth.test_enabled || packet.texture) &&
+             !capabilities.positive_depth_coordinates))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-vertex");
+        if ((packet.material.lighting_enabled ||
+             packet.material.texture_coordinates ==
+                 NativePortTextureCoordinateSource::NormalSphere) &&
+            !capabilities.nonzero_normals)
+            fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-normal");
+    }
+
+    void validate_draw(const NativePortDrawPacket& packet,
+                       const MeshSlot* const mesh_slot) {
+        if (!valid_viewport_target(packet.viewport) ||
+            !valid_topology(packet.topology) ||
+            !valid_blend(packet.blend) || !valid_depth(packet.depth) ||
+            !valid_depth_mapping(packet.depth_mapping) ||
+            !valid_rasterizer(packet.rasterizer) ||
+            !valid_sampler(packet.sampler) ||
+            !valid_material(packet.material) ||
+            !valid_lighting(packet.lighting) || !valid_fog(packet.fog) ||
+            !valid_alpha_test(packet.alpha_test) ||
+            !finite_array(packet.transform.values) ||
+            !finite_array(packet.normal_transform.values))
+            fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-layout");
+        if (!compatible_depth_contract(
+                frame_depth_buffer_, packet.depth, packet.depth_mapping))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-depth-contract");
+
+        if (mesh_slot != nullptr) {
+            if (!packet.vertices.empty() || !packet.indices.empty() ||
+                packet.topology != mesh_slot->source_topology ||
+                packet.rasterizer.shading != mesh_slot->source_shading ||
+                packet.rasterizer.small_triangle_area_threshold !=
+                    mesh_slot->source_small_triangle_area_threshold ||
+                packet.rasterizer.small_triangle_area_space !=
+                    NativePortTriangleAreaSpace::Submitted ||
+                packet.rasterizer.small_triangle_reference_extent !=
+                    NativePortExtent{})
+                fail(NativePortGraphicsFailure::InvalidDraw,
+                     0u,
+                     "draw-mesh-contract");
+        }
         if (packet.texture) static_cast<void>(resolve_texture(packet.texture));
+    }
+
+    void preprocess_geometry(
+        std::span<const NativePortVertex>& vertices,
+        std::span<const std::uint32_t>& indices,
+        NativePortPrimitiveTopology& topology,
+        const NativePortRasterizerState& rasterizer,
+        const NativePortMatrix4x4& transform,
+        const std::size_t maximum_output_vertices,
+        std::vector<NativePortVertex>& destination,
+        const NativePortGraphicsFailure topology_failure,
+        const char* const topology_operation,
+        const char* const budget_operation) {
+        const bool preprocess_triangles =
+            rasterizer.shading == NativePortShadingMode::FlatLastVertex ||
+            rasterizer.small_triangle_area_threshold > 0.0f;
+        if (!preprocess_triangles) return;
+        if (topology != NativePortPrimitiveTopology::TriangleList &&
+            topology != NativePortPrimitiveTopology::TriangleStrip)
+            fail(topology_failure, 0u, topology_operation);
+        const auto element_count =
+            indices.empty() ? vertices.size() : indices.size();
+        const auto triangle_count =
+            topology == NativePortPrimitiveTopology::TriangleList
+                ? element_count / 3u
+                : element_count - 2u;
+        if (triangle_count > maximum_output_vertices / 3u)
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 0u,
+                 budget_operation);
+        destination.clear();
+        destination.reserve(triangle_count * 3u);
+        const auto source_index = [&](const std::size_t element) {
+            return indices.empty() ? static_cast<std::uint32_t>(element)
+                                   : indices[element];
+        };
+        const auto triangle_area_position =
+            [&](const NativePortVertex& vertex,
+                std::array<double, 2u>& result) {
+                if (rasterizer.small_triangle_area_space ==
+                    NativePortTriangleAreaSpace::Submitted) {
+                    result = {vertex.position[0], vertex.position[1]};
+                    return true;
+                }
+
+                std::array<double, 4u> clip{};
+                const std::array<double, 4u> source{
+                    vertex.position[0], vertex.position[1],
+                    vertex.position[2], 1.0};
+                for (std::size_t column = 0u; column < 4u; ++column) {
+                    for (std::size_t row = 0u; row < 4u; ++row) {
+                        clip[column] +=
+                            source[row] * transform.values[row * 4u + column];
+                    }
+                }
+                if (!std::ranges::all_of(
+                        clip,
+                        [](const double value) {
+                            return std::isfinite(value);
+                        }) ||
+                    clip[3u] <= 0.0)
+                    return false;
+
+                const auto ndc_x = clip[0u] / clip[3u];
+                const auto ndc_y = clip[1u] / clip[3u];
+                result = {
+                    (ndc_x + 1.0) * 0.5 *
+                        rasterizer.small_triangle_reference_extent.width,
+                    (1.0 - ndc_y) * 0.5 *
+                        rasterizer.small_triangle_reference_extent.height};
+                return std::ranges::all_of(
+                    result,
+                    [](const double value) { return std::isfinite(value); });
+            };
+        const auto append_triangle =
+            [&](const std::size_t first,
+                const std::size_t second,
+                const std::size_t third,
+                const std::size_t provoking) {
+                NativePortVertex a = vertices[source_index(first)];
+                NativePortVertex b = vertices[source_index(second)];
+                NativePortVertex c = vertices[source_index(third)];
+                std::array<double, 2u> area_a{};
+                std::array<double, 2u> area_b{};
+                std::array<double, 2u> area_c{};
+                if (rasterizer.small_triangle_area_threshold > 0.0f &&
+                    triangle_area_position(a, area_a) &&
+                    triangle_area_position(b, area_b) &&
+                    triangle_area_position(c, area_c)) {
+                    const auto determinant =
+                        (area_b[0u] - area_a[0u]) *
+                            (area_c[1u] - area_a[1u]) -
+                        (area_b[1u] - area_a[1u]) *
+                            (area_c[0u] - area_a[0u]);
+                    if (std::abs(determinant) <
+                        rasterizer.small_triangle_area_threshold)
+                        return;
+                }
+                if (rasterizer.shading ==
+                    NativePortShadingMode::FlatLastVertex) {
+                    const auto& flat = vertices[source_index(provoking)];
+                    a.color = b.color = c.color = flat.color;
+                    a.secondary_color = b.secondary_color =
+                        c.secondary_color = flat.secondary_color;
+                    a.normal = b.normal = c.normal = flat.normal;
+                }
+                destination.push_back(a);
+                destination.push_back(b);
+                destination.push_back(c);
+            };
+        if (topology == NativePortPrimitiveTopology::TriangleList) {
+            for (std::size_t element = 0u; element < element_count;
+                 element += 3u)
+                append_triangle(
+                    element, element + 1u, element + 2u, element + 2u);
+        } else {
+            for (std::size_t element = 0u; element + 2u < element_count;
+                 ++element) {
+                if ((element & 1u) == 0u)
+                    append_triangle(element,
+                                    element + 1u,
+                                    element + 2u,
+                                    element + 2u);
+                else
+                    append_triangle(element + 1u,
+                                    element,
+                                    element + 2u,
+                                    element + 2u);
+            }
+        }
+        vertices = destination;
+        indices = {};
+        topology = NativePortPrimitiveTopology::TriangleList;
+    }
+
+    [[nodiscard]] ComPtr<ID3D11Buffer> create_immutable_buffer(
+        const void* const source,
+        const std::size_t byte_size,
+        const UINT bind_flags,
+        const char* const operation) {
+        if (byte_size == 0u) return {};
+        if (source == nullptr || byte_size > std::numeric_limits<UINT>::max())
+            fail(NativePortGraphicsFailure::InvalidResource, 0u, operation);
+        D3D11_BUFFER_DESC description{};
+        description.ByteWidth = static_cast<UINT>(byte_size);
+        description.Usage = D3D11_USAGE_IMMUTABLE;
+        description.BindFlags = bind_flags;
+        D3D11_SUBRESOURCE_DATA initial_data{};
+        initial_data.pSysMem = source;
+        ComPtr<ID3D11Buffer> buffer;
+        const auto result = device_->CreateBuffer(
+            &description, &initial_data, buffer.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 operation);
+        return buffer;
     }
 
     void ensure_vertex_buffer(const std::size_t byte_size) {
@@ -2059,6 +2420,9 @@ class NativePortGraphicsDevice::Impl final {
                     source,
                     byte_size);
         context_->Unmap(buffer, 0u);
+        saturating_add(snapshot_.uploaded_bytes, byte_size);
+        saturating_add(snapshot_.transient_geometry_uploaded_bytes,
+                       byte_size);
         write_offset = upload_offset + required;
         return upload_offset;
     }
@@ -2375,6 +2739,34 @@ class NativePortGraphicsDevice::Impl final {
         return texture_slots_[index];
     }
 
+    [[nodiscard]] static NativePortMeshHandle make_mesh_handle(
+        const std::uint32_t index,
+        const std::uint32_t generation) noexcept {
+        return {static_cast<std::uint64_t>(generation) << 32u |
+                (static_cast<std::uint64_t>(index) + 1u)};
+    }
+
+    [[nodiscard]] static std::uint32_t mesh_handle_index(
+        const NativePortMeshHandle handle) noexcept {
+        return static_cast<std::uint32_t>(handle.value) - 1u;
+    }
+
+    [[nodiscard]] MeshSlot& resolve_mesh(const NativePortMeshHandle handle) {
+        if (!handle || static_cast<std::uint32_t>(handle.value) == 0u)
+            fail(NativePortGraphicsFailure::InvalidResource,
+                 0u,
+                 "mesh-handle");
+        const auto index = mesh_handle_index(handle);
+        const auto generation = static_cast<std::uint32_t>(handle.value >> 32u);
+        if (index >= mesh_slots_.size() || generation == 0u ||
+            !mesh_slots_[index].live ||
+            mesh_slots_[index].generation != generation)
+            fail(NativePortGraphicsFailure::InvalidResource,
+                 0u,
+                 "mesh-stale");
+        return mesh_slots_[index];
+    }
+
     void require_owner_thread() const {
         if (std::this_thread::get_id() != owner_thread_)
             throw NativePortGraphicsError(
@@ -2401,6 +2793,8 @@ class NativePortGraphicsDevice::Impl final {
     bool minimized_ = false;
     bool frame_open_ = false;
     bool completed_frame_available_ = false;
+    NativePortDepthBufferConvention frame_depth_buffer_ =
+        NativePortDepthBufferConvention::Forward;
 
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
@@ -2439,6 +2833,8 @@ class NativePortGraphicsDevice::Impl final {
 
     std::vector<TextureSlot> texture_slots_;
     std::vector<std::uint32_t> free_texture_slots_;
+    std::vector<MeshSlot> mesh_slots_;
+    std::vector<std::uint32_t> free_mesh_slots_;
     std::filesystem::path capture_directory_;
     std::vector<std::uint8_t> capture_pixels_;
     std::uint64_t capture_start_frame_ = 1u;
@@ -2447,7 +2843,9 @@ class NativePortGraphicsDevice::Impl final {
     std::uint64_t capture_interval_ = 60u;
     bool capture_enabled_ = false;
     std::uint64_t texture_bytes_ = 0u;
+    std::uint64_t mesh_bytes_ = 0u;
     std::uint32_t live_textures_ = 0u;
+    std::uint32_t live_meshes_ = 0u;
     NativePortTextureHandle image_texture_;
     NativePortExtent image_texture_extent_;
     NativePortTextureFormat image_texture_format_ =
@@ -2485,6 +2883,12 @@ class NativePortGraphicsDevice::Impl final {
     void update_texture(NativePortTextureHandle,
                         std::span<const NativePortImageView>) {}
     void destroy_texture(NativePortTextureHandle) {}
+    [[nodiscard]] NativePortMeshHandle create_mesh(
+        const NativePortMeshConfig&) {
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::UnsupportedHost, 1u, "unsupported-host");
+    }
+    void destroy_mesh(NativePortMeshHandle) {}
     void begin_frame(const NativePortFrameConfig&) {}
     void draw(const NativePortDrawPacket&) {}
     void present() {}
@@ -2554,6 +2958,16 @@ void NativePortGraphicsDevice::update_texture(
 void NativePortGraphicsDevice::destroy_texture(
     const NativePortTextureHandle texture) {
     impl_->destroy_texture(texture);
+}
+
+NativePortMeshHandle NativePortGraphicsDevice::create_mesh(
+    const NativePortMeshConfig& config) {
+    return impl_->create_mesh(config);
+}
+
+void NativePortGraphicsDevice::destroy_mesh(
+    const NativePortMeshHandle mesh) {
+    impl_->destroy_mesh(mesh);
 }
 
 void NativePortGraphicsDevice::begin_frame(

@@ -4129,7 +4129,7 @@ int run_test(const int argc, char* argv[]) {
             generated_main.find("serialize_checkpoint_json()") != std::string::npos &&
             generated_main.find("runtime_probe_fault_line_prefix") !=
                 std::string::npos &&
-            generated_main.find("serialize_runtime_probe_fault_envelope_json(") !=
+            generated_main.find("serialize_runtime_probe_fault_v1_fixed(") !=
                 std::string::npos &&
             generated_main.find("RuntimeProbeTermination::DispatchMiss") !=
                 std::string::npos &&

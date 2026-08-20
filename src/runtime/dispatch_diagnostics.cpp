@@ -3,10 +3,12 @@
 #include "katana/runtime/block_table.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
@@ -73,6 +75,71 @@ std::string hex32(const std::uint32_t value) {
 
 void optional_address(std::ostringstream& output, const std::optional<std::uint32_t> value) {
     value.has_value() ? output << '"' << hex32(*value) << '"' : output << "null";
+}
+
+struct SnapshotLineWriter final {
+    DispatchDiagnosticSerializedLine& line;
+
+    void append(const std::string_view value) noexcept {
+        if (line.truncated) return;
+        if (line.size >= line.bytes.size() ||
+            value.size() > line.bytes.size() - line.size) {
+            line.truncated = true;
+            return;
+        }
+        for (const auto character : value) line.bytes[line.size++] = character;
+    }
+
+    void append_char(const char value) noexcept {
+        if (line.truncated) return;
+        if (line.size >= line.bytes.size()) {
+            line.truncated = true;
+            return;
+        }
+        line.bytes[line.size++] = value;
+    }
+
+    template <typename Integer>
+    void append_integer(const Integer value) noexcept {
+        std::array<char, 32u> buffer{};
+        const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+        if (converted.ec != std::errc{}) {
+            line.truncated = true;
+            return;
+        }
+        append(std::string_view(buffer.data(),
+                                static_cast<std::size_t>(converted.ptr - buffer.data())));
+    }
+
+    void append_quoted(const std::string_view value) noexcept {
+        append_char('"');
+        append(value);
+        append_char('"');
+    }
+};
+
+void append_snapshot_field(SnapshotLineWriter& writer,
+                           const std::string_view name,
+                           const std::uint64_t value) noexcept {
+    writer.append(",\"");
+    writer.append(name);
+    writer.append("\":");
+    writer.append_integer(value);
+}
+
+void append_snapshot_field(SnapshotLineWriter& writer,
+                           const std::string_view name,
+                           const std::uint32_t value) noexcept {
+    append_snapshot_field(writer, name, static_cast<std::uint64_t>(value));
+}
+
+void append_snapshot_name(SnapshotLineWriter& writer,
+                          const std::string_view name,
+                          const char* const value) noexcept {
+    writer.append(",\"");
+    writer.append(name);
+    writer.append("\":");
+    writer.append_quoted(value == nullptr ? std::string_view{} : std::string_view(value));
 }
 
 const char* block_end_name(const BlockEndKind kind) noexcept {
@@ -214,6 +281,37 @@ std::size_t DispatchDiagnosticRecorder::capacity() const noexcept {
     return capacity_;
 }
 
+void DispatchDiagnosticRecorder::capture_crash_snapshot(
+    DispatchDiagnosticSnapshot& snapshot) const noexcept {
+    snapshot = {};
+    snapshot.total_occurrences = total_occurrences_;
+    snapshot.dropped_unique_events = dropped_unique_events_;
+    const auto count = std::min(events_.size(), snapshot.events.size());
+    snapshot.event_count = static_cast<std::uint32_t>(count);
+    const auto first = events_.size() - count;
+    for (std::size_t index = 0u; index < count; ++index) {
+        const auto& source = events_[first + index];
+        auto& destination = snapshot.events[index];
+        destination.callsite = source.callsite;
+        destination.source_virtual = source.source_virtual;
+        destination.source_physical = source.source_physical;
+        destination.virtual_target = source.virtual_target.value_or(0u);
+        destination.canonical_target = source.canonical_target.value_or(0u);
+        destination.pr = source.pr;
+        destination.exit_pc = source.exit_pc;
+        destination.guest_instructions = source.guest_instructions;
+        destination.occurrences = source.occurrences;
+        destination.error = source.error;
+        destination.block_end = source.block_end;
+        destination.origin = source.origin;
+        destination.alias_origin = source.alias_origin;
+        destination.fallback_reason = source.fallback_reason;
+        destination.fallback_action = source.fallback_action;
+        destination.has_virtual_target = source.virtual_target.has_value() ? 1u : 0u;
+        destination.has_canonical_target = source.canonical_target.has_value() ? 1u : 0u;
+    }
+}
+
 std::string DispatchDiagnosticRecorder::serialize_json() const {
     std::ostringstream output;
     output << "{\"schema\":\"katana-dispatch-diagnostic\",\"report_version\":1"
@@ -293,6 +391,10 @@ const char* dispatch_resolution_origin_name(const DispatchResolutionOrigin value
         return "fallback";
     }
     return "unknown";
+}
+
+const char* dispatch_block_end_name(const BlockEndKind value) noexcept {
+    return block_end_name(value);
 }
 
 const char* dispatch_alias_origin_name(const DispatchAliasOrigin value) noexcept {
@@ -375,6 +477,56 @@ const char* dispatch_diagnostic_error_name(const DispatchDiagnosticError value) 
         return "aot-template-mismatch";
     }
     return "unknown";
+}
+
+DispatchDiagnosticSerializedLine serialize_dispatch_diagnostic_snapshot_json(
+    const DispatchDiagnosticSnapshot& snapshot) noexcept {
+    DispatchDiagnosticSerializedLine result;
+    SnapshotLineWriter writer{result};
+    writer.append("{\"schema\":\"katana-dispatch-diagnostic-crash\",\"version\":2");
+    append_snapshot_field(writer, "total_occurrences", snapshot.total_occurrences);
+    append_snapshot_field(writer, "dropped_unique_events", snapshot.dropped_unique_events);
+    append_snapshot_field(writer, "event_count", snapshot.event_count);
+    writer.append(",\"events\":[");
+    const auto count = std::min<std::size_t>(snapshot.event_count, snapshot.events.size());
+    for (std::size_t index = 0u; index < count; ++index) {
+        if (index != 0u) writer.append_char(',');
+        const auto& event = snapshot.events[index];
+        writer.append("{\"callsite\":");
+        writer.append_integer(event.callsite);
+        writer.append(",\"source_virtual\":");
+        writer.append_integer(event.source_virtual);
+        writer.append(",\"source_physical\":");
+        writer.append_integer(event.source_physical);
+        writer.append(",\"virtual_target\":");
+        if (event.has_virtual_target != 0u)
+            writer.append_integer(event.virtual_target);
+        else
+            writer.append("null");
+        writer.append(",\"canonical_target\":");
+        if (event.has_canonical_target != 0u)
+            writer.append_integer(event.canonical_target);
+        else
+            writer.append("null");
+        writer.append(",\"pr\":");
+        writer.append_integer(event.pr);
+        writer.append(",\"exit_pc\":");
+        writer.append_integer(event.exit_pc);
+        append_snapshot_field(writer, "guest_instructions", event.guest_instructions);
+        append_snapshot_field(writer, "occurrences", event.occurrences);
+        append_snapshot_name(writer, "error", dispatch_diagnostic_error_name(event.error));
+        append_snapshot_name(writer, "block_end", block_end_name(event.block_end));
+        append_snapshot_name(writer, "origin", dispatch_resolution_origin_name(event.origin));
+        append_snapshot_name(writer, "alias_origin",
+                            dispatch_alias_origin_name(event.alias_origin));
+        append_snapshot_name(writer, "fallback_reason",
+                            dispatch_fallback_reason_name(event.fallback_reason));
+        append_snapshot_name(writer, "fallback_action",
+                            dispatch_fallback_action_name(event.fallback_action));
+        writer.append_char('}');
+    }
+    writer.append("]}");
+    return result;
 }
 
 } // namespace katana::runtime

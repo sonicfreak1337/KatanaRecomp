@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -332,6 +333,18 @@ struct BlockMaterializationEvent {
     bool operator==(const BlockMaterializationEvent&) const = default;
 };
 
+// Fixed crash-path projection of materializer state. It copies only counters and
+// the latest already-recorded transition; it never traverses or mutates ownership.
+struct BlockMaterializationCrashSnapshot {
+    BlockMaterializationMetrics metrics;
+    BlockMaterializationEvent last_event;
+    std::uint8_t last_event_present = 0u;
+    std::uint8_t reserved[7u]{};
+};
+
+static_assert(std::is_standard_layout_v<BlockMaterializationCrashSnapshot>);
+static_assert(std::is_trivially_copyable_v<BlockMaterializationCrashSnapshot>);
+
 using BlockMaterializeCallback = std::function<MaterializedBlockCandidate(
     std::uint32_t, std::uint32_t, std::span<const std::uint8_t>, const BlockVariantKey&)>;
 enum class BlockMaterializationProbeKind : std::uint8_t {
@@ -366,6 +379,7 @@ class DemandBlockMaterializer final {
                                                                     std::uint32_t callsite);
     [[nodiscard]] const BlockMaterializationMetrics& metrics() const noexcept;
     [[nodiscard]] const std::vector<BlockMaterializationEvent>& events() const noexcept;
+    void capture_crash_snapshot(BlockMaterializationCrashSnapshot& snapshot) const noexcept;
     [[nodiscard]] MaterializationFailure last_failure() const noexcept;
     [[nodiscard]] bool validate_for_dispatch(const CpuState& cpu,
                                              RuntimeBlockHandle handle,

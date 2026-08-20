@@ -2183,6 +2183,16 @@ const std::vector<BlockMaterializationEvent>& DemandBlockMaterializer::events() 
     return events_;
 }
 
+void DemandBlockMaterializer::capture_crash_snapshot(
+    BlockMaterializationCrashSnapshot& snapshot) const noexcept {
+    snapshot = {};
+    snapshot.metrics = metrics_;
+    if (!events_.empty()) {
+        snapshot.last_event = events_.back();
+        snapshot.last_event_present = 1u;
+    }
+}
+
 MaterializationFailure DemandBlockMaterializer::last_failure() const noexcept {
     return last_failure_;
 }

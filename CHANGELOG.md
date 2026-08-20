@@ -4,6 +4,34 @@
 
 ### Geaendert
 
+- Katana besitzt jetzt einen transaktionalen, agentischen Native-Disc-
+  Analyseworkflow. `analyze-port`, `next-analysis-task`, `explain` und
+  `diff-analysis` arbeiten auf einer identitaetsgebundenen Materialization-
+  World; Resume bindet ein Schema-3-Ledger samt terminalem Commit und SHA-256
+  aller Artefakte. Produkt-Frontiers werden streng an Content, Boot, Projekt,
+  Analysevertrag und Implementierung gebunden und nur als `ObservedHint`
+  uebernommen. Sie erzeugen weder CFG-Kanten noch AOT-/Hardware-Closure.
+  Positive Produktwiederverwendung bleibt deaktiviert, bis das Archiv einen
+  vollstaendigen Callback-/Target-/Hardware-Owner-Beweis transportiert; der
+  normale Produktlauf serialisiert deshalb kein unbrauchbares grosses
+  Analysearchiv.
+
+- Der Native-Port-Runtimevertrag erweitert seine bounded Crashdiagnose um
+  eine additive `CrashCapsule` v2 mit PC/PR, Contract-/Hostfehlerart,
+  Modulidentitaeten und Generationen, letztem Materialisierungsuebergang,
+  Waitzustand sowie festen Dispatch-Snapshots. Der generierte Produktpfad
+  schreibt SEH- und C++-Fehler exactly-once ueber einen festen Rohpuffer und
+  verwendet im Crashpfad weder Heap noch `iostream`. Freie Meldungen, Pfade,
+  Retailbytes und nicht belegte Thread-/Task-IDs bleiben ausgeschlossen.
+
+- Der native Grafikvertrag 8 bindet Forward- und positiv reziproke
+  Tiefenpuffer explizit an passende Clear-/Compare-Semantik. Ausserdem koennen
+  belegte statische Meshes generationgebunden einmalig in immutable D3D11-
+  Ressourcen hochgeladen werden; transformabhaengige oder dynamische
+  Geometrie bleibt transient. Der Audioengine-Voice-Aufbau besitzt nun eine
+  RAII-Uebergabe, die einen bereits geoeffneten Codecdecoder auch bei
+  fehlschlagender Slotallokation exakt einmal schliesst.
+
 - Der native Manatee-Vertrag erkennt und bindet jetzt authored `SPSR`-Einheiten
   als begrenzte PCM-Stream-Ringe: 2 MiB Layoutfenster, 4-Byte-Ausrichtung,
   Bereichs-/Ueberlappungspruefung, generation-gepruefte Handles sowie
@@ -17,8 +45,10 @@
   Partitionen, `41/41` Latent-Module/Quellen, `19.250` Blockidentitaeten,
   `529` Funktionsidentitaeten, `1.587` Cross-Image-Transfers sowie
   `243` Hardware-Sites mit `191` offenen Gaps und `3` Progress-Waits.
-  Runtime-ABI `114` und Soundbankvertrag `6` binden den Stand; ein
-  Hauptmenue-Nachweis ist aus diesem Lauf nicht abgeleitet.
+  Der v141-Snapshot war an Runtime-ABI `114` und Soundbankvertrag `6`
+  gebunden; der aktuelle Source-Stand ist inzwischen Runtime-ABI `116` /
+  Analyzer-ABI `57`. Ein Hauptmenue-Nachweis ist aus diesem Lauf nicht
+  abgeleitet.
 
 - Der neue titel-/SDK-semantische `NativePortSaveProvider` bildet bis zu
   vier Controller mit je sechs Speicherendpunkten auf die bereits atomaren

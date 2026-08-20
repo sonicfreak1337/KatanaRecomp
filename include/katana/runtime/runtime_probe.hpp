@@ -4,6 +4,7 @@
 #include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/cache_control.hpp"
 #include "katana/runtime/code_invalidation.hpp"
+#include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/dma.hpp"
 #include "katana/runtime/dreamcast_memory.hpp"
 #include "katana/runtime/executable_modules.hpp"
@@ -31,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace katana::runtime {
@@ -42,9 +44,14 @@ inline constexpr std::uint32_t runtime_probe_schema_version = 5u;
 inline constexpr std::uint64_t runtime_probe_device_schema_version = 6u;
 inline constexpr std::string_view runtime_probe_hash_contract = "fnv1a64-le-v1";
 inline constexpr std::uint32_t runtime_probe_fault_report_version = 1u;
+// Version 1 remains the exact legacy JSON schema. v2 is a separate fixed-buffer
+// fault line and can be adopted by a caller without changing v1 consumers.
+inline constexpr std::uint32_t runtime_probe_fault_v2_report_version = 2u;
 inline constexpr std::size_t runtime_probe_replay_coverage_class_count = 12u;
 inline constexpr std::string_view runtime_probe_fault_line_prefix =
     "KATANA_RUNTIME_PROBE_FAULT ";
+inline constexpr std::string_view runtime_probe_fault_v2_line_prefix =
+    "KATANA_RUNTIME_PROBE_FAULT_V2 ";
 inline constexpr std::uint64_t runtime_probe_fnv1a64_offset_basis =
     14695981039346656037ull;
 inline constexpr std::uint64_t runtime_probe_fnv1a64_prime = 1099511628211ull;
@@ -387,6 +394,36 @@ class RuntimeProbeObservationState final {
     std::optional<RuntimeProbeCheckpointObservation> last_stable_checkpoint_;
     std::optional<RuntimeProbeFaultObservation> first_fault_;
 };
+
+struct RuntimeProbeFaultEnvelopeV2 {
+    std::uint32_t report_version = runtime_probe_fault_v2_report_version;
+    RuntimeProbeTermination termination = RuntimeProbeTermination::Unknown;
+    RuntimeProbeCheckpoint last_checkpoint = RuntimeProbeCheckpoint::None;
+    std::uint8_t first_fault_present = 0u;
+    std::uint8_t last_checkpoint_present = 0u;
+    std::uint8_t reserved[2u]{};
+    RuntimeProbeCpuSnapshot first_fault_cpu{};
+    RuntimeProbeCpuSnapshot last_checkpoint_cpu{};
+    CrashCapsule capsule{};
+};
+
+static_assert(std::is_standard_layout_v<RuntimeProbeFaultEnvelopeV2>);
+static_assert(std::is_trivially_copyable_v<RuntimeProbeFaultEnvelopeV2>);
+
+using RuntimeProbeFaultSerializedLine = CrashCapsuleSerializedLine;
+
+[[nodiscard]] RuntimeProbeFaultEnvelopeV2 capture_runtime_probe_fault_v2(
+    const RuntimeProbeObservationState& observations,
+    RuntimeProbeTermination termination,
+    const CrashCapsule& capsule) noexcept;
+[[nodiscard]] RuntimeProbeFaultSerializedLine serialize_runtime_probe_fault_v2(
+    const RuntimeProbeFaultEnvelopeV2& envelope) noexcept;
+// Allocation-free compatibility projection of the exact v1 JSON schema. It
+// is emitted together with the additive v2 line so existing tooling keeps its
+// stable prefix without putting ostringstream back into the fault path.
+[[nodiscard]] RuntimeProbeFaultSerializedLine
+serialize_runtime_probe_fault_v1_fixed(
+    const RuntimeProbeFaultEnvelopeV2& envelope) noexcept;
 
 struct RuntimeProbeReport {
     std::uint32_t schema_version = runtime_probe_schema_version;

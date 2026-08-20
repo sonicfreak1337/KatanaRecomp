@@ -8,6 +8,7 @@
 
 #include "katana/build_contract.hpp"
 #include "katana/component_identity.hpp"
+#include "katana/agent/materialization_world.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/code_address.hpp"
 #include "katana/analysis/control_flow_report.hpp"
@@ -4387,7 +4388,7 @@ std::string generated_header(const std::string& entry_namespace) {
            "#include \"katana/runtime/platform_services.hpp\"\n"
            "#include \"katana/runtime/runtime.hpp\"\n"
            "#include \"katana/runtime/system_replay.hpp\"\n"
-           "#include <array>\n#include <cstddef>\n#include <cstdint>\n"
+           "#include <array>\n#include <atomic>\n#include <cstddef>\n#include <cstdint>\n"
            "#include <memory>\n#include <string>\n"
            "#include <string_view>\n\n"
            "namespace " +
@@ -4605,6 +4606,16 @@ std::string generated_header(const std::string& entry_namespace) {
            "    const katana::runtime::ValidatedBlockExecution&,\n"
            "    const CompositeCallbackBatchDescriptor&);\n"
            "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept;\n"
+           "struct RuntimeCrashContextProvider {\n"
+           "    std::atomic<std::uint32_t>* emission_latch = nullptr;\n"
+           "    bool try_claim_emission() const noexcept {\n"
+           "        if (emission_latch == nullptr) return true;\n"
+           "        std::uint32_t expected = 0u;\n"
+           "        return emission_latch->compare_exchange_strong(\n"
+           "            expected, 1u, std::memory_order_acq_rel,\n"
+           "            std::memory_order_relaxed);\n"
+           "    }\n"
+           "};\n"
            "std::uint64_t runtime_central_dispatch_count() noexcept;\n"
            "void register_latent_aot_modules(\n"
            "    std::string_view content_identity,\n"
@@ -4614,6 +4625,7 @@ std::string generated_header(const std::string& entry_namespace) {
            "                             katana::runtime::RuntimeBlockTable& table,\n"
            "                             katana::runtime::SystemReplayObservationSession& "
            "observations,\n"
+           "                             RuntimeCrashContextProvider crash_context,\n"
            "                             katana::runtime::CrashCapsule& crash_capsule);\n"
            "}\n";
 }
@@ -5072,7 +5084,7 @@ std::string handwritten_main(
            "#include \"katana/runtime/system_replay.hpp\"\n"
            "#include \"katana/runtime/wait_loop_trace.hpp\"\n"
            "#include \"katana/io/input_provenance.hpp\"\n"
-           "#include <algorithm>\n#include <array>\n#include <cerrno>\n#include "
+           "#include <algorithm>\n#include <array>\n#include <atomic>\n#include <charconv>\n#include <cerrno>\n#include <cstdint>\n#include "
            "<chrono>\n#include <cstdlib>\n#include "
            "<exception>\n#include <filesystem>\n#include <functional>\n#include "
            "<iostream>\n#include <limits>\n#include <memory>\n"
@@ -5081,8 +5093,220 @@ std::string handwritten_main(
            "#include <string_view>\n"
            "#include <syncstream>\n#include <system_error>\n#include <thread>\n"
            "#include <unordered_map>\n#include "
-           "<unordered_set>\n#include <vector>\n\n"
-           "namespace {\n" +
+           "<unordered_set>\n#include <vector>\n"
+           "#if defined(_WIN32)\n"
+           "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
+           "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n"
+           "#include <windows.h>\n"
+           "#else\n#include <unistd.h>\n#endif\n\n"
+           "namespace {\n"
+            "void write_bounded_bytes(\n"
+            "        std::string_view bytes, const bool standard_output) noexcept {\n"
+            "#if defined(_WIN32)\n"
+            "    const auto handle = GetStdHandle(\n"
+            "        standard_output ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);\n"
+           "    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) return;\n"
+           "    while (!bytes.empty()) {\n"
+           "        DWORD written = 0u;\n"
+           "        const auto request = static_cast<DWORD>(std::min<std::size_t>(\n"
+           "            bytes.size(), std::numeric_limits<DWORD>::max()));\n"
+           "        if (WriteFile(handle, bytes.data(), request, &written, nullptr) == FALSE ||\n"
+           "            written == 0u) return;\n"
+           "        bytes.remove_prefix(written);\n"
+           "    }\n"
+           "#else\n"
+           "    while (!bytes.empty()) {\n"
+            "        const auto written = ::write(\n"
+            "            standard_output ? STDOUT_FILENO : STDERR_FILENO,\n"
+            "            bytes.data(), bytes.size());\n"
+           "        if (written < 0) {\n"
+           "            if (errno == EINTR) continue;\n"
+           "            return;\n"
+           "        }\n"
+           "        if (written == 0) return;\n"
+           "        bytes.remove_prefix(static_cast<std::size_t>(written));\n"
+           "    }\n"
+            "#endif\n"
+            "}\n"
+            "void write_bounded_fault_bytes(const std::string_view bytes) noexcept {\n"
+            "    write_bounded_bytes(bytes, false);\n"
+            "}\n"
+            "void write_bounded_stdout_bytes(const std::string_view bytes) noexcept {\n"
+            "    write_bounded_bytes(bytes, true);\n"
+            "}\n"
+            "void write_bounded_fault_line(\n"
+           "        const std::string_view prefix,\n"
+           "        const std::string_view payload) noexcept {\n"
+           "    write_bounded_fault_bytes(prefix);\n"
+           "    write_bounded_fault_bytes(payload);\n"
+            "    write_bounded_fault_bytes(\"\\n\");\n"
+            "}\n"
+            "void write_bounded_stdout_line(\n"
+            "        const std::string_view prefix,\n"
+            "        const std::string_view payload) noexcept {\n"
+            "    write_bounded_stdout_bytes(prefix);\n"
+            "    write_bounded_stdout_bytes(payload);\n"
+            "    write_bounded_stdout_bytes(\"\\n\");\n"
+            "}\n"
+            "void write_fault_u64(const std::uint64_t value) noexcept {\n"
+            "    std::array<char, 32u> bytes{};\n"
+            "    const auto converted = std::to_chars(\n"
+            "        bytes.data(), bytes.data() + bytes.size(), value);\n"
+            "    if (converted.ec == std::errc{})\n"
+            "        write_bounded_fault_bytes(std::string_view(\n"
+            "            bytes.data(), static_cast<std::size_t>(\n"
+            "                converted.ptr - bytes.data())));\n"
+            "}\n"
+            "void write_crash_capsule_legacy_v1(\n"
+            "        const katana::runtime::CrashCapsule& capsule) noexcept {\n"
+            "    write_bounded_fault_bytes(\"KATANA_CRASH_CAPSULE version=\");\n"
+            "    write_fault_u64(katana::runtime::crash_capsule_contract_version);\n"
+            "    write_bounded_fault_bytes(\" last_pc=\");\n"
+            "    write_fault_u64(capsule.last_pc);\n"
+            "    write_bounded_fault_bytes(\" last_block=\");\n"
+            "    write_fault_u64(capsule.last_block);\n"
+            "    write_bounded_fault_bytes(\" last_mmio_address=\");\n"
+            "    write_fault_u64(capsule.last_mmio_address);\n"
+            "    write_bounded_fault_bytes(\" last_mmio_value=\");\n"
+            "    write_fault_u64(capsule.last_mmio_value);\n"
+            "    write_bounded_fault_bytes(\" last_scheduler_cycle=\");\n"
+            "    write_fault_u64(capsule.last_scheduler_cycle);\n"
+            "    write_bounded_fault_bytes(\" last_scheduler_event_id=\");\n"
+            "    write_fault_u64(capsule.last_scheduler_event_id);\n"
+            "    write_bounded_fault_bytes(\" last_scheduler_event_kind=\");\n"
+            "    write_fault_u64(capsule.last_scheduler_event_kind);\n"
+            "    write_bounded_fault_bytes(\" first_error=\");\n"
+            "    write_fault_u64(capsule.first_error_code);\n"
+            "    write_bounded_fault_bytes(\" first_error_pc=\");\n"
+            "    write_fault_u64(capsule.first_error_pc);\n"
+            "    write_bounded_fault_bytes(\" first_error_target=\");\n"
+            "    write_fault_u64(capsule.first_error_target);\n"
+            "    write_bounded_fault_bytes(\" ring_events=\");\n"
+            "    write_fault_u64(capsule.event_count);\n"
+            "    write_bounded_fault_bytes(\"\\n\");\n"
+           "}\n"
+           "std::atomic<std::uint32_t> product_crash_emission_latch{0u};\n"
+           "struct ProductCrashContext final {\n"
+           "    katana::runtime::CrashCapsule capsule{};\n"
+           "\n"
+            "    bool try_claim_emission() noexcept {\n"
+            "        std::uint32_t expected = 0u;\n"
+            "        return product_crash_emission_latch.compare_exchange_strong(\n"
+            "            expected, 1u, std::memory_order_acq_rel,\n"
+            "            std::memory_order_relaxed);\n"
+            "    }\n"
+            "    void emit(const std::uint32_t host_exception_code,\n"
+            "              const std::string_view host_exception_type,\n"
+            "              const std::uint32_t contract_code,\n"
+            "              const std::string_view contract_type,\n"
+            "              const std::uint32_t callsite,\n"
+            "              const std::uint32_t target) noexcept {\n"
+           "        if (!try_claim_emission()) return;\n"
+           "        const auto effective_callsite = callsite != 0u\n"
+           "            ? callsite : capsule.last_pc;\n"
+           "        const auto effective_target = target != 0u\n"
+           "            ? target : capsule.last_pc;\n"
+           "        capsule.note_v2_host_exception(\n"
+           "            host_exception_code, host_exception_type);\n"
+           "        if (!contract_type.empty())\n"
+           "            capsule.note_v2_contract(contract_code, contract_type);\n"
+           "        if (effective_callsite != 0u || effective_target != 0u)\n"
+           "            capsule.note_v2_dispatch(effective_callsite, effective_target);\n"
+           "        if (capsule.first_error_latched == 0u)\n"
+           "            capsule.note_first_error(\n"
+           "                contract_code != 0u ? contract_code : 0xFFFFFFFFu,\n"
+           "                effective_callsite, effective_target);\n"
+            "        write_crash_capsule_legacy_v1(capsule);\n"
+            "        const auto line = katana::runtime::serialize_crash_capsule_v2(\n"
+            "            capsule);\n"
+            "        write_bounded_fault_line(\n"
+            "            \"KATANA_CRASH_CAPSULE version=2 \", line.view());\n"
+            "    }\n"
+           "    void emit_seh(const std::uint32_t code) noexcept {\n"
+           "        if (!try_claim_emission()) return;\n"
+           "        write_bounded_fault_bytes(\n"
+           "            \"KATANA_WINDOWS_SEH {\\\"schema\\\":1,\\\"code\\\":\");\n"
+           "        write_fault_u64(code);\n"
+           "        write_bounded_fault_bytes(\"}\\n\");\n"
+           "        capsule.note_v2_host_exception(code, \"windows-seh\");\n"
+           "        capsule.note_v2_contract(code, \"host-seh-boundary\");\n"
+           "        if (capsule.first_error_latched == 0u)\n"
+           "            capsule.note_first_error(\n"
+           "                code, capsule.last_pc, capsule.last_pc);\n"
+            "        write_crash_capsule_legacy_v1(capsule);\n"
+            "        const auto line = katana::runtime::serialize_crash_capsule_v2(\n"
+            "            capsule);\n"
+            "        write_bounded_fault_line(\n"
+            "            \"KATANA_CRASH_CAPSULE version=2 \", line.view());\n"
+            "    }\n"
+            "};\n"
+            "thread_local ProductCrashContext* active_product_crash_context = nullptr;\n"
+            "class ProductCrashContextScope final {\n"
+            "  public:\n"
+            "    explicit ProductCrashContextScope(ProductCrashContext& context) noexcept\n"
+            "        : previous_(active_product_crash_context) {\n"
+            "        active_product_crash_context = &context;\n"
+            "    }\n"
+            "    ~ProductCrashContextScope() noexcept {\n"
+            "        active_product_crash_context = previous_;\n"
+            "    }\n"
+            "    ProductCrashContextScope(const ProductCrashContextScope&) = delete;\n"
+            "    ProductCrashContextScope& operator=(const ProductCrashContextScope&) = delete;\n"
+            "  private:\n"
+            "    ProductCrashContext* previous_ = nullptr;\n"
+            "};\n"
+            "#if defined(_WIN32)\n"
+            "std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> previous_product_exception_filter{nullptr};\n"
+            "thread_local bool product_seh_report_active = false;\n"
+            "LONG WINAPI product_unhandled_exception_filter(\n"
+            "        EXCEPTION_POINTERS* exception) noexcept {\n"
+            "    if (product_seh_report_active) return EXCEPTION_CONTINUE_SEARCH;\n"
+            "    product_seh_report_active = true;\n"
+            "    const auto code = exception != nullptr &&\n"
+            "            exception->ExceptionRecord != nullptr\n"
+            "        ? static_cast<std::uint32_t>(\n"
+            "              exception->ExceptionRecord->ExceptionCode)\n"
+            "        : 0xFFFFFFFFu;\n"
+           "    if (active_product_crash_context != nullptr)\n"
+           "        active_product_crash_context->emit_seh(\n"
+           "            code);\n"
+           "    else {\n"
+            "        std::uint32_t expected = 0u;\n"
+            "        if (product_crash_emission_latch.compare_exchange_strong(\n"
+            "                expected, 1u, std::memory_order_acq_rel,\n"
+            "                std::memory_order_relaxed)) {\n"
+            "            write_bounded_fault_bytes(\n"
+            "                \"KATANA_WINDOWS_SEH {\\\"schema\\\":1,\\\"code\\\":\");\n"
+            "            write_fault_u64(code);\n"
+            "            write_bounded_fault_bytes(\"}\\n\");\n"
+            "        }\n"
+            "    }\n"
+            "    const auto previous = previous_product_exception_filter.load(\n"
+            "        std::memory_order_acquire);\n"
+            "    if (previous != nullptr &&\n"
+            "        previous != &product_unhandled_exception_filter)\n"
+            "        return previous(exception);\n"
+            "    return EXCEPTION_CONTINUE_SEARCH;\n"
+            "}\n"
+            "class ProductUnhandledExceptionFilterScope final {\n"
+            "  public:\n"
+            "    ProductUnhandledExceptionFilterScope() noexcept\n"
+            "        : previous_(SetUnhandledExceptionFilter(\n"
+            "              &product_unhandled_exception_filter)) {\n"
+            "        previous_product_exception_filter.store(\n"
+            "            previous_, std::memory_order_release);\n"
+            "    }\n"
+            "    ~ProductUnhandledExceptionFilterScope() noexcept {\n"
+            "        static_cast<void>(SetUnhandledExceptionFilter(previous_));\n"
+            "    }\n"
+            "    ProductUnhandledExceptionFilterScope(\n"
+            "        const ProductUnhandledExceptionFilterScope&) = delete;\n"
+            "    ProductUnhandledExceptionFilterScope& operator=(\n"
+            "        const ProductUnhandledExceptionFilterScope&) = delete;\n"
+            "  private:\n"
+            "    LPTOP_LEVEL_EXCEPTION_FILTER previous_ = nullptr;\n"
+            "};\n"
+            "#endif\n" +
            identity_contract.str() +
            "constexpr std::uint64_t product_gate_guest_cycle_checkpoint = "
            "600'000'000u;\n"
@@ -5730,6 +5954,10 @@ std::string handwritten_main(
            "                requested_post_entry_cycles_.value_or(0u);\n"
            "        }\n"
            "    }\n"
+           "    katana::runtime::CrashCapsule& bound_crash_capsule() noexcept {\n"
+           "        return crash_capsule_binding_ != nullptr\n"
+           "            ? *crash_capsule_binding_ : crash_capsule_;\n"
+           "    }\n"
            "    ~PortPlatformServices() override {\n"
            "        if (product_terminal_telemetry_ != nullptr) {\n"
            "            product_terminal_telemetry_->restored_guest_cycle =\n"
@@ -5757,12 +5985,62 @@ std::string handwritten_main(
            "                        *post_entry_host_started_).count();\n"
            "            }\n"
            "        }\n"
-           "        cpu_.memory.detach_crash_capsule(crash_capsule_);\n"
+           "        cpu_.memory.detach_crash_capsule(bound_crash_capsule());\n"
            "        if (state_.scheduler)\n"
-           "            state_.scheduler->detach_crash_capsule(crash_capsule_);\n"
+           "            state_.scheduler->detach_crash_capsule(bound_crash_capsule());\n"
+           "    }\n"
+           "    void bind_crash_capsule(\n"
+           "            katana::runtime::CrashCapsule& capsule) noexcept {\n"
+           "        crash_capsule_binding_ = &capsule;\n"
+           "        cpu_.memory.attach_crash_capsule(capsule);\n"
+           "        if (state_.scheduler)\n"
+           "            state_.scheduler->attach_crash_capsule(capsule);\n"
+           "    }\n"
+           "    void set_crash_emission_latch(\n"
+           "            std::atomic<std::uint32_t>* latch) noexcept {\n"
+           "        crash_emission_latch_ = latch;\n"
            "    }\n"
            "    katana::runtime::CrashCapsule& crash_capsule() noexcept {\n"
-           "        return crash_capsule_;\n"
+           "        return bound_crash_capsule();\n"
+           "    }\n"
+           "    void capture_crash_context(\n"
+           "            katana::runtime::CrashCapsule& capsule) const noexcept {\n"
+           "        capsule.note_v2_cpu(cpu_.pc, cpu_.pr);\n"
+           "        capsule.note_v2_dispatch(\n"
+           "            cpu_.active_instruction_pc, cpu_.active_block_virtual_start);\n"
+           "        if (state_.scheduler) {\n"
+           "            const auto next = state_.scheduler->next_event_cycle();\n"
+           "            capsule.note_v2_wait(\n"
+           "                cpu_.sleeping ? 1u : 0u,\n"
+           "                state_.scheduler->current_cycle(),\n"
+           "                state_.scheduler->pending_event_count(),\n"
+           "                next.value_or(0u));\n"
+           "        }\n"
+           "        if (active_runtime_aot_chain_context_ && state_.runtime_blocks) {\n"
+           "            const auto resolved = state_.runtime_blocks->resolve(\n"
+           "                active_runtime_aot_chain_context_->handle);\n"
+           "            if (resolved)\n"
+           "                capsule.note_v2_runtime_module(\n"
+           "                    resolved->get().provenance,\n"
+           "                    resolved->get().variant.runtime_generation);\n"
+           "        } else if (active_block_registration_ != nullptr &&\n"
+           "                   active_block_variant_) {\n"
+           "            capsule.note_v2_runtime_module(\n"
+           "                active_block_registration_->identity,\n"
+           "                active_block_variant_->runtime_generation);\n"
+           "        }\n"
+           "        if (state_.module_catalog) {\n"
+           "            const auto lookup = cpu_.active_instruction_pc != 0u\n"
+           "                ? cpu_.active_instruction_pc\n"
+           "                : cpu_.active_block_virtual_start;\n"
+           "            if (const auto* module = state_.module_catalog->resolve(lookup, 1u);\n"
+           "                module != nullptr)\n"
+           "                capsule.note_v2_source_module(\n"
+           "                    module->source_identity.empty()\n"
+           "                        ? std::string_view(module->id)\n"
+           "                        : std::string_view(module->source_identity),\n"
+           "                    module->generation, module->relocation_generation);\n"
+           "        }\n"
            "    }\n"
            "    std::string_view name() const noexcept override { return \"dreamcast-port\"; }\n"
            "    std::uint32_t abi_version() const noexcept override {\n"
@@ -5990,20 +6268,51 @@ std::string handwritten_main(
            "    katana::runtime::SystemReplayObservationSession&\n"
            "    observation_session() noexcept { return replay_observations_; }\n"
            "    void emit_runtime_fault(\n"
-           "            katana::runtime::RuntimeProbeTermination termination) noexcept {\n"
+           "            katana::runtime::RuntimeProbeTermination termination,\n"
+           "            std::uint32_t host_exception_code = 0u,\n"
+           "            std::string_view host_exception_type = \"runtime-fault\",\n"
+           "            std::uint32_t contract_code = 0u,\n"
+           "            std::string_view contract_type = {},\n"
+           "            std::uint32_t callsite = 0u,\n"
+           "            std::uint32_t target = 0u) noexcept {\n"
            "        if (fault_emitted_) return;\n"
+           "        if (crash_emission_latch_ != nullptr) {\n"
+           "            std::uint32_t expected = 0u;\n"
+           "            if (!crash_emission_latch_->compare_exchange_strong(\n"
+           "                    expected, 1u, std::memory_order_acq_rel,\n"
+           "                    std::memory_order_relaxed))\n"
+           "                return;\n"
+           "        }\n"
            "        fault_emitted_ = true;\n"
+           "        auto& capsule = bound_crash_capsule();\n"
+           "        capture_crash_context(capsule);\n"
+           "        capsule.note_v2_host_exception(\n"
+           "            host_exception_code, host_exception_type);\n"
+           "        if (!contract_type.empty())\n"
+           "            capsule.note_v2_contract(contract_code, contract_type);\n"
+           "        if (callsite != 0u || target != 0u)\n"
+           "            capsule.note_v2_dispatch(callsite, target);\n"
+           "        if (capsule.first_error_latched == 0u)\n"
+           "            capsule.note_first_error(\n"
+           "                contract_code != 0u ? contract_code : 0xFFFFFFFFu,\n"
+           "                callsite != 0u ? callsite : cpu_.pc,\n"
+           "                target != 0u ? target : cpu_.pc);\n"
            "        static_cast<void>(probe_observations_.latch_fault(\n"
            "            termination, katana::runtime::capture_runtime_probe_cpu(cpu_)));\n"
-           "        try {\n"
-           "            std::cout << katana::runtime::runtime_probe_fault_line_prefix\n"
-           "                      << "
-           "katana::runtime::serialize_runtime_probe_fault_envelope_json(\n"
-           "                             probe_observations_.fault_envelope(termination))\n"
-           "                      << std::endl;\n"
-           "        } catch (...) {\n"
-           "            if (replay_log_ != nullptr) replay_log_->note_dropped_event();\n"
-           "        }\n"
+           "        const auto envelope = katana::runtime::capture_runtime_probe_fault_v2(\n"
+           "            probe_observations_, termination, capsule);\n"
+           "        const auto legacy_line =\n"
+           "            katana::runtime::serialize_runtime_probe_fault_v1_fixed(\n"
+           "                envelope);\n"
+            "        write_bounded_stdout_line(\n"
+            "            katana::runtime::runtime_probe_fault_line_prefix,\n"
+            "            legacy_line.view());\n"
+           "        const auto v2_line =\n"
+           "            katana::runtime::serialize_runtime_probe_fault_v2(\n"
+           "                envelope);\n"
+           "        write_bounded_fault_line(\n"
+           "            katana::runtime::runtime_probe_fault_v2_line_prefix,\n"
+           "            v2_line.view());\n"
            "    }\n"
            "    bool guest_checkpoint_reached() const noexcept {\n"
            "        return guest_program_progressed_;\n"
@@ -9623,6 +9932,8 @@ std::string handwritten_main(
            "    FlagPollBatchCounters flag_poll_batch_counters_;\n"
            "    MmioWaitLoopBatchCounters mmio_wait_loop_batch_counters_;\n"
            "    katana::runtime::CrashCapsule crash_capsule_;\n"
+           "    katana::runtime::CrashCapsule* crash_capsule_binding_ = nullptr;\n"
+           "    std::atomic<std::uint32_t>* crash_emission_latch_ = nullptr;\n"
            "    bool guest_program_dispatched_ = false;\n"
            "    bool guest_program_progressed_ = false;\n"
            "    std::uint64_t guest_program_entry_cycle_ = 0u;\n"
@@ -9653,6 +9964,24 @@ std::string handwritten_main(
            "    bool product_entry_evidence_failed_ = false;\n"
            "    bool fault_emitted_ = false;\n"
            "};\n\n"
+           "class ProductCrashServiceBinding final {\n"
+           "  public:\n"
+           "    ProductCrashServiceBinding(\n"
+           "            PortPlatformServices& services,\n"
+           "            ProductCrashContext& context,\n"
+           "            std::atomic<std::uint32_t>* emission_latch =\n"
+           "                &product_crash_emission_latch) noexcept\n"
+           "        : services_(services) {\n"
+           "        services_.bind_crash_capsule(context.capsule);\n"
+           "        services_.set_crash_emission_latch(\n"
+           "            emission_latch);\n"
+           "    }\n"
+           "    ~ProductCrashServiceBinding() noexcept = default;\n"
+           "    ProductCrashServiceBinding(const ProductCrashServiceBinding&) = delete;\n"
+           "    ProductCrashServiceBinding& operator=(const ProductCrashServiceBinding&) = delete;\n"
+           "  private:\n"
+           "    PortPlatformServices& services_;\n"
+           "};\n\n"
            "int run_deterministic_runtime_probe(\n"
            "        katana::runtime::CpuState& cpu,\n"
            "        const katana::runtime::DreamcastRuntimeState& state,\n"
@@ -9671,8 +10000,14 @@ std::string handwritten_main(
            "        std::make_shared<katana::runtime::MapleControllerDevice>(input));\n"
            "    katana::runtime::RecordingHostAudioOutput audio;\n"
            "    std::vector<std::int16_t> audio_samples;\n"
-           "    PortPlatformServices services(\n"
-           "        cpu, state, {}, {}, false, true, &replay);\n"
+            "    std::atomic<std::uint32_t> runtime_probe_fault_latch{0u};\n"
+            "    PortPlatformServices services(\n"
+            "        cpu, state, {}, {}, false, true, &replay);\n"
+           "    std::optional<ProductCrashServiceBinding> crash_binding;\n"
+           "    if (active_product_crash_context != nullptr)\n"
+           "        crash_binding.emplace(\n"
+           "            services, *active_product_crash_context,\n"
+           "            &runtime_probe_fault_latch);\n"
            "    katana::runtime::DreamcastMediaClock media_clock(\n"
            "        *state.scheduler, {},\n"
            "        [&](const katana::runtime::VideoTick& tick) {\n"
@@ -9715,29 +10050,47 @@ std::string handwritten_main(
            "        static_cast<void>(" +
            entry_namespace +
            "::run_runtime(cpu, services, *state.runtime_blocks,\n"
-           "                      services.observation_session(),\n"
+            "                      services.observation_session(),\n"
+            "                      " + entry_namespace +
+            "::RuntimeCrashContextProvider{\n"
+            "                          active_product_crash_context != nullptr\n"
+            "                              ? &product_crash_emission_latch\n"
+            "                              : nullptr},\n"
            "                      services.crash_capsule()));\n"
            "    } catch (const katana::runtime::RuntimeProbeBudgetReached& reached) {\n"
            "        if (!reached.final_guest_cycle().has_value() ||\n"
            "            *reached.final_guest_cycle() != state.scheduler->current_cycle()) {\n"
            "            media_clock.stop();\n"
-           "            throw std::runtime_error(\"runtime-probe-budget-cycle-mismatch\");\n"
+           "            services.emit_runtime_fault(\n"
+           "                katana::runtime::RuntimeProbeTermination::Failed,\n"
+           "                4u, \"runtime-probe-budget-mismatch\",\n"
+           "                0xFFFFFFFFu, \"runtime-contract\",\n"
+           "                cpu.active_instruction_pc, cpu.pc);\n"
+           "            return 1;\n"
            "        }\n"
            "        termination = katana::runtime::RuntimeProbeTermination::BudgetReached;\n"
-           "    } catch (const katana::runtime::IndirectDispatchError&) {\n"
+           "    } catch (const katana::runtime::IndirectDispatchError& error) {\n"
            "        media_clock.stop();\n"
            "        services.emit_runtime_fault(\n"
-           "            katana::runtime::RuntimeProbeTermination::DispatchMiss);\n"
+           "            katana::runtime::RuntimeProbeTermination::DispatchMiss,\n"
+           "            1u, \"IndirectDispatchError\",\n"
+           "            static_cast<std::uint32_t>(error.error()),\n"
+           "            katana::runtime::dispatch_diagnostic_error_name(error.error()),\n"
+           "            error.callsite(), error.target());\n"
            "        return 1;\n"
            "    } catch (const std::exception&) {\n"
            "        media_clock.stop();\n"
            "        services.emit_runtime_fault(\n"
-           "            katana::runtime::RuntimeProbeTermination::Failed);\n"
+           "            katana::runtime::RuntimeProbeTermination::Failed,\n"
+           "            2u, \"std-exception\", 0xFFFFFFFFu,\n"
+           "            \"runtime-contract\", cpu.active_instruction_pc, cpu.pc);\n"
            "        return 1;\n"
            "    } catch (...) {\n"
            "        media_clock.stop();\n"
            "        services.emit_runtime_fault(\n"
-           "            katana::runtime::RuntimeProbeTermination::Failed);\n"
+           "            katana::runtime::RuntimeProbeTermination::Failed,\n"
+           "            3u, \"unknown-exception\", 0xFFFFFFFFu,\n"
+           "            \"runtime-contract\", cpu.active_instruction_pc, cpu.pc);\n"
            "        return 1;\n"
            "    }\n"
            "    media_clock.stop();\n"
@@ -9789,32 +10142,7 @@ std::string handwritten_main(
            "              << '\\n';\n"
            "    return 0;\n"
            "}\n\n"
-           "std::string redact_source(std::string message, const std::filesystem::path& source) {\n"
-           "    std::error_code path_error;\n"
-           "    const auto absolute = std::filesystem::weakly_canonical(source, path_error);\n"
-           "    if (path_error || absolute.empty()) return message;\n"
-           "    std::vector<std::string> values;\n"
-           "    const auto add = [&values](const std::filesystem::path& path) {\n"
-           "        const auto value = path.lexically_normal().string();\n"
-           "        if (value.size() < 4u || path == path.root_path() || path == \".\" || "
-           "path == \"..\") return;\n"
-           "        if (std::find(values.begin(), values.end(), value) == values.end()) "
-           "values.push_back(value);\n"
-           "    };\n"
-           "    add(absolute);\n"
-           "    add(absolute.parent_path());\n"
-           "    std::sort(values.begin(), values.end(), [](const auto& left, const auto& right) {\n"
-           "        return left.size() > right.size();\n"
-           "    });\n"
-           "    for (const auto& value : values) {\n"
-           "        for (auto offset = message.find(value); offset != std::string::npos;\n"
-           "             offset = message.find(value, offset + 12u)) {\n"
-           "            message.replace(offset, value.size(), \"<gdi-source>\");\n"
-           "        }\n"
-           "    }\n"
-           "    return message;\n"
-           "}\n"
-           "} // namespace\n\n"
+            "} // namespace\n\n"
            "namespace " +
            entry_namespace +
            " {\n"
@@ -9862,11 +10190,18 @@ std::string handwritten_main(
            "    ProductTerminalTelemetry terminal_telemetry;\n"
            "    std::optional<katana::runtime::HostWorkloadLimiter>\n"
            "        workload_limiter;\n"
+           "    ProductCrashContext product_crash_context;\n"
+           "    ProductCrashContextScope product_crash_context_scope(\n"
+           "        product_crash_context);\n"
+           "#if defined(_WIN32)\n"
+           "    ProductUnhandledExceptionFilterScope product_seh_filter;\n"
+           "#endif\n"
            "    auto emit_terminal_failure = [&]("
            "std::string_view first_problem,\n"
            "                                     std::uint32_t callsite = 0u,\n"
            "                                     std::uint32_t target = 0u,\n"
-           "                                     std::uint32_t dispatch_error = 0u) {\n"
+           "                                     std::uint32_t dispatch_error = 0u) noexcept {\n"
+           "        try {\n"
            "        if (terminal_telemetry.terminal_summary_emitted) return;\n"
            "        terminal_telemetry.terminal_summary_emitted = true;\n"
            "        if (workload_limiter)\n"
@@ -9956,6 +10291,9 @@ std::string handwritten_main(
            "                  << terminal_telemetry.host_video_presentation."
            "currently_occluded\n"
            "                  << \" first_problem=\" << first_problem << '\\n';\n"
+           "        } catch (...) {\n"
+           "            // The bounded crash capsule is already authoritative.\n"
+           "        }\n"
            "    };\n"
            "    try {\n"
            "        katana::ProgressReporter runtime_progress(\n"
@@ -11091,10 +11429,10 @@ std::string handwritten_main(
            "                        << \" events=\"\n"
            "                        << artifact->descriptor().scheduler.pending_events.size()\n"
            "                        << \" platform_state=complete diagnostic=0\\n\";\n"
-           "                } catch (const std::exception& error) {\n"
+           "                } catch (const std::exception&) {\n"
            "                    std::cerr\n"
            "                        << \"KATANA_GAME_ENTRY_HANDOFF_CAPTURE status=failed\"\n"
-           "                        << \" error=\" << error.what() << '\\n';\n"
+           "                        << \" error=handoff-capture-failed\\n\";\n"
            "                } catch (...) {\n"
            "                    std::cerr\n"
            "                        << \"KATANA_GAME_ENTRY_HANDOFF_CAPTURE status=failed\"\n"
@@ -11136,6 +11474,9 @@ std::string handwritten_main(
            "           promote_pending_visible_game_frame,\n"
            "           std::move(game_entry_callback),\n"
            "           configured_guest_cycle_budget, &terminal_telemetry);\n"
+           "        std::optional<ProductCrashServiceBinding> crash_binding;\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            crash_binding.emplace(services, *active_product_crash_context);\n"
            "        runtime_observer = &services;\n"
            "        services.observe_runtime_started();\n"
            "        auto report_progress = [&] {\n"
@@ -11360,7 +11701,12 @@ std::string handwritten_main(
            "            result = " +
            entry_namespace +
            "::run_runtime(cpu, services, *state.runtime_blocks,\n"
-           "                          services.observation_session(),\n"
+            "                          services.observation_session(),\n"
+            "                          " + entry_namespace +
+            "::RuntimeCrashContextProvider{\n"
+            "                              active_product_crash_context != nullptr\n"
+            "                                  ? &product_crash_emission_latch\n"
+            "                                  : nullptr},\n"
            "                          services.crash_capsule());\n"
            "        } catch (const katana::runtime::PlatformLifecycleExit&) {\n"
            "            report_progress();\n"
@@ -12027,16 +12373,40 @@ std::string handwritten_main(
            "            std::cerr << evidence.last_gdrom_status[index];\n"
            "        }\n"
            "        std::cerr << \"]}\\n\";\n"
-           "        emit_terminal_failure(\"platform-lifecycle\", evidence.callsite,\n"
+            "        if (active_product_crash_context != nullptr)\n"
+            "            active_product_crash_context->emit(\n"
+            "                0u, \"PlatformLifecycleExit\", 0xFFFFFFFFu,\n"
+            "                \"platform-lifecycle\", evidence.callsite,\n"
+            "                evidence.return_address);\n"
+            "        emit_terminal_failure(\"platform-lifecycle\", evidence.callsite,\n"
            "                              evidence.return_address);\n"
            "        return 1;\n"
+           "    } catch (const katana::runtime::RuntimeProbeBudgetReached&) {\n"
+            "        if (active_product_crash_context != nullptr)\n"
+            "            active_product_crash_context->emit(\n"
+            "                0u, \"RuntimeProbeBudgetReached\", 0xFFFFFFFFu,\n"
+            "                \"runtime-probe-budget\", 0u, 0u);\n"
+            "        emit_terminal_failure(\"runtime-probe-budget\");\n"
+           "        return 1;\n"
            "    } catch (const katana::runtime::HostPacingException& error) {\n"
-           "        std::cerr << \"KATANA_HOST_PACING_ERROR \" << error.serialize_json() << "
-           "'\\n';\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            active_product_crash_context->emit(\n"
+           "                0u, \"HostPacingException\", 0xFFFFFFFFu,\n"
+           "                \"host-pacing\", 0u, 0u);\n"
+           "        try {\n"
+           "            std::cerr << \"KATANA_HOST_PACING_ERROR \"\n"
+           "                      << error.serialize_json() << '\\n';\n"
+           "        } catch (...) {}\n"
            "        emit_terminal_failure(\"host-pacing\");\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::StoreQueuePrefetchRejected& error) {\n"
            "        const auto& fault = error.fault();\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            active_product_crash_context->emit(\n"
+           "                0u, \"StoreQueuePrefetchRejected\", 0xFFFFFFFFu,\n"
+           "                \"store-queue-prefetch\", fault.instruction.source_pc,\n"
+           "                fault.target_address);\n"
+           "        try {\n"
            "        std::cerr << \"KATANA_STORE_QUEUE_PREFETCH_REJECTED reason=\"\n"
            "                  << static_cast<unsigned>(fault.reason)\n"
            "                  << \" source=\" << fault.source_address\n"
@@ -12044,12 +12414,18 @@ std::string handwritten_main(
            "                  << \" source_pc=\" << fault.instruction.source_pc\n"
            "                  << \" runtime_pc=\" << fault.instruction.runtime_pc\n"
            "                  << \" packet_class=\" << fault.packet_class << '\\n';\n"
+           "        } catch (...) {}\n"
            "        emit_terminal_failure(\"store-queue-prefetch\",\n"
            "                              fault.instruction.source_pc,\n"
            "                              fault.target_address);\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::PvrRenderFailed& error) {\n"
            "        const auto& failure = error.failure();\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            active_product_crash_context->emit(\n"
+           "                0u, \"PvrRenderFailed\", 0xFFFFFFFFu,\n"
+           "                \"pvr-render\", 0u, 0u);\n"
+           "        try {\n"
            "        std::cerr << \"KATANA_PVR_RENDER_FAILED request=\" << failure.request\n"
            "                  << \" generation=\" << failure.generation\n"
            "                  << \" error=\"\n"
@@ -12057,24 +12433,43 @@ std::string handwritten_main(
            "                  << \" ta_packet_class=\" << failure.ta_packet_class\n"
            "                  << \" register_digest=\" << failure.register_digest\n"
            "                  << \" guest_cycle=\" << failure.guest_cycle << '\\n';\n"
+           "        } catch (...) {}\n"
            "        emit_terminal_failure(\"pvr-render\");\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::IndirectDispatchError& error) {\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            active_product_crash_context->emit(\n"
+           "                1u, \"IndirectDispatchError\",\n"
+           "                static_cast<std::uint32_t>(error.error()),\n"
+           "                katana::runtime::dispatch_diagnostic_error_name(error.error()),\n"
+           "                error.callsite(), error.target());\n"
+           "        try {\n"
            "        std::cerr << \"KATANA_RUNTIME_DISPATCH_ERROR \"\n"
            "                  << error.metrics_json() << '\\n';\n"
-           "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
-           "                  << redact_source(error.what(), source) << '\\n';\n"
+           "        std::cerr << \"KATANA_RUNTIME_FAILURE token=runtime-dispatch\\n\";\n"
+           "        } catch (...) {}\n"
            "        emit_terminal_failure(\n"
            "            \"runtime-dispatch\", error.callsite(), error.target(),\n"
            "            static_cast<std::uint32_t>(error.error()));\n"
            "        return 1;\n"
-           "    } catch (const std::exception& error) {\n"
-           "        std::cerr << \"Portlauf fehlgeschlagen: \"\n"
-           "                  << redact_source(error.what(), source) << '\\n';\n"
+           "    } catch (const std::exception&) {\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            active_product_crash_context->emit(\n"
+           "                2u, \"std-exception\", 0xFFFFFFFFu,\n"
+           "                \"runtime-contract\", 0u, 0u);\n"
+           "        try {\n"
+           "            std::cerr << \"KATANA_RUNTIME_FAILURE token=runtime-exception\\n\";\n"
+           "        } catch (...) {}\n"
            "        emit_terminal_failure(\"runtime-exception\");\n"
            "        return 1;\n"
            "    } catch (...) {\n"
-           "        std::cerr << \"Portlauf fehlgeschlagen: unknown-runtime-error\\n\";\n"
+           "        if (active_product_crash_context != nullptr)\n"
+           "            active_product_crash_context->emit(\n"
+           "                3u, \"unknown-exception\", 0xFFFFFFFFu,\n"
+           "                \"runtime-contract\", 0u, 0u);\n"
+           "        try {\n"
+           "            std::cerr << \"Portlauf fehlgeschlagen: unknown-runtime-error\\n\";\n"
+           "        } catch (...) {}\n"
            "        emit_terminal_failure(\"unknown-runtime-error\");\n"
            "        return 1;\n"
            "    }\n"
@@ -13326,11 +13721,212 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         output << "#include \"katana/runtime/dynamic_interpreter.hpp\"\n"
                << "#include \"katana/sh4/decoder.hpp\"\n";
     output
-        << "#include <algorithm>\n#include <array>\n#include <cerrno>\n#include <chrono>\n#include <cstdlib>\n#include "
-           "<iostream>\n#include <limits>\n"
+        << "#include <algorithm>\n#include <array>\n#include <cerrno>\n#include <charconv>\n#include <chrono>\n#include <cstdlib>\n#include "
+           "<exception>\n#include <iostream>\n#include <limits>\n"
            "#include <memory>\n#include <span>\n#include <stdexcept>\n#include <string>\n"
-           "#include <string_view>\n#include <thread>\n#include <utility>\n#include <vector>\n\n"
-        << "namespace " << entry_namespace << " {\n";
+           "#include <string_view>\n#include <thread>\n#include <utility>\n#include <vector>\n"
+           "#if defined(_WIN32)\n"
+           "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
+           "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n"
+           "#include <windows.h>\n"
+           "#else\n#include <unistd.h>\n#endif\n\n"
+        << "namespace " << entry_namespace << " {\n"
+           "namespace {\n"
+            "void write_bounded_fault_bytes(std::string_view bytes) noexcept {\n"
+             "#if defined(_WIN32)\n"
+            "    const auto handle = GetStdHandle(STD_ERROR_HANDLE);\n"
+           "    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) return;\n"
+           "    while (!bytes.empty()) {\n"
+           "        DWORD written = 0u;\n"
+           "        const auto request = static_cast<DWORD>(std::min<std::size_t>(\n"
+           "            bytes.size(), std::numeric_limits<DWORD>::max()));\n"
+           "        if (WriteFile(handle, bytes.data(), request, &written, nullptr) == FALSE ||\n"
+           "            written == 0u) return;\n"
+           "        bytes.remove_prefix(written);\n"
+           "    }\n"
+           "#else\n"
+           "    while (!bytes.empty()) {\n"
+            "        const auto written = ::write(STDERR_FILENO, bytes.data(), bytes.size());\n"
+           "        if (written < 0) {\n"
+           "            if (errno == EINTR) continue;\n"
+           "            return;\n"
+           "        }\n"
+           "        if (written == 0) return;\n"
+           "        bytes.remove_prefix(static_cast<std::size_t>(written));\n"
+           "    }\n"
+            "#endif\n"
+            "}\n"
+           "void write_bounded_fault_line(\n"
+           "        const std::string_view prefix,\n"
+           "        const std::string_view payload) noexcept {\n"
+           "    write_bounded_fault_bytes(prefix);\n"
+           "    write_bounded_fault_bytes(payload);\n"
+            "    write_bounded_fault_bytes(\"\\n\");\n"
+            "}\n"
+            "void write_fault_u64(const std::uint64_t value) noexcept {\n"
+           "    std::array<char, 32u> bytes{};\n"
+           "    const auto converted = std::to_chars(\n"
+           "        bytes.data(), bytes.data() + bytes.size(), value);\n"
+           "    if (converted.ec == std::errc{})\n"
+           "        write_bounded_fault_bytes(std::string_view(\n"
+           "            bytes.data(), static_cast<std::size_t>(\n"
+            "                converted.ptr - bytes.data())));\n"
+            "}\n"
+            "void write_crash_capsule_legacy_v1(\n"
+            "        const katana::runtime::CrashCapsule& capsule) noexcept {\n"
+            "    write_bounded_fault_bytes(\"KATANA_CRASH_CAPSULE version=\");\n"
+            "    write_fault_u64(katana::runtime::crash_capsule_contract_version);\n"
+            "    write_bounded_fault_bytes(\" last_pc=\");\n"
+            "    write_fault_u64(capsule.last_pc);\n"
+            "    write_bounded_fault_bytes(\" last_block=\");\n"
+            "    write_fault_u64(capsule.last_block);\n"
+            "    write_bounded_fault_bytes(\" last_mmio_address=\");\n"
+            "    write_fault_u64(capsule.last_mmio_address);\n"
+            "    write_bounded_fault_bytes(\" last_mmio_value=\");\n"
+            "    write_fault_u64(capsule.last_mmio_value);\n"
+            "    write_bounded_fault_bytes(\" last_scheduler_cycle=\");\n"
+            "    write_fault_u64(capsule.last_scheduler_cycle);\n"
+            "    write_bounded_fault_bytes(\" last_scheduler_event_id=\");\n"
+            "    write_fault_u64(capsule.last_scheduler_event_id);\n"
+            "    write_bounded_fault_bytes(\" last_scheduler_event_kind=\");\n"
+            "    write_fault_u64(capsule.last_scheduler_event_kind);\n"
+            "    write_bounded_fault_bytes(\" first_error=\");\n"
+            "    write_fault_u64(capsule.first_error_code);\n"
+            "    write_bounded_fault_bytes(\" first_error_pc=\");\n"
+            "    write_fault_u64(capsule.first_error_pc);\n"
+            "    write_bounded_fault_bytes(\" first_error_target=\");\n"
+            "    write_fault_u64(capsule.first_error_target);\n"
+            "    write_bounded_fault_bytes(\" ring_events=\");\n"
+            "    write_fault_u64(capsule.event_count);\n"
+            "    write_bounded_fault_bytes(\"\\n\");\n"
+            "}\n"
+           "void write_fault_hex32(const std::uint32_t value) noexcept {\n"
+           "    constexpr char digits[] = \"0123456789ABCDEF\";\n"
+           "    std::array<char, 12u> bytes{\n"
+           "        '\"', '0', 'x', '0', '0', '0', '0', '0', '0', '0', '0', '\"'};\n"
+           "    for (std::size_t index = 0u; index < 8u; ++index)\n"
+           "        bytes[3u + index] = digits[(value >> ((7u - index) * 4u)) & 0xFu];\n"
+            "    write_bounded_fault_bytes(std::string_view(bytes.data(), bytes.size()));\n"
+            "}\n"
+           "void write_fault_optional_hex32(\n"
+           "        const std::optional<std::uint32_t> value) noexcept {\n"
+           "    if (value) write_fault_hex32(*value);\n"
+           "    else write_bounded_fault_bytes(\"null\");\n"
+           "}\n"
+           "void write_dispatch_legacy_event(\n"
+           "        const katana::runtime::DispatchDiagnosticEvent& event) noexcept {\n"
+           "    write_bounded_fault_bytes(\"{\\\"callsite\\\":\");\n"
+           "    write_fault_hex32(event.callsite);\n"
+           "    write_bounded_fault_bytes(\",\\\"source_virtual\\\":\");\n"
+           "    write_fault_hex32(event.source_virtual);\n"
+           "    write_bounded_fault_bytes(\",\\\"source_physical\\\":\");\n"
+           "    write_fault_hex32(event.source_physical);\n"
+           "    write_bounded_fault_bytes(\",\\\"virtual_target\\\":\");\n"
+           "    write_fault_optional_hex32(event.virtual_target);\n"
+           "    write_bounded_fault_bytes(\",\\\"canonical_target\\\":\");\n"
+           "    write_fault_optional_hex32(event.canonical_target);\n"
+           "    write_bounded_fault_bytes(\",\\\"pr\\\":\");\n"
+           "    write_fault_hex32(event.pr);\n"
+           "    write_bounded_fault_bytes(\",\\\"block_end\\\":\\\"\");\n"
+           "    write_bounded_fault_bytes(\n"
+           "        katana::runtime::dispatch_block_end_name(event.block_end));\n"
+           "    write_bounded_fault_bytes(\"\\\",\\\"origin\\\":\\\"\");\n"
+           "    write_bounded_fault_bytes(\n"
+           "        katana::runtime::dispatch_resolution_origin_name(event.origin));\n"
+           "    write_bounded_fault_bytes(\"\\\",\\\"alias_origin\\\":\\\"\");\n"
+           "    write_bounded_fault_bytes(\n"
+           "        katana::runtime::dispatch_alias_origin_name(event.alias_origin));\n"
+           "    write_bounded_fault_bytes(\"\\\",\\\"fallback_reason\\\":\\\"\");\n"
+           "    write_bounded_fault_bytes(\n"
+           "        katana::runtime::dispatch_fallback_reason_name(event.fallback_reason));\n"
+           "    write_bounded_fault_bytes(\"\\\",\\\"fallback_action\\\":\\\"\");\n"
+           "    write_bounded_fault_bytes(\n"
+           "        katana::runtime::dispatch_fallback_action_name(event.fallback_action));\n"
+           "    write_bounded_fault_bytes(\"\\\",\\\"guest_instructions\\\":\");\n"
+           "    write_fault_u64(event.guest_instructions);\n"
+           "    write_bounded_fault_bytes(\",\\\"exit_pc\\\":\");\n"
+           "    write_fault_hex32(event.exit_pc);\n"
+           "    write_bounded_fault_bytes(\",\\\"error\\\":\\\"\");\n"
+           "    write_bounded_fault_bytes(\n"
+           "        katana::runtime::dispatch_diagnostic_error_name(event.error));\n"
+           "    write_bounded_fault_bytes(\"\\\",\\\"occurrences\\\":\");\n"
+           "    write_fault_u64(event.occurrences);\n"
+           "    write_bounded_fault_bytes(\"}\");\n"
+           "}\n"
+           "void write_dispatch_legacy_events(\n"
+           "        const katana::runtime::DispatchDiagnosticRecorder& diagnostics) noexcept {\n"
+           "    write_bounded_fault_bytes(\n"
+           "        \"KATANA_RUNTIME_DISPATCH_EVENTS {\\\"schema\\\":\"\n"
+           "        \"\\\"katana-dispatch-diagnostic\\\",\\\"report_version\\\":1\"\n"
+           "        \",\\\"diagnostic_version\\\":\");\n"
+           "    write_fault_u64(katana::runtime::dispatch_diagnostic_schema_version);\n"
+           "    write_bounded_fault_bytes(\",\\\"status\\\":\\\"success\\\"\"\n"
+           "        \",\\\"total_occurrences\\\":\");\n"
+           "    write_fault_u64(diagnostics.total_occurrences());\n"
+           "    write_bounded_fault_bytes(\",\\\"unique_events\\\":\");\n"
+           "    write_fault_u64(diagnostics.events().size());\n"
+           "    write_bounded_fault_bytes(\",\\\"dropped_unique_events\\\":\");\n"
+           "    write_fault_u64(diagnostics.dropped_unique_events());\n"
+           "    write_bounded_fault_bytes(\",\\\"events\\\":[\");\n"
+           "    for (std::size_t index = 0u; index < diagnostics.events().size(); ++index) {\n"
+           "        if (index != 0u) write_bounded_fault_bytes(\",\");\n"
+           "        write_dispatch_legacy_event(diagnostics.events()[index]);\n"
+           "    }\n"
+           "    write_bounded_fault_bytes(\"]}\\n\");\n"
+           "}\n"
+           "void write_dispatch_legacy_hotspots(\n"
+           "        const katana::runtime::DispatchDiagnosticRecorder& diagnostics) noexcept {\n"
+           "    std::array<const katana::runtime::DispatchDiagnosticEvent*, 16u> ordered{};\n"
+           "    std::size_t count = 0u;\n"
+           "    const auto before = [](const auto* left, const auto* right) {\n"
+           "        if (left->occurrences != right->occurrences)\n"
+           "            return left->occurrences > right->occurrences;\n"
+           "        if (left->callsite != right->callsite)\n"
+           "            return left->callsite < right->callsite;\n"
+           "        return left->virtual_target.value_or(0u) <\n"
+           "               right->virtual_target.value_or(0u);\n"
+           "    };\n"
+           "    for (const auto& event : diagnostics.events()) {\n"
+           "        if (count < ordered.size()) ordered[count++] = &event;\n"
+           "        else if (before(&event, ordered[count - 1u]))\n"
+           "            ordered[count - 1u] = &event;\n"
+           "        else continue;\n"
+           "        for (std::size_t index = count; index > 1u &&\n"
+           "             before(ordered[index - 1u], ordered[index - 2u]); --index)\n"
+           "            std::swap(ordered[index - 1u], ordered[index - 2u]);\n"
+           "    }\n"
+           "    write_bounded_fault_bytes(\n"
+           "        \"KATANA_RUNTIME_DISPATCH_DIAGNOSTICS {\\\"schema\\\":\"\n"
+           "        \"\\\"katana-dispatch-hotspots\\\",\\\"report_version\\\":1\"\n"
+           "        \",\\\"diagnostic_version\\\":\");\n"
+           "    write_fault_u64(katana::runtime::dispatch_diagnostic_schema_version);\n"
+           "    write_bounded_fault_bytes(\",\\\"total_occurrences\\\":\");\n"
+           "    write_fault_u64(diagnostics.total_occurrences());\n"
+           "    write_bounded_fault_bytes(\",\\\"unique_events\\\":\");\n"
+           "    write_fault_u64(diagnostics.events().size());\n"
+           "    write_bounded_fault_bytes(\",\\\"dropped_unique_events\\\":\");\n"
+           "    write_fault_u64(diagnostics.dropped_unique_events());\n"
+           "    write_bounded_fault_bytes(\",\\\"events\\\":[\");\n"
+           "    for (std::size_t index = 0u; index < count; ++index) {\n"
+           "        if (index != 0u) write_bounded_fault_bytes(\",\");\n"
+           "        const auto& event = *ordered[index];\n"
+           "        write_bounded_fault_bytes(\"{\\\"callsite\\\":\");\n"
+           "        write_fault_hex32(event.callsite);\n"
+           "        write_bounded_fault_bytes(\",\\\"virtual_target\\\":\");\n"
+           "        write_fault_optional_hex32(event.virtual_target);\n"
+           "        write_bounded_fault_bytes(\",\\\"origin\\\":\\\"\");\n"
+           "        write_bounded_fault_bytes(\n"
+           "            katana::runtime::dispatch_resolution_origin_name(event.origin));\n"
+           "        write_bounded_fault_bytes(\"\\\",\\\"error\\\":\\\"\");\n"
+           "        write_bounded_fault_bytes(\n"
+           "            katana::runtime::dispatch_diagnostic_error_name(event.error));\n"
+           "        write_bounded_fault_bytes(\"\\\",\\\"occurrences\\\":\");\n"
+           "        write_fault_u64(event.occurrences);\n"
+           "        write_bounded_fault_bytes(\"}\");\n"
+           "    }\n"
+           "    write_bounded_fault_bytes(\"]}\\n\");\n"
+           "}\n"
+           "} // namespace\n";
     output << "thread_local RuntimeMaterializationStatus last_materialization_status;\n"
            << "const RuntimeMaterializationStatus& runtime_materialization_status() noexcept {\n"
            << "    return last_materialization_status;\n"
@@ -13579,16 +14175,22 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    }\n"
            << "    return StaticAotEscapeReason::Unclassified;\n"
            << "}\n"
-           << "bool detailed_dispatch_diagnostics_enabled() noexcept {\n"
-           << "    static const bool enabled = [] {\n"
-           << "        const auto enabled_by_one = [](const char* name) {\n"
-           << "            const auto* value = std::getenv(name);\n"
-           << "            return value != nullptr && std::string_view(value) == \"1\";\n"
-           << "        };\n"
-           << "        const auto* runtime_probe = std::getenv(\"KATANA_RUNTIME_PROBE\");\n"
-           << "        return enabled_by_one(\"KATANA_PORT_DIAGNOSTICS\") ||\n"
-           << "               enabled_by_one(\"KATANA_PORT_DIAGNOSTICS_FULL\") ||\n"
-           << "               (runtime_probe != nullptr && *runtime_probe != '\\0');\n"
+            << "bool environment_flag_enabled(const char* name) noexcept {\n"
+            << "    const auto* value = std::getenv(name);\n"
+            << "    return value != nullptr && std::string_view(value) == \"1\";\n"
+            << "}\n"
+            << "bool legacy_dispatch_hotspots_enabled() noexcept {\n"
+            << "    return environment_flag_enabled(\"KATANA_PORT_DIAGNOSTICS\");\n"
+            << "}\n"
+            << "bool legacy_dispatch_events_enabled() noexcept {\n"
+            << "    return environment_flag_enabled(\"KATANA_PORT_DIAGNOSTICS_FULL\");\n"
+            << "}\n"
+            << "bool detailed_dispatch_diagnostics_enabled() noexcept {\n"
+            << "    static const bool enabled = [] {\n"
+            << "        const auto* runtime_probe = std::getenv(\"KATANA_RUNTIME_PROBE\");\n"
+            << "        return legacy_dispatch_hotspots_enabled() ||\n"
+            << "               legacy_dispatch_events_enabled() ||\n"
+            << "               (runtime_probe != nullptr && *runtime_probe != '\\0');\n"
            << "    }();\n"
            << "    return " << (diagnostic_interpreter ? "true" : "false")
            << " || enabled;\n"
@@ -14606,6 +15208,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "                             katana::runtime::RuntimeBlockTable& table,\n"
            << "                             katana::runtime::SystemReplayObservationSession& "
               "observations,\n"
+           << "                             RuntimeCrashContextProvider crash_context,\n"
            << "                             katana::runtime::CrashCapsule& crash_capsule) {\n"
            << "    katana::runtime::validate_platform_services(services);\n";
     if (external_game_project_runtime_bindings) {
@@ -14891,8 +15494,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 << "        });\n";
     }
     output << "    last_materialization_status = {};\n"
-           << "    const auto capture_materialization_status = [&] {\n"
-           << "        materializer.reconcile_inactive_origins(&dispatch_metrics);\n"
+           << "    const auto capture_materialization_status_noexcept = [&]() noexcept {\n"
            << "        const auto& metrics = materializer.metrics();\n"
            << "        last_materialization_status = {metrics.requests, metrics.cache_hits,\n"
            << "            metrics.materializations, metrics.interpreter_materializations,\n"
@@ -14902,6 +15504,53 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "            metrics.reclaimed_validation_bytes,\n"
            << "            static_cast<std::uint32_t>(metrics.first_failure),\n"
            << "            metrics.first_failure_target};\n"
+           << "    };\n"
+           << "    const auto capture_materialization_status = [&] {\n"
+           << "        materializer.reconcile_inactive_origins(&dispatch_metrics);\n"
+           << "        capture_materialization_status_noexcept();\n"
+           << "    };\n"
+           << "    const auto emit_crash_diagnostics = [&](\n"
+           << "            const std::uint32_t host_exception_code,\n"
+           << "            const std::string_view host_exception_type,\n"
+           << "            const std::uint32_t contract_code,\n"
+           << "            const std::string_view contract_type,\n"
+           << "            const std::uint32_t callsite,\n"
+           << "            const std::uint32_t target) noexcept {\n"
+            << "        if (!crash_context.try_claim_emission()) return;\n"
+            << "        capture_materialization_status_noexcept();\n"
+            << "        crash_capsule.note_v2_cpu(cpu.pc, cpu.pr);\n"
+           << "        crash_capsule.note_v2_host_exception(\n"
+           << "            host_exception_code, host_exception_type);\n"
+           << "        crash_capsule.note_v2_contract(contract_code, contract_type);\n"
+           << "        crash_capsule.note_v2_dispatch(callsite, target);\n"
+           << "        if (crash_capsule.first_error_latched == 0u)\n"
+           << "            crash_capsule.note_first_error(contract_code, callsite, target);\n"
+           << "        katana::runtime::BlockMaterializationCrashSnapshot materialization;\n"
+           << "        materializer.capture_crash_snapshot(materialization);\n"
+           << "        if (materialization.last_event_present != 0u)\n"
+           << "            crash_capsule.note_v2_transition(\n"
+           << "                materialization.last_event.success ? 1u : 2u,\n"
+           << "                materialization.last_event.sequence,\n"
+           << "                materialization.last_event.target,\n"
+           << "                materialization.last_event.success\n"
+           << "                    ? \"materialized\" : \"materialization-failed\");\n"
+            << "        write_crash_capsule_legacy_v1(crash_capsule);\n"
+            << "        const auto capsule_line =\n"
+           << "            katana::runtime::serialize_crash_capsule_v2(crash_capsule);\n"
+           << "        write_bounded_fault_line(\n"
+           << "            \"KATANA_CRASH_CAPSULE version=2 \", capsule_line.view());\n"
+           << "        katana::runtime::DispatchDiagnosticSnapshot dispatch_snapshot;\n"
+           << "        diagnostics.capture_crash_snapshot(dispatch_snapshot);\n"
+           << "        const auto dispatch_line =\n"
+           << "            katana::runtime::serialize_dispatch_diagnostic_snapshot_json(\n"
+           << "                dispatch_snapshot);\n"
+           << "        write_bounded_fault_line(\n"
+           << "            \"KATANA_RUNTIME_DISPATCH_CRASH_V2 \",\n"
+           << "            dispatch_line.view());\n"
+            << "        if (legacy_dispatch_hotspots_enabled())\n"
+            << "            write_dispatch_legacy_hotspots(diagnostics);\n"
+            << "        if (legacy_dispatch_events_enabled())\n"
+            << "            write_dispatch_legacy_events(diagnostics);\n"
            << "    };\n"
            << "    ServiceScope scope(\n"
            << "        services, table, context, diagnostics, dispatch_metrics,\n"
@@ -14917,44 +15566,46 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
            << "    } catch (const katana::runtime::PlatformShutdownRequested&) {\n"
            << "        // A host close request is a controlled end of native guest dispatch.\n"
            << "    } catch (const katana::runtime::RuntimeProbeBudgetReached&) {\n"
-           << "        capture_materialization_status();\n"
+           << "        capture_materialization_status_noexcept();\n"
            << "        throw;\n"
            << "    } catch (const katana::runtime::GuestCycleBudgetReached& reached) {\n"
            << "        if (reached.final_guest_cycle() != services.scheduler_cycle())\n"
-           << "            throw std::runtime_error(\"guest-cycle-budget-cycle-mismatch\");\n"
+           << "        {\n"
+           << "            emit_crash_diagnostics(\n"
+              "                4u, \"guest-cycle-budget-mismatch\",\n"
+              "                0xFFFFFFFFu, \"runtime-contract\",\n"
+              "                cpu.active_instruction_pc, cpu.pc);\n"
+           << "            throw std::runtime_error(\n"
+              "                \"guest-cycle-budget-cycle-mismatch\");\n"
+           << "        }\n"
            << "        guest_cycle_budget_reached = true;\n"
+           << "    } catch (const katana::runtime::IndirectDispatchError& error) {\n"
+           << "        emit_crash_diagnostics(\n"
+           << "            1u, \"IndirectDispatchError\",\n"
+           << "            static_cast<std::uint32_t>(error.error()),\n"
+           << "            katana::runtime::dispatch_diagnostic_error_name(error.error()),\n"
+           << "            error.callsite(), error.target());\n"
+           << "        throw;\n"
+           << "    } catch (const std::exception&) {\n"
+           << "        emit_crash_diagnostics(\n"
+           << "            2u, \"std-exception\", 0xFFFFFFFFu,\n"
+           << "            \"runtime-contract\", cpu.active_instruction_pc, cpu.pc);\n"
+           << "        throw;\n"
            << "    } catch (...) {\n"
-           << "        capture_materialization_status();\n"
-           << "        crash_capsule.note_first_error(0xFFFFFFFFu, cpu.pc, cpu.pc);\n"
-           << "        std::cerr << \"KATANA_CRASH_CAPSULE version=\"\n"
-           << "                  << katana::runtime::crash_capsule_contract_version\n"
-           << "                  << \" last_pc=\" << crash_capsule.last_pc\n"
-           << "                  << \" last_block=\" << crash_capsule.last_block\n"
-           << "                  << \" last_mmio_address=\"\n"
-           << "                  << crash_capsule.last_mmio_address\n"
-           << "                  << \" last_mmio_value=\" << crash_capsule.last_mmio_value\n"
-           << "                  << \" last_scheduler_cycle=\"\n"
-           << "                  << crash_capsule.last_scheduler_cycle\n"
-           << "                  << \" last_scheduler_event_id=\"\n"
-           << "                  << crash_capsule.last_scheduler_event_id\n"
-           << "                  << \" last_scheduler_event_kind=\"\n"
-           << "                  << crash_capsule.last_scheduler_event_kind\n"
-           << "                  << \" first_error=\" << crash_capsule.first_error_code\n"
-           << "                  << \" first_error_pc=\" << crash_capsule.first_error_pc\n"
-           << "                  << \" first_error_target=\"\n"
-           << "                  << crash_capsule.first_error_target\n"
-           << "                  << \" ring_events=\" << crash_capsule.event_count << '\\n';\n"
-           << "        if (const auto* value = std::getenv(\"KATANA_PORT_DIAGNOSTICS\");\n"
-           << "            value != nullptr && std::string_view(value) == \"1\")\n"
-           << "            std::cerr << \"KATANA_RUNTIME_DISPATCH_DIAGNOSTICS \"\n"
-           << "                      << diagnostics.serialize_hotspots_json() << '\\n';\n"
-           << "        if (const auto* value = std::getenv(\"KATANA_PORT_DIAGNOSTICS_FULL\");\n"
-           << "            value != nullptr && std::string_view(value) == \"1\")\n"
-           << "            std::cerr << \"KATANA_RUNTIME_DISPATCH_EVENTS \"\n"
-           << "                      << diagnostics.serialize_json() << '\\n';\n"
+           << "        emit_crash_diagnostics(\n"
+           << "            3u, \"unknown-exception\", 0xFFFFFFFFu,\n"
+           << "            \"runtime-contract\", cpu.active_instruction_pc, cpu.pc);\n"
            << "        throw;\n"
            << "    }\n"
-           << "    capture_materialization_status();\n"
+           << "    try {\n"
+           << "        capture_materialization_status();\n"
+           << "    } catch (...) {\n"
+           << "        emit_crash_diagnostics(\n"
+              "            5u, \"materialization-finalize-exception\",\n"
+              "            0xFFFFFFFFu, \"runtime-contract\",\n"
+              "            cpu.active_instruction_pc, cpu.pc);\n"
+           << "        throw;\n"
+           << "    }\n"
            << "    std::array<StaticAotEscapeSiteCounter, 16u> "
               "static_aot_escape_top_sites{};\n"
            << "    std::uint32_t static_aot_escape_top_site_count = 0u;\n"
@@ -15091,11 +15742,16 @@ std::string native_product_main(
     const bool has_bringup_probes,
     const std::string_view input_compatibility_identity) {
     return "#include \"../generated/include/katana_port.hpp\"\n"
+           "#include \"katana/runtime/crash_capsule.hpp\"\n"
            "#include \"katana/runtime/native_port_content.hpp\"\n"
            "#include \"katana/runtime/native_port_graphics.hpp\"\n\n"
            "#include \"katana/runtime/native_port_texture_asset.hpp\"\n"
            "#include \"katana/runtime/native_port_platform.hpp\"\n\n"
+           "#include <algorithm>\n"
+           "#include <array>\n"
+           "#include <atomic>\n"
            "#include <charconv>\n"
+           "#include <cerrno>\n"
            "#include <cstddef>\n"
            "#include <cstdint>\n"
            "#include <cstdlib>\n"
@@ -15103,12 +15759,218 @@ std::string native_product_main(
            "#include <fstream>\n"
            "#include <iostream>\n"
            "#include <limits>\n"
+           "#include <optional>\n"
            "#include <stdexcept>\n"
            "#include <string>\n"
            "#include <system_error>\n"
-           "#include <string_view>\n\n"
+           "#include <string_view>\n"
+           "#if defined(_WIN32)\n"
+           "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
+           "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n"
+           "#include <windows.h>\n"
+           "#else\n#include <unistd.h>\n#endif\n\n"
+           "namespace {\n"
+           "std::atomic<std::uint32_t> native_product_crash_latch{0u};\n"
+           "std::atomic<katana::runtime::CpuState*> native_product_cpu{nullptr};\n"
+           "katana::runtime::CrashCapsule native_product_crash_capsule{};\n"
+           "void native_product_write_fault_bytes(\n"
+           "        std::string_view bytes) noexcept {\n"
+           "#if defined(_WIN32)\n"
+           "    const auto handle = GetStdHandle(STD_ERROR_HANDLE);\n"
+           "    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) return;\n"
+           "    while (!bytes.empty()) {\n"
+           "        DWORD written = 0u;\n"
+           "        const auto request = static_cast<DWORD>(\n"
+           "            std::min<std::size_t>(\n"
+           "                bytes.size(), std::numeric_limits<DWORD>::max()));\n"
+           "        if (WriteFile(handle, bytes.data(), request, &written, nullptr) ==\n"
+           "                FALSE || written == 0u) return;\n"
+           "        bytes.remove_prefix(written);\n"
+           "    }\n"
+           "#else\n"
+           "    while (!bytes.empty()) {\n"
+           "        const auto written = ::write(\n"
+           "            STDERR_FILENO, bytes.data(), bytes.size());\n"
+           "        if (written < 0) {\n"
+           "            if (errno == EINTR) continue;\n"
+           "            return;\n"
+           "        }\n"
+           "        if (written == 0) return;\n"
+           "        bytes.remove_prefix(static_cast<std::size_t>(written));\n"
+           "    }\n"
+           "#endif\n"
+           "}\n"
+           "void native_product_write_fault_u64(\n"
+           "        const std::uint64_t value) noexcept {\n"
+           "    std::array<char, 32u> bytes{};\n"
+           "    const auto converted = std::to_chars(\n"
+           "        bytes.data(), bytes.data() + bytes.size(), value);\n"
+           "    if (converted.ec == std::errc{})\n"
+           "        native_product_write_fault_bytes(std::string_view(\n"
+           "            bytes.data(), static_cast<std::size_t>(\n"
+           "                converted.ptr - bytes.data())));\n"
+           "}\n"
+           "void native_product_write_crash_capsule_v1(\n"
+           "        const katana::runtime::CrashCapsule& capsule) noexcept {\n"
+           "    native_product_write_fault_bytes(\n"
+           "        \"KATANA_CRASH_CAPSULE version=\");\n"
+           "    native_product_write_fault_u64(\n"
+           "        katana::runtime::crash_capsule_contract_version);\n"
+           "    native_product_write_fault_bytes(\" last_pc=\");\n"
+           "    native_product_write_fault_u64(capsule.last_pc);\n"
+           "    native_product_write_fault_bytes(\" last_block=\");\n"
+           "    native_product_write_fault_u64(capsule.last_block);\n"
+           "    native_product_write_fault_bytes(\" last_mmio_address=\");\n"
+           "    native_product_write_fault_u64(capsule.last_mmio_address);\n"
+           "    native_product_write_fault_bytes(\" last_mmio_value=\");\n"
+           "    native_product_write_fault_u64(capsule.last_mmio_value);\n"
+           "    native_product_write_fault_bytes(\" last_scheduler_cycle=\");\n"
+           "    native_product_write_fault_u64(capsule.last_scheduler_cycle);\n"
+           "    native_product_write_fault_bytes(\n"
+           "        \" last_scheduler_event_id=\");\n"
+           "    native_product_write_fault_u64(\n"
+           "        capsule.last_scheduler_event_id);\n"
+           "    native_product_write_fault_bytes(\n"
+           "        \" last_scheduler_event_kind=\");\n"
+           "    native_product_write_fault_u64(\n"
+           "        capsule.last_scheduler_event_kind);\n"
+           "    native_product_write_fault_bytes(\" first_error=\");\n"
+           "    native_product_write_fault_u64(capsule.first_error_code);\n"
+           "    native_product_write_fault_bytes(\" first_error_pc=\");\n"
+           "    native_product_write_fault_u64(capsule.first_error_pc);\n"
+           "    native_product_write_fault_bytes(\" first_error_target=\");\n"
+           "    native_product_write_fault_u64(capsule.first_error_target);\n"
+           "    native_product_write_fault_bytes(\" ring_events=\");\n"
+           "    native_product_write_fault_u64(capsule.event_count);\n"
+           "    native_product_write_fault_bytes(\"\\n\");\n"
+           "}\n"
+           "bool native_product_claim_crash() noexcept {\n"
+           "    std::uint32_t expected = 0u;\n"
+           "    return native_product_crash_latch.compare_exchange_strong(\n"
+           "        expected, 1u, std::memory_order_acq_rel,\n"
+           "        std::memory_order_relaxed);\n"
+           "}\n"
+           "void native_product_capture_cpu() noexcept {\n"
+           "    const auto* const cpu = native_product_cpu.load(\n"
+           "        std::memory_order_acquire);\n"
+           "    if (cpu == nullptr) return;\n"
+           "    native_product_crash_capsule.note_block(\n"
+           "        cpu->pc, cpu->active_block_virtual_start,\n"
+           "        0u);\n"
+           "    native_product_crash_capsule.note_v2_cpu(cpu->pc, cpu->pr);\n"
+           "    native_product_crash_capsule.note_v2_dispatch(\n"
+           "        cpu->active_instruction_pc,\n"
+           "        cpu->active_block_virtual_start);\n"
+           "    native_product_crash_capsule.note_v2_wait(\n"
+           "        cpu->sleeping ? 1u : 0u, 0u,\n"
+           "        0u, 0u);\n"
+           "}\n"
+           "void native_product_emit_claimed_crash(\n"
+           "        const std::uint32_t host_code,\n"
+           "        const std::string_view host_type,\n"
+           "        const std::uint32_t contract_code,\n"
+           "        const std::string_view contract_type,\n"
+           "        const std::uint32_t callsite = 0u,\n"
+           "        const std::uint32_t target = 0u) noexcept {\n"
+           "    const auto effective_callsite = callsite != 0u\n"
+           "        ? callsite : native_product_crash_capsule.last_pc;\n"
+           "    const auto effective_target = target != 0u\n"
+           "        ? target : native_product_crash_capsule.last_pc;\n"
+           "    native_product_crash_capsule.note_v2_host_exception(\n"
+           "        host_code, host_type);\n"
+           "    native_product_crash_capsule.note_v2_contract(\n"
+           "        contract_code, contract_type);\n"
+           "    if (effective_callsite != 0u || effective_target != 0u)\n"
+           "        native_product_crash_capsule.note_v2_dispatch(\n"
+           "            effective_callsite, effective_target);\n"
+           "    if (native_product_crash_capsule.first_error_latched == 0u) {\n"
+           "        native_product_crash_capsule.note_first_error(\n"
+           "            contract_code != 0u ? contract_code : 0xFFFFFFFFu,\n"
+           "            effective_callsite, effective_target);\n"
+           "    }\n"
+           "    native_product_write_crash_capsule_v1(\n"
+           "        native_product_crash_capsule);\n"
+           "    const auto line = katana::runtime::serialize_crash_capsule_v2(\n"
+           "        native_product_crash_capsule);\n"
+           "    native_product_write_fault_bytes(\n"
+           "        \"KATANA_CRASH_CAPSULE version=2 \" );\n"
+           "    native_product_write_fault_bytes(line.view());\n"
+           "    native_product_write_fault_bytes(\"\\n\");\n"
+           "}\n"
+           "void native_product_emit_crash(\n"
+           "        const std::uint32_t host_code,\n"
+           "        const std::string_view host_type,\n"
+           "        const std::uint32_t contract_code,\n"
+           "        const std::string_view contract_type,\n"
+           "        const std::uint32_t callsite = 0u,\n"
+           "        const std::uint32_t target = 0u) noexcept {\n"
+           "    native_product_capture_cpu();\n"
+           "    if (!native_product_claim_crash()) return;\n"
+           "    native_product_emit_claimed_crash(\n"
+           "        host_code, host_type, contract_code, contract_type,\n"
+           "        callsite, target);\n"
+           "}\n"
+           "class NativeProductCpuBinding final {\n"
+           "  public:\n"
+           "    void bind(katana::runtime::CpuState& cpu) noexcept {\n"
+           "        native_product_cpu.store(&cpu, std::memory_order_release);\n"
+           "    }\n"
+           "    ~NativeProductCpuBinding() noexcept {\n"
+           "        native_product_cpu.store(nullptr, std::memory_order_release);\n"
+           "    }\n"
+           "};\n"
+           "#if defined(_WIN32)\n"
+           "std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER>\n"
+           "    native_product_previous_filter{nullptr};\n"
+           "thread_local bool native_product_seh_active = false;\n"
+           "LONG WINAPI native_product_unhandled_exception_filter(\n"
+           "        EXCEPTION_POINTERS* exception) noexcept {\n"
+           "    if (!native_product_seh_active) {\n"
+           "        native_product_seh_active = true;\n"
+           "        const auto code = exception != nullptr &&\n"
+           "                exception->ExceptionRecord != nullptr\n"
+           "            ? static_cast<std::uint32_t>(\n"
+           "                  exception->ExceptionRecord->ExceptionCode)\n"
+           "            : 0xFFFFFFFFu;\n"
+           "        if (native_product_claim_crash()) {\n"
+           "        native_product_write_fault_bytes(\n"
+            "            \"KATANA_WINDOWS_SEH {\\\"schema\\\":1,\\\"code\\\":\");\n"
+            "        native_product_write_fault_u64(code);\n"
+            "        native_product_write_fault_bytes(\"}\\n\");\n"
+           "        native_product_emit_claimed_crash(\n"
+           "            code, \"windows-seh\", code, \"host-seh-boundary\",\n"
+           "            0u, 0u);\n"
+           "        }\n"
+           "    }\n"
+           "    const auto previous = native_product_previous_filter.load(\n"
+           "        std::memory_order_acquire);\n"
+           "    if (previous != nullptr &&\n"
+           "        previous != &native_product_unhandled_exception_filter)\n"
+           "        return previous(exception);\n"
+           "    return EXCEPTION_CONTINUE_SEARCH;\n"
+           "}\n"
+           "class NativeProductExceptionFilterScope final {\n"
+           "  public:\n"
+           "    NativeProductExceptionFilterScope() noexcept\n"
+           "        : previous_(SetUnhandledExceptionFilter(\n"
+           "              &native_product_unhandled_exception_filter)) {\n"
+           "        native_product_previous_filter.store(\n"
+           "            previous_, std::memory_order_release);\n"
+           "    }\n"
+           "    ~NativeProductExceptionFilterScope() noexcept {\n"
+           "        static_cast<void>(SetUnhandledExceptionFilter(previous_));\n"
+           "    }\n"
+           "  private:\n"
+           "    LPTOP_LEVEL_EXCEPTION_FILTER previous_ = nullptr;\n"
+           "};\n"
+           "#endif\n"
+           "} // namespace\n\n"
            "int main(int argc, char** argv) {\n"
-           "    katana::runtime::CpuState* diagnostic_cpu = nullptr;\n"
+           "    std::optional<katana::runtime::NativePortMemory> diagnostic_memory;\n"
+           "#if defined(_WIN32)\n"
+           "    NativeProductExceptionFilterScope native_product_seh_filter;\n"
+           "#endif\n"
+           "    NativeProductCpuBinding diagnostic_cpu_binding;\n"
            "    const bool input_record_launch = argc == 3 &&\n"
            "        std::string_view(argv[1]) == \"--record-input\" &&\n"
            "        std::string_view(argv[2]).size() != 0u;\n"
@@ -15254,6 +16116,10 @@ std::string native_product_main(
            entry_namespace +
            "::native_port_definition();\n"
            "        katana::runtime::validate_native_port_definition(definition);\n"
+           "        native_product_crash_capsule.note_v2_runtime_module(\n"
+           "            definition.project_id, 1u);\n"
+           "        native_product_crash_capsule.note_v2_source_module(\n"
+           "            definition.executable.content_identity, 1u, 0u);\n"
            "        if (presentation_fps == 0u)\n"
            "            presentation_fps = definition.frame_timing\n"
            "                .default_presentation_rate_hz;\n"
@@ -15276,13 +16142,14 @@ std::string native_product_main(
            "            link.allows_ta_packet_renderer ||\n"
            "            link.allows_aica_command_translation)\n"
            "            throw std::runtime_error(\"native-port-link-contract\");\n"
-           "        katana::runtime::NativePortMemory memory(\n"
+           "        diagnostic_memory.emplace(\n"
            "            definition.bootstrap.cache_control_value);\n"
+           "        auto& memory = *diagnostic_memory;\n"
            "        memory.load_verified_images(\n"
            "            content_root,\n"
            "            definition.images);\n"
            "        auto& cpu = memory.cpu();\n"
-           "        diagnostic_cpu = &cpu;\n"
+           "        diagnostic_cpu_binding.bind(cpu);\n"
            "        katana::runtime::reset_cpu(\n"
            "            cpu, {definition.bootstrap.entry_point,\n"
            "                  definition.bootstrap.stack_pointer,\n"
@@ -15409,24 +16276,36 @@ std::string native_product_main(
            "        }\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::NativePortContractError& error) {\n"
+           "        native_product_emit_crash(\n"
+           "            1u, \"NativePortContractError\",\n"
+           "            static_cast<std::uint32_t>(error.failure()),\n"
+           "            \"native-port-contract\");\n"
+           "        try {\n"
            "        std::cerr << \"KATANA_NATIVE_PORT_CONTRACT failure=\"\n"
            "                  << static_cast<unsigned>(error.failure())\n"
-           "                  << \" detail=\" << error.what() << '\\n';\n"
+           "                  << \" detail=unavailable\\n\";\n"
            "        if (direct_launch) {\n"
            "            std::cerr << \"Press Enter to close.\" << std::flush;\n"
            "            std::cin.get();\n"
            "        }\n"
+           "        } catch (...) {}\n"
            "        return 1;\n"
-           "    } catch (const std::exception& error) {\n"
-           "        std::cerr << \"KATANA_NATIVE_PORT_FAILURE \" << error.what();\n"
-           "        if (diagnostic_cpu != nullptr)\n"
-           "            std::cerr << \" pc=0x\" << std::hex << diagnostic_cpu->pc\n"
-           "                      << \" pr=0x\" << diagnostic_cpu->pr << std::dec;\n"
-           "        std::cerr << '\\n';\n"
+           "    } catch (const std::exception&) {\n"
+           "        native_product_emit_crash(\n"
+           "            2u, \"std-exception\", 0xFFFFFFFFu,\n"
+           "            \"native-product-runtime\");\n"
+           "        try {\n"
+           "        std::cerr << \"KATANA_NATIVE_PORT_FAILURE token=std-exception\\n\";\n"
            "        if (direct_launch) {\n"
            "            std::cerr << \"Press Enter to close.\" << std::flush;\n"
            "            std::cin.get();\n"
            "        }\n"
+           "        } catch (...) {}\n"
+           "        return 1;\n"
+           "    } catch (...) {\n"
+           "        native_product_emit_crash(\n"
+           "            3u, \"unknown-exception\", 0xFFFFFFFFu,\n"
+           "            \"native-product-runtime\");\n"
            "        return 1;\n"
            "    }\n"
            "}\n";
@@ -15440,7 +16319,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const katana::io::ExecutableImage& image,
     const std::span<const PreparedLatentAotModule> latent_modules,
     const katana::runtime::GameProjectDefinition* const game_project,
-    const std::string_view native_port_artifact_identity) {
+    const std::string_view native_port_artifact_identity,
+    const NativeDiscAnalysisArtifactIdentity* const
+        runtime_frontier_binding) {
     for (std::size_t index = 0u; index < latent_modules.size(); ++index) {
         const auto& module = latent_modules[index];
         if (module.byte_size == 0u)
@@ -16039,10 +16920,17 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         << "#include \"../include/katana_port.hpp\"\n"
         << "#include \"../include/native-port-dispatch-internal.hpp\"\n"
         << "#include \"katana/runtime/native_port_content.hpp\"\n"
-        << "#include <algorithm>\n#include <array>\n#include <chrono>\n"
+        << "#include <algorithm>\n#include <array>\n#include <atomic>\n"
+           "#include <cerrno>\n#include <charconv>\n#include <chrono>\n"
+           "#include <cstdint>\n"
            "#include <iostream>\n#include <optional>\n#include <sstream>\n#include <stdexcept>\n"
-           "#include <string>\n#include <string_view>\n#include <thread>\n"
-           "#include <utility>\n\n";
+           "#include <limits>\n#include <string>\n#include <string_view>\n"
+           "#include <system_error>\n#include <thread>\n#include <utility>\n"
+           "#if defined(_WIN32)\n"
+           "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
+           "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n"
+           "#include <windows.h>\n"
+           "#else\n#include <unistd.h>\n#endif\n\n";
     output << "extern \"C\" katana::runtime::NativePortBootstrapResult "
            << definition.bootstrap.symbol
            << "(katana::runtime::NativePortContext&) noexcept;\n";
@@ -16055,6 +16943,42 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << "(katana::runtime::NativePortContext&) noexcept;\n";
     }
     output << "\nnamespace " << entry_namespace << " {\n"
+           << "namespace {\n"
+              "void write_bounded_fault_bytes(std::string_view bytes) noexcept {\n"
+              "#if defined(_WIN32)\n"
+              "    const auto handle = GetStdHandle(STD_ERROR_HANDLE);\n"
+              "    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) return;\n"
+              "    while (!bytes.empty()) {\n"
+              "        DWORD written = 0u;\n"
+              "        const auto request = static_cast<DWORD>(std::min<std::size_t>(\n"
+              "            bytes.size(), std::numeric_limits<DWORD>::max()));\n"
+              "        if (WriteFile(handle, bytes.data(), request, &written, nullptr) == FALSE ||\n"
+              "            written == 0u) return;\n"
+              "        bytes.remove_prefix(written);\n"
+              "    }\n"
+              "#else\n"
+              "    while (!bytes.empty()) {\n"
+              "        const auto written = ::write(\n"
+              "            STDERR_FILENO, bytes.data(), bytes.size());\n"
+              "        if (written < 0) {\n"
+              "            if (errno == EINTR) continue;\n"
+              "            return;\n"
+              "        }\n"
+              "        if (written == 0) return;\n"
+              "        bytes.remove_prefix(static_cast<std::size_t>(written));\n"
+              "    }\n"
+              "#endif\n"
+              "}\n"
+              "void write_fault_u64(const std::uint64_t value) noexcept {\n"
+              "    std::array<char, 32u> bytes{};\n"
+              "    const auto converted = std::to_chars(\n"
+              "        bytes.data(), bytes.data() + bytes.size(), value);\n"
+              "    if (converted.ec == std::errc{})\n"
+              "        write_bounded_fault_bytes(std::string_view(\n"
+              "            bytes.data(), static_cast<std::size_t>(\n"
+              "                converted.ptr - bytes.data())));\n"
+              "}\n"
+              "} // namespace\n"
            << "namespace runtime_dispatch_detail {\n"
            << "constexpr std::string_view native_port_build_identity_marker = "
            << katana::io::quote_json(build_identity_marker) << ";\n"
@@ -16426,40 +17350,116 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    return segment == 4u || segment == 5u\n"
               "               ? invoke(source ^ 0x20000000u)\n"
               "               : HookDispatch{};\n"
-              "}\n"
-              "void emit_runtime_frontier(\n"
-              "    const std::string_view reason,\n"
-              "    const std::uint32_t target) noexcept {\n"
-              "    if (active_native_context == nullptr ||\n"
-              "        active_native_context->cpu == nullptr) return;\n"
-              "    const auto& cpu = *active_native_context->cpu;\n"
-              "    const auto source =\n"
-              "        runtime_dispatch_detail::normalized_source_address(target);\n"
-              "    std::cerr << \"KATANA_RUNTIME_FRONTIER {\\\"version\\\":1\"\n"
-              "              << \",\\\"reason\\\":\\\"\" << reason << '\"'\n"
-              "              << \",\\\"pc\\\":\" << cpu.pc\n"
-              "              << \",\\\"pr\\\":\" << cpu.pr\n"
-              "              << \",\\\"runtime_target\\\":\" << target\n"
-              "              << \",\\\"source_address\\\":\" << source\n"
-              "              << \",\\\"callsite\\\":\"\n"
-              "              << runtime_dispatch_detail::active_exit_source.virtual_address\n"
-              "              << \",\\\"exit_kind\\\":\"\n"
-              "              << static_cast<unsigned>(\n"
-              "                     runtime_dispatch_detail::active_exit_kind)\n"
-              "              << \",\\\"dispatch_site_class\\\":\"\n"
-              "              << static_cast<unsigned>(\n"
-              "                     runtime_dispatch_detail::active_exit_site_class)\n"
-              "              << \",\\\"active_instruction\\\":\"\n"
-              "              << cpu.active_instruction_pc\n"
-              "              << \",\\\"active_block\\\":\"\n"
-              "              << cpu.active_block_virtual_start\n"
-              "              << \",\\\"active_block_size\\\":\"\n"
-              "              << cpu.active_block_size\n"
-              "              << \",\\\"module_identity\\\":null\"\n"
-              "              << \",\\\"slot_address\\\":null\"\n"
-              "              << \",\\\"pointer_value\\\":\" << target\n"
-              "              << \"}\\n\";\n"
-              "}\n"
+              "}\n";
+    std::string frontier_binding_line;
+    if (runtime_frontier_binding != nullptr) {
+        const auto& identity = *runtime_frontier_binding;
+        if (native_disc_analysis_artifact_identity_key(identity) !=
+            identity.key)
+            throw std::runtime_error(
+                "Runtime-Frontier erhielt keine kanonische vollstaendige "
+                "Analyseidentitaet.");
+        std::ostringstream binding;
+        binding << "{\"version\":2,\"analysis_artifact_key\":"
+                << katana::io::quote_json(identity.key)
+                << ",\"content_identity\":"
+                << katana::io::quote_json(identity.content_identity)
+                << ",\"boot_byte_identity\":"
+                << katana::io::quote_json(identity.boot_byte_identity)
+                << ",\"project_identity\":"
+                << katana::io::quote_json(identity.project_identity)
+                << ",\"analysis_contract_identity\":"
+                << katana::io::quote_json(
+                       identity.analysis_contract_identity)
+                << ",\"image_analysis_key\":"
+                << katana::io::quote_json(identity.image_analysis_key)
+                << ",\"game_project_identity\":"
+                << katana::io::quote_json(identity.game_project_identity)
+                << ",\"native_port_identity\":"
+                << katana::io::quote_json(identity.native_port_identity)
+                << ",\"native_port_artifact_identity\":"
+                << katana::io::quote_json(
+                       identity.native_port_artifact_identity)
+                << ",\"analysis_implementation_identity\":"
+                << katana::io::quote_json(
+                       identity.analysis_implementation_identity)
+                << ",\"analysis_cache_implementation_identity\":"
+                << katana::io::quote_json(
+                       identity.analysis_cache_implementation_identity)
+                << ",\"codegen_implementation_identity\":"
+                << katana::io::quote_json(
+                       identity.codegen_implementation_identity)
+                << ",\"analyzer_abi\":" << identity.analyzer_abi
+                << ",\"backend_abi\":" << identity.backend_abi
+                << ",\"analysis_mode\":" << identity.analysis_mode
+                << ",\"disc_volume_start_lba\":"
+                << identity.disc_volume_start_lba
+                << ",\"disc_extent_lba_bias\":"
+                << identity.disc_extent_lba_bias << '}';
+        frontier_binding_line = binding.str();
+        if (frontier_binding_line.size() > 16u * 1024u)
+            throw std::runtime_error(
+                "Runtime-Frontier-Binding ueberschreitet sein festes "
+                "Zeilenbudget.");
+    }
+    output << "inline constexpr bool runtime_frontier_binding_available = "
+            << (runtime_frontier_binding != nullptr ? "true" : "false")
+            << ";\n"
+            << "inline constexpr std::string_view runtime_frontier_binding_line = "
+            << katana::io::quote_json(frontier_binding_line) << ";\n"
+            << "std::atomic<std::uint32_t> runtime_frontier_emitted{0u};\n"
+            << "void emit_runtime_frontier(\n"
+               "    const std::string_view reason,\n"
+               "    const std::uint32_t target) noexcept {\n"
+               "    if (!runtime_frontier_binding_available ||\n"
+               "        active_native_context == nullptr ||\n"
+               "        active_native_context->cpu == nullptr) return;\n"
+               "    std::uint32_t expected = 0u;\n"
+               "    if (!runtime_frontier_emitted.compare_exchange_strong(\n"
+               "            expected, 1u, std::memory_order_acq_rel,\n"
+               "            std::memory_order_relaxed)) return;\n"
+               "    const auto& cpu = *active_native_context->cpu;\n"
+               "    const auto source =\n"
+               "        runtime_dispatch_detail::normalized_source_address(target);\n"
+               "    write_bounded_fault_bytes(\n"
+               "        \"KATANA_RUNTIME_FRONTIER_BINDING \" );\n"
+               "    write_bounded_fault_bytes(runtime_frontier_binding_line);\n"
+               "    write_bounded_fault_bytes(\"\\n\");\n"
+               "    write_bounded_fault_bytes(\n"
+               "        \"KATANA_RUNTIME_FRONTIER {\\\"version\\\":1,\\\"reason\\\":\\\"\");\n"
+            << "\n"
+               "    if (reason == \"missing-static-entry\")\n"
+               "        write_bounded_fault_bytes(\"missing-static-entry\");\n"
+               "    else if (reason == \"host-deadline\")\n"
+               "        write_bounded_fault_bytes(\"host-deadline\");\n"
+               "    else\n"
+               "        write_bounded_fault_bytes(\"unknown\");\n"
+               "    write_bounded_fault_bytes(\"\\\",\\\"pc\\\":\");\n"
+               "    write_fault_u64(cpu.pc);\n"
+               "    write_bounded_fault_bytes(\",\\\"pr\\\":\");\n"
+               "    write_fault_u64(cpu.pr);\n"
+               "    write_bounded_fault_bytes(\",\\\"runtime_target\\\":\");\n"
+               "    write_fault_u64(target);\n"
+               "    write_bounded_fault_bytes(\",\\\"source_address\\\":\");\n"
+               "    write_fault_u64(source);\n"
+               "    write_bounded_fault_bytes(\",\\\"callsite\\\":\");\n"
+               "    write_fault_u64(runtime_dispatch_detail::active_exit_source.virtual_address);\n"
+               "    write_bounded_fault_bytes(\",\\\"exit_kind\\\":\");\n"
+               "    write_fault_u64(static_cast<std::uint32_t>(\n"
+               "        runtime_dispatch_detail::active_exit_kind));\n"
+               "    write_bounded_fault_bytes(\",\\\"dispatch_site_class\\\":\");\n"
+               "    write_fault_u64(static_cast<std::uint32_t>(\n"
+               "        runtime_dispatch_detail::active_exit_site_class));\n"
+               "    write_bounded_fault_bytes(\",\\\"active_instruction\\\":\");\n"
+               "    write_fault_u64(cpu.active_instruction_pc);\n"
+               "    write_bounded_fault_bytes(\",\\\"active_block\\\":\");\n"
+               "    write_fault_u64(cpu.active_block_virtual_start);\n"
+               "    write_bounded_fault_bytes(\",\\\"active_block_size\\\":\");\n"
+               "    write_fault_u64(cpu.active_block_size);\n"
+               "    write_bounded_fault_bytes(\",\\\"slot_address\\\":null,\\\"pointer_value\\\":\");\n"
+               "    write_fault_u64(target);\n"
+               "    write_bounded_fault_bytes(\"}\\n\");\n"
+               "}\n"
               "[[noreturn]] void fail_missing_entry(const std::uint32_t address) {\n"
               "    emit_runtime_frontier(\"missing-static-entry\", address);\n"
               "    if (active_native_context != nullptr)\n"
@@ -22917,16 +23917,39 @@ std::string native_sdk_provider_candidates_json(
     return output.str();
 }
 
-static PortExportResult export_dreamcast_port_project_impl(
+struct NativeDiscAnalysisState {
+    std::optional<DiscExportContext> disc_context;
+    LatentAotDiscovery latent_aot;
+    std::vector<katana::ir::Function> emitted_program;
+    std::vector<std::uint32_t> native_aot_resume_entries;
+    katana::analysis::DreamcastHardwareAudit hardware_audit;
+    katana::analysis::DreamcastHardwareAudit native_hardware_audit;
+    NativePortProgramIndex native_port_program_index;
+    NativePortHardwareClosure native_hardware_closure;
+    std::vector<katana::runtime::RuntimeWaitLoopDescriptor>
+        wait_loop_descriptors;
+    std::vector<MmioWaitLoopBatchProof> mmio_wait_loops;
+    std::vector<CompositeCallbackBatchProof> composite_callback_batches;
+    std::unordered_set<std::uint32_t>
+        composite_callback_architectural_boundaries;
+    std::vector<katana::analysis::NativeSdkProviderCandidate>
+        native_sdk_provider_candidates;
+    std::uint32_t product_entry_address = 0u;
+    std::uint32_t product_entry_owner = 0u;
+};
+
+static std::shared_ptr<NativeDiscAnalysisState>
+prepare_dreamcast_port_project_impl(
     const PreparedPortProgram& prepared,
-    const std::filesystem::path& output_root,
     const PortExportOptions& options,
     const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source,
     const katana::runtime::DiscInstallRecipe* const validated_recipe = nullptr,
     LatentAotDiscovery latent_aot = {},
     const bool latent_aot_precomputed = false,
     const std::span<const std::uint32_t>
-        precomputed_external_primary_roots = {}) {
+        precomputed_external_primary_roots = {},
+    const katana::analysis::DreamcastHardwareAudit*
+        const precomputed_native_hardware_audit = nullptr) {
     if (options.diagnostic_partial &&
         options.native_port_definition != nullptr)
         throw std::invalid_argument(
@@ -22946,13 +23969,19 @@ static PortExportResult export_dreamcast_port_project_impl(
         throw std::invalid_argument(
             "Portexport besitzt einen ungueltigen Latent-AOT-Discoverymodus.");
     }
+    if (precomputed_native_hardware_audit != nullptr &&
+        (!latent_aot_precomputed ||
+         prepared.precomputed_hardware_audit == nullptr))
+        throw std::invalid_argument(
+            "Voranalyse-Hardwareclosure braucht voranalysierte Primaer- und "
+            "Latentprodukte.");
     report_progress(options, "program-validation");
     auto validation_progress = options.progress.begin(
         katana::ProgressOperation::ProgramValidation,
         katana::ProgressUnit::Steps,
         std::nullopt,
         "port-program-validation");
-    if (output_root.empty() || !valid_target_name(options.target_name) ||
+    if (!valid_target_name(options.target_name) ||
         options.tool_version.empty() || prepared.entry_address == 0u ||
         prepared.boot_address == 0u || prepared.boot_size == 0u || prepared.program.empty()) {
         throw std::invalid_argument(
@@ -23591,7 +24620,8 @@ static PortExportResult export_dreamcast_port_project_impl(
             : *computed_hardware_audit;
     std::optional<katana::analysis::DreamcastHardwareAudit>
         native_admission_hardware_audit;
-    if (native_port_definition != nullptr &&
+    if (precomputed_native_hardware_audit == nullptr &&
+        native_port_definition != nullptr &&
         prepared.precomputed_hardware_audit != nullptr)
         native_admission_hardware_audit.emplace(
             katana::analysis::audit_dreamcast_hardware(
@@ -23600,8 +24630,11 @@ static PortExportResult export_dreamcast_port_project_impl(
         native_admission_hardware_audit.has_value()
             ? *native_admission_hardware_audit
             : hardware_audit;
-    const auto native_hardware_audit = combine_native_hardware_audits(
-        primary_native_hardware_audit, latent_aot.modules);
+    const auto native_hardware_audit =
+        precomputed_native_hardware_audit != nullptr
+            ? *precomputed_native_hardware_audit
+            : combine_native_hardware_audits(
+                  primary_native_hardware_audit, latent_aot.modules);
     std::vector<NativePortExternalEntry> native_product_external_entries;
     native_product_external_entries.reserve(
         prepared.image.entry_points().size() +
@@ -23718,6 +24751,926 @@ static PortExportResult export_dreamcast_port_project_impl(
         composite_callback_architectural_boundaries.insert(
             proof.descriptor.continuation_address);
     }
+    const auto native_sdk_provider_candidates =
+        katana::analysis::discover_native_sdk_provider_candidates(
+            prepared.image,
+            prepared.analysis.recursive.instructions);
+    report_progress(
+        options,
+        "native-sdk-provider-candidates:" +
+            std::to_string(native_sdk_provider_candidates.size()));
+    partition_preparation_progress.complete();
+    auto admitted = std::make_shared<NativeDiscAnalysisState>();
+    admitted->disc_context = std::move(disc_context);
+    admitted->latent_aot = std::move(latent_aot);
+    admitted->emitted_program = std::move(emitted_program);
+    admitted->native_aot_resume_entries =
+        std::move(native_aot_resume_entries);
+    admitted->hardware_audit = hardware_audit;
+    admitted->native_hardware_audit = std::move(native_hardware_audit);
+    admitted->native_port_program_index =
+        std::move(native_port_program_index);
+    admitted->native_hardware_closure =
+        std::move(native_hardware_closure);
+    admitted->wait_loop_descriptors = std::move(wait_loop_descriptors);
+    admitted->mmio_wait_loops = std::move(mmio_wait_loops);
+    admitted->composite_callback_batches =
+        std::move(composite_callback_batches);
+    admitted->composite_callback_architectural_boundaries =
+        std::move(composite_callback_architectural_boundaries);
+    admitted->native_sdk_provider_candidates =
+        std::move(native_sdk_provider_candidates);
+    admitted->product_entry_address = product_entry_address;
+    admitted->product_entry_owner = product_entry_owner;
+    return admitted;
+}
+
+constexpr std::string_view native_disc_analysis_artifact_cache_name{
+    "native-disc-analysis-v1.bin"};
+
+std::vector<katana::io::InputProvenance> native_disc_input_provenance(
+    const katana::platform::DreamcastDiscBoot& disc) {
+    std::vector<katana::io::InputProvenance> inputs;
+    const auto& descriptor = disc.source->descriptor();
+    inputs.push_back({"gdi-descriptor",
+                      descriptor.size,
+                      descriptor.sha256,
+                      descriptor.resolved_path});
+    inputs.reserve(descriptor.tracks.size() + 1u);
+    for (const auto& track : descriptor.tracks) {
+        inputs.push_back(
+            {"gdi-track-" + std::to_string(track.number),
+             track.file_offset +
+                 track.sector_count * track.sector_size,
+             track.sha256,
+             track.resolved_path});
+    }
+    return inputs;
+}
+
+NativeDiscAnalysisArtifactIdentity native_disc_analysis_identity(
+    const PortExportOptions& options,
+    const katana::runtime::DiscInstallRecipe& recipe,
+    const std::string_view project_identity,
+    const std::string_view analysis_contract_identity,
+    const std::string_view image_analysis_key,
+    const PortAnalysisMode analysis_mode,
+    const std::uint32_t volume_start_lba,
+    const std::uint32_t extent_lba_bias) {
+    NativeDiscAnalysisArtifactIdentity identity;
+    identity.content_identity = recipe.content_identity;
+    identity.boot_byte_identity = "sha256:" + recipe.boot_sha256;
+    identity.project_identity = project_identity;
+    identity.analysis_contract_identity = analysis_contract_identity;
+    identity.image_analysis_key = image_analysis_key;
+    identity.game_project_identity =
+        options.game_project != nullptr
+            ? game_project_export_identity(*options.game_project)
+            : std::string{};
+    identity.native_port_identity =
+        native_port_export_identity(options.native_port_definition);
+    identity.native_port_artifact_identity =
+        !options.native_port_artifact_identity.empty()
+            ? options.native_port_artifact_identity
+            : identity.native_port_identity;
+    identity.analysis_implementation_identity =
+        options.analysis_implementation_identity;
+    identity.analysis_cache_implementation_identity =
+        options.analysis_cache_implementation_identity;
+    identity.codegen_implementation_identity =
+        options.codegen_implementation_identity;
+    identity.analyzer_abi = katana::analysis::abi_version;
+    identity.backend_abi = backend_interface_abi_version;
+    identity.analysis_mode =
+        static_cast<std::underlying_type_t<PortAnalysisMode>>(
+            analysis_mode);
+    identity.disc_volume_start_lba = volume_start_lba;
+    identity.disc_extent_lba_bias = extent_lba_bias;
+    identity.key = native_disc_analysis_artifact_identity_key(identity);
+    return identity;
+}
+
+bool validate_native_disc_primary_artifact(
+    const PreparedBootAnalysisArtifact& primary,
+    const katana::io::ExecutableImage& image) noexcept {
+    try {
+        if (!boot_analysis_artifact_cacheable(primary) ||
+            !katana::analysis::guarded_aot_inventory_complete(
+                primary.analysis))
+            return false;
+        katana::ir::require_valid_program(primary.lowered_program);
+        std::set<std::uint32_t> program_instructions;
+        std::set<std::uint32_t> program_blocks;
+        for (const auto& function : primary.lowered_program) {
+            for (const auto& block : function.blocks) {
+                program_blocks.insert(block.start_address);
+                for (const auto& instruction : block.instructions) {
+                    const auto* segment = image.find_segment(
+                        instruction.source_address, sizeof(std::uint16_t));
+                    const auto offset =
+                        segment != nullptr
+                            ? segment->byte_offset(
+                                  instruction.source_address)
+                            : std::optional<std::size_t>{};
+                    if (segment == nullptr || !offset.has_value() ||
+                        !segment->permissions.executable ||
+                        *offset > segment->bytes.size() ||
+                        segment->bytes.size() - *offset < 2u)
+                        return false;
+                    const auto opcode = static_cast<std::uint16_t>(
+                        static_cast<std::uint16_t>(
+                            segment->bytes[*offset]) |
+                        (static_cast<std::uint16_t>(
+                             segment->bytes[*offset + 1u])
+                         << 8u));
+                    if (opcode != instruction.original_opcode ||
+                        !katana::sh4::decode(opcode).is_known())
+                        return false;
+                    program_instructions.insert(
+                        instruction.source_address);
+                }
+            }
+        }
+        if (program_instructions.empty() || program_blocks.empty())
+            return false;
+        for (const auto entry : image.entry_points()) {
+            if (!program_blocks.contains(entry)) return false;
+        }
+        for (const auto& line : primary.analysis.recursive.instructions) {
+            const auto* segment = image.find_segment(line.address, 2u);
+            const auto offset =
+                segment != nullptr
+                    ? segment->byte_offset(line.address)
+                    : std::optional<std::size_t>{};
+            if (segment == nullptr || !offset.has_value() ||
+                *offset > segment->bytes.size() ||
+                segment->bytes.size() - *offset < 2u)
+                return false;
+            const auto opcode =
+                static_cast<std::uint16_t>(segment->bytes[*offset]) |
+                (static_cast<std::uint16_t>(
+                     segment->bytes[*offset + 1u])
+                 << 8u);
+            if (opcode != line.opcode ||
+                !program_instructions.contains(line.address))
+                return false;
+        }
+        return primary.control_flow_graph.kind ==
+                   katana::analysis::AnalysisGraphKind::ControlFlow &&
+               primary.call_graph.kind ==
+                   katana::analysis::AnalysisGraphKind::CallGraph;
+    } catch (...) {
+        return false;
+    }
+}
+
+void populate_native_disc_analysis_summary(
+    NativeDiscAnalysisResult& result) {
+    result.summary.primary_functions = result.program.size();
+    result.summary.combined_functions =
+        result.admitted_state->emitted_program.size();
+    result.summary.latent_modules =
+        result.admitted_state->latent_aot.modules.size();
+    result.summary.external_primary_roots =
+        result.latent_external_primary_roots.size();
+    result.summary.native_resume_entries =
+        result.admitted_state->native_aot_resume_entries.size();
+    result.summary.known_hardware_sites =
+        result.admitted_state->native_hardware_closure
+            .known_hardware_sites;
+    result.summary.native_hardware_gaps =
+        result.admitted_state->native_hardware_closure.gaps.size();
+    result.summary.sdk_provider_candidates =
+        result.admitted_state->native_sdk_provider_candidates.size();
+    result.summary.guarded_inventory_complete =
+        katana::analysis::guarded_aot_inventory_complete(
+            result.analysis);
+    result.summary.native_hardware_closure_complete =
+        result.admitted_state->native_hardware_closure.complete;
+    result.summary.backend_admitted = true;
+}
+
+[[nodiscard]] katana::agent::ExecutableMaterializationWorld
+build_native_disc_materialization_world(
+    const NativeDiscAnalysisResult& result,
+    const PortExportOptions& options) {
+    using namespace katana::agent;
+    if (!result.admitted_state)
+        throw std::logic_error(
+            "Materialization-World braucht den autoritativen Admissionzustand.");
+
+    ExecutableMaterializationWorld world;
+    const auto add_evidence = [&](const EvidenceKind kind,
+                                  std::string identity,
+                                  const bool immutable) {
+        const auto id = stable_id(EntityKind::Evidence, identity);
+        if (!world.add_evidence({id, kind, std::move(identity), immutable}))
+            throw std::runtime_error(
+                std::string("Materialization-World-Evidence ungueltig: ") +
+                world_model_error_name(world.last_error()));
+        return id;
+    };
+    const auto add_node = [&](MaterializationNode node) {
+        const auto id = stable_id(EntityKind::Node, node.canonical_identity);
+        node.id = id;
+        if (!world.add_node(std::move(node)))
+            throw std::runtime_error(
+                std::string("Materialization-World-Node ungueltig: ") +
+                world_model_error_name(world.last_error()));
+        return id;
+    };
+    const auto add_frontier = [&](FrontierEntry entry) {
+        if (!world.add_frontier(std::move(entry)))
+            throw std::runtime_error(
+                std::string("Materialization-World-Frontier ungueltig: ") +
+                world_model_error_name(world.last_error()));
+    };
+
+    const auto primary_evidence = add_evidence(
+        EvidenceKind::IdentityBinding,
+        "primary-image:" +
+            result.analysis_artifact_identity.boot_byte_identity,
+        true);
+    const auto analysis_evidence = add_evidence(
+        EvidenceKind::StaticAnalysis,
+        "analysis-contract:" +
+            result.analysis_artifact_identity.analysis_contract_identity,
+        true);
+    const auto provider_evidence = add_evidence(
+        EvidenceKind::IdentityBinding,
+        "native-port:" +
+            result.analysis_artifact_identity.native_port_identity + "|" +
+            result.analysis_artifact_identity.native_port_artifact_identity,
+        true);
+
+    std::size_t unbound_sdk_providers = 0u;
+    for (const auto& candidate :
+         result.admitted_state->native_sdk_provider_candidates) {
+        const bool bound = options.native_port_definition != nullptr &&
+            std::ranges::any_of(
+                options.native_port_definition->hooks,
+                [&](const auto& hook) {
+                    return hook.guest_address == candidate.entry_address &&
+                           hook.covered_size == candidate.covered_size &&
+                           hook.code_identity == candidate.code_identity &&
+                           hook.requirement ==
+                               katana::runtime::NativePortHookRequirement::Required &&
+                           hook.original_policy ==
+                               katana::runtime::NativePortHookOriginalPolicy::
+                                   ReplacesOriginal;
+                });
+        if (!bound) ++unbound_sdk_providers;
+    }
+
+    const bool graph_closed =
+        result.summary.guarded_inventory_complete &&
+        result.summary.native_hardware_closure_complete &&
+        result.summary.backend_admitted && unbound_sdk_providers == 0u;
+    MaterializationNode primary_node;
+    primary_node.kind = MaterializationNodeKind::Image;
+    primary_node.canonical_identity =
+        "image:" + result.analysis_artifact_identity.boot_byte_identity;
+    primary_node.source_identity =
+        result.analysis_artifact_identity.content_identity;
+    primary_node.proof = ProofClass::ProvenExact;
+    primary_node.completeness =
+        result.summary.guarded_inventory_complete
+            ? Completeness::Complete
+            : Completeness::Partial;
+    primary_node.evidence = {primary_evidence, analysis_evidence};
+    const auto primary_node_id = add_node(std::move(primary_node));
+
+    MaterializationNode provider_node;
+    provider_node.kind = MaterializationNodeKind::Provider;
+    provider_node.canonical_identity =
+        "provider:" +
+        result.analysis_artifact_identity.native_port_identity;
+    provider_node.source_identity =
+        result.analysis_artifact_identity.native_port_artifact_identity;
+    provider_node.proof = ProofClass::NativeReplaced;
+    provider_node.completeness =
+        graph_closed ? Completeness::Complete : Completeness::Partial;
+    provider_node.evidence = {provider_evidence};
+    const auto provider_node_id = add_node(std::move(provider_node));
+    if (!world.add_dependency(
+            {provider_node_id,
+             primary_node_id,
+             DependencyKind::Replaces,
+             result.summary.native_hardware_closure_complete}))
+        throw std::runtime_error(
+            std::string("Materialization-World-Dependency ungueltig: ") +
+            world_model_error_name(world.last_error()));
+
+    for (const auto& module : result.admitted_state->latent_aot.modules) {
+        const auto module_evidence = add_evidence(
+            EvidenceKind::IdentityBinding,
+            "latent-module:" + module.byte_identity,
+            true);
+        MaterializationNode module_node;
+        module_node.kind = MaterializationNodeKind::Module;
+        module_node.canonical_identity =
+            "module:" + module.id + "|" + module.byte_identity;
+        module_node.source_identity = module.byte_identity;
+        module_node.proof = ProofClass::GuardedComplete;
+        module_node.completeness = Completeness::Complete;
+        module_node.evidence = {module_evidence, analysis_evidence};
+        const auto module_node_id = add_node(std::move(module_node));
+        if (!world.add_dependency(
+                {primary_node_id,
+                 module_node_id,
+                 DependencyKind::Materializes,
+                 true}))
+            throw std::runtime_error(
+                std::string("Materialization-World-Dependency ungueltig: ") +
+                world_model_error_name(world.last_error()));
+    }
+
+    std::map<std::string, std::vector<std::uint32_t>> hardware_groups;
+    for (const auto& gap :
+         result.admitted_state->native_hardware_closure.gaps)
+        hardware_groups[gap.reason.empty() ? "unclassified-native-gap"
+                                           : gap.reason]
+            .push_back(gap.instruction_address);
+    std::size_t group_index = 0u;
+    for (auto& [reason, sites] : hardware_groups) {
+        std::sort(sites.begin(), sites.end());
+        sites.erase(std::unique(sites.begin(), sites.end()), sites.end());
+        FrontierEntry entry;
+        entry.family = "native-hardware-closure";
+        entry.owner = "native-product-aot";
+        entry.site = "gap-group-" + std::to_string(group_index++);
+        entry.state = FrontierState::Open;
+        entry.proof = FrontierProof::StaticAnalyzer;
+        entry.severity = FrontierSeverity::P0;
+        entry.missing_proof = reason;
+        entry.fanout = static_cast<std::uint32_t>(
+            std::min<std::size_t>(sites.size(),
+                                  std::numeric_limits<std::uint32_t>::max()));
+        entry.blocked_kind = FrontierBlockKind::Hardware;
+        entry.evidence = {analysis_evidence, provider_evidence};
+        entry.contracts = {
+            "identity-bound-whole-owner-native-replacement",
+            "replacement-reachability-proven"};
+        for (std::size_t index = 0u;
+             index < sites.size() &&
+             index < materialization_world_max_blocked_items;
+             ++index)
+            entry.blocked_sites.push_back(
+                guarded_aot_address(sites[index]));
+        entry.blocked_hardware.push_back(reason);
+        entry.causal_chain = {
+            "reachable-aot-instruction",
+            "hardware-side-effect",
+            "missing-native-owner-proof"};
+        entry.invariants = {
+            "no-mmio-emulation",
+            "no-interpreter-or-jit-fallback",
+            "preserve-owner-abi-and-side-effect-order"};
+        entry.acceptance_criteria = {
+            "exact-boundary-and-byte-identity",
+            "native-provider-semantic-equivalence",
+            "replacement-reachability-with-zero-residual-sites"};
+        add_frontier(std::move(entry));
+    }
+
+    for (const auto site :
+         result.admitted_state->native_hardware_closure
+             .replacement_reachability_incomplete_frontier) {
+        FrontierEntry entry;
+        entry.family = "replacement-reachability";
+        entry.owner = "native-product-aot";
+        entry.site = guarded_aot_address(site);
+        entry.state = FrontierState::Open;
+        entry.proof = FrontierProof::StaticAnalyzer;
+        entry.severity = FrontierSeverity::P0;
+        entry.missing_proof = "whole-owner replacement reachability";
+        entry.fanout = 1u;
+        entry.blocked_kind = FrontierBlockKind::Function;
+        entry.evidence = {analysis_evidence, provider_evidence};
+        entry.blocked_functions = {guarded_aot_address(site)};
+        entry.causal_chain = {
+            "replacement-hook",
+            "owner-entry",
+            "unproven-reachable-consumer"};
+        entry.acceptance_criteria = {
+            "identity-bound-owner-cfg",
+            "all-reachable-consumers-subsumed"};
+        add_frontier(std::move(entry));
+    }
+
+    for (const auto& candidate :
+         result.admitted_state->native_sdk_provider_candidates) {
+        const auto family = std::string(
+            katana::analysis::native_sdk_provider_family_name(
+                candidate.family));
+        const auto site = guarded_aot_address(candidate.entry_address);
+        const katana::runtime::NativePortHookBinding* hook = nullptr;
+        if (options.native_port_definition != nullptr) {
+            const auto binding = std::ranges::find_if(
+                options.native_port_definition->hooks,
+                [&](const auto& candidate_binding) {
+                    return candidate_binding.guest_address ==
+                               candidate.entry_address &&
+                           candidate_binding.covered_size ==
+                               candidate.covered_size &&
+                           candidate_binding.code_identity ==
+                               candidate.code_identity &&
+                           candidate_binding.requirement ==
+                               katana::runtime::
+                                   NativePortHookRequirement::Required &&
+                           candidate_binding.original_policy ==
+                               katana::runtime::
+                                   NativePortHookOriginalPolicy::
+                                       ReplacesOriginal;
+                });
+            if (binding != options.native_port_definition->hooks.end())
+                hook = &*binding;
+        }
+        const bool bound = hook != nullptr;
+        FrontierEntry entry;
+        entry.family = "native-sdk-provider:" + family;
+        entry.owner = site;
+        entry.site = site;
+        entry.state = bound ? FrontierState::Closed : FrontierState::Candidate;
+        entry.proof = bound ? FrontierProof::IdentityBound
+                            : FrontierProof::StaticDisassembly;
+        entry.severity = FrontierSeverity::P1;
+        entry.missing_proof = bound
+            ? std::string{}
+            : "required identity-bound native provider binding";
+        entry.fanout = 1u;
+        entry.static_complete = bound;
+        entry.blocked_kind = FrontierBlockKind::Function;
+        entry.evidence = {analysis_evidence, provider_evidence};
+        entry.contracts = {
+            "structural-sdk-boundary",
+            "required-whole-owner-native-hook"};
+        entry.blocked_functions = {site};
+        entry.invariants = {
+            "highest-proven-sdk-boundary",
+            "no-device-emulation"};
+        entry.acceptance_criteria = {
+            "exact-code-identity-and-size",
+            "native-provider-required-and-replaces-original"};
+        if (hook != nullptr) entry.source_symbols.emplace_back(hook->symbol);
+        add_frontier(std::move(entry));
+    }
+
+    FrontierEntry readiness;
+    readiness.family = "product-admission";
+    readiness.owner = "native-disc";
+    readiness.site = "static-port-ready";
+    readiness.state = graph_closed ? FrontierState::Closed
+                                   : FrontierState::Open;
+    readiness.proof = graph_closed ? FrontierProof::IdentityBound
+                                   : FrontierProof::StaticAnalyzer;
+    readiness.severity = FrontierSeverity::P0;
+    readiness.missing_proof = graph_closed
+        ? std::string{}
+        : "guarded inventory, provider and hardware closure must all be complete";
+    readiness.fanout = static_cast<std::uint32_t>(
+        std::min<std::size_t>(
+            result.summary.native_hardware_gaps + unbound_sdk_providers,
+            std::numeric_limits<std::uint32_t>::max()));
+    readiness.static_complete = graph_closed;
+    readiness.blocked_kind = FrontierBlockKind::Materialization;
+    readiness.evidence = {
+        primary_evidence, analysis_evidence, provider_evidence};
+    readiness.contracts = {
+        "guarded-aot-inventory-complete",
+        "native-hardware-closure-complete",
+        "backend-admitted"};
+    readiness.blocked_materializations = graph_closed
+        ? std::vector<std::string>{}
+        : std::vector<std::string>{"static-port-ready"};
+    readiness.invariants = {
+        "static-sh4-aot-only",
+        "native-pc-platform-services",
+        "no-emulation-fallback"};
+    readiness.acceptance_criteria = {
+        "zero-actionable-static-frontier",
+        "zero-proof-downgrades",
+        "positive-source-bound-analysis-artifact"};
+    add_frontier(std::move(readiness));
+
+    if (!world.validate())
+        throw std::runtime_error(
+            std::string("Materialization-World ist nicht kanonisch: ") +
+            world_model_error_name(world.last_error()));
+    return world;
+}
+
+void populate_native_disc_materialization_artifacts(
+    NativeDiscAnalysisResult& result,
+    const PortExportOptions& options) {
+    auto world = build_native_disc_materialization_world(result, options);
+    const auto decision = katana::agent::evaluate_agent_decision(world);
+    result.agent_decision =
+        katana::agent::agent_decision_kind_name(decision.kind);
+    result.agent_decision_reason.assign(decision.reason);
+    result.agent_decision_focus = decision.focus.value;
+    result.agent_actionable_frontier = decision.actionable_frontier;
+
+    constexpr std::size_t initial_capacity = 1u * 1024u * 1024u;
+    std::vector<char> json(initial_capacity);
+    for (;;) {
+        const auto serialized =
+            katana::agent::serialize_agent_world_json(world, json);
+        if (serialized.complete && !serialized.truncated &&
+            serialized.bytes != 0u) {
+            result.materialization_world_json.assign(
+                json.data(), serialized.bytes);
+            break;
+        }
+        if (json.size() ==
+            katana::agent::materialization_world_max_binary_artifact_bytes)
+            throw std::runtime_error(
+                "Materialization-World-JSON ueberschritt die feste "
+                "Artefaktgrenze.");
+        json.resize(std::min(
+            katana::agent::materialization_world_max_binary_artifact_bytes,
+            json.size() * 2u));
+    }
+
+    result.materialization_world_artifact_bytes.resize(initial_capacity);
+    for (;;) {
+        const auto serialized =
+            katana::agent::serialize_agent_world_binary(
+                world, result.materialization_world_artifact_bytes);
+        if (serialized.complete && !serialized.truncated &&
+            serialized.bytes != 0u) {
+            result.materialization_world_artifact_bytes.resize(
+                serialized.bytes);
+            break;
+        }
+        if (result.materialization_world_artifact_bytes.size() ==
+            katana::agent::materialization_world_max_binary_artifact_bytes)
+            throw std::runtime_error(
+                "Materialization-World ueberschritt die feste "
+                "Artefaktgrenze.");
+        result.materialization_world_artifact_bytes.resize(std::min(
+            katana::agent::materialization_world_max_binary_artifact_bytes,
+            result.materialization_world_artifact_bytes.size() * 2u));
+    }
+}
+
+std::optional<NativeDiscAnalysisResult>
+try_reuse_native_disc_analysis_artifact(
+    const katana::io::ExecutableImage& initial_image,
+    const katana::io::ExecutableImage& pre_bootstrap_image,
+    const katana::platform::DreamcastDiscBoot& disc,
+    const PortExportOptions& options,
+    const NativeDiscAnalysisArtifactIdentity& expected_identity) {
+    if (!native_disc_analysis_positive_product_cache_enabled)
+        return std::nullopt;
+    if (options.diagnostic_partial ||
+        options.analysis_cache_root.empty() ||
+        expected_identity.key.empty())
+        return std::nullopt;
+    CodegenCache cache(options.analysis_cache_root /
+                       "native-disc-analysis");
+    const auto stored = cache.load_bounded(
+        expected_identity.key,
+        native_disc_analysis_artifact_cache_name,
+        maximum_native_disc_analysis_artifact_bytes);
+    if (!stored.has_value()) return std::nullopt;
+    const auto invalidate = [&] {
+        static_cast<void>(cache.erase_bounded_if_matches(
+            expected_identity.key,
+            native_disc_analysis_artifact_cache_name,
+            *stored,
+            maximum_native_disc_analysis_artifact_bytes));
+    };
+    try {
+        auto parsed = parse_native_disc_analysis_artifact(
+            expected_identity.key,
+            std::span(
+                reinterpret_cast<const std::uint8_t*>(
+                    stored->data()),
+                stored->size()));
+        if (parsed.state !=
+                NativeDiscAnalysisArtifactState::Hit) {
+            if (parsed.state ==
+                NativeDiscAnalysisArtifactState::Corrupt)
+                invalidate();
+            return std::nullopt;
+        }
+        auto artifact = std::move(parsed.artifact);
+        auto stable_identity = artifact.identity;
+        stable_identity.image_analysis_key.clear();
+        auto stable_expected = expected_identity;
+        stable_expected.image_analysis_key.clear();
+        if (stable_identity != stable_expected ||
+            artifact.entry_address !=
+                katana::platform::
+                    dreamcast_system_bootstrap_entry_address ||
+            artifact.boot_address !=
+                katana::platform::dreamcast_disc_boot_address ||
+            artifact.boot_size != disc.boot_file.size()) {
+            invalidate();
+            return std::nullopt;
+        }
+
+        auto image = initial_image;
+        if (!artifact.external_primary_roots.empty() &&
+            !validate_latent_primary_root_seeds(
+                image,
+                artifact.external_primary_roots,
+                artifact.boot_address,
+                artifact.boot_size)) {
+            invalidate();
+            return std::nullopt;
+        }
+        for (const auto root : artifact.external_primary_roots)
+            image.add_entry_point(root);
+        const auto current_overrides = port_analysis_overrides(
+            options.game_project, options.native_port_definition, image);
+        const auto image_key = make_boot_analysis_cache_key(
+            image,
+            current_overrides ? &*current_overrides : nullptr,
+            boot_analysis_semantic_contract_identity(options),
+            options.analysis_cache_implementation_identity);
+        if (image_key != artifact.identity.image_analysis_key ||
+            !validate_native_disc_primary_artifact(
+                artifact.primary, image) ||
+            !validate_latent_aot_discovery_source_binding(
+                disc.source, artifact.latent)) {
+            invalidate();
+            return std::nullopt;
+        }
+
+        NativeDiscAnalysisResult result;
+        result.image = std::move(image);
+        result.pre_bootstrap_image = pre_bootstrap_image;
+        result.analysis = std::move(artifact.primary.analysis);
+        result.program = std::move(artifact.primary.lowered_program);
+        result.inputs = native_disc_input_provenance(disc);
+        result.hardware_audit =
+            std::move(artifact.primary_hardware_audit);
+        result.control_flow_graph =
+            std::move(artifact.primary.control_flow_graph);
+        result.call_graph =
+            std::move(artifact.primary.call_graph);
+        result.latent_external_primary_roots =
+            artifact.external_primary_roots;
+        result.disc_source = disc.source;
+        result.project_identity = artifact.identity.project_identity;
+        result.entry_address = artifact.entry_address;
+        result.boot_address = artifact.boot_address;
+        result.boot_size = static_cast<std::size_t>(artifact.boot_size);
+        result.disc_volume_start_lba =
+            artifact.identity.disc_volume_start_lba;
+        result.disc_extent_lba_bias =
+            artifact.identity.disc_extent_lba_bias;
+        result.analysis_artifact_identity = artifact.identity;
+        result.analysis_artifact_cache_hit = true;
+        result.boot_analysis_cache_hit = true;
+        result.boot_analysis_pipeline_runs = 0u;
+        result.admitted_state = prepare_dreamcast_port_project_impl(
+            {result.image,
+             result.analysis,
+             result.program,
+             result.inputs,
+             result.entry_address,
+             result.boot_address,
+             result.boot_size,
+             result.project_identity,
+             true,
+             true,
+             result.disc_volume_start_lba,
+             result.disc_extent_lba_bias,
+             false,
+             &result.hardware_audit,
+             &result.control_flow_graph,
+             &result.call_graph,
+             &result.pre_bootstrap_image},
+            options,
+            result.disc_source,
+            nullptr,
+            std::move(artifact.latent),
+            true,
+            result.latent_external_primary_roots,
+            &artifact.native_hardware_audit);
+        populate_native_disc_analysis_summary(result);
+        const auto& closure =
+            result.admitted_state->native_hardware_closure;
+        if (result.admitted_state->product_entry_address !=
+                artifact.product_entry_address ||
+            result.admitted_state->product_entry_owner !=
+                artifact.product_entry_owner ||
+            result.admitted_state->native_aot_resume_entries !=
+                artifact.native_resume_entries ||
+            result.summary.known_hardware_sites !=
+                artifact.known_hardware_sites ||
+            result.summary.native_hardware_gaps !=
+                artifact.native_hardware_gaps ||
+            result.summary.sdk_provider_candidates !=
+                artifact.sdk_provider_candidates ||
+            result.summary.guarded_inventory_complete !=
+                artifact.guarded_inventory_complete ||
+            result.summary.native_hardware_closure_complete !=
+                artifact.native_hardware_closure_complete ||
+            closure.replacement_reachability_proven !=
+                artifact.replacement_reachability_proven ||
+            !artifact.backend_admitted) {
+            invalidate();
+            return std::nullopt;
+        }
+        result.analysis_artifact_bytes.assign(
+            reinterpret_cast<const std::uint8_t*>(stored->data()),
+            reinterpret_cast<const std::uint8_t*>(stored->data()) +
+                stored->size());
+        if (options.agent_analysis_artifacts_requested)
+            populate_native_disc_materialization_artifacts(result, options);
+        report_progress(options, "native-disc-analysis-artifact-hit");
+        return result;
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (...) {
+        invalidate();
+        return std::nullopt;
+    }
+}
+
+void publish_native_disc_analysis_artifact(
+    NativeDiscAnalysisResult& result,
+    const PortExportOptions& options) {
+    const bool archive_requested =
+        options.analysis_artifact_archive_requested;
+    if ((!archive_requested &&
+         !native_disc_analysis_positive_product_cache_enabled) ||
+        options.diagnostic_partial || !result.admitted_state ||
+        result.analysis_artifact_identity.key.empty())
+        return;
+    NativeDiscAnalysisArtifact artifact;
+    artifact.identity = result.analysis_artifact_identity;
+    artifact.primary.analysis = std::move(result.analysis);
+    artifact.primary.lowered_program = std::move(result.program);
+    artifact.primary.hardware_loops = result.hardware_audit.loops;
+    artifact.primary.control_flow_graph =
+        std::move(result.control_flow_graph);
+    artifact.primary.call_graph = std::move(result.call_graph);
+    artifact.latent = std::move(result.admitted_state->latent_aot);
+    artifact.primary_hardware_audit = std::move(result.hardware_audit);
+    artifact.native_hardware_audit =
+        std::move(result.admitted_state->native_hardware_audit);
+    artifact.external_primary_roots =
+        result.latent_external_primary_roots;
+    artifact.native_resume_entries =
+        result.admitted_state->native_aot_resume_entries;
+    artifact.entry_address = result.entry_address;
+    artifact.boot_address = result.boot_address;
+    artifact.boot_size = result.boot_size;
+    artifact.product_entry_address =
+        result.admitted_state->product_entry_address;
+    artifact.product_entry_owner =
+        result.admitted_state->product_entry_owner;
+    artifact.known_hardware_sites =
+        result.summary.known_hardware_sites;
+    artifact.native_hardware_gaps =
+        result.summary.native_hardware_gaps;
+    artifact.sdk_provider_candidates =
+        result.summary.sdk_provider_candidates;
+    artifact.guarded_inventory_complete =
+        result.summary.guarded_inventory_complete;
+    artifact.native_hardware_closure_complete =
+        result.summary.native_hardware_closure_complete;
+    artifact.replacement_reachability_proven =
+        result.admitted_state->native_hardware_closure
+            .replacement_reachability_proven;
+    artifact.backend_admitted = result.summary.backend_admitted;
+
+    bool restored = false;
+    const auto restore = [&] {
+        if (restored) return;
+        result.analysis = std::move(artifact.primary.analysis);
+        result.program = std::move(artifact.primary.lowered_program);
+        result.control_flow_graph =
+            std::move(artifact.primary.control_flow_graph);
+        result.call_graph = std::move(artifact.primary.call_graph);
+        result.admitted_state->latent_aot = std::move(artifact.latent);
+        result.hardware_audit =
+            std::move(artifact.primary_hardware_audit);
+        result.admitted_state->native_hardware_audit =
+            std::move(artifact.native_hardware_audit);
+        restored = true;
+    };
+    if (!native_disc_analysis_artifact_publishable(artifact)) {
+        restore();
+        report_progress(
+            options, "native-disc-analysis-artifact-incomplete");
+        return;
+    }
+    try {
+        auto bytes = serialize_native_disc_analysis_artifact(artifact);
+        restore();
+        if constexpr (!native_disc_analysis_positive_product_cache_enabled) {
+            if (archive_requested) {
+                result.analysis_artifact_bytes = std::move(bytes);
+                report_progress(
+                    options, "native-disc-analysis-archive-created");
+            }
+            return;
+        }
+        if (options.analysis_cache_root.empty()) {
+            if (archive_requested) {
+                result.analysis_artifact_bytes = std::move(bytes);
+                report_progress(
+                    options, "native-disc-analysis-archive-created");
+            }
+            return;
+        }
+        try {
+            CodegenCache cache(options.analysis_cache_root /
+                               "native-disc-analysis");
+            const auto content = std::string_view(
+                reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            cache.store_bounded(
+                result.analysis_artifact_identity.key,
+                native_disc_analysis_artifact_cache_name,
+                content,
+                maximum_native_disc_analysis_artifact_bytes);
+            result.analysis_artifact_cache_published = true;
+            report_progress(
+                options, "native-disc-analysis-artifact-populated");
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (...) {
+            result.analysis_artifact_cache_publish_missed = true;
+            report_progress(
+                options, "native-disc-analysis-artifact-publish-missed");
+        }
+        if (archive_requested) {
+            result.analysis_artifact_bytes = std::move(bytes);
+            report_progress(
+                options, "native-disc-analysis-archive-created");
+        }
+    } catch (const std::bad_alloc&) {
+        restore();
+        throw;
+    } catch (...) {
+        restore();
+        result.analysis_artifact_bytes.clear();
+        if (native_disc_analysis_positive_product_cache_enabled) {
+            result.analysis_artifact_cache_publish_missed = true;
+            report_progress(
+                options, "native-disc-analysis-artifact-publish-missed");
+        } else {
+            report_progress(
+                options, "native-disc-analysis-archive-missed");
+        }
+    }
+}
+
+static PortExportResult export_dreamcast_port_project_impl(
+    const PreparedPortProgram& prepared,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options,
+    const std::shared_ptr<katana::runtime::GdiDiscSource>& validated_disc_source,
+    const katana::runtime::DiscInstallRecipe* const validated_recipe = nullptr,
+    LatentAotDiscovery latent_aot_input = {},
+    const bool latent_aot_precomputed = false,
+    const std::span<const std::uint32_t>
+        precomputed_external_primary_roots = {},
+    std::shared_ptr<NativeDiscAnalysisState> admitted = {},
+    const NativeDiscAnalysisArtifactIdentity* const
+        runtime_frontier_binding = nullptr) {
+    if (output_root.empty())
+        throw std::invalid_argument("Portexport braucht ein Ausgabeziel.");
+    if (!admitted) {
+        admitted = prepare_dreamcast_port_project_impl(
+            prepared,
+            options,
+            validated_disc_source,
+            validated_recipe,
+            std::move(latent_aot_input),
+            latent_aot_precomputed,
+            precomputed_external_primary_roots);
+    }
+    auto& disc_context = admitted->disc_context;
+    const auto& latent_aot = admitted->latent_aot;
+    const auto& emitted_program = admitted->emitted_program;
+    const auto& native_aot_resume_entries =
+        admitted->native_aot_resume_entries;
+    const auto& native_hardware_audit =
+        admitted->native_hardware_audit;
+    const auto& native_port_program_index =
+        admitted->native_port_program_index;
+    const auto& native_hardware_closure =
+        admitted->native_hardware_closure;
+    const auto& wait_loop_descriptors =
+        admitted->wait_loop_descriptors;
+    const auto& mmio_wait_loops = admitted->mmio_wait_loops;
+    const auto& composite_callback_batches =
+        admitted->composite_callback_batches;
+    const auto& composite_callback_architectural_boundaries =
+        admitted->composite_callback_architectural_boundaries;
+    const auto& native_sdk_provider_candidates =
+        admitted->native_sdk_provider_candidates;
+    const auto product_entry_address = admitted->product_entry_address;
+    const auto product_entry_owner = admitted->product_entry_owner;
+    const auto* const native_port_definition =
+        options.native_port_definition;
     // KATANA_COMPONENT_IDENTITY_REGION_BEGIN emit-partitions
     report_progress(options, "partition-codegen");
     const auto partitions = partition_translation_units(emitted_program, options.partition_options);
@@ -24082,7 +26035,6 @@ static PortExportResult export_dreamcast_port_project_impl(
     };
     // KATANA_COMPONENT_IDENTITY_REGION_END emit-partitions
     const auto codegen_jobs = port_codegen_jobs(partitions.size());
-    partition_preparation_progress.complete();
     auto source_progress = options.progress.begin(
         katana::ProgressOperation::SourceGeneration,
         katana::ProgressUnit::Partitions,
@@ -24232,14 +26184,6 @@ static PortExportResult export_dreamcast_port_project_impl(
             current_call_graph,
             prepared.image,
             latent_aot.modules);
-    const auto native_sdk_provider_candidates =
-        katana::analysis::discover_native_sdk_provider_candidates(
-            prepared.image,
-            prepared.analysis.recursive.instructions);
-    report_progress(
-        options,
-        "native-sdk-provider-candidates:" +
-            std::to_string(native_sdk_provider_candidates.size()));
     auto native_sdk_provider_candidates_artifact =
         native_sdk_provider_candidates_json(
             native_sdk_provider_candidates,
@@ -24465,7 +26409,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                                         prepared.image,
                                         latent_aot.modules,
                                         options.game_project,
-                                        options.native_port_artifact_identity)
+                                        options.native_port_artifact_identity,
+                                        runtime_frontier_binding)
                                   : runtime_dispatch_artifacts(
                                         entry_namespace,
                                         emitted_program,
@@ -25066,9 +27011,8 @@ PortExportResult export_dreamcast_port_project(
         disc, output_root, options, PortAnalysisMode::PlatformAbi);
 }
 
-PortExportResult export_dreamcast_port_project(
+NativeDiscAnalysisResult analyze_native_disc_port(
     const katana::platform::DreamcastDiscBoot& disc,
-    const std::filesystem::path& output_root,
     const PortExportOptions& options,
     const PortAnalysisMode analysis_mode) {
     if (!disc.source || disc.system_bootstrap.empty() ||
@@ -25136,6 +27080,40 @@ PortExportResult export_dreamcast_port_project(
         image, options.native_port_definition);
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
+
+    const auto project_identity =
+        katana::platform::dreamcast_disc_project_identity(disc);
+    const auto boot_sha256 = executable_image_range_sha256(
+        pre_bootstrap_image,
+        katana::platform::dreamcast_disc_boot_address,
+        disc.boot_file.size());
+    const auto analysis_recipe =
+        katana::runtime::make_disc_install_recipe(
+            *disc.source, project_identity, boot_sha256);
+    const auto analysis_contract_identity =
+        latent_primary_root_seed_semantic_identity(
+            options,
+            project_identity,
+            disc.data_track_lba,
+            disc.extent_lba_bias,
+            analysis_mode);
+    auto analysis_artifact_identity = native_disc_analysis_identity(
+        options,
+        analysis_recipe,
+        project_identity,
+        analysis_contract_identity,
+        {},
+        analysis_mode,
+        disc.data_track_lba,
+        disc.extent_lba_bias);
+    if (auto reused = try_reuse_native_disc_analysis_artifact(
+            image,
+            pre_bootstrap_image,
+            disc,
+            options,
+            analysis_artifact_identity);
+        reused.has_value())
+        return std::move(*reused);
 
     const auto latent_primary_root_seed_key_identity =
         !options.analysis_implementation_identity.empty()
@@ -25238,10 +27216,6 @@ PortExportResult export_dreamcast_port_project(
         prepared_analysis.full_pipeline_runs;
 
     report_progress(options, "latent-aot-source-validation");
-    const auto boot_sha256 = executable_image_range_sha256(
-        pre_bootstrap_image,
-        katana::platform::dreamcast_disc_boot_address,
-        disc.boot_file.size());
     const std::array excluded_identities{
         std::string("sha256:") + boot_sha256};
     const auto occupied = latent_aot_occupied_ranges(image);
@@ -25487,37 +27461,8 @@ PortExportResult export_dreamcast_port_project(
         inputs.size(),
         "validated-disc-provenance");
     provenance_progress.cached();
-    const auto project_identity =
-        katana::platform::dreamcast_disc_project_identity(disc);
-    auto report = export_dreamcast_port_project_impl(
-        {image,
-         analysis,
-         program,
-         inputs,
-         katana::platform::dreamcast_system_bootstrap_entry_address,
-         katana::platform::dreamcast_disc_boot_address,
-         disc.boot_file.size(),
-         project_identity,
-         true,
-         true,
-         disc.data_track_lba,
-         disc.extent_lba_bias,
-         false,
-         &prepared_analysis.hardware_audit,
-         &prepared_analysis.artifact.control_flow_graph,
-         &prepared_analysis.artifact.call_graph,
-         &pre_bootstrap_image},
-        output_root,
-        options,
-        disc.source,
-        nullptr,
-        std::move(precomputed_latent_aot),
-        true,
-        latent_external_primary_roots);
-    report.boot_analysis_cache_hit =
-        prepared_analysis.cache_hit;
-    report.boot_analysis_pipeline_runs =
-        boot_analysis_pipeline_runs;
+    bool latent_primary_root_seed_cache_published = false;
+    bool latent_primary_root_seed_cache_publish_missed = false;
     if (latent_primary_root_seed_cache != nullptr &&
         !latent_primary_root_seed_cache_key.empty() &&
         !latent_external_primary_roots.empty()) {
@@ -25540,10 +27485,7 @@ PortExportResult export_dreamcast_port_project(
                     serialized,
                     maximum_latent_primary_root_seed_cache_bytes);
             }
-            report.checkpoints.push_back(
-                latent_primary_root_seed_cache_hit
-                    ? "latent-primary-root-seed-cache-hit"
-                    : "latent-primary-root-seed-cache-populated");
+            latent_primary_root_seed_cache_published = true;
             report_progress(
                 options,
                 latent_primary_root_seed_cache_hit
@@ -25552,13 +27494,150 @@ PortExportResult export_dreamcast_port_project(
         } catch (const std::bad_alloc&) {
             throw;
         } catch (const std::exception&) {
-            // The successfully completed export remains authoritative. A
+            // The successfully completed analysis remains authoritative. A
             // cache publication race or unsafe local cache tree only removes
             // the incremental optimization from the next run.
-            report.checkpoints.push_back(
-                "latent-primary-root-seed-cache-publish-missed");
+            latent_primary_root_seed_cache_publish_missed = true;
         }
     }
+    NativeDiscAnalysisResult result;
+    result.image = std::move(image);
+    result.pre_bootstrap_image = std::move(pre_bootstrap_image);
+    result.analysis = std::move(analysis);
+    result.program = std::move(program);
+    result.inputs = std::move(inputs);
+    result.hardware_audit = std::move(prepared_analysis.hardware_audit);
+    result.control_flow_graph =
+        std::move(prepared_analysis.artifact.control_flow_graph);
+    result.call_graph = std::move(prepared_analysis.artifact.call_graph);
+    result.latent_external_primary_roots =
+        std::move(latent_external_primary_roots);
+    result.disc_source = disc.source;
+    result.project_identity = project_identity;
+    result.entry_address =
+        katana::platform::dreamcast_system_bootstrap_entry_address;
+    result.boot_address = katana::platform::dreamcast_disc_boot_address;
+    result.boot_size = disc.boot_file.size();
+    result.disc_volume_start_lba = disc.data_track_lba;
+    result.disc_extent_lba_bias = disc.extent_lba_bias;
+    result.boot_analysis_cache_hit = prepared_analysis.cache_hit;
+    result.boot_analysis_pipeline_runs = boot_analysis_pipeline_runs;
+    result.latent_primary_root_seed_cache_hit =
+        latent_primary_root_seed_cache_hit;
+    result.latent_primary_root_seed_cache_published =
+        latent_primary_root_seed_cache_published;
+    result.latent_primary_root_seed_cache_publish_missed =
+        latent_primary_root_seed_cache_publish_missed;
+    result.admitted_state = prepare_dreamcast_port_project_impl(
+        {result.image,
+         result.analysis,
+         result.program,
+         result.inputs,
+         result.entry_address,
+         result.boot_address,
+         result.boot_size,
+         result.project_identity,
+         true,
+         true,
+         result.disc_volume_start_lba,
+         result.disc_extent_lba_bias,
+         false,
+         &result.hardware_audit,
+         &result.control_flow_graph,
+         &result.call_graph,
+         &result.pre_bootstrap_image},
+        options,
+        result.disc_source,
+        nullptr,
+        std::move(precomputed_latent_aot),
+        true,
+        result.latent_external_primary_roots);
+    populate_native_disc_analysis_summary(result);
+    analysis_artifact_identity.image_analysis_key =
+        make_boot_analysis_cache_key(
+            result.image,
+            external_port_overrides
+                ? &*external_port_overrides
+                : nullptr,
+            boot_analysis_semantic_contract_identity(options),
+            options.analysis_cache_implementation_identity);
+    analysis_artifact_identity.key =
+        native_disc_analysis_artifact_identity_key(
+            analysis_artifact_identity);
+    result.analysis_artifact_identity =
+        std::move(analysis_artifact_identity);
+    publish_native_disc_analysis_artifact(result, options);
+    if (options.agent_analysis_artifacts_requested)
+        populate_native_disc_materialization_artifacts(result, options);
+    return result;
+}
+
+PortExportResult export_dreamcast_port_project(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const std::filesystem::path& output_root,
+    const PortExportOptions& options,
+    const PortAnalysisMode analysis_mode) {
+    auto analyzed = analyze_native_disc_port(disc, options, analysis_mode);
+    const auto analysis_artifact_cache_hit =
+        analyzed.analysis_artifact_cache_hit;
+    const auto analysis_artifact_cache_published =
+        analyzed.analysis_artifact_cache_published;
+    const auto analysis_artifact_cache_publish_missed =
+        analyzed.analysis_artifact_cache_publish_missed;
+    // The positive artifact is already durably stored. Do not carry its
+    // potentially large serialized copy through partitioning and host build.
+    std::vector<std::uint8_t>{}.swap(
+        analyzed.analysis_artifact_bytes);
+    std::vector<std::uint8_t>{}.swap(
+        analyzed.materialization_world_artifact_bytes);
+    std::string{}.swap(analyzed.materialization_world_json);
+    auto report = export_dreamcast_port_project_impl(
+        {analyzed.image,
+         analyzed.analysis,
+         analyzed.program,
+         analyzed.inputs,
+         analyzed.entry_address,
+         analyzed.boot_address,
+         analyzed.boot_size,
+         analyzed.project_identity,
+         true,
+         true,
+         analyzed.disc_volume_start_lba,
+         analyzed.disc_extent_lba_bias,
+         false,
+         &analyzed.hardware_audit,
+         &analyzed.control_flow_graph,
+         &analyzed.call_graph,
+         &analyzed.pre_bootstrap_image},
+        output_root,
+        options,
+        analyzed.disc_source,
+        nullptr,
+        {},
+        true,
+        analyzed.latent_external_primary_roots,
+        analyzed.admitted_state,
+        &analyzed.analysis_artifact_identity);
+    report.boot_analysis_cache_hit = analyzed.boot_analysis_cache_hit;
+    report.boot_analysis_pipeline_runs =
+        analyzed.boot_analysis_pipeline_runs;
+    if (analysis_artifact_cache_hit)
+        report.checkpoints.push_back(
+            "native-disc-analysis-artifact-hit");
+    if (analysis_artifact_cache_published)
+        report.checkpoints.push_back(
+            "native-disc-analysis-artifact-populated");
+    if (analysis_artifact_cache_publish_missed)
+        report.checkpoints.push_back(
+            "native-disc-analysis-artifact-publish-missed");
+    if (analyzed.latent_primary_root_seed_cache_published)
+        report.checkpoints.push_back(
+            analyzed.latent_primary_root_seed_cache_hit
+                ? "latent-primary-root-seed-cache-hit"
+                : "latent-primary-root-seed-cache-populated");
+    if (analyzed.latent_primary_root_seed_cache_publish_missed)
+        report.checkpoints.push_back(
+            "latent-primary-root-seed-cache-publish-missed");
     if (!options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
         !options.analysis_cache_implementation_identity.empty())

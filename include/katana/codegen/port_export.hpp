@@ -5,6 +5,7 @@
 #include "katana/analysis/hardware_audit.hpp"
 #include "katana/build_contract.hpp"
 #include "katana/codegen/latent_aot_registry.hpp"
+#include "katana/codegen/native_disc_analysis_artifact.hpp"
 #include "katana/codegen/partition.hpp"
 #include "katana/io/executable_image.hpp"
 #include "katana/io/input_provenance.hpp"
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -27,7 +29,13 @@ namespace katana::platform {
 struct DreamcastDiscBoot;
 }
 
+namespace katana::runtime {
+class GdiDiscSource;
+}
+
 namespace katana::codegen {
+
+struct NativeDiscAnalysisState;
 
 inline constexpr std::uint32_t port_project_contract_version =
     build_contract::port_project_contract_version;
@@ -125,6 +133,15 @@ struct PortExportOptions {
     std::span<const LatentAotEntryHint> latent_aot_entry_hints;
     LatentAotDiscoveryMode latent_aot_discovery_mode =
         LatentAotDiscoveryMode::HintsAndHeuristics;
+    // Analysis-only tooling may request a private, source-bound archive for
+    // agent query/diff. Product exports keep this false so a disabled positive
+    // cache does not spend time serializing and writing an unusable 256-MiB
+    // component artifact.
+    bool analysis_artifact_archive_requested = false;
+    // Materialization-World/agent JSON is analysis-tool output. Ordinary
+    // product exports keep this false and do not serialize/discard the full
+    // world merely to build the port.
+    bool agent_analysis_artifacts_requested = false;
 };
 
 struct PortExportResult {
@@ -143,6 +160,71 @@ struct PortExportResult {
     std::string content_identity;
     std::size_t disc_tracks = 0u;
     std::vector<std::string> checkpoints;
+};
+
+struct NativeDiscAnalysisSummary {
+    std::size_t primary_functions = 0u;
+    std::size_t combined_functions = 0u;
+    std::size_t latent_modules = 0u;
+    std::size_t external_primary_roots = 0u;
+    std::size_t native_resume_entries = 0u;
+    std::size_t known_hardware_sites = 0u;
+    std::size_t native_hardware_gaps = 0u;
+    std::size_t sdk_provider_candidates = 0u;
+    bool guarded_inventory_complete = false;
+    bool native_hardware_closure_complete = false;
+    bool backend_admitted = false;
+};
+
+// Complete owning result of the authoritative NativeDisc analysis prefix.
+// It contains no generated C++, CMake project, host binary or published port
+// tree.  Both the analysis-only CLI and the product exporter consume this
+// exact state so latent/cross-image closure can never diverge between them.
+struct NativeDiscAnalysisResult {
+    katana::io::ExecutableImage image;
+    katana::io::ExecutableImage pre_bootstrap_image;
+    katana::analysis::ControlFlowAnalysisResult analysis;
+    std::vector<katana::ir::Function> program;
+    std::vector<katana::io::InputProvenance> inputs;
+    katana::analysis::DreamcastHardwareAudit hardware_audit;
+    katana::analysis::AnalysisGraph control_flow_graph;
+    katana::analysis::AnalysisGraph call_graph;
+    std::vector<std::uint32_t> latent_external_primary_roots;
+    // Opaque owning state produced by the same pre-codegen admission pass
+    // used by the product exporter.  Keeping it here prevents a following
+    // export from repeating CFA/FVA, latent discovery or hardware closure.
+    std::shared_ptr<NativeDiscAnalysisState> admitted_state;
+    NativeDiscAnalysisArtifactIdentity analysis_artifact_identity;
+    // Present only when an analysis archive was explicitly requested or the
+    // positive product cache is enabled, and only for a complete, positive,
+    // source-bound analysis. With positive reuse disabled these bytes are an
+    // archive for agent query/diff, never a claimed cache hit source.
+    std::vector<std::uint8_t> analysis_artifact_bytes;
+    // Deterministic, source-bound agent view of the same admitted state.
+    // The binary form is the resumable/queryable artifact; JSON is a bounded
+    // human- and agent-readable projection of exactly that world.
+    std::vector<std::uint8_t> materialization_world_artifact_bytes;
+    std::string materialization_world_json;
+    std::string agent_decision;
+    std::string agent_decision_reason;
+    std::uint64_t agent_decision_focus = 0u;
+    std::size_t agent_actionable_frontier = 0u;
+    NativeDiscAnalysisSummary summary;
+    std::shared_ptr<katana::runtime::GdiDiscSource> disc_source;
+    std::string project_identity;
+    std::uint32_t entry_address = 0u;
+    std::uint32_t boot_address = 0u;
+    std::size_t boot_size = 0u;
+    std::uint32_t disc_volume_start_lba = 0u;
+    std::uint32_t disc_extent_lba_bias = 0u;
+    bool boot_analysis_cache_hit = false;
+    std::size_t boot_analysis_pipeline_runs = 0u;
+    bool latent_primary_root_seed_cache_hit = false;
+    bool latent_primary_root_seed_cache_published = false;
+    bool latent_primary_root_seed_cache_publish_missed = false;
+    bool analysis_artifact_cache_hit = false;
+    bool analysis_artifact_cache_published = false;
+    bool analysis_artifact_cache_publish_missed = false;
 };
 
 struct PreparedPortProgram {
@@ -213,6 +295,16 @@ export_dreamcast_port_project(
     const std::filesystem::path& output_root,
     const PortExportOptions& options,
     PortAnalysisMode analysis_mode);
+
+// Executes the complete NativeDisc product-analysis path but stops before
+// partitioning, source emission, project generation, host build and publish.
+// The returned state owns every image/IR/graph/module object needed by a
+// following product export.
+[[nodiscard]] NativeDiscAnalysisResult
+analyze_native_disc_port(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const PortExportOptions& options,
+    PortAnalysisMode analysis_mode = PortAnalysisMode::PlatformAbi);
 
 // Bring-up export from an immutable private boot-executable artifact. The
 // generated distributable contains native AOT plus the hash/layout recipe, but

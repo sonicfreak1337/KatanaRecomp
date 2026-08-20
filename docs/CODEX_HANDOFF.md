@@ -5,7 +5,84 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
-## Aktueller Produktmeilenstein v111/v30
+## Frontier-Handoff: FVA Saved-Stack-/Epoch-Vertrag (2026-08-20)
+
+Der gebuendelte Saved-Stack-/Epoch-Umbau ist implementiert, kompiliert und
+statisch reviewt, aber der genau einmal ausgefuehrte abschliessende
+FVA-Sanitylauf ist noch rot. Deshalb wurden gemaess Arbeitsauftrag keine
+weiteren Fixversuche, kein Gesamtbuild und keine Sonic-Analyse gestartet.
+
+Implementiert und zu erhalten sind insbesondere die bounded Trennung von
+current- und detached-Origin-Kanaelen, die separate Pending-ABI-Scalar-MAY-
+Domaene, der zentrale Stack-Write-Domain-Vertrag fuer Integer-, R0-indexierte
+und FPU-Stores, current-base offsets, monotone Loss-/Projectionserhaltung,
+Restore-Gates, path-lokale exakte Overwrite-Erases sowie die zugehoerigen
+Key-, Equality- und Persistence-Schemata. Der interprozedurale
+`current_stack_epoch_overwrites`-MAY-Kill wurde bewusst vollstaendig entfernt:
+ohne MUST-Schnitt ueber alle Returnpfade waere er unsound. Der strukturelle
+Slot-Akkumulator in `value_with_saved_stack_epoch()` wird als same-current-
+root behandelt; damit ist die zuvor beobachtete quadratische Origin-
+Partitionierung beseitigt. Provisorische Callee-Summaries werden erst nach
+ausgewerteten Abhaengigkeiten als autoritativer Storage-Vertrag gewidert.
+
+Der Targetbuild `katana-function-value-analysis-tests` war erfolgreich. Der
+finale, auf fuenf Sekunden begrenzte Lauf endete nach etwa `1,7 s` mit:
+
+```text
+TEST FEHLGESCHLAGEN: Ein nach dem SP-Snapshot neu geschriebener Callback
+wurde beim Restore des veralteten Snapshots stillschweigend verloren.
+```
+
+Damit ist kein Performance-/Konvergenzproblem mehr belegt, sondern ein
+verbleibender semantischer Blocker. Der aktuelle read-only Root-Cause-Befund
+fuehrt ueber die Memory-Domaene: Ein konservativer, noch nicht autoritativer
+Call-Fallback absorbiert die SavedEpoch eines exakten Memory-Slots in
+`inventory_unresolved_memory_epoch`. `load_memory_values()` materialisiert
+diese domainweite Memory-Epoch danach auch fuer einen unabhaengigen exakten
+PC-relativen Load als Root-SavedEpoch im Zielregister. Ein anschliessender
+Store klassifiziert dieses Register faelschlich als detached Stack-Root und
+publiziert Callback-/Stack-Loss; `inventory_state_loss()` beziehungsweise
+die Evaluation-Projection mischen detached Loss anschliessend wieder in den
+aktiven `stack_base_unresolved`-Kanal.
+
+Der naechste Fix muss die Memory-Epoch als eigene nested/MAY-Domaene
+transportieren und darf sie nur an einem explizit bewiesenen r15-Restore-
+oder Self-Reload-Gate zum Root-Stack-Epoch promoten. Exakte PC-relative Loads
+in allgemeine Adressregister duerfen keine detached Stack-Write-Domain
+erzeugen. Detached Loss muss separat diagnostiziert und propagiert werden,
+statt den aktiven Stack-Base-Loss zu setzen. Provisorische Unknown-Memory-
+Effekte duerfen Ordinary-Memory konservativ invalidieren, aber keine sticky
+SavedEpoch-/Callback-Loss-Fakten publizieren. Lokale echte Callback-
+Mutationen und bereits bewiesener Loss muessen dabei monoton erhalten
+bleiben.
+
+Vor dem Lauf wurden alle temporaeren `KATANA_TMP`-Ausgaben, neu eingefuegten
+Diagnose-Toggles und Fixture-Abweichungen entfernt; die sechs urspruenglichen
+HEAD-Diagnosepfade bleiben erhalten. Die CrashCapsule-v2-Verdrahtung im
+generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
+Lauf sind weiterhin offen. Es wurde kein Port exportiert.
+
+## Aktueller Produktmeilenstein: v141 / Source-ABI 116-57
+
+Der aktuelle Source-Stand ist Runtime-ABI `116`, Analyzer-ABI `57`,
+Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
+Profilvertrag `23`. Der agentische Native-Disc-Workflow publiziert eine
+identitaetsgebundene Materialization-World und ein resumierbares Ledger;
+Runtime-Frontiers werden ausschliesslich als `ObservedHint` importiert und
+niemals automatisch zu AOT-Roots oder Hardware-Closure.
+
+Der letzte validierte private Produktlauf registrierte drei bounded SPSR-
+PCM-Ringe und hielt den animierten Sonic-Titel sichtbar. Hauptmenue und
+Memory-Card-Screen sind weiterhin unbewiesen. Die aktuelle Produktstatistik
+laut v141 lautet `6.088` Funktionen, `176` Partitionen, `41/41` Module/
+Quellen, `19.250` Blockidentitaeten, `529` Funktionsidentitaeten, `1.587`
+Cross-Image-Transfers, `243` Sites, `191` Gaps, `3` Progress-Waits und
+`1.250` bewiesene Hook-Replacements.
+Ein neuer Export ist bis zum vollstaendigen `analyze-port`-Gate gesperrt;
+Runtime-Frontiers bleiben Beobachtungshinweise, und unbekannte oder noch
+ungeladene Overlayzustande muessen explizit im Artefakt erscheinen.
+
+## Historischer Produktmeilenstein v111/v30
 
 Die echte native MOVIE.BIN-Sequenz ist jetzt als Multi-Clip-Vertrag gebunden.
 Ein No-Skip-Lauf ohne Controllerinput vervollstaendigte Sonic Team mit

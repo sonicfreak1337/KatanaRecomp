@@ -252,12 +252,16 @@ list(
 )
 set(
     KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS
+    "include/katana/analysis/hardware_audit.hpp"
     "include/katana/codegen/boot_analysis_cache.hpp"
     "include/katana/codegen/latent_aot_analysis_cache.hpp"
     "include/katana/codegen/latent_aot_registry.hpp"
+    "include/katana/codegen/native_disc_analysis_artifact.hpp"
     "src/codegen/boot_analysis_cache.cpp"
     "src/codegen/latent_aot_analysis_cache.cpp"
     "src/codegen/latent_aot_registry.cpp"
+    "src/codegen/native_disc_analysis_artifact.cpp"
+    "src/analysis/hardware_audit.cpp"
 )
 file(
     GLOB_RECURSE
@@ -303,9 +307,11 @@ list(
     "include/katana/codegen/boot_analysis_cache.hpp"
     "include/katana/codegen/latent_aot_analysis_cache.hpp"
     "include/katana/codegen/latent_aot_registry.hpp"
+    "include/katana/codegen/native_disc_analysis_artifact.hpp"
     "src/codegen/boot_analysis_cache.cpp"
     "src/codegen/latent_aot_analysis_cache.cpp"
     "src/codegen/latent_aot_registry.cpp"
+    "src/codegen/native_disc_analysis_artifact.cpp"
 )
 list(
     APPEND
@@ -1003,6 +1009,7 @@ add_library(katana_core_objects OBJECT
     src/analysis/native_sdk_provider_analysis.cpp
     src/analysis/symbol_names.cpp
     src/analysis/graph_export.cpp
+    src/agent/materialization_world.cpp
     src/ir/lower.cpp
     src/ir/accumulator_effect.cpp
     src/ir/memory_effect.cpp
@@ -1034,6 +1041,7 @@ add_library(katana_port_export_tooling_objects OBJECT
     src/platform/dreamcast_disc.cpp
     src/platform/phase6_gate.cpp
     src/codegen/latent_aot_registry.cpp
+    src/codegen/native_disc_analysis_artifact.cpp
     src/codegen/port_export.cpp
 )
 add_library(

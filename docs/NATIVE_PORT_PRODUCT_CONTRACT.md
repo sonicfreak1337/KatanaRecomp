@@ -62,6 +62,14 @@ Produktlauf typisiert und fail-closed. Er wird nicht durch Emulation gerettet.
   existieren und darf nicht in ein Produktbinary gelinkt werden.
 - Das Interpretieren von TA-Paketen ist PVR-HLE und deshalb ebenfalls kein
   zulaessiger Produktfallback. TA bleibt ausschliesslich Diagnoseevidenz.
+- Der native Tiefenvertrag ist explizit: Forward-Depth verwendet Clear `1`,
+  Clip-Space und `Less`/`LessEqual`; positiv reziproke Depth verwendet Clear
+  `0` und `Greater`/`GreaterEqual`. Inkompatible Frame-/Drawkombinationen
+  enden fail-closed statt die Szene still invertiert zu rendern.
+- Nachweislich statische Geometrie darf als generationgebundener immutable
+  GPU-Mesh angelegt und ohne erneuten CPU-Upload gezeichnet werden. Dynamische
+  Geometrie bleibt im transienten Ring; Pointer-/Span-Heuristiken duerfen
+  keine Persistenz erfinden.
 
 ### Audio und Movie
 

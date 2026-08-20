@@ -1,5 +1,11 @@
 # Native Audio-, Eingabe- und Hostruntime
 
+Aktueller Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `57`,
+Backend-Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil
+`23`. Die Audio-/SPSR- und Save-Abschnitte unten beschreiben den nativen
+Produktpfad; historische Replay-/AICA-Messungen sind ausdrücklich Diagnose-
+und Vergleichsevidenz.
+
 KR-4703 erweitert `katana-native-host-runtime` auf Version 2. Der Vertrag verbindet
 Hostaudio, explizite Fenster-/Tastaturereignisse und Maple-Eingabe mit dem
 gastzeitdeterministischen Scheduler, ohne Entscheidungen aus der Host-Wall-

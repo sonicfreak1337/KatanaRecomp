@@ -46,7 +46,8 @@ class GuardedNativeEntryShapeCache {
     explicit GuardedNativeEntryShapeCache(const katana::io::ExecutableImage& image)
         : image_(&image),
           bound_image_identity_(image.analysis_instance_identity()),
-          bound_image_revision_(image.analysis_revision()) {
+          bound_image_revision_(image.analysis_revision()),
+          bound_image_immutable_generation_(image.immutable_generation()) {
         statistics_.work_budget = maximum_total_instructions;
     }
 
@@ -56,13 +57,20 @@ class GuardedNativeEntryShapeCache {
     void bind(const katana::io::ExecutableImage& image) {
         const auto identity = image.analysis_instance_identity();
         const auto revision = image.analysis_revision();
+        const auto immutable_generation = image.immutable_generation();
         if (image_ == &image &&
             bound_image_identity_ == identity &&
-            bound_image_revision_ == revision)
+            bound_image_immutable_generation_ == immutable_generation) {
+            // Root-set mutations advance analysis_revision without changing
+            // any bytes or shape proof. Keep the immutable shape shards and
+            // refresh only the diagnostic revision binding.
+            bound_image_revision_ = revision;
             return;
+        }
         image_ = &image;
         bound_image_identity_ = identity;
         bound_image_revision_ = revision;
+        bound_image_immutable_generation_ = immutable_generation;
         results_.clear();
         statistics_ = {};
         statistics_.work_budget = maximum_total_instructions;
@@ -301,6 +309,7 @@ class GuardedNativeEntryShapeCache {
     const katana::io::ExecutableImage* image_ = nullptr;
     std::uint64_t bound_image_identity_ = 0u;
     std::uint64_t bound_image_revision_ = 0u;
+    std::uint64_t bound_image_immutable_generation_ = 0u;
     std::unordered_map<std::uint32_t, GuardedNativeEntryShapeStatus> results_;
     GuardedNativeEntryShapeStatistics statistics_;
 };
@@ -370,6 +379,12 @@ struct FunctionProgramDelta final {
     std::uint64_t expected_published_epoch_version = 0u;
     std::uint64_t image_identity = 0u;
     std::uint64_t image_revision = 0u;
+    // Root-set mutations advance image_revision while retaining the
+    // authenticated byte/layout generation. A matching nonzero generation
+    // enables the root-only warm path; legacy callers without it must still
+    // provide the exact revision and therefore remain fail-closed across a
+    // root-only mutation.
+    std::uint64_t image_immutable_generation = 0u;
     std::vector<FunctionProgramLineDelta> changed_lines;
     std::vector<FunctionProgramBoundaryDelta> changed_boundaries;
     std::vector<FunctionProgramEdgeSiteDelta> changed_semantic_edge_sites;
@@ -518,8 +533,8 @@ struct FunctionEvaluationCacheTelemetryProbe final {
     std::size_t coordinator_physical_computations = 0u;
     bool coordinator_collision_safe = false;
     bool coordinator_failure_pinned = false;
-    bool coordinator_ready_eviction_recomputed = false;
-    bool coordinator_in_flight_eviction_safe = false;
+    bool coordinator_ready_admission_fallback_recomputed = false;
+    bool coordinator_concurrent_admission_fallback_independent = false;
     bool throwing_observer_semantics_preserved = false;
 };
 
@@ -735,7 +750,8 @@ class FunctionValueAnalysisSession {
             default_maximum_persistent_epoch_blob_bytes);
 
     // The next real analysis invocation consumes this exact producer journal.
-    // It is bound to image identity/revision and the expected published epoch;
+    // It is bound to image identity, the authenticated immutable generation
+    // (or an exact legacy revision), and the expected published epoch;
     // mismatches become a typed full persistent-state bypass.
     void stage_next_function_program_delta(FunctionProgramDelta delta);
 

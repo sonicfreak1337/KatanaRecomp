@@ -2035,11 +2035,14 @@ void apply_instruction(CallbackFunctionModel& model,
             static_cast<void>(join_value(loaded_value, loaded,
                                          native_entry_shapes));
             if (index.constants.size() == 1u &&
-                !index.constants_truncated)
+                !index.constants_truncated) {
+                const auto displacement = static_cast<std::int32_t>(
+                    *index.constants.begin());
                 attach_callback_field_origin(
-                    loaded_value, base,
-                    static_cast<std::int32_t>(*index.constants.begin()),
-                    width, line.address);
+                    loaded_value, base, displacement, width, line.address);
+                attach_record_load_origin(
+                    loaded_value, base, displacement, width, line.address);
+            }
         }
         loaded_value.scaled_index_origin =
             CallbackScaledIndexOrigin{line.address, 1u};
