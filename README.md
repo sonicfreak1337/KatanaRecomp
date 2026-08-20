@@ -1,8 +1,9 @@
 # KatanaRecomp
 
-Aktuelle Pre-Alpha-Version: `0.49.1`
+Aktuelle Pre-Alpha-Version: `0.49.2`
 
-`0.49.1` ist die native Produktarchitektur-Runde. `0.50.0` bleibt
+`0.49.2` stabilisiert den agentischen Analyzer und seine inkrementelle
+Saved-Stack-/Callback-Provenienz. `0.50.0` bleibt
 ausdruecklich die erste Alpha und wird erst freigegeben, wenn Sonic ohne
 emulatoraehnliche Produktzustaende ueber den rein nativen PC-Pfad das
 Hauptmenue erreicht.
@@ -27,8 +28,8 @@ Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 
 Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 116, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 57, Function-Analysis-Epoch-Schema 28, lokales
-In-Process-Evaluation-Cache-Schema 13, Application-Contract 8,
+Analyzer-ABI 58, Function-Analysis-Epoch-Schema 36, lokales
+In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
 Port-Metadata-Cache-Schema: `12`.
@@ -61,8 +62,15 @@ Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
 vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
-Source-Stand Runtime-ABI 116 / Analyzer-ABI 57; historische Exportzahlen
+Source-Stand Runtime-ABI 116 / Analyzer-ABI 58; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
+
+Der bestehende Function-Value-Sanitylauf ist nach dem geschlossenen
+Origin-/Authority-Umbau mit allen `463` Checks gruen. Current, detached und
+memory bleiben getrennte bounded Domaenen; Pending-ABI-Skalare werden erst an
+einem bewiesenen Gate zu Callbackkandidaten. Exakte Zellen duerfen
+Restore-Provenienz tragen, waehrend domainweite MAY-Fakten niemals allein
+einen r15-Restore oder eine statische CFG-Kante beweisen.
 
 Der naechste Produkt-Export ist derzeit bewusst gesperrt: Der neue Analyzer
 muss zuerst einen vollstaendigen `analyze-port`-Lauf mit materiellem Root-/
@@ -883,6 +891,7 @@ Wichtige Dokumente:
 - [Runtime](docs/RUNTIME.md)
 - [Indirect Control Flow](docs/INDIRECT_CONTROL_FLOW.md)
 - [Sonic-Acceptancevertrag](docs/SONIC_ADVENTURE_ACCEPTANCE.md)
+- [v0.49.2-Releasehinweise](docs/releases/v0.49.2.md)
 - [v0.49.1-Releasehinweise](docs/releases/v0.49.1.md)
 - [v0.49.0-Releasehinweise](docs/releases/v0.49.0.md) (historisch)
 

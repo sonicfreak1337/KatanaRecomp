@@ -1,6 +1,6 @@
 # Projektstatus
 
-Aktuelle interne Version: `v0.49.1`
+Aktuelle interne Version: `v0.49.2`
 
 `v0.50.0` bleibt die erste Alpha und wird erst freigegeben, wenn der rein
 native Sonic-Port ohne ARM7, CPU-PVR oder andere emulatoraehnliche
@@ -30,7 +30,7 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `57`, Backend-
+Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `58`, Backend-
 Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil `23`.
 Der neue agentische Analyseworkflow mit Materialization-World und Frontier-
 Ledger ist als bounded Grundlage vorhanden; CrashCapsule-v2 ist als Runtime-
@@ -41,6 +41,16 @@ Ein neuer Sonic-Export ist bis zum ersten vollstaendigen `analyze-port`-Lauf
 mit materiellem Root-/Modulgewinn gesperrt; fehlende Disassembly gilt niemals
 als Unreachability- oder Closure-Beweis. Der v141-Export bleibt bis dahin die
 letzte bestaetigte Produktbaseline.
+
+Der v0.49.2-Analyzercheckpoint schliesst den Saved-Stack-/Epoch-/Callback-
+Umbau mit `463/463` gruenen Checks im bestehenden Function-Value-Sanitylauf.
+Current-, detached- und memory-origin bleiben durch Summary, Projektion,
+Fixpunkt und Persistenz getrennt. Nichtautoritative Storage-Summaries werden
+quarantaenisiert; Pending-ABI-Skalare bleiben value- oder domaenengebunden,
+bis ein belegtes ABI-/Callback-Gate sie promoted. Runtimekandidaten aus
+partiell bekannten Contexts bleiben sichtbar, erzeugen aber keine statische
+CFG-Kante. Der erste Sonic-`analyze-port`-Lauf und die generierte
+CrashCapsule-v2-Catch-Verdrahtung bleiben die naechsten offenen Gates.
 
 Der aktuelle v141-Export bindet den bisher fehlenden SPSR-Layoutschritt
 generisch: drei titelrelevante PCM-Stream-Ringe wurden bounded registriert,

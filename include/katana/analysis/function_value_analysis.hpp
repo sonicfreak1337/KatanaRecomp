@@ -33,7 +33,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 6u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 7u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -195,9 +195,11 @@ struct InventorySavedStackEpochSummary {
     bool present = false;
     bool unresolved = false;
     bool tracks_current_epoch = false;
-    // Bounded coordinates of the saved pointer relative to the active r15
-    // epoch.  A single entry is exact; multiple entries are an uncorrelated
-    // MAY-set and must not be used for exact slot erasure.
+    // Bounded coordinates of a finite saved pointer relative to the active
+    // r15 epoch. A single entry is exact; multiple entries are an
+    // uncorrelated MAY-set and must not be used for exact slot erasure.
+    // Unresolved epochs are coordinate Top and therefore carry no finite
+    // base prefix.
     std::vector<std::int32_t> current_epoch_base_offsets;
     bool candidate_payload_lost = false;
     // Depth-capped nested saved-SP lineage with no candidate payload. This is
@@ -233,6 +235,10 @@ struct FunctionRegisterValueSummary {
     std::vector<std::uint32_t> inventory_pc_relative_code_literal_values;
     bool inventory_code_pointer_values_truncated = false;
     bool inventory_pc_relative_code_literal_values_truncated = false;
+    // Value-scoped Pending MAY. It is not callback provenance until this
+    // exact return value crosses a proven ABI/callback boundary.
+    std::vector<std::uint32_t> pending_abi_scalar_values;
+    bool pending_abi_scalar_values_truncated = false;
     // Internal candidate-return slice dependency. It is not control-flow or
     // code-pointer evidence; it only decides whether a direct helper needs a
     // contextual summary instead of its already authoritative global summary.

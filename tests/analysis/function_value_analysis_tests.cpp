@@ -281,7 +281,73 @@ void verify_persistent_function_value_session() {
                 first_stats.resolution_root_artifacts_recomputed,
         "Die analyseweite Function-Value-Session lieferte im identischen "
         "zweiten Kandidatenvertrag keinen echten Warm-Hit oder keine "
-        "atomar wiederverwendete Graph-/ABI-/Summary-Epoch.");
+        "atomar wiederverwendete Graph-/ABI-/Summary-Epoch (hits=" +
+            std::to_string(second_stats.hits) +
+            ", entries=" + std::to_string(second_stats.entries) +
+            ", graph_builds=" +
+            std::to_string(second_stats.program_graph_builds) +
+            ", graph_reuses=" +
+            std::to_string(second_stats.program_graph_reuses) +
+            ", graph_functions_reused=" +
+            std::to_string(
+                second_stats.program_graph_functions_reused) +
+            ", abi_epoch_reuses=" +
+            std::to_string(second_stats.abi_contract_epoch_reuses) +
+            ", summary_reuses=" +
+            std::to_string(second_stats.summary_state_reuses) +
+            ", epochs_published=" +
+            std::to_string(second_stats.analysis_epochs_published) +
+            ", root_reused=" +
+            std::to_string(
+                second_stats.resolution_root_artifacts_reused) +
+            ", root_recomputed=" +
+            std::to_string(
+                second_stats.resolution_root_artifacts_recomputed) +
+            ", root_retained=" +
+            std::to_string(
+                second_stats.resolution_root_artifacts_retained) +
+            ", root_bytes=" +
+            std::to_string(
+                second_stats.resolution_epoch_retained_bytes) +
+            ", retention_reason=" +
+            std::to_string(static_cast<std::uint32_t>(
+                second_stats.resolution_retention_limit_reason)) +
+            ", dependency_nodes_built=" +
+            std::to_string(
+                second_stats.resolution_dependency_nodes_built) +
+            ", dependency_nodes_reused=" +
+            std::to_string(
+                second_stats.resolution_dependency_nodes_reused) +
+            ", first_dependency_nodes_built=" +
+            std::to_string(
+                first_stats.resolution_dependency_nodes_built) +
+            ", first_dependency_nodes_reused=" +
+            std::to_string(
+                first_stats.resolution_dependency_nodes_reused) +
+            ", dirty_functions=" +
+            std::to_string(second.incremental_dirty_functions.size()) +
+            ", first_dirty_function=" +
+            std::to_string(
+                second.incremental_dirty_functions.empty()
+                    ? std::numeric_limits<std::uint32_t>::max()
+                    : second.incremental_dirty_functions.front()) +
+            ", dirty_dependency_sccs=" +
+            std::to_string(
+                second.incremental_dirty_scc_entries.size()) +
+            ", first_dirty_dependency=" +
+            std::to_string(
+                second.incremental_dirty_scc_entries.empty()
+                    ? std::numeric_limits<std::uint32_t>::max()
+                    : second.incremental_dirty_scc_entries.front()
+                          .address) +
+            ", first_dirty_dependency_kind=" +
+            std::to_string(
+                second.incremental_dirty_scc_entries.empty()
+                    ? std::numeric_limits<std::uint32_t>::max()
+                    : static_cast<std::uint32_t>(
+                          second.incremental_dirty_scc_entries.front()
+                              .kind)) +
+            ").");
     require(
         !cold_progress.empty() &&
             cold_progress.back().phase == "complete" &&
@@ -8023,26 +8089,111 @@ int main(const int argc, char* argv[]) {
         for (const auto displaced_reload : {false, true}) {
             const auto reloaded_stack =
                 reloaded_stack_epoch_values(displaced_reload);
+            const auto old_alias_store = std::find_if(
+                reloaded_stack.guarded_code_inventory
+                    .stored_code_addresses.begin(),
+                reloaded_stack.guarded_code_inventory
+                    .stored_code_addresses.end(),
+                [](const auto& candidate) {
+                    return candidate.target_address == 0x88u;
+                });
             require(
                 has_stored_code_address(reloaded_stack, 0x90u) &&
                     !has_stored_code_address(reloaded_stack, 0x80u) &&
-                    !has_stored_code_address(reloaded_stack, 0x88u) &&
+                    old_alias_store !=
+                        reloaded_stack.guarded_code_inventory
+                            .stored_code_addresses.end() &&
+                    old_alias_store->store_instruction_addresses ==
+                        std::vector<std::uint32_t>{0x44u} &&
                     !reloaded_stack.guarded_code_inventory.walk_diagnostics
                          .truncated(),
                 "Ein vollstaendiger 32-Bit-SP-Reload trennte die alte "
                 "Stack-Epoch nicht ab, verlor den neuen Callbackslot oder "
-                "behielt einen stale Alias.");
+                "verlor die getrennte finite Memory-MAY-Ueberschreibung "
+                "der spaeteren Literalzelle (displaced=" +
+                    std::to_string(displaced_reload) +
+                    ", stored_80=" +
+                    std::to_string(
+                        has_stored_code_address(reloaded_stack, 0x80u)) +
+                    ", stored_88=" +
+                    std::to_string(
+                        has_stored_code_address(reloaded_stack, 0x88u)) +
+                    ", stored_90=" +
+                    std::to_string(
+                        has_stored_code_address(reloaded_stack, 0x90u)) +
+                    ", stores_88=" +
+                    std::to_string(
+                        old_alias_store ==
+                                reloaded_stack.guarded_code_inventory
+                                    .stored_code_addresses.end()
+                            ? 0u
+                            : old_alias_store->store_instruction_addresses
+                                  .size()) +
+                    ", store_0c=" +
+                    std::to_string(
+                        old_alias_store !=
+                                reloaded_stack.guarded_code_inventory
+                                    .stored_code_addresses.end() &&
+                        std::find(
+                            old_alias_store->store_instruction_addresses
+                                .begin(),
+                            old_alias_store->store_instruction_addresses.end(),
+                            0x0Cu) !=
+                            old_alias_store->store_instruction_addresses
+                                .end()) +
+                    ", store_44=" +
+                    std::to_string(
+                        old_alias_store !=
+                                reloaded_stack.guarded_code_inventory
+                                    .stored_code_addresses.end() &&
+                        std::find(
+                            old_alias_store->store_instruction_addresses
+                                .begin(),
+                            old_alias_store->store_instruction_addresses.end(),
+                            0x44u) !=
+                            old_alias_store->store_instruction_addresses
+                                .end()) +
+                    ", active=" +
+                    std::to_string(
+                        reloaded_stack.guarded_code_inventory.walk_diagnostics
+                            .abi_stack_base_unresolved) +
+                    ", detached=" +
+                    std::to_string(
+                        reloaded_stack.guarded_code_inventory.walk_diagnostics
+                            .detached_stack_callback_loss) +
+                    ", memory=" +
+                    std::to_string(
+                        reloaded_stack.guarded_code_inventory.walk_diagnostics
+                            .memory_callback_loss) +
+                    ", truncated=" +
+                    std::to_string(
+                        reloaded_stack.guarded_code_inventory.walk_diagnostics
+                            .truncated()) +
+                    ").");
         }
         const auto register_reloaded_stack =
             reloaded_stack_epoch_values(false, false, true);
+        const auto register_old_alias_store = std::find_if(
+            register_reloaded_stack.guarded_code_inventory
+                .stored_code_addresses.begin(),
+            register_reloaded_stack.guarded_code_inventory
+                .stored_code_addresses.end(),
+            [](const auto& candidate) {
+                return candidate.target_address == 0x88u;
+            });
         require(
             has_stored_code_address(register_reloaded_stack, 0x90u) &&
                 !has_stored_code_address(register_reloaded_stack, 0x80u) &&
-                !has_stored_code_address(register_reloaded_stack, 0x88u) &&
+                register_old_alias_store !=
+                    register_reloaded_stack.guarded_code_inventory
+                        .stored_code_addresses.end() &&
+                register_old_alias_store->store_instruction_addresses ==
+                    std::vector<std::uint32_t>{0x44u} &&
                 !register_reloaded_stack.guarded_code_inventory
                      .walk_diagnostics.truncated(),
             "Ein vollstaendiges mov-Rm-r15 trennte die alte Stack-Epoch "
-            "nicht sicher ab oder verlor den neuen Callbackslot.");
+            "nicht sicher ab, verlor den neuen Callbackslot oder die "
+            "getrennte finite Memory-MAY-Ueberschreibung.");
         const auto aliased_old_stack =
             reloaded_stack_epoch_values(true, true);
         const auto& aliased_old_stack_diagnostics =
@@ -8105,11 +8256,39 @@ int main(const int argc, char* argv[]) {
                 ").");
         const auto stale_saved_epoch =
             stale_saved_stack_epoch_values();
+        const auto& stale_saved_epoch_diagnostics =
+            stale_saved_epoch.guarded_code_inventory.walk_diagnostics;
         require(
-            stale_saved_epoch.guarded_code_inventory.walk_diagnostics
-                .abi_stack_base_unresolved,
-            "Ein nach dem SP-Snapshot neu geschriebener Callback wurde beim "
-            "Restore des veralteten Snapshots stillschweigend verloren.");
+            has_stored_code_address(stale_saved_epoch, 0x80u) &&
+                !has_stored_code_address(stale_saved_epoch, 0x90u) &&
+                !stale_saved_epoch_diagnostics.abi_stack_base_unresolved &&
+                !stale_saved_epoch_diagnostics
+                     .detached_stack_callback_loss &&
+                !stale_saved_epoch_diagnostics.memory_callback_loss &&
+                !stale_saved_epoch_diagnostics.truncated(),
+            "Ein exakter Restore der nach dem SP-Snapshot aktualisierten "
+            "SavedEpoch verlor den Callback, behielt den Decoy oder "
+            "publizierte faelschlich Loss (callback=" +
+                std::to_string(
+                    has_stored_code_address(stale_saved_epoch, 0x80u)) +
+                ", decoy=" +
+                std::to_string(
+                    has_stored_code_address(stale_saved_epoch, 0x90u)) +
+                ", active=" +
+                std::to_string(
+                    stale_saved_epoch_diagnostics
+                        .abi_stack_base_unresolved) +
+                ", detached=" +
+                std::to_string(
+                    stale_saved_epoch_diagnostics
+                        .detached_stack_callback_loss) +
+                ", memory=" +
+                std::to_string(
+                    stale_saved_epoch_diagnostics.memory_callback_loss) +
+                ", truncated=" +
+                std::to_string(
+                    stale_saved_epoch_diagnostics.truncated()) +
+                ").");
         const auto omitted_saved_alias =
             omitted_saved_stack_alias_callback_values();
         const auto omitted_saved_alias_callee = std::find_if(
@@ -8138,15 +8317,60 @@ int main(const int argc, char* argv[]) {
             [](const auto& summary) {
                 return summary.function_address == 0u;
             });
+        const auto& duplicate_saved_epoch_diagnostics =
+            duplicate_saved_epoch.guarded_code_inventory.walk_diagnostics;
         require(
             !duplicate_saved_epoch.budget_exhausted &&
                 duplicate_saved_epoch_owner !=
                     duplicate_saved_epoch.summaries.end() &&
-                duplicate_saved_epoch_owner
-                    ->inventory_unresolved_stack_callback_loss,
-            "Zwei leere Saved-SP-Epochen verloren nach Stackwechsel, Restore "
-            "und spaeterem Callback-Store die Verbindung zur wieder aktiven "
-            "Stackepoche.");
+                !duplicate_saved_epoch_owner
+                     ->inventory_unresolved_stack_callback_loss &&
+                !duplicate_saved_epoch_owner
+                     ->inventory_detached_stack_callback_loss &&
+                !duplicate_saved_epoch_owner
+                     ->inventory_unresolved_memory_callback_loss &&
+                !duplicate_saved_epoch_diagnostics
+                     .abi_stack_base_unresolved &&
+                !duplicate_saved_epoch_diagnostics
+                     .detached_stack_callback_loss &&
+                !duplicate_saved_epoch_diagnostics.memory_callback_loss &&
+                !duplicate_saved_epoch_diagnostics.truncated(),
+            "Zwei payload-freie, exakte Saved-SP-Epochen erzeugten nach "
+            "Stackwechsel, Restore und einem nur aktiven Callback-Store "
+            "faelschlich einen Loss-Kanal (summary_active=" +
+                std::to_string(
+                    duplicate_saved_epoch_owner !=
+                            duplicate_saved_epoch.summaries.end() &&
+                        duplicate_saved_epoch_owner
+                            ->inventory_unresolved_stack_callback_loss) +
+                ", summary_detached=" +
+                std::to_string(
+                    duplicate_saved_epoch_owner !=
+                            duplicate_saved_epoch.summaries.end() &&
+                        duplicate_saved_epoch_owner
+                            ->inventory_detached_stack_callback_loss) +
+                ", summary_memory=" +
+                std::to_string(
+                    duplicate_saved_epoch_owner !=
+                            duplicate_saved_epoch.summaries.end() &&
+                        duplicate_saved_epoch_owner
+                            ->inventory_unresolved_memory_callback_loss) +
+                ", active=" +
+                std::to_string(
+                    duplicate_saved_epoch_diagnostics
+                        .abi_stack_base_unresolved) +
+                ", detached=" +
+                std::to_string(
+                    duplicate_saved_epoch_diagnostics
+                        .detached_stack_callback_loss) +
+                ", memory=" +
+                std::to_string(
+                    duplicate_saved_epoch_diagnostics
+                        .memory_callback_loss) +
+                ", truncated=" +
+                std::to_string(
+                    duplicate_saved_epoch_diagnostics.truncated()) +
+                ").");
         const auto suspended_stack_slot_alias =
             suspended_stack_slot_saved_epoch_reload_values();
         const auto suspended_stack_slot_alias_owner = std::find_if(
@@ -8155,15 +8379,63 @@ int main(const int argc, char* argv[]) {
             [](const auto& summary) {
                 return summary.function_address == 0u;
             });
+        const auto& suspended_stack_slot_alias_diagnostics =
+            suspended_stack_slot_alias.guarded_code_inventory
+                .walk_diagnostics;
         require(
             !suspended_stack_slot_alias.budget_exhausted &&
                 suspended_stack_slot_alias_owner !=
                     suspended_stack_slot_alias.summaries.end() &&
-                suspended_stack_slot_alias_owner
-                    ->inventory_unresolved_stack_callback_loss,
-            "Eine payload-freie Saved-SP-Epoche im suspendierten Stackslot "
-            "ging nach Restore, Slot-Reload, erneutem Stackwechsel und "
-            "Reload-Restore vor der Callbackmutation verloren.");
+                !suspended_stack_slot_alias_owner
+                     ->inventory_unresolved_stack_callback_loss &&
+                !suspended_stack_slot_alias_owner
+                     ->inventory_detached_stack_callback_loss &&
+                !suspended_stack_slot_alias_owner
+                     ->inventory_unresolved_memory_callback_loss &&
+                !suspended_stack_slot_alias_diagnostics
+                     .abi_stack_base_unresolved &&
+                !suspended_stack_slot_alias_diagnostics
+                     .detached_stack_callback_loss &&
+                !suspended_stack_slot_alias_diagnostics
+                     .memory_callback_loss &&
+                !suspended_stack_slot_alias_diagnostics.truncated(),
+            "Eine payload-freie, exakt restaurierte Saved-SP-Epoche im "
+            "suspendierten Stackslot erzeugte nach Reload und einem nur "
+            "aktiven Callback-Store faelschlich einen Loss-Kanal "
+            "(summary_active=" +
+                std::to_string(
+                    suspended_stack_slot_alias_owner !=
+                            suspended_stack_slot_alias.summaries.end() &&
+                        suspended_stack_slot_alias_owner
+                            ->inventory_unresolved_stack_callback_loss) +
+                ", summary_detached=" +
+                std::to_string(
+                    suspended_stack_slot_alias_owner !=
+                            suspended_stack_slot_alias.summaries.end() &&
+                        suspended_stack_slot_alias_owner
+                            ->inventory_detached_stack_callback_loss) +
+                ", summary_memory=" +
+                std::to_string(
+                    suspended_stack_slot_alias_owner !=
+                            suspended_stack_slot_alias.summaries.end() &&
+                        suspended_stack_slot_alias_owner
+                            ->inventory_unresolved_memory_callback_loss) +
+                ", active=" +
+                std::to_string(
+                    suspended_stack_slot_alias_diagnostics
+                        .abi_stack_base_unresolved) +
+                ", detached=" +
+                std::to_string(
+                    suspended_stack_slot_alias_diagnostics
+                        .detached_stack_callback_loss) +
+                ", memory=" +
+                std::to_string(
+                    suspended_stack_slot_alias_diagnostics
+                        .memory_callback_loss) +
+                ", truncated=" +
+                std::to_string(
+                    suspended_stack_slot_alias_diagnostics.truncated()) +
+                ").");
         const auto missing_memory_loop =
             saved_stack_epoch_missing_memory_loop_values();
         require(
@@ -8220,12 +8492,21 @@ int main(const int argc, char* argv[]) {
             require(
                 !translated_epoch_loop.budget_exhausted &&
                     translated_epoch_diagnostics
-                        .abi_stack_base_unresolved &&
+                         .abi_stack_base_unresolved &&
+                    !translated_epoch_diagnostics
+                         .detached_stack_callback_loss &&
+                    !translated_epoch_diagnostics
+                         .memory_callback_loss &&
+                    translated_epoch_diagnostics.truncated() &&
+                    !has_stored_code_address(
+                        translated_epoch_loop, 0x80u) &&
                     translated_epoch_diagnostics
                             .maximum_local_fixpoint_iterations <=
                         64u,
                 "Ein affin verschobener Saved-Stack-Epoch-Loop konvergierte "
-                "nicht schnell auf ein fail-closed Top (local_sink=" +
+                "nicht schnell auf ein fail-closed Restore-Top, publizierte "
+                "Memory-Loss fuer die unveraenderte exakte Memory-Kopie oder "
+                "erfand einen Callback (local_sink=" +
                     std::to_string(direct_local_sink) +
                     ", local=" +
                     std::to_string(
@@ -8235,6 +8516,14 @@ int main(const int argc, char* argv[]) {
                     std::to_string(
                         translated_epoch_diagnostics
                             .abi_stack_base_unresolved) +
+                    ", detached_loss=" +
+                    std::to_string(
+                        translated_epoch_diagnostics
+                            .detached_stack_callback_loss) +
+                    ", memory_loss=" +
+                    std::to_string(
+                        translated_epoch_diagnostics
+                            .memory_callback_loss) +
                     ").");
         }
 
@@ -8254,15 +8543,20 @@ int main(const int argc, char* argv[]) {
                 !recursive_projection_analysis.budget_exhausted &&
                 recursive_projection_analysis.fixpoint_iterations <=
                     32u &&
-                has_stored_code_address(
+                !has_stored_code_address(
                     recursive_projection_analysis, 0xC0u) &&
                 recursive_projection_diagnostics
-                    .abi_stack_base_unresolved &&
+                      .abi_stack_base_unresolved &&
+                !recursive_projection_diagnostics
+                      .detached_stack_callback_loss &&
+                !recursive_projection_diagnostics
+                     .memory_callback_loss &&
                 recursive_projection_diagnostics.truncated(),
             "Ein rekursiver 40-Byte-Frame mit ABI-Readset-Top "
-            "akkumulierte am selben Callsite weiterhin leere "
-            "Saved-Stack-Provenienz, verlor den endlichen Callback oder "
-            "meldete die spaetere echte Snapshot-Mutation nicht fail-closed "
+            "konvergierte nicht im bounded Prefix/Tail-Quotienten, "
+            "publizierte aus einem unvollstaendigen Root einen partiellen "
+            "Kandidaten, verlor den aktiven Stack-Loss oder etikettierte den "
+            "exakten Ergebnisstore faelschlich als Memory-Loss "
             "(contract=" +
                 std::to_string(
                     recursive_projection
@@ -8292,27 +8586,72 @@ int main(const int argc, char* argv[]) {
                 std::to_string(
                     recursive_projection_diagnostics
                         .abi_stack_base_unresolved) +
+                ", detached_loss=" +
+                std::to_string(
+                    recursive_projection_diagnostics
+                        .detached_stack_callback_loss) +
+                ", memory_loss=" +
+                std::to_string(
+                    recursive_projection_diagnostics
+                        .memory_callback_loss) +
+                ", truncated=" +
+                std::to_string(
+                    recursive_projection_diagnostics.truncated()) +
                 ").");
 
         struct ReturnedLossRegression {
             ReturnedStackCallbackLossCase test_case;
-            bool expected_unresolved;
             bool expected_candidate;
         };
         constexpr std::array returned_loss_regressions{
             ReturnedLossRegression{
                 ReturnedStackCallbackLossCase::ConsumeReturnedR0,
-                true,
-                false},
+                true},
             ReturnedLossRegression{
                 ReturnedStackCallbackLossCase::OverwriteReturnedR0,
-                false,
                 true},
             ReturnedLossRegression{
                 ReturnedStackCallbackLossCase::
                     OverwriteReturnedR0WithMoveT,
-                false,
                 false},
+        };
+        const auto saved_epoch_has_candidate =
+            [](auto&& self,
+               const katana::analysis::InventorySavedStackEpochSummary& epoch,
+               const std::uint32_t candidate) -> bool {
+            const auto carrier_has_candidate =
+                [candidate](const katana::analysis::InventoryCandidateCarrier&
+                                carrier) {
+                    return std::find(
+                               carrier.inventory_code_pointer_values.begin(),
+                               carrier.inventory_code_pointer_values.end(),
+                               candidate) !=
+                               carrier.inventory_code_pointer_values.end() ||
+                           std::find(
+                               carrier
+                                   .inventory_pc_relative_code_literal_values
+                                   .begin(),
+                               carrier
+                                   .inventory_pc_relative_code_literal_values
+                                   .end(),
+                               candidate) !=
+                               carrier
+                                   .inventory_pc_relative_code_literal_values
+                                   .end();
+                };
+            if (carrier_has_candidate(
+                    epoch.unresolved_candidate_carrier))
+                return true;
+            for (const auto& slot : epoch.slots) {
+                if (carrier_has_candidate(slot.carrier)) return true;
+                for (const auto& nested : slot.nested_epochs)
+                    if (self(self, nested, candidate)) return true;
+            }
+            for (const auto& nested : epoch.unresolved_nested_epochs)
+                if (self(self, nested, candidate)) return true;
+            for (const auto& channel : epoch.origin_channels)
+                if (self(self, channel, candidate)) return true;
+            return false;
         };
         for (const auto& regression :
              returned_loss_regressions) {
@@ -8340,32 +8679,58 @@ int main(const int argc, char* argv[]) {
             const auto& diagnostics =
                 returned_loss.guarded_code_inventory
                     .walk_diagnostics;
+            const bool summary_candidate =
+                returned != nullptr &&
+                (std::find(
+                     returned->inventory_code_pointer_values.begin(),
+                     returned->inventory_code_pointer_values.end(),
+                     0x90u) !=
+                     returned->inventory_code_pointer_values.end() ||
+                 std::find(
+                     returned
+                         ->inventory_pc_relative_code_literal_values.begin(),
+                     returned
+                         ->inventory_pc_relative_code_literal_values.end(),
+                     0x90u) !=
+                     returned
+                         ->inventory_pc_relative_code_literal_values.end() ||
+                 saved_epoch_has_candidate(
+                     saved_epoch_has_candidate,
+                     returned->inventory_saved_stack_epoch,
+                     0x90u));
             require(
                 owner != returned_loss.summaries.end() &&
                     returned != nullptr &&
-                    returned
-                        ->inventory_stack_callback_loss_unresolved &&
-                    diagnostics.abi_stack_base_unresolved ==
-                        regression.expected_unresolved &&
-                    diagnostics.truncated() ==
-                        regression.expected_unresolved &&
+                    summary_candidate &&
+                    !returned
+                         ->inventory_stack_callback_loss_unresolved &&
+                    !diagnostics.abi_stack_base_unresolved &&
+                    !diagnostics.detached_stack_callback_loss &&
+                    !diagnostics.memory_callback_loss &&
+                    !diagnostics.truncated() &&
                     has_stored_code_address(returned_loss, 0x90u) ==
                         regression.expected_candidate,
-                "Der r0-spezifische Stack-Callback-Verlust wurde ueber "
-                "die Callee-Summary nicht bis zur echten Senke getragen "
-                "oder nach einem Register-Overwrite nicht geloescht "
-                "(consume=" +
+                "Der endliche r0-Stack-Carrier ging in der Callee-Summary "
+                "verlor, wurde faelschlich zu Callback-Loss promoviert oder "
+                "ueberlebte einen exakten Register-Overwrite (summary=" +
                     std::to_string(
-                        regression.expected_unresolved) +
-                    ", summary=" +
+                        summary_candidate) +
+                    ", summary_loss=" +
                     std::to_string(
-                        owner != returned_loss.summaries.end() &&
                         returned != nullptr &&
                         returned
                             ->inventory_stack_callback_loss_unresolved) +
-                    ", unresolved=" +
+                    ", active=" +
                     std::to_string(
                         diagnostics.abi_stack_base_unresolved) +
+                    ", detached=" +
+                    std::to_string(
+                        diagnostics.detached_stack_callback_loss) +
+                    ", memory=" +
+                    std::to_string(
+                        diagnostics.memory_callback_loss) +
+                    ", truncated=" +
+                    std::to_string(diagnostics.truncated()) +
                     ", candidate=" +
                     std::to_string(
                         has_stored_code_address(
@@ -8380,35 +8745,53 @@ int main(const int argc, char* argv[]) {
             MemoryStackCallbackLossCase test_case;
             bool expected_summary_marker;
             bool expected_latent_marker;
-            bool expected_unresolved;
+            bool expected_active_loss;
+            bool expected_detached_loss;
+            bool expected_memory_loss;
+            bool expected_candidate;
         };
         constexpr std::array memory_loss_regressions{
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::ConsumeExactCell,
-                true,
+                false,
+                false,
+                false,
+                false,
                 false,
                 true},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::ReadUnknownCell,
-                true,
                 false,
-                true},
+                false,
+                false,
+                false,
+                false,
+                false},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::
                     ReadUnknownEmptySavedEpoch,
                 false,
                 true,
-                false},
+                false,
+                false,
+                false,
+                true},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::ReadDifferentCell,
-                true,
                 false,
-                false},
+                false,
+                false,
+                false,
+                false,
+                true},
             MemoryLossRegression{
                 MemoryStackCallbackLossCase::EmptySavedEpoch,
                 false,
                 true,
-                false},
+                false,
+                false,
+                false,
+                true},
         };
         for (const auto& regression :
              memory_loss_regressions) {
@@ -8451,11 +8834,17 @@ int main(const int argc, char* argv[]) {
                     latent_marker ==
                         regression.expected_latent_marker &&
                     diagnostics.abi_stack_base_unresolved ==
-                        regression.expected_unresolved &&
+                        regression.expected_active_loss &&
+                    diagnostics.detached_stack_callback_loss ==
+                        regression.expected_detached_loss &&
+                    diagnostics.memory_callback_loss ==
+                        regression.expected_memory_loss &&
                     diagnostics.truncated() ==
-                        regression.expected_unresolved &&
+                        (regression.expected_active_loss ||
+                         regression.expected_detached_loss ||
+                         regression.expected_memory_loss) &&
                     has_stored_code_address(memory_loss, 0x90u) ==
-                        !regression.expected_unresolved,
+                        regression.expected_candidate,
                 "Der adressspezifische Stack-Callback-Verlust wurde "
                 "nicht ueber exakt Speicherzelle 0x80 getragen, faerbte "
                 "eine andere Zelle oder verlor eine latente leere Epoche "
@@ -8473,13 +8862,28 @@ int main(const int argc, char* argv[]) {
                     ", unresolved=" +
                     std::to_string(
                         diagnostics.abi_stack_base_unresolved) +
-                    ", expected_unresolved=" +
+                    ", expected_active=" +
                     std::to_string(
-                        regression.expected_unresolved) +
+                        regression.expected_active_loss) +
+                    ", detached=" +
+                    std::to_string(
+                        diagnostics.detached_stack_callback_loss) +
+                    ", expected_detached=" +
+                    std::to_string(
+                        regression.expected_detached_loss) +
+                    ", memory=" +
+                    std::to_string(
+                        diagnostics.memory_callback_loss) +
+                    ", expected_memory=" +
+                    std::to_string(
+                        regression.expected_memory_loss) +
                     ", candidate=" +
                     std::to_string(
                         has_stored_code_address(
                             memory_loss, 0x90u)) +
+                    ", expected_candidate=" +
+                    std::to_string(
+                        regression.expected_candidate) +
                     ").");
         }
 
@@ -8515,11 +8919,11 @@ int main(const int argc, char* argv[]) {
                 multi_callee_memory_alias_cell = &*found;
         }
         require(
-            !multi_callee_memory_alias.budget_exhausted &&
+                !multi_callee_memory_alias.budget_exhausted &&
                 multi_callee_memory_alias_root !=
                     multi_callee_memory_alias.summaries.end() &&
-                multi_callee_memory_alias_root
-                    ->inventory_unresolved_stack_callback_loss &&
+                !multi_callee_memory_alias_root
+                     ->inventory_unresolved_stack_callback_loss &&
                 multi_callee_memory_alias_cell != nullptr &&
                 multi_callee_memory_alias_cell
                     ->inventory_saved_stack_alias_latent &&
@@ -8527,39 +8931,83 @@ int main(const int argc, char* argv[]) {
                     ->inventory_saved_stack_alias_tracks_current_epoch,
             "Eine nur von einem bekannten Mitglied einer unvollstaendigen "
             "Multi-Callee-Familie gespeicherte leere Saved-SP-Epoche ging "
-            "beim Summary-Union vor dem spaeteren Callback-Store verloren.");
+            "beim Summary-Union verloren oder wurde aus provisorischer "
+            "Storage-Provenienz zu aktivem Stack-Loss promoviert "
+            "(root=" +
+                std::to_string(
+                    multi_callee_memory_alias_root !=
+                    multi_callee_memory_alias.summaries.end()) +
+                ", root_loss=" +
+                std::to_string(
+                    multi_callee_memory_alias_root !=
+                        multi_callee_memory_alias.summaries.end() &&
+                    multi_callee_memory_alias_root
+                        ->inventory_unresolved_stack_callback_loss) +
+                ", cell=" +
+                std::to_string(multi_callee_memory_alias_cell != nullptr) +
+                ", latent=" +
+                std::to_string(
+                    multi_callee_memory_alias_cell != nullptr &&
+                    multi_callee_memory_alias_cell
+                        ->inventory_saved_stack_alias_latent) +
+                ", current=" +
+                std::to_string(
+                    multi_callee_memory_alias_cell != nullptr &&
+                    multi_callee_memory_alias_cell
+                        ->inventory_saved_stack_alias_tracks_current_epoch) +
+                ").");
 
         const auto unknown_memory_roundtrip =
             unknown_saved_stack_epoch_memory_roundtrip_values();
-        require(
+        const auto& unknown_memory_roundtrip_diagnostics =
             unknown_memory_roundtrip.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                unknown_memory_roundtrip.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
+                .walk_diagnostics;
+        require(
+            !unknown_memory_roundtrip_diagnostics
+                 .abi_stack_base_unresolved &&
+                !unknown_memory_roundtrip_diagnostics
+                     .detached_stack_callback_loss &&
+                !unknown_memory_roundtrip_diagnostics
+                     .memory_callback_loss &&
+                !unknown_memory_roundtrip_diagnostics.truncated() &&
                 !has_stored_code_address(
                     unknown_memory_roundtrip, 0x80u),
-            "Ein Saved-Stack-Epoch ging bei einem unbekannten 32-Bit-"
-            "Memory-Store mit anschliessendem Reload still verloren.");
+            "Ein endlicher Saved-Stack-Epoch aus unbekanntem Memory wurde "
+            "faelschlich als Restore oder Loss publiziert.");
         const auto unknown_empty_epoch_late_callback =
             unknown_saved_stack_epoch_memory_roundtrip_values(true);
-        require(
+        const auto& unknown_empty_epoch_late_callback_diagnostics =
             unknown_empty_epoch_late_callback.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                unknown_empty_epoch_late_callback.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
+                .walk_diagnostics;
+        require(
+            !unknown_empty_epoch_late_callback_diagnostics
+                 .abi_stack_base_unresolved &&
+                !unknown_empty_epoch_late_callback_diagnostics
+                     .detached_stack_callback_loss &&
+                !unknown_empty_epoch_late_callback_diagnostics
+                     .memory_callback_loss &&
+                !unknown_empty_epoch_late_callback_diagnostics
+                     .truncated() &&
                 !has_stored_code_address(
                     unknown_empty_epoch_late_callback, 0x80u),
             "Eine zunaechst leere, unbekannt gespeicherte Stack-Epoche "
-            "ging nach einem spaeteren Callback-Store still verloren.");
+            "wurde durch einen spaeteren endlichen Callback faelschlich als "
+            "Restore oder Loss publiziert.");
 
         const auto identity_old_stack_alias =
             identity_transformed_old_stack_alias_values();
-        require(
+        const auto& identity_old_stack_alias_diagnostics =
             identity_old_stack_alias.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                identity_old_stack_alias.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
-                !has_stored_code_address(
+                .walk_diagnostics;
+        require(
+            !identity_old_stack_alias_diagnostics
+                 .abi_stack_base_unresolved &&
+                !identity_old_stack_alias_diagnostics
+                     .detached_stack_callback_loss &&
+                !identity_old_stack_alias_diagnostics
+                     .memory_callback_loss &&
+                !identity_old_stack_alias_diagnostics.truncated() &&
+                has_stored_code_address(
                     identity_old_stack_alias, 0x80u),
             "Die Identitaet `mov r15,r0; or #0,r0` verlor vor einem "
             "vollstaendigen Stackwechsel den Alias auf den alten "
@@ -8567,16 +9015,41 @@ int main(const int argc, char* argv[]) {
 
         const auto merged_old_stack_alias =
             merged_old_stack_alias_values();
-        require(
+        const auto& merged_old_stack_alias_diagnostics =
             merged_old_stack_alias.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                merged_old_stack_alias.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
-                !has_stored_code_address(
+                .walk_diagnostics;
+        require(
+            !merged_old_stack_alias_diagnostics
+                 .abi_stack_base_unresolved &&
+                !merged_old_stack_alias_diagnostics
+                     .detached_stack_callback_loss &&
+                !merged_old_stack_alias_diagnostics
+                     .memory_callback_loss &&
+                !merged_old_stack_alias_diagnostics.truncated() &&
+                has_stored_code_address(
                     merged_old_stack_alias, 0x80u),
             "Ein nur auf einem CFG-Pfad vorhandener alter Stack-Alias "
             "verlor beim Merge vor dem Stackwechsel seinen "
-            "wertgebundenen Callback-Verlustmarker.");
+            "wertgebundenen Callback-Verlustmarker (active=" +
+                std::to_string(
+                    merged_old_stack_alias_diagnostics
+                        .abi_stack_base_unresolved) +
+                ", detached=" +
+                std::to_string(
+                    merged_old_stack_alias_diagnostics
+                        .detached_stack_callback_loss) +
+                ", memory=" +
+                std::to_string(
+                    merged_old_stack_alias_diagnostics
+                        .memory_callback_loss) +
+                ", truncated=" +
+                std::to_string(
+                    merged_old_stack_alias_diagnostics.truncated()) +
+                ", candidate=" +
+                std::to_string(
+                    has_stored_code_address(
+                        merged_old_stack_alias, 0x80u)) +
+                ").");
 
         const auto conditional_memory_loss =
             conditional_memory_stack_callback_loss_values();
@@ -8598,21 +9071,29 @@ int main(const int argc, char* argv[]) {
                                .inventory_stack_callback_loss_unresolved;
                 });
         require(
-            conditional_memory_marker &&
-                conditional_memory_loss.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                conditional_memory_loss.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
-                !has_stored_code_address(
+            !conditional_memory_marker &&
+                !conditional_memory_loss.guarded_code_inventory
+                     .walk_diagnostics.abi_stack_base_unresolved &&
+                !conditional_memory_loss.guarded_code_inventory
+                     .walk_diagnostics.detached_stack_callback_loss &&
+                !conditional_memory_loss.guarded_code_inventory
+                     .walk_diagnostics.memory_callback_loss &&
+                !conditional_memory_loss.guarded_code_inventory
+                     .walk_diagnostics.truncated() &&
+                has_stored_code_address(
                     conditional_memory_loss, 0x90u),
-            "Ein adressspezifischer Stack-Callback-Verlust ging verloren, "
-            "wenn nur ein CFG-Vorgaenger die markierte Speicherzelle "
-            "besass (summary=" +
+            "Ein endlicher Stack-Callback-Kandidat wurde beim Verlust einer "
+            "nur auf einem CFG-Vorgaenger vorhandenen Speicherzelle "
+            "faelschlich verworfen oder zum Loss promoviert (summary=" +
                 std::to_string(conditional_memory_marker) +
                 ", unresolved=" +
                 std::to_string(
                     conditional_memory_loss.guarded_code_inventory
                         .walk_diagnostics.abi_stack_base_unresolved) +
+                ", memory=" +
+                std::to_string(
+                    conditional_memory_loss.guarded_code_inventory
+                        .walk_diagnostics.memory_callback_loss) +
                 ", candidate=" +
                 std::to_string(
                     has_stored_code_address(
@@ -8621,27 +9102,110 @@ int main(const int argc, char* argv[]) {
 
         const auto conditional_stack_loss =
             conditional_stack_slot_callback_loss_values();
-        require(
+        const auto& conditional_stack_diagnostics =
             conditional_stack_loss.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                conditional_stack_loss.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
-                !has_stored_code_address(
+                .walk_diagnostics;
+        require(
+            !conditional_stack_diagnostics.abi_stack_base_unresolved &&
+                !conditional_stack_diagnostics
+                     .detached_stack_callback_loss &&
+                !conditional_stack_diagnostics.memory_callback_loss &&
+                !conditional_stack_diagnostics.truncated() &&
+                has_stored_code_address(
                     conditional_stack_loss, 0x90u),
-            "Ein wertgenauer Stack-Callback-Verlust ging verloren, wenn "
-            "nur ein CFG-Vorgaenger den markierten Stackslot besass.");
+            "Ein endlicher Stack-Callback-Kandidat wurde beim Verlust eines "
+            "nur auf einem CFG-Vorgaenger vorhandenen Stackslots "
+            "faelschlich verworfen oder zum Loss promoviert.");
 
         const auto candidate_only_memory_loss =
             candidate_only_memory_stack_callback_loss_values();
-        require(
+        const auto& candidate_only_memory_diagnostics =
             candidate_only_memory_loss.guarded_code_inventory
-                    .walk_diagnostics.abi_stack_base_unresolved &&
-                candidate_only_memory_loss.guarded_code_inventory
-                    .walk_diagnostics.truncated() &&
-                !has_stored_code_address(
-                    candidate_only_memory_loss, 0xD0u),
-            "Ein exakter Memory-Verlustmarker erreichte keinen "
-            "candidate-only Callee, dessen Senke keine ABI-Quelle liest.");
+                .walk_diagnostics;
+        const auto candidate_memory_stage =
+            [&](const std::uint32_t owner) {
+                const auto summary = std::find_if(
+                    candidate_only_memory_loss.summaries.begin(),
+                    candidate_only_memory_loss.summaries.end(),
+                    [&](const auto& value) {
+                        return value.function_address == owner;
+                    });
+                if (summary == candidate_only_memory_loss.summaries.end())
+                    return std::string{"missing"};
+                const auto cell = std::find_if(
+                    summary->memory_values.begin(),
+                    summary->memory_values.end(),
+                    [](const auto& value) {
+                        return value.address == 0x80u;
+                    });
+                if (cell == summary->memory_values.end())
+                    return std::string{"auth="} +
+                           std::to_string(summary
+                                              ->inventory_storage_contract_authoritative) +
+                           ",cell=0";
+                return std::string{"auth="} +
+                       std::to_string(summary
+                                          ->inventory_storage_contract_authoritative) +
+                       ",cell=1,latent=" +
+                       std::to_string(cell
+                                          ->inventory_saved_stack_alias_latent) +
+                       ",current=" +
+                       std::to_string(cell
+                                          ->inventory_saved_stack_alias_tracks_current_epoch) +
+                       ",epoch=" +
+                       std::to_string(cell->inventory_saved_stack_epoch.present) +
+                       ",unresolved=" +
+                       std::to_string(cell
+                                          ->inventory_saved_stack_epoch.unresolved) +
+                       ",top=" +
+                       std::to_string(cell
+                                          ->inventory_saved_stack_epoch.candidate_payload_lost) +
+                       ",slots=" +
+                       std::to_string(cell
+                                          ->inventory_saved_stack_epoch.slots.size()) +
+                       ",code=" +
+                       std::to_string(cell->inventory_candidate_carrier
+                                          .inventory_code_pointer_values.size()) +
+                       ",pc=" +
+                       std::to_string(cell->inventory_candidate_carrier
+                                          .inventory_pc_relative_code_literal_values.size()) +
+                       ",pending=" +
+                       std::to_string(cell->inventory_candidate_carrier
+                                          .pending_abi_scalar_values.size()) +
+                       ",ctx=" +
+                       std::to_string(cell->inventory_candidate_carrier
+                                          .contextual_candidate_dependency);
+            };
+        require(
+            has_stored_code_address(candidate_only_memory_loss, 0xD0u) &&
+                !candidate_only_memory_diagnostics
+                     .abi_stack_base_unresolved &&
+                !candidate_only_memory_diagnostics
+                     .detached_stack_callback_loss &&
+                !candidate_only_memory_diagnostics.memory_callback_loss &&
+                !candidate_only_memory_diagnostics.truncated(),
+            "Eine finite SavedEpoch aus einer exakten Memory-Zelle erreichte "
+            "den candidate-only Callee nicht oder erzeugte faelschlich "
+            "einen Loss-Kanal (candidate=" +
+                std::to_string(has_stored_code_address(
+                    candidate_only_memory_loss, 0xD0u)) +
+                ", active=" +
+                std::to_string(candidate_only_memory_diagnostics
+                                   .abi_stack_base_unresolved) +
+                ", detached=" +
+                std::to_string(candidate_only_memory_diagnostics
+                                   .detached_stack_callback_loss) +
+                ", memory=" +
+                std::to_string(candidate_only_memory_diagnostics
+                                   .memory_callback_loss) +
+                ", truncated=" +
+                std::to_string(candidate_only_memory_diagnostics.truncated()) +
+                ", A0={" + candidate_memory_stage(0xA0u) +
+                "}, root={" + candidate_memory_stage(0x00u) +
+                "}, owner={" + candidate_memory_stage(0x20u) +
+                "}, sink={" + candidate_memory_stage(0x40u) +
+                "}" +
+                ").");
 
         katana::analysis::ControlFlowAnalysisResult
             loss_report;
@@ -8811,9 +9375,18 @@ int main(const int argc, char* argv[]) {
 
         const auto unresolved_stack =
             sub_register_fifth_stack_callback_values(false);
-        require(unresolved_stack.guarded_code_inventory.walk_diagnostics
-                    .abi_stack_base_unresolved,
-                "Unaufgeloeste SUB-Register-Stackbasis blieb undiagnostiziert.");
+        const auto& unresolved_stack_diagnostics =
+            unresolved_stack.guarded_code_inventory.walk_diagnostics;
+        require(
+            has_stored_code_address(unresolved_stack, 0x50u) &&
+                !unresolved_stack_diagnostics.abi_stack_base_unresolved &&
+                !unresolved_stack_diagnostics
+                     .detached_stack_callback_loss &&
+                !unresolved_stack_diagnostics.memory_callback_loss &&
+                !unresolved_stack_diagnostics.truncated(),
+            "Eine unaufgeloeste SUB-Register-Stackkoordinate verlor den "
+            "endlichen Stack-MAY-Callback oder promovierte ihn "
+            "faelschlich zu Loss.");
 
         const auto harmless_unresolved_stack =
             sub_register_fifth_stack_callback_values(false, false);
@@ -9201,7 +9774,8 @@ int main(const int argc, char* argv[]) {
                     dispatch->evidence ==
                         katana::analysis::ControlFlowEvidence::GuardedPartial &&
                     !incomplete_family.budget_exhausted &&
-                    incomplete_family.fixpoint_iterations <= 2u,
+                    incomplete_family.fixpoint_iterations <=
+                        incomplete_family.iteration_budget,
                 "Candidate-Call-Carrier erzeugte einen autoritativen CFG-Beweis "
                 "oder trat statt des begrenzten Inventory-Passes in den "
                 "semantischen Summary-Fixpunkt ein (iterations=" +
@@ -9681,7 +10255,7 @@ int main(const int argc, char* argv[]) {
                 guarded_join_site->evidence == katana::analysis::ControlFlowEvidence::RuntimeOnly &&
                 !guarded_join_site->target.has_value() && guarded_join_site->targets.empty() &&
                 guarded_join_site->analysis_candidates == std::vector<std::uint32_t>{0x30u} &&
-                guarded_join_site->reason == "runtime-contract-function-memory" &&
+                guarded_join_site->reason == "runtime-contract-merged-contexts" &&
                 guarded_join_edge == guarded_join.resolved_edges.end(),
             "CFG-Join fror einen veraenderlichen Speicherkandidaten statisch ein.");
     const auto guarded_join_ir = katana::ir::lower_program(guarded_join);
@@ -9768,15 +10342,17 @@ int main(const int argc, char* argv[]) {
                     unknown_caller_site->evidence) &&
                 !unknown_caller_site->target.has_value() &&
                 unknown_caller_site->targets.empty() &&
-                unknown_caller_site->analysis_candidates.empty() &&
+                unknown_caller_site->analysis_candidates ==
+                    std::vector<std::uint32_t>{0x50u} &&
+                unknown_caller_site->reason == "runtime-contract-merged-contexts" &&
                 std::none_of(unknown_caller.resolved_edges.begin(),
                              unknown_caller.resolved_edges.end(),
                              [](const auto& edge) {
                                  return edge.instruction_address == 0x22u &&
                                         edge.target_address == 0x50u;
                              }),
-            "Partielle Callerwerte veraenderten trotz unbekanntem Ingress "
-            "globale Resolutions oder CFG-Kanten.");
+            "Partielle Callerwerte verloren trotz unbekanntem Ingress ihren "
+            "Runtimekandidaten oder erzeugten eine statische CFG-Kante.");
 
     std::vector<std::uint8_t> indirect_parameter_bytes(0x60u, 0x09u);
     const std::array<std::uint8_t, 18u> indirect_parameter_caller{
