@@ -32,28 +32,35 @@ getrennte Domaenen. Der Materialization-World-Reverseindex traegt ausserdem
 jetzt `(from, kind)`, sodass mehrere legitime Relationsarten desselben
 Node-Paars nicht mehr kollidieren.
 
-Der Targetbuild `katana-function-value-analysis-tests` war erfolgreich. Der
-finale, auf fuenf Sekunden begrenzte Lauf endete nach `1,94 s` mit Exitcode
-`1`, also nicht durch Timeout:
+Der Targetbuild `katana-function-value-analysis-tests` war erfolgreich. Ein
+read-only Frontier-Review belegte, dass der vorherige rote Alias-Fall keinen
+Sourcefehler zeigte: Der alte r15-Alias und sein Callback bleiben korrekt als
+detached SavedEpoch erhalten, die spaetere Mutation erzeugt terminalen
+`detached_stack_callback_loss`, und dieser wird absichtlich nicht nach
+`abi_stack_base_unresolved` hochgestuft. Die bestehende Testexpectation wurde
+daher auf `detached_stack_callback_loss`,
+`!abi_stack_base_unresolved` und fail-closed `truncated()` korrigiert; Source
+und Fixture blieben unveraendert.
+
+Der inkrementelle Targetbuild war danach erneut erfolgreich. Der genau einmal
+ausgefuehrte, auf fuenf Sekunden begrenzte Lauf passierte den korrigierten
+Alias-Fall und endete nach `1,91 s` mit Exitcode `1`, also nicht durch Timeout,
+am naechsten bestehenden Sanityfall:
 
 ```text
-TEST FEHLGESCHLAGEN: Ein vollstaendiger SP-Reload verwarf trotz ueberlebendem
-Alias stillschweigend einen alten Inventory-Callback (truncated=1,
-stored_80=0, stored_88=0, stored_90=0).
+TEST FEHLGESCHLAGEN: Ein nach dem SP-Snapshot neu geschriebener Callback wurde
+beim Restore des veralteten Snapshots stillschweigend verloren.
 ```
 
-Damit ist kein Performance-/Konvergenzproblem mehr belegt, sondern ein
-verbleibender semantischer Blocker in der Saved-SP-Alias-/Restore-Familie.
-Der vorangegangene Memory-MAY-zu-Root-Fehler, die detached-zu-active-
-Diagnosepromotion und die nichtautoritative Summary-Publikation sind im
-aktuellen Sourcepfad geschlossen. Fuer den neuen roten Endpunkt wurde wegen
-der ausdruecklichen One-Run-Grenze keine weitere dynamische Diagnose und kein
-zweiter Fixversuch ausgefuehrt; insbesondere wird keine unbewiesene neue
-Root Cause behauptet. Der naechste Review muss read-only den vollstaendigen
-SP-Reload mit ueberlebendem Alias verfolgen: exakte Zellprovenienz,
-Snapshot-/Restore-Auswahl, Callback-Payload-Erhaltung, Alias-Watcher sowie
-die anschliessende Truncation-/Store-Publikation. Fehlende Disassembly bleibt
-kein Unerreichbarkeitsbeweis.
+Damit ist weiterhin kein Performance-/Konvergenzproblem belegt. Fuer den
+neuen roten Endpunkt wurde wegen der ausdruecklichen One-Run-Grenze keine
+weitere dynamische Diagnose und kein zweiter Fixversuch ausgefuehrt;
+insbesondere wird weder Sourcefehler noch veraltete Erwartung vorweggenommen.
+Der naechste Review muss read-only `stale_saved_stack_epoch_values()` samt
+Snapshot, nachtraeglichem Callbackwrite, Restore-Auswahl, Origin-Kanal und
+terminaler Diagnose bis zur Assertion verfolgen. Detached Loss darf dabei
+nicht allein zur Reparatur wieder in den aktiven r15-Kanal promoviert werden.
+Fehlende Disassembly bleibt kein Unerreichbarkeitsbeweis.
 
 Vor dem Lauf wurden alle temporaeren `KATANA_TMP`-Ausgaben, neu eingefuegten
 Diagnose-Toggles und Fixture-Abweichungen entfernt; die sechs urspruenglichen

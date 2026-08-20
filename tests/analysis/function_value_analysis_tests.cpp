@@ -8045,14 +8045,25 @@ int main(const int argc, char* argv[]) {
             "nicht sicher ab oder verlor den neuen Callbackslot.");
         const auto aliased_old_stack =
             reloaded_stack_epoch_values(true, true);
+        const auto& aliased_old_stack_diagnostics =
+            aliased_old_stack.guarded_code_inventory.walk_diagnostics;
         require(
-            aliased_old_stack.guarded_code_inventory.walk_diagnostics
-                .abi_stack_base_unresolved,
-            "Ein vollstaendiger SP-Reload verwarf trotz ueberlebendem Alias "
-            "stillschweigend einen alten Inventory-Callback (truncated=" +
+            aliased_old_stack_diagnostics.detached_stack_callback_loss &&
+                !aliased_old_stack_diagnostics.abi_stack_base_unresolved &&
+                aliased_old_stack_diagnostics.truncated(),
+            "Ein vollstaendiger SP-Reload publizierte den erwarteten "
+            "detached Callback-Loss nicht getrennt vom aktiven r15-Kanal "
+            "(detached=" +
                 std::to_string(
-                    aliased_old_stack.guarded_code_inventory
-                        .walk_diagnostics.truncated()) +
+                    aliased_old_stack_diagnostics
+                        .detached_stack_callback_loss) +
+                ", active=" +
+                std::to_string(
+                    aliased_old_stack_diagnostics
+                        .abi_stack_base_unresolved) +
+                ", truncated=" +
+                std::to_string(
+                    aliased_old_stack_diagnostics.truncated()) +
                 ", stored_80=" +
                 std::to_string(
                     has_stored_code_address(aliased_old_stack, 0x80u)) +
