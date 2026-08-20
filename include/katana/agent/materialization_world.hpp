@@ -9,9 +9,9 @@
 
 namespace katana::agent {
 
-inline constexpr std::uint32_t materialization_world_schema_version = 1u;
+inline constexpr std::uint32_t materialization_world_schema_version = 2u;
 inline constexpr std::uint32_t frontier_schema_version = 1u;
-inline constexpr std::uint32_t materialization_world_binary_schema_version = 1u;
+inline constexpr std::uint32_t materialization_world_binary_schema_version = 2u;
 inline constexpr std::size_t materialization_world_max_binary_artifact_bytes =
     64u * 1024u * 1024u;
 
@@ -110,6 +110,14 @@ enum class DependencyKind : std::uint8_t {
     Requires,
     Produces,
     Observes,
+};
+
+struct ReverseDependency final {
+    StableId from{};
+    DependencyKind kind = DependencyKind::Requires;
+
+    friend constexpr bool operator==(ReverseDependency,
+                                     ReverseDependency) noexcept = default;
 };
 
 enum class FrontierBlockKind : std::uint8_t {
@@ -219,7 +227,9 @@ struct MaterializationNode final {
     std::uint64_t dependency_generation = 0u;
     std::uint64_t evidence_digest = 0u;
     std::vector<StableId> evidence;
-    std::vector<StableId> reverse_dependencies;
+    // Reverse edges retain their kind. The same source/target pair may have
+    // one reverse entry for each distinct DependencyKind.
+    std::vector<ReverseDependency> reverse_dependencies;
 };
 
 struct DependencyEdge final {
@@ -381,7 +391,7 @@ public:
     [[nodiscard]] bool contains_frontier(StableId id) const noexcept;
     [[nodiscard]] bool collect_reverse_dependencies(
         StableId target,
-        std::span<StableId> output,
+        std::span<ReverseDependency> output,
         std::size_t& written) const noexcept;
 
     [[nodiscard]] bool validate() const noexcept;

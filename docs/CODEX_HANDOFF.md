@@ -9,8 +9,9 @@ aelteren Prozessbeschreibungen.
 
 Der gebuendelte Saved-Stack-/Epoch-Umbau ist implementiert, kompiliert und
 statisch reviewt, aber der genau einmal ausgefuehrte abschliessende
-FVA-Sanitylauf ist noch rot. Deshalb wurden gemaess Arbeitsauftrag keine
-weiteren Fixversuche, kein Gesamtbuild und keine Sonic-Analyse gestartet.
+FVA-Sanitylauf ist noch rot. Deshalb wurden gemaess Arbeitsauftrag nach diesem
+Lauf keine weiteren Fixversuche, kein Gesamtbuild und keine Sonic-Analyse
+gestartet.
 
 Implementiert und zu erhalten sind insbesondere die bounded Trennung von
 current- und detached-Origin-Kanaelen, die separate Pending-ABI-Scalar-MAY-
@@ -22,49 +23,48 @@ Key-, Equality- und Persistence-Schemata. Der interprozedurale
 ohne MUST-Schnitt ueber alle Returnpfade waere er unsound. Der strukturelle
 Slot-Akkumulator in `value_with_saved_stack_epoch()` wird als same-current-
 root behandelt; damit ist die zuvor beobachtete quadratische Origin-
-Partitionierung beseitigt. Provisorische Callee-Summaries werden erst nach
-ausgewerteten Abhaengigkeiten als autoritativer Storage-Vertrag gewidert.
+Partitionierung beseitigt. Provisorische Callee-Summaries duerfen keine
+positiven Storage-/Epoch-/Loss-Fakten publizieren. Summary-Authority folgt
+den exakten Dependency-Snapshots; rekursive SCCs verwenden einen bounded
+Bootstrap mit obligatorischem autoritativem Replay. Pending-/Contextual-
+Publikation, Diagnose und Persistenz halten current, detached und memory als
+getrennte Domaenen. Der Materialization-World-Reverseindex traegt ausserdem
+jetzt `(from, kind)`, sodass mehrere legitime Relationsarten desselben
+Node-Paars nicht mehr kollidieren.
 
 Der Targetbuild `katana-function-value-analysis-tests` war erfolgreich. Der
-finale, auf fuenf Sekunden begrenzte Lauf endete nach etwa `1,7 s` mit:
+finale, auf fuenf Sekunden begrenzte Lauf endete nach `1,94 s` mit Exitcode
+`1`, also nicht durch Timeout:
 
 ```text
-TEST FEHLGESCHLAGEN: Ein nach dem SP-Snapshot neu geschriebener Callback
-wurde beim Restore des veralteten Snapshots stillschweigend verloren.
+TEST FEHLGESCHLAGEN: Ein vollstaendiger SP-Reload verwarf trotz ueberlebendem
+Alias stillschweigend einen alten Inventory-Callback (truncated=1,
+stored_80=0, stored_88=0, stored_90=0).
 ```
 
 Damit ist kein Performance-/Konvergenzproblem mehr belegt, sondern ein
-verbleibender semantischer Blocker. Der aktuelle read-only Root-Cause-Befund
-fuehrt ueber die Memory-Domaene: Ein konservativer, noch nicht autoritativer
-Call-Fallback absorbiert die SavedEpoch eines exakten Memory-Slots in
-`inventory_unresolved_memory_epoch`. `load_memory_values()` materialisiert
-diese domainweite Memory-Epoch danach auch fuer einen unabhaengigen exakten
-PC-relativen Load als Root-SavedEpoch im Zielregister. Ein anschliessender
-Store klassifiziert dieses Register faelschlich als detached Stack-Root und
-publiziert Callback-/Stack-Loss; `inventory_state_loss()` beziehungsweise
-die Evaluation-Projection mischen detached Loss anschliessend wieder in den
-aktiven `stack_base_unresolved`-Kanal.
-
-Der naechste Fix muss die Memory-Epoch als eigene nested/MAY-Domaene
-transportieren und darf sie nur an einem explizit bewiesenen r15-Restore-
-oder Self-Reload-Gate zum Root-Stack-Epoch promoten. Exakte PC-relative Loads
-in allgemeine Adressregister duerfen keine detached Stack-Write-Domain
-erzeugen. Detached Loss muss separat diagnostiziert und propagiert werden,
-statt den aktiven Stack-Base-Loss zu setzen. Provisorische Unknown-Memory-
-Effekte duerfen Ordinary-Memory konservativ invalidieren, aber keine sticky
-SavedEpoch-/Callback-Loss-Fakten publizieren. Lokale echte Callback-
-Mutationen und bereits bewiesener Loss muessen dabei monoton erhalten
-bleiben.
+verbleibender semantischer Blocker in der Saved-SP-Alias-/Restore-Familie.
+Der vorangegangene Memory-MAY-zu-Root-Fehler, die detached-zu-active-
+Diagnosepromotion und die nichtautoritative Summary-Publikation sind im
+aktuellen Sourcepfad geschlossen. Fuer den neuen roten Endpunkt wurde wegen
+der ausdruecklichen One-Run-Grenze keine weitere dynamische Diagnose und kein
+zweiter Fixversuch ausgefuehrt; insbesondere wird keine unbewiesene neue
+Root Cause behauptet. Der naechste Review muss read-only den vollstaendigen
+SP-Reload mit ueberlebendem Alias verfolgen: exakte Zellprovenienz,
+Snapshot-/Restore-Auswahl, Callback-Payload-Erhaltung, Alias-Watcher sowie
+die anschliessende Truncation-/Store-Publikation. Fehlende Disassembly bleibt
+kein Unerreichbarkeitsbeweis.
 
 Vor dem Lauf wurden alle temporaeren `KATANA_TMP`-Ausgaben, neu eingefuegten
 Diagnose-Toggles und Fixture-Abweichungen entfernt; die sechs urspruenglichen
 HEAD-Diagnosepfade bleiben erhalten. Die CrashCapsule-v2-Verdrahtung im
 generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
-Lauf sind weiterhin offen. Es wurde kein Port exportiert.
+Lauf sind weiterhin offen. Es wurde weder eine Sonic-Analyse noch ein Port
+gestartet oder exportiert.
 
-## Aktueller Produktmeilenstein: v141 / Source-ABI 116-57
+## Aktueller Produktmeilenstein: v141 / Source-ABI 116-58
 
-Der aktuelle Source-Stand ist Runtime-ABI `116`, Analyzer-ABI `57`,
+Der aktuelle Source-Stand ist Runtime-ABI `116`, Analyzer-ABI `58`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
 Profilvertrag `23`. Der agentische Native-Disc-Workflow publiziert eine
 identitaetsgebundene Materialization-World und ein resumierbares Ledger;

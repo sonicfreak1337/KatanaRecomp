@@ -679,6 +679,8 @@ void write_guarded_walk(
     output.boolean(value.resolution_root_logical_budget_exhausted);
     output.boolean(value.inventory_candidate_values_truncated);
     output.boolean(value.abi_stack_base_unresolved);
+    output.boolean(value.detached_stack_callback_loss);
+    output.boolean(value.memory_callback_loss);
     output.boolean(value.inventory_tail_target_unresolved);
 }
 
@@ -739,6 +741,8 @@ read_guarded_walk(Reader& input) {
     value.resolution_root_logical_budget_exhausted = input.boolean();
     value.inventory_candidate_values_truncated = input.boolean();
     value.abi_stack_base_unresolved = input.boolean();
+    value.detached_stack_callback_loss = input.boolean();
+    value.memory_callback_loss = input.boolean();
     value.inventory_tail_target_unresolved = input.boolean();
     return value;
 }

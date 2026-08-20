@@ -124,6 +124,19 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool unique_reverse_dependency_vector(
+    const std::vector<ReverseDependency>& values) noexcept {
+    for (std::size_t index = 0u; index < values.size(); ++index) {
+        if (!values[index].from ||
+            !valid_dependency_kind_value(values[index].kind))
+            return false;
+        for (std::size_t other = index + 1u; other < values.size(); ++other) {
+            if (values[index] == values[other]) return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] std::uint64_t hash_key(const EntityKind kind,
                                      const std::string_view key) noexcept {
     std::uint64_t hash = fnv_offset_basis;
@@ -144,6 +157,22 @@ template <typename T>
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
+[[nodiscard]] bool has_reverse_dependency(
+    const std::vector<ReverseDependency>& values,
+    const StableId from,
+    const DependencyKind kind) noexcept {
+    return std::any_of(values.begin(), values.end(), [from, kind](const auto& value) {
+        return value.from == from && value.kind == kind;
+    });
+}
+
+[[nodiscard]] bool reverse_dependency_less(const ReverseDependency& lhs,
+                                            const ReverseDependency& rhs) noexcept {
+    if (lhs.from != rhs.from) return lhs.from < rhs.from;
+    return static_cast<std::uint8_t>(lhs.kind) <
+           static_cast<std::uint8_t>(rhs.kind);
+}
+
 [[nodiscard]] bool valid_node_proof(const MaterializationNode& node) noexcept {
     if (!valid_node_kind_value(node.kind) || !valid_proof_value(node.proof) ||
         !valid_completeness_value(node.completeness) ||
@@ -153,7 +182,7 @@ template <typename T>
     if (node.evidence.size() > materialization_world_max_evidence_per_item ||
         node.reverse_dependencies.size() > materialization_world_max_edges ||
         !unique_id_vector(node.evidence) ||
-        !unique_id_vector(node.reverse_dependencies))
+        !unique_reverse_dependency_vector(node.reverse_dependencies))
         return false;
     if (node.evidence_digest != 0u && node.evidence_digest != digest_ids(node.evidence))
         return false;
@@ -386,21 +415,31 @@ void write_node(JsonWriter& writer, const MaterializationNode& node) noexcept {
     write_id_array(writer, node.evidence);
     writer.raw(",\"reverse_dependencies\":[");
     // The graph is bounded, but serialization must not allocate. The stored
-    // reverse list is emitted in deterministic order by selecting its next
-    // minimum directly from the vector.
-    StableId previous{};
+    // reverse list is emitted in deterministic (source, kind) order by
+    // selecting its next minimum directly from the vector.
+    ReverseDependency previous{};
+    bool have_previous = false;
     bool first = true;
     for (std::size_t emitted = 0u; emitted < node.reverse_dependencies.size(); ++emitted) {
-        StableId next{};
+        ReverseDependency next{};
+        bool have_next = false;
         for (const auto candidate : node.reverse_dependencies) {
-            if (candidate.value <= previous.value) continue;
-            if (!next || candidate < next) next = candidate;
+            if (have_previous && !reverse_dependency_less(previous, candidate)) continue;
+            if (!have_next || reverse_dependency_less(candidate, next)) {
+                next = candidate;
+                have_next = true;
+            }
         }
-        if (!next) break;
+        if (!have_next) break;
         if (!first) writer.put(',');
         first = false;
-        writer.id(next);
+        writer.raw("{\"from\":");
+        writer.id(next.from);
+        writer.raw(",\"kind\":");
+        writer.string(dependency_kind_name(next.kind));
+        writer.put('}');
         previous = next;
+        have_previous = true;
     }
     writer.raw("]}");
 }
@@ -859,12 +898,13 @@ bool ExecutableMaterializationWorld::add_dependency(DependencyEdge edge) noexcep
         fail(WorldModelError::CapacityExceeded);
         return false;
     }
-    if (has_id(target->reverse_dependencies, edge.from)) {
+    if (has_reverse_dependency(target->reverse_dependencies, edge.from, edge.kind)) {
         fail(WorldModelError::DuplicateEntry);
         return false;
     }
     try {
-        target->reverse_dependencies.push_back(edge.from);
+        target->reverse_dependencies.push_back(
+            ReverseDependency{edge.from, edge.kind});
         dependencies_.push_back(edge);
         ++dependency_generation_;
         for (auto& node : nodes_) node.dependency_generation = dependency_generation_;
@@ -874,7 +914,8 @@ bool ExecutableMaterializationWorld::add_dependency(DependencyEdge edge) noexcep
         return true;
     } catch (...) {
         if (target != nullptr && !target->reverse_dependencies.empty() &&
-            target->reverse_dependencies.back() == edge.from)
+            target->reverse_dependencies.back() ==
+                ReverseDependency{edge.from, edge.kind})
             target->reverse_dependencies.pop_back();
         fail(WorldModelError::CapacityExceeded);
         return false;
@@ -1187,7 +1228,7 @@ bool ExecutableMaterializationWorld::contains_frontier(const StableId id) const 
 
 bool ExecutableMaterializationWorld::collect_reverse_dependencies(
     const StableId target,
-    const std::span<StableId> output,
+    const std::span<ReverseDependency> output,
     std::size_t& written) const noexcept {
     const MaterializationNode* node = nullptr;
     for (const auto& candidate : nodes_) {
@@ -1207,7 +1248,7 @@ bool ExecutableMaterializationWorld::collect_reverse_dependencies(
     written = node->reverse_dependencies.size();
     std::copy(node->reverse_dependencies.begin(), node->reverse_dependencies.end(),
               output.begin());
-    std::sort(output.begin(), output.begin() + written);
+    std::sort(output.begin(), output.begin() + written, reverse_dependency_less);
     return true;
 }
 
@@ -1265,10 +1306,11 @@ bool ExecutableMaterializationWorld::validate() const noexcept {
             if (!has_runtime) return false;
         }
         for (const auto reverse : node.reverse_dependencies) {
-            if (!contains_node(reverse)) return false;
+            if (!contains_node(reverse.from)) return false;
             const auto edge = std::find_if(
                 dependencies_.begin(), dependencies_.end(), [node, reverse](const auto& item) {
-                    return item.from == reverse && item.to == node.id;
+                    return item.from == reverse.from && item.to == node.id &&
+                           item.kind == reverse.kind;
                 });
             if (edge == dependencies_.end()) return false;
         }
@@ -1287,7 +1329,7 @@ bool ExecutableMaterializationWorld::validate() const noexcept {
             return node.id == edge.to;
         });
         if (target == nodes_.end() ||
-            !has_id(target->reverse_dependencies, edge.from))
+            !has_reverse_dependency(target->reverse_dependencies, edge.from, edge.kind))
             return false;
     }
     for (std::size_t index = 0u; index < dependencies_.size(); ++index) {
@@ -1726,6 +1768,18 @@ void write_id_vector(BinaryWriter& writer, const std::vector<T>& values) noexcep
     for (const auto value : values) writer.u64(value.value);
 }
 
+void write_reverse_dependency_vector(
+    BinaryWriter& writer,
+    const std::vector<ReverseDependency>& values) noexcept {
+    writer.u32(static_cast<std::uint32_t>(values.size()));
+    for (const auto value : values) {
+        writer.u64(value.from.value);
+        writer.u8(static_cast<std::uint8_t>(value.kind));
+        writer.u8(0u);
+        writer.u16(0u);
+    }
+}
+
 void write_text_vector(BinaryWriter& writer,
                        const std::vector<std::string>& values) noexcept {
     writer.u32(static_cast<std::uint32_t>(values.size()));
@@ -1805,6 +1859,48 @@ template <typename T>
 
 [[nodiscard]] bool valid_dependency_kind_byte(const std::uint8_t value) noexcept {
     return value <= static_cast<std::uint8_t>(DependencyKind::Observes);
+}
+
+[[nodiscard]] bool read_reverse_dependency_vector(
+    BinaryReader& reader,
+    std::vector<ReverseDependency>& values,
+    const std::size_t maximum) {
+    constexpr std::size_t wire_bytes = sizeof(std::uint64_t) +
+                                        sizeof(std::uint8_t) +
+                                        sizeof(std::uint8_t) +
+                                        sizeof(std::uint16_t);
+    std::uint32_t count = 0u;
+    if (!reader.u32(count) || count > maximum) return false;
+    if (reader.position > reader.input.size() ||
+        count > (reader.input.size() - reader.position) / wire_bytes ||
+        count > std::numeric_limits<std::size_t>::max() /
+                    sizeof(ReverseDependency) ||
+        !reader.reserve_bytes(static_cast<std::size_t>(count) *
+                              sizeof(ReverseDependency))) {
+        reader.failed = true;
+        return false;
+    }
+    try {
+        values.clear();
+        values.reserve(count);
+        for (std::uint32_t index = 0u; index < count; ++index) {
+            ReverseDependency value;
+            std::uint8_t kind = 0u;
+            std::uint8_t reserved8 = 0u;
+            std::uint16_t reserved16 = 0u;
+            if (!reader.u64(value.from.value) || !reader.u8(kind) ||
+                !reader.u8(reserved8) || !reader.u16(reserved16) ||
+                reserved8 != 0u || reserved16 != 0u || !value.from ||
+                !valid_dependency_kind_byte(kind))
+                return false;
+            value.kind = static_cast<DependencyKind>(kind);
+            values.push_back(value);
+        }
+    } catch (...) {
+        reader.failed = true;
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] bool valid_frontier_state_byte(const std::uint8_t value) noexcept {
@@ -1971,7 +2067,7 @@ BoundedBinaryResult serialize_agent_world_binary(
             writer.text(item.canonical_identity);
             writer.text(item.source_identity);
             write_id_vector(writer, item.evidence);
-            write_id_vector(writer, item.reverse_dependencies);
+            write_reverse_dependency_vector(writer, item.reverse_dependencies);
         }
         for (const auto& item : world.dependencies()) {
             writer.u64(item.from.value);
@@ -2118,14 +2214,15 @@ bool parse_agent_world_binary(const std::span<const std::uint8_t> input,
                 !reader.text(item.source_identity, materialization_world_max_text_bytes) ||
                 !read_id_vector(reader, item.evidence,
                                 materialization_world_max_evidence_per_item) ||
-                !read_id_vector(reader, item.reverse_dependencies,
-                                materialization_world_max_edges))
+                !read_reverse_dependency_vector(reader, item.reverse_dependencies,
+                                                materialization_world_max_edges))
                 return false;
             item.kind = static_cast<MaterializationNodeKind>(kind);
             item.proof = static_cast<ProofClass>(proof);
             item.completeness = static_cast<Completeness>(completeness);
             item.runtime_hint_only = runtime_hint != 0u;
-            if (!unique_ids(item.evidence) || !unique_ids(item.reverse_dependencies))
+            if (!unique_ids(item.evidence) ||
+                !unique_reverse_dependency_vector(item.reverse_dependencies))
                 return false;
             parsed.nodes_.push_back(std::move(item));
         }

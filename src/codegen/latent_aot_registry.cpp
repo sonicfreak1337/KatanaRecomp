@@ -584,7 +584,9 @@ bool runtime_only_candidate_stack_loss_is_bounded(
     const auto& walk = analysis.guarded_code_inventory_walk;
     const bool candidate_stack_resolution_loss =
         walk.inventory_candidate_values_truncated ||
-        walk.abi_stack_base_unresolved;
+        walk.abi_stack_base_unresolved ||
+        walk.detached_stack_callback_loss ||
+        walk.memory_callback_loss;
     if ((analysis.function_budget_exhausted &&
          (resolution_retention_limit_reason !=
               katana::analysis::ResolutionRetentionLimitReason::
@@ -700,6 +702,8 @@ std::string guarded_aot_inventory_loss_summary(
            walk.resolution_root_logical_budget_exhausted);
     append("candidate-values", walk.inventory_candidate_values_truncated);
     append("abi-stack-base", walk.abi_stack_base_unresolved);
+    append("detached-stack-callback", walk.detached_stack_callback_loss);
+    append("memory-callback", walk.memory_callback_loss);
     append("tail-target", walk.inventory_tail_target_unresolved);
     append("candidate-inventory", analysis.candidate_inventory_truncated);
     append("returned-table", analysis.returned_table_scan_truncated);

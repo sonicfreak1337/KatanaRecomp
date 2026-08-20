@@ -33,7 +33,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 5u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 6u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -282,6 +282,11 @@ struct FunctionMemoryWriteRange {
 
 struct FunctionValueSummary {
     std::uint32_t function_address = 0u;
+    // Positive storage/Epoch/Loss facts may be consumed by callers only after
+    // this summary has crossed the fixpoint's revocable bootstrap boundary.
+    // Ordinary return values remain usable while the storage contract is
+    // provisional; unknown Memory stays conservative.
+    bool inventory_storage_contract_authoritative = false;
     std::vector<FunctionRegisterValueSummary> registers;
     bool memory_complete = false;
     // Relative memory effect. An unknown write invalidates every caller fact;
@@ -460,7 +465,12 @@ struct GuardedCodeInventoryWalkDiagnostics {
     // category as semantic output.
     bool resolution_root_logical_budget_exhausted = false;
     bool inventory_candidate_values_truncated = false;
+    // Active-r15 loss is deliberately distinct from suspended-stack and
+    // Memory-domain loss. Diagnostics observe these channels; they never
+    // promote one channel into another.
     bool abi_stack_base_unresolved = false;
+    bool detached_stack_callback_loss = false;
+    bool memory_callback_loss = false;
     // A tail edge carried inventory-relevant state to a target which could
     // not be bound as either an ordinary function or an inventory region.
     // Silently dropping that edge would make product completeness unsound.
@@ -480,6 +490,8 @@ struct GuardedCodeInventoryWalkDiagnostics {
                abi_stack_argument_projection_truncated_functions != 0u ||
                local_fixpoint_limited_evaluations != 0u ||
                resolution_root_logical_budget_exhausted ||
+               detached_stack_callback_loss ||
+               memory_callback_loss ||
                inventory_tail_target_unresolved;
     }
 

@@ -1,6 +1,6 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `57`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `58`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
@@ -15,7 +15,9 @@ letzte RuntimeOnly-Bring-up-Meilenstein verwendet diesen Analyzer-ABI-
 Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
 
-Analyzer-ABI 57 bindet zusaetzlich die transaktionale Materialization-World,
+Analyzer-ABI 58 bindet zusaetzlich getrennte current-, detached- und
+Memory-Callback-Loss-Diagnosen sowie autoritative Storage-Summaries. ABI 57
+band bereits die transaktionale Materialization-World,
 den Schema-3-Resume-Ledger und die streng identitaetsgebundene Frontier-
 Importgrenze. Beobachtete Runtime-Frontiers bleiben `ObservedHint` und duerfen
 weder CFG-Kanten noch AOT-Roots oder Hardware-Closure erzeugen. Positive

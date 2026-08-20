@@ -455,6 +455,10 @@ std::string format_control_flow_analysis_json(const ControlFlowAnalysisResult& a
            << (analysis.guarded_code_inventory_walk.inventory_candidate_values_truncated ? "true" : "false")
            << ",\"guarded_abi_stack_base_unresolved\":"
            << (analysis.guarded_code_inventory_walk.abi_stack_base_unresolved ? "true" : "false")
+           << ",\"guarded_detached_stack_callback_loss\":"
+           << (analysis.guarded_code_inventory_walk.detached_stack_callback_loss ? "true" : "false")
+           << ",\"guarded_memory_callback_loss\":"
+           << (analysis.guarded_code_inventory_walk.memory_callback_loss ? "true" : "false")
            << ",\"guarded_inventory_tail_target_unresolved\":"
            << (analysis.guarded_code_inventory_walk.inventory_tail_target_unresolved ? "true" : "false")
            << ",\"guarded_code_shape_validation_work\":"
