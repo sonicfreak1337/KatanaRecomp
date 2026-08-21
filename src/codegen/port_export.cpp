@@ -1971,48 +1971,21 @@ void bind_post_bootstrap_immutable_image_ranges(
             "ausfuehrbares Bootimage.");
     if (game_project == nullptr) return;
 
-    // A GameProject jump-table declaration supplies its layout, not a proof
-    // that writable guest RAM will stay unchanged. Only the conjunction with
-    // an exact base-image CodeIdentity upgrades that table. Runtime-image
-    // The complete selected identity range becomes immutable so guard/literal
-    // bytes remain correlated with the table proof. Runtime-image declarations
-    // remain snapshot candidates because their committed bytes are installed
-    // later and ExecutableImage rejects immutable RuntimeMemory ranges.
-    for (const auto& table : game_project->jump_tables) {
-        if (!game_project_metadata_is_active(native_port, table.image_id) ||
-            !table.image_id.empty())
+    // Bootstrap materialization ranges can contain both executable/read-only
+    // bytes and ordinary mutable title data. Restore immutability only for the
+    // complete, independently SHA-bound base-image CodeIdentity ranges. This
+    // keeps code/literal/table bytes correlated without turning the surrounding
+    // checkpoint RAM into static evidence. Runtime-image identities remain
+    // snapshot candidates because ExecutableImage deliberately rejects
+    // immutable RuntimeMemory ranges.
+    for (const auto& identity : game_project->code_identities) {
+        if (!game_project_metadata_is_active(native_port, identity.image_id) ||
+            !identity.image_id.empty())
             continue;
-        const auto width =
-            table.encoding ==
-                    katana::runtime::GameProjectTableEncoding::
-                        SignedRelative16
-                ? 2u
-                : 4u;
-        const auto table_extent =
-            static_cast<std::uint64_t>(table.entry_count - 1u) *
-                table.entry_stride +
-            width;
-        if (table_extent > std::numeric_limits<std::size_t>::max())
-            throw std::invalid_argument(
-                "Game-Project-Jump-Table-Identitybereich ist zu gross.");
-        const auto table_end =
-            static_cast<std::uint64_t>(table.table_address) + table_extent;
-        const auto identity = std::find_if(
-            game_project->code_identities.begin(),
-            game_project->code_identities.end(),
-            [&](const auto& candidate) {
-                const auto candidate_end =
-                    static_cast<std::uint64_t>(candidate.address) +
-                    candidate.size;
-                return candidate.image_id == table.image_id &&
-                       candidate.address <= table.table_address &&
-                       candidate_end >= table_end;
-            });
-        if (identity == game_project->code_identities.end()) continue;
 
-        const auto size = static_cast<std::size_t>(identity->size);
+        const auto size = static_cast<std::size_t>(identity.size);
         const auto resolved =
-            image.resolve_segment_address(identity->address, size);
+            image.resolve_segment_address(identity.address, size);
         const auto* const segment =
             resolved.has_value() ? image.find_segment(*resolved, size)
                                  : nullptr;
@@ -2024,11 +1997,11 @@ void bind_post_bootstrap_immutable_image_ranges(
             *offset > segment->bytes.size() ||
             size > segment->bytes.size() - *offset)
             throw std::invalid_argument(
-                "Game-Project-Jump-Table-Identitybereich ist nicht lesbar.");
+                "Game-Project-Codeidentitaetsbereich ist nicht lesbar.");
         if (image.find_immutable_range(*resolved, size) != nullptr) continue;
 
         const auto resolved_end =
-            static_cast<std::uint64_t>(*resolved) + identity->size;
+            static_cast<std::uint64_t>(*resolved) + identity.size;
         const bool overlaps_existing = std::any_of(
             image.immutable_ranges().begin(),
             image.immutable_ranges().end(), [&](const auto& existing) {
@@ -2040,7 +2013,7 @@ void bind_post_bootstrap_immutable_image_ranges(
             });
         if (overlaps_existing)
             throw std::invalid_argument(
-                "Game-Project-Jump-Table-Identitybereich ueberlappt einen "
+                "Game-Project-Codeidentitaetsbereich ueberlappt einen "
                 "abweichenden Immutable-Proof.");
 
         const auto exact_identity = std::string("sha256:") +
@@ -2048,8 +2021,12 @@ void bind_post_bootstrap_immutable_image_ranges(
                 reinterpret_cast<const char*>(
                     segment->bytes.data() + *offset),
                 size));
+        if (exact_identity != identity.byte_identity)
+            throw std::invalid_argument(
+                "Game-Project-Codeidentitaetsbereich stimmt nicht mit dem "
+                "Post-Bootstrap-Image ueberein.");
         image.add_immutable_range(
-            {*resolved, identity->size, exact_identity, 0u});
+            {*resolved, identity.size, exact_identity, 0u});
     }
 }
 
@@ -17064,9 +17041,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         throw std::runtime_error(
             "Nativer Produktdispatch besitzt keine Codebereiche.");
 
-    std::vector<ImmutableRange> identity_bound_table_proof_ranges;
+    std::vector<ImmutableRange> identity_bound_code_proof_ranges;
     if (game_project != nullptr) {
-        identity_bound_table_proof_ranges.reserve(
+        identity_bound_code_proof_ranges.reserve(
             game_project->code_identities.size());
         for (const auto& identity : game_project->code_identities) {
             if (!game_project_metadata_is_active(
@@ -17076,32 +17053,6 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             const auto identity_begin =
                 static_cast<std::uint64_t>(identity.address);
             const auto identity_end = identity_begin + identity.size;
-            const bool binds_jump_table = std::ranges::any_of(
-                game_project->jump_tables, [&](const auto& table) {
-                    if (table.image_id != identity.image_id ||
-                        !game_project_metadata_is_active(
-                            &definition, table.image_id))
-                        return false;
-                    const auto width =
-                        table.encoding ==
-                                katana::runtime::
-                                    GameProjectTableEncoding::
-                                        SignedRelative16
-                            ? 2u
-                            : 4u;
-                    const auto extent =
-                        static_cast<std::uint64_t>(
-                            table.entry_count - 1u) *
-                            table.entry_stride +
-                        width;
-                    const auto table_begin =
-                        static_cast<std::uint64_t>(
-                            table.table_address);
-                    return identity_begin <= table_begin &&
-                           identity_end >= table_begin + extent;
-                });
-            if (!binds_jump_table) continue;
-
             const auto size = static_cast<std::size_t>(identity.size);
             const auto resolved =
                 image.resolve_segment_address(identity.address, size);
@@ -17134,7 +17085,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 throw std::runtime_error(
                     "Native Game-Project-Codeidentitaet besitzt keinen "
                     "physisch linearen Produktbereich.");
-            identity_bound_table_proof_ranges.push_back(
+            identity_bound_code_proof_ranges.push_back(
                 {physical, identity.size,
                  read_only_image_range_kind});
         }
@@ -17148,13 +17099,13 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const auto read_only_image_count = static_cast<std::size_t>(
         std::count_if(definition.images.begin(), definition.images.end(),
                       [](const auto& image) { return !image.writable; }));
-    if (identity_bound_table_proof_ranges.size() >
+    if (identity_bound_code_proof_ranges.size() >
             std::numeric_limits<std::size_t>::max() -
                 read_only_image_count)
         throw std::runtime_error(
             "Nativer Produktdispatch besitzt zu viele immutable Bereiche.");
     const auto read_only_range_count = read_only_image_count +
-        identity_bound_table_proof_ranges.size();
+        identity_bound_code_proof_ranges.size();
     if (read_only_range_count >
             std::numeric_limits<std::size_t>::max() -
                 executable_ranges.size() ||
@@ -17194,7 +17145,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         append_immutable_events(
             physical, binding.byte_size, read_only_image_range_kind);
     }
-    for (const auto& range : identity_bound_table_proof_ranges)
+    for (const auto& range : identity_bound_code_proof_ranges)
         append_immutable_events(
             range.physical_address, range.byte_size, range.kind_mask);
     std::sort(
