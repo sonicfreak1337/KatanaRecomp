@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
+#include <tuple>
+#include <utility>
 
 namespace katana::agent {
 namespace {
@@ -2383,6 +2386,59 @@ bool next_agent_tasks(const ExecutableMaterializationWorld& world,
                 return std::find(rhs.begin(), rhs.end(), value) != rhs.end();
             });
     };
+    const auto hardware_resources_overlap = [](const auto& lhs,
+                                               const auto& rhs) noexcept {
+        // blocked_hardware is also the bounded human/agent explanation of a
+        // hardware frontier.  Provider roles, expected symbols and missing
+        // proofs describe work; they are not shared mutable resources.  The
+        // hardware audit's canonical region/access/register descriptor is the
+        // only concrete resource identity in this vector.  Owners and sites
+        // are already compared through their structured fields above.
+        const auto resource_identity = [](const std::string_view value) noexcept
+            -> std::optional<
+                std::tuple<std::string_view, std::string_view,
+                           std::string_view>> {
+            constexpr std::string_view region_prefix{"region="};
+            constexpr std::string_view access_marker{";access="};
+            constexpr std::string_view register_marker{";register="};
+            if (!value.starts_with(region_prefix)) return std::nullopt;
+            const auto region_end = value.find(';', region_prefix.size());
+            if (region_end == std::string_view::npos) return std::nullopt;
+            const auto access_begin = value.find(access_marker);
+            if (access_begin == std::string_view::npos)
+                return std::nullopt;
+            const auto access_end = value.find(
+                ';', access_begin + access_marker.size());
+            if (access_end == std::string_view::npos)
+                return std::nullopt;
+            const auto register_begin = value.find(register_marker);
+            const auto region = value.substr(
+                region_prefix.size(), region_end - region_prefix.size());
+            const auto access = value.substr(
+                access_begin + access_marker.size(),
+                access_end - access_begin - access_marker.size());
+            const auto hardware_register =
+                register_begin == std::string_view::npos
+                    ? std::string_view{}
+                    : value.substr(register_begin + register_marker.size());
+            return std::tuple{region, access, hardware_register};
+        };
+        return std::any_of(
+            lhs.begin(), lhs.end(), [&](const auto& value) {
+                const auto left = resource_identity(value);
+                if (!left.has_value()) return false;
+                return std::any_of(
+                    rhs.begin(), rhs.end(), [&](const auto& candidate) {
+                        const auto right = resource_identity(candidate);
+                        return right.has_value() &&
+                               std::get<0>(*left) == std::get<0>(*right) &&
+                               std::get<1>(*left) == std::get<1>(*right) &&
+                               (std::get<2>(*left).empty() ||
+                                std::get<2>(*right).empty() ||
+                                std::get<2>(*left) == std::get<2>(*right));
+                    });
+            });
+    };
     const auto task_owner = [](const FrontierEntry& entry)
         -> std::string_view {
         if (entry.family == "replacement-reachability" &&
@@ -2414,7 +2470,7 @@ bool next_agent_tasks(const ExecutableMaterializationWorld& world,
                     text_sets_overlap(
                         existing->blocked_materializations,
                         entry.blocked_materializations) ||
-                    text_sets_overlap(
+                    hardware_resources_overlap(
                         existing->blocked_hardware,
                         entry.blocked_hardware)) {
                     conflicts = true;

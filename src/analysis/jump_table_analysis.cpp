@@ -17,6 +17,21 @@ namespace {
 
 constexpr std::size_t maximum_jump_table_entries = 4096u;
 
+bool immutable_table_source(
+    const katana::io::ExecutableImage& image,
+    const katana::io::ImageSegment& segment,
+    const std::uint32_t table_address,
+    const std::size_t byte_count) noexcept {
+    if (!segment.permissions.readable) return false;
+    // Product admission can bind a fine-grained immutable range inside an
+    // otherwise writable SH-4 RAM segment. Generated products reject writes
+    // to that identity-bound range, so it is as authoritative for table bytes
+    // as a physically read-only segment. Runtime-memory ranges cannot acquire
+    // this proof because ExecutableImage rejects them at insertion time.
+    return !segment.permissions.writable ||
+           image.find_immutable_range(table_address, byte_count) != nullptr;
+}
+
 std::string snapshot_key(const katana::io::ExecutableImage& image,
                          const JumpTableEncoding encoding,
                          const std::uint32_t dispatch_address,
@@ -39,8 +54,11 @@ std::string snapshot_key(const katana::io::ExecutableImage& image,
         }
     }
     std::ostringstream key;
-    key << static_cast<unsigned>(encoding) << ':' << dispatch_address << ':' << table_address << ':'
-        << target_base << ':' << entry_count << ':' << digest;
+    key << image.analysis_instance_identity() << ':'
+        << image.analysis_revision() << ':'
+        << static_cast<unsigned>(encoding) << ':' << dispatch_address << ':'
+        << table_address << ':' << target_base << ':' << entry_count << ':'
+        << digest;
     return key.str();
 }
 
@@ -489,10 +507,15 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
     const auto byte_count = static_cast<std::size_t>(entry_count * 4u);
     const auto* segment = image.find_segment(table_address, byte_count);
     const auto offset = segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
-    if (segment == nullptr || !segment->permissions.readable || segment->permissions.writable ||
+    const bool immutable_source =
+        segment != nullptr &&
+        immutable_table_source(image, *segment, table_address, byte_count);
+    if (segment == nullptr || !immutable_source ||
         !offset.has_value() || *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
-        analysis.reason = segment != nullptr && segment->permissions.writable
+        analysis.reason = segment != nullptr &&
+                                  segment->permissions.writable &&
+                                  !immutable_source
                               ? "table-segment-writable"
                               : "table-range-not-immutable";
         return analysis;
@@ -562,14 +585,22 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
     }
     const auto* segment = image.find_segment(table_address, static_cast<std::size_t>(byte_count));
     const auto offset = segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
+    const bool immutable_source =
+        segment != nullptr &&
+        immutable_table_source(
+            image, *segment, table_address,
+            static_cast<std::size_t>(byte_count));
     const bool writable_snapshot_source =
-        initial_snapshot_candidates && segment != nullptr && segment->permissions.writable &&
+        initial_snapshot_candidates && segment != nullptr &&
+        !immutable_source && segment->permissions.writable &&
         snapshot_candidate_source(image, *segment);
-    if (segment == nullptr || !segment->permissions.readable ||
-        (segment->permissions.writable && !writable_snapshot_source) ||
+    if (segment == nullptr ||
+        (!immutable_source && !writable_snapshot_source) ||
         !offset.has_value() || *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
-        analysis.reason = segment != nullptr && segment->permissions.writable
+        analysis.reason = segment != nullptr &&
+                                  segment->permissions.writable &&
+                                  !immutable_source
                               ? "table-segment-writable"
                               : "table-range-not-immutable";
         return analysis;
@@ -688,16 +719,23 @@ JumpTableAnalysis analyze_declared_jump_table(
         image.find_segment(table_address, static_cast<std::size_t>(byte_count));
     const auto offset =
         segment != nullptr ? segment->byte_offset(table_address) : std::nullopt;
+    const bool immutable_source =
+        segment != nullptr &&
+        immutable_table_source(
+            image, *segment, table_address,
+            static_cast<std::size_t>(byte_count));
     const bool writable_snapshot_source =
-        segment != nullptr && segment->permissions.writable &&
+        segment != nullptr && !immutable_source &&
+        segment->permissions.writable &&
         snapshot_candidate_source(image, *segment);
-    if (segment == nullptr || !segment->permissions.readable ||
-        (segment->permissions.writable && !writable_snapshot_source) ||
+    if (segment == nullptr ||
+        (!immutable_source && !writable_snapshot_source) ||
         !offset.has_value() ||
         *offset > segment->bytes.size() ||
         byte_count > segment->bytes.size() - *offset) {
         analysis.reason =
-            segment != nullptr && segment->permissions.writable
+            segment != nullptr && segment->permissions.writable &&
+                    !immutable_source
                 ? "table-segment-writable"
                 : "table-range-not-immutable";
         return analysis;

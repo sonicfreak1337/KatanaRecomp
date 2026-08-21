@@ -126,7 +126,11 @@ struct GameProjectSymbol {
 // Optional fine-grained identity proof for code outside the immutable boot
 // executable (for example an overlay or a runtime-loaded module). The identity
 // is SHA-256 over exactly [address, address + size). The exporter validates
-// these ranges before accepting title-owned hooks or metadata.
+// these ranges before accepting title-owned hooks or metadata. In a native
+// product, a base-image JumpTable whose complete byte range is covered by one
+// of these identities makes that complete identity range read-only: analysis
+// may use its exact table/guard literals and the generated runtime rejects
+// writes to the same identity-bound range.
 struct GameProjectCodeIdentity {
     std::uint32_t address = 0u;
     std::uint32_t size = 0u;

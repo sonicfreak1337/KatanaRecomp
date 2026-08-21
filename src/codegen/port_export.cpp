@@ -1842,7 +1842,8 @@ void apply_native_port_post_aot_view(
 
 void bind_post_bootstrap_immutable_image_ranges(
     katana::io::ExecutableImage& image,
-    const katana::runtime::NativePortDefinition* const native_port) {
+    const katana::runtime::NativePortDefinition* const native_port,
+    const katana::runtime::GameProjectDefinition* const game_project) {
     if (native_port == nullptr) return;
 
     const auto is_boot_executable = [&](const katana::io::ImageSegment& segment) {
@@ -1854,6 +1855,7 @@ void bind_post_bootstrap_immutable_image_ranges(
                segment.permissions.executable &&
                !segment.bytes.empty();
     };
+    bool bound_boot_executable = false;
     for (const auto& segment : image.segments()) {
         if (!is_boot_executable(segment)) continue;
         const auto segment_physical =
@@ -1914,11 +1916,95 @@ void bind_post_bootstrap_immutable_image_ranges(
             image.add_immutable_range(
                 {source_address, end - begin, identity, 0u});
         }
-        return;
+        bound_boot_executable = true;
+        break;
     }
-    throw std::invalid_argument(
-        "Post-Bootstrap-Immutable-View findet kein gebundenes "
-        "ausfuehrbares Bootimage.");
+    if (!bound_boot_executable)
+        throw std::invalid_argument(
+            "Post-Bootstrap-Immutable-View findet kein gebundenes "
+            "ausfuehrbares Bootimage.");
+    if (game_project == nullptr) return;
+
+    // A GameProject jump-table declaration supplies its layout, not a proof
+    // that writable guest RAM will stay unchanged. Only the conjunction with
+    // an exact base-image CodeIdentity upgrades that table. Runtime-image
+    // The complete selected identity range becomes immutable so guard/literal
+    // bytes remain correlated with the table proof. Runtime-image declarations
+    // remain snapshot candidates because their committed bytes are installed
+    // later and ExecutableImage rejects immutable RuntimeMemory ranges.
+    for (const auto& table : game_project->jump_tables) {
+        if (!game_project_metadata_is_active(native_port, table.image_id) ||
+            !table.image_id.empty())
+            continue;
+        const auto width =
+            table.encoding ==
+                    katana::runtime::GameProjectTableEncoding::
+                        SignedRelative16
+                ? 2u
+                : 4u;
+        const auto table_extent =
+            static_cast<std::uint64_t>(table.entry_count - 1u) *
+                table.entry_stride +
+            width;
+        if (table_extent > std::numeric_limits<std::size_t>::max())
+            throw std::invalid_argument(
+                "Game-Project-Jump-Table-Identitybereich ist zu gross.");
+        const auto table_end =
+            static_cast<std::uint64_t>(table.table_address) + table_extent;
+        const auto identity = std::find_if(
+            game_project->code_identities.begin(),
+            game_project->code_identities.end(),
+            [&](const auto& candidate) {
+                const auto candidate_end =
+                    static_cast<std::uint64_t>(candidate.address) +
+                    candidate.size;
+                return candidate.image_id == table.image_id &&
+                       candidate.address <= table.table_address &&
+                       candidate_end >= table_end;
+            });
+        if (identity == game_project->code_identities.end()) continue;
+
+        const auto size = static_cast<std::size_t>(identity->size);
+        const auto resolved =
+            image.resolve_segment_address(identity->address, size);
+        const auto* const segment =
+            resolved.has_value() ? image.find_segment(*resolved, size)
+                                 : nullptr;
+        const auto offset =
+            segment != nullptr ? segment->byte_offset(*resolved)
+                               : std::nullopt;
+        if (!resolved.has_value() || segment == nullptr ||
+            !segment->permissions.readable || !offset.has_value() ||
+            *offset > segment->bytes.size() ||
+            size > segment->bytes.size() - *offset)
+            throw std::invalid_argument(
+                "Game-Project-Jump-Table-Identitybereich ist nicht lesbar.");
+        if (image.find_immutable_range(*resolved, size) != nullptr) continue;
+
+        const auto resolved_end =
+            static_cast<std::uint64_t>(*resolved) + identity->size;
+        const bool overlaps_existing = std::any_of(
+            image.immutable_ranges().begin(),
+            image.immutable_ranges().end(), [&](const auto& existing) {
+                const auto existing_end =
+                    static_cast<std::uint64_t>(existing.address) +
+                    existing.size;
+                return *resolved < existing_end &&
+                       existing.address < resolved_end;
+            });
+        if (overlaps_existing)
+            throw std::invalid_argument(
+                "Game-Project-Jump-Table-Identitybereich ueberlappt einen "
+                "abweichenden Immutable-Proof.");
+
+        const auto exact_identity = std::string("sha256:") +
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(
+                    segment->bytes.data() + *offset),
+                size));
+        image.add_immutable_range(
+            {*resolved, identity->size, exact_identity, 0u});
+    }
 }
 
 void apply_game_project_runtime_images(
@@ -16832,6 +16918,82 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         throw std::runtime_error(
             "Nativer Produktdispatch besitzt keine Codebereiche.");
 
+    std::vector<ImmutableRange> identity_bound_table_proof_ranges;
+    if (game_project != nullptr) {
+        identity_bound_table_proof_ranges.reserve(
+            game_project->code_identities.size());
+        for (const auto& identity : game_project->code_identities) {
+            if (!game_project_metadata_is_active(
+                    &definition, identity.image_id) ||
+                !identity.image_id.empty())
+                continue;
+            const auto identity_begin =
+                static_cast<std::uint64_t>(identity.address);
+            const auto identity_end = identity_begin + identity.size;
+            const bool binds_jump_table = std::ranges::any_of(
+                game_project->jump_tables, [&](const auto& table) {
+                    if (table.image_id != identity.image_id ||
+                        !game_project_metadata_is_active(
+                            &definition, table.image_id))
+                        return false;
+                    const auto width =
+                        table.encoding ==
+                                katana::runtime::
+                                    GameProjectTableEncoding::
+                                        SignedRelative16
+                            ? 2u
+                            : 4u;
+                    const auto extent =
+                        static_cast<std::uint64_t>(
+                            table.entry_count - 1u) *
+                            table.entry_stride +
+                        width;
+                    const auto table_begin =
+                        static_cast<std::uint64_t>(
+                            table.table_address);
+                    return identity_begin <= table_begin &&
+                           identity_end >= table_begin + extent;
+                });
+            if (!binds_jump_table) continue;
+
+            const auto size = static_cast<std::size_t>(identity.size);
+            const auto resolved =
+                image.resolve_segment_address(identity.address, size);
+            if (!resolved.has_value() ||
+                image.find_immutable_range(*resolved, size) == nullptr)
+                continue;
+
+            auto runtime_address = identity.address;
+            for (const auto& alias : image.address_aliases()) {
+                const auto alias_begin =
+                    static_cast<std::uint64_t>(alias.source_start);
+                const auto alias_end = alias_begin + alias.size;
+                if (identity_begin >= alias_end ||
+                    alias_begin >= identity_end)
+                    continue;
+                if (identity_begin < alias_begin ||
+                    identity_end > alias_end)
+                    throw std::runtime_error(
+                        "Native Game-Project-Codeidentitaet schneidet eine "
+                        "Runtime-Adressaliasgrenze.");
+                runtime_address = alias.runtime_start +
+                    (identity.address - alias.source_start);
+                break;
+            }
+            const auto physical =
+                katana::runtime::canonical_physical_address(
+                    runtime_address);
+            if (static_cast<std::uint64_t>(physical) + identity.size >
+                0x20000000ull)
+                throw std::runtime_error(
+                    "Native Game-Project-Codeidentitaet besitzt keinen "
+                    "physisch linearen Produktbereich.");
+            identity_bound_table_proof_ranges.push_back(
+                {physical, identity.size,
+                 read_only_image_range_kind});
+        }
+    }
+
     struct ImmutableRangeEvent final {
         std::uint64_t position = 0u;
         int executable_delta = 0;
@@ -16840,16 +17002,23 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const auto read_only_image_count = static_cast<std::size_t>(
         std::count_if(definition.images.begin(), definition.images.end(),
                       [](const auto& image) { return !image.writable; }));
-    if (read_only_image_count >
+    if (identity_bound_table_proof_ranges.size() >
+            std::numeric_limits<std::size_t>::max() -
+                read_only_image_count)
+        throw std::runtime_error(
+            "Nativer Produktdispatch besitzt zu viele immutable Bereiche.");
+    const auto read_only_range_count = read_only_image_count +
+        identity_bound_table_proof_ranges.size();
+    if (read_only_range_count >
             std::numeric_limits<std::size_t>::max() -
                 executable_ranges.size() ||
-        executable_ranges.size() + read_only_image_count >
+        executable_ranges.size() + read_only_range_count >
             std::numeric_limits<std::size_t>::max() / 2u)
         throw std::runtime_error(
             "Nativer Produktdispatch besitzt zu viele immutable Bereiche.");
     std::vector<ImmutableRangeEvent> immutable_events;
     immutable_events.reserve(
-        (executable_ranges.size() + read_only_image_count) * 2u);
+        (executable_ranges.size() + read_only_range_count) * 2u);
     const auto append_immutable_events =
         [&](const std::uint32_t physical_address,
             const std::uint32_t byte_size,
@@ -16879,6 +17048,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         append_immutable_events(
             physical, binding.byte_size, read_only_image_range_kind);
     }
+    for (const auto& range : identity_bound_table_proof_ranges)
+        append_immutable_events(
+            range.physical_address, range.byte_size, range.kind_mask);
     std::sort(
         immutable_events.begin(), immutable_events.end(),
         [](const auto& left, const auto& right) {
@@ -24325,6 +24497,11 @@ struct NativeDiscAnalysisState {
         composite_callback_architectural_boundaries;
     std::vector<katana::analysis::NativeSdkProviderCandidate>
         native_sdk_provider_candidates;
+    // True only when the same state would pass the product backend gates.
+    // analyze-port may retain a non-admitted state solely to publish a
+    // bounded, authoritative agent frontier; product export never consumes
+    // such a state.
+    bool backend_admitted = false;
     std::uint32_t product_entry_address = 0u;
     std::uint32_t product_entry_owner = 0u;
 };
@@ -24505,13 +24682,21 @@ prepare_dreamcast_port_project_impl(
             return status == katana::analysis::ControlFlowReportStatus::GuardedPartial ||
                    status == katana::analysis::ControlFlowReportStatus::Unresolved;
         });
-    if (!options.diagnostic_partial && incomplete != 0u) {
+    const bool agent_frontier_report =
+        options.agent_analysis_artifacts_requested &&
+        !options.diagnostic_partial;
+    bool backend_admitted = incomplete == 0u;
+    if (!options.diagnostic_partial && !agent_frontier_report &&
+        incomplete != 0u) {
         throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(incomplete) +
                                  " partielle oder ungeloeste Kontrollflussstellen.");
     }
-    if (!options.diagnostic_partial &&
-        !katana::analysis::guarded_aot_inventory_complete(
-            prepared.analysis)) {
+    const bool guarded_inventory_complete =
+        katana::analysis::guarded_aot_inventory_complete(
+            prepared.analysis);
+    backend_admitted = backend_admitted && guarded_inventory_complete;
+    if (!options.diagnostic_partial && !agent_frontier_report &&
+        !guarded_inventory_complete) {
         throw std::runtime_error(
             guarded_aot_inventory_failure_message(
                 prepared.analysis));
@@ -25188,20 +25373,28 @@ prepare_dreamcast_port_project_impl(
                 uncovered_diagnostics.insert(diagnostic.address);
         }
         if (!uncovered_diagnostics.empty()) {
-            std::ostringstream detail;
-            detail << "Native-Port-Analyse enthaelt "
-                   << uncovered_diagnostics.size()
-                   << " nicht durch Replacement-Hooks geschlossene "
-                      "Instruktionsstellen; erste=0x"
-                   << std::hex << *uncovered_diagnostics.begin();
-            throw std::runtime_error(detail.str());
+            backend_admitted = false;
+            if (agent_frontier_report) {
+                report_progress(
+                    options,
+                    "agent-frontier-uncovered-diagnostics:" +
+                        std::to_string(uncovered_diagnostics.size()));
+            } else {
+                std::ostringstream detail;
+                detail << "Native-Port-Analyse enthaelt "
+                       << uncovered_diagnostics.size()
+                       << " nicht durch Replacement-Hooks geschlossene "
+                          "Instruktionsstellen; erste=0x"
+                       << std::hex << *uncovered_diagnostics.begin();
+                throw std::runtime_error(detail.str());
+            }
         }
     }
     const auto wait_loop_descriptors = runtime_wait_loop_descriptors(hardware_audit);
     const auto mmio_wait_loops =
         mmio_wait_loop_batch_proofs(emitted_program, hardware_audit);
     std::vector<CompositeCallbackBatchProof> composite_callback_batches;
-    if (!options.diagnostic_partial) {
+    if (!options.diagnostic_partial && backend_admitted) {
         composite_callback_batches = composite_callback_batch_proofs(
             emitted_program,
             prepared.analysis.indirect_control_flow,
@@ -25259,6 +25452,7 @@ prepare_dreamcast_port_project_impl(
         std::move(composite_callback_architectural_boundaries);
     admitted->native_sdk_provider_candidates =
         std::move(native_sdk_provider_candidates);
+    admitted->backend_admitted = backend_admitted;
     admitted->product_entry_address = product_entry_address;
     admitted->product_entry_owner = product_entry_owner;
     return admitted;
@@ -25426,7 +25620,8 @@ void populate_native_disc_analysis_summary(
             result.analysis);
     result.summary.native_hardware_closure_complete =
         result.admitted_state->native_hardware_closure.complete;
-    result.summary.backend_admitted = true;
+    result.summary.backend_admitted =
+        result.admitted_state->backend_admitted;
 }
 
 constexpr std::size_t maximum_owner_semantic_task_blocks = 16u;
@@ -28051,6 +28246,16 @@ build_native_disc_materialization_world(
                 "provider-role=identity-bound-hardware-replacement");
             entry.blocked_hardware.push_back(
                 "missing-proof=" + task_missing_proof);
+            // Concrete region/register resources are conflict identities for
+            // parallel agent scheduling.  Retain them before the bounded
+            // explanatory slice so verbose IR/provider diagnostics cannot
+            // evict the actual lock keys.
+            for (const auto& descriptor : group.descriptors) {
+                if (entry.blocked_hardware.size() >=
+                    materialization_world_max_blocked_items)
+                    break;
+                entry.blocked_hardware.push_back(descriptor);
+            }
             if (current_hook_identity_bound_but_non_closing &&
                 group.native_provider_input_read) {
                 entry.blocked_hardware.push_back(
@@ -28154,12 +28359,6 @@ build_native_disc_materialization_world(
                              : std::string{"missing"}));
                 }
             }
-            for (const auto& descriptor : group.descriptors) {
-                if (entry.blocked_hardware.size() >=
-                    materialization_world_max_blocked_items)
-                    break;
-                entry.blocked_hardware.push_back(descriptor);
-            }
             entry.causal_chain = owner_hook_task_blocked
                 ? std::vector<std::string>{
                       "owner-function",
@@ -28225,9 +28424,42 @@ build_native_disc_materialization_world(
         }
     }
 
-    for (const auto site :
-         result.admitted_state->native_hardware_closure
-             .replacement_reachability_incomplete_frontier) {
+    const auto& replacement_reachability_frontier =
+        result.admitted_state->native_hardware_closure
+            .replacement_reachability_incomplete_frontier;
+    // A World is a bounded agent shard, not an unbounded mirror of every
+    // incomplete owner. Stable address order exposes a deterministic prefix;
+    // the aggregate remainder keeps product admission fail-closed and rolls
+    // the next owners into view as earlier tasks close. Size the prefix from
+    // the actual frontier occupancy instead of guessing a fixed split: SDK
+    // providers and product admission are emitted below and must retain room.
+    const auto reserved_following_frontiers =
+        result.admitted_state->native_sdk_provider_candidates.size() + 1u;
+    const auto remaining_world_capacity =
+        materialization_world_max_frontier - world.frontier().size();
+    if (reserved_following_frontiers > remaining_world_capacity)
+        throw std::runtime_error(
+            "Materialization-World hat keinen Platz fuer die "
+            "abschliessenden Provider-/Admission-Frontiers.");
+    const auto replacement_world_capacity =
+        remaining_world_capacity - reserved_following_frontiers;
+    const bool replacement_frontier_requires_shard =
+        replacement_reachability_frontier.size() >
+        replacement_world_capacity;
+    if (replacement_frontier_requires_shard &&
+        replacement_world_capacity == 0u)
+        throw std::runtime_error(
+            "Materialization-World hat keinen Platz fuer den "
+            "Replacement-Restshard.");
+    const auto maximum_replacement_tasks_per_world =
+        replacement_frontier_requires_shard
+            ? replacement_world_capacity - 1u
+            : replacement_reachability_frontier.size();
+    std::size_t emitted_replacement_tasks = 0u;
+    for (const auto site : replacement_reachability_frontier) {
+        if (emitted_replacement_tasks >=
+            maximum_replacement_tasks_per_world)
+            break;
         const auto& program_index =
             result.admitted_state->native_port_program_index;
         const auto evidence =
@@ -28347,6 +28579,47 @@ build_native_disc_materialization_world(
             "all-listed-runtime-only-or-partial-edge-remainders-closed",
             "listed-transfer-slice-no-longer-blocks-reachability"};
         add_frontier(std::move(entry));
+        ++emitted_replacement_tasks;
+    }
+    if (replacement_frontier_requires_shard) {
+        const auto remaining =
+            replacement_reachability_frontier.size() -
+            emitted_replacement_tasks;
+        FrontierEntry shard;
+        shard.family = "replacement-reachability";
+        shard.owner = "native-product-aot";
+        shard.site = "bounded-owner-frontier-remainder";
+        shard.state = FrontierState::Blocked;
+        shard.proof = FrontierProof::StaticAnalyzer;
+        shard.severity = FrontierSeverity::P0;
+        shard.missing_proof =
+            "additional replacement-reachability owner shard remains";
+        shard.fanout = static_cast<std::uint32_t>(
+            std::min<std::size_t>(
+                remaining,
+                std::numeric_limits<std::uint32_t>::max()));
+        shard.blocked_kind = FrontierBlockKind::Function;
+        shard.evidence = {analysis_evidence, provider_evidence};
+        shard.contracts = {
+            "bounded-frontier-shard",
+            "concrete-prefix=" +
+                std::to_string(emitted_replacement_tasks),
+            "remaining-owners=" + std::to_string(remaining)};
+        shard.causal_chain = {
+            "authoritative-owner-frontier",
+            "bounded-agent-world-projection",
+            "next-shard-after-prefix-closure"};
+        shard.source_paths = {"src/codegen/port_export.cpp"};
+        shard.source_symbols = {
+            "build_native_disc_materialization_world"};
+        shard.invariants = {
+            "omitted-owners-remain-incomplete",
+            "stable-owner-address-order",
+            "no-product-admission-from-partial-shard"};
+        shard.acceptance_criteria = {
+            "all-concrete-prefix-tasks-closed",
+            "next-analysis-publishes-following-owner-shard"};
+        add_frontier(std::move(shard));
     }
 
     for (const auto& candidate :
@@ -29042,6 +29315,10 @@ static PortExportResult export_dreamcast_port_project_impl(
             latent_aot_precomputed,
             precomputed_external_primary_roots);
     }
+    if (!options.diagnostic_partial && !admitted->backend_admitted)
+        throw std::runtime_error(
+            "Produktport darf keinen nur fuer Agent-Frontiers "
+            "beibehaltenen Analysezustand konsumieren.");
     auto& disc_context = admitted->disc_context;
     const auto& latent_aot = admitted->latent_aot;
     const auto& emitted_program = admitted->emitted_program;
@@ -30284,6 +30561,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                 katana::analysis::ControlFlowAnalysisTerminationReason::None &&
             !analysis.function_budget_exhausted);
     if (!options.diagnostic_partial &&
+        !options.agent_analysis_artifacts_requested &&
         !katana::analysis::guarded_aot_inventory_complete(analysis) &&
         analysis.guarded_aot_entry_rejections.empty() &&
         std::none_of(
@@ -30474,7 +30752,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                         "native-disc-game-project-runtime-only-analysis");
     }
     bind_post_bootstrap_immutable_image_ranges(
-        image, options.native_port_definition);
+        image, options.native_port_definition, options.game_project);
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
 
@@ -31152,7 +31430,7 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
             "boot-artifact-game-project-runtime-only-analysis");
     }
     bind_post_bootstrap_immutable_image_ranges(
-        image, options.native_port_definition);
+        image, options.native_port_definition, options.game_project);
     auto prepared_analysis = prepare_boot_analysis(
         image,
         external_port_overrides ? &*external_port_overrides : nullptr,
