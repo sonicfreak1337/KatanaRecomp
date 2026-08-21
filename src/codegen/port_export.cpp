@@ -21576,6 +21576,8 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
         options.analysis_implementation_identity;
     result.analysis_cache_implementation_identity =
         options.analysis_cache_implementation_identity;
+    result.persistent_cache_writes_enabled =
+        !options.analysis_artifact_archive_requested;
     result.progress = options.progress;
     if (!options.analysis_cache_root.empty())
         result.analysis_cache_root = options.analysis_cache_root / "latent";
@@ -29548,7 +29550,9 @@ try_reuse_native_disc_analysis_artifact(
             cached_artifact->size());
     }
     const auto invalidate = [&] {
-        if (resume_artifact_requested || !cached_artifact.has_value()) return;
+        if (options.analysis_artifact_archive_requested ||
+            resume_artifact_requested || !cached_artifact.has_value())
+            return;
         static_cast<void>(cache.erase_bounded_if_matches(
             expected_identity.key,
             native_disc_analysis_artifact_cache_name,
@@ -29893,8 +29897,13 @@ void publish_native_disc_analysis_artifact(
     const PortExportOptions& options) {
     const bool archive_requested =
         options.analysis_artifact_archive_requested;
+    // Agent sessions publish their archive/World only after the CLI has
+    // compared the candidate against the last authoritative generation. A
+    // refresh must therefore not mutate the shared whole-disc cache from
+    // inside the analyzer before that authority gate has run.
     const bool analysis_checkpoint_requested =
         options.agent_analysis_artifacts_requested &&
+        !archive_requested &&
         !options.analysis_cache_root.empty();
     if ((!archive_requested && !analysis_checkpoint_requested &&
          !native_disc_analysis_positive_product_cache_enabled) ||
@@ -31252,6 +31261,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                     return result;
                 }
                 cache_entry_absent =
+                    !options.analysis_artifact_archive_requested &&
                     cache->erase_bounded_if_matches(
                         cache_key,
                         artifact_name,
@@ -31365,7 +31375,8 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     analysis_options
         .persistent_function_analysis_epoch_implementation_identity =
             options.analysis_implementation_identity;
-    if (epoch_cache != nullptr && !epoch_cache_key.empty()) {
+    if (!options.analysis_artifact_archive_requested &&
+        epoch_cache != nullptr && !epoch_cache_key.empty()) {
         analysis_options
             .persistent_function_analysis_epoch_publish_callback =
                 [&epoch_cache,
@@ -31443,7 +31454,8 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     materialize_prepared_boot_analysis_artifacts(
         image, options, result);
 
-    if (cache != nullptr && cache_entry_absent &&
+    if (!options.analysis_artifact_archive_requested &&
+        cache != nullptr && cache_entry_absent &&
         boot_analysis_artifact_cacheable(result.artifact)) {
         try {
             const auto serialized =
@@ -31670,13 +31682,14 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                             std::to_string(
                                 cached_latent_primary_roots.size()));
                 } else {
-                    static_cast<void>(
-                        latent_primary_root_seed_cache
-                            ->erase_bounded_if_matches(
-                                latent_primary_root_seed_cache_key,
-                                latent_primary_root_seed_artifact_name,
-                                *stored,
-                                maximum_latent_primary_root_seed_cache_bytes));
+                    if (!options.analysis_artifact_archive_requested)
+                        static_cast<void>(
+                            latent_primary_root_seed_cache
+                                ->erase_bounded_if_matches(
+                                    latent_primary_root_seed_cache_key,
+                                    latent_primary_root_seed_artifact_name,
+                                    *stored,
+                                    maximum_latent_primary_root_seed_cache_bytes));
                     report_progress(
                         options,
                         "latent-primary-root-seed-cache-rejected");
@@ -31930,17 +31943,10 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             latent_external_primary_roots.end(),
             cached_latent_primary_roots.begin(),
             cached_latent_primary_roots.end())) {
-        if (latent_primary_root_seed_cache != nullptr &&
-            !loaded_latent_primary_root_seed_payload.empty())
-            static_cast<void>(
-                latent_primary_root_seed_cache->erase_bounded_if_matches(
-                    latent_primary_root_seed_cache_key,
-                    latent_primary_root_seed_artifact_name,
-                    loaded_latent_primary_root_seed_payload,
-                    maximum_latent_primary_root_seed_cache_bytes));
         throw std::runtime_error(
             "Latent-Primary-Root-Cache wurde vom autoritativen "
-            "Cross-Image-Fixpunkt nicht bestaetigt.");
+            "Cross-Image-Fixpunkt nicht bestaetigt; der letzte "
+            "autoritative Seed bleibt erhalten.");
     }
     // KATANA_COMPONENT_IDENTITY_REGION_END native-disc-root-discovery
 
@@ -31976,7 +31982,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     provenance_progress.cached();
     bool latent_primary_root_seed_cache_published = false;
     bool latent_primary_root_seed_cache_publish_missed = false;
-    if (latent_primary_root_seed_cache != nullptr &&
+    if (!options.analysis_artifact_archive_requested &&
+        latent_primary_root_seed_cache != nullptr &&
         !latent_primary_root_seed_cache_key.empty() &&
         !latent_external_primary_roots.empty()) {
         try {
@@ -31984,19 +31991,24 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                 latent_primary_root_seed_cache_key,
                 latent_external_primary_roots);
             if (serialized != loaded_latent_primary_root_seed_payload) {
-                if (!loaded_latent_primary_root_seed_payload.empty())
-                    static_cast<void>(
-                        latent_primary_root_seed_cache
-                            ->erase_bounded_if_matches(
-                                latent_primary_root_seed_cache_key,
-                                latent_primary_root_seed_artifact_name,
-                                loaded_latent_primary_root_seed_payload,
-                                maximum_latent_primary_root_seed_cache_bytes));
-                latent_primary_root_seed_cache->store_bounded(
-                    latent_primary_root_seed_cache_key,
-                    latent_primary_root_seed_artifact_name,
-                    serialized,
-                    maximum_latent_primary_root_seed_cache_bytes);
+                if (!loaded_latent_primary_root_seed_payload.empty()) {
+                    if (!latent_primary_root_seed_cache
+                             ->replace_bounded_if_matches(
+                                 latent_primary_root_seed_cache_key,
+                                 latent_primary_root_seed_artifact_name,
+                                 loaded_latent_primary_root_seed_payload,
+                                 serialized,
+                                 maximum_latent_primary_root_seed_cache_bytes))
+                        throw std::runtime_error(
+                            "Latent-Primary-Root-Cache konnte den exakt "
+                            "gelesenen Seed nicht atomar erweitern.");
+                } else {
+                    latent_primary_root_seed_cache->store_bounded(
+                        latent_primary_root_seed_cache_key,
+                        latent_primary_root_seed_artifact_name,
+                        serialized,
+                        maximum_latent_primary_root_seed_cache_bytes);
+                }
             }
             latent_primary_root_seed_cache_published = true;
             report_progress(

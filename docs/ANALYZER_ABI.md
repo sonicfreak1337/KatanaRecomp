@@ -1,6 +1,6 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `60`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `61`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
@@ -13,6 +13,16 @@ der erste vollstaendige `analyze-port`-Lauf samt identitaetsgebundenem Resume
 ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt ausschliesslich als
 ABI-34-Referenz erhalten.
+
+Analyzer-ABI 61 bindet den persistenten Cache-Schreibvertrag von
+`LatentAotDiscoveryOptions`. Autoritative Agentanalysen duerfen weiterhin
+exakt identitaetsgebundene Cacheeintraege lesen, publizieren aber keine
+Epoch-, IR- oder Root-Seeds, bevor die vollstaendige Kandidatengeneration das
+aeussere Session-Authority-Gate passiert hat. Ein verworfener Kandidat kann
+dadurch keinen spaeteren Resume-Lauf mit nichtautoritativen Fakten speisen.
+Das transaktionale Agent-Session-Ledger-Schema 5 bindet dazu den stabilen
+semantischen Eingabevertrag getrennt von der wechselnden
+Analyzer-Implementierungsidentitaet.
 
 Analyzer-ABI 60 trennt die policyseitige Deaktivierung des
 interprozeduralen Function-Value-Fixpunkts von der realen Guest-Call-ABI des

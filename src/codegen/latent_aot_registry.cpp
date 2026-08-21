@@ -5814,6 +5814,7 @@ CandidateAnalysisOutcome analyze_candidate(
                         1u, std::memory_order_relaxed);
                 }
                 cache_entry_absent =
+                    options.persistent_cache_writes_enabled &&
                     cache->erase_bounded_if_matches(
                         cache_key,
                         latent_aot_analysis_cache_artifact,
@@ -5857,7 +5858,8 @@ CandidateAnalysisOutcome analyze_candidate(
     }
     katana::analysis::PersistentFunctionAnalysisEpochPublishCallback
         epoch_publish_callback;
-    if (cache != nullptr && !epoch_cache_key.empty()) {
+    if (options.persistent_cache_writes_enabled &&
+        cache != nullptr && !epoch_cache_key.empty()) {
         epoch_publish_callback =
             [cache,
              epoch_cache_key,
@@ -5893,7 +5895,8 @@ CandidateAnalysisOutcome analyze_candidate(
                 epoch_import_blob.data()),
             epoch_import_blob.size()),
         std::move(epoch_publish_callback));
-    if (cache == nullptr || cache_key.empty() ||
+    if (!options.persistent_cache_writes_enabled ||
+        cache == nullptr || cache_key.empty() ||
         !cache_entry_absent || !analyzed.deterministic)
         return analyzed;
     try {

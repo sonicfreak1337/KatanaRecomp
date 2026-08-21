@@ -148,6 +148,10 @@ struct LatentAotDiscoveryOptions {
     std::string analysis_implementation_identity;
     // Latent positive/negative IR-cache codec and IR contract identity.
     std::string analysis_cache_implementation_identity;
+    // Authority-gated agent runs may import exact persistent entries, but
+    // must not mutate them until their complete candidate generation has
+    // passed the outer session publication gate.
+    bool persistent_cache_writes_enabled = true;
     katana::ProgressReporter progress;
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;

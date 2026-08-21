@@ -8610,6 +8610,7 @@ struct AgentSessionLedgerState final {
     std::optional<std::uint64_t> previous_wall_time_ms;
     std::string analysis_artifact_id;
     std::string producer_identity;
+    std::string analysis_session_contract_identity;
     std::string materialization_world_sha256;
     std::string materialization_world_json_sha256;
     std::string analysis_report_sha256;
@@ -8638,6 +8639,419 @@ std::string agent_session_producer_identity(
     append(std::to_string(
         katana::agent::materialization_world_binary_schema_version));
     return katana::io::sha256_bytes(material.str());
+}
+
+std::string agent_analysis_session_contract_identity(
+    const katana::codegen::NativeDiscAnalysisArtifactIdentity& identity,
+    const katana::codegen::PortExportOptions& options) {
+    std::ostringstream material;
+    const auto append = [&](const std::string_view value) {
+        material << value.size() << ':' << value << ';';
+    };
+    const auto append_value = [&](const std::uint64_t value) {
+        material << 'i' << value << ';';
+    };
+    append("katana-agent-analysis-session-contract-v1");
+    append(identity.content_identity);
+    append(identity.boot_byte_identity);
+    append(identity.project_identity);
+    append(identity.game_project_identity);
+    append(identity.native_port_identity);
+    append(identity.native_port_artifact_identity);
+    append_value(identity.analysis_mode);
+    append_value(identity.disc_volume_start_lba);
+    append_value(identity.disc_extent_lba_bias);
+    append(options.console_profile);
+    append_value(static_cast<std::underlying_type_t<
+        katana::codegen::LatentAotDiscoveryMode>>(
+        options.latent_aot_discovery_mode));
+
+    std::vector<katana::codegen::LatentAotEntryHint> hints(
+        options.latent_aot_entry_hints.begin(),
+        options.latent_aot_entry_hints.end());
+    std::sort(hints.begin(), hints.end(), [](const auto& left, const auto& right) {
+        return std::tie(left.byte_identity,
+                        left.disc_byte_offset,
+                        left.byte_size,
+                        left.module_relative_offset) <
+               std::tie(right.byte_identity,
+                        right.disc_byte_offset,
+                        right.byte_size,
+                        right.module_relative_offset);
+    });
+    append_value(hints.size());
+    for (const auto& hint : hints) {
+        append(hint.byte_identity);
+        append_value(hint.disc_byte_offset);
+        append_value(hint.byte_size);
+        append_value(hint.module_relative_offset);
+    }
+
+    std::vector<std::uint32_t> resume_entries(
+        options.native_aot_resume_entries.begin(),
+        options.native_aot_resume_entries.end());
+    std::sort(resume_entries.begin(), resume_entries.end());
+    resume_entries.erase(
+        std::unique(resume_entries.begin(), resume_entries.end()),
+        resume_entries.end());
+    append_value(resume_entries.size());
+    for (const auto entry : resume_entries) append_value(entry);
+
+    std::vector<std::pair<std::string, std::string>> runtime_payloads;
+    runtime_payloads.reserve(
+        options.game_project_runtime_image_payloads.size());
+    for (const auto& payload : options.game_project_runtime_image_payloads) {
+        runtime_payloads.emplace_back(
+            payload.image_id,
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(payload.bytes.data()),
+                payload.bytes.size())));
+    }
+    std::sort(runtime_payloads.begin(), runtime_payloads.end());
+    append_value(runtime_payloads.size());
+    for (const auto& [id, hash] : runtime_payloads) {
+        append(id);
+        append(hash);
+    }
+
+    std::vector<std::pair<std::uint32_t, std::string>> bootstrap_payloads;
+    bootstrap_payloads.reserve(
+        options.native_port_bootstrap_write_payloads.size());
+    for (const auto& payload : options.native_port_bootstrap_write_payloads) {
+        bootstrap_payloads.emplace_back(
+            payload.guest_address,
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(payload.bytes.data()),
+                payload.bytes.size())));
+    }
+    std::sort(bootstrap_payloads.begin(), bootstrap_payloads.end());
+    append_value(bootstrap_payloads.size());
+    for (const auto& [address, hash] : bootstrap_payloads) {
+        append_value(address);
+        append(hash);
+    }
+    return katana::io::sha256_bytes(material.str());
+}
+
+struct AgentAnalysisModuleAuthority final {
+    std::string id;
+    std::string byte_identity;
+    std::uint32_t byte_size = 0u;
+    std::uint32_t source_address = 0u;
+    std::vector<katana::codegen::PreparedLatentAotSourceBinding>
+        source_bindings;
+    std::vector<std::uint32_t> entry_offsets;
+    std::vector<std::uint32_t> instruction_addresses;
+};
+
+struct AgentAnalysisAuthorityBaseline final {
+    std::vector<std::uint32_t> external_primary_roots;
+    std::vector<std::uint32_t> native_resume_entries;
+    std::vector<std::uint32_t> primary_function_entries;
+    std::vector<std::uint32_t> primary_instruction_addresses;
+    std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>>
+        primary_call_edges;
+    std::vector<AgentAnalysisModuleAuthority> modules;
+    katana::codegen::NativeDiscProgramIndexCheckpoint program_index;
+    bool guarded_inventory_complete = false;
+    bool native_hardware_closure_complete = false;
+    bool replacement_reachability_proven = false;
+    bool backend_admitted = false;
+};
+
+std::vector<std::uint32_t> latent_module_instruction_addresses(
+    const katana::codegen::PreparedLatentAotModule& module) {
+    std::vector<std::uint32_t> addresses;
+    for (const auto& function : module.program)
+        for (const auto& block : function.blocks)
+            for (const auto& instruction : block.instructions)
+                addresses.push_back(instruction.source_address);
+    std::sort(addresses.begin(), addresses.end());
+    addresses.erase(
+        std::unique(addresses.begin(), addresses.end()), addresses.end());
+    return addresses;
+}
+
+AgentAnalysisAuthorityBaseline capture_agent_analysis_authority(
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact) {
+    AgentAnalysisAuthorityBaseline result;
+    result.external_primary_roots = artifact.external_primary_roots;
+    result.native_resume_entries = artifact.native_resume_entries;
+    result.primary_function_entries.reserve(
+        artifact.primary.lowered_program.size());
+    for (const auto& function : artifact.primary.lowered_program)
+        result.primary_function_entries.push_back(function.entry_address);
+    std::sort(
+        result.primary_function_entries.begin(),
+        result.primary_function_entries.end());
+    result.primary_function_entries.erase(
+        std::unique(result.primary_function_entries.begin(),
+                    result.primary_function_entries.end()),
+        result.primary_function_entries.end());
+    result.primary_instruction_addresses.reserve(
+        artifact.primary.analysis.recursive.instructions.size());
+    for (const auto& instruction :
+         artifact.primary.analysis.recursive.instructions)
+        result.primary_instruction_addresses.push_back(instruction.address);
+    std::sort(result.primary_instruction_addresses.begin(),
+              result.primary_instruction_addresses.end());
+    result.primary_instruction_addresses.erase(
+        std::unique(result.primary_instruction_addresses.begin(),
+                    result.primary_instruction_addresses.end()),
+        result.primary_instruction_addresses.end());
+    for (const auto& edge : artifact.primary.call_graph.edges)
+        if (edge.target.has_value())
+            result.primary_call_edges.emplace_back(
+                edge.source, *edge.target, edge.callsite);
+    std::sort(
+        result.primary_call_edges.begin(), result.primary_call_edges.end());
+    result.primary_call_edges.erase(
+        std::unique(result.primary_call_edges.begin(),
+                    result.primary_call_edges.end()),
+        result.primary_call_edges.end());
+    result.modules.reserve(artifact.latent.modules.size());
+    for (const auto& module : artifact.latent.modules) {
+        result.modules.push_back({
+            module.id,
+            module.byte_identity,
+            module.byte_size,
+            module.source_address,
+            module.source_bindings,
+            module.entry_offsets,
+            latent_module_instruction_addresses(module)});
+    }
+    result.guarded_inventory_complete = artifact.guarded_inventory_complete;
+    result.native_hardware_closure_complete =
+        artifact.native_hardware_closure_complete;
+    result.replacement_reachability_proven =
+        artifact.replacement_reachability_proven;
+    result.backend_admitted = artifact.backend_admitted;
+    result.program_index = artifact.native_port_program_index;
+    return result;
+}
+
+template <typename Value>
+bool sorted_authority_subset(const std::vector<Value>& required,
+                             const std::vector<Value>& candidate) {
+    return std::includes(
+        candidate.begin(), candidate.end(), required.begin(), required.end());
+}
+
+bool program_index_adjacency_subset(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        required,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate) {
+    return std::all_of(
+        required.begin(), required.end(), [&](const auto& entry) {
+            const auto found = std::lower_bound(
+                candidate.begin(),
+                candidate.end(),
+                entry.address,
+                [](const auto& value, const std::uint32_t address) {
+                    return value.address < address;
+                });
+            return found != candidate.end() &&
+                   found->address == entry.address &&
+                   sorted_authority_subset(
+                       entry.related_addresses,
+                       found->related_addresses);
+        });
+}
+
+std::optional<std::string_view> agent_analysis_authority_rejection(
+    const AgentAnalysisAuthorityBaseline& baseline,
+    const katana::codegen::NativeDiscAnalysisArtifact& candidate,
+    const AgentIterationDelta& world_delta) {
+    if (!sorted_authority_subset(
+            baseline.external_primary_roots,
+            candidate.external_primary_roots))
+        return "external-primary-roots-lost";
+    if (!sorted_authority_subset(
+            baseline.native_resume_entries,
+            candidate.native_resume_entries))
+        return "native-resume-entries-lost";
+
+    std::vector<std::uint32_t> candidate_function_entries;
+    candidate_function_entries.reserve(candidate.primary.lowered_program.size());
+    for (const auto& function : candidate.primary.lowered_program)
+        candidate_function_entries.push_back(function.entry_address);
+    std::sort(candidate_function_entries.begin(), candidate_function_entries.end());
+    candidate_function_entries.erase(
+        std::unique(candidate_function_entries.begin(),
+                    candidate_function_entries.end()),
+        candidate_function_entries.end());
+    if (!sorted_authority_subset(
+            baseline.primary_function_entries, candidate_function_entries))
+        return "primary-functions-lost";
+
+    std::vector<std::uint32_t> candidate_instruction_addresses;
+    candidate_instruction_addresses.reserve(
+        candidate.primary.analysis.recursive.instructions.size());
+    for (const auto& instruction :
+         candidate.primary.analysis.recursive.instructions)
+        candidate_instruction_addresses.push_back(instruction.address);
+    std::sort(candidate_instruction_addresses.begin(),
+              candidate_instruction_addresses.end());
+    candidate_instruction_addresses.erase(
+        std::unique(candidate_instruction_addresses.begin(),
+                    candidate_instruction_addresses.end()),
+        candidate_instruction_addresses.end());
+    if (!sorted_authority_subset(
+            baseline.primary_instruction_addresses,
+            candidate_instruction_addresses))
+        return "primary-instructions-lost";
+
+    std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>>
+        candidate_call_edges;
+    for (const auto& edge : candidate.primary.call_graph.edges)
+        if (edge.target.has_value())
+            candidate_call_edges.emplace_back(
+                edge.source, *edge.target, edge.callsite);
+    std::sort(candidate_call_edges.begin(), candidate_call_edges.end());
+    candidate_call_edges.erase(
+        std::unique(candidate_call_edges.begin(),
+                    candidate_call_edges.end()),
+        candidate_call_edges.end());
+    if (!sorted_authority_subset(
+            baseline.primary_call_edges, candidate_call_edges))
+        return "primary-call-edges-lost";
+
+    for (const auto& required : baseline.modules) {
+        const auto found = std::find_if(
+            candidate.latent.modules.begin(),
+            candidate.latent.modules.end(),
+            [&](const auto& module) {
+                return module.id == required.id &&
+                       module.byte_identity == required.byte_identity &&
+                       module.byte_size == required.byte_size &&
+                       module.source_address == required.source_address;
+            });
+        if (found == candidate.latent.modules.end() ||
+            !std::all_of(
+                required.source_bindings.begin(),
+                required.source_bindings.end(),
+                [&](const auto& binding) {
+                    return std::find(
+                               found->source_bindings.begin(),
+                               found->source_bindings.end(),
+                               binding) != found->source_bindings.end();
+                }) ||
+            !sorted_authority_subset(
+                required.entry_offsets, found->entry_offsets) ||
+            !sorted_authority_subset(
+                required.instruction_addresses,
+                latent_module_instruction_addresses(*found)))
+            return "latent-materialization-lost";
+    }
+    if (!program_index_adjacency_subset(
+            baseline.program_index.incoming_edge_sources,
+            candidate.native_port_program_index.incoming_edge_sources) ||
+        !program_index_adjacency_subset(
+            baseline.program_index.incoming_instruction_addresses,
+            candidate.native_port_program_index
+                .incoming_instruction_addresses) ||
+        !program_index_adjacency_subset(
+            baseline.program_index.outgoing_function_entries,
+            candidate.native_port_program_index
+                .outgoing_function_entries) ||
+        !sorted_authority_subset(
+            baseline.program_index.incomplete_outgoing_function_entries,
+            candidate.native_port_program_index
+                .incomplete_outgoing_function_entries) ||
+        !sorted_authority_subset(
+            baseline.program_index.seed_entries,
+            candidate.native_port_program_index.seed_entries))
+        return "native-program-index-facts-lost";
+    if ((baseline.guarded_inventory_complete &&
+         !candidate.guarded_inventory_complete) ||
+        (baseline.native_hardware_closure_complete &&
+         !candidate.native_hardware_closure_complete) ||
+        (baseline.replacement_reachability_proven &&
+         !candidate.replacement_reachability_proven) ||
+        (baseline.backend_admitted && !candidate.backend_admitted) ||
+        world_delta.proof_downgrades != 0u)
+        return "proof-downgrade";
+    return std::nullopt;
+}
+
+void publish_pending_agent_analysis_candidate(
+    const std::filesystem::path& output_root,
+    const katana::codegen::NativeDiscAnalysisResult& analyzed,
+    const std::string_view rejection,
+    const std::string_view analysis_session_contract_identity) {
+    const auto pending_root =
+        output_root / ".katana" / "agent" / "pending-analysis";
+    ensure_safe_port_directory_chain(
+        output_root,
+        pending_root,
+        "Nichtautoritative Analyse-Kandidatengeneration");
+    const auto archive_path =
+        pending_root / "native-disc-analysis.katana-analysis";
+    const auto world_path =
+        pending_root / "materialization-world.katana-world";
+    const auto world_json_path =
+        pending_root / "materialization-world.json";
+    const auto manifest_path = pending_root / "candidate.json";
+    AnalysisArtifactRollback publication(pending_root);
+    publication.prepare(archive_path, "Nichtautoratives Analysearchiv");
+    publication.prepare(world_path, "Nichtautoritativer Materialization-World");
+    publication.prepare(
+        world_json_path,
+        "Nichtautoritativer Materialization-World-JSON");
+    publication.prepare(manifest_path, "Analyse-Kandidatenmanifest");
+    write_atomic_analysis_file(
+        pending_root,
+        archive_path,
+        analyzed.analysis_artifact_bytes,
+        "Nichtautoratives Analysearchiv");
+    write_atomic_analysis_file(
+        pending_root,
+        world_path,
+        analyzed.materialization_world_artifact_bytes,
+        "Nichtautoritativer Materialization-World");
+    auto world_json = analyzed.materialization_world_json;
+    world_json.push_back('\n');
+    write_atomic_analysis_file(
+        pending_root,
+        world_json_path,
+        world_json,
+        "Nichtautoritativer Materialization-World-JSON");
+    const auto archive_sha256 = katana::io::sha256_bytes(
+        std::string_view(
+            reinterpret_cast<const char*>(
+                analyzed.analysis_artifact_bytes.data()),
+            analyzed.analysis_artifact_bytes.size()));
+    const auto world_sha256 = katana::io::sha256_bytes(
+        std::string_view(
+            reinterpret_cast<const char*>(
+                analyzed.materialization_world_artifact_bytes.data()),
+            analyzed.materialization_world_artifact_bytes.size()));
+    std::ostringstream manifest;
+    manifest
+        << "{\"schema\":1,\"kind\":\"katana-pending-analysis-candidate\""
+        << ",\"authority\":\"rejected\""
+        << ",\"reason\":" << katana::io::quote_json(rejection)
+        << ",\"analysis_artifact_id\":"
+        << katana::io::quote_json(
+               analyzed.analysis_artifact_identity.key)
+        << ",\"analysis_session_contract_identity\":"
+        << katana::io::quote_json(
+               analysis_session_contract_identity)
+        << ",\"analysis_archive_sha256\":"
+        << katana::io::quote_json(archive_sha256)
+        << ",\"materialization_world_sha256\":"
+        << katana::io::quote_json(world_sha256)
+        << ",\"materialization_world_json_sha256\":"
+        << katana::io::quote_json(
+               katana::io::sha256_bytes(world_json))
+        << "}\n";
+    write_atomic_analysis_file(
+        pending_root,
+        manifest_path,
+        manifest.str(),
+        "Analyse-Kandidatenmanifest");
+    publication.commit();
 }
 
 bool same_noop_analysis_manifest_identity(
@@ -8697,6 +9111,18 @@ AgentSessionLedgerState validate_agent_session_ledger(
         "runtime_frontiers_imported", "next_action", "producer_identity",
         "materialization_world_sha256", "materialization_world_json_sha256",
         "analysis_report_sha256", "analysis_archive_sha256"};
+    static constexpr std::array<std::string_view, 28u> schema_five_keys{
+        "schema", "kind", "task_id", "analysis_artifact_id", "commit",
+        "result", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
+        "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
+        "resolved_incomplete_roots", "timing_kind",
+        "telemetry_analysis_wall_time_ms", "telemetry_analysis_wall_time_delta_ms",
+        "boot_analysis_cache_hit", "boot_analysis_pipeline_runs",
+        "latent_root_seed_cache_hit", "analysis_artifact_cache_hit",
+        "runtime_frontiers_imported", "next_action", "producer_identity",
+        "analysis_session_contract_identity", "materialization_world_sha256",
+        "materialization_world_json_sha256", "analysis_report_sha256",
+        "analysis_archive_sha256"};
     static constexpr std::array<std::string_view, 8u> numeric_keys{
         "task_id", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
         "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
@@ -8717,6 +9143,7 @@ AgentSessionLedgerState validate_agent_session_ledger(
         const auto schema = strict_json_u32(object, "schema");
         state.committed_generation = false;
         state.producer_identity.clear();
+        state.analysis_session_contract_identity.clear();
         state.materialization_world_sha256.clear();
         state.materialization_world_json_sha256.clear();
         state.analysis_report_sha256.clear();
@@ -8742,12 +9169,14 @@ AgentSessionLedgerState validate_agent_session_ledger(
                 (delta->kind != StrictJsonValueKind::Number &&
                  delta->kind != StrictJsonValueKind::Null))
                 throw std::invalid_argument("Agent-Session-Ledger besitzt ein ungueltiges Zeitdelta.");
-        } else if (schema == 3u || schema == 4u) {
+        } else if (schema == 3u || schema == 4u || schema == 5u) {
             require_strict_json_keys(
                 object,
                 schema == 3u
                     ? std::span<const std::string_view>(schema_three_keys)
-                    : std::span<const std::string_view>(schema_four_keys));
+                    : schema == 4u
+                        ? std::span<const std::string_view>(schema_four_keys)
+                        : std::span<const std::string_view>(schema_five_keys));
             if (strict_json_identifier(object, "timing_kind", 64u) !=
                 "nondeterministic-telemetry")
                 throw std::invalid_argument(
@@ -8781,9 +9210,15 @@ AgentSessionLedgerState validate_agent_session_ledger(
             } else {
                 state.analysis_archive_sha256.reset();
             }
-            if (schema == 4u)
+            if (schema >= 4u)
                 state.producer_identity = strict_json_identifier(
                     object, "producer_identity", 64u);
+            if (schema == 5u)
+                state.analysis_session_contract_identity =
+                    strict_json_identifier(
+                        object,
+                        "analysis_session_contract_identity",
+                        64u);
             state.committed_generation = true;
         } else {
             throw std::invalid_argument("Agent-Session-Ledger besitzt eine unbekannte Schema-Version.");
@@ -8814,6 +9249,7 @@ struct CommittedAgentGeneration final {
     std::string analysis_artifact_id;
     std::string analysis_archive;
     std::string producer_identity;
+    std::string analysis_session_contract_identity;
 };
 
 CommittedAgentGeneration load_committed_agent_generation(
@@ -8862,7 +9298,8 @@ CommittedAgentGeneration load_committed_agent_generation(
     }
     return {
         std::move(world), state.analysis_artifact_id, std::move(archive),
-        state.producer_identity};
+        state.producer_identity,
+        state.analysis_session_contract_identity};
 }
 
 void append_agent_session_ledger(
@@ -8877,7 +9314,8 @@ void append_agent_session_ledger(
     const std::string_view materialization_world_json_sha256,
     const std::string_view analysis_report_sha256,
     const std::optional<std::string_view> analysis_archive_sha256,
-    const std::string_view producer_identity) {
+    const std::string_view producer_identity,
+    const std::string_view analysis_session_contract_identity) {
     const auto agent_root = output_root / ".katana" / "agent";
     ensure_safe_port_directory_chain(
         output_root, agent_root, "Privates Agent-Session-Verzeichnis");
@@ -8914,7 +9352,7 @@ void append_agent_session_ledger(
                 ? "improved"
                 : "no_progress";
     std::ostringstream line;
-    line << "{\"schema\":4,\"kind\":\"katana-agent-session\""
+    line << "{\"schema\":5,\"kind\":\"katana-agent-session\""
          << ",\"task_id\":" << task_id
          << ",\"analysis_artifact_id\":"
          << katana::io::quote_json(analyzed.analysis_artifact_identity.key)
@@ -8954,6 +9392,8 @@ void append_agent_session_ledger(
          << katana::io::quote_json(analyzed.agent_decision)
          << ",\"producer_identity\":"
          << katana::io::quote_json(producer_identity)
+         << ",\"analysis_session_contract_identity\":"
+         << katana::io::quote_json(analysis_session_contract_identity)
          << ",\"materialization_world_sha256\":"
          << katana::io::quote_json(materialization_world_sha256)
          << ",\"materialization_world_json_sha256\":"
@@ -9909,6 +10349,7 @@ int export_port_project(const std::filesystem::path& source_path,
         std::optional<std::string> previous_analysis_artifact_id;
         std::string previous_analysis_archive;
         std::string previous_producer_identity;
+        std::string previous_analysis_session_contract_identity;
         if (resume_analysis) {
             if (!safe_regular_port_directory_exists(
                     absolute_output,
@@ -9925,6 +10366,14 @@ int export_port_project(const std::filesystem::path& source_path,
                 std::move(committed.analysis_archive);
             previous_producer_identity =
                 std::move(committed.producer_identity);
+            previous_analysis_session_contract_identity =
+                std::move(
+                    committed.analysis_session_contract_identity);
+            if (previous_analysis_session_contract_identity.empty())
+                throw std::invalid_argument(
+                    "analyze-port --resume verweigert eine Legacy-Session "
+                    "ohne gebundenen Analysevertrag; eine neue "
+                    "Analyse-Session ist erforderlich.");
         }
         std::optional<RuntimeFrontierImport> runtime_import;
         if (runtime_frontier_import_path.has_value())
@@ -9942,48 +10391,67 @@ int export_port_project(const std::filesystem::path& source_path,
         }
         const auto current_producer_identity =
             agent_session_producer_identity(implementation_identities);
-        if (resume_analysis && !refresh_analysis &&
-            katana::build_contract::source_identity_trusted &&
-            !runtime_import.has_value() &&
-            !previous_analysis_archive.empty() &&
-            previous_analysis_artifact_id.has_value() &&
-            previous_producer_identity == current_producer_identity) {
-            const auto parsed_manifest =
+        std::optional<AgentAnalysisAuthorityBaseline>
+            previous_analysis_authority;
+        std::string analysis_session_contract_identity;
+        if (resume_analysis) {
+            if (previous_analysis_archive.empty() ||
+                !previous_analysis_artifact_id.has_value())
+                throw std::invalid_argument(
+                    "analyze-port --resume braucht ein autoritatives "
+                    "Analysearchiv.");
+            auto parsed_manifest =
                 katana::codegen::parse_native_disc_analysis_artifact(
-                        *previous_analysis_artifact_id,
-                        std::span(
-                            reinterpret_cast<const std::uint8_t*>(
-                                previous_analysis_archive.data()),
-                            previous_analysis_archive.size()));
-            if (parsed_manifest.state ==
-                    katana::codegen::
-                        NativeDiscAnalysisArtifactState::Hit) {
-                const auto current_manifest =
-                    katana::codegen::
-                        native_disc_analysis_resume_manifest_identity(
-                            *verified_native_disc,
-                            analysis_options,
-                            parsed_manifest.artifact.
-                                external_primary_roots,
-                            analysis_mode);
-                if (same_noop_analysis_manifest_identity(
-                        parsed_manifest.artifact.identity,
-                        current_manifest) &&
-                    previous_world.has_value() &&
-                    materialization_world_matches_analysis_identity(
-                        *previous_world,
-                        parsed_manifest.artifact.identity)) {
-                    const auto report_path =
-                        absolute_output / "native-disc-analysis.json";
-                    std::cout
-                        << "KATANA_ANALYZE_PORT_NOOP_RESUME "
-                        << report_path.string() << '\n'
-                        << "KATANA_ANALYZE_PORT_COMPLETE "
-                        << report_path.string() << '\n'
-                        << std::flush;
-                    telemetry_run.complete();
-                    return 0;
-                }
+                    *previous_analysis_artifact_id,
+                    std::span(
+                        reinterpret_cast<const std::uint8_t*>(
+                            previous_analysis_archive.data()),
+                        previous_analysis_archive.size()));
+            if (parsed_manifest.state !=
+                katana::codegen::NativeDiscAnalysisArtifactState::Hit)
+                throw std::invalid_argument(
+                    "analyze-port --resume verweigert ein nicht "
+                    "revalidierbares Analysearchiv.");
+            const auto current_manifest =
+                katana::codegen::
+                    native_disc_analysis_resume_manifest_identity(
+                        *verified_native_disc,
+                        analysis_options,
+                        parsed_manifest.artifact.external_primary_roots,
+                        analysis_mode);
+            analysis_session_contract_identity =
+                agent_analysis_session_contract_identity(
+                    current_manifest, analysis_options);
+            if (previous_analysis_session_contract_identity !=
+                analysis_session_contract_identity)
+                throw std::invalid_argument(
+                    "analyze-port --resume verweigert einen veraenderten "
+                    "semantischen Analysevertrag; eine neue "
+                    "Analyse-Session ist erforderlich.");
+            previous_analysis_authority =
+                capture_agent_analysis_authority(
+                    parsed_manifest.artifact);
+            if (!refresh_analysis &&
+                katana::build_contract::source_identity_trusted &&
+                !runtime_import.has_value() &&
+                previous_producer_identity == current_producer_identity &&
+                same_noop_analysis_manifest_identity(
+                    parsed_manifest.artifact.identity,
+                    current_manifest) &&
+                previous_world.has_value() &&
+                materialization_world_matches_analysis_identity(
+                    *previous_world,
+                    parsed_manifest.artifact.identity)) {
+                const auto report_path =
+                    absolute_output / "native-disc-analysis.json";
+                std::cout
+                    << "KATANA_ANALYZE_PORT_NOOP_RESUME "
+                    << report_path.string() << '\n'
+                    << "KATANA_ANALYZE_PORT_COMPLETE "
+                    << report_path.string() << '\n'
+                    << std::flush;
+                telemetry_run.complete();
+                return 0;
             }
         }
         const auto analysis_started = std::chrono::steady_clock::now();
@@ -9992,6 +10460,11 @@ int export_port_project(const std::filesystem::path& source_path,
                 *verified_native_disc,
                 analysis_options,
                 analysis_mode);
+        if (analysis_session_contract_identity.empty())
+            analysis_session_contract_identity =
+                agent_analysis_session_contract_identity(
+                    analyzed.analysis_artifact_identity,
+                    analysis_options);
         const auto analysis_wall_time_ms = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - analysis_started)
@@ -10045,6 +10518,55 @@ int export_port_project(const std::filesystem::path& source_path,
                 analyzed,
                 previous_world_for_evidence,
                 runtime_observations);
+        if (analyzed.analysis_artifact_bytes.empty())
+            throw std::runtime_error(
+                "analyze-port erhielt kein autoritatives Analysearchiv.");
+        if (analyzed.materialization_world_artifact_bytes.empty() ||
+            analyzed.materialization_world_json.empty())
+            throw std::runtime_error(
+                "analyze-port erhielt keinen Materialization-World vom "
+                "autoritativen Analysepfad.");
+        katana::agent::ExecutableMaterializationWorld current_world;
+        if (!katana::agent::parse_agent_world_binary(
+                analyzed.materialization_world_artifact_bytes,
+                current_world))
+            throw std::runtime_error(
+                "Kandidaten-Materialization-World konnte nicht fuer das "
+                "Authority-Gate validiert werden.");
+        const auto candidate_artifact =
+            katana::codegen::parse_native_disc_analysis_artifact(
+                analyzed.analysis_artifact_identity.key,
+                analyzed.analysis_artifact_bytes);
+        if (candidate_artifact.state !=
+            katana::codegen::NativeDiscAnalysisArtifactState::Hit)
+            throw std::runtime_error(
+                "Kandidaten-Analysearchiv konnte nicht fuer das "
+                "Authority-Gate validiert werden.");
+        AgentIterationDelta authority_world_delta;
+        if (previous_world.has_value())
+            authority_world_delta =
+                measure_agent_iteration(*previous_world, current_world);
+        if (previous_analysis_authority.has_value()) {
+            if (const auto rejection =
+                    agent_analysis_authority_rejection(
+                        *previous_analysis_authority,
+                        candidate_artifact.artifact,
+                        authority_world_delta)) {
+                publish_pending_agent_analysis_candidate(
+                    absolute_output,
+                    analyzed,
+                    *rejection,
+                    analysis_session_contract_identity);
+                std::cout
+                    << "KATANA_ANALYZE_PORT_CANDIDATE_REJECTED reason="
+                    << *rejection << '\n'
+                    << std::flush;
+                throw std::runtime_error(
+                    "Analyse-Refresh verletzt den autoritativen "
+                    "Closure-Vertrag; die letzte Generation bleibt aktiv "
+                    "und der Kandidat wurde bounded separat gesichert.");
+            }
+        }
         std::error_code output_error;
         auto output_status = std::filesystem::symlink_status(
             absolute_output, output_error);
@@ -10099,11 +10621,6 @@ int export_port_project(const std::filesystem::path& source_path,
                 analyzed.analysis_artifact_bytes,
                 "Identitaetsgebundenes NativeDisc-Analysearchiv");
         }
-        if (analyzed.materialization_world_artifact_bytes.empty() ||
-            analyzed.materialization_world_json.empty())
-            throw std::runtime_error(
-                "analyze-port erhielt keinen Materialization-World vom "
-                "autoritativen Analysepfad.");
         write_atomic_analysis_file(
             absolute_output,
             world_artifact_path,
@@ -10231,13 +10748,6 @@ int export_port_project(const std::filesystem::path& source_path,
                     reinterpret_cast<const char*>(
                         analyzed.analysis_artifact_bytes.data()),
                     analyzed.analysis_artifact_bytes.size()));
-        katana::agent::ExecutableMaterializationWorld current_world;
-        if (!katana::agent::parse_agent_world_binary(
-                analyzed.materialization_world_artifact_bytes,
-                current_world))
-            throw std::runtime_error(
-                "Publizierter Materialization-World konnte nicht fuer das "
-                "Agent-Session-Ledger validiert werden.");
         write_atomic_analysis_file(
             absolute_output,
             report_path,
@@ -10260,7 +10770,8 @@ int export_port_project(const std::filesystem::path& source_path,
             analysis_archive_sha256.has_value()
                 ? std::optional<std::string_view>(*analysis_archive_sha256)
                 : std::nullopt,
-            current_producer_identity);
+            current_producer_identity,
+            analysis_session_contract_identity);
         publication.commit();
         std::cout << "KATANA_ANALYZE_PORT_COMPLETE "
                   << report_path.string() << '\n'
