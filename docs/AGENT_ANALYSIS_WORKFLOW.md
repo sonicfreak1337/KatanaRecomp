@@ -97,6 +97,18 @@ ABI-/Register-/State-/Side-Effect-Beweis als
 `provider-result-or-state-proof=missing` sichtbar; ein Agent darf daraus
 keine Providersemantik erfinden.
 
+Jede Hardwareaufgabe enthaelt hoechstens vier Sites. Fuer jede Site liefert
+Katana einen bounded Rueckwaertsslice der tatsaechlichen
+Registerproduzenten: maximal vier CFG-Pfade, acht Bloecke und 24 relevante
+Instruktionen. PC-relative Literale bleiben mit ihrer Snapshot-Autoritaet
+gekennzeichnet. Alle statischen Vorgaengerpfade werden getrennt ausgewiesen;
+input-erhaltende Loop-Backedges duerfen auf den bewiesenen nichtzyklischen
+Ingress zurueckgefuehrt werden. Ein wertveraendernder Zyklus, Owner-Live-in,
+offener Kontrollfluss oder Budgetueberlauf bleibt dagegen ausdruecklich
+`partial`. So erhaelt ein kleiner Agent konkrete Werte und Reihenfolge, ohne
+dass Katana fehlende Disassembly als Unerreichbarkeits- oder
+Completeness-Beweis missversteht.
+
 Protokollregister werden nicht automatisch als API des nativen Hostbackends
 missverstanden. Fuer einen `PVR.SOFTRESET`-Write benennt Katana beispielsweise
 den title-seitigen Native-Grafikadapter als Provider-Layer und

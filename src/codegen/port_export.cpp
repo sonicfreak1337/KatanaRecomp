@@ -25182,6 +25182,9 @@ void populate_native_disc_analysis_summary(
 
 constexpr std::size_t maximum_owner_semantic_task_blocks = 16u;
 constexpr std::size_t maximum_owner_semantic_task_instructions = 64u;
+constexpr std::size_t maximum_owner_hardware_site_slice_instructions = 24u;
+constexpr std::size_t maximum_owner_hardware_site_slice_blocks = 8u;
+constexpr std::size_t maximum_owner_hardware_site_slice_paths = 4u;
 
 std::string owner_task_register_mask(const katana::ir::RegisterMask mask) {
     static constexpr std::array<std::string_view, 22u> names{
@@ -25730,6 +25733,322 @@ struct OwnerSemanticTaskContract final {
     bool state_projection_complete = false;
     std::vector<std::string> fields;
 };
+
+struct OwnerHardwareSiteTaskContract final {
+    std::vector<std::string> fields;
+};
+
+OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
+    const std::span<const katana::ir::Function> program,
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t owner_entry,
+    const bool owner_control_flow_closed,
+    const std::span<const std::uint32_t> sites) {
+    OwnerHardwareSiteTaskContract contract;
+    const auto function = std::ranges::find_if(
+        program,
+        [owner_entry](const auto& candidate) {
+            return candidate.entry_address == owner_entry;
+        });
+    const auto append_instruction = [&](std::ostringstream& slice,
+                                        const katana::ir::Instruction&
+                                            instruction) {
+        const auto use_def =
+            katana::ir::instruction_register_use_def(instruction);
+        slice << guarded_aot_address(instruction.source_address)
+              << ':' << katana::ir::operation_name(instruction.operation)
+              << "(use=" << owner_task_register_mask(use_def.uses)
+              << ";def=" << owner_task_register_mask(use_def.defs);
+        const auto destination_bit = katana::ir::gpr_register_bit(
+            instruction.destination_register);
+        const auto source_bit = katana::ir::gpr_register_bit(
+            instruction.source_register);
+        if (((use_def.uses | use_def.defs) & destination_bit) != 0u)
+            slice << ";dst=r" << std::dec
+                  << static_cast<unsigned>(
+                         instruction.destination_register);
+        if ((use_def.uses & source_bit) != 0u &&
+            (instruction.source_register !=
+                 instruction.destination_register ||
+             (use_def.defs & destination_bit) == 0u))
+            slice << ";src=r" << std::dec
+                  << static_cast<unsigned>(instruction.source_register);
+        if (instruction.widths.immediate !=
+                katana::ir::OperandWidth::None ||
+            instruction.operation == katana::ir::Operation::Constant32)
+            slice << ";imm=" << std::dec << instruction.immediate;
+        if (instruction.widths.displacement !=
+            katana::ir::OperandWidth::None)
+            slice << ";disp=" << std::dec << instruction.displacement;
+        if (instruction.effective_address.has_value())
+            slice << ";effective=" << guarded_aot_address(
+                *instruction.effective_address);
+        if (instruction.operation ==
+                katana::ir::Operation::LoadWordSignedPcRelative ||
+            instruction.operation ==
+                katana::ir::Operation::LoadLongPcRelative) {
+            const auto literal = owner_task_literal(image, instruction);
+            slice << ";literal="
+                  << (literal.has_value()
+                          ? owner_task_literal_text(*literal)
+                          : std::string{"unresolved"});
+        }
+        slice << ')';
+    };
+    for (const auto site : sites) {
+        if (function == program.end()) {
+            contract.fields.push_back(
+                "hardware-site-ir-slice=" + guarded_aot_address(site) +
+                ":unavailable:owner-function");
+            continue;
+        }
+        const katana::ir::BasicBlock* containing_block = nullptr;
+        std::size_t site_index = 0u;
+        for (const auto& block : function->blocks) {
+            const auto instruction = std::ranges::find_if(
+                block.instructions,
+                [site](const auto& candidate) {
+                    return candidate.source_address == site;
+                });
+            if (instruction == block.instructions.end()) continue;
+            containing_block = &block;
+            site_index = static_cast<std::size_t>(
+                instruction - block.instructions.begin());
+            break;
+        }
+        if (containing_block == nullptr) {
+            contract.fields.push_back(
+                "hardware-site-ir-slice=" + guarded_aot_address(site) +
+                ":unavailable:instruction");
+            continue;
+        }
+
+        struct SlicePath final {
+            const katana::ir::BasicBlock* block = nullptr;
+            std::size_t end_index = 0u;
+            katana::ir::RegisterMask unresolved_inputs = 0u;
+            std::vector<const katana::ir::Instruction*> selected;
+            std::vector<std::uint32_t> producer_blocks;
+            std::vector<std::uint32_t> blocks;
+            std::string terminal;
+        };
+        const auto site_use_def =
+            katana::ir::instruction_register_use_def(
+                containing_block->instructions[site_index]);
+        std::vector<SlicePath> pending{{
+            containing_block,
+            site_index,
+            site_use_def.uses,
+            {&containing_block->instructions[site_index]},
+            {},
+            {containing_block->start_address},
+            {}}};
+        std::vector<SlicePath> resolved_paths;
+        bool path_budget_exhausted = false;
+        bool crossed_block_boundary = false;
+        bool skipped_loop_backedge = false;
+        while (!pending.empty()) {
+            auto path = std::move(pending.back());
+            pending.pop_back();
+            bool instruction_budget_exhausted = false;
+            while (path.end_index != 0u &&
+                   path.unresolved_inputs != 0u) {
+                const auto& candidate =
+                    path.block->instructions[--path.end_index];
+                const auto use_def =
+                    katana::ir::instruction_register_use_def(candidate);
+                if ((use_def.defs & path.unresolved_inputs) == 0u)
+                    continue;
+                if (path.selected.size() >=
+                    maximum_owner_hardware_site_slice_instructions) {
+                    instruction_budget_exhausted = true;
+                    break;
+                }
+                path.selected.push_back(&candidate);
+                if (std::ranges::find(
+                        path.producer_blocks,
+                        path.block->start_address) ==
+                    path.producer_blocks.end())
+                    path.producer_blocks.push_back(
+                        path.block->start_address);
+                path.unresolved_inputs =
+                    (path.unresolved_inputs & ~use_def.defs) |
+                    use_def.uses;
+            }
+            if (path.unresolved_inputs == 0u) {
+                path.terminal = "resolved";
+                resolved_paths.push_back(std::move(path));
+                continue;
+            }
+            if (instruction_budget_exhausted) {
+                path.terminal = "instruction-budget";
+                resolved_paths.push_back(std::move(path));
+                continue;
+            }
+            if (path.block->start_address == function->entry_address) {
+                path.terminal = "owner-entry-live-in";
+                resolved_paths.push_back(std::move(path));
+                continue;
+            }
+            if (path.blocks.size() >=
+                maximum_owner_hardware_site_slice_blocks) {
+                path.terminal = "block-budget";
+                resolved_paths.push_back(std::move(path));
+                continue;
+            }
+
+            std::vector<const katana::ir::BasicBlock*> predecessors;
+            for (const auto& candidate : function->blocks) {
+                const bool static_predecessor = std::ranges::find(
+                    candidate.successors,
+                    path.block->start_address) !=
+                    candidate.successors.end();
+                const bool guarded_predecessor =
+                    owner_control_flow_closed &&
+                    std::ranges::find(
+                        candidate.guarded_case_ownership_targets,
+                        path.block->start_address) !=
+                        candidate.guarded_case_ownership_targets.end();
+                if (!static_predecessor && !guarded_predecessor)
+                    continue;
+                if (predecessors.size() >=
+                    maximum_owner_hardware_site_slice_paths) {
+                    path_budget_exhausted = true;
+                    break;
+                }
+                if (std::ranges::find(predecessors, &candidate) ==
+                    predecessors.end())
+                    predecessors.push_back(&candidate);
+            }
+            std::ranges::sort(
+                predecessors,
+                {},
+                &katana::ir::BasicBlock::start_address);
+            if (predecessors.empty()) {
+                path.terminal = "unmapped-predecessor";
+                resolved_paths.push_back(std::move(path));
+                continue;
+            }
+            crossed_block_boundary = true;
+            bool enqueued_predecessor = false;
+            bool skipped_path_loop_backedge = false;
+            for (auto predecessor = predecessors.rbegin();
+                 predecessor != predecessors.rend(); ++predecessor) {
+                if (std::ranges::find(
+                        path.blocks,
+                        (*predecessor)->start_address) !=
+                    path.blocks.end()) {
+                    const auto cycle_begin = std::ranges::find(
+                        path.blocks,
+                        (*predecessor)->start_address);
+                    const bool cycle_has_value_transfer =
+                        std::ranges::any_of(
+                            std::ranges::subrange{
+                                cycle_begin, path.blocks.end()},
+                            [&](const auto block_address) {
+                                return std::ranges::find(
+                                           path.producer_blocks,
+                                           block_address) !=
+                                    path.producer_blocks.end();
+                            });
+                    if (cycle_has_value_transfer) {
+                        if (pending.size() + resolved_paths.size() >=
+                            maximum_owner_hardware_site_slice_paths) {
+                            path_budget_exhausted = true;
+                            continue;
+                        }
+                        auto cycle = path;
+                        cycle.terminal =
+                            "cfg-cycle-with-value-transfer";
+                        resolved_paths.push_back(std::move(cycle));
+                        enqueued_predecessor = true;
+                    } else {
+                        // A backwards slice which has crossed one complete
+                        // loop iteration without a relevant definition has
+                        // proved this input invariant on that backedge.  The
+                        // non-cyclic ingress remains authoritative for its
+                        // origin.
+                        skipped_loop_backedge = true;
+                        skipped_path_loop_backedge = true;
+                    }
+                    continue;
+                }
+                if (pending.size() + resolved_paths.size() >=
+                    maximum_owner_hardware_site_slice_paths) {
+                    path_budget_exhausted = true;
+                    continue;
+                }
+                auto next = path;
+                next.block = *predecessor;
+                next.end_index = next.block->instructions.size();
+                next.blocks.push_back(next.block->start_address);
+                pending.push_back(std::move(next));
+                enqueued_predecessor = true;
+            }
+            if (!enqueued_predecessor &&
+                !skipped_path_loop_backedge) {
+                path.terminal = "unmapped-predecessor";
+                resolved_paths.push_back(std::move(path));
+            }
+        }
+
+        std::ostringstream slice;
+        slice << "hardware-site-ir-slice=site="
+              << guarded_aot_address(site)
+              << ";block="
+              << guarded_aot_address(containing_block->start_address)
+              << ";kind=bounded-cfg-backward-register-producer"
+              << ";producer-closure="
+              << (!resolved_paths.empty() && !path_budget_exhausted &&
+                          (!crossed_block_boundary ||
+                           owner_control_flow_closed) &&
+                          std::ranges::all_of(
+                              resolved_paths,
+                              [](const auto& path) {
+                                  return path.unresolved_inputs == 0u;
+                              })
+                      ? "closed-all-static-predecessor-paths"
+                      : "partial")
+              << ";static-predecessors="
+              << (crossed_block_boundary && !owner_control_flow_closed
+                      ? "open-owner-cfg-not-proven"
+                      : "closed")
+              << ";loop-backedges="
+              << (skipped_loop_backedge
+                      ? "proven-input-preserving"
+                      : "none")
+              << ";path-budget-exhausted="
+              << (path_budget_exhausted ? "true" : "false")
+              << ";paths=" << std::dec << resolved_paths.size();
+        for (std::size_t path_index = 0u;
+             path_index < resolved_paths.size(); ++path_index) {
+            const auto& path = resolved_paths[path_index];
+            slice << ";path" << path_index << "=blocks:";
+            for (auto block = path.blocks.rbegin();
+                 block != path.blocks.rend(); ++block) {
+                if (block != path.blocks.rbegin()) slice << '>';
+                slice << guarded_aot_address(*block);
+            }
+            slice << ",terminal:" << path.terminal
+                  << ",unresolved:"
+                  << owner_task_register_mask(path.unresolved_inputs)
+                  << ",sequence:";
+            for (auto instruction = path.selected.rbegin();
+                 instruction != path.selected.rend(); ++instruction) {
+                if (instruction != path.selected.rbegin()) slice << '|';
+                append_instruction(slice, **instruction);
+            }
+        }
+        auto field = slice.str();
+        if (field.size() >
+            katana::agent::materialization_world_max_text_bytes)
+            field = "hardware-site-ir-slice=" +
+                    guarded_aot_address(site) +
+                    ":unavailable:text-budget";
+        contract.fields.push_back(std::move(field));
+    }
+    return contract;
+}
 
 OwnerSemanticTaskContract owner_semantic_task_contract(
     const std::span<const katana::ir::Function> program,
@@ -26388,7 +26707,7 @@ build_native_disc_materialization_world(
         }
         group.sites.push_back(gap.instruction_address);
     }
-    constexpr std::size_t maximum_native_hardware_sites_per_agent_task = 8u;
+    constexpr std::size_t maximum_native_hardware_sites_per_agent_task = 4u;
     for (auto& [group_identity, group] : hardware_groups) {
         auto& sites = group.sites;
         std::sort(sites.begin(), sites.end());
@@ -26400,6 +26719,7 @@ build_native_disc_materialization_world(
             std::string code_identity;
             std::string suggested_symbol;
             std::string candidate_reason;
+            bool control_flow_closed = false;
             const katana::runtime::NativePortHookBinding* current_hook =
                 nullptr;
         };
@@ -26422,6 +26742,12 @@ build_native_disc_materialization_world(
             contract.covered_size = boundary->size;
             contract.boundary_proof = std::string(
                 native_port_function_boundary_proof_name(boundary->proof));
+            contract.control_flow_closed =
+                boundary->proof ==
+                    NativePortFunctionBoundaryProof::ClosedControlFlow ||
+                boundary->proof ==
+                    NativePortFunctionBoundaryProof::
+                        IdentityBoundExactAndClosedControlFlow;
             const auto identity = native_port_code_identity(
                 result.image,
                 result.admitted_state->latent_aot.modules,
@@ -26506,6 +26832,13 @@ build_native_disc_materialization_world(
             const auto site_count = std::min(
                 maximum_native_hardware_sites_per_agent_task,
                 sites.size() - first_site);
+            const auto site_semantics = owner_hardware_site_task_contract(
+                result.admitted_state->emitted_program,
+                result.image,
+                owner_hook_contract.entry,
+                owner_hook_contract.control_flow_closed,
+                std::span<const std::uint32_t>{
+                    sites.data() + first_site, site_count});
             std::ostringstream task_identity;
             append_persistent_epoch_key_field(
                 task_identity, group_identity);
@@ -26603,6 +26936,12 @@ build_native_disc_materialization_world(
             entry.blocked_hardware.push_back(
                 "missing-proof=" + task_missing_proof);
             for (const auto& field : group.provider_contract.fields) {
+                if (entry.blocked_hardware.size() >=
+                    materialization_world_max_blocked_items)
+                    break;
+                entry.blocked_hardware.push_back(field);
+            }
+            for (const auto& field : site_semantics.fields) {
                 if (entry.blocked_hardware.size() >=
                     materialization_world_max_blocked_items)
                     break;
