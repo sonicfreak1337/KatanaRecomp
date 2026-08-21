@@ -26652,6 +26652,7 @@ build_native_disc_materialization_world(
         std::set<std::uint32_t> owners;
         std::string expected_provider;
         NativeHardwareProviderTaskContract provider_contract;
+        bool native_provider_input_read = false;
         std::vector<std::uint32_t> sites;
     };
     std::map<std::string, HardwareTaskGroup> hardware_groups;
@@ -26700,12 +26701,30 @@ build_native_disc_materialization_world(
             group.expected_provider = expected_provider;
             const auto references =
                 hardware_references_by_site.find(gap.instruction_address);
-            if (references != hardware_references_by_site.end())
+            if (references != hardware_references_by_site.end()) {
                 group.provider_contract =
                     native_hardware_provider_task_contract(
                         references->second);
+                group.native_provider_input_read =
+                    !references->second.empty() &&
+                    std::ranges::all_of(
+                        references->second,
+                        [](const auto* const reference) {
+                            return reference != nullptr &&
+                                reference->kind ==
+                                    katana::analysis::
+                                        HardwareAccessKind::Read;
+                        });
+            }
         }
         group.sites.push_back(gap.instruction_address);
+    }
+    std::set<std::uint32_t> native_provider_input_read_owners;
+    for (const auto& [identity, group] : hardware_groups) {
+        static_cast<void>(identity);
+        if (!group.native_provider_input_read) continue;
+        native_provider_input_read_owners.insert(
+            group.owners.begin(), group.owners.end());
     }
     constexpr std::size_t maximum_native_hardware_sites_per_agent_task = 4u;
     for (auto& [group_identity, group] : hardware_groups) {
@@ -26810,12 +26829,28 @@ build_native_disc_materialization_world(
                 owner_hook_contract.code_identity &&
             !katana::runtime::native_port_hook_closes_product_contract(
                 owner_hook_contract.current_hook->requirement);
+        const bool blocked_by_native_provider_input_read =
+            current_hook_identity_bound_but_non_closing &&
+            !group.native_provider_input_read &&
+            std::ranges::any_of(
+                group.owners,
+                [&](const auto owner) {
+                    return native_provider_input_read_owners.contains(owner);
+                });
+        const bool owner_hook_task_blocked =
+            !current_hook_identity_bound_but_non_closing &&
+            !owner_hook_contract.candidate_reason.empty();
         const auto task_missing_proof =
             current_hook_identity_bound_but_non_closing
                 ? !group.provider_contract.missing_proof.empty()
                       ? group.provider_contract.missing_proof
+                      : group.native_provider_input_read
+                          ? std::string{
+                                "native-provider-read-result-state-proof-missing"}
                       : std::string{
                             "native-provider-result-or-state-proof-missing"}
+                : owner_hook_task_blocked
+                    ? owner_hook_contract.candidate_reason
                 : group.reason;
         const auto task_expected_provider =
             current_hook_identity_bound_but_non_closing
@@ -26862,7 +26897,11 @@ build_native_disc_materialization_world(
             }
             entry.site = "gap-signature-" +
                 katana::io::sha256_bytes(task_identity.str()).substr(0u, 16u);
-            entry.state = FrontierState::Open;
+            entry.state = blocked_by_native_provider_input_read
+                ? FrontierState::Candidate
+                : owner_hook_task_blocked
+                    ? FrontierState::Blocked
+                    : FrontierState::Open;
             entry.proof = FrontierProof::StaticAnalyzer;
             entry.severity = FrontierSeverity::P0;
             entry.missing_proof = task_missing_proof;
@@ -26873,6 +26912,13 @@ build_native_disc_materialization_world(
                 "identity-bound-whole-owner-native-replacement",
                 "expected-native-provider:" + task_expected_provider,
                 "replacement-reachability-proven"};
+            if (current_hook_identity_bound_but_non_closing &&
+                group.native_provider_input_read)
+                entry.contracts.push_back(
+                    "task-role:native-provider-input-read");
+            if (blocked_by_native_provider_input_read)
+                entry.contracts.push_back(
+                    "task-prerequisite:native-provider-input-read");
             if (owner_hook_contract.covered_size.has_value() &&
                 !owner_hook_contract.code_identity.empty()) {
                 entry.contracts.push_back(
@@ -26935,6 +26981,17 @@ build_native_disc_materialization_world(
                 "provider-role=identity-bound-hardware-replacement");
             entry.blocked_hardware.push_back(
                 "missing-proof=" + task_missing_proof);
+            if (current_hook_identity_bound_but_non_closing &&
+                group.native_provider_input_read) {
+                entry.blocked_hardware.push_back(
+                    "provider-operation-role=input-read");
+                entry.blocked_hardware.push_back(
+                    "required-provider-proof="
+                    "read-value-result-and-state-projection");
+            }
+            if (blocked_by_native_provider_input_read)
+                entry.blocked_hardware.push_back(
+                    "task-prerequisite=native-provider-input-read");
             for (const auto& field : group.provider_contract.fields) {
                 if (entry.blocked_hardware.size() >=
                     materialization_world_max_blocked_items)
@@ -27033,11 +27090,30 @@ build_native_disc_materialization_world(
                     break;
                 entry.blocked_hardware.push_back(descriptor);
             }
-            entry.causal_chain = {
-                "owner-function",
-                "classified-hardware-operation-and-register-family",
-                "expected-native-provider",
-                "missing-provider-result-or-state-proof"};
+            entry.causal_chain = owner_hook_task_blocked
+                ? std::vector<std::string>{
+                      "owner-function",
+                      "classified-hardware-operation-and-register-family",
+                      "whole-owner-native-hook-admission",
+                      owner_hook_contract.candidate_reason}
+                : blocked_by_native_provider_input_read
+                ? std::vector<std::string>{
+                      "owner-function",
+                      "native-provider-input-read-prerequisite",
+                      "classified-hardware-operation-and-register-family",
+                      "missing-provider-result-or-state-proof"}
+                : current_hook_identity_bound_but_non_closing &&
+                    group.native_provider_input_read
+                ? std::vector<std::string>{
+                      "owner-function",
+                      "classified-native-hardware-read-and-register-family",
+                      "native-provider-input-read",
+                      "missing-read-result-state-projection"}
+                : std::vector<std::string>{
+                      "owner-function",
+                      "classified-hardware-operation-and-register-family",
+                      "expected-native-provider",
+                      "missing-provider-result-or-state-proof"};
             entry.invariants = {
                 "no-mmio-emulation",
                 "no-interpreter-or-jit-fallback",
@@ -27061,6 +27137,9 @@ build_native_disc_materialization_world(
                     "hook-requirement-upgraded-to-required-only-after-proof",
                     "site-resolutions-bound-to-the-proven-provider",
                     "replacement-reachability-with-zero-residual-sites"};
+                if (group.native_provider_input_read)
+                    entry.acceptance_criteria.push_back(
+                        "native-read-value-projected-to-owner-visible-result-state");
             } else {
                 entry.acceptance_criteria = {
                     "all-listed-sites-share-owner-and-operation-contract",

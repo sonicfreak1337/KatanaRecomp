@@ -50,6 +50,12 @@ ist, bleiben ersetzte Artefakte als explizite Rollbackgeneration gesichert;
 ein Fehler bei World, Report, Archiv oder Ledger stellt die vorherige
 committed Generation wieder her.
 
+Der Resume-Aufruf wiederholt ausschliesslich die analysewirksamen CLI-Eingaben
+des Checkpoints. Aus dem Native-Port-Manifest abgeleitete AOT-Resume-Entries
+werden nicht zusaetzlich als `--native-aot-resume-entry` angegeben: explizite
+und manifestabgeleitete Entries koennen dieselbe finale Rootmenge erzeugen,
+besitzen aber absichtlich verschiedene Analysevertragsidentitaeten.
+
 Eine ausschliessliche Native-Port-/Provideraenderung darf den statischen
 CFA-/FVA-Checkpoint admission-only weiterverwenden. Katana rekonstruiert dazu
 den alten Analysevertrag mit den gespeicherten Native-Port-Identitaeten und
@@ -97,6 +103,12 @@ ABI-/Register-/State-/Side-Effect-Beweis als
 `provider-result-or-state-proof=missing` sichtbar; ein Agent darf daraus
 keine Providersemantik erfinden.
 
+Ein Whole-Owner-Hook ohne exakte Boundary, Codeidentitaet oder geschlossene
+Site-Coverage ist `Blocked`, nicht `Open`. Sein `missing_proof` benennt die
+fehlende Admissionsvoraussetzung. Dadurch priorisiert `next-analysis-task`
+keine scheinbar offene Providerimplementierung, die Katana anschliessend
+selbst nicht identitaetsgebunden zulassen koennte.
+
 Jede Hardwareaufgabe enthaelt hoechstens vier Sites. Fuer jede Site liefert
 Katana einen bounded Rueckwaertsslice der tatsaechlichen
 Registerproduzenten: maximal vier CFG-Pfade, acht Bloecke und 24 relevante
@@ -108,6 +120,14 @@ offener Kontrollfluss oder Budgetueberlauf bleibt dagegen ausdruecklich
 `partial`. So erhaelt ein kleiner Agent konkrete Werte und Reihenfolge, ohne
 dass Katana fehlende Disassembly als Unerreichbarkeits- oder
 Completeness-Beweis missversteht.
+
+Bei einem identity-bound Provider, der den Produktvertrag noch nicht
+schliesst, markiert Katana statisch klassifizierte Hardware-Reads als
+`native-provider-input-read`. Der Agentselektor priorisiert diese bounded
+Result-/State-Voraussetzungen vor nachgelagerten Provider-Writes, auch wenn
+eine Writegruppe mehr Sites besitzt. Die Readrolle ist typisiert aus dem
+Hardware-Audit abgeleitet; Adressen oder Titelnamen beeinflussen die Prioritaet
+nicht.
 
 Protokollregister werden nicht automatisch als API des nativen Hostbackends
 missverstanden. Fuer einen `PVR.SOFTRESET`-Write benennt Katana beispielsweise
