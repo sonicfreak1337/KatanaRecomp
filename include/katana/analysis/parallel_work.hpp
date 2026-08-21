@@ -983,6 +983,45 @@ class ParallelWorkExecutor final {
 
 namespace detail {
 
+struct ParallelWorkGroupExecutionFrame final {
+    const void* group = nullptr;
+    const ParallelWorkGroupExecutionFrame* previous = nullptr;
+};
+
+inline thread_local const ParallelWorkGroupExecutionFrame*
+    current_parallel_work_group_execution = nullptr;
+
+[[nodiscard]] inline bool parallel_work_group_is_active(
+    const void* const group) noexcept {
+    for (auto* frame = current_parallel_work_group_execution;
+         frame != nullptr;
+         frame = frame->previous) {
+        if (frame->group == group) return true;
+    }
+    return false;
+}
+
+class ParallelWorkGroupExecutionScope final {
+  public:
+    explicit ParallelWorkGroupExecutionScope(
+        const void* const group) noexcept
+        : frame_{group, current_parallel_work_group_execution} {
+        current_parallel_work_group_execution = &frame_;
+    }
+
+    ~ParallelWorkGroupExecutionScope() {
+        current_parallel_work_group_execution = frame_.previous;
+    }
+
+    ParallelWorkGroupExecutionScope(
+        const ParallelWorkGroupExecutionScope&) = delete;
+    ParallelWorkGroupExecutionScope& operator=(
+        const ParallelWorkGroupExecutionScope&) = delete;
+
+  private:
+    ParallelWorkGroupExecutionFrame frame_;
+};
+
 template <typename Work>
 class ParallelWorkGroup final {
   public:
@@ -1002,6 +1041,17 @@ class ParallelWorkGroup final {
     void cancel_drain() noexcept { complete_drain({}); }
 
     [[nodiscard]] AnalysisWorkDisposition drain_quantum() noexcept {
+        // A worker waiting for a nested batch helps the shared executor.  It
+        // must not re-enter another continuation of a work group already on
+        // that worker's stack: a wide outer batch whose items launch nested
+        // analysis would otherwise recursively enter itself once per lane and
+        // can exhaust the finite host stack before any item returns.  Yielding
+        // this continuation leaves it queued for another worker (or for this
+        // worker after the active item unwinds) while still allowing unrelated
+        // and genuinely nested groups to make progress.
+        if (parallel_work_group_is_active(this))
+            return AnalysisWorkDisposition::Yield;
+        const ParallelWorkGroupExecutionScope execution_scope{this};
         const ParallelWorkActivityScope activity_scope{activity_};
         for (std::size_t consumed = 0u; consumed < quantum_; ++consumed) {
             const auto index =
