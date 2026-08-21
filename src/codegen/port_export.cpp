@@ -1056,6 +1056,35 @@ bool game_project_runtime_image_is_active(
            native_port->checkpoint_runtime_image_ids.end();
 }
 
+bool active_runtime_image_address(
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const katana::runtime::NativePortDefinition* const native_port,
+    const std::uint32_t address) noexcept {
+    if (game_project == nullptr) return false;
+    return std::any_of(
+        game_project->runtime_images.begin(),
+        game_project->runtime_images.end(),
+        [&](const auto& image) {
+            if (!game_project_runtime_image_is_active(
+                    native_port, image.image_id))
+                return false;
+            const auto contains = [&](const std::uint32_t start) {
+                const auto begin = static_cast<std::uint64_t>(start);
+                const auto end = begin +
+                    static_cast<std::uint64_t>(image.byte_size);
+                return static_cast<std::uint64_t>(address) >= begin &&
+                       static_cast<std::uint64_t>(address) < end;
+            };
+            // Program-index frontiers normally use the synthetic source
+            // address.  Accept the live alias as well so resumed/runtime
+            // evidence cannot accidentally reclassify the same mutable
+            // generation as a static owner merely because it crossed the
+            // source-to-runtime projection boundary.
+            return contains(image.source_start) ||
+                   contains(image.runtime_start);
+        });
+}
+
 bool game_project_metadata_is_active(
     const katana::runtime::NativePortDefinition* const native_port,
     const std::string_view image_id) noexcept {
@@ -28938,6 +28967,22 @@ build_native_disc_materialization_world(
         const bool has_detailed_evidence =
             evidence != program_index.incomplete_outgoing_evidence.end() &&
             !evidence->second.empty();
+        const bool requires_runtime_image_evidence =
+            active_runtime_image_address(
+                options.game_project,
+                options.native_port_definition,
+                site) ||
+            (has_detailed_evidence &&
+             std::any_of(
+                 evidence->second.begin(),
+                 evidence->second.end(),
+                 [&](const auto& detail) {
+                     return detail.instruction_address.has_value() &&
+                            active_runtime_image_address(
+                                options.game_project,
+                                options.native_port_definition,
+                                *detail.instruction_address);
+                 }));
         constexpr std::size_t maximum_task_transfer_details = 4u;
         FrontierEntry entry;
         entry.family = "replacement-reachability";
@@ -28961,16 +29006,26 @@ build_native_disc_materialization_world(
             entry.missing_proof +=
                 "; exact edge detail unavailable from resumed checkpoint";
         }
+        if (requires_runtime_image_evidence)
+            entry.missing_proof +=
+                "; live runtime-image generation evidence required";
         entry.fanout = has_detailed_evidence
             ? static_cast<std::uint32_t>(std::min<std::size_t>(
                   evidence->second.size(),
                   std::numeric_limits<std::uint32_t>::max()))
             : 1u;
+        entry.runtime_evidence_required = requires_runtime_image_evidence;
         entry.blocked_kind = FrontierBlockKind::Function;
         entry.evidence = {analysis_evidence, provider_evidence};
         entry.blocked_functions = {guarded_aot_address(site)};
         entry.contracts = {
             "checkpoint-owner-frontier-authoritative"};
+        if (requires_runtime_image_evidence) {
+            entry.contracts.push_back(
+                "runtime-image-source-is-mutable");
+            entry.contracts.push_back(
+                "live-runtime-generation-evidence-required");
+        }
         bool selected_slice_requires_analysis_source = false;
         if (has_detailed_evidence) {
             entry.contracts.push_back(
@@ -29016,17 +29071,25 @@ build_native_disc_materialization_world(
                 }
             }
         }
-        entry.causal_chain = has_detailed_evidence
-            ? std::vector<std::string>{
-                  "owner-entry",
-                  "typed-incomplete-outgoing-transfer",
-                  "target-ownership-or-edge-completeness-unproven"}
-            : std::vector<std::string>{
-                  "checkpoint-owner-frontier",
-                  "recomputed-edge-detail-unavailable",
-                  "fresh-analysis-required-for-actionable-site"};
+        if (requires_runtime_image_evidence) {
+            entry.causal_chain = {
+                "runtime-image-owner-entry",
+                "mutable-runtime-generation",
+                "live-outgoing-transfer-proof-required"};
+        } else if (has_detailed_evidence) {
+            entry.causal_chain = {
+                "owner-entry",
+                "typed-incomplete-outgoing-transfer",
+                "target-ownership-or-edge-completeness-unproven"};
+        } else {
+            entry.causal_chain = {
+                "checkpoint-owner-frontier",
+                "recomputed-edge-detail-unavailable",
+                "fresh-analysis-required-for-actionable-site"};
+        }
         entry.source_paths = {"src/codegen/port_export.cpp"};
-        if (selected_slice_requires_analysis_source) {
+        if (selected_slice_requires_analysis_source &&
+            !requires_runtime_image_evidence) {
             entry.source_paths.push_back(
                 "src/analysis/function_value_analysis.cpp");
             entry.source_paths.push_back(
@@ -29044,11 +29107,19 @@ build_native_disc_materialization_world(
             "checkpoint-owner-frontier-remains-authoritative",
             "unknown-targets-remain-unresolved",
             "no-replacement-proof-from-partial-edge-evidence"};
-        entry.acceptance_criteria = {
-            "identity-bound-owner-cfg",
-            "all-listed-outgoing-targets-have-one-owned-function",
-            "all-listed-runtime-only-or-partial-edge-remainders-closed",
-            "listed-transfer-slice-no-longer-blocks-reachability"};
+        if (requires_runtime_image_evidence) {
+            entry.acceptance_criteria = {
+                "matching-runtime-image-generation-observed",
+                "listed-transfer-sites-bounded-for-live-generation",
+                "runtime-observation-remains-non-authoritative-static-hint",
+                "no-static-closure-from-payload-template"};
+        } else {
+            entry.acceptance_criteria = {
+                "identity-bound-owner-cfg",
+                "all-listed-outgoing-targets-have-one-owned-function",
+                "all-listed-runtime-only-or-partial-edge-remainders-closed",
+                "listed-transfer-slice-no-longer-blocks-reachability"};
+        }
         add_frontier(std::move(entry));
         ++emitted_replacement_tasks;
     }
