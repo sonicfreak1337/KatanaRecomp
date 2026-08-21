@@ -984,7 +984,11 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
         decode_stage = "primary";
         const auto primary = parse_boot_analysis_checkpoint(
             artifact.identity.image_analysis_key, payload.blob());
-        if (primary.state != BootAnalysisCacheState::Hit) throw CodecError();
+        if (primary.state != BootAnalysisCacheState::Hit)
+            return {
+                NativeDiscAnalysisArtifactState::Corrupt,
+                {},
+                "codec-primary-" + primary.reason};
         artifact.primary = std::move(primary.artifact);
         decode_stage = "latent";
         artifact.latent = read_latent(payload);

@@ -14,6 +14,10 @@ ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt ausschliesslich als
 ABI-34-Referenz erhalten.
 
+Analyzer-ABI 62 erweitert den oeffentlichen Boot-Analyseparser um einen
+bounded Diagnosegrund. Damit bleibt nach einem abgelehnten Checkpoint nicht
+nur `Miss` oder `Corrupt`, sondern auch die exakte Codecphase sichtbar.
+
 Analyzer-ABI 61 bindet den persistenten Cache-Schreibvertrag von
 `LatentAotDiscoveryOptions`. Autoritative Agentanalysen duerfen weiterhin
 exakt identitaetsgebundene Cacheeintraege lesen, publizieren aber keine

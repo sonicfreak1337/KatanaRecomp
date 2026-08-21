@@ -47,7 +47,9 @@ enum class PayloadKind : std::uint8_t {
 
 class CodecError final : public std::runtime_error {
 public:
-    CodecError() : std::runtime_error("invalid latent AOT analysis cache") {}
+    explicit CodecError(
+        const char* const reason = "invalid latent AOT analysis cache")
+        : std::runtime_error(reason) {}
 };
 
 [[nodiscard]] std::uint8_t hex_nibble(const char value) {
@@ -162,7 +164,7 @@ public:
           allocation_bytes_remaining_(maximum_allocation_bytes) {
         if (maximum_depth_ == 0u ||
             allocation_bytes_remaining_ == 0u)
-            throw CodecError();
+            throw CodecError("invalid IR parser budget");
     }
 
     class DepthScope {
@@ -241,20 +243,21 @@ public:
             count > remaining() / minimum_encoded_bytes ||
             count > std::numeric_limits<std::size_t>::max() /
                         sizeof(Value))
-            throw CodecError();
+            throw CodecError("invalid IR vector encoding");
         const auto bytes = count * sizeof(Value);
-        if (bytes > allocation_bytes_remaining_) throw CodecError();
+        if (bytes > allocation_bytes_remaining_)
+            throw CodecError("IR allocation budget exhausted");
         allocation_bytes_remaining_ -= bytes;
     }
 
 private:
     void require(const std::size_t count) const {
-        if (count > remaining()) throw CodecError();
+        if (count > remaining()) throw CodecError("truncated IR payload");
     }
 
     void enter() {
         if (depth_ >= maximum_depth_)
-            throw CodecError();
+            throw CodecError("IR parser depth exhausted");
         ++depth_;
     }
 
@@ -337,7 +340,8 @@ template <typename Enum>
 void require_add(std::size_t& total,
                  const std::size_t count,
                  const std::size_t maximum) {
-    if (count > maximum || total > maximum - count) throw CodecError();
+    if (count > maximum || total > maximum - count)
+        throw CodecError("IR container budget exhausted");
     total += count;
 }
 
@@ -587,11 +591,11 @@ void write_instruction(Writer& output,
     instruction.forwarded_value_register = read_optional_u8(input);
     if (instruction.forwarded_value_register.has_value() &&
         *instruction.forwarded_value_register > 15u)
-        throw CodecError();
+        throw CodecError("invalid forwarded IR register");
     const auto dynamic_target_class = input.u8();
     if (dynamic_target_class >
-        enum_u8(katana::ir::DynamicTargetClass::Unresolved))
-        throw CodecError();
+        enum_u8(katana::ir::DynamicTargetClass::ExactGuarded))
+        throw CodecError("invalid IR dynamic target class");
     instruction.dynamic_target_class =
         static_cast<katana::ir::DynamicTargetClass>(dynamic_target_class);
     const auto delay_role = input.u8();

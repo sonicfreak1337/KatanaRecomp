@@ -8975,48 +8975,39 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
     return std::nullopt;
 }
 
-void publish_pending_agent_analysis_candidate(
-    const std::filesystem::path& output_root,
+std::optional<std::string> active_pending_agent_analysis_slot(
+    const std::filesystem::path& pending_root) {
+    const auto active_path = pending_root / "active-slot.txt";
+    if (!safe_regular_port_file_exists(
+            active_path, "Aktiver Analyse-Kandidatenslot"))
+        return std::nullopt;
+    const auto active = read_safe_small_port_file(
+        active_path, 32u, "Aktiver Analyse-Kandidatenslot");
+    if (active == "slot-0\n") return std::string("slot-0");
+    if (active == "slot-1\n") return std::string("slot-1");
+    throw std::runtime_error(
+        "Aktiver Analyse-Kandidatenslot ist ungueltig.");
+}
+
+void write_pending_agent_analysis_candidate_manifest_at_slot(
+    const std::filesystem::path& slot_root,
+    const std::string_view slot,
     const katana::codegen::NativeDiscAnalysisResult& analyzed,
-    const std::string_view rejection,
+    const std::string_view authority,
+    const std::string_view reason,
     const std::string_view analysis_session_contract_identity) {
-    const auto pending_root =
-        output_root / ".katana" / "agent" / "pending-analysis";
-    ensure_safe_port_directory_chain(
-        output_root,
-        pending_root,
-        "Nichtautoritative Analyse-Kandidatengeneration");
-    const auto archive_path =
-        pending_root / "native-disc-analysis.katana-analysis";
-    const auto world_path =
-        pending_root / "materialization-world.katana-world";
-    const auto world_json_path =
-        pending_root / "materialization-world.json";
-    const auto manifest_path = pending_root / "candidate.json";
-    AnalysisArtifactRollback publication(pending_root);
-    publication.prepare(archive_path, "Nichtautoratives Analysearchiv");
-    publication.prepare(world_path, "Nichtautoritativer Materialization-World");
-    publication.prepare(
-        world_json_path,
-        "Nichtautoritativer Materialization-World-JSON");
-    publication.prepare(manifest_path, "Analyse-Kandidatenmanifest");
-    write_atomic_analysis_file(
-        pending_root,
-        archive_path,
-        analyzed.analysis_artifact_bytes,
-        "Nichtautoratives Analysearchiv");
-    write_atomic_analysis_file(
-        pending_root,
-        world_path,
-        analyzed.materialization_world_artifact_bytes,
-        "Nichtautoritativer Materialization-World");
+    static constexpr std::array<std::string_view, 3u> allowed_authorities{
+        "unvalidated", "rejected", "validated"};
+    if (std::find(
+            allowed_authorities.begin(),
+            allowed_authorities.end(),
+            authority) == allowed_authorities.end() ||
+        reason.empty() || reason.size() > 1024u)
+        throw std::invalid_argument(
+            "Analyse-Kandidatenmanifest besitzt einen ungueltigen Zustand.");
+    const auto manifest_path = slot_root / "candidate.json";
     auto world_json = analyzed.materialization_world_json;
     world_json.push_back('\n');
-    write_atomic_analysis_file(
-        pending_root,
-        world_json_path,
-        world_json,
-        "Nichtautoritativer Materialization-World-JSON");
     const auto archive_sha256 = katana::io::sha256_bytes(
         std::string_view(
             reinterpret_cast<const char*>(
@@ -9029,9 +9020,10 @@ void publish_pending_agent_analysis_candidate(
             analyzed.materialization_world_artifact_bytes.size()));
     std::ostringstream manifest;
     manifest
-        << "{\"schema\":1,\"kind\":\"katana-pending-analysis-candidate\""
-        << ",\"authority\":\"rejected\""
-        << ",\"reason\":" << katana::io::quote_json(rejection)
+        << "{\"schema\":3,\"kind\":\"katana-pending-analysis-candidate\""
+        << ",\"slot\":" << katana::io::quote_json(slot)
+        << ",\"authority\":" << katana::io::quote_json(authority)
+        << ",\"reason\":" << katana::io::quote_json(reason)
         << ",\"analysis_artifact_id\":"
         << katana::io::quote_json(
                analyzed.analysis_artifact_identity.key)
@@ -9047,11 +9039,102 @@ void publish_pending_agent_analysis_candidate(
                katana::io::sha256_bytes(world_json))
         << "}\n";
     write_atomic_analysis_file(
-        pending_root,
+        slot_root,
         manifest_path,
         manifest.str(),
         "Analyse-Kandidatenmanifest");
-    publication.commit();
+}
+
+void write_pending_agent_analysis_candidate_manifest(
+    const std::filesystem::path& output_root,
+    const katana::codegen::NativeDiscAnalysisResult& analyzed,
+    const std::string_view authority,
+    const std::string_view reason,
+    const std::string_view analysis_session_contract_identity) {
+    const auto pending_root =
+        output_root / ".katana" / "agent" / "pending-analysis";
+    ensure_safe_port_directory_chain(
+        output_root,
+        pending_root,
+        "Nichtautoritative Analyse-Kandidatengeneration");
+    const auto active = active_pending_agent_analysis_slot(pending_root);
+    if (!active.has_value())
+        throw std::runtime_error(
+            "Analyse-Kandidatenmanifest besitzt keinen aktiven Slot.");
+    const auto slot_root = pending_root / *active;
+    if (!safe_regular_port_directory_exists(
+            slot_root, "Aktiver Analyse-Kandidatenslot"))
+        throw std::runtime_error(
+            "Aktiver Analyse-Kandidatenslot fehlt.");
+    write_pending_agent_analysis_candidate_manifest_at_slot(
+        slot_root,
+        *active,
+        analyzed,
+        authority,
+        reason,
+        analysis_session_contract_identity);
+}
+
+void publish_pending_agent_analysis_candidate(
+    const std::filesystem::path& output_root,
+    const katana::codegen::NativeDiscAnalysisResult& analyzed,
+    const std::string_view analysis_session_contract_identity) {
+    const auto pending_root =
+        output_root / ".katana" / "agent" / "pending-analysis";
+    ensure_safe_port_directory_chain(
+        output_root,
+        pending_root,
+        "Nichtautoritative Analyse-Kandidatengeneration");
+    const auto active = active_pending_agent_analysis_slot(pending_root);
+    const std::string_view target_slot =
+        active == std::optional<std::string>{"slot-0"}
+            ? std::string_view("slot-1")
+            : std::string_view("slot-0");
+    const auto slot_root = pending_root / target_slot;
+    ensure_safe_port_directory_chain(
+        pending_root,
+        slot_root,
+        "Nichtautoritativer Analyse-Kandidatenslot");
+    const auto archive_path =
+        slot_root / "native-disc-analysis.katana-analysis";
+    const auto world_path =
+        slot_root / "materialization-world.katana-world";
+    const auto world_json_path =
+        slot_root / "materialization-world.json";
+    // Build a complete generation in the inactive slot.  The single active
+    // pointer replacement below is the only commit: until then a crash leaves
+    // the preceding complete slot authoritative and untouched.
+    write_atomic_analysis_file(
+        slot_root,
+        archive_path,
+        analyzed.analysis_artifact_bytes,
+        "Nichtautoratives Analysearchiv");
+    write_atomic_analysis_file(
+        slot_root,
+        world_path,
+        analyzed.materialization_world_artifact_bytes,
+        "Nichtautoritativer Materialization-World");
+    auto world_json = analyzed.materialization_world_json;
+    world_json.push_back('\n');
+    write_atomic_analysis_file(
+        slot_root,
+        world_json_path,
+        world_json,
+        "Nichtautoritativer Materialization-World-JSON");
+    write_pending_agent_analysis_candidate_manifest_at_slot(
+        slot_root,
+        target_slot,
+        analyzed,
+        "unvalidated",
+        "authority-validation-pending",
+        analysis_session_contract_identity);
+    const auto active_path = pending_root / "active-slot.txt";
+    const auto active_document = std::string(target_slot) + "\n";
+    write_atomic_analysis_file(
+        pending_root,
+        active_path,
+        active_document,
+        "Aktiver Analyse-Kandidatenslot");
 }
 
 bool same_noop_analysis_manifest_identity(
@@ -10469,104 +10552,6 @@ int export_port_project(const std::filesystem::path& source_path,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - analysis_started)
                 .count());
-        bool previous_world_evidence_reusable = false;
-        if (previous_world.has_value()) {
-            const bool exact_generation =
-                previous_analysis_artifact_id.has_value() &&
-                *previous_analysis_artifact_id ==
-                    analyzed.analysis_artifact_identity.key &&
-                materialization_world_matches_analysis_identity(
-                    *previous_world,
-                    analyzed.analysis_artifact_identity);
-            const bool revalidated_admission_generation =
-                previous_analysis_artifact_id.has_value() &&
-                analyzed.resumed_from_analysis_artifact_identity.has_value() &&
-                *previous_analysis_artifact_id ==
-                    analyzed.resumed_from_analysis_artifact_identity->key &&
-                materialization_world_matches_analysis_identity(
-                    *previous_world,
-                    *analyzed.resumed_from_analysis_artifact_identity);
-            previous_world_evidence_reusable =
-                exact_generation || revalidated_admission_generation;
-            if (!previous_world_evidence_reusable && !refresh_analysis)
-                throw std::invalid_argument(
-                    "--resume verweigert: der vorhandene "
-                    "Materialization-World ist weder an die aktuelle noch "
-                    "an die revalidierte Eingabe-Analysegeneration gebunden.");
-            if (!previous_world_evidence_reusable)
-                std::cout
-                    << "KATANA_ANALYZE_PORT_REFRESH_BASELINE_REBUILT\n"
-                    << std::flush;
-        }
-        if (runtime_import.has_value())
-            validate_runtime_frontier_import_binding(runtime_import.value(), analyzed);
-        const auto runtime_observations = runtime_import.has_value()
-            ? std::span<const RuntimeFrontierObservation>(
-                  runtime_import->observations.data(),
-                  runtime_import->observations.size())
-            : std::span<const RuntimeFrontierObservation>{};
-        std::size_t accepted_runtime_observations = 0u;
-        const std::optional<katana::agent::ExecutableMaterializationWorld>
-            no_previous_world;
-        const auto& previous_world_for_evidence =
-            previous_world_evidence_reusable
-                ? previous_world
-                : no_previous_world;
-        if (previous_world_evidence_reusable ||
-            !runtime_observations.empty())
-            accepted_runtime_observations = refresh_agent_artifacts(
-                analyzed,
-                previous_world_for_evidence,
-                runtime_observations);
-        if (analyzed.analysis_artifact_bytes.empty())
-            throw std::runtime_error(
-                "analyze-port erhielt kein autoritatives Analysearchiv.");
-        if (analyzed.materialization_world_artifact_bytes.empty() ||
-            analyzed.materialization_world_json.empty())
-            throw std::runtime_error(
-                "analyze-port erhielt keinen Materialization-World vom "
-                "autoritativen Analysepfad.");
-        katana::agent::ExecutableMaterializationWorld current_world;
-        if (!katana::agent::parse_agent_world_binary(
-                analyzed.materialization_world_artifact_bytes,
-                current_world))
-            throw std::runtime_error(
-                "Kandidaten-Materialization-World konnte nicht fuer das "
-                "Authority-Gate validiert werden.");
-        const auto candidate_artifact =
-            katana::codegen::parse_native_disc_analysis_artifact(
-                analyzed.analysis_artifact_identity.key,
-                analyzed.analysis_artifact_bytes);
-        if (candidate_artifact.state !=
-            katana::codegen::NativeDiscAnalysisArtifactState::Hit)
-            throw std::runtime_error(
-                "Kandidaten-Analysearchiv konnte nicht fuer das "
-                "Authority-Gate validiert werden.");
-        AgentIterationDelta authority_world_delta;
-        if (previous_world.has_value())
-            authority_world_delta =
-                measure_agent_iteration(*previous_world, current_world);
-        if (previous_analysis_authority.has_value()) {
-            if (const auto rejection =
-                    agent_analysis_authority_rejection(
-                        *previous_analysis_authority,
-                        candidate_artifact.artifact,
-                        authority_world_delta)) {
-                publish_pending_agent_analysis_candidate(
-                    absolute_output,
-                    analyzed,
-                    *rejection,
-                    analysis_session_contract_identity);
-                std::cout
-                    << "KATANA_ANALYZE_PORT_CANDIDATE_REJECTED reason="
-                    << *rejection << '\n'
-                    << std::flush;
-                throw std::runtime_error(
-                    "Analyse-Refresh verletzt den autoritativen "
-                    "Closure-Vertrag; die letzte Generation bleibt aktiv "
-                    "und der Kandidat wurde bounded separat gesichert.");
-            }
-        }
         std::error_code output_error;
         auto output_status = std::filesystem::symlink_status(
             absolute_output, output_error);
@@ -10593,6 +10578,176 @@ int export_port_project(const std::filesystem::path& source_path,
                 absolute_output, output_status))
             throw std::runtime_error(
                 "Analyseartefaktziel ist kein sicherer lokaler Ordner.");
+        if (analyzed.analysis_artifact_bytes.empty())
+            throw std::runtime_error(
+                "analyze-port erhielt kein autoritatives Analysearchiv.");
+        // Capture the direct analysis output before resume/runtime evidence
+        // projection can reject or mutate the World.  A later successful
+        // refresh publishes another complete generation in the alternate
+        // bounded slot.
+        publish_pending_agent_analysis_candidate(
+            absolute_output,
+            analyzed,
+            analysis_session_contract_identity);
+        if (analyzed.materialization_world_artifact_bytes.empty() ||
+            analyzed.materialization_world_json.empty()) {
+            write_pending_agent_analysis_candidate_manifest(
+                absolute_output,
+                analyzed,
+                "rejected",
+                "materialization-world-missing",
+                analysis_session_contract_identity);
+            throw std::runtime_error(
+                "analyze-port erhielt keinen Materialization-World vom "
+                "autoritativen Analysepfad; das Analysearchiv wurde bounded "
+                "separat gesichert.");
+        }
+        bool previous_world_evidence_reusable = false;
+        if (previous_world.has_value()) {
+            const bool exact_generation =
+                previous_analysis_artifact_id.has_value() &&
+                *previous_analysis_artifact_id ==
+                    analyzed.analysis_artifact_identity.key &&
+                materialization_world_matches_analysis_identity(
+                    *previous_world,
+                    analyzed.analysis_artifact_identity);
+            const bool revalidated_admission_generation =
+                previous_analysis_artifact_id.has_value() &&
+                analyzed.resumed_from_analysis_artifact_identity.has_value() &&
+                *previous_analysis_artifact_id ==
+                    analyzed.resumed_from_analysis_artifact_identity->key &&
+                materialization_world_matches_analysis_identity(
+                    *previous_world,
+                    *analyzed.resumed_from_analysis_artifact_identity);
+            previous_world_evidence_reusable =
+                exact_generation || revalidated_admission_generation;
+            if (!previous_world_evidence_reusable && !refresh_analysis) {
+                write_pending_agent_analysis_candidate_manifest(
+                    absolute_output,
+                    analyzed,
+                    "rejected",
+                    "resume-world-binding",
+                    analysis_session_contract_identity);
+                throw std::invalid_argument(
+                    "--resume verweigert: der vorhandene "
+                    "Materialization-World ist weder an die aktuelle noch "
+                    "an die revalidierte Eingabe-Analysegeneration gebunden.");
+            }
+            if (!previous_world_evidence_reusable)
+                std::cout
+                    << "KATANA_ANALYZE_PORT_REFRESH_BASELINE_REBUILT\n"
+                    << std::flush;
+        }
+        if (runtime_import.has_value()) {
+            try {
+                validate_runtime_frontier_import_binding(
+                    runtime_import.value(), analyzed);
+            } catch (...) {
+                write_pending_agent_analysis_candidate_manifest(
+                    absolute_output,
+                    analyzed,
+                    "rejected",
+                    "runtime-frontier-binding",
+                    analysis_session_contract_identity);
+                throw;
+            }
+        }
+        const auto runtime_observations = runtime_import.has_value()
+            ? std::span<const RuntimeFrontierObservation>(
+                  runtime_import->observations.data(),
+                  runtime_import->observations.size())
+            : std::span<const RuntimeFrontierObservation>{};
+        std::size_t accepted_runtime_observations = 0u;
+        const std::optional<katana::agent::ExecutableMaterializationWorld>
+            no_previous_world;
+        const auto& previous_world_for_evidence =
+            previous_world_evidence_reusable
+                ? previous_world
+                : no_previous_world;
+        if (previous_world_evidence_reusable ||
+            !runtime_observations.empty()) {
+            write_pending_agent_analysis_candidate_manifest(
+                absolute_output,
+                analyzed,
+                "unvalidated",
+                "materialization-world-refresh-pending",
+                analysis_session_contract_identity);
+            accepted_runtime_observations = refresh_agent_artifacts(
+                analyzed,
+                previous_world_for_evidence,
+                runtime_observations);
+        }
+        // A successful refresh becomes a second complete two-slot generation;
+        // no active candidate is ever edited into a mixed archive/World set.
+        publish_pending_agent_analysis_candidate(
+            absolute_output,
+            analyzed,
+            analysis_session_contract_identity);
+        katana::agent::ExecutableMaterializationWorld current_world;
+        if (!katana::agent::parse_agent_world_binary(
+                analyzed.materialization_world_artifact_bytes,
+                current_world)) {
+            write_pending_agent_analysis_candidate_manifest(
+                absolute_output,
+                analyzed,
+                "rejected",
+                "materialization-world-codec",
+                analysis_session_contract_identity);
+            throw std::runtime_error(
+                "Kandidaten-Materialization-World konnte nicht fuer das "
+                "Authority-Gate validiert werden.");
+        }
+        const auto candidate_artifact =
+            katana::codegen::parse_native_disc_analysis_artifact(
+                analyzed.analysis_artifact_identity.key,
+                analyzed.analysis_artifact_bytes);
+        if (candidate_artifact.state !=
+            katana::codegen::NativeDiscAnalysisArtifactState::Hit) {
+            const auto rejection =
+                "analysis-archive-" + candidate_artifact.reason;
+            write_pending_agent_analysis_candidate_manifest(
+                absolute_output,
+                analyzed,
+                "rejected",
+                rejection,
+                analysis_session_contract_identity);
+            throw std::runtime_error(
+                "Kandidaten-Analysearchiv konnte nicht fuer das "
+                "Authority-Gate validiert werden: " +
+                candidate_artifact.reason + ".");
+        }
+        AgentIterationDelta authority_world_delta;
+        if (previous_world.has_value())
+            authority_world_delta =
+                measure_agent_iteration(*previous_world, current_world);
+        if (previous_analysis_authority.has_value()) {
+            if (const auto rejection =
+                    agent_analysis_authority_rejection(
+                        *previous_analysis_authority,
+                        candidate_artifact.artifact,
+                        authority_world_delta)) {
+                write_pending_agent_analysis_candidate_manifest(
+                    absolute_output,
+                    analyzed,
+                    "rejected",
+                    *rejection,
+                    analysis_session_contract_identity);
+                std::cout
+                    << "KATANA_ANALYZE_PORT_CANDIDATE_REJECTED reason="
+                    << *rejection << '\n'
+                    << std::flush;
+                throw std::runtime_error(
+                    "Analyse-Refresh verletzt den autoritativen "
+                    "Closure-Vertrag; die letzte Generation bleibt aktiv "
+                    "und der Kandidat wurde bounded separat gesichert.");
+            }
+        }
+        write_pending_agent_analysis_candidate_manifest(
+            absolute_output,
+            analyzed,
+            "validated",
+            "authority-gate-passed",
+            analysis_session_contract_identity);
         const auto report_path =
             absolute_output / "native-disc-analysis.json";
         const auto archive_target_path =

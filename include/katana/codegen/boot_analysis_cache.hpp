@@ -50,6 +50,7 @@ enum class BootAnalysisCacheState : std::uint8_t {
 struct BootAnalysisCacheParseResult {
     BootAnalysisCacheState state = BootAnalysisCacheState::Miss;
     PreparedBootAnalysisArtifact artifact;
+    std::string reason;
 };
 
 // semantic_contract_identity binds analysis-visible GameProject/runtime-image

@@ -1114,32 +1114,42 @@ read_static_callback_record_table(Reader& input) {
 }
 
 [[nodiscard]] PreparedBootAnalysisArtifact parse_payload(
-    Reader& input) {
+    Reader& input,
+    std::string_view& decode_stage) {
+    decode_stage = "payload-ir-schema";
     if (input.u32() != boot_analysis_cache_ir_schema_version)
         throw CodecError();
+    decode_stage = "payload-ir-size";
     const auto ir_bytes_u64 = input.u64();
     if (ir_bytes_u64 > boot_ir_limits.maximum_payload_bytes ||
         ir_bytes_u64 > input.remaining())
         throw CodecError();
     PreparedBootAnalysisArtifact artifact;
+    decode_stage = "payload-ir-program";
     artifact.lowered_program = parse_ir_program_cache_payload(
         input.raw(static_cast<std::size_t>(ir_bytes_u64)),
         boot_ir_limits);
+    decode_stage = "payload-recursive-functions";
     artifact.analysis.recursive.functions =
         read_vector<katana::analysis::FunctionCandidate>(
             input, read_function_candidate, boot_ir_limits.maximum_functions);
+    decode_stage = "payload-runtime-code-copies";
     artifact.analysis.runtime_code_copies.copies =
         read_vector<katana::analysis::RuntimeCodeCopy>(
             input, read_runtime_code_copy);
+    decode_stage = "payload-indirect-control-flow";
     artifact.analysis.indirect_control_flow =
         read_vector<katana::analysis::IndirectControlFlowResolution>(
             input, read_indirect_resolution);
+    decode_stage = "payload-jump-tables";
     artifact.analysis.jump_tables =
         read_vector<katana::analysis::JumpTableAnalysis>(
             input, read_jump_table);
+    decode_stage = "payload-guarded-aot-entries";
     artifact.analysis.guarded_aot_entries =
         read_vector<katana::analysis::GuardedAotEntry>(
             input, read_guarded_entry);
+    decode_stage = "payload-static-callback-contracts";
     artifact.analysis.static_callback_contracts_materialized =
         input.boolean();
     artifact.analysis.static_callback_sinks =
@@ -1154,11 +1164,15 @@ read_static_callback_record_table(Reader& input) {
     artifact.analysis.static_callback_record_tables =
         read_vector<katana::analysis::StaticCallbackRecordTableContract>(
             input, read_static_callback_record_table);
+    decode_stage = "payload-analysis-scalars";
     read_analysis_scalars(input, artifact.analysis);
+    decode_stage = "payload-hardware-loops";
     artifact.hardware_loops =
         read_vector<katana::analysis::HardwareNaturalLoop>(
             input, read_hardware_loop);
+    decode_stage = "payload-control-flow-graph";
     artifact.control_flow_graph = read_graph(input);
+    decode_stage = "payload-call-graph";
     artifact.call_graph = read_graph(input);
     return artifact;
 }
@@ -1450,17 +1464,19 @@ BootAnalysisCacheParseResult parse_boot_analysis_envelope(
     if (!lowercase_sha256(expected_key) ||
         artifact.size() < cache_header_bytes ||
         artifact.size() > maximum_boot_analysis_cache_artifact_bytes)
-        return {BootAnalysisCacheState::Corrupt, {}};
+        return {
+            BootAnalysisCacheState::Corrupt, {}, "envelope-input"};
+    std::string_view decode_stage = "envelope";
     try {
         Reader input(artifact);
         if (!std::ranges::equal(input.raw(magic.size()), magic))
             throw CodecError();
         const auto stored_schema = input.u32();
         if (stored_schema != schema)
-            return {BootAnalysisCacheState::Miss, {}};
+            return {BootAnalysisCacheState::Miss, {}, "schema"};
         if (!std::ranges::equal(
                 input.raw(sha256_bytes), decode_sha256(expected_key)))
-            return {BootAnalysisCacheState::Miss, {}};
+            return {BootAnalysisCacheState::Miss, {}, "identity-key"};
         const auto payload_size_u64 = input.u64();
         if (payload_size_u64 >
                 maximum_boot_analysis_cache_artifact_bytes -
@@ -1478,19 +1494,35 @@ BootAnalysisCacheParseResult parse_boot_analysis_envelope(
         if (!std::ranges::equal(
                 expected_payload_sha, actual_payload_sha))
             throw CodecError();
+        decode_stage = "payload";
         Reader payload_input(payload);
-        auto parsed = parse_payload(payload_input);
-        if (!payload_input.empty() || !predicate(parsed))
+        auto parsed = parse_payload(payload_input, decode_stage);
+        if (!payload_input.empty()) {
+            decode_stage = "payload-trailing-bytes";
             throw CodecError();
-        return {BootAnalysisCacheState::Hit, std::move(parsed)};
+        }
+        decode_stage = "checkpoint-contract";
+        if (!predicate(parsed)) throw CodecError();
+        return {
+            BootAnalysisCacheState::Hit, std::move(parsed), "hit"};
     } catch (const CodecError&) {
-        return {BootAnalysisCacheState::Corrupt, {}};
+        return {
+            BootAnalysisCacheState::Corrupt,
+            {},
+            "codec-" + std::string(decode_stage)};
     } catch (const std::runtime_error&) {
-        return {BootAnalysisCacheState::Corrupt, {}};
+        return {
+            BootAnalysisCacheState::Corrupt,
+            {},
+            "runtime-" + std::string(decode_stage)};
     } catch (const std::bad_alloc&) {
-        return {BootAnalysisCacheState::Corrupt, {}};
+        return {
+            BootAnalysisCacheState::Corrupt, {}, "allocation"};
     } catch (const std::length_error&) {
-        return {BootAnalysisCacheState::Corrupt, {}};
+        return {
+            BootAnalysisCacheState::Corrupt,
+            {},
+            "length-" + std::string(decode_stage)};
     }
 }
 
