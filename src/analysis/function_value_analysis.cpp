@@ -25752,6 +25752,7 @@ class FunctionEvaluationCache {
             const auto artifact_payload_bytes =
                 result->retained_payload_budget_bytes();
             auto artifact_retainable =
+                !result->evaluation.local_fixpoint_budget_exhausted &&
                 artifact_payload_bytes <=
                     std::numeric_limits<std::size_t>::max() -
                         producer_entry->retained_payload_bytes &&
@@ -26519,6 +26520,7 @@ class MultiRootEvaluationCoordinator final {
             const auto artifact_payload_bytes =
                 result->retained_payload_budget_bytes();
             auto artifact_retainable =
+                !result->evaluation.local_fixpoint_budget_exhausted &&
                 artifact_payload_bytes <=
                     std::numeric_limits<std::size_t>::max() -
                         producer_entry->retained_payload_bytes &&
@@ -27407,7 +27409,7 @@ inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
 // Complete per-callsite inventory families now replace their correlation-lost
 // aggregate journal, while explicit unknown ingress is evaluated as its own
 // exact partition. Older root artifacts published both journals monotonically.
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 36u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 37u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -30178,6 +30180,11 @@ struct FunctionAnalysisEpoch final {
     std::unordered_map<std::uint32_t, std::uint64_t> summary_versions;
     std::unordered_map<std::uint32_t, std::uint64_t> input_versions;
     std::unordered_set<std::uint32_t> inventory_sink_functions;
+    // A locally capped CFG publishes a conservative Top summary so unrelated
+    // SCCs and complete resolution roots remain reusable.  These exact owners
+    // are nevertheless non-authoritative analysis work: every later semantic
+    // epoch must retry them and their caller dependency closure.
+    std::vector<std::uint32_t> incomplete_summary_functions;
 
     // KR-4978: the four derived preparation domains are retained as
     // immutable, path-copying owner shards.  The legacy flat maps above are
@@ -32557,6 +32564,18 @@ void write_presentation_metadata(
         epoch.inventory_sink_functions.end()};
     normalize(inventory_sinks);
     write_u32_values(writer, inventory_sinks);
+    if (!std::is_sorted(epoch.incomplete_summary_functions.begin(),
+                        epoch.incomplete_summary_functions.end()) ||
+        std::adjacent_find(epoch.incomplete_summary_functions.begin(),
+                           epoch.incomplete_summary_functions.end()) !=
+            epoch.incomplete_summary_functions.end() ||
+        std::any_of(epoch.incomplete_summary_functions.begin(),
+                    epoch.incomplete_summary_functions.end(),
+                    [&](const auto address) {
+                        return epoch.program->find_function(address) == nullptr;
+                    }))
+        throw PersistentFunctionEpochIncomplete{};
+    write_u32_values(writer, epoch.incomplete_summary_functions);
     write_resolution_epoch(writer, epoch);
     write_presentation_metadata(writer, epoch.presentation_metadata);
     return std::move(writer).finish_with_digest();
@@ -32713,6 +32732,18 @@ read_persistent_function_epoch_body(
             throw PersistentFunctionEpochIncomplete{};
         epoch->inventory_sink_functions.insert(address);
     }
+    epoch->incomplete_summary_functions = read_u32_values(reader);
+    if (!std::is_sorted(epoch->incomplete_summary_functions.begin(),
+                        epoch->incomplete_summary_functions.end()) ||
+        std::adjacent_find(epoch->incomplete_summary_functions.begin(),
+                           epoch->incomplete_summary_functions.end()) !=
+            epoch->incomplete_summary_functions.end() ||
+        std::any_of(epoch->incomplete_summary_functions.begin(),
+                    epoch->incomplete_summary_functions.end(),
+                    [&](const auto address) {
+                        return epoch->program->find_function(address) == nullptr;
+                    }))
+        throw PersistentFunctionEpochIncomplete{};
     const auto computed_resolution_retained_bytes =
         read_resolution_epoch(reader,
                               image,
@@ -38321,6 +38352,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         for (const auto& function : functions)
             summary_dirty_functions.insert(function.entry_address);
     } else {
+        summary_candidate_entries_visited +=
+            previous_epoch->incomplete_summary_functions.size();
+        for (const auto address :
+             previous_epoch->incomplete_summary_functions) {
+            if (graph_function_index.contains(address))
+                summary_dirty_functions.insert(address);
+        }
         summary_candidate_entries_visited += abi_contract_dirty.size();
         for (const auto address : abi_contract_dirty) {
             if (graph_function_index.contains(address))
@@ -39830,6 +39868,153 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     std::deque<std::uint32_t> pending;
     std::unordered_set<std::uint32_t> queued;
     queued.reserve(functions.size());
+    std::unordered_set<std::uint32_t> incomplete_summary_functions;
+    incomplete_summary_functions.reserve(functions.size());
+    const auto make_local_cap_summary = [](const std::uint32_t address) {
+        FunctionValueSummary summary;
+        summary.function_address = address;
+        summary.inventory_storage_contract_authoritative = true;
+        summary.memory_complete = false;
+        summary.memory_write_unknown = true;
+        summary.memory_read_complete = true;
+        summary.memory_read_unknown = true;
+        return summary;
+    };
+    const auto quarantine_local_cap_component =
+        [&](const std::size_t failed_function) {
+            // A locally capped member invalidates the recursive storage SCC
+            // and every caller SCC which consumed its summary.  Reset only
+            // that reverse dependency closure to Bottom; unrelated shards
+            // keep their exact authority and versions.
+            std::vector<std::uint8_t> affected_components(
+                storage_component_members.size(), 0u);
+            std::deque<std::size_t> pending_components;
+            const auto enqueue_component = [&](const std::size_t component) {
+                if (affected_components[component] != 0u) return;
+                affected_components[component] = 1u;
+                pending_components.push_back(component);
+            };
+            const auto failed_component =
+                storage_component_by_function[failed_function];
+            std::vector<std::uint8_t> capped_components(
+                storage_component_members.size(), 0u);
+            capped_components[failed_component] = 1u;
+            for (const auto address : incomplete_summary_functions) {
+                const auto found = fixpoint_function_index.find(address);
+                if (found != fixpoint_function_index.end())
+                    capped_components[storage_component_by_function[
+                        found->second]] = 1u;
+            }
+            enqueue_component(failed_component);
+            // Every quarantined owner will replay its latest-per-caller
+            // ingress contributions from a fresh state. Include every
+            // concrete target of every affected owner while taking the
+            // reverse caller closure; otherwise an exact stale CandidateInput
+            // cell produced by a reset caller could survive when that caller
+            // no longer emits the observation. The mixed closure is bounded
+            // by the finite storage-component graph. An unowned structural
+            // endpoint makes localized salvage unrepresentable and
+            // deliberately falls back to the existing whole-epoch abort
+            // path.
+            std::vector<std::vector<std::size_t>>
+                contribution_targets_by_component(
+                    storage_component_members.size());
+            for (const auto& [target, contributions] :
+                 summary_callsite_contributions) {
+                const auto target_function =
+                    fixpoint_function_index.find(target);
+                if (target_function == fixpoint_function_index.end()) {
+                    result.budget_exhausted = true;
+                    return;
+                }
+                const auto target_component =
+                    storage_component_by_function[target_function->second];
+                const auto& target_input = candidate_inputs.at(target);
+                for (const auto& contribution : contributions) {
+                    const auto caller = fixpoint_function_index.find(
+                        contribution.caller);
+                    if (caller == fixpoint_function_index.end()) {
+                        result.budget_exhausted = true;
+                        return;
+                    }
+                    // A declared but not yet observed relation contributes no
+                    // exact ingress state and therefore needs no retraction.
+                    // This keeps the quarantine at the actually published
+                    // dependency closure instead of the whole structural
+                    // call-graph component.
+                    if (!target_input.contribution_observations.contains(
+                            contribution))
+                        continue;
+                    contribution_targets_by_component
+                        [storage_component_by_function[caller->second]]
+                            .push_back(target_component);
+                }
+            }
+            for (auto& targets : contribution_targets_by_component)
+                normalize(targets);
+            while (!pending_components.empty()) {
+                const auto component = pending_components.front();
+                pending_components.pop_front();
+                for (const auto target :
+                     contribution_targets_by_component[component])
+                    enqueue_component(target);
+                for (const auto member :
+                     storage_component_members[component]) {
+                    for (const auto caller :
+                         fixpoint_summary_dependents[member])
+                        enqueue_component(
+                            storage_component_by_function[caller]);
+                }
+            }
+
+            for (std::size_t component = 0u;
+                 component < affected_components.size(); ++component) {
+                if (affected_components[component] == 0u) continue;
+                const bool component_capped =
+                    capped_components[component] != 0u;
+                storage_component_authoritative[component] =
+                    component_capped ? 1u : 0u;
+                for (const auto member :
+                     storage_component_members[component]) {
+                    const auto address =
+                        fixpoint_functions[member]->entry_address;
+                    if (summary_dirty_functions.insert(address).second &&
+                        staged_summary_state_reuses != 0u)
+                        --staged_summary_state_reuses;
+                    ++fixpoint_summary_versions[member];
+                    ++fixpoint_input_versions[member];
+                    CandidateInput reset_input;
+                    reset_input.state.stack_offsets[15u] = 0;
+                    if (const auto relation =
+                            summary_callsite_contributions.find(address);
+                        relation != summary_callsite_contributions.end())
+                        reset_input.expected_contributions = relation->second;
+                    reset_input.unknown_ingress =
+                        reset_input.expected_contributions.empty() ||
+                        std::find(image.entry_points().begin(),
+                                  image.entry_points().end(),
+                                  address) != image.entry_points().end();
+                    rebuild_candidate_input_observation_projection(
+                        reset_input);
+                    candidate_inputs.at(address) =
+                        std::move(reset_input);
+                    if (component_capped) {
+                        summaries.at(address) =
+                            make_local_cap_summary(address);
+                        fixpoint_summary_evaluated[member] = 1u;
+                        incomplete_summary_functions.insert(address);
+                    } else {
+                        FunctionValueSummary bottom;
+                        bottom.function_address = address;
+                        bottom.memory_read_complete = true;
+                        summaries.at(address) = std::move(bottom);
+                        fixpoint_summary_evaluated[member] = 0u;
+                        if (queued.insert(address).second)
+                            pending.push_back(address);
+                    }
+                }
+            }
+        };
     for (const auto& component : components) {
         for (const auto address : component) {
             if (!summary_dirty_functions.contains(address)) continue;
@@ -40078,9 +40263,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             auto evaluation =
                 std::move(*item.evaluation);
             if (evaluation.local_fixpoint_budget_exhausted) {
-                result.budget_exhausted = true;
-                break;
+                quarantine_local_cap_component(item.function_index);
+                if (result.budget_exhausted) break;
+                continue;
             }
+            if (incomplete_summary_functions.contains(item.address))
+                continue;
             if (memory_read_tail_top_functions.contains(
                     item.address)) {
                 evaluation.summary.memory_read_complete = true;
@@ -40248,6 +40436,19 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 pending.size());
             pending_count = pending.size();
         }
+        if (!incomplete_summary_functions.empty()) {
+            std::deque<std::uint32_t> retained_pending;
+            while (!pending.empty()) {
+                const auto address = pending.front();
+                pending.pop_front();
+                if (incomplete_summary_functions.contains(address)) {
+                    queued.erase(address);
+                    continue;
+                }
+                retained_pending.push_back(address);
+            }
+            pending.swap(retained_pending);
+        }
         if (result.budget_exhausted) break;
         if (batch.size() > 1u)
             report_progress("fixpoint-batch-complete");
@@ -40281,6 +40482,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         "global-loop-complete", 1u, 0u, 0u, summaries.size());
     memory_read_contracts_authoritative =
         !result.budget_exhausted;
+    run_work.summary_candidate_entries_rebuilt.store(
+        summary_dirty_functions.size(), std::memory_order_relaxed);
 
     if (result.budget_exhausted) {
         for (auto& [address, summary] : summaries) {
@@ -43159,6 +43362,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     shape_existing,
                     shape_incoming);
             };
+        if (incomplete_summary_functions.contains(
+                function->entry_address)) {
+            record_local_fixpoint_limit();
+            function_result.walk_diagnostics
+                .local_fixpoint_limited_evaluations = 1u;
+            return finalize_root_result();
+        }
         emit_analyzer_fixpoint_trace(
             "resolution-root-base-start",
             1u,
@@ -50912,7 +51122,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             progress_resolution_functions_started.fetch_add(
                 1u, std::memory_order_relaxed);
         const auto& plan = resolution_root_plans.at(function_index);
-        if (plan.reused_artifact != nullptr) {
+        if (plan.reused_artifact != nullptr &&
+            !incomplete_summary_functions.contains(resolution_entry)) {
             ResolutionFunctionResult reused;
             reused.root_index = function_index;
             reused.persistent_artifact = plan.reused_artifact;
@@ -50961,12 +51172,12 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     // admission is deliberately order-sensitive: the bounded raw-candidate
     // collector keeps deterministic top-K evidence and supports later
     // complete-evidence promotion.  Fold roots in canonical function order,
-    // never worker-completion order.  A private copy makes the fold
-    // transactional: if any root reaches its local cap, none of the partial
-    // resolution inventory is published.
+    // never worker-completion order. Each root is transactional: a locally
+    // capped owner contributes nothing, while complete sibling owners remain
+    // publishable in canonical order.
     std::optional<GuardedCodeInventoryCollector>
         resolution_inventory_candidate;
-    const auto staged_presentation_baseline_diagnostics =
+    auto staged_presentation_baseline_diagnostics =
         inventory_walk_diagnostics;
     const auto publish_owner_deltas =
         result.result_materialization ==
@@ -50986,7 +51197,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             FunctionValueResultMaterialization::TerminalFull)
         resolution_inventory_candidate.emplace(
             guarded_inventory_collector);
-    bool resolution_root_incomplete = false;
+    bool resolution_dispatch_incomplete = false;
     GuardedCodeInventoryReplayTruncation
         resolution_incomplete_replay_truncation;
     using ResolutionRootArtifactIndex =
@@ -51190,16 +51401,41 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 resolved.walk_diagnostics);
             resolution_incomplete_replay_truncation.merge(
                 replay_truncation);
-            resolution_root_incomplete = true;
-            resolution_inventory_candidate.reset();
-            result.resolutions.clear();
-            resolution_count = 0u;
-            // Presentation retention is all-or-nothing. Publishing any
-            // non-null partial map would let a later Unchanged/TerminalFull
-            // invocation silently omit this root.
-            if (resolution_epoch_retention_enabled) {
-                disable_resolution_epoch_retention(
-                    ResolutionRetentionLimitReason::IncompleteRoot);
+            auto non_local_walk = resolved.walk_diagnostics;
+            non_local_walk.local_fixpoint_limited_evaluations = 0u;
+            const bool local_cap_only =
+                root_address != 0u &&
+                resolved.local_fixpoint_budget_exhausted &&
+                !non_local_walk.truncated() &&
+                !replay_truncation.replay_incomplete();
+            if (local_cap_only) {
+                // Withdraw only this incomplete owner. Complete sibling roots
+                // remain in both the semantic and presentation indices, while
+                // the baseline cap diagnostic makes every materialization
+                // fail closed and forces the absent owner to be retried.
+                merge_root_walk_diagnostics(
+                    staged_presentation_baseline_diagnostics,
+                    resolved.walk_diagnostics);
+                staged_resolution_root_artifacts->erase(root_address);
+                if (staged_presentation_root_artifacts != nullptr)
+                    staged_presentation_root_artifacts->erase(root_address);
+                if (publish_owner_deltas) {
+                    const FunctionValueDependencyNodeId owner{
+                        root_address,
+                        FunctionValueDependencyNodeKind::Function};
+                    result.removed_resolution_shards.push_back(owner);
+                    result.removed_guarded_code_inventory_shards.push_back(
+                        owner);
+                }
+            } else {
+                resolution_dispatch_incomplete = true;
+                resolution_inventory_candidate.reset();
+                result.resolutions.clear();
+                resolution_count = 0u;
+                if (resolution_epoch_retention_enabled) {
+                    disable_resolution_epoch_retention(
+                        ResolutionRetentionLimitReason::IncompleteRoot);
+                }
             }
         }
         if (resolved.persistent_artifact != nullptr &&
@@ -51237,7 +51473,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 resolved.walk_diagnostics);
         const bool publish_resolution_outputs =
             !result.budget_exhausted &&
-            !resolution_root_incomplete;
+            !incomplete_root &&
+            !resolution_dispatch_incomplete;
         if (publish_resolution_outputs) {
             if (resolved.persistent_artifact != nullptr) {
                 if (resolution_inventory_candidate.has_value()) {
@@ -51284,7 +51521,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         *resolution_inventory_candidate);
                 }
                 if (!result.budget_exhausted &&
-                    !resolution_root_incomplete) {
+                    !resolution_dispatch_incomplete) {
                     resolution_count +=
                         resolved.evaluation.resolutions.size();
                     result.resolutions.insert(
@@ -51328,10 +51565,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             report_progress("resolution-progress");
     };
 
-    // Sticky baseline loss which no exact root partition replaced already
-    // makes this presentation fail-closed. Do not spend a full speculative
-    // wavefront proving the same terminal result again.
-    if (inventory_walk_diagnostics.truncated()) {
+    // A non-local baseline loss cannot be repaired by an exact root
+    // partition. A local CFG cap is different: its exact summary SCC is
+    // already quarantined, so continue with every independent root instead
+    // of discarding the whole resolution wavefront.
+    auto blocking_baseline_diagnostics = inventory_walk_diagnostics;
+    blocking_baseline_diagnostics.local_fixpoint_limited_evaluations = 0u;
+    if (blocking_baseline_diagnostics.truncated()) {
         emit_incomplete_resolution_root(
             "baseline",
             0u,
@@ -51343,7 +51583,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             false,
             false,
             false);
-        resolution_root_incomplete = true;
+        resolution_dispatch_incomplete = true;
         resolution_inventory_candidate.reset();
         if (resolution_epoch_retention_enabled)
             disable_resolution_epoch_retention(
@@ -51363,7 +51603,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 std::memory_order_relaxed);
             commit_resolution_result(
                 evaluate_or_reuse_resolution_function(index));
-            if (resolution_root_incomplete) break;
+            if (resolution_dispatch_incomplete) break;
         }
         progress_resolution_head_started_nanoseconds.store(
             0, std::memory_order_relaxed);
@@ -52081,7 +52321,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     }
                 }
                 resolution_executor.notify_waiters();
-                if (resolution_root_incomplete) {
+                if (resolution_dispatch_incomplete) {
                     cancel_dispatch();
                     break;
                 }
@@ -52129,6 +52369,23 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         if (missing_resolution_result)
             throw std::logic_error(
                 "Parallele Function-Resolution lieferte kein Ergebnis.");
+    }
+    normalize(result.removed_resolution_shards);
+    normalize(result.removed_guarded_code_inventory_shards);
+    if (publish_owner_deltas) {
+        const auto baseline = std::find_if(
+            result.guarded_code_inventory_replacements.begin(),
+            result.guarded_code_inventory_replacements.end(),
+            [](const auto& shard) {
+                return shard.owner.kind ==
+                       FunctionValueDependencyNodeKind::AnalysisBaseline;
+            });
+        if (baseline ==
+            result.guarded_code_inventory_replacements.end())
+            throw std::logic_error(
+                "Function-Value-Delta verlor seine Analysis-Baseline.");
+        baseline->inventory.walk_diagnostics =
+            staged_presentation_baseline_diagnostics;
     }
     result.resolution_root_artifacts_retained =
         result.budget_exhausted
@@ -52523,6 +52780,10 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         staged_epoch->candidate_inputs = std::move(candidate_inputs);
         staged_epoch->inventory_sink_functions =
             functions_reaching_guarded_inventory_sink;
+        staged_epoch->incomplete_summary_functions.assign(
+            incomplete_summary_functions.begin(),
+            incomplete_summary_functions.end());
+        normalize(staged_epoch->incomplete_summary_functions);
         staged_epoch->resolution_dependency_nodes =
             std::move(staged_resolution_dependency_nodes);
         staged_epoch->resolution_dependency_components_by_node =
