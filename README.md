@@ -33,7 +33,7 @@ In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
 Port-Metadata-Cache-Schema: `12`.
-Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat `6`; der native
+Der aktuelle GameProject-Vertrag ist `9` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
 NativePortArtifact-Format steht auf `9`. Die aktuellen
 Analyse-Direktiven stehen auf `5`, das Hardware-Closure-Schema auf `v6`, die
@@ -57,6 +57,11 @@ Menutest steht aus, bis ein Nutzer am System ist.
 
 Der aktuelle agentische Analyseworkflow publiziert eine transaktionale,
 identitaetsgebundene Materialization-World samt Frontier- und Resume-Ledger.
+Das Ledger steht auf Schema 4 und bindet eine komponentengenaue
+Produceridentitaet. `analyze-port --resume --refresh-analysis` kann den
+Whole-Disc-Checkpoint bewusst erneuern, ohne unveraenderte, exakt gebundene
+untere Analyseebenen pauschal zu verwerfen. Ein echter NOOP-Resume ist nur
+bei verifizierter sauberer Sourceidentitaet zulaessig.
 Runtimebeobachtungen bleiben `ObservedHint` und erzeugen weder AOT-Roots noch
 Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
@@ -64,6 +69,14 @@ vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
 Source-Stand Runtime-ABI 116 / Analyzer-ABI 59; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
+
+Der aktuelle Kaltpfad verschiebt IR-Lowering, Audit und Graphmaterialisierung
+hinter den Cross-Image-Fixpunkt, behaelt Latent-AOT-Katalogarbeit innerhalb
+des Prozesses und setzt monotone Root-Deltas ueber eine streng
+identitaetsgebundene CFA/FVA-Session fort. Materialization-World- und
+GameProject-Validierung arbeiten auf kanonischen Indizes beziehungsweise
+Intervallen. Das sind Kaltlaufoptimierungen ohne persistenten Cache und ohne
+Abdeckungsreduktion; neue Sonic-Zeitwerte sind noch nicht behauptet.
 
 Der bestehende Function-Value-Sanitylauf ist nach dem geschlossenen
 Origin-/Authority-Umbau mit allen `463` Checks gruen. Current, detached und
@@ -666,7 +679,7 @@ Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
 KR-5005-Stand verwendet Runtime-ABI 115, Analyzer-ABI 56, Portprojektvertrag 103 und
-Native-Port-Profilvertrag 23. Davon getrennt verwendet `GameProject` Vertrag 8 und
+Native-Port-Profilvertrag 23. Davon getrennt verwendet `GameProject` Vertrag 9 und
 Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
 Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
 typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
@@ -674,7 +687,7 @@ Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4
 Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
 ist nicht automatisch freigegeben.
 
-`GameProjectArtifact` Format 6 transportiert fuer Spielprojektvertrag 8 die deklarativen,
+`GameProjectArtifact` Format 6 transportiert fuer Spielprojektvertrag 9 die deklarativen,
 hashgebundenen Spielprojektdaten ueber die CLI. Dazu gehoeren exakte
 Funktionsgrenzen, Jump-/Callbacktabellen, Runtime-AOT-Templates, Symbole,
 Codeidentitaeten und Direct-Boot-Konfiguration. Native Hookzeiger und private

@@ -5,7 +5,38 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
-## Frontier-Handoff: FVA Saved-Stack-/Epoch-Vertrag (2026-08-20)
+## Aktueller Frontier-Handoff (2026-08-21)
+
+Der Saved-Stack-/Epoch-/Callback-Umbau ist abgeschlossen. Der bestehende
+Function-Value-Sanitylauf steht auf `463/463`; es gibt keinen offenen roten
+SavedEpoch-, Alias- oder r15-Restore-Fall. Die source-belegte Endsemantik
+trennt current, detached und memory durch Summary, Persistenz und Projektion.
+Detached Loss wird nicht pauschal nach active/r15 promoviert, Memory-MAY
+beweist keinen Root-SavedEpoch, und `truncated()` bleibt bei nicht
+vollstaendig korrelierter Provenienz fail-closed.
+
+Der erste vollstaendige Sonic-`analyze-port`-Lauf sowie ein identitaetsgleiches
+Resume sind erfolgreich abgeschlossen. Der Kaltlauf benoetigte `342,230 s`,
+das Resume `45,758 s`; im Resume waren Analyse- und Bootcheckpoint Treffer
+und `boot_analysis_pipeline_runs=0`. Ein anschliessender Providerdelta-Lauf
+blieb ebenfalls ohne neue CFA/FVA-Pipeline. Ein Produktport wurde daraus
+bewusst noch nicht exportiert; fehlende Disassembly bleibt ausnahmslos kein
+Unerreichbarkeitsbeweis.
+
+Der aktuelle Source-Umbau reduziert nun auch den echten Kaltpfad: abgeleitete
+IR-/Audit-/Graph-Artefakte werden erst nach dem Cross-Image-Fixpunkt erzeugt,
+Latent-AOT behaelt seinen gebundenen Disc-Katalog innerhalb des Prozesses,
+Materialization-World arbeitet auf kanonischen Indizes, und eine
+Control-Flow-Session darf bei unveraenderten Verträgen ausschliesslich
+monotone Root-Erweiterungen inkrementell fortsetzen. Diese Einsparungen sind
+source-seitig implementiert; neue Sonic-Zeitwerte duerfen erst nach einem
+separat freigegebenen Produktlauf behauptet werden.
+
+## Historischer FVA-Zwischenhandoff vom 2026-08-20
+
+Der folgende Abschnitt dokumentiert den damaligen One-Run-Zwischenstand.
+Seine roten Endpunkte und "naechster Review"-Anweisungen sind historisch und
+nicht mehr handlungsleitend; der aktuelle Vertrag steht im Abschnitt oben.
 
 Der gebuendelte Saved-Stack-/Epoch-Umbau ist implementiert, kompiliert und
 statisch reviewt, aber der genau einmal ausgefuehrte abschliessende
@@ -42,25 +73,37 @@ daher auf `detached_stack_callback_loss`,
 `!abi_stack_base_unresolved` und fail-closed `truncated()` korrigiert; Source
 und Fixture blieben unveraendert.
 
+Zwei unabhaengige read-only Reviews belegten auch fuer
+`stale_saved_stack_epoch_values()`, dass kein Sourceverlust vorliegt: Der
+nach dem Snapshot geschriebene Callback `0x80` wird in die exakte SavedEpoch-
+Zelle gespiegelt und beim bewiesenen Restore aktiv materialisiert; der
+statische Decoy `0x90` wird nicht publiziert, und alle drei Loss-Kanaele
+bleiben leer. Die bestehende Assertion wurde deshalb auf genau diesen
+verlustfreien Store-/Diagnosevertrag korrigiert. Source und Fixture blieben
+unveraendert.
+
 Der inkrementelle Targetbuild war danach erneut erfolgreich. Der genau einmal
-ausgefuehrte, auf fuenf Sekunden begrenzte Lauf passierte den korrigierten
-Alias-Fall und endete nach `1,91 s` mit Exitcode `1`, also nicht durch Timeout,
-am naechsten bestehenden Sanityfall:
+ausgefuehrte, auf fuenf Sekunden begrenzte Lauf passierte beide korrigierten
+Fälle und endete nach `1,80 s` mit Exitcode `1`, also nicht durch Timeout, am
+naechsten bestehenden Sanityfall:
 
 ```text
-TEST FEHLGESCHLAGEN: Ein nach dem SP-Snapshot neu geschriebener Callback wurde
-beim Restore des veralteten Snapshots stillschweigend verloren.
+TEST FEHLGESCHLAGEN: Zwei leere Saved-SP-Epochen verloren nach Stackwechsel,
+Restore und spaeterem Callback-Store die Verbindung zur wieder aktiven
+Stackepoche.
 ```
 
 Damit ist weiterhin kein Performance-/Konvergenzproblem belegt. Fuer den
 neuen roten Endpunkt wurde wegen der ausdruecklichen One-Run-Grenze keine
 weitere dynamische Diagnose und kein zweiter Fixversuch ausgefuehrt;
 insbesondere wird weder Sourcefehler noch veraltete Erwartung vorweggenommen.
-Der naechste Review muss read-only `stale_saved_stack_epoch_values()` samt
-Snapshot, nachtraeglichem Callbackwrite, Restore-Auswahl, Origin-Kanal und
-terminaler Diagnose bis zur Assertion verfolgen. Detached Loss darf dabei
-nicht allein zur Reparatur wieder in den aktiven r15-Kanal promoviert werden.
-Fehlende Disassembly bleibt kein Unerreichbarkeitsbeweis.
+Der naechste Review muss read-only
+`duplicate_saved_stack_epoch_restore_then_callback_values()` samt beiden
+leeren SavedEpoch-Captures, Stackwechsel, Restore-Auswahl, spaeterem
+Callback-Store, Summary-Publikation und terminaler Assertion verfolgen.
+Detached Loss darf dabei nicht allein zur Reparatur wieder in den aktiven
+r15-Kanal promoviert werden. Fehlende Disassembly bleibt kein
+Unerreichbarkeitsbeweis.
 
 Vor dem Lauf wurden alle temporaeren `KATANA_TMP`-Ausgaben, neu eingefuegten
 Diagnose-Toggles und Fixture-Abweichungen entfernt; die sechs urspruenglichen
@@ -69,9 +112,9 @@ generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
 Lauf sind weiterhin offen. Es wurde weder eine Sonic-Analyse noch ein Port
 gestartet oder exportiert.
 
-## Aktueller Produktmeilenstein: v141 / Source-ABI 116-58
+## Aktueller Produktmeilenstein: v141 / Source-ABI 116-59
 
-Der aktuelle Source-Stand ist Runtime-ABI `116`, Analyzer-ABI `58`,
+Der aktuelle Source-Stand ist Runtime-ABI `116`, Analyzer-ABI `59`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
 Profilvertrag `23`. Der agentische Native-Disc-Workflow publiziert eine
 identitaetsgebundene Materialization-World und ein resumierbares Ledger;

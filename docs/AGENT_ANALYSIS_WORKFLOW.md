@@ -21,7 +21,8 @@ Der Lauf publiziert transaktional:
 - `native-disc-analysis.json`: Analysebericht und Agentenentscheidung;
 - `native-disc-analysis.katana-analysis`: identitaetsgebundener
   Analysecheckpoint, sobald die primaere statische Analyse cachebar ist;
-- `.katana/agent/session.jsonl`: Session-Ledger Schema 3.
+- `.katana/agent/session.jsonl`: Session-Ledger Schema 4 mit gebundener
+  `producer_identity`.
 
 Das Ledger besitzt einen terminalen Commitrecord und bindet SHA-256 aller
 publizierten Artefakte. `--resume` akzeptiert nur eine vollstaendige letzte
@@ -45,10 +46,29 @@ gebundenen Eingaben und IR-Identitaeten und fuehrt Produktadmission,
 Hardwareclosure, World-Projektion und Agentenentscheidung unter dem aktuellen
 Code erneut aus. Reine Agenten-/World-Projektionsaenderungen duerfen deshalb
 den gebundenen Analysecheckpoint wiederverwenden, ohne alte Admission als
-autoritative Wahrheit zu uebernehmen. Bis der neue Ledger-Commit sichtbar
-ist, bleiben ersetzte Artefakte als explizite Rollbackgeneration gesichert;
-ein Fehler bei World, Report, Archiv oder Ledger stellt die vorherige
-committed Generation wieder her.
+autoritative Wahrheit zu uebernehmen. Stimmen zusaetzlich Producer-,
+Artefakt- und World-Identitaet exakt ueberein und ist die Build-Sourceidentitaet
+vertrauenswuerdig, darf der Lauf als `KATANA_ANALYZE_PORT_NOOP_RESUME` ohne
+erneute Admission enden. Dirty oder nicht verifizierbare Sourcebuilds nehmen
+diesen Kurzpfad niemals.
+
+Ein bewusst frischer Analysecheckpoint wird ausschliesslich so angefordert:
+
+```powershell
+katana-recomp analyze-port .\disc\game.gdi `
+  --output .\private\analysis-session `
+  --target-name game `
+  --game-project .\private\game.katana-game-project `
+  --native-port-definition .\private\game.katana-native-port `
+  --resume --refresh-analysis
+```
+
+`--refresh-analysis` umgeht den monolithischen Whole-Disc-Checkpoint, behaelt
+aber die exakt identitaetsgebundenen niedrigeren Analyseebenen. Eine alte
+World darf nur als Evidenzbaseline dienen, wenn ihre Analysegeneration erneut
+gebunden wurde; andernfalls wird sie nicht in die neue Evidenzprojektion
+eingemischt. Erst die vollstaendige neue Transaktion ersetzt die committed
+Artefakte und den Ledgerstand.
 
 Der Resume-Aufruf wiederholt ausschliesslich die analysewirksamen CLI-Eingaben
 des Checkpoints. Aus dem Native-Port-Manifest abgeleitete AOT-Resume-Entries

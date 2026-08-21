@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace katana::ir {
@@ -92,6 +93,24 @@ void add_issue(std::vector<VerificationIssue>& issues,
     issues.push_back({address, std::move(message)});
 }
 
+struct DecodedOpcodeProperties final {
+    bool has_delay_slot = false;
+    bool changes_control_flow = false;
+};
+
+DecodedOpcodeProperties decoded_opcode_properties(
+    const std::uint16_t opcode,
+    std::unordered_map<std::uint16_t, DecodedOpcodeProperties>& cache) {
+    const auto found = cache.find(opcode);
+    if (found != cache.end()) return found->second;
+
+    const auto decoded = katana::sh4::decode(opcode);
+    const DecodedOpcodeProperties properties{
+        decoded.has_delay_slot, decoded.changes_control_flow()};
+    cache.emplace(opcode, properties);
+    return properties;
+}
+
 void verify_memory_effects(const Instruction& instruction, std::vector<VerificationIssue>& issues) {
     const auto& effects = instruction.memory_effects;
     const bool has_access = effects.access != MemoryAccessKind::None;
@@ -117,11 +136,14 @@ void verify_memory_effects(const Instruction& instruction, std::vector<Verificat
 
 void verify_delay_slot(const BasicBlock& block,
                        const std::size_t index,
-                       std::vector<VerificationIssue>& issues) {
+                       std::vector<VerificationIssue>& issues,
+                       std::unordered_map<std::uint16_t,
+                                          DecodedOpcodeProperties>& opcode_cache) {
     const auto& instruction = block.instructions[index];
     const auto role = instruction.delay_slot.role;
     const auto peer = instruction.delay_slot.counterpart_address;
-    const auto decoded = katana::sh4::decode(instruction.original_opcode);
+    const auto decoded = decoded_opcode_properties(
+        instruction.original_opcode, opcode_cache);
     const bool opcode_has_delay_slot = decoded.has_delay_slot;
 
     if (role == DelaySlotRole::Owner && !opcode_has_delay_slot) {
@@ -192,7 +214,7 @@ void verify_delay_slot(const BasicBlock& block,
                   instruction.source_address,
                   "Delay Slot und vorhergehender Owner sind nicht gegenseitig verknuepft.");
     }
-    if (is_control_flow(instruction.operation) || decoded.changes_control_flow()) {
+    if (is_control_flow(instruction.operation) || decoded.changes_control_flow) {
         add_issue(issues,
                   instruction.source_address,
                   "Kontrollflussinstruktion ist als Delay Slot ungueltig.");
@@ -205,6 +227,8 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
     std::vector<VerificationIssue> issues;
     std::unordered_set<std::uint32_t> block_addresses;
     std::unordered_set<std::uint32_t> instruction_addresses;
+    std::unordered_map<std::uint16_t, DecodedOpcodeProperties> opcode_cache;
+    opcode_cache.reserve(function.blocks.size() * 2u);
 
     if (function.blocks.empty()) {
         add_issue(issues, function.entry_address, "Funktion besitzt keine Bloecke.");
@@ -307,7 +331,7 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                               "Load-Forwarding besitzt keinen passenden direkten Store.");
                 }
             }
-            verify_delay_slot(block, index, issues);
+            verify_delay_slot(block, index, issues, opcode_cache);
 
             const bool control_flow = is_control_flow(instruction.operation);
             if (saw_control_flow && instruction.delay_slot.role != DelaySlotRole::Slot) {

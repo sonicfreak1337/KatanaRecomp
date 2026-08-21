@@ -1,5 +1,6 @@
 #include "katana/ir/optimize.hpp"
 
+#include "katana/analysis/parallel_work.hpp"
 #include "katana/ir/serialize.hpp"
 #include "katana/ir/verifier.hpp"
 
@@ -434,38 +435,53 @@ bool reads_register(const Instruction& instruction, const std::uint8_t register_
 
 OptimizationResult eliminate_dead_block_code(BasicBlock& block) {
     OptimizationResult result;
-    std::size_t index = 1u;
-    while (index < block.instructions.size()) {
-        const auto& candidate = block.instructions[index];
-        if (!is_pure_register_write(candidate)) {
-            ++index;
+    // A candidate write is dead exactly when a later pure write to the same
+    // register is reached before that register is read or a non-pure operation
+    // forms a barrier.  Keep all still-pending candidates per register and
+    // resolve them in one forward pass instead of rescanning the suffix for
+    // every instruction (the old implementation was quadratic in block size).
+    std::array<std::vector<std::size_t>, 16u> pending;
+    std::vector<std::size_t> dead_candidates;
+    dead_candidates.reserve(block.instructions.size());
+
+    for (std::size_t index = 1u; index < block.instructions.size(); ++index) {
+        auto& instruction = block.instructions[index];
+        if (!is_pure_register_write(instruction)) {
+            // Preserve the historical transparent-NOP contract. Every other
+            // unknown or effectful operation remains a conservative barrier.
+            if (instruction.operation == Operation::Nop) continue;
+            for (auto& candidates : pending) candidates.clear();
             continue;
         }
 
-        const auto destination = candidate.destination_register;
-        bool overwritten = false;
-        for (std::size_t next = index + 1u; next < block.instructions.size(); ++next) {
-            const auto& instruction = block.instructions[next];
-            if (reads_register(instruction, destination)) break;
-            if (is_pure_register_write(instruction) &&
-                instruction.destination_register == destination) {
-                overwritten = true;
-                break;
-            }
-            if (!is_pure_register_write(instruction) && instruction.operation != Operation::Nop) {
-                break;
-            }
+        // A pure write may still read one or more registers (for example an
+        // AddRegister). Those reads terminate only the affected candidates.
+        for (std::size_t register_index = 0u; register_index < pending.size();
+             ++register_index) {
+            if (pending[register_index].empty()) continue;
+            if (reads_register(
+                    instruction, static_cast<std::uint8_t>(register_index)))
+                pending[register_index].clear();
         }
 
-        if (overwritten) {
-            // A dead architectural register write may lose its host-side effect,
-            // but its guest instruction boundary, timing, and source PC remain
-            // observable. Keep a semantic NOP instead of
-            // shortening the native instruction stream.
-            replace_with_nop(block.instructions[index]);
-            ++result.changes;
+        const auto destination = instruction.destination_register;
+        if (!reads_register(instruction, destination) &&
+            !pending[destination].empty()) {
+            dead_candidates.insert(dead_candidates.end(),
+                                   pending[destination].begin(),
+                                   pending[destination].end());
+            pending[destination].clear();
         }
-        ++index;
+        pending[destination].push_back(index);
+    }
+
+    for (const auto index : dead_candidates) {
+        // A dead architectural register write may lose its host-side effect,
+        // but its guest instruction boundary, timing, and source PC remain
+        // observable. Keep a semantic NOP instead of shortening the native
+        // instruction stream.
+        replace_with_nop(block.instructions[index]);
+        ++result.changes;
     }
     return result;
 }
@@ -581,34 +597,57 @@ OptimizationResult simplify_block_load_store(BasicBlock& block) {
     return result;
 }
 
+OptimizationResult fold_constants_unchecked(Function& function) {
+    OptimizationResult result;
+    for (auto& block : function.blocks)
+        result.changes += fold_block(block).changes;
+    return result;
+}
+
+OptimizationResult propagate_copies_unchecked(Function& function) {
+    OptimizationResult result;
+    for (auto& block : function.blocks)
+        result.changes += propagate_block_copies(block).changes;
+    return result;
+}
+
+OptimizationResult eliminate_dead_code_unchecked(Function& function) {
+    OptimizationResult result;
+    for (auto& block : function.blocks)
+        result.changes += eliminate_dead_block_code(block).changes;
+    return result;
+}
+
+OptimizationResult simplify_load_store_unchecked(Function& function) {
+    OptimizationResult result;
+    for (auto& block : function.blocks)
+        result.changes += simplify_block_load_store(block).changes;
+    return result;
+}
+
+void require_valid_functions(const std::span<const Function> functions) {
+    for (const auto& function : functions) require_valid_function(function);
+}
+
 } // namespace
 
 OptimizationResult fold_constants(Function& function) {
     require_valid_function(function);
-    OptimizationResult result;
-    for (auto& block : function.blocks) {
-        result.changes += fold_block(block).changes;
-    }
+    const auto result = fold_constants_unchecked(function);
     require_valid_function(function);
     return result;
 }
 
 OptimizationResult propagate_copies(Function& function) {
     require_valid_function(function);
-    OptimizationResult result;
-    for (auto& block : function.blocks) {
-        result.changes += propagate_block_copies(block).changes;
-    }
+    const auto result = propagate_copies_unchecked(function);
     require_valid_function(function);
     return result;
 }
 
 OptimizationResult eliminate_dead_code(Function& function) {
     require_valid_function(function);
-    OptimizationResult result;
-    for (auto& block : function.blocks) {
-        result.changes += eliminate_dead_block_code(block).changes;
-    }
+    const auto result = eliminate_dead_code_unchecked(function);
     require_valid_function(function);
     return result;
 }
@@ -633,10 +672,7 @@ OptimizationResult simplify_cfg(
 
 OptimizationResult simplify_load_store(Function& function) {
     require_valid_function(function);
-    OptimizationResult result;
-    for (auto& block : function.blocks) {
-        result.changes += simplify_block_load_store(block).changes;
-    }
+    const auto result = simplify_load_store_unchecked(function);
     require_valid_function(function);
     return result;
 }
@@ -690,15 +726,40 @@ OptimizationPipelineReport optimize_program(
             if (!enabled) return;
             require_dispatchability_contract(
                 program, dispatchability_index);
+            // Public pass entry points retain their function-level
+            // pre/post validation. The pipeline validates the complete
+            // function set once per pass instead of paying that full cost
+            // around every individual function.
+            require_valid_functions(program);
             OptimizationPassReport pass_report;
             pass_report.name = name;
             if (options.capture_dumps) {
                 pass_report.before = emit_ir_text(program);
             }
-            for (auto& function : program) {
-                pass_report.changes += pass(function).changes;
-                optimization_progress.advance(1u);
+            if (program.size() > 1u &&
+                katana::analysis::global_analysis_executor().maximum_jobs() >
+                    1u) {
+                // Functions are disjoint mutable roots. Store each result at
+                // its stable index and fold changes in index order after the
+                // batch, keeping reports deterministic while using the
+                // process-wide executor already used by analysis.
+                std::vector<OptimizationResult> function_results(program.size());
+                katana::analysis::parallel_analysis_for(
+                    program.size(),
+                    [&](const std::size_t index) {
+                        function_results[index] = pass(program[index]);
+                    });
+                for (const auto& function_result : function_results) {
+                    pass_report.changes += function_result.changes;
+                    optimization_progress.advance(1u);
+                }
+            } else {
+                for (auto& function : program) {
+                    pass_report.changes += pass(function).changes;
+                    optimization_progress.advance(1u);
+                }
             }
+            require_valid_functions(program);
             require_dispatchability_contract(
                 program, dispatchability_index);
             if (options.capture_dumps) {
@@ -708,20 +769,18 @@ OptimizationPipelineReport optimize_program(
             report.passes.push_back(std::move(pass_report));
         };
 
-    run_pass("constant-folding", options.constant_folding, fold_constants);
-    run_pass("copy-propagation", options.copy_propagation, propagate_copies);
-    run_pass("dead-code-elimination", options.dead_code_elimination, eliminate_dead_code);
+    run_pass("constant-folding", options.constant_folding, fold_constants_unchecked);
+    run_pass("copy-propagation", options.copy_propagation, propagate_copies_unchecked);
+    run_pass("dead-code-elimination", options.dead_code_elimination,
+             eliminate_dead_code_unchecked);
     run_pass(
         "cfg-simplification",
         options.cfg_simplification,
         [&](Function& function) {
-            require_valid_function(function);
-            const auto result = simplify_function_cfg(
-                function, dispatchability_index);
-            require_valid_function(function);
-            return result;
+            return simplify_function_cfg(function, dispatchability_index);
         });
-    run_pass("load-store-simplification", options.load_store_simplification, simplify_load_store);
+    run_pass("load-store-simplification", options.load_store_simplification,
+             simplify_load_store_unchecked);
     optimization_progress.complete();
     return report;
 }

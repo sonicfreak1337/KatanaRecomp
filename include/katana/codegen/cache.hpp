@@ -100,6 +100,18 @@ class CodegenCache final {
                        std::string_view artifact_name,
                        std::string_view content,
                        std::size_t maximum_bytes);
+    // Atomically replaces exactly the bounded regular artifact observed by
+    // the caller. The replacement is fully staged and flushed before one
+    // platform backup/exchange commit under the same root mutation lock. The
+    // displaced target is identity-checked before deletion; a mismatch is
+    // rolled back atomically. Unsupported platforms and every pre-commit
+    // failure leave the old artifact authoritative.
+    [[nodiscard]] bool replace_bounded_if_matches(
+        std::string_view key,
+        std::string_view artifact_name,
+        std::string_view expected_content,
+        std::string_view replacement_content,
+        std::size_t maximum_bytes);
     // Publishes a canonical size- and SHA-256-bound envelope. A previously
     // observed malformed regular artifact is replaced only through the same
     // exact-content bounded erase contract used for cache repair.

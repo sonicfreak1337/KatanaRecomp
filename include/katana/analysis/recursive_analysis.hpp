@@ -383,6 +383,11 @@ class RecursiveAnalysisSession final {
     RecursiveAnalysisSession(const RecursiveAnalysisSession&) = delete;
     RecursiveAnalysisSession& operator=(const RecursiveAnalysisSession&) = delete;
 
+    // Same-image root additions may extend the retained immutable decode
+    // epoch. Root removal, immutable proof/content/ABI mutation, an incomplete
+    // producer journal or a changed exact boundary rejects the baseline
+    // fail-closed. Absence from the supplied disassembly is never treated as
+    // negative reachability evidence.
     [[nodiscard]] RecursiveAnalysisSnapshot analyze(
         const katana::io::ExecutableImage& image,
         std::span<const AnalysisSeed> complete_seeds,

@@ -142,7 +142,7 @@ KR-5000 bindet diese Grenze aktuell an Runtime-ABI `104`, Analyzer-ABI `41`,
 Backend-Interface-ABI `22`, Portprojektvertrag `93` und Native-Port-
 Profilvertrag `16`. Der aktuelle Export nutzt Native-AOT-Emissionsprofil `34` und
 Port-Metadata-Cache-Schema `4`.
-Der aktuelle GameProject-Vertrag steht auf `8`/Artefaktformat `6` und
+Der aktuelle GameProject-Vertrag steht auf `9`/Artefaktformat `6` und
 enthaelt weiterhin keine Native-Port-Definition. Das installierte Produkt-SDK
 exportiert nur `aot_runtime`, `native_port_runtime` und die explizite native
 Produktheader-Allowlist; der

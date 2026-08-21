@@ -7,14 +7,31 @@
 - Katana besitzt jetzt einen transaktionalen, agentischen Native-Disc-
   Analyseworkflow. `analyze-port`, `next-analysis-task`, `explain` und
   `diff-analysis` arbeiten auf einer identitaetsgebundenen Materialization-
-  World; Resume bindet ein Schema-3-Ledger samt terminalem Commit und SHA-256
-  aller Artefakte. Produkt-Frontiers werden streng an Content, Boot, Projekt,
+  World; Resume bindet ein Schema-4-Ledger samt Produceridentitaet,
+  terminalem Commit und SHA-256 aller Artefakte. Produkt-Frontiers werden
+  streng an Content, Boot, Projekt,
   Analysevertrag und Implementierung gebunden und nur als `ObservedHint`
   uebernommen. Sie erzeugen weder CFG-Kanten noch AOT-/Hardware-Closure.
   Positive Produktwiederverwendung bleibt deaktiviert, bis das Archiv einen
   vollstaendigen Callback-/Target-/Hardware-Owner-Beweis transportiert; der
   normale Produktlauf serialisiert deshalb kein unbrauchbares grosses
   Analysearchiv.
+
+- Der NativeDisc-Kaltpfad erzeugt IR, Hardware-Audit und Graphartefakte erst
+  nach dem Cross-Image-Rootfixpunkt. Eine strikt identitaetsgebundene
+  In-Process-CFA/FVA-Session darf monotone Root-Erweiterungen fortsetzen; die
+  Latent-AOT-Discovery behaelt Disc-Katalog und Kandidatenbytes nur innerhalb
+  desselben Laufs. Materialization-World verwendet kanonische Indizes statt
+  wiederholter linearer Suchen, GameProject-Validierung vergleicht gebundene
+  Bootstrapintervalle blockweise, und das NativeDisc-Artefakt wird ohne
+  zweite vollstaendige Envelope-Kopie serialisiert. Keine dieser Einsparungen
+  verwendet einen persistenten Kaltlaufcache oder reduziert Closure.
+
+- `analyze-port --resume --refresh-analysis` erzwingt eine neue Whole-Disc-
+  Analyse, darf aber exakt gebundene niedrigere Analyseebenen behalten. Der
+  echte NOOP-Resume bindet komponentengenaue Analyzer-, Cache-, Codegen-,
+  Orchestrierungs- und Materialization-World-Identitaeten und ist bei dirty
+  oder anderweitig nicht verifizierbarer Sourceidentitaet deaktiviert.
 
 - Der Native-Port-Runtimevertrag erweitert seine bounded Crashdiagnose um
   eine additive `CrashCapsule` v2 mit PC/PR, Contract-/Hostfehlerart,

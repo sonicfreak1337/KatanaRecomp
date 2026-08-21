@@ -2,9 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace katana::agent {
@@ -342,6 +344,13 @@ class ExecutableMaterializationWorld;
 [[nodiscard]] bool parse_agent_world_binary(
     std::span<const std::uint8_t> input,
     ExecutableMaterializationWorld& output) noexcept;
+// Serializes a complete, deterministic snapshot into caller-owned storage.
+// The function never allocates, sorts, locks, or treats runtime observations
+// as static proof. On overflow it returns {0,false,true}; partial bytes are
+// not valid JSON and must be discarded by the caller.
+[[nodiscard]] BoundedJsonResult serialize_agent_world_json(
+    const ExecutableMaterializationWorld& world,
+    std::span<char> output) noexcept;
 [[nodiscard]] bool next_agent_task(const ExecutableMaterializationWorld& world,
                                    AgentTaskView& output) noexcept;
 // Selects a deterministic bounded batch of independent tasks. Entries sharing
@@ -385,12 +394,14 @@ public:
         return evidence_;
     }
     [[nodiscard]] const std::vector<MaterializationNode>& nodes() const noexcept {
+        synchronize_dependency_generation();
         return nodes_;
     }
     [[nodiscard]] const std::vector<DependencyEdge>& dependencies() const noexcept {
         return dependencies_;
     }
     [[nodiscard]] const std::vector<FrontierEntry>& frontier() const noexcept {
+        synchronize_dependency_generation();
         return frontier_;
     }
 
@@ -407,7 +418,10 @@ public:
         return last_error_;
     }
     [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
-    void set_revision(std::uint64_t revision) noexcept { revision_ = revision; }
+    void set_revision(std::uint64_t revision) noexcept {
+        revision_ = revision;
+        validation_cached_ = false;
+    }
     [[nodiscard]] std::uint64_t dependency_generation() const noexcept {
         return dependency_generation_;
     }
@@ -422,15 +436,79 @@ private:
     friend bool parse_agent_world_binary(
         std::span<const std::uint8_t> input,
         ExecutableMaterializationWorld& output) noexcept;
+    friend BoundedJsonResult serialize_agent_world_json(
+        const ExecutableMaterializationWorld& world,
+        std::span<char> output) noexcept;
+    friend AgentDiffResult diff_agent_worlds(
+        const ExecutableMaterializationWorld& before,
+        const ExecutableMaterializationWorld& after,
+        std::span<AgentDiffEntry> output) noexcept;
+
+    using EntityIndex = std::map<StableId, std::size_t>;
+    using DependencyIndexKey =
+        std::tuple<StableId, StableId, std::uint8_t>;
+    using DependencyIndex = std::map<DependencyIndexKey, std::size_t>;
+    using ReverseDependencyIndexKey =
+        std::tuple<StableId, StableId, std::uint8_t>;
+    using ReverseDependencyIndex =
+        std::map<ReverseDependencyIndexKey, std::size_t>;
+    using FrontierOrderKey = std::tuple<std::uint8_t,
+                                        std::uint8_t,
+                                        std::uint8_t,
+                                        std::uint32_t,
+                                        StableId>;
+    using FrontierOrderIndex = std::map<FrontierOrderKey, std::size_t>;
+
+    static DependencyIndexKey dependency_index_key(
+        const DependencyEdge& edge) noexcept;
+    static ReverseDependencyIndexKey reverse_dependency_index_key(
+        StableId target,
+        const ReverseDependency& dependency) noexcept;
+    static FrontierOrderKey frontier_order_key(
+        const FrontierEntry& entry) noexcept;
+    [[nodiscard]] bool rebuild_indexes() noexcept;
+    void synchronize_dependency_generation() const noexcept;
+    [[nodiscard]] bool validate_uncached() const noexcept;
+
+    template <typename Callback>
+    void for_each_reverse_dependency(StableId target,
+                                     Callback&& callback) const noexcept {
+        const auto node_index = node_index_.find(target);
+        if (node_index == node_index_.end() ||
+            node_index->second >= nodes_.size())
+            return;
+        const auto begin = reverse_dependency_index_.lower_bound(
+            std::make_tuple(target, StableId{}, std::uint8_t{0u}));
+        for (auto item = begin; item != reverse_dependency_index_.end();
+             ++item) {
+            if (std::get<0>(item->first) != target) break;
+            const auto reverse_index = item->second;
+            if (reverse_index >=
+                nodes_[node_index->second].reverse_dependencies.size())
+                return;
+            callback(nodes_[node_index->second]
+                         .reverse_dependencies[reverse_index]);
+        }
+    }
 
     std::vector<EvidenceRecord> evidence_;
-    std::vector<MaterializationNode> nodes_;
+    mutable std::vector<MaterializationNode> nodes_;
     std::vector<DependencyEdge> dependencies_;
-    std::vector<FrontierEntry> frontier_;
+    mutable std::vector<FrontierEntry> frontier_;
+    EntityIndex evidence_index_;
+    EntityIndex node_index_;
+    EntityIndex frontier_index_;
+    DependencyIndex dependency_index_;
+    ReverseDependencyIndex reverse_dependency_index_;
+    FrontierOrderIndex frontier_order_index_;
     WorldModelError last_error_ = WorldModelError::None;
     std::uint64_t revision_ = 0u;
     std::uint64_t dependency_generation_ = 1u;
     std::uint64_t evidence_digest_ = 0u;
+    std::uint64_t evidence_digest_accumulator_ = 0u;
+    mutable bool dependency_generation_dirty_ = false;
+    mutable bool validation_cached_ = false;
+    mutable bool validation_result_ = false;
 
     void fail(WorldModelError error) noexcept { last_error_ = error; }
 };
@@ -439,13 +517,5 @@ private:
                                           const FrontierEntry& rhs) noexcept;
 [[nodiscard]] AgentDecision evaluate_agent_decision(
     const ExecutableMaterializationWorld& world) noexcept;
-
-// Serializes a complete, deterministic snapshot into caller-owned storage.
-// The function never allocates, sorts, locks, or treats runtime observations
-// as static proof. On overflow it returns {0,false,true}; partial bytes are
-// not valid JSON and must be discarded by the caller.
-[[nodiscard]] BoundedJsonResult serialize_agent_world_json(
-    const ExecutableMaterializationWorld& world,
-    std::span<char> output) noexcept;
 
 } // namespace katana::agent

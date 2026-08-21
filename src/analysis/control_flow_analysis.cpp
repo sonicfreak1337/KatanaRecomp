@@ -2555,11 +2555,449 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
 
 } // namespace
 
-ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,
-                                               const AnalysisOverrides* overrides,
-                                               const ControlFlowAnalysisProgressCallback&
-                                                   progress_callback,
-                                               const ControlFlowAnalysisOptions& options) {
+namespace {
+
+constexpr std::size_t maximum_control_flow_session_binding_entries =
+    65'536u;
+constexpr std::size_t maximum_control_flow_session_binding_string_bytes =
+    16u * 1024u * 1024u;
+constexpr std::size_t maximum_control_flow_session_seed_causes =
+    1u * 1024u * 1024u;
+constexpr std::size_t maximum_control_flow_session_seed_evidence_items =
+    4u * 1024u * 1024u;
+
+struct ControlFlowSessionOptionsBinding final {
+    bool detailed_cache_miss_telemetry = false;
+    std::size_t maximum_fixpoint_iterations = 0u;
+    std::size_t maximum_instructions = 0u;
+    std::size_t maximum_contexts = 0u;
+    AnalysisMemoryBudget* pre_reserved_function_value_ready_budget = nullptr;
+    AnalysisMemoryBudget* function_value_cache_memory_budget = nullptr;
+
+    bool operator==(const ControlFlowSessionOptionsBinding&) const = default;
+};
+
+[[nodiscard]] ControlFlowSessionOptionsBinding
+make_control_flow_session_options_binding(
+    const ControlFlowAnalysisOptions& options) noexcept {
+    return {options.detailed_cache_miss_telemetry,
+            options.maximum_fixpoint_iterations,
+            options.maximum_instructions,
+            options.maximum_contexts,
+            options.pre_reserved_function_value_ready_budget,
+            options.function_value_cache_memory_budget};
+}
+
+[[nodiscard]] bool same_seed_evidence(const SeedEvidence& left,
+                                      const SeedEvidence& right) {
+    return left.origins == right.origins &&
+           left.proven == right.proven &&
+           left.evidence == right.evidence &&
+           left.function_size == right.function_size &&
+           left.causes == right.causes;
+}
+
+[[nodiscard]] bool control_flow_session_seed_binding_is_bounded(
+    const std::map<std::uint32_t, SeedEvidence>& seeds) noexcept {
+    if (seeds.size() > maximum_control_flow_session_binding_entries)
+        return false;
+    std::size_t causes = 0u;
+    std::size_t evidence_items = 0u;
+    for (const auto& [address, seed] : seeds) {
+        static_cast<void>(address);
+        if (seed.causes.size() >
+            maximum_control_flow_session_seed_causes -
+                std::min(causes,
+                         maximum_control_flow_session_seed_causes))
+            return false;
+        causes += seed.causes.size();
+        for (const auto& cause : seed.causes) {
+            const std::array item_counts{
+                cause.evidence_call_sites.size(),
+                cause.evidence_callees.size()};
+            for (const auto items : item_counts) {
+                if (items >
+                    maximum_control_flow_session_seed_evidence_items -
+                        std::min(
+                            evidence_items,
+                            maximum_control_flow_session_seed_evidence_items))
+                    return false;
+                evidence_items += items;
+            }
+        }
+    }
+    return true;
+}
+
+void merge_retained_seed_evidence(
+    std::map<std::uint32_t, SeedEvidence>& destination,
+    const std::map<std::uint32_t, SeedEvidence>& retained) {
+    for (const auto& [address, evidence] : retained) {
+        std::vector<FunctionOrigin> origins(
+            evidence.origins.begin(), evidence.origins.end());
+        if (evidence.causes.empty()) {
+            static_cast<void>(add_seed(
+                destination, address, origins, evidence.proven,
+                evidence.evidence, evidence.function_size));
+            continue;
+        }
+        bool first = true;
+        for (const auto& cause : evidence.causes) {
+            static_cast<void>(add_seed(
+                destination, address,
+                first ? std::span<const FunctionOrigin>{origins}
+                      : std::span<const FunctionOrigin>{},
+                evidence.proven, evidence.evidence,
+                evidence.function_size, cause));
+            first = false;
+        }
+    }
+}
+
+[[nodiscard]] bool same_analysis_overrides(
+    const std::optional<AnalysisOverrides>& left,
+    const AnalysisOverrides* const right) {
+    if (!left.has_value() || right == nullptr)
+        return left.has_value() == (right != nullptr);
+    if (left->version != right->version ||
+        left->mode != right->mode ||
+        left->source_path != right->source_path ||
+        left->functions.size() != right->functions.size() ||
+        left->function_boundaries.size() !=
+            right->function_boundaries.size() ||
+        left->function_entry_hints.size() !=
+            right->function_entry_hints.size() ||
+        left->jumps.size() != right->jumps.size() ||
+        left->jump_tables.size() != right->jump_tables.size())
+        return false;
+    const auto same_functions = std::equal(
+        left->functions.begin(), left->functions.end(),
+        right->functions.begin(), right->functions.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.address, a.line, a.size) ==
+                   std::tie(b.address, b.line, b.size);
+        });
+    const auto same_boundaries = std::equal(
+        left->function_boundaries.begin(),
+        left->function_boundaries.end(),
+        right->function_boundaries.begin(),
+        right->function_boundaries.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.address, a.line, a.size) ==
+                   std::tie(b.address, b.line, b.size);
+        });
+    const auto same_entry_hints = std::equal(
+        left->function_entry_hints.begin(),
+        left->function_entry_hints.end(),
+        right->function_entry_hints.begin(),
+        right->function_entry_hints.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.address, a.line) ==
+                   std::tie(b.address, b.line);
+        });
+    const auto same_jumps = std::equal(
+        left->jumps.begin(), left->jumps.end(),
+        right->jumps.begin(), right->jumps.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.instruction_address, a.target, a.line) ==
+                   std::tie(b.instruction_address, b.target, b.line);
+        });
+    const auto same_tables = std::equal(
+        left->jump_tables.begin(), left->jump_tables.end(),
+        right->jump_tables.begin(), right->jump_tables.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.dispatch_address, a.table_address,
+                            a.entry_count, a.line, a.entry_stride,
+                            a.relative_base, a.encoding, a.transfer,
+                            a.require_dispatch) ==
+                   std::tie(b.dispatch_address, b.table_address,
+                            b.entry_count, b.line, b.entry_stride,
+                            b.relative_base, b.encoding, b.transfer,
+                            b.require_dispatch);
+        });
+    return same_functions && same_boundaries && same_entry_hints &&
+           same_jumps && same_tables;
+}
+
+[[nodiscard]] bool control_flow_session_binding_is_bounded(
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* const overrides) noexcept {
+    const auto immutable_ranges = image.immutable_ranges();
+    std::size_t entry_count = immutable_ranges.size();
+    std::size_t string_bytes = 0u;
+    const auto absorb_string_bytes = [&](const std::size_t bytes) {
+        if (bytes > maximum_control_flow_session_binding_string_bytes ||
+            string_bytes >
+                maximum_control_flow_session_binding_string_bytes - bytes)
+            return false;
+        string_bytes += bytes;
+        return true;
+    };
+    for (const auto& range : immutable_ranges) {
+        if (!absorb_string_bytes(range.identity.size())) return false;
+    }
+    if (overrides != nullptr) {
+        const std::array counts{
+            overrides->functions.size(),
+            overrides->function_boundaries.size(),
+            overrides->function_entry_hints.size(),
+            overrides->jumps.size(),
+            overrides->jump_tables.size()};
+        for (const auto count : counts) {
+            if (count > maximum_control_flow_session_binding_entries -
+                            std::min(entry_count,
+                                     maximum_control_flow_session_binding_entries))
+                return false;
+            entry_count += count;
+        }
+        const auto source_path_size =
+            overrides->source_path.native().size();
+        if (source_path_size >
+            maximum_control_flow_session_binding_string_bytes /
+                sizeof(std::filesystem::path::value_type))
+            return false;
+        if (!absorb_string_bytes(
+                source_path_size *
+                sizeof(std::filesystem::path::value_type)))
+            return false;
+    }
+    return entry_count <= maximum_control_flow_session_binding_entries &&
+           string_bytes <=
+               maximum_control_flow_session_binding_string_bytes;
+}
+
+} // namespace
+
+struct ControlFlowAnalysisSession::Impl final {
+    bool active = false;
+    bool reusable = false;
+    bool candidate_binding_is_bounded = false;
+    std::uint64_t image_identity = 0u;
+    std::uint64_t image_revision = 0u;
+    std::uint64_t image_immutable_generation = 0u;
+    std::vector<katana::io::ImageImmutableRange> image_immutable_ranges;
+    std::optional<AnalysisOverrides> overrides;
+    ControlFlowSessionOptionsBinding options;
+    std::map<std::uint32_t, SeedEvidence> root_seed_baseline;
+    std::map<std::uint32_t, SeedEvidence> working_seed_baseline;
+    std::map<std::uint32_t, SeedEvidence> candidate_root_seed_baseline;
+    std::map<std::uint32_t, SeedEvidence> candidate_working_seed_baseline;
+
+    std::unique_ptr<detail::RecursiveAnalysisSession> recursive_session;
+    RecursiveWorkingIndex recursive_index;
+    std::unique_ptr<detail::GuardedNativeEntryShapeCache>
+        guarded_native_entry_shapes;
+    std::unique_ptr<detail::FunctionValueAnalysisSession>
+        function_value_session;
+    JumpTableSnapshotCache jump_table_cache;
+    IncrementalCfaScanCache cfa_scan_cache;
+    std::map<std::uint32_t, FunctionBoundary> function_boundary_index;
+    bool function_value_program_initialized = false;
+    bool function_value_full_program_required = false;
+    FunctionEdgeJournal function_edge_journal;
+    bool decode_boundary_normalization_initialized = false;
+    std::map<FunctionValueDependencyNodeId, FunctionValueSummary>
+        function_summary_shards;
+    std::map<FunctionValueDependencyNodeId,
+             std::vector<InterproceduralTargetResolution>>
+        function_resolution_shards;
+    std::map<std::uint32_t,
+             std::map<FunctionValueDependencyNodeId,
+                      InterproceduralTargetResolution>>
+        function_resolution_proofs_by_site;
+    std::map<FunctionValueDependencyNodeId, GuardedCodeInventory>
+        function_inventory_shards;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, RuntimeCodeCopy>
+        runtime_copy_result_index;
+    std::map<std::pair<std::uint32_t, std::uint32_t>,
+             StaticReturnContinuationCandidate>
+        continuation_result_index;
+    std::map<std::uint32_t, IndirectControlFlowResolution>
+        resolution_result_index;
+    std::map<std::uint32_t, JumpTableAnalysis> jump_table_result_index;
+    std::set<std::uint32_t> function_value_resolution_overlay_sites;
+    std::set<std::uint32_t> snapshot_candidate_dispatch_index;
+
+    void clear_working_state(const katana::io::ExecutableImage& image,
+                             const ControlFlowAnalysisOptions& next_options) {
+        recursive_session =
+            std::make_unique<detail::RecursiveAnalysisSession>();
+        recursive_index.clear();
+        guarded_native_entry_shapes =
+            std::make_unique<detail::GuardedNativeEntryShapeCache>(image);
+        function_value_session =
+            std::make_unique<detail::FunctionValueAnalysisSession>(
+                16'384u,
+                1'024u * 1024u * 1024u,
+                next_options.detailed_cache_miss_telemetry,
+                detail::FunctionEvaluationCacheDecisionObserver{},
+                detail::FunctionValueAnalysisSession::
+                    default_maximum_resolution_dependency_nodes,
+                detail::FunctionValueAnalysisSession::
+                    default_maximum_resolution_root_artifacts,
+                detail::FunctionValueAnalysisSession::
+                    default_maximum_resolution_epoch_retained_bytes,
+                next_options.pre_reserved_function_value_ready_budget,
+                next_options.function_value_cache_memory_budget);
+        jump_table_cache = JumpTableSnapshotCache{};
+        cfa_scan_cache.clear();
+        function_boundary_index.clear();
+        function_value_program_initialized = false;
+        function_value_full_program_required = false;
+        function_edge_journal.clear();
+        decode_boundary_normalization_initialized = false;
+        function_summary_shards.clear();
+        function_resolution_shards.clear();
+        function_resolution_proofs_by_site.clear();
+        function_inventory_shards.clear();
+        runtime_copy_result_index.clear();
+        continuation_result_index.clear();
+        resolution_result_index.clear();
+        jump_table_result_index.clear();
+        function_value_resolution_overlay_sites.clear();
+        snapshot_candidate_dispatch_index.clear();
+    }
+
+    [[nodiscard]] bool prepare(
+        const katana::io::ExecutableImage& image,
+        const AnalysisOverrides* const next_overrides,
+        const ControlFlowAnalysisOptions& next_options,
+        const std::map<std::uint32_t, SeedEvidence>& next_seeds) {
+        const auto next_options_binding =
+            make_control_flow_session_options_binding(next_options);
+        const auto immutable_ranges = image.immutable_ranges();
+        const bool bounded =
+            control_flow_session_seed_binding_is_bounded(next_seeds) &&
+            control_flow_session_binding_is_bounded(
+                image, next_overrides);
+        bool seed_extension =
+            root_seed_baseline.size() <= next_seeds.size();
+        if (seed_extension) {
+            for (const auto& [address, evidence] : root_seed_baseline) {
+                const auto found = next_seeds.find(address);
+                if (found == next_seeds.end() ||
+                    !same_seed_evidence(evidence, found->second)) {
+                    seed_extension = false;
+                    break;
+                }
+            }
+        }
+        const bool immutable_binding_matches =
+            image_immutable_ranges.size() == immutable_ranges.size() &&
+            std::equal(image_immutable_ranges.begin(),
+                       image_immutable_ranges.end(),
+                       immutable_ranges.begin(), immutable_ranges.end());
+        const bool root_only_reuse =
+            reusable && bounded &&
+            image_identity == image.analysis_instance_identity() &&
+            image_immutable_generation == image.immutable_generation() &&
+            immutable_binding_matches &&
+            same_analysis_overrides(overrides, next_overrides) &&
+            options == next_options_binding && seed_extension &&
+            next_options.persistent_function_analysis_epoch_import_blob.empty();
+
+        if (!root_only_reuse)
+            clear_working_state(image, next_options);
+        else
+            guarded_native_entry_shapes->bind(image);
+
+        reusable = false;
+        candidate_binding_is_bounded = bounded;
+        if (bounded)
+            candidate_root_seed_baseline = next_seeds;
+        else
+            candidate_root_seed_baseline.clear();
+        candidate_working_seed_baseline.clear();
+        image_identity = image.analysis_instance_identity();
+        image_revision = image.analysis_revision();
+        image_immutable_generation = image.immutable_generation();
+        if (bounded) {
+            image_immutable_ranges.assign(immutable_ranges.begin(),
+                                          immutable_ranges.end());
+            overrides = next_overrides == nullptr
+                            ? std::optional<AnalysisOverrides>{}
+                            : std::optional<AnalysisOverrides>{*next_overrides};
+        } else {
+            image_immutable_ranges.clear();
+            overrides.reset();
+        }
+        options = next_options_binding;
+        function_value_full_program_required = false;
+        return root_only_reuse;
+    }
+
+    void stage_terminal_seeds(
+        const std::map<std::uint32_t, SeedEvidence>& seeds) {
+        if (!candidate_binding_is_bounded ||
+            !control_flow_session_seed_binding_is_bounded(seeds)) {
+            candidate_binding_is_bounded = false;
+            candidate_working_seed_baseline.clear();
+            return;
+        }
+        candidate_working_seed_baseline = seeds;
+    }
+
+    void finish(const ControlFlowAnalysisResult& result) {
+        const bool complete =
+            result.termination_reason ==
+                ControlFlowAnalysisTerminationReason::None &&
+            !result.function_budget_exhausted;
+        reusable = complete && candidate_binding_is_bounded;
+        if (reusable) {
+            root_seed_baseline =
+                std::move(candidate_root_seed_baseline);
+            working_seed_baseline =
+                std::move(candidate_working_seed_baseline);
+        } else {
+            reset();
+        }
+    }
+
+    void reset() noexcept {
+        reusable = false;
+        candidate_binding_is_bounded = false;
+        image_identity = 0u;
+        image_revision = 0u;
+        image_immutable_generation = 0u;
+        image_immutable_ranges.clear();
+        overrides.reset();
+        options = {};
+        root_seed_baseline.clear();
+        working_seed_baseline.clear();
+        candidate_root_seed_baseline.clear();
+        candidate_working_seed_baseline.clear();
+        recursive_session.reset();
+        recursive_index.clear();
+        guarded_native_entry_shapes.reset();
+        function_value_session.reset();
+        jump_table_cache = JumpTableSnapshotCache{};
+        cfa_scan_cache.clear();
+        function_boundary_index.clear();
+        function_value_program_initialized = false;
+        function_value_full_program_required = false;
+        function_edge_journal.clear();
+        decode_boundary_normalization_initialized = false;
+        function_summary_shards.clear();
+        function_resolution_shards.clear();
+        function_resolution_proofs_by_site.clear();
+        function_inventory_shards.clear();
+        runtime_copy_result_index.clear();
+        continuation_result_index.clear();
+        resolution_result_index.clear();
+        jump_table_result_index.clear();
+        function_value_resolution_overlay_sites.clear();
+        snapshot_candidate_dispatch_index.clear();
+    }
+};
+
+namespace {
+
+ControlFlowAnalysisResult analyze_control_flow_session_impl(
+    ControlFlowAnalysisSession::Impl& session_state,
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* overrides,
+    const ControlFlowAnalysisProgressCallback& progress_callback,
+    const ControlFlowAnalysisOptions& options) {
     std::map<std::uint32_t, SeedEvidence> seeds;
     SeedLedgerTelemetry seed_telemetry;
     SeedChangeTracker pending_seed_changes;
@@ -2746,10 +3184,32 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                     non_root_function_entry_hints.end()),
         non_root_function_entry_hints.end());
 
+    const bool root_only_session_reuse = session_state.prepare(
+        image, overrides, options, seeds);
+    if (root_only_session_reuse) {
+        // The ordinary seed builder starts from an empty ledger and therefore
+        // labels every retained root as new. A warm session must publish only
+        // the exact root extension to RecursiveAnalysisSession; removals or
+        // changed contracts were already rejected by prepare().
+        pending_seed_changes = {};
+        for (const auto& [address, evidence] : seeds) {
+            if (session_state.root_seed_baseline.contains(address)) continue;
+            pending_seed_changes.changed_targets.insert(address);
+            pending_seed_changes.decode_targets.insert(address);
+            pending_seed_changes.metadata_targets.insert(address);
+            pending_seed_changes.exact_boundary_changed =
+                pending_seed_changes.exact_boundary_changed ||
+                evidence.function_size != 0u;
+            pending_seed_changes.facts_added += evidence.causes.size();
+        }
+        merge_retained_seed_evidence(
+            seeds, session_state.working_seed_baseline);
+    }
+
     ControlFlowAnalysisResult analysis;
-    detail::RecursiveAnalysisSession recursive_session;
+    auto& recursive_session = *session_state.recursive_session;
     detail::RecursiveAnalysisSnapshot recursive_snapshot;
-    RecursiveWorkingIndex recursive_index;
+    auto& recursive_index = session_state.recursive_index;
     RecursiveAnalysisPhysicalWork recursive_seed_arena_work;
     bool recursive_result_materialized = false;
     const auto materialize_recursive_result_once = [&] {
@@ -2801,7 +3261,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     std::vector<StaticCallbackRecordTableContract>
         final_static_callback_record_tables;
     bool static_callback_contracts_materialized = false;
-    detail::GuardedNativeEntryShapeCache guarded_native_entry_shapes(image);
+    auto& guarded_native_entry_shapes =
+        *session_state.guarded_native_entry_shapes;
     const auto guarded_callback_candidate_is_admissible =
         [&](const std::uint32_t address) {
             return std::binary_search(
@@ -2810,19 +3271,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
                    guarded_native_entry_shapes.classify(address) ==
                        detail::GuardedNativeEntryShapeStatus::Valid;
         };
-    detail::FunctionValueAnalysisSession function_value_session(
-        16'384u,
-        1'024u * 1024u * 1024u,
-        options.detailed_cache_miss_telemetry,
-        {},
-        detail::FunctionValueAnalysisSession::
-            default_maximum_resolution_dependency_nodes,
-        detail::FunctionValueAnalysisSession::
-            default_maximum_resolution_root_artifacts,
-        detail::FunctionValueAnalysisSession::
-            default_maximum_resolution_epoch_retained_bytes,
-        options.pre_reserved_function_value_ready_budget,
-        options.function_value_cache_memory_budget);
+    auto& function_value_session =
+        *session_state.function_value_session;
     static_assert(
         maximum_persistent_function_analysis_epoch_blob_bytes ==
         detail::FunctionValueAnalysisSession::
@@ -2842,49 +3292,50 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
     // not stage an interprocedural delta that FVA deliberately cannot consume.
     const bool function_value_analysis_supported =
         image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC;
-    JumpTableSnapshotCache jump_table_cache;
-    IncrementalCfaScanCache cfa_scan_cache;
-    std::map<std::uint32_t, FunctionBoundary> function_boundary_index;
+    auto& jump_table_cache = session_state.jump_table_cache;
+    auto& cfa_scan_cache = session_state.cfa_scan_cache;
+    auto& function_boundary_index = session_state.function_boundary_index;
     std::map<std::uint32_t, detail::FunctionProgramLineDelta>
         pending_function_line_deltas;
     std::map<std::uint32_t, detail::FunctionProgramBoundaryDelta>
         pending_function_boundary_deltas;
-    bool function_value_program_initialized = false;
-    bool function_value_full_program_required = false;
-    FunctionEdgeJournal function_edge_journal;
+    auto& function_value_program_initialized =
+        session_state.function_value_program_initialized;
+    auto& function_value_full_program_required =
+        session_state.function_value_full_program_required;
+    auto& function_edge_journal = session_state.function_edge_journal;
     std::set<std::uint32_t> pending_function_edge_sites;
     // Edge publication may happen before decode-boundary normalization. Keep
     // the exact affected-site set alive across that publication instead of
     // rediscovering it with a full resolution/table scan in every seed round.
     std::set<std::uint32_t> pending_contract_normalization_sites;
-    bool decode_boundary_normalization_initialized = false;
-    std::map<FunctionValueDependencyNodeId, FunctionValueSummary>
-        function_summary_shards;
-    std::map<FunctionValueDependencyNodeId,
-             std::vector<InterproceduralTargetResolution>>
-        function_resolution_shards;
-    std::map<std::uint32_t,
-             std::map<FunctionValueDependencyNodeId,
-                      InterproceduralTargetResolution>>
-        function_resolution_proofs_by_site;
-    std::map<FunctionValueDependencyNodeId, GuardedCodeInventory>
-        function_inventory_shards;
-    std::map<std::pair<std::uint32_t, std::uint32_t>, RuntimeCodeCopy>
-        runtime_copy_result_index;
-    std::map<std::pair<std::uint32_t, std::uint32_t>,
-             StaticReturnContinuationCandidate>
-        continuation_result_index;
-    std::map<std::uint32_t, IndirectControlFlowResolution>
-        resolution_result_index;
-    std::map<std::uint32_t, JumpTableAnalysis> jump_table_result_index;
+    auto& decode_boundary_normalization_initialized =
+        session_state.decode_boundary_normalization_initialized;
+    auto& function_summary_shards = session_state.function_summary_shards;
+    auto& function_resolution_shards =
+        session_state.function_resolution_shards;
+    auto& function_resolution_proofs_by_site =
+        session_state.function_resolution_proofs_by_site;
+    auto& function_inventory_shards =
+        session_state.function_inventory_shards;
+    auto& runtime_copy_result_index =
+        session_state.runtime_copy_result_index;
+    auto& continuation_result_index =
+        session_state.continuation_result_index;
+    auto& resolution_result_index =
+        session_state.resolution_result_index;
+    auto& jump_table_result_index =
+        session_state.jump_table_result_index;
     std::set<std::pair<std::uint32_t, std::uint32_t>>
         pending_runtime_copy_seed_sources;
     std::set<std::pair<std::uint32_t, std::uint32_t>>
         pending_continuation_seed_sources;
     std::set<std::uint32_t> pending_resolution_seed_sources;
     std::set<std::uint32_t> pending_jump_table_seed_sources;
-    std::set<std::uint32_t> function_value_resolution_overlay_sites;
-    std::set<std::uint32_t> snapshot_candidate_dispatch_index;
+    auto& function_value_resolution_overlay_sites =
+        session_state.function_value_resolution_overlay_sites;
+    auto& snapshot_candidate_dispatch_index =
+        session_state.snapshot_candidate_dispatch_index;
     std::set<std::uint32_t> directive_dispatches;
     std::map<std::uint32_t, std::vector<const JumpOverride*>>
         jump_overrides_by_site;
@@ -3430,7 +3881,8 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
         active_round_full_cpu_fallbacks = 0u;
         candidate_contract_iteration = 0u;
         ++analysis.fixpoint_iterations;
-        const bool has_recursive_baseline = recursive_snapshot.valid();
+        const bool has_recursive_baseline =
+            recursive_snapshot.valid() || root_only_session_reuse;
         const bool recursive_full_recompute =
             has_recursive_baseline &&
             active_round_seed_changes.exact_boundary_changed;
@@ -5465,8 +5917,60 @@ ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage
             // authoritative fresh result.
         }
     }
+    session_state.stage_terminal_seeds(seeds);
     report_progress("complete");
     return analysis;
+}
+
+} // namespace
+
+ControlFlowAnalysisSession::ControlFlowAnalysisSession()
+    : impl_(std::make_unique<Impl>()) {}
+
+ControlFlowAnalysisSession::~ControlFlowAnalysisSession() = default;
+ControlFlowAnalysisSession::ControlFlowAnalysisSession(
+    ControlFlowAnalysisSession&&) noexcept = default;
+ControlFlowAnalysisSession& ControlFlowAnalysisSession::operator=(
+    ControlFlowAnalysisSession&&) noexcept = default;
+
+ControlFlowAnalysisResult ControlFlowAnalysisSession::analyze(
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* const overrides,
+    const ControlFlowAnalysisProgressCallback& progress_callback,
+    const ControlFlowAnalysisOptions& options) {
+    if (impl_ == nullptr)
+        throw std::logic_error(
+            "Verschobene ControlFlowAnalysisSession kann nicht analysieren.");
+    if (impl_->active)
+        throw std::logic_error(
+            "ControlFlowAnalysisSession darf nicht gleichzeitig analysieren.");
+    impl_->active = true;
+    try {
+        auto result = analyze_control_flow_session_impl(
+            *impl_, image, overrides, progress_callback, options);
+        impl_->finish(result);
+        impl_->active = false;
+        return result;
+    } catch (...) {
+        impl_->reset();
+        impl_->active = false;
+        throw;
+    }
+}
+
+void ControlFlowAnalysisSession::reset() noexcept {
+    if (impl_ == nullptr || impl_->active) return;
+    impl_->reset();
+}
+
+ControlFlowAnalysisResult analyze_control_flow(
+    const katana::io::ExecutableImage& image,
+    const AnalysisOverrides* const overrides,
+    const ControlFlowAnalysisProgressCallback& progress_callback,
+    const ControlFlowAnalysisOptions& options) {
+    ControlFlowAnalysisSession session;
+    return session.analyze(
+        image, overrides, progress_callback, options);
 }
 
 ControlFlowAnalysisResult analyze_control_flow(const katana::io::ExecutableImage& image,

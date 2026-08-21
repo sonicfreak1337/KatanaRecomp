@@ -597,6 +597,40 @@ struct ControlFlowAnalysisOptions {
         persistent_function_analysis_epoch_publish_callback;
 };
 
+// Retains the bounded recursive/CFA/FVA working set for repeated analyses of
+// one ExecutableImage. A root-only analysis revision may reuse immutable
+// decode, graph, SCC and summary shards. Image content/layout/ABI,
+// authenticated immutable-range, override or execution-limit changes discard
+// the complete retained epoch before any new result can become authoritative.
+// Missing disassembly is never converted into negative reachability evidence.
+// A session is deliberately single-caller and not thread-safe.
+class ControlFlowAnalysisSession final {
+  public:
+    ControlFlowAnalysisSession();
+    ~ControlFlowAnalysisSession();
+    ControlFlowAnalysisSession(ControlFlowAnalysisSession&&) noexcept;
+    ControlFlowAnalysisSession& operator=(
+        ControlFlowAnalysisSession&&) noexcept;
+    ControlFlowAnalysisSession(const ControlFlowAnalysisSession&) = delete;
+    ControlFlowAnalysisSession& operator=(
+        const ControlFlowAnalysisSession&) = delete;
+
+    [[nodiscard]] ControlFlowAnalysisResult analyze(
+        const katana::io::ExecutableImage& image,
+        const AnalysisOverrides* overrides = nullptr,
+        const ControlFlowAnalysisProgressCallback& progress_callback = {},
+        const ControlFlowAnalysisOptions& options = {});
+
+    // Drops every retained proof and working index. This operation is local
+    // to the session and never mutates the bound ExecutableImage.
+    void reset() noexcept;
+
+    struct Impl;
+
+  private:
+    std::unique_ptr<Impl> impl_;
+};
+
 [[nodiscard]] const char*
 analysis_directive_diagnostic_status_name(AnalysisDirectiveDiagnosticStatus status) noexcept;
 [[nodiscard]] const char*

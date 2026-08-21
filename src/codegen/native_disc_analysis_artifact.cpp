@@ -74,6 +74,24 @@ class Writer final {
     [[nodiscard]] std::vector<std::uint8_t> finish() && {
         return std::move(bytes_);
     }
+    [[nodiscard]] std::size_t size() const noexcept { return bytes_.size(); }
+    [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept {
+        return bytes_;
+    }
+    void patch_u64(const std::size_t offset, const std::uint64_t value) {
+        if (offset > bytes_.size() ||
+            sizeof(value) > bytes_.size() - offset)
+            throw CodecError();
+        for (std::size_t index = 0u; index < sizeof(value); ++index)
+            bytes_[offset + index] =
+                static_cast<std::uint8_t>(value >> (index * 8u));
+    }
+    void patch_text_bytes(const std::size_t offset,
+                          const std::string_view value) {
+        if (offset > bytes_.size() || value.size() > bytes_.size() - offset)
+            throw CodecError();
+        std::copy(value.begin(), value.end(), bytes_.begin() + offset);
+    }
 
   private:
     void append(const void* const data, const std::size_t size) {
@@ -873,46 +891,60 @@ std::vector<std::uint8_t> serialize_native_disc_analysis_artifact(
         throw std::invalid_argument(
             "NativeDisc-Analysecheckpoint ist nicht publizierbar.");
 
-    Writer payload(maximum_native_disc_analysis_artifact_bytes);
-    write_identity(payload, artifact.identity);
-    const auto primary = serialize_boot_analysis_checkpoint(
-        artifact.identity.image_analysis_key, artifact.primary);
-    payload.blob(primary);
-    write_latent(payload, artifact.latent);
-    write_hardware_audit(payload, artifact.primary_hardware_audit);
-    write_hardware_audit(payload, artifact.native_hardware_audit);
-    write_u32_vector(payload, artifact.external_primary_roots);
-    write_u32_vector(payload, artifact.native_resume_entries);
-    write_program_index_checkpoint(
-        payload, artifact.native_port_program_index);
-    write_hardware_gap_details(
-        payload, artifact.native_hardware_gap_details);
-    write_u32_vector(
-        payload,
-        artifact.replacement_reachability_incomplete_frontier);
-    payload.u32(artifact.entry_address);
-    payload.u32(artifact.boot_address);
-    payload.u64(artifact.boot_size);
-    payload.u32(artifact.product_entry_address);
-    payload.u32(artifact.product_entry_owner);
-    payload.u64(artifact.known_hardware_sites);
-    payload.u64(artifact.native_hardware_gaps);
-    payload.u64(artifact.sdk_provider_candidates);
-    payload.boolean(artifact.guarded_inventory_complete);
-    payload.boolean(artifact.native_hardware_closure_complete);
-    payload.boolean(artifact.replacement_reachability_proven);
-    payload.boolean(artifact.backend_admitted);
-    auto payload_bytes = std::move(payload).finish();
-
-    const auto payload_sha = katana::io::sha256_bytes(std::string_view(
-        reinterpret_cast<const char*>(payload_bytes.data()), payload_bytes.size()));
+    // Emit the envelope and payload into one bounded allocation. The previous
+    // two-writer form retained a complete payload vector while copying it into
+    // a second almost equally large envelope at the analysis memory peak.
     Writer output(maximum_native_disc_analysis_artifact_bytes);
     output.text(artifact_magic);
     output.u32(native_disc_analysis_artifact_schema_version);
     output.u32(native_disc_analysis_artifact_codec_version);
     output.text(artifact.identity.key);
-    output.text(payload_sha);
-    output.blob(payload_bytes);
+    constexpr std::size_t sha256_text_bytes = 64u;
+    const auto payload_sha_offset = output.size() + sizeof(std::uint32_t);
+    output.text(std::string(sha256_text_bytes, '0'));
+    const auto payload_size_offset = output.size();
+    output.u64(0u);
+    const auto payload_offset = output.size();
+
+    write_identity(output, artifact.identity);
+    const auto primary = serialize_boot_analysis_checkpoint(
+        artifact.identity.image_analysis_key, artifact.primary);
+    output.blob(primary);
+    write_latent(output, artifact.latent);
+    write_hardware_audit(output, artifact.primary_hardware_audit);
+    write_hardware_audit(output, artifact.native_hardware_audit);
+    write_u32_vector(output, artifact.external_primary_roots);
+    write_u32_vector(output, artifact.native_resume_entries);
+    write_program_index_checkpoint(
+        output, artifact.native_port_program_index);
+    write_hardware_gap_details(
+        output, artifact.native_hardware_gap_details);
+    write_u32_vector(
+        output,
+        artifact.replacement_reachability_incomplete_frontier);
+    output.u32(artifact.entry_address);
+    output.u32(artifact.boot_address);
+    output.u64(artifact.boot_size);
+    output.u32(artifact.product_entry_address);
+    output.u32(artifact.product_entry_owner);
+    output.u64(artifact.known_hardware_sites);
+    output.u64(artifact.native_hardware_gaps);
+    output.u64(artifact.sdk_provider_candidates);
+    output.boolean(artifact.guarded_inventory_complete);
+    output.boolean(artifact.native_hardware_closure_complete);
+    output.boolean(artifact.replacement_reachability_proven);
+    output.boolean(artifact.backend_admitted);
+
+    const auto payload_size = output.size() - payload_offset;
+    const auto payload_bytes = output.bytes().subspan(
+        payload_offset, payload_size);
+    const auto payload_sha = katana::io::sha256_bytes(std::string_view(
+        reinterpret_cast<const char*>(payload_bytes.data()),
+        payload_bytes.size()));
+    if (payload_sha.size() != sha256_text_bytes)
+        throw CodecError();
+    output.patch_u64(payload_size_offset, payload_size);
+    output.patch_text_bytes(payload_sha_offset, payload_sha);
     return std::move(output).finish();
 }
 

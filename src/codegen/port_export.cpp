@@ -2014,6 +2014,7 @@ void apply_game_project_runtime_images(
     const katana::runtime::NativePortDefinition* const native_port) {
     validate_native_runtime_image_contract(&definition, native_port);
     std::size_t index = 0u;
+
     for (const auto& runtime_image : definition.runtime_images) {
         if (!game_project_runtime_image_is_active(
                 native_port, runtime_image.image_id))
@@ -2589,6 +2590,47 @@ void validate_game_project_image_contract(
     const katana::runtime::NativePortDefinition* const native_port,
     const std::span<const NativePortBootstrapWritePayload>
         bootstrap_payloads) {
+    struct BootstrapWriteView final {
+        std::uint64_t begin = 0u;
+        std::uint64_t end = 0u;
+        std::span<const std::uint8_t> bytes;
+    };
+    std::vector<BootstrapWriteView> bootstrap_write_views;
+    if (native_port != nullptr) {
+        bootstrap_write_views.reserve(native_port->bootstrap.writes.size());
+        for (const auto& binding : native_port->bootstrap.writes) {
+            const auto payload = std::find_if(
+                bootstrap_payloads.begin(), bootstrap_payloads.end(),
+                [&](const auto& candidate) {
+                    return candidate.guest_address == binding.guest_address;
+                });
+            if (payload == bootstrap_payloads.end())
+                throw std::invalid_argument(
+                    "native-bootstrap-write-payload-missing");
+            const auto begin = static_cast<std::uint64_t>(
+                katana::runtime::canonical_physical_address(
+                    binding.guest_address));
+            const auto end = begin + binding.byte_size;
+            if (end < begin || payload->bytes.size() != binding.byte_size)
+                throw std::invalid_argument(
+                    "native-bootstrap-write-payload-range-invalid");
+            bootstrap_write_views.push_back(
+                {begin, end, payload->bytes});
+        }
+        std::sort(
+            bootstrap_write_views.begin(), bootstrap_write_views.end(),
+            [](const auto& left, const auto& right) {
+                return std::tie(left.begin, left.end) <
+                       std::tie(right.begin, right.end);
+            });
+        for (std::size_t index = 1u;
+             index < bootstrap_write_views.size(); ++index) {
+            if (bootstrap_write_views[index].begin <
+                bootstrap_write_views[index - 1u].end)
+                throw std::invalid_argument(
+                    "native-bootstrap-write-payload-ranges-overlap");
+        }
+    }
     for (const auto& function : definition.function_boundaries) {
         if (!game_project_metadata_is_active(
                 native_port, function.image_id))
@@ -2673,52 +2715,61 @@ void validate_game_project_image_contract(
                 "game-project-runtime-image-payload-missing");
         const auto bytes = game_project_image_bytes(
             image, runtime_image.source_start, runtime_image.byte_size);
-        for (std::size_t offset = 0u; offset < bytes.size(); ++offset) {
-            auto expected = payload->bytes[offset];
-            bool checkpoint_materialized = native_port == nullptr;
-            if (native_port != nullptr) {
-                const auto runtime_address =
-                    runtime_image.runtime_start +
-                    static_cast<std::uint32_t>(offset);
-                const auto runtime_physical =
-                    static_cast<std::uint64_t>(
-                        katana::runtime::canonical_physical_address(
-                            runtime_address));
-                for (const auto& binding : native_port->bootstrap.writes) {
-                    const auto binding_begin =
-                        static_cast<std::uint64_t>(
-                            katana::runtime::canonical_physical_address(
-                                binding.guest_address));
-                    const auto binding_end =
-                        binding_begin + binding.byte_size;
-                    if (runtime_physical < binding_begin ||
-                        runtime_physical >= binding_end)
-                        continue;
-                    const auto bootstrap_payload = std::find_if(
-                        bootstrap_payloads.begin(),
-                        bootstrap_payloads.end(),
-                        [&](const auto& candidate) {
-                            return candidate.guest_address ==
-                                   binding.guest_address;
-                        });
-                    if (bootstrap_payload == bootstrap_payloads.end())
-                        throw std::invalid_argument(
-                            "native-bootstrap-write-payload-missing");
-                    expected = bootstrap_payload->bytes[
-                        static_cast<std::size_t>(
-                            runtime_physical - binding_begin)];
-                    checkpoint_materialized = true;
-                    break;
-                }
-            }
-            if (!checkpoint_materialized)
-                throw std::invalid_argument(
-                    "Checkpoint-gebundenes Runtime-Image wird nicht "
-                    "vollstaendig durch Post-Bootstrap-Bytes materialisiert.");
-            if (bytes[offset] != expected)
+        if (native_port == nullptr) {
+            if (bytes.size() != payload->bytes.size() ||
+                !std::equal(bytes.begin(), bytes.end(),
+                            payload->bytes.begin()))
                 throw std::invalid_argument(
                     "Game-Project-Runtime-Image stimmt nicht mit der "
                     "gebundenen Post-Bootstrap-Analyseansicht ueberein.");
+        } else if (!bytes.empty()) {
+            const auto physical_begin = static_cast<std::uint64_t>(
+                katana::runtime::canonical_physical_address(
+                    runtime_image.runtime_start));
+            const auto last_runtime_address =
+                static_cast<std::uint64_t>(runtime_image.runtime_start) +
+                bytes.size() - 1u;
+            if (last_runtime_address >
+                    std::numeric_limits<std::uint32_t>::max() ||
+                static_cast<std::uint64_t>(
+                    katana::runtime::canonical_physical_address(
+                        static_cast<std::uint32_t>(last_runtime_address))) !=
+                    physical_begin + bytes.size() - 1u)
+                throw std::invalid_argument(
+                    "Checkpoint-Runtime-Image besitzt keine zusammenhaengende "
+                    "physische Adressabbildung.");
+            std::size_t cursor = 0u;
+            auto view = std::lower_bound(
+                bootstrap_write_views.begin(),
+                bootstrap_write_views.end(), physical_begin,
+                [](const auto& candidate, const std::uint64_t address) {
+                    return candidate.end <= address;
+                });
+            while (cursor < bytes.size()) {
+                const auto address = physical_begin + cursor;
+                if (view == bootstrap_write_views.end() ||
+                    view->begin > address || view->end <= address)
+                    throw std::invalid_argument(
+                        "Checkpoint-gebundenes Runtime-Image wird nicht "
+                        "vollstaendig durch Post-Bootstrap-Bytes materialisiert.");
+                const auto source_offset =
+                    static_cast<std::size_t>(address - view->begin);
+                const auto count = std::min<std::size_t>(
+                    bytes.size() - cursor,
+                    static_cast<std::size_t>(view->end - address));
+                if (!std::equal(
+                        bytes.begin() +
+                            static_cast<std::ptrdiff_t>(cursor),
+                        bytes.begin() + static_cast<std::ptrdiff_t>(
+                                            cursor + count),
+                        view->bytes.begin() +
+                            static_cast<std::ptrdiff_t>(source_offset)))
+                    throw std::invalid_argument(
+                        "Game-Project-Runtime-Image stimmt nicht mit der "
+                        "gebundenen Post-Bootstrap-Analyseansicht ueberein.");
+                cursor += count;
+                if (address + count == view->end) ++view;
+            }
         }
         for (const auto entry_offset : runtime_image.entry_offsets) {
             const auto source_entry =
@@ -20533,12 +20584,50 @@ std::vector<std::uint32_t> latent_aot_inferred_gap_function_entries(
     return inferred;
 }
 
+std::vector<std::uint32_t> latent_aot_primary_program_interior_addresses(
+    const std::span<const katana::ir::Function> program) {
+    std::vector<std::uint32_t> result;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.source_address != function.entry_address)
+                    result.push_back(instruction.source_address);
+            }
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::vector<std::uint32_t> latent_aot_primary_analysis_interior_addresses(
+    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    std::vector<std::uint32_t> entries;
+    entries.reserve(analysis.recursive.functions.size());
+    for (const auto& function : analysis.recursive.functions)
+        entries.push_back(function.address);
+    std::sort(entries.begin(), entries.end());
+    entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+
+    std::vector<std::uint32_t> result;
+    result.reserve(analysis.recursive.instructions.size());
+    for (const auto& instruction : analysis.recursive.instructions) {
+        if (!std::binary_search(entries.begin(), entries.end(),
+                                instruction.address))
+            result.push_back(instruction.address);
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
 std::vector<std::uint32_t> latent_aot_external_primary_entries(
     const std::span<const PreparedLatentAotModule> modules,
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port,
     const katana::io::ExecutableImage& image,
-    const std::span<const katana::ir::Function> existing_primary_program,
+    const std::span<const std::uint32_t>
+        existing_primary_interior_addresses,
     const std::span<const std::uint32_t> inferred_gap_entries,
     const std::uint32_t primary_image_address,
     const std::size_t primary_image_size) {
@@ -20546,27 +20635,6 @@ std::vector<std::uint32_t> latent_aot_external_primary_entries(
     constexpr std::size_t maximum_entry_scan_instructions = 32u;
     std::vector<std::uint32_t> result;
     if (game_project == nullptr || modules.empty()) return result;
-
-    // Build the reachable primary owner's interior-address index once. The
-    // latent inventory can contain thousands of pointer evidences; rescanning
-    // the complete IR program for every candidate would turn this fail-closed
-    // ownership guard into an export-time quadratic hot path.
-    std::vector<std::uint32_t> existing_primary_interior_addresses;
-    for (const auto& function : existing_primary_program) {
-        for (const auto& block : function.blocks) {
-            for (const auto& instruction : block.instructions) {
-                if (instruction.source_address != function.entry_address)
-                    existing_primary_interior_addresses.push_back(
-                        instruction.source_address);
-            }
-        }
-    }
-    std::sort(existing_primary_interior_addresses.begin(),
-              existing_primary_interior_addresses.end());
-    existing_primary_interior_addresses.erase(
-        std::unique(existing_primary_interior_addresses.begin(),
-                    existing_primary_interior_addresses.end()),
-        existing_primary_interior_addresses.end());
 
     const auto primary_image_begin =
         latent_aot_external_code_address(primary_image_address);
@@ -24592,7 +24660,8 @@ prepare_dreamcast_port_project_impl(
     const katana::analysis::DreamcastHardwareAudit*
         const precomputed_native_hardware_audit = nullptr,
     const NativeDiscProgramIndexCheckpoint*
-        const precomputed_program_index = nullptr) {
+        const precomputed_program_index = nullptr,
+    const bool game_project_image_contract_prevalidated = false) {
     if (options.diagnostic_partial &&
         options.native_port_definition != nullptr)
         throw std::invalid_argument(
@@ -24796,13 +24865,15 @@ prepare_dreamcast_port_project_impl(
         disc_context.emplace(
             prepare_disc_export_context(prepared, validated_disc_source));
     }
+    const auto primary_program_interior_addresses =
+        latent_aot_primary_program_interior_addresses(prepared.program);
     const auto latent_external_primary_entries =
         latent_aot_external_primary_entries(
             latent_aot.modules,
             options.game_project,
             options.native_port_definition,
             prepared.image,
-            prepared.program,
+            primary_program_interior_addresses,
             inferred_gap_entries,
             prepared.boot_address,
             prepared.boot_size);
@@ -24831,10 +24902,14 @@ prepare_dreamcast_port_project_impl(
         options.game_project,
         options.native_port_bootstrap_write_payloads,
         validated_external_primary_entries);
-    validate_game_project_runtime_image_payloads(
-        options.game_project,
-        options.game_project_runtime_image_payloads,
-        options.native_port_definition);
+    if (!game_project_image_contract_prevalidated) {
+        report_progress(
+            options, "game-project-validation:payload-binding");
+        validate_game_project_runtime_image_payloads(
+            options.game_project,
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition);
+    }
     if (options.game_project != nullptr) {
         report_progress(options, "game-project-validation");
         const auto& game_project = *options.game_project;
@@ -24850,12 +24925,18 @@ prepare_dreamcast_port_project_impl(
                     "Game-Entry-Handoff-Konsolenprofil passt nicht zum "
                     "Produktport.");
         }
-        validate_game_project_image_contract(
-            game_project,
-            prepared.image,
-            options.game_project_runtime_image_payloads,
-            options.native_port_definition,
-            options.native_port_bootstrap_write_payloads);
+        if (!game_project_image_contract_prevalidated) {
+            report_progress(
+                options, "game-project-validation:image-contract");
+            validate_game_project_image_contract(
+                game_project,
+                prepared.image,
+                options.game_project_runtime_image_payloads,
+                options.native_port_definition,
+                options.native_port_bootstrap_write_payloads);
+        }
+        report_progress(
+            options, "game-project-validation:analysis-contract");
         if (!disc_context.has_value())
             throw std::invalid_argument(
                 "Game-Project-Export braucht eine validierte Disc- oder "
@@ -25259,6 +25340,8 @@ prepare_dreamcast_port_project_impl(
         "final-emitted-ir");
     require_architectural_safepoint_program_entries(
         emitted_program, "final-emitted-ir");
+    report_progress(
+        options, "game-project-validation:hardware-audit");
     std::optional<katana::analysis::DreamcastHardwareAudit>
         computed_hardware_audit;
     if (prepared.precomputed_hardware_audit == nullptr)
@@ -25269,23 +25352,11 @@ prepare_dreamcast_port_project_impl(
         prepared.precomputed_hardware_audit != nullptr
             ? *prepared.precomputed_hardware_audit
             : *computed_hardware_audit;
-    std::optional<katana::analysis::DreamcastHardwareAudit>
-        native_admission_hardware_audit;
-    if (precomputed_native_hardware_audit == nullptr &&
-        native_port_definition != nullptr &&
-        prepared.precomputed_hardware_audit != nullptr)
-        native_admission_hardware_audit.emplace(
-            katana::analysis::audit_dreamcast_hardware(
-                prepared.image, prepared.analysis));
-    const auto& primary_native_hardware_audit =
-        native_admission_hardware_audit.has_value()
-            ? *native_admission_hardware_audit
-            : hardware_audit;
     const auto native_hardware_audit =
         precomputed_native_hardware_audit != nullptr
             ? *precomputed_native_hardware_audit
             : combine_native_hardware_audits(
-                  primary_native_hardware_audit, latent_aot.modules);
+                  hardware_audit, latent_aot.modules);
     std::vector<NativePortExternalEntry> native_product_external_entries;
     native_product_external_entries.reserve(
         prepared.image.entry_points().size() +
@@ -25313,6 +25384,8 @@ prepare_dreamcast_port_project_impl(
         std::unique(native_product_external_entries.begin(),
                     native_product_external_entries.end()),
         native_product_external_entries.end());
+    report_progress(
+        options, "game-project-validation:program-index");
     auto native_port_program_index = build_native_port_program_index(
         emitted_program,
         prepared.analysis,
@@ -25529,6 +25602,8 @@ native_disc_analysis_resume_manifest_identity(
     const PortExportOptions& options,
     const std::span<const std::uint32_t> external_primary_roots,
     const PortAnalysisMode analysis_mode) {
+    report_progress(
+        options, "game-project-validation:resume-manifest-payload-binding");
     validate_game_project_runtime_image_payloads(
         options.game_project,
         options.game_project_runtime_image_payloads,
@@ -25552,6 +25627,8 @@ native_disc_analysis_resume_manifest_identity(
         options.game_project,
         options.native_port_bootstrap_write_payloads);
     if (options.game_project != nullptr) {
+        report_progress(
+            options, "game-project-validation:resume-manifest-image-contract");
         validate_game_project_image_contract(
             *options.game_project,
             image,
@@ -25975,6 +26052,252 @@ OwnerTaskSymbolicValue owner_task_symbolic_shift(
     return result;
 }
 
+std::optional<std::uint32_t> owner_task_canonical_memory_range(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t address,
+    const std::size_t width) {
+    if (width == 0u ||
+        static_cast<std::uint64_t>(address) + width >
+            (std::uint64_t{1u} << 32u))
+        return std::nullopt;
+    const auto resolved = image.resolve_segment_address(address, width);
+    const auto canonical_start = katana::runtime::canonical_physical_address(
+        resolved.value_or(address));
+    for (std::size_t offset = 0u; offset < width; ++offset) {
+        const auto byte_address = static_cast<std::uint32_t>(address + offset);
+        const auto resolved_byte = image.resolve_segment_address(
+            byte_address, 1u);
+        const auto canonical_byte =
+            katana::runtime::canonical_physical_address(
+                resolved_byte.value_or(byte_address));
+        const auto expected =
+            static_cast<std::uint64_t>(canonical_start) + offset;
+        if (expected > std::numeric_limits<std::uint32_t>::max() ||
+            canonical_byte != expected)
+            return std::nullopt;
+    }
+    return canonical_start;
+}
+
+bool owner_task_memory_ranges_overlap(
+    const std::uint32_t left,
+    const std::uint32_t right,
+    const std::size_t width) {
+    const auto left_end = static_cast<std::uint64_t>(left) + width;
+    const auto right_end = static_cast<std::uint64_t>(right) + width;
+    return static_cast<std::uint64_t>(left) < right_end &&
+           static_cast<std::uint64_t>(right) < left_end;
+}
+
+OwnerTaskSymbolicValue owner_task_symbolic_bit0(
+    const OwnerTaskSymbolicValue& value);
+OwnerTaskSymbolicValue owner_task_symbolic_memory_load(
+    const OwnerTaskSymbolicValue& address,
+    std::string_view width,
+    std::uint32_t site);
+OwnerTaskSymbolicValue owner_task_symbolic_status_with_t(
+    const OwnerTaskSymbolicValue& sr,
+    const OwnerTaskSymbolicValue& t);
+OwnerTaskSymbolicValue owner_task_symbolic_test(
+    const OwnerTaskSymbolicValue& left,
+    const OwnerTaskSymbolicValue& right);
+OwnerTaskSymbolicValue owner_task_symbolic_equal(
+    const OwnerTaskSymbolicValue& left,
+    const OwnerTaskSymbolicValue& right);
+
+struct OwnerTaskRegisterTransferState {
+    std::array<OwnerTaskSymbolicValue, 16u> registers;
+    OwnerTaskSymbolicValue t;
+    OwnerTaskSymbolicValue sr;
+    OwnerTaskSymbolicValue vbr;
+    OwnerTaskSymbolicValue pr;
+    bool sr_written = false;
+    bool vbr_written = false;
+};
+
+enum class OwnerTaskInstructionTransfer : std::uint8_t {
+    Applied,
+    NotApplicable,
+    Failed,
+};
+
+OwnerTaskInstructionTransfer owner_task_apply_register_transfer(
+    const katana::ir::Instruction& instruction,
+    const katana::io::ExecutableImage& image,
+    OwnerTaskRegisterTransferState& state) {
+    using Operation = katana::ir::Operation;
+    const auto destination = instruction.destination_register;
+    const auto source = instruction.source_register;
+    const auto valid_register = [](const std::uint8_t index) {
+        return index < 16u;
+    };
+    const auto assign_t = [&](OwnerTaskSymbolicValue value) {
+        if (!value.available) return false;
+        auto next_sr = owner_task_symbolic_status_with_t(state.sr, value);
+        if (!next_sr.available) return false;
+        state.t = std::move(value);
+        state.sr = std::move(next_sr);
+        return true;
+    };
+    switch (instruction.operation) {
+    case Operation::Nop:
+        return OwnerTaskInstructionTransfer::Applied;
+    case Operation::MovImmediate:
+    case Operation::Constant32:
+        if (!valid_register(destination))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = owner_task_symbolic_constant(
+            static_cast<std::uint32_t>(instruction.immediate));
+        return OwnerTaskInstructionTransfer::Applied;
+    case Operation::MovRegister:
+        if (!valid_register(destination) || !valid_register(source))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = state.registers[source];
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::LoadWordSignedPcRelative:
+    case Operation::LoadLongPcRelative: {
+        if (!valid_register(destination))
+            return OwnerTaskInstructionTransfer::Failed;
+        const auto literal = owner_task_literal(image, instruction);
+        if (!literal.has_value()) return OwnerTaskInstructionTransfer::Failed;
+        const auto value = literal->signed_value
+            ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
+                  static_cast<std::int16_t>(literal->bits)))
+            : literal->bits;
+        state.registers[destination] = owner_task_symbolic_constant(
+            value, !literal->immutable);
+        return OwnerTaskInstructionTransfer::Applied;
+    }
+    case Operation::ShiftLogicalLeftTwo:
+    case Operation::ShiftLogicalRightTwo:
+        if (!valid_register(destination))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = owner_task_symbolic_shift(
+            state.registers[destination], 2u,
+            instruction.operation == Operation::ShiftLogicalLeftTwo);
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::AndImmediate:
+    case Operation::OrImmediate:
+        state.registers[0u] = owner_task_symbolic_binary(
+            state.registers[0u],
+            owner_task_symbolic_constant(
+                static_cast<std::uint32_t>(instruction.immediate)),
+            instruction.operation == Operation::AndImmediate ? '&' : '|');
+        return state.registers[0u].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::AndRegister:
+    case Operation::OrRegister:
+        if (!valid_register(destination) || !valid_register(source))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = owner_task_symbolic_binary(
+            state.registers[destination], state.registers[source],
+            instruction.operation == Operation::AndRegister ? '&' : '|');
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::AddImmediate:
+        if (!valid_register(destination))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = owner_task_symbolic_binary(
+            state.registers[destination],
+            owner_task_symbolic_constant(
+                static_cast<std::uint32_t>(instruction.immediate)), '+');
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::AddRegister:
+        if (!valid_register(destination) || !valid_register(source))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = owner_task_symbolic_binary(
+            state.registers[destination], state.registers[source], '+');
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::TestRegister:
+        if (!valid_register(destination) || !valid_register(source))
+            return OwnerTaskInstructionTransfer::Failed;
+        return assign_t(owner_task_symbolic_test(
+                   state.registers[destination], state.registers[source]))
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::TestImmediate:
+        return assign_t(owner_task_symbolic_test(
+                   state.registers[0u],
+                   owner_task_symbolic_constant(
+                       static_cast<std::uint32_t>(instruction.immediate))))
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::CompareEqualImmediate:
+        return assign_t(owner_task_symbolic_equal(
+                   state.registers[0u],
+                   owner_task_symbolic_constant(
+                       static_cast<std::uint32_t>(instruction.immediate))))
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::CompareEqualRegister:
+        if (!valid_register(destination) || !valid_register(source))
+            return OwnerTaskInstructionTransfer::Failed;
+        return assign_t(owner_task_symbolic_equal(
+                   state.registers[destination], state.registers[source]))
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::ClearT:
+        return assign_t(owner_task_symbolic_constant(0u))
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::SetT:
+        return assign_t(owner_task_symbolic_constant(1u))
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::MoveT:
+        if (!valid_register(destination))
+            return OwnerTaskInstructionTransfer::Failed;
+        state.registers[destination] = state.t;
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::StoreSpecialRegister:
+        if (!valid_register(destination))
+            return OwnerTaskInstructionTransfer::Failed;
+        if (instruction.special_register == katana::ir::SpecialRegister::Sr)
+            state.registers[destination] = state.sr;
+        else if (instruction.special_register ==
+                 katana::ir::SpecialRegister::Vbr)
+            state.registers[destination] = state.vbr;
+        else
+            return OwnerTaskInstructionTransfer::Failed;
+        return state.registers[destination].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    case Operation::LoadSpecialRegister:
+        if (!valid_register(source))
+            return OwnerTaskInstructionTransfer::Failed;
+        if (instruction.special_register == katana::ir::SpecialRegister::Sr) {
+            state.sr = state.registers[source];
+            state.t = owner_task_symbolic_bit0(state.sr);
+            state.sr_written = true;
+            if (!state.t.available)
+                return OwnerTaskInstructionTransfer::Failed;
+        } else if (instruction.special_register ==
+                   katana::ir::SpecialRegister::Vbr) {
+            state.vbr = state.registers[source];
+            state.vbr_written = true;
+        } else {
+            return OwnerTaskInstructionTransfer::Failed;
+        }
+        return state.registers[source].available
+            ? OwnerTaskInstructionTransfer::Applied
+            : OwnerTaskInstructionTransfer::Failed;
+    default:
+        return OwnerTaskInstructionTransfer::NotApplicable;
+    }
+}
+
 struct OwnerTaskSymbolicProjection final {
     bool complete = false;
     std::vector<std::string> fields;
@@ -26045,17 +26368,23 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
         return projection;
     }
 
-    std::array<OwnerTaskSymbolicValue, 16u> registers;
+    OwnerTaskRegisterTransferState transfer_state;
+    auto& registers = transfer_state.registers;
     for (std::size_t index = 0u; index < registers.size(); ++index)
         registers[index] = owner_task_symbolic_input(
             "r" + std::to_string(index) + "_in");
-    auto sr = owner_task_symbolic_input("sr_in");
-    auto vbr = owner_task_symbolic_input("vbr_in");
-    bool sr_written = false;
-    bool vbr_written = false;
+    transfer_state.sr = owner_task_symbolic_input("sr_in");
+    transfer_state.t = owner_task_symbolic_bit0(transfer_state.sr);
+    transfer_state.vbr = owner_task_symbolic_input("vbr_in");
+    transfer_state.pr = owner_task_symbolic_input("pr_in");
+    auto& sr = transfer_state.sr;
+    auto& vbr = transfer_state.vbr;
+    auto& sr_written = transfer_state.sr_written;
+    auto& vbr_written = transfer_state.vbr_written;
     struct WriteEffect final {
         std::uint32_t site = 0u;
         OwnerTaskSymbolicValue address;
+        std::optional<std::uint32_t> canonical_address;
         OwnerTaskSymbolicValue value;
         std::string access_contract;
     };
@@ -26074,89 +26403,40 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
             using Operation = katana::ir::Operation;
             const auto destination = instruction.destination_register;
             const auto source = instruction.source_register;
+            const auto transfer = owner_task_apply_register_transfer(
+                instruction, image, transfer_state);
+            if (transfer == OwnerTaskInstructionTransfer::Applied) continue;
+            if (transfer == OwnerTaskInstructionTransfer::Failed)
+                return fail();
             switch (instruction.operation) {
-            case Operation::Nop:
-            case Operation::Return: break;
-            case Operation::MovImmediate:
-                if (!valid_register(destination)) return fail();
-                registers[destination] = owner_task_symbolic_constant(
-                    static_cast<std::uint32_t>(instruction.immediate));
+            case Operation::Return:
+            case Operation::Branch:
                 break;
-            case Operation::MovRegister:
+            case Operation::LoadLong: {
                 if (!valid_register(destination) ||
-                    !valid_register(source))
+                    !valid_register(source) ||
+                    instruction.forwarded_value_register.has_value())
                     return fail();
-                registers[destination] = registers[source];
-                break;
-            case Operation::LoadWordSignedPcRelative:
-            case Operation::LoadLongPcRelative: {
-                if (!valid_register(destination)) return fail();
-                const auto literal = owner_task_literal(image, instruction);
-                if (!literal.has_value()) return fail();
-                const auto value = literal->signed_value
-                    ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
-                          static_cast<std::int16_t>(literal->bits)))
-                    : literal->bits;
-                registers[destination] = owner_task_symbolic_constant(
-                    value, !literal->immutable);
+                std::optional<std::uint32_t> canonical_load;
+                if (registers[source].constant.has_value()) {
+                    canonical_load = owner_task_canonical_memory_range(
+                        image, *registers[source].constant,
+                        sizeof(std::uint32_t));
+                    if (!canonical_load.has_value()) return fail();
+                }
+                for (const auto& write : writes) {
+                    if (!canonical_load.has_value() ||
+                        !write.canonical_address.has_value() ||
+                        owner_task_memory_ranges_overlap(
+                            *canonical_load, *write.canonical_address,
+                            sizeof(std::uint32_t)))
+                        return fail();
+                }
+                registers[destination] = owner_task_symbolic_memory_load(
+                    registers[source], "32", instruction.source_address);
+                if (!registers[destination].available) return fail();
                 break;
             }
-            case Operation::StoreSpecialRegister:
-                if (!valid_register(destination)) return fail();
-                if (instruction.special_register ==
-                    katana::ir::SpecialRegister::Sr)
-                    registers[destination] = sr;
-                else if (instruction.special_register ==
-                         katana::ir::SpecialRegister::Vbr)
-                    registers[destination] = vbr;
-                else
-                    return fail();
-                break;
-            case Operation::LoadSpecialRegister:
-                if (!valid_register(source)) return fail();
-                if (instruction.special_register ==
-                    katana::ir::SpecialRegister::Sr) {
-                    sr = registers[source];
-                    sr_written = true;
-                } else if (instruction.special_register ==
-                           katana::ir::SpecialRegister::Vbr) {
-                    vbr = registers[source];
-                    vbr_written = true;
-                } else {
-                    return fail();
-                }
-                break;
-            case Operation::ShiftLogicalLeftTwo:
-            case Operation::ShiftLogicalRightTwo:
-                if (!valid_register(destination)) return fail();
-                registers[destination] = owner_task_symbolic_shift(
-                    registers[destination], 2u,
-                    instruction.operation ==
-                        Operation::ShiftLogicalLeftTwo);
-                if (!registers[destination].available) return fail();
-                break;
-            case Operation::AndImmediate:
-            case Operation::OrImmediate:
-                if (!valid_register(destination)) return fail();
-                registers[destination] = owner_task_symbolic_binary(
-                    registers[destination],
-                    owner_task_symbolic_constant(
-                        static_cast<std::uint32_t>(instruction.immediate)),
-                    instruction.operation == Operation::AndImmediate
-                        ? '&' : '|');
-                if (!registers[destination].available) return fail();
-                break;
-            case Operation::AndRegister:
-            case Operation::OrRegister:
-                if (!valid_register(destination) ||
-                    !valid_register(source))
-                    return fail();
-                registers[destination] = owner_task_symbolic_binary(
-                    registers[destination], registers[source],
-                    instruction.operation == Operation::AndRegister
-                        ? '&' : '|');
-                if (!registers[destination].available) return fail();
-                break;
             case Operation::StoreLong:
             case Operation::StoreLongR0Indexed: {
                 if (!valid_register(destination) ||
@@ -26169,6 +26449,12 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
                         registers[0u], address, '+');
                 if (!address.available || !registers[source].available)
                     return fail();
+                std::optional<std::uint32_t> canonical_address;
+                if (address.constant.has_value()) {
+                    canonical_address = owner_task_canonical_memory_range(
+                        image, *address.constant, sizeof(std::uint32_t));
+                    if (!canonical_address.has_value()) return fail();
+                }
                 std::vector<std::string> access_contracts;
                 for (const auto& reference : hardware_references) {
                     if (reference.instruction_address !=
@@ -26209,6 +26495,7 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
                 writes.push_back({
                     instruction.source_address,
                     std::move(address),
+                    canonical_address,
                     registers[source],
                     access_contract.str()});
                 break;
@@ -26229,6 +26516,20 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
         first = false;
         state << 'r' << index << '='
               << owner_task_symbolic_text(registers[index]);
+    }
+    if (katana::ir::register_mask_contains(
+            may_defs, katana::ir::TrackedRegister::T)) {
+        if (!transfer_state.t.available) return fail();
+        if (!first) state << ';';
+        first = false;
+        state << "t=" << owner_task_symbolic_text(transfer_state.t);
+    }
+    if (katana::ir::register_mask_contains(
+            may_defs, katana::ir::TrackedRegister::Pr)) {
+        if (!transfer_state.pr.available) return fail();
+        if (!first) state << ';';
+        first = false;
+        state << "pr=" << owner_task_symbolic_text(transfer_state.pr);
     }
     if (sr_written) {
         if (!sr.available) return fail();
@@ -26289,18 +26590,12 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
 struct OwnerTaskPathWriteEffect final {
     std::uint32_t site = 0u;
     OwnerTaskSymbolicValue address;
+    std::optional<std::uint32_t> canonical_address;
     OwnerTaskSymbolicValue value;
     std::string access_contract;
 };
 
-struct OwnerTaskPathState final {
-    std::array<OwnerTaskSymbolicValue, 16u> registers;
-    OwnerTaskSymbolicValue t;
-    OwnerTaskSymbolicValue sr;
-    OwnerTaskSymbolicValue vbr;
-    OwnerTaskSymbolicValue pr;
-    bool sr_written = false;
-    bool vbr_written = false;
+struct OwnerTaskPathState final : OwnerTaskRegisterTransferState {
     std::vector<std::string> guards;
     std::vector<std::uint32_t> blocks;
     std::vector<OwnerTaskPathWriteEffect> writes;
@@ -26524,68 +26819,51 @@ OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
         using Operation = katana::ir::Operation;
         const auto destination = instruction.destination_register;
         const auto source = instruction.source_register;
-        const auto assign_t = [&](OwnerTaskSymbolicValue value) {
-            if (!value.available) return false;
-            auto next_sr = owner_task_symbolic_status_with_t(
-                state.sr, value);
-            if (!next_sr.available) return false;
-            state.t = std::move(value);
-            state.sr = std::move(next_sr);
-            return true;
-        };
-        if (!valid_register(destination) || !valid_register(source)) {
-            switch (instruction.operation) {
-            case Operation::Nop:
-            case Operation::ClearT:
-            case Operation::SetT:
-                break;
-            default:
-                return false;
-            }
-        }
+        const auto transfer = owner_task_apply_register_transfer(
+            instruction, image, state);
+        if (transfer == OwnerTaskInstructionTransfer::Applied) return true;
+        if (transfer == OwnerTaskInstructionTransfer::Failed) return false;
         switch (instruction.operation) {
-        case Operation::Nop:
-            return true;
-        case Operation::MovImmediate:
-        case Operation::Constant32:
-            state.registers[destination] = owner_task_symbolic_constant(
-                static_cast<std::uint32_t>(instruction.immediate));
-            return state.registers[destination].available;
-        case Operation::MovRegister:
-            state.registers[destination] = state.registers[source];
-            return state.registers[destination].available;
-        case Operation::LoadWordSignedPcRelative:
-        case Operation::LoadLongPcRelative: {
-            const auto literal = owner_task_literal(image, instruction);
-            if (!literal.has_value()) return false;
-            const auto value = literal->signed_value
-                ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
-                      static_cast<std::int16_t>(literal->bits)))
-                : literal->bits;
-            state.registers[destination] = owner_task_symbolic_constant(
-                value, !literal->immutable);
-            return true;
-        }
-        case Operation::LoadLong:
-            if (instruction.forwarded_value_register.has_value()) return false;
+        case Operation::LoadLong: {
+            if (!valid_register(destination) || !valid_register(source) ||
+                instruction.forwarded_value_register.has_value())
+                return false;
+            std::optional<std::uint32_t> canonical_load;
+            if (state.registers[source].constant.has_value()) {
+                canonical_load = owner_task_canonical_memory_range(
+                    image, *state.registers[source].constant,
+                    sizeof(std::uint32_t));
+                if (!canonical_load.has_value()) return false;
+            }
             for (const auto& write : state.writes) {
-                if (!write.address.constant.has_value() ||
-                    !state.registers[source].constant.has_value() ||
-                    *write.address.constant ==
-                        *state.registers[source].constant)
+                if (!canonical_load.has_value() ||
+                    !write.canonical_address.has_value() ||
+                    owner_task_memory_ranges_overlap(
+                        *canonical_load, *write.canonical_address,
+                        sizeof(std::uint32_t)))
                     return false;
             }
             state.registers[destination] = owner_task_symbolic_memory_load(
                 state.registers[source], "32",
                 instruction.source_address);
             return state.registers[destination].available;
+        }
         case Operation::StoreLong: {
-            if (!state.registers[destination].available ||
+            if (!valid_register(destination) || !valid_register(source) ||
+                !state.registers[destination].available ||
                 !state.registers[source].available)
                 return false;
+            std::optional<std::uint32_t> canonical_address;
+            if (state.registers[destination].constant.has_value()) {
+                canonical_address = owner_task_canonical_memory_range(
+                    image, *state.registers[destination].constant,
+                    sizeof(std::uint32_t));
+                if (!canonical_address.has_value()) return false;
+            }
             state.writes.push_back({
                 instruction.source_address,
                 state.registers[destination],
+                canonical_address,
                 state.registers[source],
                 access_contract_for(
                     instruction.source_address,
@@ -26593,105 +26871,27 @@ OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
             return true;
         }
         case Operation::StoreLongR0Indexed: {
-            if (!state.registers[destination].available ||
+            if (!valid_register(destination) || !valid_register(source) ||
+                !state.registers[destination].available ||
                 !state.registers[source].available)
                 return false;
             const auto address = owner_task_symbolic_binary(
                 state.registers[0u], state.registers[destination], '+');
             if (!address.available) return false;
+            std::optional<std::uint32_t> canonical_address;
+            if (address.constant.has_value()) {
+                canonical_address = owner_task_canonical_memory_range(
+                    image, *address.constant, sizeof(std::uint32_t));
+                if (!canonical_address.has_value()) return false;
+            }
             state.writes.push_back({
                 instruction.source_address,
                 address,
+                canonical_address,
                 state.registers[source],
                 access_contract_for(instruction.source_address, address)});
             return true;
         }
-        case Operation::AndImmediate:
-        case Operation::OrImmediate:
-        case Operation::XorImmediate: {
-            const auto operation = instruction.operation ==
-                    Operation::AndImmediate
-                ? '&'
-                : instruction.operation == Operation::OrImmediate ? '|' : '^';
-            if (operation == '^') return false;
-            state.registers[0u] = owner_task_symbolic_binary(
-                state.registers[0u],
-                owner_task_symbolic_constant(
-                    static_cast<std::uint32_t>(instruction.immediate)),
-                operation);
-            return state.registers[0u].available;
-        }
-        case Operation::AndRegister:
-        case Operation::OrRegister:
-        case Operation::XorRegister: {
-            const auto operation = instruction.operation ==
-                    Operation::AndRegister
-                ? '&'
-                : instruction.operation == Operation::OrRegister ? '|' : '^';
-            if (operation == '^') return false;
-            state.registers[destination] = owner_task_symbolic_binary(
-                state.registers[destination], state.registers[source], operation);
-            return state.registers[destination].available;
-        }
-        case Operation::AddImmediate:
-            state.registers[destination] = owner_task_symbolic_binary(
-                state.registers[destination],
-                owner_task_symbolic_constant(
-                    static_cast<std::uint32_t>(instruction.immediate)),
-                '+');
-            return state.registers[destination].available;
-        case Operation::AddRegister:
-            state.registers[destination] = owner_task_symbolic_binary(
-                state.registers[destination], state.registers[source], '+');
-            return state.registers[destination].available;
-        case Operation::TestRegister:
-            return assign_t(owner_task_symbolic_test(
-                state.registers[destination], state.registers[source]));
-        case Operation::TestImmediate:
-            return assign_t(owner_task_symbolic_test(
-                state.registers[0u],
-                owner_task_symbolic_constant(
-                    static_cast<std::uint32_t>(instruction.immediate))));
-        case Operation::CompareEqualImmediate:
-            return assign_t(owner_task_symbolic_equal(
-                state.registers[0u],
-                owner_task_symbolic_constant(
-                    static_cast<std::uint32_t>(instruction.immediate))));
-        case Operation::CompareEqualRegister:
-            return assign_t(owner_task_symbolic_equal(
-                state.registers[destination], state.registers[source]));
-        case Operation::ClearT:
-            return assign_t(owner_task_symbolic_constant(0u));
-        case Operation::SetT:
-            return assign_t(owner_task_symbolic_constant(1u));
-        case Operation::MoveT:
-            state.registers[destination] = state.t;
-            return state.registers[destination].available;
-        case Operation::StoreSpecialRegister:
-            if (instruction.special_register ==
-                katana::ir::SpecialRegister::Sr)
-                state.registers[destination] = state.sr;
-            else if (instruction.special_register ==
-                     katana::ir::SpecialRegister::Vbr)
-                state.registers[destination] = state.vbr;
-            else
-                return false;
-            return state.registers[destination].available;
-        case Operation::LoadSpecialRegister:
-            if (instruction.special_register ==
-                katana::ir::SpecialRegister::Sr) {
-                state.sr = state.registers[source];
-                state.t = owner_task_symbolic_bit0(state.sr);
-                if (!state.t.available) return false;
-                state.sr_written = true;
-            } else if (instruction.special_register ==
-                       katana::ir::SpecialRegister::Vbr) {
-                state.vbr = state.registers[source];
-                state.vbr_written = true;
-            } else {
-                return false;
-            }
-            return state.registers[source].available;
         default:
             return false;
         }
@@ -29042,6 +29242,11 @@ try_reuse_native_disc_analysis_artifact(
     const bool resume_artifact_requested =
         !options.resume_analysis_artifact.empty();
     if (resume_artifact_requested &&
+        options.analysis_artifact_refresh_requested)
+        throw std::invalid_argument(
+            "Analyseartefakt-Refresh darf kein Resume-Archiv als "
+            "Whole-Disc-Eingang verwenden.");
+    if (resume_artifact_requested &&
         options.resume_analysis_artifact_key.empty())
         throw std::invalid_argument(
             "Resume-Analysearchiv besitzt keine Ledger-Identitaet.");
@@ -29053,6 +29258,11 @@ try_reuse_native_disc_analysis_artifact(
         options.analysis_cache_root, "native-disc-analysis");
     CodegenCache cache(options.analysis_cache_root /
                        "native-disc-analysis");
+    if (options.analysis_artifact_refresh_requested) {
+        report_progress(
+            options, "native-disc-analysis-artifact-refresh");
+        return std::nullopt;
+    }
     std::optional<std::string> cached_artifact;
     std::span<const std::uint8_t> stored_bytes;
     std::string_view stored_key = expected_identity.key;
@@ -29214,13 +29424,16 @@ try_reuse_native_disc_analysis_artifact(
                 options.game_project,
                 options.native_port_definition,
                 image);
+        const auto primary_program_interior_addresses =
+            latent_aot_primary_program_interior_addresses(
+                artifact.primary.lowered_program);
         const auto rebound_external_primary_roots =
             latent_aot_external_primary_entries(
                 artifact.latent.modules,
                 options.game_project,
                 options.native_port_definition,
                 image,
-                artifact.primary.lowered_program,
+                primary_program_interior_addresses,
                 inferred_gap_entries,
                 artifact.boot_address,
                 static_cast<std::size_t>(artifact.boot_size));
@@ -29310,9 +29523,10 @@ try_reuse_native_disc_analysis_artifact(
             nullptr,
             std::move(artifact.latent),
             true,
-            result.latent_external_primary_roots,
-            &artifact.native_hardware_audit,
-            &artifact.native_port_program_index);
+             result.latent_external_primary_roots,
+             &artifact.native_hardware_audit,
+             &artifact.native_port_program_index,
+             true);
         populate_native_disc_analysis_summary(result);
         const auto& closure =
             result.admitted_state->native_hardware_closure;
@@ -29515,11 +29729,33 @@ void publish_native_disc_analysis_artifact(
                                    "native-disc-analysis");
                 const auto content = std::string_view(
                     reinterpret_cast<const char*>(bytes.data()), bytes.size());
-                cache.store_bounded(
-                    result.analysis_artifact_identity.key,
-                    native_disc_analysis_artifact_cache_name,
-                    content,
-                    maximum_native_disc_analysis_artifact_bytes);
+                bool cache_content_published = false;
+                if (options.analysis_artifact_refresh_requested) {
+                    const auto previous = cache.load_bounded(
+                        result.analysis_artifact_identity.key,
+                        native_disc_analysis_artifact_cache_name,
+                        maximum_native_disc_analysis_artifact_bytes);
+                    if (previous.has_value()) {
+                        if (*previous != content &&
+                            !cache.replace_bounded_if_matches(
+                                result.analysis_artifact_identity.key,
+                                native_disc_analysis_artifact_cache_name,
+                                *previous,
+                                content,
+                                maximum_native_disc_analysis_artifact_bytes))
+                            throw std::runtime_error(
+                                "Analyseartefakt-Refresh konnte den zuvor "
+                                "exakt gelesenen Checkpoint nicht atomar "
+                                "ersetzen.");
+                        cache_content_published = true;
+                    }
+                }
+                if (!cache_content_published)
+                    cache.store_bounded(
+                        result.analysis_artifact_identity.key,
+                        native_disc_analysis_artifact_cache_name,
+                        content,
+                        maximum_native_disc_analysis_artifact_bytes);
                 result.analysis_artifact_cache_published = true;
                 report_progress(
                     options, "native-disc-analysis-artifact-populated");
@@ -29566,7 +29802,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         precomputed_external_primary_roots = {},
     std::shared_ptr<NativeDiscAnalysisState> admitted = {},
     const NativeDiscAnalysisArtifactIdentity* const
-        runtime_frontier_binding = nullptr) {
+        runtime_frontier_binding = nullptr,
+    const bool game_project_image_contract_prevalidated = false) {
     if (output_root.empty())
         throw std::invalid_argument("Portexport braucht ein Ausgabeziel.");
     if (!admitted) {
@@ -29577,7 +29814,10 @@ static PortExportResult export_dreamcast_port_project_impl(
             validated_recipe,
             std::move(latent_aot_input),
             latent_aot_precomputed,
-            precomputed_external_primary_roots);
+            precomputed_external_primary_roots,
+            nullptr,
+            nullptr,
+            game_project_image_contract_prevalidated);
     }
     if (!options.diagnostic_partial && !admitted->backend_admitted)
         throw std::runtime_error(
@@ -30591,14 +30831,67 @@ struct PreparedBootAnalysisRun {
     PreparedBootAnalysisArtifact artifact;
     katana::analysis::DreamcastHardwareAudit hardware_audit;
     bool cache_hit = false;
+    bool derived_artifacts_materialized = false;
     std::size_t full_pipeline_runs = 0u;
 };
+
+void materialize_prepared_boot_analysis_artifacts(
+    const katana::io::ExecutableImage& image,
+    const PortExportOptions& options,
+    PreparedBootAnalysisRun& result,
+    const std::string_view progress_label = "ir-lowering") {
+    if (result.derived_artifacts_materialized) return;
+    report_progress(options, progress_label);
+    auto architectural_safepoints =
+        katana::ir::architectural_safepoint_block_leaders(
+            result.artifact.analysis);
+    if (options.native_port_definition != nullptr) {
+        for (const auto& continuation :
+             options.native_port_definition->bootstrap
+                 .post_aot_continuations)
+            architectural_safepoints.push_back(
+                continuation.resume_address);
+        // Instruction replacements are execution boundaries, not discovery
+        // roots. Split an already-reachable owner at every executable hook.
+        for (const auto& hook : options.native_port_definition->hooks) {
+            if (hook.kind ==
+                    katana::runtime::NativePortHookKind::Instruction &&
+                katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
+                architectural_safepoints.push_back(hook.guest_address);
+        }
+        std::sort(architectural_safepoints.begin(),
+                  architectural_safepoints.end());
+        architectural_safepoints.erase(
+            std::unique(architectural_safepoints.begin(),
+                        architectural_safepoints.end()),
+            architectural_safepoints.end());
+    }
+    result.artifact.lowered_program = katana::ir::lower_program(
+        result.artifact.analysis,
+        architectural_safepoints,
+        options.progress);
+    result.hardware_audit =
+        katana::analysis::audit_dreamcast_hardware(
+            image, result.artifact.analysis);
+    result.artifact.hardware_loops = result.hardware_audit.loops;
+    result.artifact.control_flow_graph =
+        katana::analysis::build_control_flow_graph(
+            result.artifact.analysis);
+    result.artifact.call_graph =
+        katana::analysis::build_call_graph(result.artifact.analysis);
+    result.derived_artifacts_materialized = true;
+}
 
 PreparedBootAnalysisRun prepare_boot_analysis(
     const katana::io::ExecutableImage& image,
     const katana::analysis::AnalysisOverrides* const overrides,
     const PortExportOptions& options,
-    const std::string_view progress_label) {
+    const std::string_view progress_label,
+    const bool defer_derived_artifacts = false,
+    katana::analysis::ControlFlowAnalysisSession* const analysis_session =
+        nullptr,
+    const bool allow_persistent_epoch_import = true) {
     constexpr std::string_view artifact_name{
         "prepared-boot-analysis.bin"};
     constexpr std::string_view epoch_artifact_name{
@@ -30648,6 +30941,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                     result.hardware_audit.scope =
                         "cache-rebound-executable-image";
                     result.cache_hit = true;
+                    result.derived_artifacts_materialized = true;
                     report_progress(
                         options, "analysis-ir-cache-hit");
                     const auto cached_phase =
@@ -30714,7 +31008,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     std::unique_ptr<CodegenCache> epoch_cache;
     std::string epoch_cache_key;
     std::string epoch_import_blob;
-    if (epoch_cache_enabled) {
+    if (epoch_cache_enabled && allow_persistent_epoch_import) {
         try {
             epoch_cache_key = persistent_boot_epoch_cache_key(
                 image,
@@ -30739,6 +31033,21 @@ PreparedBootAnalysisRun prepare_boot_analysis(
             epoch_cache_key.clear();
             epoch_import_blob.clear();
             report_progress(options, "analysis-epoch-cache-miss");
+        }
+    } else if (epoch_cache_enabled) {
+        report_progress(options, "analysis-epoch-session-reuse");
+        try {
+            epoch_cache_key = persistent_boot_epoch_cache_key(
+                image,
+                overrides,
+                options.analysis_implementation_identity);
+            epoch_cache = std::make_unique<CodegenCache>(
+                options.analysis_cache_root / "boot");
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            epoch_cache.reset();
+            epoch_cache_key.clear();
         }
     }
     report_progress(options, "control-flow-analysis");
@@ -30812,11 +31121,17 @@ PreparedBootAnalysisRun prepare_boot_analysis(
                             maximum_persistent_function_analysis_epoch_blob_bytes);
                 };
     }
-    auto analysis = katana::analysis::analyze_control_flow(
-        image,
-        overrides,
-        analysis_progress_callback,
-        analysis_options);
+    auto analysis = analysis_session != nullptr
+        ? analysis_session->analyze(
+              image,
+              overrides,
+              analysis_progress_callback,
+              analysis_options)
+        : katana::analysis::analyze_control_flow(
+              image,
+              overrides,
+              analysis_progress_callback,
+              analysis_options);
     if (analysis.progress_callback_failed)
         options.progress.record_observation_loss();
     control_flow_progress.complete(
@@ -30849,54 +31164,12 @@ PreparedBootAnalysisRun prepare_boot_analysis(
         throw std::runtime_error(
             guarded_aot_inventory_failure_message(analysis));
     }
-    report_progress(options, "ir-lowering");
-    auto architectural_safepoints =
-        katana::ir::architectural_safepoint_block_leaders(
-            analysis);
-    if (options.native_port_definition != nullptr) {
-        for (const auto& continuation :
-             options.native_port_definition->bootstrap
-                 .post_aot_continuations)
-            architectural_safepoints.push_back(
-                continuation.resume_address);
-        // Instruction replacements are execution boundaries, not discovery
-        // roots. Split an already-reachable owner at every executable hook
-        // address before optimization so a terminal instruction (for example
-        // a JSR at the end of a larger basic block) can be replaced without
-        // manufacturing a function, CFG edge or external entry. The lowering
-        // contract rejects delay-slot-only addresses fail-closed.
-        for (const auto& hook : options.native_port_definition->hooks) {
-            if (hook.kind ==
-                    katana::runtime::NativePortHookKind::Instruction &&
-                katana::runtime::native_port_hook_is_executable(
-                    hook.requirement))
-                architectural_safepoints.push_back(hook.guest_address);
-        }
-        std::sort(architectural_safepoints.begin(),
-                  architectural_safepoints.end());
-        architectural_safepoints.erase(
-            std::unique(architectural_safepoints.begin(),
-                        architectural_safepoints.end()),
-            architectural_safepoints.end());
-    }
-    auto program = katana::ir::lower_program(
-        analysis,
-        architectural_safepoints,
-        options.progress);
-
     PreparedBootAnalysisRun result;
-    result.hardware_audit =
-        katana::analysis::audit_dreamcast_hardware(
-            image, analysis);
-    result.artifact.hardware_loops =
-        result.hardware_audit.loops;
-    result.artifact.control_flow_graph =
-        katana::analysis::build_control_flow_graph(analysis);
-    result.artifact.call_graph =
-        katana::analysis::build_call_graph(analysis);
     result.artifact.analysis = std::move(analysis);
-    result.artifact.lowered_program = std::move(program);
     result.full_pipeline_runs = 1u;
+    if (defer_derived_artifacts) return result;
+    materialize_prepared_boot_analysis_artifacts(
+        image, options, result);
 
     if (cache != nullptr && cache_entry_absent &&
         boot_analysis_artifact_cacheable(result.artifact)) {
@@ -30980,6 +31253,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     boot_image_progress.complete();
     std::optional<katana::analysis::AnalysisOverrides>
         external_port_overrides;
+    report_progress(options, "game-project-validation:payload-binding");
     validate_game_project_runtime_image_payloads(
         options.game_project,
         options.game_project_runtime_image_payloads,
@@ -30998,6 +31272,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         options.game_project,
         options.native_port_bootstrap_write_payloads);
     if (options.game_project != nullptr) {
+        report_progress(options, "game-project-validation:image-contract");
         validate_game_project_image_contract(
             *options.game_project,
             image,
@@ -31154,11 +31429,14 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         report_progress(options,
                         "latent-primary-root-seed-cache-disabled");
     }
+    katana::analysis::ControlFlowAnalysisSession analysis_session;
     auto prepared_analysis = prepare_boot_analysis(
         image,
         external_port_overrides ? &*external_port_overrides : nullptr,
         options,
-        "native-disc-control-flow");
+        "native-disc-control-flow",
+        true,
+        &analysis_session);
     std::size_t boot_analysis_pipeline_runs =
         prepared_analysis.full_pipeline_runs;
 
@@ -31201,6 +31479,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         "latent-aot-image-references:" +
             std::to_string(referenced_disc_files.size()));
     LatentAotDiscovery precomputed_latent_aot;
+    LatentAotDiscoverySession latent_aot_discovery_session;
     constexpr std::size_t maximum_cross_image_callback_iterations = 8u;
     std::size_t final_external_callback_sink_count = 0u;
     std::size_t final_external_persistent_pointer_sink_count = 0u;
@@ -31283,14 +31562,18 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             discovery_options,
             occupied,
             options.latent_aot_entry_hints,
-            referenced_disc_files);
+            referenced_disc_files,
+            latent_aot_discovery_session);
+        const auto primary_analysis_interior_addresses =
+            latent_aot_primary_analysis_interior_addresses(
+                prepared_analysis.artifact.analysis);
         const auto latent_external_roots =
             latent_aot_external_primary_entries(
                 precomputed_latent_aot.modules,
                 options.game_project,
                 options.native_port_definition,
                 image,
-                prepared_analysis.artifact.lowered_program,
+                primary_analysis_interior_addresses,
                 inferred_gap_entries,
                 katana::platform::dreamcast_disc_boot_address,
                 disc.boot_file.size());
@@ -31336,14 +31619,23 @@ NativeDiscAnalysisResult analyze_native_disc_port(
 
         external_port_overrides = port_analysis_overrides(
             options.game_project, options.native_port_definition, image);
+        // The previous run's large CFA/FVA state is no longer needed once its
+        // delta roots have been extracted. Release it before allocating the
+        // next run instead of overlapping two near-peak analyses.
+        prepared_analysis = PreparedBootAnalysisRun{};
         prepared_analysis = prepare_boot_analysis(
             image,
             external_port_overrides ? &*external_port_overrides : nullptr,
             options,
-            "native-disc-cross-image-callback-control-flow");
+            "native-disc-cross-image-callback-control-flow",
+            true,
+            &analysis_session,
+            false);
         boot_analysis_pipeline_runs +=
             prepared_analysis.full_pipeline_runs;
     }
+    materialize_prepared_boot_analysis_artifacts(
+        image, options, prepared_analysis, "ir-lowering-final");
     report_latent_aot_analysis_durations(options, precomputed_latent_aot);
     report_progress(
         options,
@@ -31499,7 +31791,10 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         nullptr,
         std::move(precomputed_latent_aot),
         true,
-        result.latent_external_primary_roots);
+        result.latent_external_primary_roots,
+        nullptr,
+        nullptr,
+        true);
     populate_native_disc_analysis_summary(result);
     analysis_artifact_identity.image_analysis_key =
         make_boot_analysis_cache_key(
@@ -31655,6 +31950,7 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
     boot_image_progress.complete();
     std::optional<katana::analysis::AnalysisOverrides>
         external_port_overrides;
+    report_progress(options, "game-project-validation:payload-binding");
     validate_game_project_runtime_image_payloads(
         options.game_project,
         options.game_project_runtime_image_payloads,
@@ -31673,6 +31969,7 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         options.game_project,
         options.native_port_bootstrap_write_payloads);
     if (options.game_project != nullptr) {
+        report_progress(options, "game-project-validation:image-contract");
         validate_game_project_image_contract(
             *options.game_project,
             image,
@@ -31766,7 +32063,13 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         output_root,
         options,
         {},
-        &artifact.install_recipe);
+        &artifact.install_recipe,
+        {},
+        false,
+        {},
+        {},
+        nullptr,
+        true);
     report.boot_analysis_cache_hit =
         prepared_analysis.cache_hit;
     report.boot_analysis_pipeline_runs =

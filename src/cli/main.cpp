@@ -18,6 +18,7 @@
 #include "katana/codegen/native_aot_profile.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/codegen/probe.hpp"
+#include "katana/component_identity.hpp"
 #include "katana/io/elf32_sh_loader.hpp"
 #include "katana/io/input_output_error.hpp"
 #include "katana/io/input_provenance.hpp"
@@ -460,7 +461,10 @@ void observe_port_export_progress(
         std::find(
             timing_boundaries.begin(),
             timing_boundaries.end(),
-            phase) != timing_boundaries.end();
+            phase) != timing_boundaries.end() ||
+        phase.starts_with("latent-aot-discovery-fixpoint:") ||
+        phase == "ir-lowering-final" ||
+        phase.starts_with("game-project-validation:");
     if (!recorded_module_timing && timing_boundary)
         phase_timings.transition(
             std::string("export:") + std::string(phase));
@@ -8619,13 +8623,14 @@ std::string agent_session_producer_identity(
     const auto append = [&](const std::string_view value) {
         material << value.size() << ':' << value << ';';
     };
-    append("katana-agent-session-producer-v1");
+    append("katana-agent-session-producer-v2");
     append(KATANA_RECOMP_VERSION);
-    append(katana::build_contract::katana_git_commit);
     append(identities.analysis);
     append(identities.analysis_cache);
     append(identities.codegen);
     append(identities.whole_export);
+    append(katana::build_contract::
+               materialization_world_component_identity);
     append(std::to_string(
         katana::codegen::native_disc_analysis_artifact_schema_version));
     append(std::to_string(
@@ -9025,12 +9030,14 @@ int export_port_project(const std::filesystem::path& source_path,
                                       HintsAndHeuristics,
                          const std::vector<std::uint32_t>&
                              native_aot_resume_entries = {},
-                         const std::optional<std::filesystem::path>&
-                             telemetry_jsonl_path = std::nullopt,
-                        const PortAnalysisMode analysis_mode =
+                          const std::optional<std::filesystem::path>&
+                              telemetry_jsonl_path = std::nullopt,
+                         const bool detailed_analysis_telemetry = false,
+                         const PortAnalysisMode analysis_mode =
                             PortAnalysisMode::PlatformAbi,
                         const bool analysis_only = false,
                         const bool resume_analysis = false,
+                        const bool refresh_analysis = false,
                         const std::optional<std::filesystem::path>&
                             runtime_frontier_import_path = std::nullopt) {
     if (!valid_port_target_name(target_name))
@@ -9053,6 +9060,10 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--resume und --import-runtime-frontier sind ausschliesslich "
             "fuer analyze-port erlaubt.");
+    if (refresh_analysis && (!analysis_only || !resume_analysis))
+        throw std::invalid_argument(
+            "--refresh-analysis braucht einen expliziten "
+            "analyze-port --resume-Lauf.");
     if (runtime_frontier_import_path.has_value() && !resume_analysis)
         throw std::invalid_argument(
             "--import-runtime-frontier braucht einen expliziten "
@@ -9844,7 +9855,7 @@ int export_port_project(const std::filesystem::path& source_path,
                 }};
             export_options.progress = port_progress;
             export_options.detailed_analysis_telemetry =
-                normalized_telemetry_jsonl_path.has_value();
+                detailed_analysis_telemetry;
             export_options.analysis_cache_root =
                 component_cache_root;
             export_options.codegen_cache_root = codegen_cache_root;
@@ -9878,6 +9889,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 analysis_only;
             export_options.agent_analysis_artifacts_requested =
                 analysis_only;
+            export_options.analysis_artifact_refresh_requested =
+                analysis_only && refresh_analysis;
             return export_options;
         };
     if (analysis_only) {
@@ -9918,7 +9931,7 @@ int export_port_project(const std::filesystem::path& source_path,
             runtime_import = load_runtime_frontier_import(
                 *runtime_frontier_import_path);
         auto analysis_options = make_export_options({});
-        if (!previous_analysis_archive.empty()) {
+        if (!refresh_analysis && !previous_analysis_archive.empty()) {
             analysis_options.resume_analysis_artifact =
                 std::span(
                     reinterpret_cast<const std::uint8_t*>(
@@ -9929,7 +9942,9 @@ int export_port_project(const std::filesystem::path& source_path,
         }
         const auto current_producer_identity =
             agent_session_producer_identity(implementation_identities);
-        if (resume_analysis && !runtime_import.has_value() &&
+        if (resume_analysis && !refresh_analysis &&
+            katana::build_contract::source_identity_trusted &&
+            !runtime_import.has_value() &&
             !previous_analysis_archive.empty() &&
             previous_analysis_artifact_id.has_value() &&
             previous_producer_identity == current_producer_identity) {
@@ -9981,6 +9996,7 @@ int export_port_project(const std::filesystem::path& source_path,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - analysis_started)
                 .count());
+        bool previous_world_evidence_reusable = false;
         if (previous_world.has_value()) {
             const bool exact_generation =
                 previous_analysis_artifact_id.has_value() &&
@@ -9997,11 +10013,17 @@ int export_port_project(const std::filesystem::path& source_path,
                 materialization_world_matches_analysis_identity(
                     *previous_world,
                     *analyzed.resumed_from_analysis_artifact_identity);
-            if (!exact_generation && !revalidated_admission_generation)
+            previous_world_evidence_reusable =
+                exact_generation || revalidated_admission_generation;
+            if (!previous_world_evidence_reusable && !refresh_analysis)
                 throw std::invalid_argument(
                     "--resume verweigert: der vorhandene "
                     "Materialization-World ist weder an die aktuelle noch "
                     "an die revalidierte Eingabe-Analysegeneration gebunden.");
+            if (!previous_world_evidence_reusable)
+                std::cout
+                    << "KATANA_ANALYZE_PORT_REFRESH_BASELINE_REBUILT\n"
+                    << std::flush;
         }
         if (runtime_import.has_value())
             validate_runtime_frontier_import_binding(runtime_import.value(), analyzed);
@@ -10011,9 +10033,18 @@ int export_port_project(const std::filesystem::path& source_path,
                   runtime_import->observations.size())
             : std::span<const RuntimeFrontierObservation>{};
         std::size_t accepted_runtime_observations = 0u;
-        if (previous_world.has_value() || !runtime_observations.empty())
+        const std::optional<katana::agent::ExecutableMaterializationWorld>
+            no_previous_world;
+        const auto& previous_world_for_evidence =
+            previous_world_evidence_reusable
+                ? previous_world
+                : no_previous_world;
+        if (previous_world_evidence_reusable ||
+            !runtime_observations.empty())
             accepted_runtime_observations = refresh_agent_artifacts(
-                analyzed, previous_world, runtime_observations);
+                analyzed,
+                previous_world_for_evidence,
+                runtime_observations);
         std::error_code output_error;
         auto output_status = std::filesystem::symlink_status(
             absolute_output, output_error);
@@ -11811,7 +11842,8 @@ void print_usage(std::ostream& output) {
                "[--runtime-image-payload <Image-ID>=<private-Datei>] "
               "[--native-bootstrap-write-payload "
               "<0xGastadresse>=<private-Datei>] "
-              "[--telemetry-jsonl <Datei>] "
+               "[--telemetry-jsonl <Datei>] "
+               "[--detailed-analysis-telemetry] "
               "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
               "<sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
@@ -11820,7 +11852,8 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp analyze-port <Quelle.gdi> --output <privater-Analyseordner> "
               "--target-name <Name> --game-project <Descriptor-Artefakt> "
               "--native-port-definition <private .katana-native-port> "
-              "[--resume] [--import-runtime-frontier <Produktlog>] "
+              "[--resume] [--refresh-analysis] "
+              "[--import-runtime-frontier <Produktlog>] "
               "[dieselben Analyse-/Payload-/Latent-Optionen wie port]\n"
            << "  katana-recomp next-analysis-task --analysis-artifact "
               "<materialization-world.katana-world> --format agent-json\n"
@@ -12573,6 +12606,8 @@ int main(const int argc, char* argv[]) {
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             bool resume_analysis = false;
+            bool refresh_analysis = false;
+            bool detailed_analysis_telemetry = false;
             std::optional<std::filesystem::path>
                 runtime_frontier_import_path;
             std::vector<std::string_view> paired_arguments;
@@ -12585,6 +12620,22 @@ int main(const int argc, char* argv[]) {
                         throw std::invalid_argument(
                             "--resume ist nur einmal fuer analyze-port erlaubt.");
                     resume_analysis = true;
+                    continue;
+                }
+                if (option == "--refresh-analysis") {
+                    if (!analysis_only || refresh_analysis)
+                        throw std::invalid_argument(
+                            "--refresh-analysis ist nur einmal fuer "
+                            "analyze-port erlaubt.");
+                    refresh_analysis = true;
+                    continue;
+                }
+                if (option == "--detailed-analysis-telemetry") {
+                    if (detailed_analysis_telemetry)
+                        throw std::invalid_argument(
+                            "--detailed-analysis-telemetry ist nur einmal "
+                            "erlaubt.");
+                    detailed_analysis_telemetry = true;
                     continue;
                 }
                 if (argument >= static_cast<std::size_t>(argc))
@@ -12754,11 +12805,13 @@ int main(const int argc, char* argv[]) {
                                        bootstrap_write_payload_arguments,
                                        latent_aot_entry_hints,
                                        latent_aot_discovery_mode,
-                                       native_aot_resume_entries,
-                                       telemetry_jsonl_path,
-                                       analysis_mode,
+                                        native_aot_resume_entries,
+                                        telemetry_jsonl_path,
+                                        detailed_analysis_telemetry,
+                                        analysis_mode,
                                        analysis_only,
                                        resume_analysis,
+                                       refresh_analysis,
                                        runtime_frontier_import_path);
         }
 

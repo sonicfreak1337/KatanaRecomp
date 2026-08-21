@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace katana::agent {
@@ -11,6 +12,7 @@ namespace {
 
 constexpr std::uint64_t fnv_offset_basis = 14695981039346656037ull;
 constexpr std::uint64_t fnv_prime = 1099511628211ull;
+constexpr std::uint64_t evidence_digest_seed = 0xA0761D6478BD642Full;
 
 [[nodiscard]] constexpr std::uint64_t hash_byte(std::uint64_t hash,
                                                  const std::uint8_t byte) noexcept {
@@ -33,17 +35,19 @@ constexpr std::uint64_t fnv_prime = 1099511628211ull;
     return digest == 0u ? 1u : digest;
 }
 
-[[nodiscard]] std::uint64_t digest_evidence(
-    const std::vector<EvidenceRecord>& evidence) noexcept {
-    if (evidence.empty()) return 0u;
-    std::uint64_t digest = 0xA0761D6478BD642Full;
-    for (const auto& item : evidence) {
-        const auto component = item.id.value ^
-                               (static_cast<std::uint64_t>(item.kind) << 56u) ^
-                               (item.immutable ? 0xF00DCAFEu : 0u);
-        digest ^= mix64(component + 0x517CC1B727220A95ull);
-    }
-    return digest == 0u ? 1u : digest;
+[[nodiscard]] constexpr std::uint64_t evidence_digest_component(
+    const EvidenceRecord& item) noexcept {
+    const auto component = item.id.value ^
+                           (static_cast<std::uint64_t>(item.kind) << 56u) ^
+                           (item.immutable ? 0xF00DCAFEu : 0u);
+    return mix64(component + 0x517CC1B727220A95ull);
+}
+
+[[nodiscard]] constexpr std::uint64_t canonical_evidence_digest(
+    const std::uint64_t accumulator,
+    const bool nonempty) noexcept {
+    if (!nonempty) return 0u;
+    return accumulator == 0u ? 1u : accumulator;
 }
 
 [[nodiscard]] bool valid_text(const std::string& value) noexcept {
@@ -128,16 +132,17 @@ template <typename T>
 }
 
 [[nodiscard]] bool unique_reverse_dependency_vector(
-    const std::vector<ReverseDependency>& values) noexcept {
-    for (std::size_t index = 0u; index < values.size(); ++index) {
-        if (!values[index].from ||
-            !valid_dependency_kind_value(values[index].kind))
+    const std::vector<ReverseDependency>& values) {
+    std::vector<std::tuple<StableId, std::uint8_t>> keys;
+    keys.reserve(values.size());
+    for (const auto& value : values) {
+        if (!value.from || !valid_dependency_kind_value(value.kind))
             return false;
-        for (std::size_t other = index + 1u; other < values.size(); ++other) {
-            if (values[index] == values[other]) return false;
-        }
+        keys.emplace_back(value.from,
+                          static_cast<std::uint8_t>(value.kind));
     }
-    return true;
+    std::sort(keys.begin(), keys.end());
+    return std::adjacent_find(keys.begin(), keys.end()) == keys.end();
 }
 
 [[nodiscard]] std::uint64_t hash_key(const EntityKind kind,
@@ -160,15 +165,6 @@ template <typename T>
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
-[[nodiscard]] bool has_reverse_dependency(
-    const std::vector<ReverseDependency>& values,
-    const StableId from,
-    const DependencyKind kind) noexcept {
-    return std::any_of(values.begin(), values.end(), [from, kind](const auto& value) {
-        return value.from == from && value.kind == kind;
-    });
-}
-
 [[nodiscard]] bool reverse_dependency_less(const ReverseDependency& lhs,
                                             const ReverseDependency& rhs) noexcept {
     if (lhs.from != rhs.from) return lhs.from < rhs.from;
@@ -176,7 +172,9 @@ template <typename T>
            static_cast<std::uint8_t>(rhs.kind);
 }
 
-[[nodiscard]] bool valid_node_proof(const MaterializationNode& node) noexcept {
+[[nodiscard]] bool valid_node_proof(
+    const MaterializationNode& node,
+    const bool check_reverse_dependencies = true) {
     if (!valid_node_kind_value(node.kind) || !valid_proof_value(node.proof) ||
         !valid_completeness_value(node.completeness) ||
         node.canonical_identity.empty() ||
@@ -185,7 +183,8 @@ template <typename T>
     if (node.evidence.size() > materialization_world_max_evidence_per_item ||
         node.reverse_dependencies.size() > materialization_world_max_edges ||
         !unique_id_vector(node.evidence) ||
-        !unique_reverse_dependency_vector(node.reverse_dependencies))
+        (check_reverse_dependencies &&
+         !unique_reverse_dependency_vector(node.reverse_dependencies)))
         return false;
     if (node.evidence_digest != 0u && node.evidence_digest != digest_ids(node.evidence))
         return false;
@@ -314,19 +313,6 @@ template <typename T>
     return lhs.id < rhs.id;
 }
 
-[[nodiscard]] bool dependency_less(const DependencyEdge& lhs,
-                                   const DependencyEdge& rhs) noexcept {
-    if (lhs.from != rhs.from) return lhs.from < rhs.from;
-    if (lhs.to != rhs.to) return lhs.to < rhs.to;
-    return static_cast<std::uint8_t>(lhs.kind) <
-           static_cast<std::uint8_t>(rhs.kind);
-}
-
-[[nodiscard]] bool evidence_less(const EvidenceRecord& lhs,
-                                 const EvidenceRecord& rhs) noexcept {
-    return lhs.id < rhs.id;
-}
-
 struct JsonWriter final {
     std::span<char> output;
     std::size_t position = 0u;
@@ -410,18 +396,6 @@ struct JsonWriter final {
     void id(const StableId value) noexcept { number(value.value); }
 };
 
-template <typename T, typename Less>
-[[nodiscard]] const T* next_sorted(const std::vector<T>& values,
-                                    const T* previous,
-                                    Less less) noexcept {
-    const T* result = nullptr;
-    for (const auto& value : values) {
-        if (previous != nullptr && !less(*previous, value)) continue;
-        if (result == nullptr || less(value, *result)) result = &value;
-    }
-    return result;
-}
-
 void write_id_array(JsonWriter& writer, const std::vector<StableId>& ids) noexcept {
     writer.put('[');
     for (std::size_t index = 0u; index < ids.size(); ++index) {
@@ -441,7 +415,10 @@ void write_string_array(JsonWriter& writer,
     writer.put(']');
 }
 
-void write_node(JsonWriter& writer, const MaterializationNode& node) noexcept {
+template <typename ReverseWriter>
+void write_node(JsonWriter& writer,
+                const MaterializationNode& node,
+                ReverseWriter&& reverse_writer) noexcept {
     writer.raw("{\"id\":");
     writer.id(node.id);
     writer.raw(",\"kind\":");
@@ -463,33 +440,7 @@ void write_node(JsonWriter& writer, const MaterializationNode& node) noexcept {
     writer.raw(",\"evidence\":");
     write_id_array(writer, node.evidence);
     writer.raw(",\"reverse_dependencies\":[");
-    // The graph is bounded, but serialization must not allocate. The stored
-    // reverse list is emitted in deterministic (source, kind) order by
-    // selecting its next minimum directly from the vector.
-    ReverseDependency previous{};
-    bool have_previous = false;
-    bool first = true;
-    for (std::size_t emitted = 0u; emitted < node.reverse_dependencies.size(); ++emitted) {
-        ReverseDependency next{};
-        bool have_next = false;
-        for (const auto candidate : node.reverse_dependencies) {
-            if (have_previous && !reverse_dependency_less(previous, candidate)) continue;
-            if (!have_next || reverse_dependency_less(candidate, next)) {
-                next = candidate;
-                have_next = true;
-            }
-        }
-        if (!have_next) break;
-        if (!first) writer.put(',');
-        first = false;
-        writer.raw("{\"from\":");
-        writer.id(next.from);
-        writer.raw(",\"kind\":");
-        writer.string(dependency_kind_name(next.kind));
-        writer.put('}');
-        previous = next;
-        have_previous = true;
-    }
+    reverse_writer(writer, node);
     writer.raw("]}");
 }
 
@@ -787,6 +738,118 @@ const char* world_model_error_name(const WorldModelError error) noexcept {
     return "invalid";
 }
 
+ExecutableMaterializationWorld::DependencyIndexKey
+ExecutableMaterializationWorld::dependency_index_key(
+    const DependencyEdge& edge) noexcept {
+    return std::make_tuple(edge.from,
+                           edge.to,
+                           static_cast<std::uint8_t>(edge.kind));
+}
+
+ExecutableMaterializationWorld::ReverseDependencyIndexKey
+ExecutableMaterializationWorld::reverse_dependency_index_key(
+    const StableId target,
+    const ReverseDependency& dependency) noexcept {
+    return std::make_tuple(target,
+                           dependency.from,
+                           static_cast<std::uint8_t>(dependency.kind));
+}
+
+ExecutableMaterializationWorld::FrontierOrderKey
+ExecutableMaterializationWorld::frontier_order_key(
+    const FrontierEntry& entry) noexcept {
+    return std::make_tuple(
+        static_cast<std::uint8_t>(entry.severity),
+        static_cast<std::uint8_t>(frontier_state_rank(entry.state)),
+        static_cast<std::uint8_t>(entry.runtime_evidence_required),
+        0xFFFFFFFFu - entry.fanout,
+        entry.id);
+}
+
+void ExecutableMaterializationWorld::synchronize_dependency_generation()
+    const noexcept {
+    if (!dependency_generation_dirty_) return;
+    for (auto& node : nodes_)
+        node.dependency_generation = dependency_generation_;
+    for (auto& entry : frontier_)
+        entry.dependency_generation = dependency_generation_;
+    dependency_generation_dirty_ = false;
+    validation_cached_ = false;
+}
+
+bool ExecutableMaterializationWorld::rebuild_indexes() noexcept {
+    const auto clear_indexes = [&]() noexcept {
+        evidence_index_.clear();
+        node_index_.clear();
+        frontier_index_.clear();
+        dependency_index_.clear();
+        reverse_dependency_index_.clear();
+        frontier_order_index_.clear();
+        evidence_digest_accumulator_ = 0u;
+        dependency_generation_dirty_ = false;
+        validation_cached_ = false;
+    };
+    try {
+        clear_indexes();
+        evidence_digest_accumulator_ = evidence_.empty()
+                                          ? 0u
+                                          : evidence_digest_seed;
+
+        for (std::size_t index = 0u; index < evidence_.size(); ++index) {
+            const auto& item = evidence_[index];
+            if (!evidence_index_.emplace(item.id, index).second) {
+                clear_indexes();
+                return false;
+            }
+            evidence_digest_accumulator_ ^= evidence_digest_component(item);
+        }
+        for (std::size_t index = 0u; index < nodes_.size(); ++index) {
+            const auto& node = nodes_[index];
+            if (!node_index_.emplace(node.id, index).second) {
+                clear_indexes();
+                return false;
+            }
+        }
+        for (std::size_t index = 0u; index < frontier_.size(); ++index) {
+            const auto& entry = frontier_[index];
+            if (!frontier_index_.emplace(entry.id, index).second ||
+                !frontier_order_index_.emplace(frontier_order_key(entry), index)
+                     .second) {
+                clear_indexes();
+                return false;
+            }
+        }
+        for (std::size_t index = 0u; index < dependencies_.size(); ++index) {
+            if (!dependency_index_.emplace(
+                    dependency_index_key(dependencies_[index]), index)
+                     .second) {
+                clear_indexes();
+                return false;
+            }
+        }
+        for (const auto& node : nodes_) {
+            for (std::size_t index = 0u;
+                 index < node.reverse_dependencies.size();
+                 ++index) {
+                if (!reverse_dependency_index_.emplace(
+                        reverse_dependency_index_key(
+                            node.id, node.reverse_dependencies[index]),
+                        index)
+                         .second) {
+                    clear_indexes();
+                    return false;
+                }
+            }
+        }
+        dependency_generation_dirty_ = false;
+        validation_cached_ = false;
+        return true;
+    } catch (...) {
+        clear_indexes();
+        return false;
+    }
+}
+
 bool ExecutableMaterializationWorld::add_evidence(EvidenceRecord evidence) noexcept {
     try {
         if (!valid_evidence_kind_value(evidence.kind) ||
@@ -809,16 +872,35 @@ bool ExecutableMaterializationWorld::add_evidence(EvidenceRecord evidence) noexc
             fail(WorldModelError::CapacityExceeded);
             return false;
         }
-        for (const auto& existing : evidence_) {
-            if (existing.id == evidence.id) {
-                fail(existing.canonical_identity == evidence.canonical_identity
-                         ? WorldModelError::DuplicateEntry
-                         : WorldModelError::StableIdCollision);
+        const auto existing = evidence_index_.find(evidence.id);
+        if (existing != evidence_index_.end()) {
+            if (existing->second >= evidence_.size()) {
+                fail(WorldModelError::InvalidArtifact);
                 return false;
             }
+            const auto& prior = evidence_[existing->second];
+            fail(prior.canonical_identity == evidence.canonical_identity
+                     ? WorldModelError::DuplicateEntry
+                     : WorldModelError::StableIdCollision);
+            return false;
         }
         evidence_.push_back(std::move(evidence));
-        evidence_digest_ = digest_evidence(evidence_);
+        const auto index = evidence_.size() - 1u;
+        try {
+            if (!evidence_index_.emplace(evidence_[index].id, index).second) {
+                evidence_.pop_back();
+                fail(WorldModelError::DuplicateEntry);
+                return false;
+            }
+        } catch (...) {
+            evidence_.pop_back();
+            fail(WorldModelError::CapacityExceeded);
+            return false;
+        }
+        if (evidence_.size() == 1u) evidence_digest_accumulator_ = evidence_digest_seed;
+        evidence_digest_accumulator_ ^= evidence_digest_component(evidence_.back());
+        evidence_digest_ = canonical_evidence_digest(evidence_digest_accumulator_, true);
+        validation_cached_ = false;
         last_error_ = WorldModelError::None;
         ++revision_;
         return true;
@@ -845,21 +927,21 @@ bool ExecutableMaterializationWorld::add_node(MaterializationNode node) noexcept
             fail(WorldModelError::InvalidStableId);
             return false;
         }
+        std::sort(node.evidence.begin(), node.evidence.end());
         if (node.dependency_generation == 0u)
             node.dependency_generation = dependency_generation_;
         if (node.evidence_digest == 0u)
             node.evidence_digest = digest_ids(node.evidence);
         bool has_runtime_evidence = false;
         for (const auto evidence_id : node.evidence) {
-            const auto evidence = std::find_if(
-                evidence_.begin(), evidence_.end(), [evidence_id](const auto& item) {
-                    return item.id == evidence_id;
-                });
-            if (evidence == evidence_.end()) {
+            const auto evidence_index = evidence_index_.find(evidence_id);
+            if (evidence_index == evidence_index_.end() ||
+                evidence_index->second >= evidence_.size()) {
                 fail(WorldModelError::MissingReference);
                 return false;
             }
-            if (runtime_only_evidence(evidence->kind)) {
+            const auto& evidence = evidence_[evidence_index->second];
+            if (runtime_only_evidence(evidence.kind)) {
                 if (!node.runtime_hint_only || is_static_proof(node.proof) ||
                     node.completeness == Completeness::Complete) {
                     fail(WorldModelError::InvalidProof);
@@ -868,7 +950,7 @@ bool ExecutableMaterializationWorld::add_node(MaterializationNode node) noexcept
                 has_runtime_evidence = true;
             }
             if (node.completeness == Completeness::Complete &&
-                (!evidence->immutable || runtime_only_evidence(evidence->kind))) {
+                (!evidence.immutable || runtime_only_evidence(evidence.kind))) {
                 fail(WorldModelError::InvalidProof);
                 return false;
             }
@@ -881,29 +963,65 @@ bool ExecutableMaterializationWorld::add_node(MaterializationNode node) noexcept
             fail(WorldModelError::InvalidProof);
             return false;
         }
-        for (std::size_t index = 0u; index < node.reverse_dependencies.size(); ++index) {
-            for (std::size_t other = index + 1u;
-                 other < node.reverse_dependencies.size();
-                 ++other) {
-                if (node.reverse_dependencies[index] == node.reverse_dependencies[other]) {
-                    fail(WorldModelError::DuplicateEntry);
-                    return false;
-                }
-            }
-        }
         if (nodes_.size() >= materialization_world_max_nodes) {
             fail(WorldModelError::CapacityExceeded);
             return false;
         }
-        for (const auto& existing : nodes_) {
-            if (existing.id == node.id) {
-                fail(existing.canonical_identity == node.canonical_identity
-                         ? WorldModelError::DuplicateEntry
-                         : WorldModelError::StableIdCollision);
+        const auto existing = node_index_.find(node.id);
+        if (existing != node_index_.end()) {
+            if (existing->second >= nodes_.size()) {
+                fail(WorldModelError::InvalidArtifact);
                 return false;
             }
+            const auto& prior = nodes_[existing->second];
+            fail(prior.canonical_identity == node.canonical_identity
+                     ? WorldModelError::DuplicateEntry
+                     : WorldModelError::StableIdCollision);
+            return false;
         }
         nodes_.push_back(std::move(node));
+        const auto index = nodes_.size() - 1u;
+        const auto node_key = nodes_[index].id;
+        bool node_index_added = false;
+        std::size_t reverse_indexes_added = 0u;
+        const auto rollback_node = [&]() noexcept {
+            for (std::size_t reverse_index = 0u;
+                 reverse_index < reverse_indexes_added;
+                 ++reverse_index) {
+                reverse_dependency_index_.erase(
+                    reverse_dependency_index_key(
+                        node_key, nodes_[index].reverse_dependencies[reverse_index]));
+            }
+            if (node_index_added) node_index_.erase(node_key);
+            nodes_.pop_back();
+        };
+        try {
+            if (!node_index_.emplace(node_key, index).second) {
+                rollback_node();
+                fail(WorldModelError::DuplicateEntry);
+                return false;
+            }
+            node_index_added = true;
+            for (std::size_t reverse_index = 0u;
+                 reverse_index < nodes_[index].reverse_dependencies.size();
+                 ++reverse_index) {
+                const auto& reverse = nodes_[index].reverse_dependencies[reverse_index];
+                if (!reverse_dependency_index_
+                         .emplace(reverse_dependency_index_key(node_key, reverse),
+                                  reverse_index)
+                         .second) {
+                    rollback_node();
+                    fail(WorldModelError::DuplicateEntry);
+                    return false;
+                }
+                ++reverse_indexes_added;
+            }
+        } catch (...) {
+            rollback_node();
+            fail(WorldModelError::CapacityExceeded);
+            return false;
+        }
+        validation_cached_ = false;
         last_error_ = WorldModelError::None;
         ++revision_;
         return true;
@@ -915,8 +1033,14 @@ bool ExecutableMaterializationWorld::add_node(MaterializationNode node) noexcept
 
 bool ExecutableMaterializationWorld::add_dependency(DependencyEdge edge) noexcept {
     if (!valid_dependency_kind_value(edge.kind) || !edge.from || !edge.to ||
-        edge.from == edge.to ||
-        !contains_node(edge.from) || !contains_node(edge.to)) {
+        edge.from == edge.to) {
+        fail(WorldModelError::InvalidDependency);
+        return false;
+    }
+    const auto from = node_index_.find(edge.from);
+    const auto to = node_index_.find(edge.to);
+    if (from == node_index_.end() || to == node_index_.end() ||
+        from->second >= nodes_.size() || to->second >= nodes_.size()) {
         fail(WorldModelError::InvalidDependency);
         return false;
     }
@@ -924,48 +1048,67 @@ bool ExecutableMaterializationWorld::add_dependency(DependencyEdge edge) noexcep
         fail(WorldModelError::CapacityExceeded);
         return false;
     }
-    for (const auto& existing : dependencies_) {
-        if (existing.from == edge.from && existing.to == edge.to &&
-            existing.kind == edge.kind) {
-            fail(WorldModelError::DuplicateEntry);
-            return false;
-        }
+    const auto dependency_key = dependency_index_key(edge);
+    if (dependency_index_.find(dependency_key) != dependency_index_.end()) {
+        fail(WorldModelError::DuplicateEntry);
+        return false;
+    }
+    const ReverseDependency reverse{edge.from, edge.kind};
+    const auto reverse_key = reverse_dependency_index_key(edge.to, reverse);
+    if (reverse_dependency_index_.find(reverse_key) !=
+        reverse_dependency_index_.end()) {
+        fail(WorldModelError::DuplicateEntry);
+        return false;
     }
     if (dependency_generation_ == std::numeric_limits<std::uint64_t>::max()) {
         fail(WorldModelError::CapacityExceeded);
         return false;
     }
-    MaterializationNode* target = nullptr;
-    for (auto& node : nodes_) {
-        if (node.id == edge.to) {
-            target = &node;
-            break;
-        }
-    }
-    if (target == nullptr || target->reverse_dependencies.size() >=
-                                materialization_world_max_edges) {
+    auto& target = nodes_[to->second];
+    if (target.reverse_dependencies.size() >= materialization_world_max_edges) {
         fail(WorldModelError::CapacityExceeded);
         return false;
     }
-    if (has_reverse_dependency(target->reverse_dependencies, edge.from, edge.kind)) {
-        fail(WorldModelError::DuplicateEntry);
-        return false;
-    }
+    bool reverse_added = false;
+    bool dependency_added = false;
+    bool dependency_index_added = false;
+    bool reverse_index_added = false;
+    const auto rollback_dependency = [&]() noexcept {
+        if (reverse_index_added) reverse_dependency_index_.erase(reverse_key);
+        if (dependency_index_added) dependency_index_.erase(dependency_key);
+        if (dependency_added && !dependencies_.empty()) dependencies_.pop_back();
+        if (reverse_added && !target.reverse_dependencies.empty() &&
+            target.reverse_dependencies.back() == reverse)
+            target.reverse_dependencies.pop_back();
+    };
     try {
-        target->reverse_dependencies.push_back(
-            ReverseDependency{edge.from, edge.kind});
+        target.reverse_dependencies.push_back(reverse);
+        reverse_added = true;
         dependencies_.push_back(edge);
+        dependency_added = true;
+        if (!dependency_index_.emplace(dependency_key, dependencies_.size() - 1u)
+                 .second) {
+            rollback_dependency();
+            fail(WorldModelError::DuplicateEntry);
+            return false;
+        }
+        dependency_index_added = true;
+        if (!reverse_dependency_index_
+                 .emplace(reverse_key, target.reverse_dependencies.size() - 1u)
+                 .second) {
+            rollback_dependency();
+            fail(WorldModelError::DuplicateEntry);
+            return false;
+        }
+        reverse_index_added = true;
         ++dependency_generation_;
-        for (auto& node : nodes_) node.dependency_generation = dependency_generation_;
-        for (auto& entry : frontier_) entry.dependency_generation = dependency_generation_;
+        dependency_generation_dirty_ = true;
+        validation_cached_ = false;
         last_error_ = WorldModelError::None;
         ++revision_;
         return true;
     } catch (...) {
-        if (target != nullptr && !target->reverse_dependencies.empty() &&
-            target->reverse_dependencies.back() ==
-                ReverseDependency{edge.from, edge.kind})
-            target->reverse_dependencies.pop_back();
+        rollback_dependency();
         fail(WorldModelError::CapacityExceeded);
         return false;
     }
@@ -987,21 +1130,21 @@ bool ExecutableMaterializationWorld::add_frontier(FrontierEntry entry) noexcept 
             fail(WorldModelError::InvalidStableId);
             return false;
         }
+        std::sort(entry.evidence.begin(), entry.evidence.end());
         if (entry.dependency_generation == 0u)
             entry.dependency_generation = dependency_generation_;
         if (entry.evidence_digest == 0u)
             entry.evidence_digest = digest_ids(entry.evidence);
         bool has_runtime_evidence = false;
         for (const auto evidence_id : entry.evidence) {
-            const auto evidence = std::find_if(
-                evidence_.begin(), evidence_.end(), [evidence_id](const auto& item) {
-                    return item.id == evidence_id;
-                });
-            if (evidence == evidence_.end()) {
+            const auto evidence_index = evidence_index_.find(evidence_id);
+            if (evidence_index == evidence_index_.end() ||
+                evidence_index->second >= evidence_.size()) {
                 fail(WorldModelError::MissingReference);
                 return false;
             }
-            if (runtime_only_evidence(evidence->kind)) {
+            const auto& evidence = evidence_[evidence_index->second];
+            if (runtime_only_evidence(evidence.kind)) {
                 has_runtime_evidence = true;
                 if (!entry.runtime_evidence_required ||
                     entry.state != FrontierState::ObservedHint ||
@@ -1012,7 +1155,7 @@ bool ExecutableMaterializationWorld::add_frontier(FrontierEntry entry) noexcept 
                 }
             }
             if (entry.static_complete &&
-                (!evidence->immutable || runtime_only_evidence(evidence->kind))) {
+                (!evidence.immutable || runtime_only_evidence(evidence.kind))) {
                 fail(WorldModelError::InvalidProof);
                 return false;
             }
@@ -1029,16 +1172,45 @@ bool ExecutableMaterializationWorld::add_frontier(FrontierEntry entry) noexcept 
             fail(WorldModelError::CapacityExceeded);
             return false;
         }
-        for (const auto& existing : frontier_) {
-            if (existing.id == entry.id) {
-                fail(existing.family == entry.family && existing.owner == entry.owner &&
-                             existing.site == entry.site
-                         ? WorldModelError::DuplicateEntry
-                         : WorldModelError::StableIdCollision);
+        const auto existing = frontier_index_.find(entry.id);
+        if (existing != frontier_index_.end()) {
+            if (existing->second >= frontier_.size()) {
+                fail(WorldModelError::InvalidArtifact);
                 return false;
             }
+            const auto& prior = frontier_[existing->second];
+            fail(prior.family == entry.family && prior.owner == entry.owner &&
+                         prior.site == entry.site
+                     ? WorldModelError::DuplicateEntry
+                     : WorldModelError::StableIdCollision);
+            return false;
         }
         frontier_.push_back(std::move(entry));
+        const auto index = frontier_.size() - 1u;
+        const auto frontier_key = frontier_[index].id;
+        bool id_added = false;
+        try {
+            if (!frontier_index_.emplace(frontier_[index].id, index).second) {
+                frontier_.pop_back();
+                fail(WorldModelError::DuplicateEntry);
+                return false;
+            }
+            id_added = true;
+            if (!frontier_order_index_
+                     .emplace(frontier_order_key(frontier_[index]), index)
+                     .second) {
+                frontier_index_.erase(frontier_key);
+                frontier_.pop_back();
+                fail(WorldModelError::DuplicateEntry);
+                return false;
+            }
+        } catch (...) {
+            if (id_added) frontier_index_.erase(frontier_key);
+            frontier_.pop_back();
+            fail(WorldModelError::CapacityExceeded);
+            return false;
+        }
+        validation_cached_ = false;
         last_error_ = WorldModelError::None;
         ++revision_;
         return true;
@@ -1073,15 +1245,21 @@ bool ExecutableMaterializationWorld::add_runtime_hint(
             return false;
         }
         FrontierEntry* existing_frontier = nullptr;
-        for (auto& candidate : frontier_) {
-            if (candidate.id != frontier) continue;
+        std::size_t existing_frontier_index = 0u;
+        const auto frontier_index = frontier_index_.find(frontier);
+        if (frontier_index != frontier_index_.end()) {
+            if (frontier_index->second >= frontier_.size()) {
+                fail(WorldModelError::InvalidFrontier);
+                return false;
+            }
+            existing_frontier_index = frontier_index->second;
+            auto& candidate = frontier_[existing_frontier_index];
             if (candidate.family != family || candidate.owner != owner ||
                 candidate.site != site) {
                 fail(WorldModelError::StableIdCollision);
                 return false;
             }
             existing_frontier = &candidate;
-            break;
         }
         if (existing_frontier != nullptr &&
             (existing_frontier->state != FrontierState::ObservedHint ||
@@ -1129,23 +1307,46 @@ bool ExecutableMaterializationWorld::add_runtime_hint(
 
         const auto previous_evidence_size = evidence_.size();
         const auto previous_evidence_digest = evidence_digest_;
+        const auto previous_evidence_accumulator = evidence_digest_accumulator_;
         const auto previous_revision = revision_;
+        const auto previous_validation_cached = validation_cached_;
+        const auto previous_validation_result = validation_result_;
         const auto rollback = [&](const WorldModelError error) noexcept {
+            if (evidence_.size() > previous_evidence_size) {
+                evidence_index_.erase(evidence_.back().id);
+            }
             evidence_.resize(previous_evidence_size);
             evidence_digest_ = previous_evidence_digest;
+            evidence_digest_accumulator_ = previous_evidence_accumulator;
             revision_ = previous_revision;
+            validation_cached_ = previous_validation_cached;
+            validation_result_ = previous_validation_result;
             last_error_ = error;
         };
         if (!add_evidence(std::move(evidence))) return false;
         if (existing_frontier != nullptr) {
+            bool frontier_evidence_added = false;
+            std::size_t inserted_evidence_index = 0u;
             try {
-                existing_frontier->evidence.push_back(evidence_id);
+                const auto position = std::lower_bound(
+                    existing_frontier->evidence.begin(),
+                    existing_frontier->evidence.end(),
+                    evidence_id);
+                inserted_evidence_index = static_cast<std::size_t>(
+                    position - existing_frontier->evidence.begin());
+                existing_frontier->evidence.insert(position, evidence_id);
+                frontier_evidence_added = true;
                 existing_frontier->evidence_digest =
                     digest_ids(existing_frontier->evidence);
                 last_error_ = WorldModelError::None;
+                validation_cached_ = false;
                 ++revision_;
                 return true;
             } catch (...) {
+                if (frontier_evidence_added)
+                    existing_frontier->evidence.erase(
+                        existing_frontier->evidence.begin() +
+                        static_cast<std::ptrdiff_t>(inserted_evidence_index));
                 rollback(WorldModelError::CapacityExceeded);
                 return false;
             }
@@ -1164,271 +1365,296 @@ bool ExecutableMaterializationWorld::add_runtime_hint(
 
 bool ExecutableMaterializationWorld::attach_node_evidence(const StableId node,
                                                           const StableId evidence) noexcept {
-    if (!contains_node(node) || !contains_evidence(evidence)) {
+    const auto node_index = node_index_.find(node);
+    const auto evidence_index = evidence_index_.find(evidence);
+    if (node_index == node_index_.end() || evidence_index == evidence_index_.end() ||
+        node_index->second >= nodes_.size() || evidence_index->second >= evidence_.size()) {
         fail(WorldModelError::MissingReference);
         return false;
     }
-    for (auto& item : nodes_) {
-        if (item.id != node) continue;
-        if (has_id(item.evidence, evidence)) return true;
-        const auto evidence_item = std::find_if(
-            evidence_.begin(), evidence_.end(), [evidence](const auto& candidate) {
-                return candidate.id == evidence;
-            });
-        if (evidence_item == evidence_.end()) {
-            fail(WorldModelError::MissingReference);
-            return false;
-        }
-        if (runtime_only_evidence(evidence_item->kind) &&
-            (!item.runtime_hint_only || is_static_proof(item.proof) ||
-             item.completeness == Completeness::Complete)) {
-            fail(WorldModelError::InvalidProof);
-            return false;
-        }
-        if (item.completeness == Completeness::Complete &&
-            !evidence_item->immutable) {
-            fail(WorldModelError::InvalidProof);
-            return false;
-        }
-        if (item.evidence.size() >= materialization_world_max_evidence_per_item) {
-            fail(WorldModelError::CapacityExceeded);
-            return false;
-        }
-        try {
-            item.evidence.push_back(evidence);
-            item.evidence_digest = digest_ids(item.evidence);
-            ++revision_;
-            last_error_ = WorldModelError::None;
-            return true;
-        } catch (...) {
-            fail(WorldModelError::CapacityExceeded);
-            return false;
-        }
+    auto& item = nodes_[node_index->second];
+    if (has_id(item.evidence, evidence)) return true;
+    const auto& evidence_item = evidence_[evidence_index->second];
+    if (runtime_only_evidence(evidence_item.kind) &&
+        (!item.runtime_hint_only || is_static_proof(item.proof) ||
+         item.completeness == Completeness::Complete)) {
+        fail(WorldModelError::InvalidProof);
+        return false;
     }
-    fail(WorldModelError::MissingReference);
-    return false;
+    if (item.completeness == Completeness::Complete &&
+        !evidence_item.immutable) {
+        fail(WorldModelError::InvalidProof);
+        return false;
+    }
+    if (item.evidence.size() >= materialization_world_max_evidence_per_item) {
+        fail(WorldModelError::CapacityExceeded);
+        return false;
+    }
+    try {
+        const auto position = std::lower_bound(item.evidence.begin(),
+                                               item.evidence.end(), evidence);
+        item.evidence.insert(position, evidence);
+        item.evidence_digest = digest_ids(item.evidence);
+        validation_cached_ = false;
+        ++revision_;
+        last_error_ = WorldModelError::None;
+        return true;
+    } catch (...) {
+        fail(WorldModelError::CapacityExceeded);
+        return false;
+    }
 }
 
 bool ExecutableMaterializationWorld::attach_frontier_evidence(
     const StableId frontier,
     const StableId evidence) noexcept {
-    if (!contains_frontier(frontier) || !contains_evidence(evidence)) {
+    const auto frontier_index = frontier_index_.find(frontier);
+    const auto evidence_index = evidence_index_.find(evidence);
+    if (frontier_index == frontier_index_.end() ||
+        evidence_index == evidence_index_.end() ||
+        frontier_index->second >= frontier_.size() ||
+        evidence_index->second >= evidence_.size()) {
         fail(WorldModelError::MissingReference);
         return false;
     }
-    for (auto& item : frontier_) {
-        if (item.id != frontier) continue;
-        if (has_id(item.evidence, evidence)) return true;
-        const auto evidence_item = std::find_if(
-            evidence_.begin(), evidence_.end(), [evidence](const auto& candidate) {
-                return candidate.id == evidence;
-            });
-        if (evidence_item == evidence_.end()) {
-            fail(WorldModelError::MissingReference);
-            return false;
-        }
-        if (runtime_only_evidence(evidence_item->kind) &&
-            (item.state != FrontierState::ObservedHint ||
-             item.proof != FrontierProof::RuntimeObservation ||
-             !item.runtime_evidence_required || item.static_complete)) {
-            fail(WorldModelError::InvalidProof);
-            return false;
-        }
-        if (item.static_complete && !evidence_item->immutable) {
-            fail(WorldModelError::InvalidProof);
-            return false;
-        }
-        if (item.evidence.size() >= materialization_world_max_evidence_per_item) {
-            fail(WorldModelError::CapacityExceeded);
-            return false;
-        }
-        try {
-            item.evidence.push_back(evidence);
-            item.evidence_digest = digest_ids(item.evidence);
-            ++revision_;
-            last_error_ = WorldModelError::None;
-            return true;
-        } catch (...) {
-            fail(WorldModelError::CapacityExceeded);
-            return false;
-        }
+    auto& item = frontier_[frontier_index->second];
+    if (has_id(item.evidence, evidence)) return true;
+    const auto& evidence_item = evidence_[evidence_index->second];
+    if (runtime_only_evidence(evidence_item.kind) &&
+        (item.state != FrontierState::ObservedHint ||
+         item.proof != FrontierProof::RuntimeObservation ||
+         !item.runtime_evidence_required || item.static_complete)) {
+        fail(WorldModelError::InvalidProof);
+        return false;
     }
-    fail(WorldModelError::MissingReference);
-    return false;
+    if (item.static_complete && !evidence_item.immutable) {
+        fail(WorldModelError::InvalidProof);
+        return false;
+    }
+    if (item.evidence.size() >= materialization_world_max_evidence_per_item) {
+        fail(WorldModelError::CapacityExceeded);
+        return false;
+    }
+    try {
+        const auto position = std::lower_bound(item.evidence.begin(),
+                                               item.evidence.end(), evidence);
+        item.evidence.insert(position, evidence);
+        item.evidence_digest = digest_ids(item.evidence);
+        validation_cached_ = false;
+        ++revision_;
+        last_error_ = WorldModelError::None;
+        return true;
+    } catch (...) {
+        fail(WorldModelError::CapacityExceeded);
+        return false;
+    }
 }
 
 bool ExecutableMaterializationWorld::contains_node(const StableId id) const noexcept {
-    return std::any_of(nodes_.begin(), nodes_.end(), [id](const auto& node) {
-        return node.id == id;
-    });
+    const auto item = node_index_.find(id);
+    return item != node_index_.end() && item->second < nodes_.size() &&
+           nodes_[item->second].id == id;
 }
 
 bool ExecutableMaterializationWorld::contains_evidence(const StableId id) const noexcept {
-    return std::any_of(evidence_.begin(), evidence_.end(), [id](const auto& item) {
-        return item.id == id;
-    });
+    const auto item = evidence_index_.find(id);
+    return item != evidence_index_.end() && item->second < evidence_.size() &&
+           evidence_[item->second].id == id;
 }
 
 bool ExecutableMaterializationWorld::contains_frontier(const StableId id) const noexcept {
-    return std::any_of(frontier_.begin(), frontier_.end(), [id](const auto& item) {
-        return item.id == id;
-    });
+    const auto item = frontier_index_.find(id);
+    return item != frontier_index_.end() && item->second < frontier_.size() &&
+           frontier_[item->second].id == id;
 }
 
 bool ExecutableMaterializationWorld::collect_reverse_dependencies(
     const StableId target,
     const std::span<ReverseDependency> output,
     std::size_t& written) const noexcept {
-    const MaterializationNode* node = nullptr;
-    for (const auto& candidate : nodes_) {
-        if (candidate.id == target) {
-            node = &candidate;
-            break;
-        }
-    }
-    if (node == nullptr) {
+    const auto node_index = node_index_.find(target);
+    if (node_index == node_index_.end() || node_index->second >= nodes_.size()) {
         written = 0u;
         return false;
     }
-    if (node->reverse_dependencies.size() > output.size()) {
-        written = node->reverse_dependencies.size();
+    const auto& node = nodes_[node_index->second];
+    if (node.reverse_dependencies.size() > output.size()) {
+        written = node.reverse_dependencies.size();
         return false;
     }
-    written = node->reverse_dependencies.size();
-    std::copy(node->reverse_dependencies.begin(), node->reverse_dependencies.end(),
-              output.begin());
-    std::sort(output.begin(), output.begin() + written, reverse_dependency_less);
+    written = 0u;
+    for_each_reverse_dependency(target, [&](const ReverseDependency& dependency) {
+        if (written < output.size()) output[written++] = dependency;
+    });
+    if (written != node.reverse_dependencies.size()) {
+        written = node.reverse_dependencies.size();
+        return false;
+    }
     return true;
 }
 
 bool ExecutableMaterializationWorld::validate() const noexcept {
-    if (nodes_.size() > materialization_world_max_nodes ||
-        dependencies_.size() > materialization_world_max_edges ||
-        evidence_.size() > materialization_world_max_evidence ||
-        frontier_.size() > materialization_world_max_frontier)
+    synchronize_dependency_generation();
+    if (validation_cached_) return validation_result_;
+    validation_result_ = validate_uncached();
+    validation_cached_ = true;
+    return validation_result_;
+}
+
+bool ExecutableMaterializationWorld::validate_uncached() const noexcept {
+    try {
+        if (dependency_generation_ == 0u ||
+            nodes_.size() > materialization_world_max_nodes ||
+            dependencies_.size() > materialization_world_max_edges ||
+            evidence_.size() > materialization_world_max_evidence ||
+            frontier_.size() > materialization_world_max_frontier)
+            return false;
+        if (evidence_index_.size() != evidence_.size() ||
+            node_index_.size() != nodes_.size() ||
+            frontier_index_.size() != frontier_.size() ||
+            frontier_order_index_.size() != frontier_.size() ||
+            dependency_index_.size() != dependencies_.size() ||
+            reverse_dependency_index_.size() != dependencies_.size())
+            return false;
+
+        for (std::size_t index = 0u; index < evidence_.size(); ++index) {
+            const auto& item = evidence_[index];
+            if (!valid_evidence_kind_value(item.kind) ||
+                item.canonical_identity.empty() ||
+                !valid_text(item.canonical_identity) ||
+                item.id != stable_id(EntityKind::Evidence, item.canonical_identity))
+                return false;
+            const auto indexed = evidence_index_.find(item.id);
+            if (indexed == evidence_index_.end() || indexed->second != index)
+                return false;
+        }
+        if (evidence_digest_ != canonical_evidence_digest(
+                                  evidence_digest_accumulator_,
+                                  !evidence_.empty()))
+            return false;
+
+        for (std::size_t index = 0u; index < nodes_.size(); ++index) {
+            const auto& node = nodes_[index];
+            const auto indexed = node_index_.find(node.id);
+            if (indexed == node_index_.end() || indexed->second != index ||
+                !valid_node_proof(node, false) ||
+                node.id != stable_id(EntityKind::Node, node.canonical_identity) ||
+                node.dependency_generation != dependency_generation_ ||
+                node.evidence_digest != digest_ids(node.evidence))
+                return false;
+            for (const auto evidence : node.evidence) {
+                const auto item_index = evidence_index_.find(evidence);
+                if (item_index == evidence_index_.end() ||
+                    item_index->second >= evidence_.size())
+                    return false;
+                const auto& item = evidence_[item_index->second];
+                if (runtime_only_evidence(item.kind) &&
+                    (!node.runtime_hint_only || is_static_proof(node.proof) ||
+                     node.completeness == Completeness::Complete))
+                    return false;
+                if (node.completeness == Completeness::Complete &&
+                    !item.immutable)
+                    return false;
+            }
+            if (node.completeness == Completeness::Complete && node.evidence.empty())
+                return false;
+            if (node.runtime_hint_only) {
+                const bool has_runtime = std::any_of(
+                    node.evidence.begin(), node.evidence.end(), [&](const auto id) {
+                        const auto item_index = evidence_index_.find(id);
+                        return item_index != evidence_index_.end() &&
+                               item_index->second < evidence_.size() &&
+                               runtime_only_evidence(
+                                   evidence_[item_index->second].kind);
+                    });
+                if (!has_runtime) return false;
+            }
+            for (std::size_t reverse_index = 0u;
+                 reverse_index < node.reverse_dependencies.size();
+                 ++reverse_index) {
+                const auto& reverse = node.reverse_dependencies[reverse_index];
+                const auto source = node_index_.find(reverse.from);
+                if (source == node_index_.end() || source->second >= nodes_.size())
+                    return false;
+                const auto reverse_key = reverse_dependency_index_key(node.id, reverse);
+                const auto reverse_indexed = reverse_dependency_index_.find(reverse_key);
+                if (reverse_indexed == reverse_dependency_index_.end() ||
+                    reverse_indexed->second != reverse_index)
+                    return false;
+                const auto edge = dependency_index_.find(
+                    std::make_tuple(reverse.from,
+                                    node.id,
+                                    static_cast<std::uint8_t>(reverse.kind)));
+                if (edge == dependency_index_.end()) return false;
+            }
+        }
+
+        for (std::size_t index = 0u; index < dependencies_.size(); ++index) {
+            const auto& edge = dependencies_[index];
+            if (!valid_dependency_kind_value(edge.kind) || !edge.from || !edge.to ||
+                edge.from == edge.to)
+                return false;
+            const auto indexed = dependency_index_.find(dependency_index_key(edge));
+            if (indexed == dependency_index_.end() || indexed->second != index)
+                return false;
+            const auto from = node_index_.find(edge.from);
+            const auto to = node_index_.find(edge.to);
+            if (from == node_index_.end() || to == node_index_.end() ||
+                from->second >= nodes_.size() || to->second >= nodes_.size())
+                return false;
+            const auto reverse = reverse_dependency_index_.find(
+                std::make_tuple(edge.to,
+                                edge.from,
+                                static_cast<std::uint8_t>(edge.kind)));
+            if (reverse == reverse_dependency_index_.end() ||
+                reverse->second >= nodes_[to->second].reverse_dependencies.size() ||
+                nodes_[to->second].reverse_dependencies[reverse->second] !=
+                    ReverseDependency{edge.from, edge.kind})
+                return false;
+        }
+
+        for (std::size_t index = 0u; index < frontier_.size(); ++index) {
+            const auto& entry = frontier_[index];
+            const auto indexed = frontier_index_.find(entry.id);
+            if (indexed == frontier_index_.end() || indexed->second != index ||
+                !valid_frontier_entry(entry) ||
+                entry.id != frontier_id(entry.family, entry.owner, entry.site) ||
+                entry.dependency_generation != dependency_generation_ ||
+                entry.evidence_digest != digest_ids(entry.evidence))
+                return false;
+            const auto ordered = frontier_order_index_.find(frontier_order_key(entry));
+            if (ordered == frontier_order_index_.end() || ordered->second != index)
+                return false;
+            for (const auto evidence : entry.evidence) {
+                const auto item_index = evidence_index_.find(evidence);
+                if (item_index == evidence_index_.end() ||
+                    item_index->second >= evidence_.size())
+                    return false;
+                const auto& item = evidence_[item_index->second];
+                if (runtime_only_evidence(item.kind) &&
+                    (entry.state != FrontierState::ObservedHint ||
+                     entry.proof != FrontierProof::RuntimeObservation ||
+                     !entry.runtime_evidence_required || entry.static_complete))
+                    return false;
+                if (entry.static_complete && !item.immutable) return false;
+            }
+            if (entry.static_complete && entry.evidence.empty()) return false;
+            if (entry.state == FrontierState::ObservedHint) {
+                const bool has_runtime = std::any_of(
+                    entry.evidence.begin(), entry.evidence.end(), [&](const auto id) {
+                        const auto item_index = evidence_index_.find(id);
+                        return item_index != evidence_index_.end() &&
+                               item_index->second < evidence_.size() &&
+                               runtime_only_evidence(
+                                   evidence_[item_index->second].kind);
+                    });
+                if (!has_runtime) return false;
+            }
+        }
+        return true;
+    } catch (...) {
         return false;
-    for (const auto& item : evidence_) {
-        if (!valid_evidence_kind_value(item.kind) ||
-            item.canonical_identity.empty() ||
-            !valid_text(item.canonical_identity) ||
-            item.id != stable_id(EntityKind::Evidence, item.canonical_identity))
-            return false;
     }
-    for (std::size_t index = 0u; index < evidence_.size(); ++index) {
-        for (std::size_t other = index + 1u; other < evidence_.size(); ++other) {
-            if (evidence_[index].id == evidence_[other].id) return false;
-        }
-    }
-    if (evidence_digest_ != digest_evidence(evidence_)) return false;
-    for (const auto& node : nodes_) {
-        if (!valid_node_proof(node) ||
-            node.id != stable_id(EntityKind::Node, node.canonical_identity) ||
-            node.dependency_generation != dependency_generation_ ||
-            node.evidence_digest != digest_ids(node.evidence))
-            return false;
-        for (const auto evidence : node.evidence) {
-            const auto item = std::find_if(
-                evidence_.begin(), evidence_.end(), [evidence](const auto& candidate) {
-                    return candidate.id == evidence;
-                });
-            if (item == evidence_.end()) return false;
-            if (runtime_only_evidence(item->kind) &&
-                (!node.runtime_hint_only || is_static_proof(node.proof) ||
-                 node.completeness == Completeness::Complete))
-                return false;
-            if (node.completeness == Completeness::Complete &&
-                !item->immutable)
-                return false;
-        }
-        if (node.completeness == Completeness::Complete && node.evidence.empty())
-            return false;
-        if (node.runtime_hint_only) {
-            const bool has_runtime = std::any_of(
-                node.evidence.begin(), node.evidence.end(), [&](const auto id) {
-                    const auto evidence = std::find_if(
-                        evidence_.begin(), evidence_.end(), [id](const auto& candidate) {
-                            return candidate.id == id;
-                        });
-                    return evidence != evidence_.end() &&
-                           runtime_only_evidence(evidence->kind);
-                });
-            if (!has_runtime) return false;
-        }
-        for (const auto reverse : node.reverse_dependencies) {
-            if (!contains_node(reverse.from)) return false;
-            const auto edge = std::find_if(
-                dependencies_.begin(), dependencies_.end(), [node, reverse](const auto& item) {
-                    return item.from == reverse.from && item.to == node.id &&
-                           item.kind == reverse.kind;
-                });
-            if (edge == dependencies_.end()) return false;
-        }
-    }
-    for (std::size_t index = 0u; index < nodes_.size(); ++index) {
-        for (std::size_t other = index + 1u; other < nodes_.size(); ++other) {
-            if (nodes_[index].id == nodes_[other].id) return false;
-        }
-    }
-    for (const auto& edge : dependencies_) {
-        if (!valid_dependency_kind_value(edge.kind) || !edge.from || !edge.to ||
-            edge.from == edge.to ||
-            !contains_node(edge.from) || !contains_node(edge.to))
-            return false;
-        const auto target = std::find_if(nodes_.begin(), nodes_.end(), [edge](const auto& node) {
-            return node.id == edge.to;
-        });
-        if (target == nodes_.end() ||
-            !has_reverse_dependency(target->reverse_dependencies, edge.from, edge.kind))
-            return false;
-    }
-    for (std::size_t index = 0u; index < dependencies_.size(); ++index) {
-        for (std::size_t other = index + 1u; other < dependencies_.size(); ++other) {
-            if (dependencies_[index].from == dependencies_[other].from &&
-                dependencies_[index].to == dependencies_[other].to &&
-                dependencies_[index].kind == dependencies_[other].kind)
-                return false;
-        }
-    }
-    for (const auto& entry : frontier_) {
-        if (!valid_frontier_entry(entry) ||
-            entry.id != frontier_id(entry.family, entry.owner, entry.site) ||
-            entry.dependency_generation != dependency_generation_ ||
-            entry.evidence_digest != digest_ids(entry.evidence))
-            return false;
-        for (const auto evidence : entry.evidence) {
-            const auto item = std::find_if(
-                evidence_.begin(), evidence_.end(), [evidence](const auto& candidate) {
-                    return candidate.id == evidence;
-                });
-            if (item == evidence_.end()) return false;
-            if (runtime_only_evidence(item->kind) &&
-                (entry.state != FrontierState::ObservedHint ||
-                 entry.proof != FrontierProof::RuntimeObservation ||
-                 !entry.runtime_evidence_required || entry.static_complete))
-                return false;
-            if (entry.static_complete && !item->immutable)
-                return false;
-        }
-        if (entry.static_complete && entry.evidence.empty()) return false;
-        if (entry.state == FrontierState::ObservedHint) {
-            const bool has_runtime = std::any_of(
-                entry.evidence.begin(), entry.evidence.end(), [&](const auto id) {
-                    const auto evidence = std::find_if(
-                        evidence_.begin(), evidence_.end(), [id](const auto& candidate) {
-                            return candidate.id == id;
-                        });
-                    return evidence != evidence_.end() &&
-                           runtime_only_evidence(evidence->kind);
-                });
-            if (!has_runtime) return false;
-        }
-    }
-    for (std::size_t index = 0u; index < frontier_.size(); ++index) {
-        for (std::size_t other = index + 1u; other < frontier_.size(); ++other) {
-            if (frontier_[index].id == frontier_[other].id) return false;
-        }
-    }
-    return true;
 }
 
 bool frontier_priority_less(const FrontierEntry& lhs,
@@ -1445,14 +1671,10 @@ bool frontier_priority_less(const FrontierEntry& lhs,
     return lhs.id < rhs.id;
 }
 
-AgentDecision evaluate_agent_decision(
-    const ExecutableMaterializationWorld& world) noexcept {
-    if (!world.validate())
-        return {AgentDecisionKind::ContinueStaticIteration,
-                {},
-                "world-model-invalid-or-incomplete",
-                0u};
+namespace {
 
+AgentDecision evaluate_agent_decision_unchecked(
+    const ExecutableMaterializationWorld& world) noexcept {
     StableId first_static{};
     const FrontierEntry* first_static_entry = nullptr;
     StableId first_runtime{};
@@ -1513,12 +1735,29 @@ AgentDecision evaluate_agent_decision(
     return {AgentDecisionKind::BuildPort, {}, "static-world-closed", actionable};
 }
 
+} // namespace
+
+AgentDecision evaluate_agent_decision(
+    const ExecutableMaterializationWorld& world) noexcept {
+    if (!world.validate())
+        return {AgentDecisionKind::ContinueStaticIteration,
+                {},
+                "world-model-invalid-or-incomplete",
+                0u};
+    return evaluate_agent_decision_unchecked(world);
+}
+
 BoundedJsonResult serialize_agent_world_json(
     const ExecutableMaterializationWorld& world,
     const std::span<char> output) noexcept {
     JsonWriter writer{output};
     const bool valid = world.validate();
-    const auto decision = evaluate_agent_decision(world);
+    const auto decision = valid
+                              ? evaluate_agent_decision_unchecked(world)
+                              : AgentDecision{AgentDecisionKind::ContinueStaticIteration,
+                                              {},
+                                              "world-model-invalid-or-incomplete",
+                                              0u};
     writer.raw("{\"schema\":");
     writer.number(materialization_world_schema_version);
     writer.raw(",\"frontier_schema\":");
@@ -1542,68 +1781,69 @@ BoundedJsonResult serialize_agent_world_json(
     writer.raw(",\"actionable_frontier\":");
     writer.number(decision.actionable_frontier);
     writer.raw("},\"evidence\":[");
-    const EvidenceRecord* previous_evidence = nullptr;
     bool first = true;
-    for (std::size_t emitted = 0u; emitted < world.evidence().size(); ++emitted) {
-        const auto* item = next_sorted(world.evidence(), previous_evidence, evidence_less);
-        if (item == nullptr) break;
+    for (const auto& indexed : world.evidence_index_) {
+        if (indexed.second >= world.evidence_.size()) continue;
+        const auto& item = world.evidence_[indexed.second];
         if (!first) writer.put(',');
         first = false;
         writer.raw("{\"id\":");
-        writer.id(item->id);
+        writer.id(item.id);
         writer.raw(",\"kind\":");
-        writer.string(evidence_kind_name(item->kind));
+        writer.string(evidence_kind_name(item.kind));
         writer.raw(",\"identity\":");
-        writer.string(item->canonical_identity);
+        writer.string(item.canonical_identity);
         writer.raw(",\"immutable\":");
-        writer.boolean(item->immutable);
+        writer.boolean(item.immutable);
         writer.put('}');
-        previous_evidence = item;
     }
     writer.raw("],\"nodes\":[");
-    const MaterializationNode* previous_node = nullptr;
     first = true;
-    for (std::size_t emitted = 0u; emitted < world.nodes().size(); ++emitted) {
-        const auto* item = next_sorted(
-            world.nodes(), previous_node, [](const auto& lhs, const auto& rhs) {
-                return lhs.id < rhs.id;
-            });
-        if (item == nullptr) break;
+    for (const auto& indexed : world.node_index_) {
+        if (indexed.second >= world.nodes_.size()) continue;
+        const auto& item = world.nodes_[indexed.second];
         if (!first) writer.put(',');
         first = false;
-        write_node(writer, *item);
-        previous_node = item;
+        write_node(writer, item, [&](JsonWriter& reverse_writer,
+                                     const MaterializationNode& node) noexcept {
+            bool first_reverse = true;
+            world.for_each_reverse_dependency(
+                node.id, [&](const ReverseDependency& reverse) noexcept {
+                    if (!first_reverse) reverse_writer.put(',');
+                    first_reverse = false;
+                    reverse_writer.raw("{\"from\":");
+                    reverse_writer.id(reverse.from);
+                    reverse_writer.raw(",\"kind\":");
+                    reverse_writer.string(dependency_kind_name(reverse.kind));
+                    reverse_writer.put('}');
+                });
+        });
     }
     writer.raw("],\"dependencies\":[");
-    const DependencyEdge* previous_edge = nullptr;
     first = true;
-    for (std::size_t emitted = 0u; emitted < world.dependencies().size(); ++emitted) {
-        const auto* item = next_sorted(world.dependencies(), previous_edge, dependency_less);
-        if (item == nullptr) break;
+    for (const auto& indexed : world.dependency_index_) {
+        if (indexed.second >= world.dependencies_.size()) continue;
+        const auto& item = world.dependencies_[indexed.second];
         if (!first) writer.put(',');
         first = false;
         writer.raw("{\"from\":");
-        writer.id(item->from);
+        writer.id(item.from);
         writer.raw(",\"to\":");
-        writer.id(item->to);
+        writer.id(item.to);
         writer.raw(",\"kind\":");
-        writer.string(dependency_kind_name(item->kind));
+        writer.string(dependency_kind_name(item.kind));
         writer.raw(",\"statically_proven\":");
-        writer.boolean(item->statically_proven);
+        writer.boolean(item.statically_proven);
         writer.put('}');
-        previous_edge = item;
     }
     writer.raw("],\"frontier\":[");
-    const FrontierEntry* previous_frontier = nullptr;
     first = true;
-    for (std::size_t emitted = 0u; emitted < world.frontier().size(); ++emitted) {
-        const auto* item = next_sorted(world.frontier(), previous_frontier,
-                                       frontier_priority_less);
-        if (item == nullptr) break;
+    for (const auto& indexed : world.frontier_order_index_) {
+        if (indexed.second >= world.frontier_.size()) continue;
+        const auto& item = world.frontier_[indexed.second];
         if (!first) writer.put(',');
         first = false;
-        write_frontier(writer, *item);
-        previous_frontier = item;
+        write_frontier(writer, item);
     }
     writer.raw("]}");
     if (writer.overflow) return {0u, false, true};
@@ -1817,18 +2057,6 @@ void write_id_vector(BinaryWriter& writer, const std::vector<T>& values) noexcep
     for (const auto value : values) writer.u64(value.value);
 }
 
-void write_reverse_dependency_vector(
-    BinaryWriter& writer,
-    const std::vector<ReverseDependency>& values) noexcept {
-    writer.u32(static_cast<std::uint32_t>(values.size()));
-    for (const auto value : values) {
-        writer.u64(value.from.value);
-        writer.u8(static_cast<std::uint8_t>(value.kind));
-        writer.u8(0u);
-        writer.u16(0u);
-    }
-}
-
 void write_text_vector(BinaryWriter& writer,
                        const std::vector<std::string>& values) noexcept {
     writer.u32(static_cast<std::uint32_t>(values.size()));
@@ -1980,34 +2208,10 @@ template <typename T>
     return true;
 }
 
-[[nodiscard]] const EvidenceRecord* find_evidence(
-    const ExecutableMaterializationWorld& world, const StableId id) noexcept {
-    for (const auto& item : world.evidence())
-        if (item.id == id) return &item;
-    return nullptr;
-}
-
-[[nodiscard]] const MaterializationNode* find_node(
-    const ExecutableMaterializationWorld& world, const StableId id) noexcept {
-    for (const auto& item : world.nodes())
-        if (item.id == id) return &item;
-    return nullptr;
-}
-
 [[nodiscard]] const FrontierEntry* find_frontier(
     const ExecutableMaterializationWorld& world, const StableId id) noexcept {
     for (const auto& item : world.frontier())
         if (item.id == id) return &item;
-    return nullptr;
-}
-
-[[nodiscard]] const DependencyEdge* find_dependency(
-    const ExecutableMaterializationWorld& world,
-    const StableId from,
-    const StableId to,
-    const DependencyKind kind) noexcept {
-    for (const auto& item : world.dependencies())
-        if (item.from == from && item.to == to && item.kind == kind) return &item;
     return nullptr;
 }
 
@@ -2026,8 +2230,7 @@ template <typename T>
            lhs.completeness == rhs.completeness &&
            lhs.runtime_hint_only == rhs.runtime_hint_only &&
            lhs.dependency_generation == rhs.dependency_generation &&
-           lhs.evidence_digest == rhs.evidence_digest && lhs.evidence == rhs.evidence &&
-           lhs.reverse_dependencies == rhs.reverse_dependencies;
+           lhs.evidence_digest == rhs.evidence_digest && lhs.evidence == rhs.evidence;
 }
 
 [[nodiscard]] bool equal_dependency(const DependencyEdge& lhs,
@@ -2058,20 +2261,6 @@ template <typename T>
            lhs.acceptance_criteria == rhs.acceptance_criteria;
 }
 
-struct DependencyKey final {
-    StableId from{};
-    StableId to{};
-    DependencyKind kind = DependencyKind::Requires;
-};
-
-[[nodiscard]] bool dependency_key_less(const DependencyKey& lhs,
-                                       const DependencyKey& rhs) noexcept {
-    if (lhs.from != rhs.from) return lhs.from < rhs.from;
-    if (lhs.to != rhs.to) return lhs.to < rhs.to;
-    return static_cast<std::uint8_t>(lhs.kind) <
-           static_cast<std::uint8_t>(rhs.kind);
-}
-
 } // namespace
 
 BoundedBinaryResult serialize_agent_world_binary(
@@ -2098,14 +2287,18 @@ BoundedBinaryResult serialize_agent_world_binary(
         writer.u32(static_cast<std::uint32_t>(world.dependencies().size()));
         writer.u32(static_cast<std::uint32_t>(world.frontier().size()));
 
-        for (const auto& item : world.evidence()) {
+        for (const auto& indexed : world.evidence_index_) {
+            if (indexed.second >= world.evidence_.size()) continue;
+            const auto& item = world.evidence_[indexed.second];
             writer.u64(item.id.value);
             writer.u8(static_cast<std::uint8_t>(item.kind));
             writer.u8(item.immutable ? 1u : 0u);
             writer.u16(0u);
             writer.text(item.canonical_identity);
         }
-        for (const auto& item : world.nodes()) {
+        for (const auto& indexed : world.node_index_) {
+            if (indexed.second >= world.nodes_.size()) continue;
+            const auto& item = world.nodes_[indexed.second];
             writer.u64(item.id.value);
             writer.u8(static_cast<std::uint8_t>(item.kind));
             writer.u8(static_cast<std::uint8_t>(item.proof));
@@ -2116,16 +2309,27 @@ BoundedBinaryResult serialize_agent_world_binary(
             writer.text(item.canonical_identity);
             writer.text(item.source_identity);
             write_id_vector(writer, item.evidence);
-            write_reverse_dependency_vector(writer, item.reverse_dependencies);
+            writer.u32(static_cast<std::uint32_t>(item.reverse_dependencies.size()));
+            world.for_each_reverse_dependency(
+                item.id, [&](const ReverseDependency& reverse) noexcept {
+                    writer.u64(reverse.from.value);
+                    writer.u8(static_cast<std::uint8_t>(reverse.kind));
+                    writer.u8(0u);
+                    writer.u16(0u);
+                });
         }
-        for (const auto& item : world.dependencies()) {
+        for (const auto& indexed : world.dependency_index_) {
+            if (indexed.second >= world.dependencies_.size()) continue;
+            const auto& item = world.dependencies_[indexed.second];
             writer.u64(item.from.value);
             writer.u64(item.to.value);
             writer.u8(static_cast<std::uint8_t>(item.kind));
             writer.u8(item.statically_proven ? 1u : 0u);
             writer.u16(0u);
         }
-        for (const auto& item : world.frontier()) {
+        for (const auto& indexed : world.frontier_order_index_) {
+            if (indexed.second >= world.frontier_.size()) continue;
+            const auto& item = world.frontier_[indexed.second];
             writer.u64(item.id.value);
             writer.u8(static_cast<std::uint8_t>(item.state));
             writer.u8(static_cast<std::uint8_t>(item.proof));
@@ -2273,6 +2477,10 @@ bool parse_agent_world_binary(const std::span<const std::uint8_t> input,
             if (!unique_ids(item.evidence) ||
                 !unique_reverse_dependency_vector(item.reverse_dependencies))
                 return false;
+            std::sort(item.evidence.begin(), item.evidence.end());
+            std::sort(item.reverse_dependencies.begin(),
+                      item.reverse_dependencies.end(),
+                      reverse_dependency_less);
             parsed.nodes_.push_back(std::move(item));
         }
         for (std::uint32_t index = 0u; index < dependency_count; ++index) {
@@ -2345,6 +2553,7 @@ bool parse_agent_world_binary(const std::span<const std::uint8_t> input,
             item.runtime_evidence_required = runtime_required != 0u;
             item.static_complete = static_complete != 0u;
             if (!unique_ids(item.evidence)) return false;
+            std::sort(item.evidence.begin(), item.evidence.end());
             parsed.frontier_.push_back(std::move(item));
         }
         if (reader.failed || reader.position != input.size()) return false;
@@ -2352,6 +2561,11 @@ bool parse_agent_world_binary(const std::span<const std::uint8_t> input,
         parsed.revision_ = revision;
         parsed.dependency_generation_ = dependency_generation;
         parsed.evidence_digest_ = evidence_digest;
+        if (!parsed.rebuild_indexes() ||
+            parsed.evidence_digest_ != canonical_evidence_digest(
+                                           parsed.evidence_digest_accumulator_,
+                                           !parsed.evidence_.empty()))
+            return false;
         if (!parsed.validate()) return false;
         output = std::move(parsed);
         return true;
@@ -2374,7 +2588,7 @@ bool next_agent_tasks(const ExecutableMaterializationWorld& world,
     for (auto& item : output) item = {};
     if (output.empty()) return false;
     if (!world.validate()) return false;
-    const auto decision = evaluate_agent_decision(world);
+    const auto decision = evaluate_agent_decision_unchecked(world);
     if (!decision.focus) return false;
 
     const bool select_runtime =
@@ -2531,99 +2745,150 @@ AgentDiffResult diff_agent_worlds(
         before.last_error() != after.last_error())
         emit({AgentDiffEntityKind::WorldMetadata, AgentDiffChange::Changed, {}, {}, 0u});
 
-    StableId previous{};
-    for (;;) {
-        StableId next{};
-        for (const auto& item : before.evidence())
-            if (item.id.value > previous.value && (!next || item.id < next)) next = item.id;
-        for (const auto& item : after.evidence())
-            if (item.id.value > previous.value && (!next || item.id < next)) next = item.id;
-        if (!next) break;
-        const auto* lhs = find_evidence(before, next);
-        const auto* rhs = find_evidence(after, next);
-        if (lhs == nullptr || rhs == nullptr || !equal_evidence(*lhs, *rhs))
-            emit({AgentDiffEntityKind::Evidence,
-                  lhs == nullptr ? AgentDiffChange::Added
-                                 : rhs == nullptr ? AgentDiffChange::Removed
-                                                  : AgentDiffChange::Changed,
-                  next,
-                  {},
-                  0u});
-        previous = next;
-    }
+    const auto equal_nodes = [&](const MaterializationNode& lhs,
+                                 const MaterializationNode& rhs) noexcept {
+        if (!equal_node(lhs, rhs)) return false;
+        const auto lhs_index = before.node_index_.find(lhs.id);
+        const auto rhs_index = after.node_index_.find(rhs.id);
+        if (lhs_index == before.node_index_.end() ||
+            rhs_index == after.node_index_.end())
+            return false;
+        const auto lhs_begin = before.reverse_dependency_index_.lower_bound(
+            std::make_tuple(lhs.id, StableId{}, std::uint8_t{0u}));
+        const auto rhs_begin = after.reverse_dependency_index_.lower_bound(
+            std::make_tuple(rhs.id, StableId{}, std::uint8_t{0u}));
+        auto lhs_reverse = lhs_begin;
+        auto rhs_reverse = rhs_begin;
+        while (lhs_reverse != before.reverse_dependency_index_.end() &&
+               std::get<0>(lhs_reverse->first) == lhs.id &&
+               rhs_reverse != after.reverse_dependency_index_.end() &&
+               std::get<0>(rhs_reverse->first) == rhs.id) {
+            if (std::get<1>(lhs_reverse->first) !=
+                    std::get<1>(rhs_reverse->first) ||
+                std::get<2>(lhs_reverse->first) !=
+                    std::get<2>(rhs_reverse->first))
+                return false;
+            ++lhs_reverse;
+            ++rhs_reverse;
+        }
+        const bool lhs_done =
+            lhs_reverse == before.reverse_dependency_index_.end() ||
+            std::get<0>(lhs_reverse->first) != lhs.id;
+        const bool rhs_done =
+            rhs_reverse == after.reverse_dependency_index_.end() ||
+            std::get<0>(rhs_reverse->first) != rhs.id;
+        return lhs_done && rhs_done &&
+               lhs_index->second < before.nodes_.size() &&
+               rhs_index->second < after.nodes_.size();
+    };
 
-    previous = {};
-    for (;;) {
-        StableId next{};
-        for (const auto& item : before.nodes())
-            if (item.id.value > previous.value && (!next || item.id < next)) next = item.id;
-        for (const auto& item : after.nodes())
-            if (item.id.value > previous.value && (!next || item.id < next)) next = item.id;
-        if (!next) break;
-        const auto* lhs = find_node(before, next);
-        const auto* rhs = find_node(after, next);
-        const bool present_both = lhs != nullptr && rhs != nullptr;
-        if (!present_both || !equal_node(*lhs, *rhs))
-            emit({AgentDiffEntityKind::Node,
-                  lhs == nullptr ? AgentDiffChange::Added
-                                 : rhs == nullptr ? AgentDiffChange::Removed
-                                                  : AgentDiffChange::Changed,
-                  next,
-                  {},
-                  0u});
-        previous = next;
-    }
-
-    previous = {};
-    for (;;) {
-        StableId next{};
-        for (const auto& item : before.frontier())
-            if (item.id.value > previous.value && (!next || item.id < next)) next = item.id;
-        for (const auto& item : after.frontier())
-            if (item.id.value > previous.value && (!next || item.id < next)) next = item.id;
-        if (!next) break;
-        const auto* lhs = find_frontier(before, next);
-        const auto* rhs = find_frontier(after, next);
-        if (lhs == nullptr || rhs == nullptr || !equal_frontier(*lhs, *rhs))
-            emit({AgentDiffEntityKind::Frontier,
-                  lhs == nullptr ? AgentDiffChange::Added
-                                 : rhs == nullptr ? AgentDiffChange::Removed
-                                                  : AgentDiffChange::Changed,
-                  next,
-                  {},
-                  0u});
-        previous = next;
-    }
-
-    DependencyKey previous_dependency{};
-    bool has_previous_dependency = false;
-    for (;;) {
-        DependencyKey next{};
-        bool found = false;
-        const auto consider = [&](const DependencyEdge& edge) noexcept {
-            const DependencyKey candidate{edge.from, edge.to, edge.kind};
-            if (has_previous_dependency &&
-                !dependency_key_less(previous_dependency, candidate)) return;
-            if (!found || dependency_key_less(candidate, next)) {
-                next = candidate;
-                found = true;
+    const auto diff_entity = [&](const auto& before_index,
+                                 const auto& after_index,
+                                 const auto& before_values,
+                                 const auto& after_values,
+                                 const AgentDiffEntityKind entity_kind,
+                                 const auto& equal) noexcept {
+        auto lhs_index = before_index.begin();
+        auto rhs_index = after_index.begin();
+        while (lhs_index != before_index.end() || rhs_index != after_index.end()) {
+            const bool take_lhs =
+                rhs_index == after_index.end() ||
+                (lhs_index != before_index.end() &&
+                 lhs_index->first < rhs_index->first);
+            const bool take_rhs =
+                lhs_index == before_index.end() ||
+                (rhs_index != after_index.end() &&
+                 rhs_index->first < lhs_index->first);
+            StableId id{};
+            using BeforeValue =
+                typename std::decay_t<decltype(before_values)>::value_type;
+            using AfterValue =
+                typename std::decay_t<decltype(after_values)>::value_type;
+            const BeforeValue* lhs = nullptr;
+            const AfterValue* rhs = nullptr;
+            if (take_lhs) {
+                id = lhs_index->first;
+                lhs = &before_values[lhs_index->second];
+                ++lhs_index;
+            } else if (take_rhs) {
+                id = rhs_index->first;
+                rhs = &after_values[rhs_index->second];
+                ++rhs_index;
+            } else {
+                id = lhs_index->first;
+                lhs = &before_values[lhs_index->second];
+                rhs = &after_values[rhs_index->second];
+                ++lhs_index;
+                ++rhs_index;
             }
-        };
-        for (const auto& edge : before.dependencies()) consider(edge);
-        for (const auto& edge : after.dependencies()) consider(edge);
-        if (!found) break;
-        const auto* lhs = find_dependency(before, next.from, next.to, next.kind);
-        const auto* rhs = find_dependency(after, next.from, next.to, next.kind);
+            if (lhs == nullptr || rhs == nullptr || !equal(*lhs, *rhs))
+                emit({entity_kind,
+                      lhs == nullptr ? AgentDiffChange::Added
+                                     : rhs == nullptr ? AgentDiffChange::Removed
+                                                      : AgentDiffChange::Changed,
+                      id,
+                      {},
+                      0u});
+        }
+    };
+
+    diff_entity(before.evidence_index_,
+                after.evidence_index_,
+                before.evidence_,
+                after.evidence_,
+                AgentDiffEntityKind::Evidence,
+                equal_evidence);
+    diff_entity(before.node_index_,
+                after.node_index_,
+                before.nodes_,
+                after.nodes_,
+                AgentDiffEntityKind::Node,
+                equal_nodes);
+    diff_entity(before.frontier_index_,
+                after.frontier_index_,
+                before.frontier_,
+                after.frontier_,
+                AgentDiffEntityKind::Frontier,
+                equal_frontier);
+
+    auto lhs_dependency = before.dependency_index_.begin();
+    auto rhs_dependency = after.dependency_index_.begin();
+    while (lhs_dependency != before.dependency_index_.end() ||
+           rhs_dependency != after.dependency_index_.end()) {
+        const bool take_lhs =
+            rhs_dependency == after.dependency_index_.end() ||
+            (lhs_dependency != before.dependency_index_.end() &&
+             lhs_dependency->first < rhs_dependency->first);
+        const bool take_rhs =
+            lhs_dependency == before.dependency_index_.end() ||
+            (rhs_dependency != after.dependency_index_.end() &&
+             rhs_dependency->first < lhs_dependency->first);
+        const DependencyEdge* lhs = nullptr;
+        const DependencyEdge* rhs = nullptr;
+        std::tuple<StableId, StableId, std::uint8_t> key{};
+        if (take_lhs) {
+            key = lhs_dependency->first;
+            lhs = &before.dependencies_[lhs_dependency->second];
+            ++lhs_dependency;
+        } else if (take_rhs) {
+            key = rhs_dependency->first;
+            rhs = &after.dependencies_[rhs_dependency->second];
+            ++rhs_dependency;
+        } else {
+            key = lhs_dependency->first;
+            lhs = &before.dependencies_[lhs_dependency->second];
+            rhs = &after.dependencies_[rhs_dependency->second];
+            ++lhs_dependency;
+            ++rhs_dependency;
+        }
         if (lhs == nullptr || rhs == nullptr || !equal_dependency(*lhs, *rhs))
             emit({AgentDiffEntityKind::Dependency,
                   lhs == nullptr ? AgentDiffChange::Added
                                  : rhs == nullptr ? AgentDiffChange::Removed
                                                   : AgentDiffChange::Changed,
-                  next.from,
-                  next.to,
-                  static_cast<std::uint8_t>(next.kind)});
-        previous_dependency = next;
-        has_previous_dependency = true;
+                  std::get<0>(key),
+                  std::get<1>(key),
+                  std::get<2>(key)});
     }
     result.complete = !result.truncated;
     return result;

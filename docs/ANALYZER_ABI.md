@@ -3,17 +3,16 @@
 Der aktuelle oeffentliche Analyzervertrag ist Version `59`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
-Profilvertrag 23. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
+Profilvertrag 23. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
 und Port-Metadata-Cache-
 Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.
-Der aktuelle Analyzer-Branch ist noch nicht commit-ready: FVA-Volltest,
-Guarded-Kontextauflosung und das Entfernen temporarer Diagnosen muessen vor
-dem ersten vollstaendigen `analyze-port`-Ergebnis abgeschlossen werden. Der
-letzte RuntimeOnly-Bring-up-Meilenstein verwendet diesen Analyzer-ABI-
-Vertrag; der historische Candidate-Resolution-Checkpoint
-`49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
+Der bestehende Function-Value-Sanitylauf ist mit `463/463` Checks gruen, und
+der erste vollstaendige `analyze-port`-Lauf samt identitaetsgebundenem Resume
+ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
+`49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt ausschliesslich als
+ABI-34-Referenz erhalten.
 
 Analyzer-ABI 59 bindet die inkompatible, wertgebundene Pending-ABI-Scalar-
 Lane in `FunctionRegisterValueSummary`. Endliche Pending-Werte und ihr
@@ -25,7 +24,8 @@ werden.
 Analyzer-ABI 58 bindet zusaetzlich getrennte current-, detached- und
 Memory-Callback-Loss-Diagnosen sowie autoritative Storage-Summaries. ABI 57
 band bereits die transaktionale Materialization-World,
-den Schema-3-Resume-Ledger und die streng identitaetsgebundene Frontier-
+den inzwischen als Schema 4 publizierten Resume-Ledger und die streng
+identitaetsgebundene Frontier-
 Importgrenze. Beobachtete Runtime-Frontiers bleiben `ObservedHint` und duerfen
 weder CFG-Kanten noch AOT-Roots oder Hardware-Closure erzeugen. Positive
 Produktwiederverwendung bleibt bis zum vollstaendigen Callback-/Target-/

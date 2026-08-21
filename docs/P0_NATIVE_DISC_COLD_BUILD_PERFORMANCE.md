@@ -152,6 +152,35 @@ vollstaendiger Kaltport benoetigte 711,2 Sekunden.
 Diese Werte bleiben historische Vergleichsevidenz. Sie beschreiben nicht den
 aktuellen Source.
 
+### Aktuelles 16-Worker-Frischlaufprofil und Sourceantwort
+
+Das dem aktuellen Optimierungsreview zugrunde gelegte Cache-Miss-Protokoll
+umfasst `583,822 s` CLI-Zeit bei 16 Workern, 8 GiB Analyselimit und rund
+7,16 GiB beobachtetem Peak. Die 194 Modulmarker sind parallele Unterphasen
+und werden nicht addiert. Die Top-Level-Verteilung lautet:
+
+| Phase | Zeit | Geschlossene unnoetige Arbeit |
+|---|---:|---|
+| CFA 1/2/3 | 134,214 / 120,629 / 118,067 s | Eine lauflokale, hart identitaetsgebundene CFA/FVA-Session behaelt Working Sets, Shards und Indizes bei ausschliesslich monotoner Root-Erweiterung. Rootentfernung, Content-, Immutable-, Override-, ABI-, Limit- oder Importaenderung setzt kalt zurueck. |
+| IR-Lowering 1/2/3 | 3,514 / 48,264 / 48,168 s | Zwischeniterationen extrahieren Root-/Interior-Evidence direkt aus der Analyse; Lowering, CFG-/Callgraphmaterialisierung und Audit erfolgen erst einmal nach dem Rootfixpunkt. |
+| Latent-AOT | 41,483 s | Ein prozesslokales Discovery-Objekt behaelt den gebundenen ISO-Katalog, Kandidatenmetadaten und Sourcebytes. Dynamische externe Targets und Sinks werden weiterhin pro Iteration analysiert; es entsteht keine persistente Autoritaet. |
+| GameProject-Validierung | 42,952 s | Payload-/Imagevertrag wird an der vertrauenswuerdigen internen Admissiongrenze nicht doppelt wiederholt. Runtimebilder werden gegen sortierte, nicht ueberlappende Bootstrapintervalle blockweise statt byteweise mit Vollscan verglichen. Hardware-Audit und Programindex werden einmal gebaut beziehungsweise rehydriert. |
+| IR-Optimierung | 11,178 s | Der delegierte IR-Hotpath verwendet gemeinsame, vorindizierte Programmsichten und vermeidet wiederholte Vollprogrammscans; Optimierungssemantik und finaler Verifier bleiben unveraendert. |
+| Programmvalidierung | 8,835 s | Bereits erzeugte kanonische Programindizes und Auditresultate werden in den nachfolgenden Admissionpruefungen weitergereicht, statt dieselben Beziehungen erneut aufzubauen. |
+| Disc/GDI | 5,436 s | GDI-/Bootmaterialisierung teilt innerhalb des Laufs die bereits authentifizierte Source- und Trackansicht; Hash-, Bounds- und Retailgrenzen bleiben unveraendert. |
+
+Zusaetzlich wird die vorherige grosse Analyse vor dem naechsten Rootdelta
+freigegeben, statt zwei Peakzustaende zu ueberlappen. NativeDisc-Envelope und
+Payload werden in einer bounded Allocation serialisiert. Materialization-
+World fuehrt Stable-ID-, Dependency-, Reverse- und Frontierindizes sowie
+einen inkrementellen Evidence-Digest; JSON, Binary und Diff laufen ueber
+kanonische Indexreihenfolgen statt wiederholter Minimumsuche. Detaillierte
+FVA-Miss-Telemetrie ist nicht mehr implizit an normales JSONL-Timing gebunden.
+
+Alle diese Hebel wirken im echten Kaltlauf ohne Whole-Analysis-, Boot- oder
+Latent-Root-Seed-Cache. Ein neuer Frischlaufwert ist noch nicht erhoben und
+wird deshalb nicht prognostiziert oder als Zielerreichung ausgegeben.
+
 ### Terminaler v56-Befund
 
 ```text

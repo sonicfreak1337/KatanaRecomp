@@ -66,6 +66,22 @@ native Resume-Entries, `240` Hardware-Sites, `167` offene Hardware-Gaps und
 `289` handlungsfaehige Frontiers. Katana entscheidet deshalb korrekt
 `continue_static_iteration` statt `BuildPort`.
 
+Das diesem Kaltpfadreview zugrunde gelegte, separat konfigurierte
+Cache-Miss-Frischlaufprotokoll benoetigte
+`583,822 s`; davon entfielen `134,214 s`, `120,629 s` und `118,067 s` auf
+drei CFA-Paesse, `48,264 s` und `48,168 s` auf zwei spaete redundante
+IR-Lowerings, `41,483 s` auf Latent-AOT und `42,952 s` auf
+GameProject-Validierung. Die Zeitwerte werden wegen der abweichenden
+Laufkonfiguration nicht mit der `342,230 s`-Baseline verrechnet. Der aktuelle
+Source schliesst die dabei belegte
+unnuetze Arbeit: monotone Root-Erweiterungen teilen eine gebundene
+In-Process-CFA/FVA-Session, abgeleitete IR-/Audit-/Graphprodukte entstehen
+erst nach dem Rootfixpunkt, Latent-AOT behaelt Katalog/Kandidaten im Lauf,
+und World-/GameProject-/Artefaktpfade vermeiden quadratische Suchen sowie
+vollstaendige Zweitkopien. Diese Aenderungen sind noch nicht mit einem neuen
+Sonic-Frischlauf zeitlich abgenommen; Abdeckung und Fail-Closed-Grenzen
+bleiben unveraendert verbindlich.
+
 Die Hardwaretasks sind nun fuer kleine Agenten bounded und konkret: Owner,
 Operation/Registerfamilie, erwarteter Native-Provider, fehlender Proof sowie
 gegebenenfalls exakte Hookgroesse, Codeidentitaet, Symbol und Sitezuordnung.
@@ -378,7 +394,7 @@ Aktuell gelten Runtime-ABI `108`,
 PlatformServices-ABI `14`, Analyzer-ABI `49`, Function-Analysis-Epoch-Schema
 `28`, lokales In-Process-Evaluation-Cache-Schema `13`, Backend-Interface-ABI
 `23`, PVR-State-Contract `3`, Portprojektvertrag `99` und Native-Port-
-Profilvertrag `22`. Der aktuelle GameProject-Vertrag ist `8` mit Artefaktformat
+Profilvertrag `22`. Der aktuelle GameProject-Vertrag ist `9` mit Artefaktformat
 `6`; er transportiert die unabhaengige Native-Port-Definition ausdruecklich
 nicht. Der SDK-Reviewabschluss trennt `port_export.cpp` als
 nicht installierte Tooling-Object-Closure vom Analyzer-SDK und schliesst

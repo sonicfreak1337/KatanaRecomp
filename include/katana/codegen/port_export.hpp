@@ -150,6 +150,12 @@ struct PortExportOptions {
     // product exports keep this false and do not serialize/discard the full
     // world merely to build the port.
     bool agent_analysis_artifacts_requested = false;
+    // Explicit agent-workflow refreshes retain the committed World as their
+    // comparison baseline and keep all lower, identity-bound analysis caches,
+    // but must not reuse the monolithic whole-disc checkpoint they are meant
+    // to supersede. A successfully serialized refresh may replace only the
+    // exact bounded cache artifact observed under the same identity.
+    bool analysis_artifact_refresh_requested = false;
 };
 
 struct PortExportResult {

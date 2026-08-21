@@ -489,6 +489,46 @@ struct LatentAotDiscovery {
     std::size_t analysis_full_pipeline_runs = 0u;
 };
 
+// In-process state for one analyze-port discovery run.  The session owns only
+// the bounded source catalog and its source-byte-backed candidate work; it is
+// deliberately not a persistent cache and must be discarded at the end of a
+// run.  A later discovery call may reuse that catalog when all source,
+// placement, hint and budget inputs match exactly and the same immutable
+// DiscSource instance is supplied.  Cross-image contracts are supplied on
+// each call and therefore remain the invalidation boundary for candidate
+// analysis.
+class LatentAotDiscoverySession final {
+  public:
+    struct Impl;
+
+    LatentAotDiscoverySession();
+    ~LatentAotDiscoverySession();
+    LatentAotDiscoverySession(const LatentAotDiscoverySession&) = delete;
+    LatentAotDiscoverySession& operator=(
+        const LatentAotDiscoverySession&) = delete;
+    LatentAotDiscoverySession(LatentAotDiscoverySession&&) noexcept;
+    LatentAotDiscoverySession& operator=(
+        LatentAotDiscoverySession&&) noexcept;
+
+    // Drops all in-process catalog state.  No source bytes or analysis
+    // products survive this boundary.
+    void reset() noexcept;
+
+  private:
+    std::unique_ptr<Impl> impl_;
+
+    friend LatentAotDiscovery discover_latent_aot_modules(
+        std::shared_ptr<const katana::runtime::DiscSource> source,
+        std::uint32_t volume_start_lba,
+        std::uint32_t extent_lba_bias,
+        std::span<const std::string> excluded_byte_identities,
+        const LatentAotDiscoveryOptions& options,
+        std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+        std::span<const LatentAotEntryHint> entry_hints,
+        std::span<const std::string> prioritized_file_references,
+        LatentAotDiscoverySession& session);
+};
+
 // Every address that the native backend relocates must stay inside the exact
 // byte-identity extent. Otherwise a synthetic export-time base could leak into
 // execution when the file is loaded at another guest address.
@@ -529,5 +569,21 @@ struct LatentAotDiscovery {
     std::span<const LatentAotOccupiedRange> occupied_source_ranges,
     std::span<const LatentAotEntryHint> entry_hints,
     std::span<const std::string> prioritized_file_references);
+
+// Session-aware overload for repeated discovery calls within one
+// analyze-port cross-image/fixpoint run.  The caller must keep `session`
+// alive for the complete run and reset/destroy it before changing the source,
+// placement or discovery contract.  Dynamic external targets/sinks remain
+// call-local and are never treated as persistent authority.
+[[nodiscard]] LatentAotDiscovery discover_latent_aot_modules(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    std::uint32_t volume_start_lba,
+    std::uint32_t extent_lba_bias,
+    std::span<const std::string> excluded_byte_identities,
+    const LatentAotDiscoveryOptions& options,
+    std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    std::span<const LatentAotEntryHint> entry_hints,
+    std::span<const std::string> prioritized_file_references,
+    LatentAotDiscoverySession& session);
 
 } // namespace katana::codegen

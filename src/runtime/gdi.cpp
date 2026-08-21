@@ -99,22 +99,27 @@ class PackedTrackHashAccumulator final {
         auto input_offset = static_cast<std::size_t>(relevant_begin - file_offset);
         auto remaining = static_cast<std::size_t>(relevant_end - relevant_begin);
         while (remaining != 0u) {
-            if (chunk_target_bytes_ == 0u || chunk_.size() > chunk_target_bytes_)
+            if (chunk_target_bytes_ == 0u || chunk_bytes_ > chunk_target_bytes_)
                 throw std::runtime_error("GDI-Trackhash besitzt eine inkonsistente Chunkgrenze.");
-            const auto take = std::min(remaining, chunk_target_bytes_ - chunk_.size());
-            chunk_.append(bytes.data() + static_cast<std::ptrdiff_t>(input_offset), take);
+            const auto take = std::min(remaining, chunk_target_bytes_ - chunk_bytes_);
+            // Feed the packed chunk digest from the provenance stream itself;
+            // no second pass or materialized chunk buffer is needed.
+            chunk_hash_.update(std::string_view(
+                bytes.data() + static_cast<std::ptrdiff_t>(input_offset), take));
             input_offset += take;
             remaining -= take;
-            if (chunk_.size() != chunk_target_bytes_) continue;
-            hashes_.push_back(katana::io::sha256_bytes(chunk_));
+            chunk_bytes_ += take;
+            if (chunk_bytes_ != chunk_target_bytes_) continue;
+            hashes_.push_back(chunk_hash_.finish());
             hashed_sectors_ += chunk_target_bytes_ / sector_size_;
-            chunk_.clear();
+            chunk_bytes_ = 0u;
+            chunk_hash_ = katana::io::Sha256Accumulator{};
             prepare_chunk();
         }
     }
 
     [[nodiscard]] std::vector<std::string> finish() {
-        if (!chunk_.empty() || hashed_sectors_ != sector_count_)
+        if (chunk_bytes_ != 0u || hashed_sectors_ != sector_count_)
             throw std::runtime_error("GDI-Trackhash deckt nicht alle Rohsektoren ab.");
         return std::move(hashes_);
     }
@@ -130,7 +135,6 @@ class PackedTrackHashAccumulator final {
         if (sectors > std::numeric_limits<std::size_t>::max() / sector_size_)
             throw std::out_of_range("GDI-Hashchunk ist fuer den Host zu gross.");
         chunk_target_bytes_ = static_cast<std::size_t>(sectors) * sector_size_;
-        chunk_.reserve(chunk_target_bytes_);
     }
 
     std::uint64_t first_byte_ = 0u;
@@ -140,7 +144,8 @@ class PackedTrackHashAccumulator final {
     std::uint64_t sector_count_ = 0u;
     std::uint64_t hashed_sectors_ = 0u;
     std::size_t chunk_target_bytes_ = 0u;
-    std::string chunk_;
+    std::size_t chunk_bytes_ = 0u;
+    katana::io::Sha256Accumulator chunk_hash_;
     std::vector<std::string> hashes_;
 };
 } // namespace

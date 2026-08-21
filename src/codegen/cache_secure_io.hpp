@@ -25,6 +25,12 @@
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#elif defined(__APPLE__)
+#include <stdio.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -144,6 +150,19 @@ win_file_information(const HANDLE handle) {
         information.dwVolumeSerialNumber,
         information.nFileIndexHigh,
         information.nFileIndexLow};
+}
+
+[[nodiscard]] inline bool win_same_snapshot(
+    const BY_HANDLE_FILE_INFORMATION& left,
+    const BY_HANDLE_FILE_INFORMATION& right) noexcept {
+    return win_file_identity(left) == win_file_identity(right) &&
+           left.nNumberOfLinks == right.nNumberOfLinks &&
+           left.dwFileAttributes == right.dwFileAttributes &&
+           left.nFileSizeHigh == right.nFileSizeHigh &&
+           left.nFileSizeLow == right.nFileSizeLow &&
+           CompareFileTime(
+               &left.ftLastWriteTime,
+               &right.ftLastWriteTime) == 0;
 }
 
 [[nodiscard]] inline bool win_safe_directory_information(
@@ -630,11 +649,12 @@ inline void secure_cache_prune_empty_parents(
 
 [[nodiscard]] inline WinHandle win_open_regular_file(
     const std::filesystem::path& path,
-    const DWORD access) {
+    const DWORD access,
+    const DWORD sharing = FILE_SHARE_READ) {
     return WinHandle(CreateFileW(
         path.c_str(),
         access,
-        FILE_SHARE_READ,
+        sharing,
         nullptr,
         OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT |
@@ -848,11 +868,12 @@ inline void win_write_all(
             "werden.");
 }
 
-inline void secure_cache_publish(
+inline bool secure_cache_publish(
     const std::filesystem::path& root,
     const std::filesystem::path& path,
     const std::string_view content,
-    const std::size_t maximum_bytes) {
+    const std::size_t maximum_bytes,
+    const std::optional<std::string_view> expected_content = std::nullopt) {
     auto chain = win_open_directory_chain(
         root, path.parent_path(), true);
     if (chain.kind != SecureArtifactKind::Regular)
@@ -992,6 +1013,172 @@ inline void secure_cache_publish(
         temporary_handle.reset();
         require_target_chain();
         require_staging_directory();
+        if (expected_content.has_value()) {
+            auto expected_file = win_open_regular_file(
+                path,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_DELETE);
+            const auto expected_information = expected_file
+                ? win_file_information(expected_file.get())
+                : std::nullopt;
+            const auto current = expected_file
+                ? win_read_open_file(
+                      expected_file.get(), maximum_bytes)
+                : SecureArtifactRead{
+                      SecureArtifactKind::Missing, {}};
+            const auto expected_after = expected_file
+                ? win_file_information(expected_file.get())
+                : std::nullopt;
+            auto expected_named = win_open_regular_file(
+                path,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_DELETE);
+            const auto expected_named_information = expected_named
+                ? win_file_information(expected_named.get())
+                : std::nullopt;
+            if (current.kind != SecureArtifactKind::Regular ||
+                current.content != *expected_content ||
+                !expected_information || !expected_after ||
+                !expected_named_information ||
+                !win_same_snapshot(
+                    *expected_information, *expected_after) ||
+                !win_same_snapshot(
+                    *expected_after, *expected_named_information) ||
+                !win_revalidate_directory_chain(
+                    root, target_directory, chain.chain)) {
+                cleanup();
+                return false;
+            }
+            expected_named.reset();
+            require_target_chain();
+            require_staging_directory();
+            const auto displaced_path = staging / "displaced.tmp";
+            if (!ReplaceFileW(
+                    path.c_str(),
+                    temporary.c_str(),
+                    displaced_path.c_str(),
+                    REPLACEFILE_WRITE_THROUGH,
+                    nullptr,
+                    nullptr)) {
+                const auto error = GetLastError();
+                cleanup();
+                throw std::runtime_error(
+                    "Begrenzter Cache-Replace konnte den atomaren "
+                    "Plattform-Commit nicht ausfuehren (native_error=" +
+                    std::to_string(error) + ").");
+            }
+            temporary_named = false;
+            auto displaced = win_open_regular_file(
+                displaced_path,
+                GENERIC_READ | DELETE,
+                FILE_SHARE_READ | FILE_SHARE_DELETE);
+            const auto displaced_information = displaced
+                ? win_file_information(displaced.get())
+                : std::nullopt;
+            const auto displaced_read = displaced
+                ? win_read_open_file(
+                      displaced.get(), maximum_bytes)
+                : SecureArtifactRead{
+                      SecureArtifactKind::Unsafe, {}};
+            auto published = win_open_regular_file(
+                path,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_DELETE);
+            const auto published_information = published
+                ? win_file_information(published.get())
+                : std::nullopt;
+            const auto published_read = published
+                ? win_read_open_file(
+                      published.get(), maximum_bytes)
+                : SecureArtifactRead{
+                      SecureArtifactKind::Unsafe, {}};
+            const auto displaced_is_expected =
+                displaced_information &&
+                win_same_snapshot(
+                    *expected_after, *displaced_information) &&
+                displaced_read.kind == SecureArtifactKind::Regular &&
+                displaced_read.content == *expected_content;
+            const auto replacement_is_public =
+                published_information && temporary_information &&
+                win_file_identity(*published_information) ==
+                    win_file_identity(*temporary_information) &&
+                published_read.kind == SecureArtifactKind::Regular &&
+                published_read.content == content &&
+                win_revalidate_directory_chain(
+                    root, target_directory, chain.chain);
+            if (displaced_is_expected && replacement_is_public) {
+                // ReplaceFileW is the linearization point: the exact target
+                // captured in displaced_path and our staged identity became
+                // public in one platform operation. A later uncooperative
+                // namespace mutation is a subsequent writer, not a failed
+                // CAS of this operation.
+                published.reset();
+                expected_file.reset();
+                if (!win_delete_open_file(displaced.get())) {
+                    cleanup();
+                    throw std::runtime_error(
+                        "Begrenzter Cache-Replace konnte den validierten "
+                        "Altcheckpoint nicht entfernen.");
+                }
+                displaced.reset();
+                cleanup();
+                return true;
+            }
+
+            // ReplaceFileW retained the exact displaced target. Restore it
+            // atomically only while the public name is still our staged
+            // replacement; otherwise leave the displaced bytes in private
+            // staging rather than deleting an unknown concurrent writer.
+            if (replacement_is_public && displaced_information) {
+                published.reset();
+                expected_file.reset();
+                displaced.reset();
+                const auto rollback_path = staging / "rollback.tmp";
+                if (ReplaceFileW(
+                        path.c_str(),
+                        displaced_path.c_str(),
+                        rollback_path.c_str(),
+                        REPLACEFILE_WRITE_THROUGH,
+                        nullptr,
+                        nullptr)) {
+                    auto restored = win_open_regular_file(
+                        path,
+                        GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_DELETE);
+                    const auto restored_information = restored
+                        ? win_file_information(restored.get())
+                        : std::nullopt;
+                    auto rolled_back = win_open_regular_file(
+                        rollback_path,
+                        GENERIC_READ | DELETE,
+                        FILE_SHARE_READ | FILE_SHARE_DELETE);
+                    const auto rolled_back_information = rolled_back
+                        ? win_file_information(rolled_back.get())
+                        : std::nullopt;
+                    if (restored_information &&
+                        win_file_identity(*restored_information) ==
+                            win_file_identity(*displaced_information) &&
+                        rolled_back_information && temporary_information &&
+                        win_file_identity(*rolled_back_information) ==
+                            win_file_identity(*temporary_information) &&
+                        win_delete_open_file(rolled_back.get())) {
+                        rolled_back.reset();
+                        restored.reset();
+                        cleanup();
+                        return false;
+                    }
+                }
+            }
+            published.reset();
+            expected_file.reset();
+            displaced.reset();
+            cleanup();
+            throw std::runtime_error(
+                "Begrenzter Cache-Replace konnte einen Namespace-Race "
+                "nicht verlustfrei auf den oeffentlichen Namen "
+                "zurueckrollen; der displaced Checkpoint bleibt im "
+                "privaten Staging erhalten.");
+        }
         if (!MoveFileExW(
                 temporary.c_str(),
                 path.c_str(),
@@ -1003,7 +1190,7 @@ inline void secure_cache_publish(
             if (concurrent.kind ==
                     SecureArtifactKind::Regular &&
                 concurrent.content == content)
-                return;
+                return true;
             if (error == ERROR_FILE_EXISTS ||
                 error == ERROR_ALREADY_EXISTS)
                 throw std::runtime_error(
@@ -1060,10 +1247,25 @@ inline void secure_cache_publish(
         require_staging_directory();
         cleanup();
         require_target_chain();
+        return true;
     } catch (...) {
         cleanup();
         throw;
     }
+}
+
+[[nodiscard]] inline bool secure_cache_replace_if_matches(
+    const std::filesystem::path& root,
+    const std::filesystem::path& path,
+    const std::string_view expected_content,
+    const std::string_view replacement_content,
+    const std::size_t maximum_bytes) {
+    return secure_cache_publish(
+        root,
+        path,
+        replacement_content,
+        maximum_bytes,
+        expected_content);
 }
 
 #else
@@ -1097,6 +1299,40 @@ public:
 private:
     int value_ = -1;
 };
+
+// Atomic exchange is the only namespace primitive which can both keep the
+// public artifact continuously present and retain the displaced target for
+// exact identity/content validation. Unsupported POSIX platforms fail before
+// touching either name instead of degrading to an erase/store window.
+[[nodiscard]] inline bool posix_exchange_names(
+    const int left_parent,
+    const char* const left_name,
+    const int right_parent,
+    const char* const right_name) noexcept {
+#if defined(__linux__) && defined(SYS_renameat2) && defined(RENAME_EXCHANGE)
+    return syscall(
+               SYS_renameat2,
+               left_parent,
+               left_name,
+               right_parent,
+               right_name,
+               RENAME_EXCHANGE) == 0;
+#elif defined(__APPLE__) && defined(RENAME_SWAP)
+    return renameatx_np(
+               left_parent,
+               left_name,
+               right_parent,
+               right_name,
+               RENAME_SWAP) == 0;
+#else
+    static_cast<void>(left_parent);
+    static_cast<void>(left_name);
+    static_cast<void>(right_parent);
+    static_cast<void>(right_name);
+    errno = ENOTSUP;
+    return false;
+#endif
+}
 
 struct PosixFileIdentity {
     dev_t device{};
@@ -1699,13 +1935,14 @@ inline void posix_write_all(
             "werden.");
 }
 
-inline void secure_cache_publish(
+inline bool secure_cache_publish(
     const std::filesystem::path& root,
     const std::filesystem::path& path,
     const std::string_view content,
     const std::size_t maximum_bytes,
     const PosixSecureCacheCommitHookForTesting* const commitpoint_hook =
-        nullptr) {
+        nullptr,
+    const std::optional<std::string_view> expected_content = std::nullopt) {
     auto chain = posix_open_directory_chain(
         root, path.parent_path(), true);
     if (chain.kind != SecureArtifactKind::Regular)
@@ -1737,8 +1974,13 @@ inline void secure_cache_publish(
         "artifact.tmp",
         O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
         0600));
+    bool retain_staging = false;
     const auto cleanup = [&]() noexcept {
         temporary.reset();
+        if (retain_staging) {
+            staging_directory.reset();
+            return;
+        }
         static_cast<void>(unlinkat(
             staging_directory.get(), "artifact.tmp", 0));
         staging_directory.reset();
@@ -1760,6 +2002,129 @@ inline void secure_cache_publish(
             !S_ISREG(temporary_status.st_mode))
             throw std::runtime_error(
                 "Begrenztes Cache-Stagingartefakt ist unsicher.");
+        if (expected_content.has_value()) {
+            PosixFd expected_file(openat(
+                chain.chain.parent.get(),
+                path.filename().c_str(),
+                O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+            struct stat expected_status{};
+            const auto current = expected_file
+                ? posix_read_open_file(
+                      expected_file.get(),
+                      maximum_bytes,
+                      &expected_status)
+                : SecureArtifactRead{
+                      SecureArtifactKind::Missing, {}};
+            if (current.kind != SecureArtifactKind::Regular ||
+                current.content != *expected_content ||
+                !posix_public_file_matches_snapshot(
+                    root,
+                    path,
+                    chain.chain.identities,
+                    expected_status)) {
+                cleanup();
+                return false;
+            }
+            posix_wait_at_secure_cache_commit_for_testing(
+                commitpoint_hook,
+                PosixSecureCacheCommitPointForTesting::Publish);
+            if (!posix_public_file_matches_snapshot(
+                    root,
+                    path,
+                    chain.chain.identities,
+                    expected_status)) {
+                cleanup();
+                return false;
+            }
+            if (!posix_exchange_names(
+                    staging_directory.get(),
+                    "artifact.tmp",
+                    chain.chain.parent.get(),
+                    path.filename().c_str())) {
+                const auto error = errno;
+                cleanup();
+                throw std::runtime_error(
+                    "Begrenzter Cache-Replace besitzt keinen sicheren "
+                    "atomaren Exchange-Commit (native_error=" +
+                    std::to_string(error) + ").");
+            }
+            PosixFd displaced(openat(
+                staging_directory.get(),
+                "artifact.tmp",
+                O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+            struct stat displaced_status{};
+            const auto displaced_read = displaced
+                ? posix_read_open_file(
+                      displaced.get(),
+                      maximum_bytes,
+                      &displaced_status)
+                : SecureArtifactRead{
+                      SecureArtifactKind::Unsafe, {}};
+            const auto replacement_is_public =
+                posix_public_file_matches_snapshot(
+                    root,
+                    path,
+                    chain.chain.identities,
+                    temporary_status);
+            const auto displaced_is_expected =
+                displaced_read.kind == SecureArtifactKind::Regular &&
+                displaced_read.content == *expected_content &&
+                posix_same_snapshot(
+                    displaced_status, expected_status);
+            if (replacement_is_public && displaced_is_expected) {
+                // The exchange itself is the linearization point: it both
+                // retained the exact displaced target and published the
+                // staged inode. A later uncooperative namespace mutation is
+                // a subsequent writer, not a failed CAS of this operation.
+                expected_file.reset();
+                displaced.reset();
+                temporary.reset();
+                cleanup();
+                return true;
+            }
+
+            // The exchange retained whichever file actually occupied the
+            // public name. Roll it back only while the public entry is still
+            // provably our replacement; otherwise preserve both names for
+            // fail-closed recovery instead of deleting an unknown writer's
+            // artifact.
+            const auto replacement_still_at_captured_name =
+                posix_named_regular_file_matches_snapshot(
+                    chain.chain.parent.get(),
+                    path.filename(),
+                    temporary_status);
+            if (replacement_still_at_captured_name &&
+                displaced &&
+                posix_exchange_names(
+                    staging_directory.get(),
+                    "artifact.tmp",
+                    chain.chain.parent.get(),
+                    path.filename().c_str()) &&
+                posix_named_regular_file_matches_snapshot(
+                    chain.chain.parent.get(),
+                    path.filename(),
+                    displaced_status) &&
+                posix_named_regular_file_matches_snapshot(
+                    staging_directory.get(),
+                    "artifact.tmp",
+                    temporary_status)) {
+                expected_file.reset();
+                displaced.reset();
+                temporary.reset();
+                cleanup();
+                return false;
+            }
+            retain_staging = true;
+            expected_file.reset();
+            displaced.reset();
+            temporary.reset();
+            cleanup();
+            throw std::runtime_error(
+                "Begrenzter Cache-Replace konnte einen Namespace-Race "
+                "nicht verlustfrei auf den oeffentlichen Namen "
+                "zurueckrollen; der displaced Checkpoint bleibt im "
+                "privaten Staging erhalten.");
+        }
         if (linkat(
                 staging_directory.get(),
                 "artifact.tmp",
@@ -1787,7 +2152,7 @@ inline void secure_cache_publish(
                 if (concurrent.kind ==
                         SecureArtifactKind::Regular &&
                     concurrent.content == content)
-                    return;
+                    return true;
                 throw std::runtime_error(
                     "Begrenzter Cache-Publish kollidiert mit einem "
                     "unsicheren oder abweichenden Artefakt.");
@@ -1853,10 +2218,26 @@ inline void secure_cache_publish(
                 "Pfad- oder Dateiidentitaet.");
         }
         cleanup();
+        return true;
     } catch (...) {
         cleanup();
         throw;
     }
+}
+
+[[nodiscard]] inline bool secure_cache_replace_if_matches(
+    const std::filesystem::path& root,
+    const std::filesystem::path& path,
+    const std::string_view expected_content,
+    const std::string_view replacement_content,
+    const std::size_t maximum_bytes) {
+    return secure_cache_publish(
+        root,
+        path,
+        replacement_content,
+        maximum_bytes,
+        nullptr,
+        expected_content);
 }
 
 #endif

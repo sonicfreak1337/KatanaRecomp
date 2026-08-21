@@ -577,11 +577,21 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
         ProgressUnit::Steps,
         3u,
         "dreamcast-boot-image");
-    const auto boot_sector = source->read(static_cast<std::uint64_t>(data_track_lba) * 2048u, 256u);
     const auto bootstrap_offset = static_cast<std::uint64_t>(data_track_lba) * 2048u;
-    auto system_bootstrap = source->read(bootstrap_offset, dreamcast_system_bootstrap_size);
+    constexpr std::size_t dreamcast_boot_sector_metadata_size = 256u;
+    const auto early_boot_window_size = std::max(
+        dreamcast_boot_sector_metadata_size, dreamcast_system_bootstrap_size);
+    // Keep both reads identical: the second contiguous window is the
+    // repeatability/source-binding check for the same early disc bytes.
+    auto system_bootstrap = source->read(bootstrap_offset, early_boot_window_size);
     const auto repeated_system_bootstrap =
-        source->read(bootstrap_offset, dreamcast_system_bootstrap_size);
+        source->read(bootstrap_offset, early_boot_window_size);
+    if (system_bootstrap.size() != early_boot_window_size ||
+        repeated_system_bootstrap.size() != early_boot_window_size)
+        throw std::runtime_error(
+            "Dreamcast-Bootfenster wurde nur unvollstaendig gelesen.");
+    const auto boot_sector = std::span<const std::uint8_t>(
+        system_bootstrap.data(), dreamcast_boot_sector_metadata_size);
     const auto hardware_id = trimmed_ascii(boot_sector, 0x00u, 16u);
     const auto disc_type = trimmed_ascii(boot_sector, 0x25u, 6u);
     const auto area_symbols = trimmed_ascii(boot_sector, 0x30u, 8u);
@@ -592,7 +602,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     if (!safe_iso_file_name(boot_file_name)) {
         throw std::invalid_argument("Dreamcast-Bootdateiname ist ungueltig.");
     }
-    if (boot_sector.at(0x3Eu) == static_cast<std::uint8_t>('1') ||
+    if (boot_sector[0x3Eu] == static_cast<std::uint8_t>('1') ||
         boot_file_name == "0WINCEOS.BIN") {
         throw std::runtime_error("unsupported-dreamcast-wince-boot-layout");
     }
@@ -625,7 +635,7 @@ DreamcastRuntimeBootImage load_dreamcast_runtime_boot(std::shared_ptr<DiscSource
     Iso9660Filesystem repeated_filesystem(source, 2048u, data_track_lba, selected_bias);
     const auto repeated = repeated_filesystem.read_file("/" + boot_file_name);
     const bool repeated_bootstrap_reads_match =
-        repeated_system_bootstrap.size() == dreamcast_system_bootstrap_size &&
+        repeated_system_bootstrap.size() == early_boot_window_size &&
         repeated_system_bootstrap == system_bootstrap;
     const bool repeated_reads_match = repeated == boot_file;
     auto result = DreamcastRuntimeBootImage{

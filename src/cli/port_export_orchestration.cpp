@@ -75,7 +75,9 @@ port_export_implementation_identities(
         !valid_cache_digest(
             katana::build_contract::partition_codegen_component_identity) ||
         !valid_cache_digest(
-            katana::build_contract::orchestration_component_identity))
+            katana::build_contract::orchestration_component_identity) ||
+        !valid_cache_digest(
+            katana::build_contract::materialization_world_component_identity))
         throw std::runtime_error(
             "Exporter besitzt keine gueltigen buildgebundenen "
             "Komponentenidentitaeten.");
@@ -170,13 +172,15 @@ port_export_implementation_identities(
         native_port_artifact_identity.empty()
             ? std::string_view{"no-native-port-artifact-v1"}
             : native_port_artifact_identity;
-    const std::array<std::string_view, 15u> whole_fields{
+    const std::array<std::string_view, 16u> whole_fields{
         identities.analysis,
         identities.analysis_cache,
         identities.codegen,
         katana::build_contract::ir_component_identity,
         katana::build_contract::
             orchestration_component_identity,
+        katana::build_contract::
+            materialization_world_component_identity,
         katana::build_contract::project_version,
         runtime_abi,
         block_abi,

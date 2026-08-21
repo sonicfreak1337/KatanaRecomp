@@ -7,6 +7,8 @@ namespace katana::build_contract {
 
 inline constexpr std::string_view project_version = "@KATANA_PROJECT_VERSION@";
 inline constexpr std::string_view katana_git_commit = "@KATANA_GIT_COMMIT@";
+inline constexpr bool source_identity_trusted =
+    @KATANA_SOURCE_IDENTITY_TRUSTED@ != 0;
 inline constexpr std::string_view configured_compiler_launcher =
     "@KATANA_CONFIGURED_COMPILER_LAUNCHER@";
 inline constexpr std::uint32_t runtime_abi_version = @KATANA_RUNTIME_ABI_VERSION@u;

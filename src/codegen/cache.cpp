@@ -788,8 +788,8 @@ void CodegenCache::store_bounded(const std::string_view key,
             path,
             static_cast<std::uint64_t>(content.size()),
             1u);
-        detail::secure_cache_publish(
-            root_, path, content, maximum_bytes);
+        static_cast<void>(detail::secure_cache_publish(
+            root_, path, content, maximum_bytes));
         record_published_artifact(
             *accounting,
             path,
@@ -802,6 +802,93 @@ void CodegenCache::store_bounded(const std::string_view key,
         invalidate_root_accounting(*accounting);
         throw;
     }
+}
+
+bool CodegenCache::replace_bounded_if_matches(
+    const std::string_view key,
+    const std::string_view artifact_name,
+    const std::string_view expected_content,
+    const std::string_view replacement_content,
+    const std::size_t maximum_bytes) {
+    if (maximum_bytes == 0u ||
+        expected_content.size() > maximum_bytes ||
+        replacement_content.size() > maximum_bytes ||
+        static_cast<std::uint64_t>(replacement_content.size()) >
+            root_limits_.maximum_bytes ||
+        replacement_content.size() >
+            static_cast<std::size_t>(
+                std::numeric_limits<std::streamsize>::max()))
+        throw std::invalid_argument(
+            "Begrenzter Codegen-Cache-Replace besitzt ein ungueltiges "
+            "Bytebudget.");
+    const auto path = artifact_path(key, artifact_name);
+    const auto accounting = root_accounting(root_);
+    const std::unique_lock accounting_lock(accounting->mutex);
+    detail::SecureCacheRootMutationLock root_lock(root_);
+    synchronize_root_accounting(
+        *accounting,
+        root_,
+        root_limits_,
+        root_lock.sequence());
+    const auto existing = detail::secure_cache_read(
+        root_, path, maximum_bytes);
+    if (existing.kind != detail::SecureArtifactKind::Regular ||
+        existing.content != expected_content)
+        return false;
+    if (expected_content == replacement_content) {
+        record_cache_access_locked(*accounting, path);
+        return true;
+    }
+    const auto additional_bytes =
+        replacement_content.size() > expected_content.size()
+            ? static_cast<std::uint64_t>(
+                  replacement_content.size() - expected_content.size())
+            : 0u;
+    enforce_root_budget(
+        *accounting,
+        root_,
+        root_limits_,
+        path,
+        additional_bytes,
+        0u);
+    const auto mutation_sequence = root_lock.advance_sequence();
+    bool replaced = false;
+    try {
+        replaced = detail::secure_cache_replace_if_matches(
+            root_,
+            path,
+            expected_content,
+            replacement_content,
+            maximum_bytes);
+    } catch (const std::bad_alloc&) {
+        invalidate_root_accounting(*accounting);
+        throw;
+    } catch (...) {
+        invalidate_root_accounting(*accounting);
+        throw;
+    }
+    if (!replaced) {
+        // A failed exact-CAS may have observed an uncooperative namespace
+        // mutation at the platform commit boundary. The root sequence only
+        // serializes cooperating cache writers, so do not bless the earlier
+        // inventory snapshot as current.
+        invalidate_root_accounting(*accounting);
+        return false;
+    }
+    // The platform commit is the authority boundary. Accounting is only an
+    // optimization; once replace/rename succeeded, an allocation or metadata
+    // failure cannot truthfully turn the committed replacement into a failed
+    // publish. Force a bounded rescan on the next operation instead.
+    try {
+        record_published_artifact(
+            *accounting,
+            path,
+            static_cast<std::uint64_t>(replacement_content.size()));
+        accounting->observed_mutation_sequence = mutation_sequence;
+    } catch (...) {
+        invalidate_root_accounting(*accounting);
+    }
+    return true;
 }
 
 void CodegenCache::store_integrity_bounded(

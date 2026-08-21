@@ -299,6 +299,20 @@ endforeach()
 string(SHA256 KATANA_ORCHESTRATION_COMPONENT_IDENTITY
        "${katana_orchestration_material}")
 
+set(katana_materialization_world_material
+    "katana-materialization-world-component-v1;${katana_toolchain_material}")
+katana_expand_component_dependency_closure(
+    KATANA_MATERIALIZATION_WORLD_IDENTITY_CLOSURE
+    FALSE
+    ${KATANA_MATERIALIZATION_WORLD_IDENTITY_INPUTS})
+foreach(katana_component_file
+        IN LISTS KATANA_MATERIALIZATION_WORLD_IDENTITY_CLOSURE)
+    katana_append_component_file(
+        katana_materialization_world_material "${katana_component_file}")
+endforeach()
+string(SHA256 KATANA_MATERIALIZATION_WORLD_COMPONENT_IDENTITY
+       "${katana_materialization_world_material}")
+
 set(katana_component_header
 "#pragma once
 
@@ -318,6 +332,8 @@ inline constexpr std::string_view partition_codegen_component_identity =
     \"${KATANA_PARTITION_CODEGEN_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view orchestration_component_identity =
     \"${KATANA_ORCHESTRATION_COMPONENT_IDENTITY}\";
+inline constexpr std::string_view materialization_world_component_identity =
+    \"${KATANA_MATERIALIZATION_WORLD_COMPONENT_IDENTITY}\";
 
 } // namespace katana::build_contract
 ")

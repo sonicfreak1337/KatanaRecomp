@@ -1316,37 +1316,72 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         analysis.recursive.instructions, analysis.resolved_edges,
         block_leaders, normal_entry_leaders);
 
+    // These snapshots replace a full-vector search for every declared entry.
+    // The source image and materialized blocks are immutable for the remainder
+    // of this lowering pass, so the lookup sets preserve the old any-of
+    // semantics while keeping entry validation linear.
+    std::unordered_set<std::uint32_t> decoded_instruction_addresses;
+    decoded_instruction_addresses.reserve(analysis.recursive.instructions.size());
+    for (const auto& line : analysis.recursive.instructions)
+        decoded_instruction_addresses.insert(line.address);
+    std::unordered_set<std::uint32_t> materialized_block_addresses;
+    materialized_block_addresses.reserve(source_blocks.size());
+    for (const auto& block : source_blocks)
+        materialized_block_addresses.insert(block.start_address);
+
     for (const auto address : normal_entry_leaders) {
-        const auto decoded = std::any_of(
-            analysis.recursive.instructions.begin(),
-            analysis.recursive.instructions.end(),
-            [&](const auto& line) { return line.address == address; });
-        if (!decoded) continue;
-        const auto materialized = std::any_of(
-            source_blocks.begin(), source_blocks.end(),
-            [&](const auto& block) {
-                return block.start_address == address;
-            });
-        if (!materialized)
+        if (!decoded_instruction_addresses.contains(address)) continue;
+        if (!materialized_block_addresses.contains(address))
             throw std::invalid_argument(
                 "Deklarierter Normal-Entry wurde nicht als Basic Block "
                 "materialisiert: " + std::to_string(address));
     }
 
+    // Explicit boundaries are sorted by entry because they originate from a
+    // std::map. Keep only bounded ranges and answer ownership queries with a
+    // binary search. discover_functions_from_blocks rejects overlaps with
+    // different ends; equal-end nested ranges are retained and resolve to the
+    // same earliest owner as the former linear find_if.
+    std::vector<katana::analysis::FunctionBoundary> exact_boundaries;
+    exact_boundaries.reserve(function_boundaries.size());
+    for (const auto& boundary : function_boundaries) {
+        if (boundary.size != 0u) exact_boundaries.push_back(boundary);
+    }
+    const auto find_exact_boundary_owner =
+        [&](const std::uint32_t address)
+        -> const katana::analysis::FunctionBoundary* {
+        auto owner = std::upper_bound(
+            exact_boundaries.begin(), exact_boundaries.end(), address,
+            [](const auto candidate, const auto& boundary) {
+                return candidate < boundary.entry_address;
+            });
+        if (owner == exact_boundaries.begin()) return nullptr;
+        --owner;
+        const auto end = static_cast<std::uint64_t>(owner->entry_address) +
+                         owner->size;
+        if (address <= owner->entry_address ||
+            static_cast<std::uint64_t>(address) >= end)
+            return nullptr;
+
+        // Equal-end nested ranges are legal. The historical first-match
+        // search selected the earliest entry, so walk only that equal-end
+        // group; ranges with different ends cannot overlap by contract.
+        while (owner != exact_boundaries.begin()) {
+            const auto previous = owner - 1;
+            const auto previous_end =
+                static_cast<std::uint64_t>(previous->entry_address) +
+                previous->size;
+            if (previous_end != end || address <= previous->entry_address)
+                break;
+            owner = previous;
+        }
+        return &*owner;
+    };
+
     auto function_discovery_boundaries = function_boundaries;
     const auto append_exactly_owned_block_entry =
         [&](const std::uint32_t address) {
-            const auto owner = std::find_if(
-                function_boundaries.begin(), function_boundaries.end(),
-                [&](const auto& boundary) {
-                    if (boundary.size == 0u ||
-                        address <= boundary.entry_address)
-                        return false;
-                    return static_cast<std::uint64_t>(address) <
-                           static_cast<std::uint64_t>(
-                               boundary.entry_address) + boundary.size;
-                });
-            if (owner != function_boundaries.end())
+            if (find_exact_boundary_owner(address) != nullptr)
                 function_discovery_boundaries.push_back({address, 0u});
         };
     // Candidate-only dispatch entries and explicit continuation leaders are
@@ -1390,6 +1425,15 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             source_block_start_by_instruction.emplace(
                 line.address, block.start_address);
     }
+    std::unordered_map<
+        std::uint32_t,
+        const katana::analysis::IndirectControlFlowResolution*>
+        indirect_resolution_by_instruction;
+    indirect_resolution_by_instruction.reserve(
+        analysis.indirect_control_flow.size());
+    for (const auto& resolution : analysis.indirect_control_flow)
+        indirect_resolution_by_instruction.emplace(
+            resolution.instruction_address, &resolution);
 
     std::unordered_map<std::uint32_t, std::size_t> unique_owner_by_block;
     std::unordered_set<std::uint32_t> ambiguous_owner_blocks;
@@ -1430,17 +1474,13 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             table.encoding ==
                 katana::analysis::JumpTableEncoding::Absolute32)
             continue;
-        const auto resolution = std::find_if(
-            analysis.indirect_control_flow.begin(),
-            analysis.indirect_control_flow.end(),
-            [&](const auto& candidate) {
-                return candidate.instruction_address ==
-                       table.dispatch_address;
-            });
-        if (resolution == analysis.indirect_control_flow.end())
+        const auto resolution = indirect_resolution_by_instruction.find(
+            table.dispatch_address);
+        if (resolution == indirect_resolution_by_instruction.end())
             continue;
         const auto resolution_status =
-            katana::analysis::control_flow_report_status(*resolution);
+            katana::analysis::control_flow_report_status(
+                *resolution->second);
         if (resolution_status !=
                 katana::analysis::ControlFlowReportStatus::GuardedPartial &&
             resolution_status !=
@@ -1644,14 +1684,9 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
                     candidate_leaders_owned_by_fallthrough.insert(sequential);
                 address = sequential;
             }
-        };
+    };
     for (const auto address : candidate_leaders) {
-        const auto materialized = std::any_of(
-            source_blocks.begin(), source_blocks.end(),
-            [&](const auto& block) {
-                return block.start_address == address;
-            });
-        if (!materialized)
+        if (!materialized_block_addresses.contains(address))
             throw std::invalid_argument(
                 "Externer Kandidat wurde nicht als Basic Block "
                 "materialisiert: " +
@@ -1677,38 +1712,39 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
             function_ownership_blocks, function_discovery_boundaries,
             function_ownership_edges);
     }
+    std::unordered_set<std::uint32_t> owned_function_blocks;
+    owned_function_blocks.reserve(source_blocks.size());
+    for (const auto& function : functions)
+        owned_function_blocks.insert(function.block_addresses.begin(),
+                                     function.block_addresses.end());
     for (const auto address : candidate_leaders) {
-        const auto owned = std::any_of(
-            functions.begin(), functions.end(),
-            [&](const auto& function) {
-                return std::find(function.block_addresses.begin(),
-                                 function.block_addresses.end(),
-                                 address) != function.block_addresses.end();
-            });
-        if (!owned)
+        if (!owned_function_blocks.contains(address))
             throw std::invalid_argument(
                 "Externer Kandidat besitzt keinen IR-Funktionsowner: " +
                 std::to_string(address));
     }
+
+    std::unordered_map<std::uint32_t, const katana::analysis::FunctionInfo*>
+        function_by_entry;
+    std::unordered_set<std::uint64_t> function_entry_block_pairs;
+    function_by_entry.reserve(functions.size());
+    function_entry_block_pairs.reserve(source_blocks.size());
+    for (const auto& function : functions) {
+        function_by_entry.emplace(function.entry_address, &function);
+        for (const auto address : function.block_addresses)
+            function_entry_block_pairs.insert(
+                (static_cast<std::uint64_t>(function.entry_address) << 32u) |
+                address);
+    }
     for (const auto address : additional_block_leaders) {
-        const auto owner = std::find_if(
-            function_boundaries.begin(), function_boundaries.end(),
-            [&](const auto& boundary) {
-                return boundary.size != 0u &&
-                       address > boundary.entry_address &&
-                       static_cast<std::uint64_t>(address) <
-                           static_cast<std::uint64_t>(
-                               boundary.entry_address) + boundary.size;
-            });
-        if (owner == function_boundaries.end()) continue;
-        const auto function = std::find_if(
-            functions.begin(), functions.end(), [&](const auto& candidate) {
-                return candidate.entry_address == owner->entry_address;
-            });
-        if (function == functions.end() ||
-            std::find(function->block_addresses.begin(),
-                      function->block_addresses.end(), address) ==
-                function->block_addresses.end())
+        const auto owner = find_exact_boundary_owner(address);
+        if (owner == nullptr) continue;
+        const auto function = function_by_entry.find(owner->entry_address);
+        const auto owned_block = function_entry_block_pairs.contains(
+            (static_cast<std::uint64_t>(owner->entry_address) << 32u) |
+            address);
+        if (function == function_by_entry.end() ||
+            !owned_block)
             throw std::invalid_argument(
                 "Exakter Funktionsowner hat einen deklarierten "
                 "Normal-Entry nicht uebernommen: " +

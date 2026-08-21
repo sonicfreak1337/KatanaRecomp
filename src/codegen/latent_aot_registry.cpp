@@ -5929,6 +5929,56 @@ CandidateAnalysisOutcome analyze_candidate(
 }
 } // namespace
 
+struct LatentAotDiscoverySession::Impl final {
+    struct CatalogStatistics final {
+        std::size_t examined_files = 0u;
+        std::size_t rejected_files = 0u;
+        std::size_t duplicate_files = 0u;
+        std::uint64_t examined_bytes = 0u;
+        std::size_t prs_files_examined = 0u;
+        std::size_t prs_files_decoded = 0u;
+        std::size_t prs_files_rejected = 0u;
+        std::size_t prs_candidates_admitted = 0u;
+        std::uint64_t prs_decoded_bytes = 0u;
+        bool prs_decoded_budget_exhausted = false;
+    } catalog_statistics;
+
+    // A successful catalog build is distinct from a non-empty candidate
+    // vector.  An empty, but valid, ISO catalog must be reusable; conversely,
+    // a failed build must never become a reusable empty catalog.
+    bool catalog_ready = false;
+    std::shared_ptr<const katana::runtime::DiscSource> source;
+    std::string catalog_key;
+    std::vector<std::pair<std::string, katana::runtime::Iso9660Entry>> files;
+    std::vector<DiscFileCandidate> candidates;
+    std::vector<bool> candidates_have_explicit_entries;
+
+    void clear() noexcept {
+        catalog_ready = false;
+        source.reset();
+        catalog_key.clear();
+        files.clear();
+        candidates.clear();
+        candidates_have_explicit_entries.clear();
+        catalog_statistics = {};
+    }
+};
+
+LatentAotDiscoverySession::LatentAotDiscoverySession()
+    : impl_(std::make_unique<Impl>()) {}
+
+LatentAotDiscoverySession::~LatentAotDiscoverySession() = default;
+
+LatentAotDiscoverySession::LatentAotDiscoverySession(
+    LatentAotDiscoverySession&&) noexcept = default;
+
+LatentAotDiscoverySession& LatentAotDiscoverySession::operator=(
+    LatentAotDiscoverySession&&) noexcept = default;
+
+void LatentAotDiscoverySession::reset() noexcept {
+    if (impl_ != nullptr) impl_->clear();
+}
+
 std::string_view latent_aot_loader_tail_audit_status_name(
     const LatentAotLoaderTailAuditStatus status) noexcept {
     switch (status) {
@@ -6189,8 +6239,10 @@ bool latent_aot_program_is_relocation_closed(
            relocation_closed_impl(program, source_start, extent);
 }
 
-LatentAotDiscovery discover_latent_aot_modules(
-    std::shared_ptr<const katana::runtime::DiscSource> source,
+namespace {
+
+std::string latent_aot_catalog_key(
+    const katana::runtime::DiscSource& source,
     const std::uint32_t volume_start_lba,
     const std::uint32_t extent_lba_bias,
     const std::span<const std::string> excluded_byte_identities,
@@ -6198,6 +6250,87 @@ LatentAotDiscovery discover_latent_aot_modules(
     const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
     const std::span<const LatentAotEntryHint> entry_hints,
     const std::span<const std::string> prioritized_file_references) {
+    std::ostringstream material;
+    const auto append_string = [&material](const std::string_view value) {
+        material << 's' << value.size() << ':' << value << ';';
+    };
+    const auto append_value = [&material](const auto value) {
+        material << 'i' << +value << ';';
+    };
+    append_string("katana-latent-aot-catalog-v1");
+    append_string(source.identity());
+    append_value(source.size());
+    append_value(volume_start_lba);
+    append_value(extent_lba_bias);
+    append_value(static_cast<std::uint8_t>(options.mode));
+    append_value(static_cast<std::uint8_t>(options.completeness_policy));
+    append_value(options.maximum_directory_entries);
+    append_value(options.maximum_directory_bytes);
+    append_value(options.maximum_total_directory_bytes);
+    append_value(options.maximum_candidate_files);
+    append_value(options.maximum_file_bytes);
+    append_value(options.maximum_total_file_bytes);
+    append_value(options.maximum_total_transform_source_bytes);
+    append_value(options.maximum_total_transformed_bytes);
+    append_value(options.maximum_transformed_candidate_files);
+    append_value(options.maximum_workers);
+    append_value(options.maximum_entry_scan_instructions);
+    append_value(options.maximum_native_instructions_per_module);
+    append_value(options.maximum_blocks_per_module);
+    append_value(options.maximum_functions_per_module);
+    append_value(options.maximum_analysis_iterations);
+    append_value(options.maximum_analysis_contexts);
+    append_value(options.source_address_begin);
+    append_value(options.source_address_end);
+    append_string(options.analysis_implementation_identity);
+    append_string(options.analysis_cache_implementation_identity);
+
+    std::vector<std::string> excluded(excluded_byte_identities.begin(),
+                                      excluded_byte_identities.end());
+    std::sort(excluded.begin(), excluded.end());
+    excluded.erase(std::unique(excluded.begin(), excluded.end()),
+                   excluded.end());
+    append_value(excluded.size());
+    for (const auto& identity : excluded) append_string(identity);
+
+    std::vector<LatentAotOccupiedRange> occupied(
+        occupied_source_ranges.begin(), occupied_source_ranges.end());
+    std::sort(occupied.begin(), occupied.end(), [](const auto left,
+                                                   const auto right) {
+        return std::tie(left.start, left.size) <
+               std::tie(right.start, right.size);
+    });
+    append_value(occupied.size());
+    for (const auto range : occupied) {
+        append_value(range.start);
+        append_value(range.size);
+    }
+
+    append_value(entry_hints.size());
+    for (const auto& hint : entry_hints) {
+        append_string(hint.byte_identity);
+        append_value(hint.disc_byte_offset);
+        append_value(hint.byte_size);
+        append_value(hint.module_relative_offset);
+    }
+    append_value(prioritized_file_references.size());
+    for (const auto& reference : prioritized_file_references)
+        append_string(reference);
+    return katana::io::sha256_bytes(material.str());
+}
+
+} // namespace
+
+LatentAotDiscovery discover_latent_aot_modules_impl(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    const std::uint32_t volume_start_lba,
+    const std::uint32_t extent_lba_bias,
+    const std::span<const std::string> excluded_byte_identities,
+    const LatentAotDiscoveryOptions& options,
+    const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    const std::span<const LatentAotEntryHint> entry_hints,
+    const std::span<const std::string> prioritized_file_references,
+    LatentAotDiscoverySession::Impl* const session) {
     auto discovery_progress = options.progress.begin(
         katana::ProgressOperation::LatentAotAnalysis,
         katana::ProgressUnit::Bytes,
@@ -6447,58 +6580,111 @@ LatentAotDiscovery discover_latent_aot_modules(
         return {};
     }
 
-    katana::runtime::Iso9660Filesystem filesystem(
-        source, iso_sector_size, volume_start_lba, extent_lba_bias);
-    struct PendingDirectory {
-        std::string path;
-        std::size_t depth = 0u;
-        katana::runtime::Iso9660Entry entry;
-    };
-    std::vector<PendingDirectory> pending{{"/", 0u, filesystem.root_directory()}};
+    const auto catalog_key = latent_aot_catalog_key(
+        *source, volume_start_lba, extent_lba_bias,
+        excluded_byte_identities, options, occupied_source_ranges,
+        normalized_entry_hints, normalized_file_references);
+    // DiscSource implementations in this tree authenticate their content
+    // with a non-empty identity.  Do not retain or reuse a session for a
+    // custom source that violates that contract.
+    const bool source_identity_valid = !source->identity().empty();
+    const bool reuse_catalog =
+        source_identity_valid && session != nullptr &&
+        session->catalog_ready &&
+        session->source.get() == source.get() &&
+        session->catalog_key == catalog_key;
+    if (session != nullptr && !reuse_catalog) session->clear();
+
+    LatentAotDiscovery result;
+    std::unique_ptr<katana::runtime::Iso9660Filesystem> filesystem;
     std::vector<std::pair<std::string, katana::runtime::Iso9660Entry>> files;
-    std::size_t directory_entries = 0u;
-    std::size_t directory_bytes = 0u;
-    while (!pending.empty()) {
-        auto directory = std::move(pending.back());
-        pending.pop_back();
-        if (directory.depth > 32u)
-            throw std::runtime_error("ISO9660-Verzeichnistiefe ueberschreitet das AOT-Budget.");
-        if (directory.entry.size > options.maximum_directory_bytes ||
-            directory.entry.size >
-                options.maximum_total_directory_bytes - directory_bytes)
-            throw std::runtime_error("ISO9660-Verzeichnisse ueberschreiten das AOT-I/O-Budget.");
-        directory_bytes += directory.entry.size;
-        auto entries = filesystem.list_directory(
-            directory.entry,
-            {options.maximum_directory_entries - directory_entries,
-             static_cast<std::uint32_t>(options.maximum_directory_bytes)});
-        std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
-            if (left.name != right.name) return left.name < right.name;
-            if (left.lba != right.lba) return left.lba < right.lba;
-            return left.size < right.size;
-        });
-        if (entries.size() > options.maximum_directory_entries - directory_entries)
-            throw std::runtime_error("ISO9660-Dateiregistry ueberschreitet das AOT-Budget.");
-        directory_entries += entries.size();
-        for (const auto& entry : entries) {
-            if (!safe_component(entry.name))
-                throw std::runtime_error("ISO9660-Dateiregistry enthaelt unsicheren Namen.");
-            auto path = directory.path;
-            if (path.size() != 1u) path += '/';
-            path += entry.name;
-            if (entry.directory)
-                pending.push_back({std::move(path), directory.depth + 1u, entry});
-            else
-                files.emplace_back(std::move(path), entry);
+    if (reuse_catalog) {
+        // The source identity is part of catalog_key.  Moving the bounded
+        // metadata out lets the analysis retain one authoritative copy while
+        // avoiding a second directory walk and a second metadata allocation.
+        session->catalog_ready = false;
+        files = std::move(session->files);
+        result.examined_files = session->catalog_statistics.examined_files;
+        result.rejected_files = session->catalog_statistics.rejected_files;
+        result.duplicate_files = session->catalog_statistics.duplicate_files;
+        result.examined_bytes = session->catalog_statistics.examined_bytes;
+        result.prs_files_examined =
+            session->catalog_statistics.prs_files_examined;
+        result.prs_files_decoded =
+            session->catalog_statistics.prs_files_decoded;
+        result.prs_files_rejected =
+            session->catalog_statistics.prs_files_rejected;
+        result.prs_candidates_admitted =
+            session->catalog_statistics.prs_candidates_admitted;
+        result.prs_decoded_bytes =
+            session->catalog_statistics.prs_decoded_bytes;
+        result.prs_decoded_budget_exhausted =
+            session->catalog_statistics.prs_decoded_budget_exhausted;
+        std::fill(matched_entry_hints.begin(), matched_entry_hints.end(), true);
+    } else {
+        filesystem = std::make_unique<katana::runtime::Iso9660Filesystem>(
+            source, iso_sector_size, volume_start_lba, extent_lba_bias);
+        struct PendingDirectory {
+            std::string path;
+            std::size_t depth = 0u;
+            katana::runtime::Iso9660Entry entry;
+        };
+        std::vector<PendingDirectory> pending{{
+            "/", 0u, filesystem->root_directory()}};
+        std::size_t directory_entries = 0u;
+        std::size_t directory_bytes = 0u;
+        while (!pending.empty()) {
+            auto directory = std::move(pending.back());
+            pending.pop_back();
+            if (directory.depth > 32u)
+                throw std::runtime_error(
+                    "ISO9660-Verzeichnistiefe ueberschreitet das AOT-Budget.");
+            if (directory.entry.size > options.maximum_directory_bytes ||
+                directory.entry.size >
+                    options.maximum_total_directory_bytes - directory_bytes)
+                throw std::runtime_error(
+                    "ISO9660-Verzeichnisse ueberschreiten das AOT-I/O-Budget.");
+            directory_bytes += directory.entry.size;
+            auto entries = filesystem->list_directory(
+                directory.entry,
+                {options.maximum_directory_entries - directory_entries,
+                 static_cast<std::uint32_t>(options.maximum_directory_bytes)});
+            std::sort(
+                entries.begin(), entries.end(),
+                [](const auto& left, const auto& right) {
+                    if (left.name != right.name) return left.name < right.name;
+                    if (left.lba != right.lba) return left.lba < right.lba;
+                    return left.size < right.size;
+                });
+            if (entries.size() >
+                options.maximum_directory_entries - directory_entries)
+                throw std::runtime_error(
+                    "ISO9660-Dateiregistry ueberschreitet das AOT-Budget.");
+            directory_entries += entries.size();
+            for (const auto& entry : entries) {
+                if (!safe_component(entry.name))
+                    throw std::runtime_error(
+                        "ISO9660-Dateiregistry enthaelt unsicheren Namen.");
+                auto path = directory.path;
+                if (path.size() != 1u) path += '/';
+                path += entry.name;
+                if (entry.directory)
+                    pending.push_back(
+                        {std::move(path), directory.depth + 1u, entry});
+                else
+                    files.emplace_back(std::move(path), entry);
+            }
         }
+        std::sort(
+            files.begin(), files.end(),
+            [](const auto& left, const auto& right) {
+                if (left.second.lba != right.second.lba)
+                    return left.second.lba < right.second.lba;
+                if (left.second.size != right.second.size)
+                    return left.second.size < right.second.size;
+                return left.first < right.first;
+            });
     }
-    std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) {
-        if (left.second.lba != right.second.lba)
-            return left.second.lba < right.second.lba;
-        if (left.second.size != right.second.size)
-            return left.second.size < right.second.size;
-        return left.first < right.first;
-    });
     std::map<std::string, std::size_t> file_basename_counts;
     for (const auto& file : files)
         ++file_basename_counts[std::string(
@@ -6551,14 +6737,18 @@ LatentAotDiscovery discover_latent_aot_modules(
         discovery_progress.update(counters);
     }
 
-    LatentAotDiscovery result;
     std::vector<DiscFileCandidate> candidates;
+    std::vector<bool> candidates_have_explicit_entries;
+    if (reuse_catalog) {
+        candidates = std::move(session->candidates);
+        candidates_have_explicit_entries =
+            std::move(session->candidates_have_explicit_entries);
+    } else {
     candidates.reserve(
         std::min(files.size(), options.maximum_candidate_files) +
         std::min(files.size(), normalized_entry_hints.size()) +
         std::min(files.size(),
                  maximum_latent_aot_inferred_authoritative_candidates));
-    std::vector<bool> candidates_have_explicit_entries;
     candidates_have_explicit_entries.reserve(candidates.capacity());
     std::map<std::pair<std::string, std::uint32_t>, std::size_t>
         candidate_by_byte_identity_and_size;
@@ -6641,7 +6831,7 @@ LatentAotDiscovery discover_latent_aot_modules(
         if (entry.size > source_budget - source_budget_used)
             throw std::runtime_error(
                 "latent-aot-entry-hint-total-budget");
-        auto source_bytes = filesystem.read_file(entry, entry.size);
+        auto source_bytes = filesystem->read_file(entry, entry.size);
         if (source_bytes.size() != entry.size)
             throw std::runtime_error("Latente Discdatei wurde abgeschnitten gelesen.");
         if (sega_prs)
@@ -6831,7 +7021,7 @@ LatentAotDiscovery discover_latent_aot_modules(
                 entry.size > source->size() - disc_byte_offset)
                 throw std::runtime_error(
                     "Latente Discdatei liegt ausserhalb der Discquelle.");
-            auto source_bytes = filesystem.read_file(
+            auto source_bytes = filesystem->read_file(
                 entry, static_cast<std::uint32_t>(options.maximum_file_bytes));
             if (source_bytes.size() != entry.size)
                 throw std::runtime_error(
@@ -7030,6 +7220,28 @@ LatentAotDiscovery discover_latent_aot_modules(
                 exact_file_extents.emplace(disc_byte_offset, entry.size);
         }
     }
+    }
+
+    if (session != nullptr && !reuse_catalog) {
+        session->catalog_ready = false;
+        session->catalog_key = catalog_key;
+        session->catalog_statistics.examined_files = result.examined_files;
+        session->catalog_statistics.rejected_files = result.rejected_files;
+        session->catalog_statistics.duplicate_files = result.duplicate_files;
+        session->catalog_statistics.examined_bytes = result.examined_bytes;
+        session->catalog_statistics.prs_files_examined =
+            result.prs_files_examined;
+        session->catalog_statistics.prs_files_decoded =
+            result.prs_files_decoded;
+        session->catalog_statistics.prs_files_rejected =
+            result.prs_files_rejected;
+        session->catalog_statistics.prs_candidates_admitted =
+            result.prs_candidates_admitted;
+        session->catalog_statistics.prs_decoded_bytes =
+            result.prs_decoded_bytes;
+        session->catalog_statistics.prs_decoded_budget_exhausted =
+            result.prs_decoded_budget_exhausted;
+    }
 
     if (std::any_of(matched_entry_hints.begin(), matched_entry_hints.end(),
                     [](const bool matched) { return !matched; }))
@@ -7169,12 +7381,13 @@ LatentAotDiscovery discover_latent_aot_modules(
                         std::chrono::steady_clock::now() -
                         analysis_started)
                         .count());
-            // Analysis artifacts never retain source bytes. Release each
-            // candidate buffer as soon as its worker has finished so a cold
-            // multi-module scan does not hold both every file and every IR
-            // result until the final collection pass.
-            std::vector<std::uint8_t>{}.swap(
-                candidates[index].bytes);
+            // A session deliberately retains the bounded source catalog for
+            // the next cross-image discovery call.  The legacy no-session
+            // path keeps the old eager release behavior so a one-shot scan
+            // does not retain source bytes past candidate analysis.
+            if (session == nullptr)
+                std::vector<std::uint8_t>{}.swap(
+                    candidates[index].bytes);
             candidate_progress.advance(1u);
             katana::ProgressCounterSnapshot counters;
             counters.configured_workers =
@@ -7297,6 +7510,14 @@ LatentAotDiscovery discover_latent_aot_modules(
             }
             ++result.rejected_files;
         }
+    }
+    if (session != nullptr && source_identity_valid) {
+        session->source = source;
+        session->files = std::move(files);
+        session->candidates = std::move(candidates);
+        session->candidates_have_explicit_entries =
+            std::move(candidates_have_explicit_entries);
+        session->catalog_ready = true;
     }
     discovery_progress.complete(
         result.examined_bytes);
@@ -7505,6 +7726,39 @@ bool validate_latent_aot_discovery_source_binding(
     } catch (...) {
         return false;
     }
+}
+
+LatentAotDiscovery discover_latent_aot_modules(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    const std::uint32_t volume_start_lba,
+    const std::uint32_t extent_lba_bias,
+    const std::span<const std::string> excluded_byte_identities,
+    const LatentAotDiscoveryOptions& options,
+    const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    const std::span<const LatentAotEntryHint> entry_hints,
+    const std::span<const std::string> prioritized_file_references) {
+    return discover_latent_aot_modules_impl(
+        std::move(source), volume_start_lba, extent_lba_bias,
+        excluded_byte_identities, options, occupied_source_ranges,
+        entry_hints, prioritized_file_references, nullptr);
+}
+
+LatentAotDiscovery discover_latent_aot_modules(
+    std::shared_ptr<const katana::runtime::DiscSource> source,
+    const std::uint32_t volume_start_lba,
+    const std::uint32_t extent_lba_bias,
+    const std::span<const std::string> excluded_byte_identities,
+    const LatentAotDiscoveryOptions& options,
+    const std::span<const LatentAotOccupiedRange> occupied_source_ranges,
+    const std::span<const LatentAotEntryHint> entry_hints,
+    const std::span<const std::string> prioritized_file_references,
+    LatentAotDiscoverySession& session) {
+    if (session.impl_ == nullptr) session.impl_ =
+        std::make_unique<LatentAotDiscoverySession::Impl>();
+    return discover_latent_aot_modules_impl(
+        std::move(source), volume_start_lba, extent_lba_bias,
+        excluded_byte_identities, options, occupied_source_ranges,
+        entry_hints, prioritized_file_references, session.impl_.get());
 }
 
 LatentAotDiscovery discover_latent_aot_modules(

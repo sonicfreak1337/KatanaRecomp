@@ -1230,7 +1230,11 @@ struct SessionEpoch final {
     std::shared_ptr<const SessionEpoch> base;
     std::uint64_t image_identity = 0u;
     std::uint64_t image_revision = 0u;
+    std::uint64_t image_immutable_generation = 0u;
     std::uint64_t version = 0u;
+    std::shared_ptr<const std::vector<katana::io::ImageImmutableRange>>
+        image_immutable_ranges;
+    std::shared_ptr<const std::vector<std::uint32_t>> image_entry_points;
     std::shared_ptr<const std::vector<ExactFunctionRange>> exact_ranges;
     std::map<std::uint32_t, RecursiveAnalysisSeedContract> seed_updates;
     std::map<std::uint32_t, katana::sh4::DisassemblyLine> line_updates;
@@ -1302,10 +1306,40 @@ RecursiveAnalysisSnapshot RecursiveAnalysisSession::analyze(
     const auto published = impl_->published;
     const auto identity = image.analysis_instance_identity();
     const auto revision = image.analysis_revision();
+    const auto immutable_generation = image.immutable_generation();
+    const auto immutable_ranges = image.immutable_ranges();
+    auto image_entry_points = std::vector<std::uint32_t>(
+        image.entry_points().begin(), image.entry_points().end());
+    std::sort(image_entry_points.begin(), image_entry_points.end());
+    image_entry_points.erase(
+        std::unique(image_entry_points.begin(), image_entry_points.end()),
+        image_entry_points.end());
+    const auto immutable_binding_matches = [&] {
+        if (published == nullptr ||
+            published->image_immutable_ranges == nullptr ||
+            published->image_immutable_generation !=
+                immutable_generation ||
+            published->image_immutable_ranges->size() !=
+                immutable_ranges.size())
+            return false;
+        return std::equal(
+            published->image_immutable_ranges->begin(),
+            published->image_immutable_ranges->end(),
+            immutable_ranges.begin(), immutable_ranges.end());
+    }();
+    const auto root_extension_matches = [&] {
+        if (published == nullptr ||
+            published->image_entry_points == nullptr)
+            return false;
+        return std::includes(
+            image_entry_points.begin(), image_entry_points.end(),
+            published->image_entry_points->begin(),
+            published->image_entry_points->end());
+    }();
     const bool image_changed =
         published != nullptr &&
         (published->image_identity != identity ||
-         published->image_revision != revision);
+         !immutable_binding_matches || !root_extension_matches);
     const bool budget_incompatible =
         published != nullptr &&
         (published->instruction_count > maximum_instructions ||
@@ -1345,7 +1379,8 @@ RecursiveAnalysisSnapshot RecursiveAnalysisSession::analyze(
         impl_->aggregate_work.add(retry.physical_work_);
         return retry;
     }
-    if (!cold && delta.changed_seeds.empty()) {
+    if (!cold && delta.changed_seeds.empty() &&
+        published->image_revision == revision) {
         RecursiveAnalysisPhysicalWork work;
         ++work.trusted_snapshot_validations;
         impl_->aggregate_work.add(work);
@@ -1368,6 +1403,10 @@ RecursiveAnalysisSnapshot RecursiveAnalysisSession::analyze(
     staged->base = cold ? nullptr : published;
     staged->image_identity = identity;
     staged->image_revision = revision;
+    staged->image_immutable_generation = immutable_generation;
+    staged->image_entry_points =
+        std::make_shared<const std::vector<std::uint32_t>>(
+            std::move(image_entry_points));
     staged->version = published == nullptr ? 1u : published->version + 1u;
     staged->instruction_count = cold ? 0u : published->instruction_count;
     staged->function_count = cold ? 0u : published->function_count;
@@ -1375,9 +1414,14 @@ RecursiveAnalysisSnapshot RecursiveAnalysisSession::analyze(
     staged->reused_contexts = cold ? 0u : published->context_count;
     staged->baseline_status = baseline_status;
     if (cold) {
+        staged->image_immutable_ranges =
+            std::make_shared<const std::vector<katana::io::ImageImmutableRange>>(
+                immutable_ranges.begin(), immutable_ranges.end());
         staged->exact_ranges = std::make_shared<const std::vector<ExactFunctionRange>>(
             session_exact_ranges(image, complete_seeds));
     } else {
+        staged->image_immutable_ranges =
+            published->image_immutable_ranges;
         staged->exact_ranges = published->exact_ranges;
         ++staged->work.trusted_snapshot_validations;
     }
@@ -1929,6 +1973,28 @@ RecursiveAnalysisResult RecursiveAnalysisSession::materialize(
     if (epoch->image_identity != image.analysis_instance_identity())
         throw std::invalid_argument(
             "Recursive-Analyse-Snapshot gehoert zu einem anderen Image.");
+    const auto immutable_ranges = image.immutable_ranges();
+    if (epoch->image_immutable_generation !=
+            image.immutable_generation() ||
+        epoch->image_immutable_ranges == nullptr ||
+        epoch->image_immutable_ranges->size() !=
+            immutable_ranges.size() ||
+        !std::equal(epoch->image_immutable_ranges->begin(),
+                    epoch->image_immutable_ranges->end(),
+                    immutable_ranges.begin(), immutable_ranges.end()))
+        throw std::invalid_argument(
+            "Recursive-Analyse-Snapshot besitzt eine veraltete "
+            "Immutable-Bindung.");
+    auto image_entry_points = std::vector<std::uint32_t>(
+        image.entry_points().begin(), image.entry_points().end());
+    std::sort(image_entry_points.begin(), image_entry_points.end());
+    image_entry_points.erase(
+        std::unique(image_entry_points.begin(), image_entry_points.end()),
+        image_entry_points.end());
+    if (epoch->image_entry_points == nullptr ||
+        *epoch->image_entry_points != image_entry_points)
+        throw std::invalid_argument(
+            "Recursive-Analyse-Snapshot besitzt einen veralteten Rootvertrag.");
     if (epoch->image_revision != image.analysis_revision())
         throw std::invalid_argument(
             "Recursive-Analyse-Snapshot gehoert zu einer veralteten Image-Revision.");

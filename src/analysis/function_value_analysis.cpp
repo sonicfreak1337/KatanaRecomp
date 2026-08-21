@@ -32987,8 +32987,16 @@ struct detail::FunctionValueAnalysisSession::Impl {
             image.analysis_instance_identity();
         const auto revision = image.analysis_revision();
         const auto immutable_generation = image.immutable_generation();
+        const auto immutable_ranges = image.immutable_ranges();
+        const bool immutable_binding_matches =
+            bound_image_immutable_ranges.size() ==
+                immutable_ranges.size() &&
+            std::equal(bound_image_immutable_ranges.begin(),
+                       bound_image_immutable_ranges.end(),
+                       immutable_ranges.begin(), immutable_ranges.end());
         if (bound_image_identity == identity &&
-            bound_image_immutable_generation == immutable_generation) {
+            bound_image_immutable_generation == immutable_generation &&
+            immutable_binding_matches) {
             // Entry-point/root metadata advances analysis_revision without
             // changing the analyzed bytes or FVA shape. Keep all immutable
             // graph/SCC/summary shards; the caller's exact FunctionProgramDelta
@@ -33067,14 +33075,22 @@ struct detail::FunctionValueAnalysisSession::Impl {
         bound_image_identity = identity;
         bound_image_revision = revision;
         bound_image_immutable_generation = immutable_generation;
+        bound_image_immutable_ranges.assign(immutable_ranges.begin(),
+                                            immutable_ranges.end());
     }
 
     [[nodiscard]] bool image_binding_matches(
         const katana::io::ExecutableImage& image) const noexcept {
+        const auto immutable_ranges = image.immutable_ranges();
         return bound_image_identity == image.analysis_instance_identity() &&
                bound_image_revision == image.analysis_revision() &&
                bound_image_immutable_generation ==
-                   image.immutable_generation();
+                   image.immutable_generation() &&
+               bound_image_immutable_ranges.size() ==
+                   immutable_ranges.size() &&
+               std::equal(bound_image_immutable_ranges.begin(),
+                          bound_image_immutable_ranges.end(),
+                          immutable_ranges.begin(), immutable_ranges.end());
     }
 
     std::mutex analysis_mutex;
@@ -33146,6 +33162,8 @@ struct detail::FunctionValueAnalysisSession::Impl {
     std::uint64_t bound_image_identity = 0u;
     std::uint64_t bound_image_revision = 0u;
     std::uint64_t bound_image_immutable_generation = 0u;
+    std::vector<katana::io::ImageImmutableRange>
+        bound_image_immutable_ranges;
 };
 
 detail::FunctionValueAnalysisSession::FunctionValueAnalysisSession(
