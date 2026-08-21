@@ -736,16 +736,25 @@ OptimizationPipelineReport optimize_program(
             if (options.capture_dumps) {
                 pass_report.before = emit_ir_text(program);
             }
+            auto& analysis_executor =
+                katana::analysis::global_analysis_executor();
             if (program.size() > 1u &&
-                katana::analysis::global_analysis_executor().maximum_jobs() >
-                    1u) {
+                analysis_executor.maximum_jobs() > 1u &&
+                !analysis_executor.current_thread_is_worker()) {
                 // Functions are disjoint mutable roots. Store each result at
                 // its stable index and fold changes in index order after the
                 // batch, keeping reports deterministic while using the
-                // process-wide executor already used by analysis.
+                // process-wide executor already used by analysis. Do not
+                // create a nested optimizer batch from an executor worker:
+                // help-while-waiting may otherwise enter another outer
+                // analysis item, recursively nesting batches until the host
+                // stack is exhausted. The surrounding analysis batch already
+                // supplies parallelism in that case.
                 std::vector<OptimizationResult> function_results(program.size());
                 katana::analysis::parallel_analysis_for(
+                    analysis_executor,
                     program.size(),
+                    analysis_executor.maximum_jobs(),
                     [&](const std::size_t index) {
                         function_results[index] = pass(program[index]);
                     });
