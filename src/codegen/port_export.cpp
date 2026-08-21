@@ -22348,9 +22348,16 @@ NativePortProgramIndex build_native_port_program_index(
     const auto append_function_edge =
         [&](const std::uint32_t source_entry,
             const std::uint32_t target_address) {
+            // An exact function entry is already the canonical graph node.
+            // Overlapping resume/function views may also own its first
+            // instruction, but those materialization aliases do not make the
+            // callee identity ambiguous.
+            if (index.functions_by_entry.contains(target_address)) {
+                index.outgoing_function_entries[source_entry].insert(
+                    target_address);
+                return true;
+            }
             std::set<std::uint32_t> target_owners;
-            if (index.function_entries.contains(target_address))
-                target_owners.insert(target_address);
             if (const auto owners =
                     index.entry_owners.find(target_address);
                 owners != index.entry_owners.end())
@@ -22388,6 +22395,15 @@ NativePortProgramIndex build_native_port_program_index(
         return control->source_address;
     };
     for (const auto& function : program) {
+        std::set<std::uint32_t> local_addresses;
+        for (const auto& block : function.blocks) {
+            local_addresses.insert(block.start_address);
+            for (const auto resume :
+                 detail::native_aot_internal_resume_entries(block))
+                local_addresses.insert(resume);
+            for (const auto& instruction : block.instructions)
+                local_addresses.insert(instruction.source_address);
+        }
         for (const auto callee : function.direct_callees) {
             if (!append_function_edge(function.entry_address, callee))
                 mark_incomplete_outgoing(
@@ -22397,6 +22413,13 @@ NativePortProgramIndex build_native_port_program_index(
         }
         for (const auto& block : function.blocks) {
             for (const auto successor : block.successors) {
+                // A successor already materialized in this exact IR view is
+                // an intra-function CFG edge. Other overlapping views of the
+                // same block are not alternate runtime destinations and must
+                // not turn the local edge into an incomplete function edge.
+                if (local_addresses.contains(successor) &&
+                    !index.functions_by_entry.contains(successor))
+                    continue;
                 if (!append_function_edge(function.entry_address, successor))
                     mark_incomplete_outgoing(
                         function.entry_address,
@@ -22404,7 +22427,15 @@ NativePortProgramIndex build_native_port_program_index(
                         block_control_address(block), successor);
             }
             for (const auto& instruction : block.instructions) {
+                const bool call =
+                    instruction.operation == katana::ir::Operation::Call ||
+                    instruction.operation ==
+                        katana::ir::Operation::CallRegister;
                 if (instruction.target_address.has_value() &&
+                    (call ||
+                     !local_addresses.contains(*instruction.target_address) ||
+                     index.functions_by_entry.contains(
+                         *instruction.target_address)) &&
                     !append_function_edge(function.entry_address,
                                           *instruction.target_address))
                     mark_incomplete_outgoing(
@@ -22414,6 +22445,9 @@ NativePortProgramIndex build_native_port_program_index(
                         instruction.source_address,
                         *instruction.target_address);
                 for (const auto target : instruction.resolved_targets) {
+                    if (!call && local_addresses.contains(target) &&
+                        !index.functions_by_entry.contains(target))
+                        continue;
                     if (!append_function_edge(function.entry_address, target))
                         mark_incomplete_outgoing(
                             function.entry_address,
@@ -22593,11 +22627,11 @@ void rehydrate_native_disc_program_index_checkpoint(
         throw std::runtime_error(
             "native-disc-program-index-checkpoint-noncanonical");
     for (const auto& [source, targets] : outgoing_function_entries) {
-        if (!index.function_entries.contains(source) ||
+        if (!index.functions_by_entry.contains(source) ||
             std::any_of(
                 targets.begin(), targets.end(),
                 [&](const auto target) {
-                    return !index.function_entries.contains(target);
+                    return !index.functions_by_entry.contains(target);
                 }))
             throw std::runtime_error(
                 "native-disc-program-index-checkpoint-function-mismatch");
@@ -22606,7 +22640,7 @@ void rehydrate_native_disc_program_index_checkpoint(
             checkpoint.incomplete_outgoing_function_entries.begin(),
             checkpoint.incomplete_outgoing_function_entries.end(),
             [&](const auto entry) {
-                return !index.function_entries.contains(entry);
+                return !index.functions_by_entry.contains(entry);
             }))
         throw std::runtime_error(
             "native-disc-program-index-checkpoint-frontier-mismatch");

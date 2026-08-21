@@ -13,7 +13,11 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 3u;
+// Schema 5 invalidates checkpoints whose replacement-reachability owner set
+// treated intra-function edges across overlapping IR views as ambiguous
+// outgoing function transfers or admitted non-materialized analysis entries
+// as canonical graph nodes.
+inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 5u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
     256u * 1024u * 1024u;

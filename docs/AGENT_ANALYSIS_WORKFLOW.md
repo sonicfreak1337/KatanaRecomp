@@ -109,6 +109,17 @@ aus einem Resume-Checkpoint, ohne dass die aktuelle IR-/CFA-Sicht den
 Einzeltransfer reproduzieren kann, bleibt der Task `Blocked` und fordert einen
 frischen Detailbeweis statt eine scheinbar konkrete Reparatur zu erfinden.
 
+Replacement-Reachability arbeitet auf Funktionskanten, nicht auf jedem
+einzelnen CFG-Nachfolger. Ein Branch-/Jump-Ziel, das bereits in derselben
+materialisierten IR-Funktionssicht liegt, bleibt deshalb lokal, selbst wenn
+weitere Resume-Sichten denselben Block ebenfalls enthalten. Echte Calls,
+Ziele ausserhalb der Sicht und `has_indirect_successor` bleiben dagegen
+fail-closed ausgehende beziehungsweise residuale Kanten. Exakte,
+materialisierte Funktionsentries benennen ihren kanonischen Zielknoten auch
+dann eindeutig, wenn ueberlappende Sichten die erste Instruktion mitbesitzen.
+Ein nur analysierter, aber nicht materialisierter Entry bleibt dagegen
+unbewiesen.
+
 Stabile IDs sind in derselben Welt kollisionsgeprueft. Unbekannte Enumwerte,
 ueberlaufende Budgets, unvollstaendige Beziehungen und widerspruechliche
 Identitaeten machen das Artefakt ungueltig.
