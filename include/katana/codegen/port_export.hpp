@@ -203,6 +203,12 @@ struct NativeDiscAnalysisResult {
     // export from repeating CFA/FVA, latent discovery or hardware closure.
     std::shared_ptr<NativeDiscAnalysisState> admitted_state;
     NativeDiscAnalysisArtifactIdentity analysis_artifact_identity;
+    // Present only when --resume accepted a prior analyzer generation across
+    // a strictly revalidated NativePort/admission-only identity change. The
+    // CLI uses it to bind the old World/Ledger as input while committing the
+    // freshly published current generation under analysis_artifact_identity.
+    std::optional<NativeDiscAnalysisArtifactIdentity>
+        resumed_from_analysis_artifact_identity;
     // Present only when an analysis archive was explicitly requested or the
     // positive product cache is enabled, and only for a complete, positive,
     // source-bound analysis. With positive reuse disabled these bytes are an

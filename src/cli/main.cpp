@@ -9871,15 +9871,28 @@ int export_port_project(const std::filesystem::path& source_path,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - analysis_started)
                 .count());
-        if (previous_world.has_value() &&
-            (!previous_analysis_artifact_id.has_value() ||
-             *previous_analysis_artifact_id !=
-                 analyzed.analysis_artifact_identity.key ||
-             !materialization_world_matches_analysis_identity(
-                 *previous_world, analyzed.analysis_artifact_identity)))
-            throw std::invalid_argument(
-                "--resume verweigert: der vorhandene Materialization-World "
-                "ist nicht exakt an die aktuelle Analyseidentitaet gebunden.");
+        if (previous_world.has_value()) {
+            const bool exact_generation =
+                previous_analysis_artifact_id.has_value() &&
+                *previous_analysis_artifact_id ==
+                    analyzed.analysis_artifact_identity.key &&
+                materialization_world_matches_analysis_identity(
+                    *previous_world,
+                    analyzed.analysis_artifact_identity);
+            const bool revalidated_admission_generation =
+                previous_analysis_artifact_id.has_value() &&
+                analyzed.resumed_from_analysis_artifact_identity.has_value() &&
+                *previous_analysis_artifact_id ==
+                    analyzed.resumed_from_analysis_artifact_identity->key &&
+                materialization_world_matches_analysis_identity(
+                    *previous_world,
+                    *analyzed.resumed_from_analysis_artifact_identity);
+            if (!exact_generation && !revalidated_admission_generation)
+                throw std::invalid_argument(
+                    "--resume verweigert: der vorhandene "
+                    "Materialization-World ist weder an die aktuelle noch "
+                    "an die revalidierte Eingabe-Analysegeneration gebunden.");
+        }
         if (runtime_import.has_value())
             validate_runtime_frontier_import_binding(runtime_import.value(), analyzed);
         const auto runtime_observations = runtime_import.has_value()

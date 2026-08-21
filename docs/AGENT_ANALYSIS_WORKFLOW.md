@@ -50,6 +50,19 @@ ist, bleiben ersetzte Artefakte als explizite Rollbackgeneration gesichert;
 ein Fehler bei World, Report, Archiv oder Ledger stellt die vorherige
 committed Generation wieder her.
 
+Eine ausschliessliche Native-Port-/Provideraenderung darf den statischen
+CFA-/FVA-Checkpoint admission-only weiterverwenden. Katana rekonstruiert dazu
+den alten Analysevertrag mit den gespeicherten Native-Port-Identitaeten und
+verlangt fuer alle uebrigen Vertragsfelder exakte Gleichheit. Danach werden
+aktuelle GDI, Image-Key, IR, externe Roots und Latent-Sourcebindungen erneut
+geprueft. Der analyzergebundene kombinierte Hardware-Audit bleibt Teil des
+validierten Checkpoints; Native-Port-Programindex, Closure, Gaps,
+Replacement-Reachability, World und Entscheidung werden dagegen unter der
+neuen Definition frisch berechnet. Der alte World-/Ledger-Key ist dabei nur
+die gebundene Eingabegeneration. Publiziert wird stets eine neue Generation
+mit der aktuellen Native-Port-Identitaet. Feldabweichungen werden als
+feldgenaue `admission-replay-*`-Rejects gemeldet.
+
 ## Naechste Arbeitseinheit und Evidenz
 
 ```powershell
@@ -83,6 +96,15 @@ raet weder Groesse noch Providersemantik. Ebenso bleibt ein fehlender
 ABI-/Register-/State-/Side-Effect-Beweis als
 `provider-result-or-state-proof=missing` sichtbar; ein Agent darf daraus
 keine Providersemantik erfinden.
+
+Fuer bounded, linear geschlossene Owner mit hoechstens 16 Bloecken und 64
+Instruktionen liefert die Aufgabe zusaetzlich eine fail-closed symbolische
+Stateprojektion. `owner-state-transfer` beschreibt die nachweisbaren
+Register-/Statusausgaenge, `owner-write-effects` die geordneten 32-Bit-Writes
+einschliesslich der vom Hardware-Audit belegten Region und Registerfamilie.
+Snapshot-Literale bleiben dabei explizit revalidierungspflichtig. Nichtlineare
+Kontrollfluesse, unbekannte Operationen oder ueberschrittene Textbudgets
+erzeugen `owner-state-projection=unavailable` statt einer geratenen Semantik.
 
 Die Entscheidung `BuildPort` bedeutet: alle handlungsfaehigen Frontiers sind
 durch immutable, identitaetsgebundene statische Evidenz geschlossen oder
