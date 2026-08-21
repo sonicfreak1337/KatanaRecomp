@@ -25523,6 +25523,88 @@ NativeDiscAnalysisArtifactIdentity native_disc_analysis_identity(
     return identity;
 }
 
+NativeDiscAnalysisArtifactIdentity
+native_disc_analysis_resume_manifest_identity(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const PortExportOptions& options,
+    const std::span<const std::uint32_t> external_primary_roots,
+    const PortAnalysisMode analysis_mode) {
+    validate_game_project_runtime_image_payloads(
+        options.game_project,
+        options.game_project_runtime_image_payloads,
+        options.native_port_definition);
+    validate_native_port_bootstrap_write_payloads(
+        options.native_port_definition,
+        options.native_port_bootstrap_write_payloads);
+    auto image = katana::platform::make_dreamcast_disc_executable(
+        disc,
+        katana::platform::DreamcastDiscExecutionPath::NativeSystemBootstrap);
+    if (options.game_project != nullptr)
+        apply_game_project_runtime_images(
+            image,
+            *options.game_project,
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition);
+    const auto pre_bootstrap_image = image;
+    apply_native_port_post_aot_view(
+        image,
+        options.native_port_definition,
+        options.game_project,
+        options.native_port_bootstrap_write_payloads);
+    if (options.game_project != nullptr) {
+        validate_game_project_image_contract(
+            *options.game_project,
+            image,
+            options.game_project_runtime_image_payloads,
+            options.native_port_definition,
+            options.native_port_bootstrap_write_payloads);
+        apply_game_project_symbols(
+            image,
+            *options.game_project,
+            options.native_port_definition == nullptr,
+            options.native_port_definition);
+    }
+    if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly)
+        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
+    bind_post_bootstrap_immutable_image_ranges(
+        image, options.native_port_definition, options.game_project);
+    for (const auto root : external_primary_roots)
+        image.add_entry_point(root);
+    const auto overrides = port_analysis_overrides(
+        options.game_project, options.native_port_definition, image);
+    const auto project_identity =
+        katana::platform::dreamcast_disc_project_identity(disc);
+    const auto boot_sha256 = executable_image_range_sha256(
+        pre_bootstrap_image,
+        katana::platform::dreamcast_disc_boot_address,
+        disc.boot_file.size());
+    const auto recipe = katana::runtime::make_disc_install_recipe(
+        *disc.source, project_identity, boot_sha256);
+    const auto analysis_contract_identity =
+        latent_primary_root_seed_semantic_identity(
+            options,
+            project_identity,
+            disc.data_track_lba,
+            disc.extent_lba_bias,
+            analysis_mode);
+    auto identity = native_disc_analysis_identity(
+        options,
+        recipe,
+        project_identity,
+        analysis_contract_identity,
+        {},
+        analysis_mode,
+        disc.data_track_lba,
+        disc.extent_lba_bias);
+    identity.image_analysis_key = make_boot_analysis_cache_key(
+        image,
+        overrides ? &*overrides : nullptr,
+        boot_analysis_semantic_contract_identity(options),
+        options.analysis_cache_implementation_identity);
+    identity.key = native_disc_analysis_artifact_identity_key(identity);
+    return identity;
+}
+
 bool validate_native_disc_primary_artifact(
     const PreparedBootAnalysisArtifact& primary,
     const katana::io::ExecutableImage& image) noexcept {

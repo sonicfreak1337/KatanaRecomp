@@ -320,6 +320,17 @@ analyze_native_disc_port(
     const PortExportOptions& options,
     PortAnalysisMode analysis_mode = PortAnalysisMode::PlatformAbi);
 
+// Computes only the stable, pre-analysis identity of the exact materialized
+// disc/options contract. It performs no CFA/FVA, admission, World generation
+// or completeness decision. A caller may compare it with an authenticated
+// committed manifest to identify a true no-op resume.
+[[nodiscard]] NativeDiscAnalysisArtifactIdentity
+native_disc_analysis_resume_manifest_identity(
+    const katana::platform::DreamcastDiscBoot& disc,
+    const PortExportOptions& options,
+    std::span<const std::uint32_t> external_primary_roots,
+    PortAnalysisMode analysis_mode = PortAnalysisMode::PlatformAbi);
+
 // Bring-up export from an immutable private boot-executable artifact. The
 // generated distributable contains native AOT plus the hash/layout recipe, but
 // never copies the artifact's retail boot bytes.

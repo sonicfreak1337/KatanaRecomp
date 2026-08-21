@@ -8605,12 +8605,46 @@ AgentIterationDelta measure_agent_iteration(
 struct AgentSessionLedgerState final {
     std::optional<std::uint64_t> previous_wall_time_ms;
     std::string analysis_artifact_id;
+    std::string producer_identity;
     std::string materialization_world_sha256;
     std::string materialization_world_json_sha256;
     std::string analysis_report_sha256;
     std::optional<std::string> analysis_archive_sha256;
     bool committed_generation = false;
 };
+
+std::string agent_session_producer_identity(
+    const katana::cli::PortExportImplementationIdentities& identities) {
+    std::ostringstream material;
+    const auto append = [&](const std::string_view value) {
+        material << value.size() << ':' << value << ';';
+    };
+    append("katana-agent-session-producer-v1");
+    append(KATANA_RECOMP_VERSION);
+    append(katana::build_contract::katana_git_commit);
+    append(identities.analysis);
+    append(identities.analysis_cache);
+    append(identities.codegen);
+    append(identities.whole_export);
+    append(std::to_string(
+        katana::codegen::native_disc_analysis_artifact_schema_version));
+    append(std::to_string(
+        katana::agent::materialization_world_schema_version));
+    append(std::to_string(
+        katana::agent::materialization_world_binary_schema_version));
+    return katana::io::sha256_bytes(material.str());
+}
+
+bool same_noop_analysis_manifest_identity(
+    katana::codegen::NativeDiscAnalysisArtifactIdentity committed,
+    katana::codegen::NativeDiscAnalysisArtifactIdentity current) {
+    // Schema-6 checkpoints deliberately omit downstream codegen identity.
+    // The terminal ledger producer identity binds the current codegen/World
+    // contract independently.
+    committed.codegen_implementation_identity.clear();
+    current.codegen_implementation_identity.clear();
+    return committed == current;
+}
 
 AgentSessionLedgerState validate_agent_session_ledger(
     const std::string_view ledger) {
@@ -8647,6 +8681,17 @@ AgentSessionLedgerState validate_agent_session_ledger(
         "runtime_frontiers_imported", "next_action",
         "materialization_world_sha256", "materialization_world_json_sha256",
         "analysis_report_sha256", "analysis_archive_sha256"};
+    static constexpr std::array<std::string_view, 27u> schema_four_keys{
+        "schema", "kind", "task_id", "analysis_artifact_id", "commit",
+        "result", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
+        "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
+        "resolved_incomplete_roots", "timing_kind",
+        "telemetry_analysis_wall_time_ms", "telemetry_analysis_wall_time_delta_ms",
+        "boot_analysis_cache_hit", "boot_analysis_pipeline_runs",
+        "latent_root_seed_cache_hit", "analysis_artifact_cache_hit",
+        "runtime_frontiers_imported", "next_action", "producer_identity",
+        "materialization_world_sha256", "materialization_world_json_sha256",
+        "analysis_report_sha256", "analysis_archive_sha256"};
     static constexpr std::array<std::string_view, 8u> numeric_keys{
         "task_id", "resolved_frontiers", "new_frontiers", "new_runtime_hints",
         "proof_upgrades", "proof_downgrades", "new_incomplete_roots",
@@ -8666,6 +8711,7 @@ AgentSessionLedgerState validate_agent_session_ledger(
         parse_strict_json_object(line, object);
         const auto schema = strict_json_u32(object, "schema");
         state.committed_generation = false;
+        state.producer_identity.clear();
         state.materialization_world_sha256.clear();
         state.materialization_world_json_sha256.clear();
         state.analysis_report_sha256.clear();
@@ -8691,8 +8737,12 @@ AgentSessionLedgerState validate_agent_session_ledger(
                 (delta->kind != StrictJsonValueKind::Number &&
                  delta->kind != StrictJsonValueKind::Null))
                 throw std::invalid_argument("Agent-Session-Ledger besitzt ein ungueltiges Zeitdelta.");
-        } else if (schema == 3u) {
-            require_strict_json_keys(object, schema_three_keys);
+        } else if (schema == 3u || schema == 4u) {
+            require_strict_json_keys(
+                object,
+                schema == 3u
+                    ? std::span<const std::string_view>(schema_three_keys)
+                    : std::span<const std::string_view>(schema_four_keys));
             if (strict_json_identifier(object, "timing_kind", 64u) !=
                 "nondeterministic-telemetry")
                 throw std::invalid_argument(
@@ -8726,6 +8776,9 @@ AgentSessionLedgerState validate_agent_session_ledger(
             } else {
                 state.analysis_archive_sha256.reset();
             }
+            if (schema == 4u)
+                state.producer_identity = strict_json_identifier(
+                    object, "producer_identity", 64u);
             state.committed_generation = true;
         } else {
             throw std::invalid_argument("Agent-Session-Ledger besitzt eine unbekannte Schema-Version.");
@@ -8755,6 +8808,7 @@ struct CommittedAgentGeneration final {
     katana::agent::ExecutableMaterializationWorld world;
     std::string analysis_artifact_id;
     std::string analysis_archive;
+    std::string producer_identity;
 };
 
 CommittedAgentGeneration load_committed_agent_generation(
@@ -8802,7 +8856,8 @@ CommittedAgentGeneration load_committed_agent_generation(
                 "NativeDisc-Analysearchiv.");
     }
     return {
-        std::move(world), state.analysis_artifact_id, std::move(archive)};
+        std::move(world), state.analysis_artifact_id, std::move(archive),
+        state.producer_identity};
 }
 
 void append_agent_session_ledger(
@@ -8816,7 +8871,8 @@ void append_agent_session_ledger(
     const std::string_view materialization_world_sha256,
     const std::string_view materialization_world_json_sha256,
     const std::string_view analysis_report_sha256,
-    const std::optional<std::string_view> analysis_archive_sha256) {
+    const std::optional<std::string_view> analysis_archive_sha256,
+    const std::string_view producer_identity) {
     const auto agent_root = output_root / ".katana" / "agent";
     ensure_safe_port_directory_chain(
         output_root, agent_root, "Privates Agent-Session-Verzeichnis");
@@ -8853,7 +8909,7 @@ void append_agent_session_ledger(
                 ? "improved"
                 : "no_progress";
     std::ostringstream line;
-    line << "{\"schema\":3,\"kind\":\"katana-agent-session\""
+    line << "{\"schema\":4,\"kind\":\"katana-agent-session\""
          << ",\"task_id\":" << task_id
          << ",\"analysis_artifact_id\":"
          << katana::io::quote_json(analyzed.analysis_artifact_identity.key)
@@ -8891,6 +8947,8 @@ void append_agent_session_ledger(
          << imported_runtime_frontiers
          << ",\"next_action\":"
          << katana::io::quote_json(analyzed.agent_decision)
+         << ",\"producer_identity\":"
+         << katana::io::quote_json(producer_identity)
          << ",\"materialization_world_sha256\":"
          << katana::io::quote_json(materialization_world_sha256)
          << ",\"materialization_world_json_sha256\":"
@@ -9837,6 +9895,7 @@ int export_port_project(const std::filesystem::path& source_path,
             previous_world;
         std::optional<std::string> previous_analysis_artifact_id;
         std::string previous_analysis_archive;
+        std::string previous_producer_identity;
         if (resume_analysis) {
             if (!safe_regular_port_directory_exists(
                     absolute_output,
@@ -9851,6 +9910,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 std::move(committed.analysis_artifact_id);
             previous_analysis_archive =
                 std::move(committed.analysis_archive);
+            previous_producer_identity =
+                std::move(committed.producer_identity);
         }
         std::optional<RuntimeFrontierImport> runtime_import;
         if (runtime_frontier_import_path.has_value())
@@ -9865,6 +9926,50 @@ int export_port_project(const std::filesystem::path& source_path,
                     previous_analysis_archive.size());
             analysis_options.resume_analysis_artifact_key =
                 *previous_analysis_artifact_id;
+        }
+        const auto current_producer_identity =
+            agent_session_producer_identity(implementation_identities);
+        if (resume_analysis && !runtime_import.has_value() &&
+            !previous_analysis_archive.empty() &&
+            previous_analysis_artifact_id.has_value() &&
+            previous_producer_identity == current_producer_identity) {
+            const auto parsed_manifest =
+                katana::codegen::parse_native_disc_analysis_artifact(
+                        *previous_analysis_artifact_id,
+                        std::span(
+                            reinterpret_cast<const std::uint8_t*>(
+                                previous_analysis_archive.data()),
+                            previous_analysis_archive.size()));
+            if (parsed_manifest.state ==
+                    katana::codegen::
+                        NativeDiscAnalysisArtifactState::Hit) {
+                const auto current_manifest =
+                    katana::codegen::
+                        native_disc_analysis_resume_manifest_identity(
+                            *verified_native_disc,
+                            analysis_options,
+                            parsed_manifest.artifact.
+                                external_primary_roots,
+                            analysis_mode);
+                if (same_noop_analysis_manifest_identity(
+                        parsed_manifest.artifact.identity,
+                        current_manifest) &&
+                    previous_world.has_value() &&
+                    materialization_world_matches_analysis_identity(
+                        *previous_world,
+                        parsed_manifest.artifact.identity)) {
+                    const auto report_path =
+                        absolute_output / "native-disc-analysis.json";
+                    std::cout
+                        << "KATANA_ANALYZE_PORT_NOOP_RESUME "
+                        << report_path.string() << '\n'
+                        << "KATANA_ANALYZE_PORT_COMPLETE "
+                        << report_path.string() << '\n'
+                        << std::flush;
+                    telemetry_run.complete();
+                    return 0;
+                }
+            }
         }
         const auto analysis_started = std::chrono::steady_clock::now();
         auto analyzed =
@@ -10123,7 +10228,8 @@ int export_port_project(const std::filesystem::path& source_path,
             report_sha256,
             analysis_archive_sha256.has_value()
                 ? std::optional<std::string_view>(*analysis_archive_sha256)
-                : std::nullopt);
+                : std::nullopt,
+            current_producer_identity);
         publication.commit();
         std::cout << "KATANA_ANALYZE_PORT_COMPLETE "
                   << report_path.string() << '\n'
