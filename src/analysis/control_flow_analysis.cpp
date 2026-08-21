@@ -458,7 +458,8 @@ struct RecursiveWorkingIndex final {
 void classify_dynamic_sites(
     std::span<const katana::sh4::DisassemblyLine> lines,
     const katana::io::ExecutableImage& image,
-    std::vector<IndirectControlFlowResolution>& resolutions);
+    std::vector<IndirectControlFlowResolution>& resolutions,
+    std::span<const ResolvedControlFlowEdge> resolved_edges);
 
 // CFA consumes Recursive's monotone journal through stable function-owner
 // shards (and bounded orphan pages). A warm round rebuilds only owners
@@ -591,6 +592,7 @@ class IncrementalCfaScanCache final {
                 dirty_component_starts.insert(shard_start(address));
         }
 
+        std::set<std::uint32_t> rebuilt_component_starts;
         for (const auto requested_begin : dirty_component_starts) {
             const auto [begin, end] = shard_bounds(requested_begin);
             if (components_.contains(begin)) continue;
@@ -645,18 +647,10 @@ class IncrementalCfaScanCache final {
                         local.static_return_continuations.end()));
                 shard_begin = index;
             }
-            telemetry.local_control_flow_instruction_visits +=
-                component.lines.size();
-            classify_dynamic_sites(component.lines,
-                                   image,
-                                   component.local.indirect_control_flow);
             for (const auto& resolution :
                  component.local.indirect_control_flow) {
                 last_changed_dispatches_.insert(
                     resolution.instruction_address);
-                resolution_index_.insert_or_assign(
-                    resolution.instruction_address, resolution);
-                ++telemetry.dispatch_index_entries_rebuilt;
             }
             for (const auto& continuation :
                  component.local.static_return_continuations) {
@@ -668,6 +662,7 @@ class IncrementalCfaScanCache final {
                 ++telemetry.local_control_flow_result_entries_rebuilt;
             }
             components_.insert_or_assign(begin, std::move(component));
+            rebuilt_component_starts.insert(begin);
         }
 
         refresh_runtime_copy_dependencies(image, telemetry);
@@ -716,6 +711,64 @@ class IncrementalCfaScanCache final {
                 recognition.jump_table.has_value())
                 recognition_index_.insert_or_assign(
                     address, std::move(recognition));
+        }
+
+        // Dynamic-site classification is deliberately delayed until the
+        // recognition index for this incremental round is current. A fully
+        // resolved immutable BRAF table is intra-function CFG evidence: its
+        // case blocks execute with the register state established before the
+        // dispatch. Omitting those successors made the bounded writer slice
+        // treat every case as a fresh root and lose otherwise exact
+        // callee-saved PC-literal targets. Candidate-only or incomplete
+        // tables remain excluded, so missing disassembly never manufactures
+        // a predecessor.
+        for (const auto begin : rebuilt_component_starts) {
+            auto component_entry = components_.find(begin);
+            if (component_entry == components_.end()) continue;
+            auto& component = component_entry->second;
+            std::vector<ResolvedControlFlowEdge> recognized_edges;
+            auto recognition = recognition_index_.lower_bound(
+                component.begin);
+            while (recognition != recognition_index_.end() &&
+                   recognition->first <= component.end) {
+                if (recognition->second.jump_table.has_value()) {
+                    const auto& table =
+                        *recognition->second.jump_table;
+                    const auto evidence =
+                        table.evidence == ControlFlowEvidence::Unresolved
+                            ? ControlFlowEvidence::ProvenComplete
+                            : table.evidence;
+                    if (table.dispatch_kind ==
+                            JumpTableDispatchKind::Jump &&
+                        table.resolved && !table.aot_candidates_only &&
+                        control_flow_evidence_complete(evidence)) {
+                        for (const auto& entry : table.entries) {
+                            if (!entry.accepted) continue;
+                            recognized_edges.push_back(
+                                ResolvedControlFlowEdge{
+                                    table.dispatch_address,
+                                    entry.target,
+                                    ResolvedControlFlowKind::Jump,
+                                    false,
+                                    evidence});
+                        }
+                    }
+                }
+                ++recognition;
+            }
+            telemetry.local_control_flow_instruction_visits +=
+                component.lines.size();
+            classify_dynamic_sites(
+                component.lines,
+                image,
+                component.local.indirect_control_flow,
+                recognized_edges);
+            for (const auto& resolution :
+                 component.local.indirect_control_flow) {
+                resolution_index_.insert_or_assign(
+                    resolution.instruction_address, resolution);
+                ++telemetry.dispatch_index_entries_rebuilt;
+            }
         }
     }
 
@@ -1270,6 +1323,7 @@ struct BackwardSlice {
     // though it is not, by itself, the memory-writer shape used by the dynamic
     // origin classifier.
     bool path_incomplete = false;
+    bool budget_exhausted = false;
     bool writer_not_memory_load = false;
     bool preceding_call = false;
 };
@@ -1308,7 +1362,9 @@ WriterSliceIndex build_writer_slice_index(const std::span<const BasicBlock> bloc
 
 BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
                                    const std::uint32_t before_address,
-                                   const std::uint8_t register_index) {
+                                   const std::uint8_t register_index,
+                                   const std::size_t instruction_budget = 64u,
+                                   const std::size_t work_state_budget = 128u) {
     BackwardSlice result;
     const auto initial = index.locations.find(before_address);
     if (initial == index.locations.end()) {
@@ -1323,11 +1379,15 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
     std::deque<Work> pending{
         {initial->second.block, initial->second.before_index, 0u}};
     std::set<std::pair<std::uint32_t, std::size_t>> visited;
-    constexpr std::size_t instruction_budget = 64u;
     while (!pending.empty()) {
         const auto work = pending.front();
         pending.pop_front();
         if (!visited.emplace(work.block, work.before_index).second) continue;
+        if (visited.size() > work_state_budget) {
+            result.path_incomplete = true;
+            result.budget_exhausted = true;
+            break;
+        }
         const auto found = index.by_start.find(work.block);
         if (found == index.by_start.end()) {
             result.path_incomplete = true;
@@ -1339,6 +1399,7 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
         for (std::size_t line_index = work.before_index; line_index-- > 0u;) {
             if (++depth > instruction_budget) {
                 result.path_incomplete = true;
+                result.budget_exhausted = true;
                 writer_found = true;
                 break;
             }
@@ -1415,7 +1476,25 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
     constexpr std::size_t maximum_chain_depth = 8u;
     for (std::size_t depth = 0u; depth < maximum_chain_depth; ++depth) {
         if (!visited.emplace(before_address, register_index).second) return result;
-        const auto slice = bounded_writer_slice(index, before_address, register_index);
+        auto slice = bounded_writer_slice(
+            index, before_address, register_index);
+        // Keep the common 64-instruction slice cheap. Compiler-generated
+        // loops often hoist immutable call literals into SH-C nonvolatile
+        // registers before a large loop body, however, and a backedge then
+        // makes every incoming path part of the proof. Retry only that ABI-
+        // eligible shape with a second hard bound; unknown predecessors,
+        // conflicting writers and either budget ending still fail closed.
+        if (slice.budget_exhausted && register_index >= 8u &&
+            register_index <= 14u) {
+            constexpr std::size_t extended_instruction_budget = 256u;
+            constexpr std::size_t extended_work_state_budget = 512u;
+            slice = bounded_writer_slice(
+                index,
+                before_address,
+                register_index,
+                extended_instruction_budget,
+                extended_work_state_budget);
+        }
         result.preceding_call = result.preceding_call || slice.preceding_call;
         if (slice.preceding_call) {
             result.preceding_call_transport_abi_proven =
@@ -1606,8 +1685,9 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
 void classify_dynamic_sites(
     const std::span<const katana::sh4::DisassemblyLine> lines,
     const katana::io::ExecutableImage& image,
-    std::vector<IndirectControlFlowResolution>& resolutions) {
-    const auto blocks = build_basic_blocks(lines);
+    std::vector<IndirectControlFlowResolution>& resolutions,
+    const std::span<const ResolvedControlFlowEdge> resolved_edges) {
+    const auto blocks = build_basic_blocks(lines, resolved_edges);
     const auto writer_slice_index = build_writer_slice_index(blocks);
     for (auto& resolution : resolutions) {
         if (resolution.origin_class != IndirectControlFlowOriginClass::Table &&
