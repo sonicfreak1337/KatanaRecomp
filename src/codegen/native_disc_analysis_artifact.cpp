@@ -514,7 +514,6 @@ void write_identity(Writer& output,
     output.text(identity.native_port_artifact_identity);
     output.text(identity.analysis_implementation_identity);
     output.text(identity.analysis_cache_implementation_identity);
-    output.text(identity.codegen_implementation_identity);
     output.u32(identity.analyzer_abi);
     output.u32(identity.backend_abi);
     output.u32(identity.analysis_mode);
@@ -535,7 +534,6 @@ NativeDiscAnalysisArtifactIdentity read_identity(Reader& input) {
     identity.native_port_artifact_identity = input.text();
     identity.analysis_implementation_identity = input.text();
     identity.analysis_cache_implementation_identity = input.text();
-    identity.codegen_implementation_identity = input.text();
     identity.analyzer_abi = input.u32();
     identity.backend_abi = input.u32();
     identity.analysis_mode = input.u32();
@@ -798,8 +796,10 @@ std::string native_disc_analysis_artifact_identity_key(
         material, identity.analysis_implementation_identity);
     append_identity_key_field(
         material, identity.analysis_cache_implementation_identity);
-    append_identity_key_field(
-        material, identity.codegen_implementation_identity);
+    // Product code generation is downstream from this checkpoint. Reuse
+    // always replays current admission and runtime-frontier binding still
+    // compares the explicit codegen identity; task/World-only edits therefore
+    // must not evict the expensive analyzer closure.
     append_identity_key_value(material, identity.analyzer_abi);
     append_identity_key_value(material, identity.backend_abi);
     append_identity_key_value(material, identity.analysis_mode);
@@ -824,13 +824,11 @@ bool native_disc_analysis_artifact_checkpointable(
                !artifact.identity.native_port_artifact_identity.empty() &&
                !artifact.identity.analysis_implementation_identity.empty() &&
                !artifact.identity.analysis_cache_implementation_identity.empty() &&
-               !artifact.identity.codegen_implementation_identity.empty() &&
                artifact.identity.analyzer_abi != 0u &&
                artifact.identity.backend_abi != 0u &&
                artifact.entry_address != 0u && artifact.boot_address != 0u &&
                artifact.boot_size != 0u &&
-               artifact.backend_admitted &&
-               boot_analysis_artifact_cacheable(artifact.primary) &&
+               boot_analysis_artifact_checkpointable(artifact.primary) &&
                sorted_unique(artifact.external_primary_roots) &&
                sorted_unique(artifact.native_resume_entries) &&
                canonical_program_index_checkpoint(
@@ -857,6 +855,7 @@ bool native_disc_analysis_artifact_checkpointable(
 bool native_disc_analysis_artifact_product_admissible(
     const NativeDiscAnalysisArtifact& artifact) noexcept {
     return native_disc_analysis_artifact_checkpointable(artifact) &&
+           artifact.backend_admitted &&
            artifact.guarded_inventory_complete &&
            artifact.native_hardware_closure_complete &&
            artifact.replacement_reachability_proven &&
@@ -876,7 +875,7 @@ std::vector<std::uint8_t> serialize_native_disc_analysis_artifact(
 
     Writer payload(maximum_native_disc_analysis_artifact_bytes);
     write_identity(payload, artifact.identity);
-    const auto primary = serialize_boot_analysis_cache(
+    const auto primary = serialize_boot_analysis_checkpoint(
         artifact.identity.image_analysis_key, artifact.primary);
     payload.blob(primary);
     write_latent(payload, artifact.latent);
@@ -951,7 +950,7 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
                     artifact.identity))
             throw CodecError();
         decode_stage = "primary";
-        const auto primary = parse_boot_analysis_cache(
+        const auto primary = parse_boot_analysis_checkpoint(
             artifact.identity.image_analysis_key, payload.blob());
         if (primary.state != BootAnalysisCacheState::Hit) throw CodecError();
         artifact.primary = std::move(primary.artifact);

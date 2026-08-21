@@ -18,6 +18,7 @@ namespace katana::codegen {
 
 inline constexpr std::uint32_t boot_analysis_cache_schema_version = 11u;
 inline constexpr std::uint32_t boot_analysis_cache_ir_schema_version = 3u;
+inline constexpr std::uint32_t boot_analysis_checkpoint_schema_version = 1u;
 inline constexpr std::size_t maximum_boot_analysis_cache_artifact_bytes =
     256u * 1024u * 1024u;
 // A byte-bound cached program cannot prove that it did not omit a
@@ -65,6 +66,13 @@ struct BootAnalysisCacheParseResult {
 [[nodiscard]] bool boot_analysis_artifact_cacheable(
     const PreparedBootAnalysisArtifact& artifact) noexcept;
 
+// A checkpoint is a bounded, source-revalidated analyzer snapshot. Unlike the
+// positive product cache it may carry guarded or unresolved control-flow
+// evidence; those completeness facts remain data and are never upgraded by
+// serialization or replay.
+[[nodiscard]] bool boot_analysis_artifact_checkpointable(
+    const PreparedBootAnalysisArtifact& artifact) noexcept;
+
 [[nodiscard]] std::vector<std::uint8_t> serialize_boot_analysis_cache(
     std::string_view key,
     const PreparedBootAnalysisArtifact& artifact);
@@ -73,6 +81,17 @@ struct BootAnalysisCacheParseResult {
 // current IR verification are checked separately by
 // validate_boot_analysis_cache_source_binding().
 [[nodiscard]] BootAnalysisCacheParseResult parse_boot_analysis_cache(
+    std::string_view expected_key,
+    std::span<const std::uint8_t> artifact);
+
+// Separate envelope for incomplete-but-structurally-valid analysis state.
+// Keeping this distinct from the positive cache prevents a partial checkpoint
+// from becoming product authority through a shared parser or predicate.
+[[nodiscard]] std::vector<std::uint8_t> serialize_boot_analysis_checkpoint(
+    std::string_view key,
+    const PreparedBootAnalysisArtifact& artifact);
+
+[[nodiscard]] BootAnalysisCacheParseResult parse_boot_analysis_checkpoint(
     std::string_view expected_key,
     std::span<const std::uint8_t> artifact);
 

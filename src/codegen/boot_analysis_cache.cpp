@@ -35,6 +35,8 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8u> cache_magic{
     'K', 'B', 'O', 'O', 'T', 'A', 'C', '1'};
+constexpr std::array<std::uint8_t, 8u> checkpoint_magic{
+    'K', 'B', 'O', 'O', 'T', 'C', 'P', '1'};
 constexpr std::string_view key_magic{"katana-boot-analysis-key-v1"};
 constexpr std::size_t sha256_bytes = 32u;
 constexpr std::size_t cache_header_bytes =
@@ -1393,21 +1395,44 @@ bool boot_analysis_artifact_cacheable(
         });
 }
 
-std::vector<std::uint8_t> serialize_boot_analysis_cache(
+bool boot_analysis_artifact_checkpointable(
+    const PreparedBootAnalysisArtifact& artifact) noexcept {
+    try {
+        if (artifact.lowered_program.empty() ||
+            artifact.control_flow_graph.kind !=
+                katana::analysis::AnalysisGraphKind::ControlFlow ||
+            artifact.call_graph.kind !=
+                katana::analysis::AnalysisGraphKind::CallGraph)
+            return false;
+        katana::ir::require_valid_program(artifact.lowered_program);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+namespace {
+
+using BootArtifactPredicate = bool (*)(
+    const PreparedBootAnalysisArtifact&) noexcept;
+
+std::vector<std::uint8_t> serialize_boot_analysis_envelope(
+    const std::array<std::uint8_t, 8u>& magic,
+    const std::uint32_t schema,
     const std::string_view key,
-    const PreparedBootAnalysisArtifact& artifact) {
-    if (!lowercase_sha256(key) ||
-        !boot_analysis_artifact_cacheable(artifact))
-        throw std::invalid_argument(
-            "Boot-Analysecache-Artefakt ist nicht cachebar.");
+    const PreparedBootAnalysisArtifact& artifact,
+    const BootArtifactPredicate predicate,
+    const std::string_view error) {
+    if (!lowercase_sha256(key) || !predicate(artifact))
+        throw std::invalid_argument(std::string(error));
     const auto payload = serialize_payload(artifact);
     const auto payload_sha = decode_sha256(
         katana::io::sha256_bytes(std::string_view(
             reinterpret_cast<const char*>(payload.data()),
             payload.size())));
     Writer output(maximum_boot_analysis_cache_artifact_bytes);
-    output.raw(cache_magic);
-    output.u32(boot_analysis_cache_schema_version);
+    output.raw(magic);
+    output.u32(schema);
     output.raw(decode_sha256(key));
     output.u64(static_cast<std::uint64_t>(payload.size()));
     output.raw(payload_sha);
@@ -1415,25 +1440,25 @@ std::vector<std::uint8_t> serialize_boot_analysis_cache(
     return std::move(output).finish();
 }
 
-BootAnalysisCacheParseResult parse_boot_analysis_cache(
+BootAnalysisCacheParseResult parse_boot_analysis_envelope(
+    const std::array<std::uint8_t, 8u>& magic,
+    const std::uint32_t schema,
     const std::string_view expected_key,
-    const std::span<const std::uint8_t> artifact) {
+    const std::span<const std::uint8_t> artifact,
+    const BootArtifactPredicate predicate) {
     if (!lowercase_sha256(expected_key) ||
         artifact.size() < cache_header_bytes ||
-        artifact.size() >
-            maximum_boot_analysis_cache_artifact_bytes)
+        artifact.size() > maximum_boot_analysis_cache_artifact_bytes)
         return {BootAnalysisCacheState::Corrupt, {}};
     try {
         Reader input(artifact);
-        if (!std::ranges::equal(
-                input.raw(cache_magic.size()), cache_magic))
+        if (!std::ranges::equal(input.raw(magic.size()), magic))
             throw CodecError();
-        const auto schema = input.u32();
-        if (schema != boot_analysis_cache_schema_version)
+        const auto stored_schema = input.u32();
+        if (stored_schema != schema)
             return {BootAnalysisCacheState::Miss, {}};
         if (!std::ranges::equal(
-                input.raw(sha256_bytes),
-                decode_sha256(expected_key)))
+                input.raw(sha256_bytes), decode_sha256(expected_key)))
             return {BootAnalysisCacheState::Miss, {}};
         const auto payload_size_u64 = input.u64();
         if (payload_size_u64 >
@@ -1454,11 +1479,9 @@ BootAnalysisCacheParseResult parse_boot_analysis_cache(
             throw CodecError();
         Reader payload_input(payload);
         auto parsed = parse_payload(payload_input);
-        if (!payload_input.empty() ||
-            !boot_analysis_artifact_cacheable(parsed))
+        if (!payload_input.empty() || !predicate(parsed))
             throw CodecError();
-        return {
-            BootAnalysisCacheState::Hit, std::move(parsed)};
+        return {BootAnalysisCacheState::Hit, std::move(parsed)};
     } catch (const CodecError&) {
         return {BootAnalysisCacheState::Corrupt, {}};
     } catch (const std::runtime_error&) {
@@ -1468,6 +1491,54 @@ BootAnalysisCacheParseResult parse_boot_analysis_cache(
     } catch (const std::length_error&) {
         return {BootAnalysisCacheState::Corrupt, {}};
     }
+}
+
+} // namespace
+
+std::vector<std::uint8_t> serialize_boot_analysis_cache(
+    const std::string_view key,
+    const PreparedBootAnalysisArtifact& artifact) {
+    return serialize_boot_analysis_envelope(
+        cache_magic,
+        boot_analysis_cache_schema_version,
+        key,
+        artifact,
+        boot_analysis_artifact_cacheable,
+        "Boot-Analysecache-Artefakt ist nicht cachebar.");
+}
+
+BootAnalysisCacheParseResult parse_boot_analysis_cache(
+    const std::string_view expected_key,
+    const std::span<const std::uint8_t> artifact) {
+    return parse_boot_analysis_envelope(
+        cache_magic,
+        boot_analysis_cache_schema_version,
+        expected_key,
+        artifact,
+        boot_analysis_artifact_cacheable);
+}
+
+std::vector<std::uint8_t> serialize_boot_analysis_checkpoint(
+    const std::string_view key,
+    const PreparedBootAnalysisArtifact& artifact) {
+    return serialize_boot_analysis_envelope(
+        checkpoint_magic,
+        boot_analysis_checkpoint_schema_version,
+        key,
+        artifact,
+        boot_analysis_artifact_checkpointable,
+        "Boot-Analysecheckpoint ist strukturell ungueltig.");
+}
+
+BootAnalysisCacheParseResult parse_boot_analysis_checkpoint(
+    const std::string_view expected_key,
+    const std::span<const std::uint8_t> artifact) {
+    return parse_boot_analysis_envelope(
+        checkpoint_magic,
+        boot_analysis_checkpoint_schema_version,
+        expected_key,
+        artifact,
+        boot_analysis_artifact_checkpointable);
 }
 
 bool validate_boot_analysis_cache_source_binding(

@@ -7783,11 +7783,16 @@ std::vector<std::uint8_t> load_runtime_image_payload(
         throw std::invalid_argument(
             "Private Runtime-Image-Payloadbytes duerfen nicht im "
             "KatanaRecomp-Quellbaum liegen.");
-    if (std::filesystem::file_size(canonical, status_error) !=
-            expected_size ||
-        status_error)
+    const auto actual_size =
+        std::filesystem::file_size(canonical, status_error);
+    if (actual_size != expected_size || status_error)
         throw std::invalid_argument(
-            "Runtime-Image-Payloadgroesse passt nicht zum Deskriptor.");
+            "Gebundene Payloadgroesse passt nicht zum Deskriptor: "
+            "expected=" +
+            std::to_string(expected_size) + ", actual=" +
+            (status_error ? std::string{"unavailable"}
+                          : std::to_string(actual_size)) +
+            '.');
     std::ifstream input(canonical, std::ios::binary | std::ios::ate);
     if (!input || input.tellg() !=
                       static_cast<std::streamoff>(expected_size))

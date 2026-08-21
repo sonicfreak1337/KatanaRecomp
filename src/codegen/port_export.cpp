@@ -25527,9 +25527,7 @@ bool validate_native_disc_primary_artifact(
     const PreparedBootAnalysisArtifact& primary,
     const katana::io::ExecutableImage& image) noexcept {
     try {
-        if (!boot_analysis_artifact_cacheable(primary) ||
-            !katana::analysis::guarded_aot_inventory_complete(
-                primary.analysis))
+        if (!boot_analysis_artifact_checkpointable(primary))
             return false;
         katana::ir::require_valid_program(primary.lowered_program);
         std::set<std::uint32_t> program_instructions;
@@ -28778,6 +28776,171 @@ void populate_native_disc_materialization_artifacts(
     }
 }
 
+struct NativeDiscLatentSourceValidation final {
+    bool valid = false;
+    std::string reason{"unknown"};
+};
+
+NativeDiscLatentSourceValidation
+validate_native_disc_checkpoint_latent_source_binding(
+    const std::shared_ptr<const katana::runtime::DiscSource>& source,
+    LatentAotDiscovery& discovery) {
+    // The stable discovery validator's block/function limits are per module.
+    // Calling it once for the whole discovery incorrectly reinterprets those
+    // limits as aggregate caps and rejects a checkpoint that the same producer
+    // just serialized. The archive envelope already bounds aggregate record
+    // storage; retain explicit aggregate byte/I/O limits here and validate
+    // every module independently against the exact current disc bytes, IR,
+    // opcodes and range identities.
+    constexpr std::size_t maximum_source_bindings = 1024u;
+    constexpr std::uint64_t maximum_total_module_bytes =
+        64ull * 1024ull * 1024ull;
+    constexpr std::uint64_t maximum_total_source_bytes =
+        256ull * 1024ull * 1024ull;
+    constexpr std::uint64_t maximum_total_block_identity_bytes =
+        64ull * 1024ull * 1024ull;
+    constexpr std::uint64_t maximum_total_function_identity_bytes =
+        64ull * 1024ull * 1024ull;
+    if (!source)
+        return {false, "missing-disc-source"};
+    if (discovery.modules.size() > maximum_source_bindings)
+        return {false, "module-count-budget"};
+
+    std::uint64_t total_module_bytes = 0u;
+    std::uint64_t total_source_bytes = 0u;
+    std::uint64_t total_block_identity_bytes = 0u;
+    std::uint64_t total_function_identity_bytes = 0u;
+    std::size_t total_source_bindings = 0u;
+    std::unordered_set<std::string_view> module_ids;
+    std::unordered_set<std::string_view> source_binding_ids;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> module_extents;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> source_extents;
+    module_ids.reserve(discovery.modules.size());
+    source_binding_ids.reserve(maximum_source_bindings);
+    module_extents.reserve(discovery.modules.size());
+    source_extents.reserve(maximum_source_bindings);
+
+    const auto add_bounded = [](std::uint64_t& total,
+                                const std::uint64_t value,
+                                const std::uint64_t maximum) {
+        if (value > maximum - total) return false;
+        total += value;
+        return true;
+    };
+    for (std::size_t module_index = 0u;
+         module_index < discovery.modules.size();
+         ++module_index) {
+        const auto& module = discovery.modules[module_index];
+        if (!module_ids.insert(module.id).second)
+            return {false,
+                    "duplicate-module-id:module=" +
+                        std::to_string(module_index)};
+        if (!add_bounded(
+                total_module_bytes,
+                module.byte_size,
+                maximum_total_module_bytes))
+            return {false, "module-byte-budget"};
+        if (module.source_bindings.size() >
+            maximum_source_bindings - total_source_bindings)
+            return {false, "source-binding-count-budget"};
+        total_source_bindings += module.source_bindings.size();
+
+        const auto physical_begin = static_cast<std::uint64_t>(
+            katana::runtime::canonical_physical_address(
+                module.source_address));
+        if (module.byte_size >
+            std::numeric_limits<std::uint64_t>::max() - physical_begin)
+            return {false,
+                    "module-address-overflow:module=" +
+                        std::to_string(module_index)};
+        const auto physical_end = physical_begin + module.byte_size;
+        if (std::any_of(
+                module_extents.begin(),
+                module_extents.end(),
+                [&](const auto& extent) {
+                    return physical_begin < extent.second &&
+                           extent.first < physical_end;
+                }))
+            return {false,
+                    "module-address-overlap:module=" +
+                        std::to_string(module_index)};
+        module_extents.emplace_back(physical_begin, physical_end);
+
+        for (std::size_t binding_index = 0u;
+             binding_index < module.source_bindings.size();
+             ++binding_index) {
+            const auto& binding = module.source_bindings[binding_index];
+            if (!source_binding_ids.insert(binding.id).second)
+                return {false,
+                        "duplicate-source-binding-id:module=" +
+                            std::to_string(module_index) +
+                            ":binding=" +
+                            std::to_string(binding_index)};
+            if (!add_bounded(
+                    total_source_bytes,
+                    binding.byte_size,
+                    maximum_total_source_bytes))
+                return {false, "source-byte-budget"};
+            if (binding.byte_size >
+                std::numeric_limits<std::uint64_t>::max() -
+                    binding.disc_byte_offset)
+                return {false,
+                        "source-address-overflow:module=" +
+                            std::to_string(module_index) +
+                            ":binding=" +
+                            std::to_string(binding_index)};
+            const auto binding_end =
+                binding.disc_byte_offset + binding.byte_size;
+            if (std::any_of(
+                    source_extents.begin(),
+                    source_extents.end(),
+                    [&](const auto& extent) {
+                        return binding.disc_byte_offset < extent.second &&
+                               extent.first < binding_end;
+                    }))
+                return {false,
+                        "source-range-overlap:module=" +
+                            std::to_string(module_index) +
+                            ":binding=" +
+                            std::to_string(binding_index)};
+            source_extents.emplace_back(
+                binding.disc_byte_offset, binding_end);
+        }
+        for (const auto& identity : module.block_identities) {
+            if (!add_bounded(
+                    total_block_identity_bytes,
+                    identity.size,
+                    maximum_total_block_identity_bytes))
+                return {false, "block-identity-byte-budget"};
+        }
+        for (const auto& identity : module.function_identities) {
+            if (!add_bounded(
+                    total_function_identity_bytes,
+                    identity.size,
+                    maximum_total_function_identity_bytes))
+                return {false, "function-identity-byte-budget"};
+        }
+    }
+
+    for (std::size_t module_index = 0u;
+         module_index < discovery.modules.size();
+         ++module_index) {
+        LatentAotDiscovery isolated;
+        isolated.modules.reserve(1u);
+        isolated.modules.push_back(
+            std::move(discovery.modules[module_index]));
+        const bool valid = validate_latent_aot_discovery_source_binding(
+            source, isolated);
+        discovery.modules[module_index] =
+            std::move(isolated.modules.front());
+        if (!valid)
+            return {false,
+                    "module-contract:module=" +
+                        std::to_string(module_index)};
+    }
+    return {true, "valid"};
+}
+
 std::optional<NativeDiscAnalysisResult>
 try_reuse_native_disc_analysis_artifact(
     const katana::io::ExecutableImage& initial_image,
@@ -28800,6 +28963,12 @@ try_reuse_native_disc_analysis_artifact(
         options.resume_analysis_artifact_key.empty())
         throw std::invalid_argument(
             "Resume-Analysearchiv besitzt keine Ledger-Identitaet.");
+    // Missing cache namespaces used to turn the final checkpoint publication
+    // into a swallowed publish miss after the complete multi-minute analysis.
+    // Establish and validate the bounded namespace before any expensive work
+    // so late World/serializer failures can never discard the closure.
+    ensure_safe_port_directory(
+        options.analysis_cache_root, "native-disc-analysis");
     CodegenCache cache(options.analysis_cache_root /
                        "native-disc-analysis");
     std::optional<std::string> cached_artifact;
@@ -28866,6 +29035,11 @@ try_reuse_native_disc_analysis_artifact(
         stable_identity.image_analysis_key.clear();
         auto stable_expected = expected_identity;
         stable_expected.image_analysis_key.clear();
+        // The checkpoint owns analyzer closure, not generated-product code.
+        // Admission is replayed below and runtime-frontier import separately
+        // compares the current in-memory codegen identity.
+        stable_identity.codegen_implementation_identity.clear();
+        stable_expected.codegen_implementation_identity.clear();
         if (resume_artifact_requested) {
             // A committed analysis product is independent from subsequent
             // world/task/code-emission-only edits. Analyzer/cache identities,
@@ -28873,8 +29047,6 @@ try_reuse_native_disc_analysis_artifact(
             // admission is replayed below under the current codegen build.
             stable_identity.key.clear();
             stable_expected.key.clear();
-            stable_identity.codegen_implementation_identity.clear();
-            stable_expected.codegen_implementation_identity.clear();
         }
         if (native_port_contract_changed) {
             // A provider/hardware-resolution edit is downstream from the
@@ -28932,8 +29104,6 @@ try_reuse_native_disc_analysis_artifact(
                 analysis_implementation_identity);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
                 analysis_cache_implementation_identity);
-            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
-                codegen_implementation_identity);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analysis_contract_identity);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analyzer_abi);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(backend_abi);
@@ -28985,13 +29155,18 @@ try_reuse_native_disc_analysis_artifact(
             current_overrides ? &*current_overrides : nullptr,
             boot_analysis_semantic_contract_identity(options),
             options.analysis_cache_implementation_identity);
-        if (image_key != artifact.identity.image_analysis_key ||
-            !validate_native_disc_primary_artifact(
-                artifact.primary, image) ||
-            !validate_latent_aot_discovery_source_binding(
-                disc.source, artifact.latent)) {
-            return reject("image-or-source-binding");
-        }
+        if (image_key != artifact.identity.image_analysis_key)
+            return reject("image-analysis-key");
+        if (!validate_native_disc_primary_artifact(
+                artifact.primary, image))
+            return reject("primary-image-source-binding");
+        const auto latent_source_validation =
+            validate_native_disc_checkpoint_latent_source_binding(
+                disc.source, artifact.latent);
+        if (!latent_source_validation.valid)
+            return reject(
+                "latent-source-binding:" +
+                latent_source_validation.reason);
 
         NativeDiscAnalysisResult result;
         result.image = std::move(image);
@@ -29016,7 +29191,11 @@ try_reuse_native_disc_analysis_artifact(
             artifact.identity.disc_volume_start_lba;
         result.disc_extent_lba_bias =
             artifact.identity.disc_extent_lba_bias;
-        result.analysis_artifact_identity = artifact.identity;
+        result.analysis_artifact_identity = expected_identity;
+        result.analysis_artifact_identity.image_analysis_key = image_key;
+        result.analysis_artifact_identity.key =
+            native_disc_analysis_artifact_identity_key(
+                result.analysis_artifact_identity);
         result.analysis_artifact_cache_hit = true;
         result.boot_analysis_cache_hit = true;
         result.boot_analysis_pipeline_runs = 0u;
@@ -29109,7 +29288,7 @@ try_reuse_native_disc_analysis_artifact(
                                current.reason == stored.reason;
                     }))
                 return reject("admission-replay-hardware-gap-details");
-            if (!artifact.backend_admitted)
+            if (result.summary.backend_admitted != artifact.backend_admitted)
                 return reject("admission-replay-backend-admission");
         }
         if (native_port_contract_changed) {
@@ -29247,6 +29426,9 @@ void publish_native_disc_analysis_artifact(
         if (analysis_checkpoint_requested ||
             native_disc_analysis_positive_product_cache_enabled) {
             try {
+                ensure_safe_port_directory(
+                    options.analysis_cache_root,
+                    "native-disc-analysis");
                 CodegenCache cache(options.analysis_cache_root /
                                    "native-disc-analysis");
                 const auto content = std::string_view(
