@@ -25182,6 +25182,7 @@ void populate_native_disc_analysis_summary(
 
 constexpr std::size_t maximum_owner_semantic_task_blocks = 16u;
 constexpr std::size_t maximum_owner_semantic_task_instructions = 64u;
+constexpr std::size_t maximum_owner_semantic_task_paths = 8u;
 constexpr std::size_t maximum_owner_hardware_site_slice_instructions = 24u;
 constexpr std::size_t maximum_owner_hardware_site_slice_blocks = 8u;
 constexpr std::size_t maximum_owner_hardware_site_slice_paths = 4u;
@@ -25455,7 +25456,7 @@ struct OwnerTaskSymbolicProjection final {
     std::vector<std::string> fields;
 };
 
-OwnerTaskSymbolicProjection owner_task_symbolic_projection(
+OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
     const katana::ir::Function& function,
     const katana::io::ExecutableImage& image,
     const std::uint32_t entry,
@@ -25474,6 +25475,11 @@ OwnerTaskSymbolicProjection owner_task_symbolic_projection(
         return found != function.blocks.end() ? &*found : nullptr;
     };
     const auto* block = find_block(entry);
+    if (block == nullptr || function.blocks.empty()) {
+        projection.fields.push_back(
+            "owner-state-projection=unavailable:open-or-invalid-cfg");
+        return projection;
+    }
     while (block != nullptr) {
         if (std::ranges::find(execution, block) != execution.end() ||
             block->has_indirect_successor) {
@@ -25482,13 +25488,32 @@ OwnerTaskSymbolicProjection owner_task_symbolic_projection(
             return projection;
         }
         execution.push_back(block);
-        if (block->successors.empty()) break;
+        if (block->successors.empty()) {
+            const bool returns_normally = std::ranges::any_of(
+                block->instructions,
+                [](const auto& instruction) {
+                    return instruction.operation ==
+                        katana::ir::Operation::Return;
+                });
+            if (!returns_normally) {
+                projection.fields.push_back(
+                    "owner-state-projection=unavailable:open-or-invalid-cfg");
+                return projection;
+            }
+            break;
+        }
         if (block->successors.size() != 1u) {
             projection.fields.push_back(
                 "owner-state-projection=unavailable:non-linear-cfg");
             return projection;
         }
-        block = find_block(block->successors.front());
+        const auto successor = block->successors.front();
+        if (find_block(successor) == nullptr) {
+            projection.fields.push_back(
+                "owner-state-projection=unavailable:open-or-invalid-cfg");
+            return projection;
+        }
+        block = find_block(successor);
     }
     if (execution.size() != function.blocks.size()) {
         projection.fields.push_back(
@@ -25503,6 +25528,7 @@ OwnerTaskSymbolicProjection owner_task_symbolic_projection(
     auto sr = owner_task_symbolic_input("sr_in");
     auto vbr = owner_task_symbolic_input("vbr_in");
     bool sr_written = false;
+    bool vbr_written = false;
     struct WriteEffect final {
         std::uint32_t site = 0u;
         OwnerTaskSymbolicValue address;
@@ -25571,6 +25597,7 @@ OwnerTaskSymbolicProjection owner_task_symbolic_projection(
                 } else if (instruction.special_register ==
                            katana::ir::SpecialRegister::Vbr) {
                     vbr = registers[source];
+                    vbr_written = true;
                 } else {
                     return fail();
                 }
@@ -25680,9 +25707,16 @@ OwnerTaskSymbolicProjection owner_task_symbolic_projection(
               << owner_task_symbolic_text(registers[index]);
     }
     if (sr_written) {
+        if (!sr.available) return fail();
         if (!first) state << ';';
         state << "sr=" << owner_task_symbolic_text(sr)
               << ";t=bit0(" << owner_task_symbolic_text(sr) << ')';
+        first = false;
+    }
+    if (vbr_written) {
+        if (!vbr.available) return fail();
+        if (!first) state << ';';
+        state << "vbr=" << owner_task_symbolic_text(vbr);
     }
     const auto state_text = state.str();
     if (state_text.size() >
@@ -25728,6 +25762,728 @@ OwnerTaskSymbolicProjection owner_task_symbolic_projection(
     return projection;
 }
 
+struct OwnerTaskPathWriteEffect final {
+    std::uint32_t site = 0u;
+    OwnerTaskSymbolicValue address;
+    OwnerTaskSymbolicValue value;
+    std::string access_contract;
+};
+
+struct OwnerTaskPathState final {
+    std::array<OwnerTaskSymbolicValue, 16u> registers;
+    OwnerTaskSymbolicValue t;
+    OwnerTaskSymbolicValue sr;
+    OwnerTaskSymbolicValue vbr;
+    OwnerTaskSymbolicValue pr;
+    bool sr_written = false;
+    bool vbr_written = false;
+    std::vector<std::string> guards;
+    std::vector<std::uint32_t> blocks;
+    std::vector<OwnerTaskPathWriteEffect> writes;
+};
+
+OwnerTaskSymbolicValue owner_task_symbolic_memory_load(
+    const OwnerTaskSymbolicValue& address,
+    const std::string_view width,
+    const std::uint32_t site) {
+    if (!address.available) return {};
+    OwnerTaskSymbolicValue result;
+    result.available = true;
+    result.expression = "load" + std::string(width) + '@' +
+                        owner_task_hex32(site) + "(" +
+                        owner_task_symbolic_text(address) + ')';
+    result.runtime_revalidation_required =
+        address.runtime_revalidation_required;
+    if (result.expression.size() >
+        katana::agent::materialization_world_max_text_bytes)
+        return {};
+    return result;
+}
+
+OwnerTaskSymbolicValue owner_task_symbolic_bit0(
+    const OwnerTaskSymbolicValue& value) {
+    if (!value.available) return {};
+    if (value.constant.has_value())
+        return owner_task_symbolic_constant(
+            *value.constant & 1u,
+            value.runtime_revalidation_required);
+    OwnerTaskSymbolicValue result;
+    result.available = true;
+    result.expression = "bit0(" + owner_task_symbolic_text(value) + ')';
+    result.runtime_revalidation_required =
+        value.runtime_revalidation_required;
+    if (result.expression.size() >
+        katana::agent::materialization_world_max_text_bytes)
+        return {};
+    return result;
+}
+
+OwnerTaskSymbolicValue owner_task_symbolic_status_with_t(
+    const OwnerTaskSymbolicValue& sr,
+    const OwnerTaskSymbolicValue& t) {
+    if (!sr.available || !t.available) return {};
+    const bool revalidate = sr.runtime_revalidation_required ||
+                            t.runtime_revalidation_required;
+    if (sr.constant.has_value() && t.constant.has_value())
+        return owner_task_symbolic_constant(
+            (*sr.constant & ~1u) | (*t.constant & 1u), revalidate);
+    OwnerTaskSymbolicValue result;
+    result.available = true;
+    result.expression = "with_t(" + owner_task_symbolic_text(sr) + ',' +
+                        owner_task_symbolic_text(t) + ')';
+    result.runtime_revalidation_required = revalidate;
+    if (result.expression.size() >
+        katana::agent::materialization_world_max_text_bytes)
+        return {};
+    return result;
+}
+
+OwnerTaskSymbolicValue owner_task_symbolic_test(
+    const OwnerTaskSymbolicValue& left,
+    const OwnerTaskSymbolicValue& right) {
+    if (!left.available || !right.available) return {};
+    const bool revalidate = left.runtime_revalidation_required ||
+                            right.runtime_revalidation_required;
+    if (left.constant.has_value() && right.constant.has_value())
+        return owner_task_symbolic_constant(
+            ((*left.constant & *right.constant) == 0u) ? 1u : 0u,
+            revalidate);
+    OwnerTaskSymbolicValue result;
+    result.available = true;
+    result.expression = left.expression == right.expression
+        ? "tst(" + owner_task_symbolic_text(left) + ')'
+        : "tst(" + owner_task_symbolic_text(left) + ',' +
+              owner_task_symbolic_text(right) + ')';
+    result.runtime_revalidation_required = revalidate;
+    if (result.expression.size() >
+        katana::agent::materialization_world_max_text_bytes)
+        return {};
+    return result;
+}
+
+OwnerTaskSymbolicValue owner_task_symbolic_equal(
+    const OwnerTaskSymbolicValue& left,
+    const OwnerTaskSymbolicValue& right) {
+    if (!left.available || !right.available) return {};
+    const bool revalidate = left.runtime_revalidation_required ||
+                            right.runtime_revalidation_required;
+    if (left.constant.has_value() && right.constant.has_value())
+        return owner_task_symbolic_constant(
+            *left.constant == *right.constant ? 1u : 0u, revalidate);
+    OwnerTaskSymbolicValue result;
+    result.available = true;
+    result.expression = "eq(" + owner_task_symbolic_text(left) + ',' +
+                        owner_task_symbolic_text(right) + ')';
+    result.runtime_revalidation_required = revalidate;
+    if (result.expression.size() >
+        katana::agent::materialization_world_max_text_bytes)
+        return {};
+    return result;
+}
+
+std::string owner_task_path_guard_text(
+    const OwnerTaskSymbolicValue& t,
+    const bool expected_true) {
+    if (!t.available) return {};
+    if (t.constant.has_value())
+        return "true";
+    return owner_task_symbolic_text(t) +
+           (expected_true ? "!=0" : "==0");
+}
+
+OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
+    const katana::ir::Function& function,
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t entry,
+    const katana::ir::RegisterMask may_defs,
+    const std::span<const katana::analysis::HardwareAccessReference>
+        hardware_references) {
+    OwnerTaskSymbolicProjection projection;
+    const auto unavailable = [&](const std::string_view reason) {
+        projection.complete = false;
+        projection.fields = {
+            "owner-state-projection=unavailable:" + std::string(reason)};
+        return projection;
+    };
+    const auto find_block = [&](const std::uint32_t address) {
+        const auto found = std::ranges::find_if(
+            function.blocks,
+            [address](const auto& block) {
+                return block.start_address == address;
+            });
+        return found != function.blocks.end() ? &*found : nullptr;
+    };
+    const auto has_conditional_branch = std::ranges::any_of(
+        function.blocks,
+        [](const auto& block) {
+            return std::ranges::any_of(
+                block.instructions,
+                [](const auto& instruction) {
+                    return instruction.operation ==
+                               katana::ir::Operation::BranchIfTrue ||
+                           instruction.operation ==
+                               katana::ir::Operation::BranchIfFalse;
+                });
+        });
+    if (!has_conditional_branch)
+        return owner_task_symbolic_linear_projection(
+            function, image, entry, may_defs, hardware_references);
+
+    if (function.blocks.empty() || function.blocks.size() >
+                                      maximum_owner_semantic_task_blocks)
+        return unavailable("bounded-slice-budget");
+
+    std::unordered_set<std::uint32_t> block_addresses;
+    block_addresses.reserve(function.blocks.size());
+    for (const auto& block : function.blocks) {
+        if (block.instructions.empty() ||
+            !block_addresses.insert(block.start_address).second ||
+            block.has_indirect_successor)
+            return unavailable("open-or-invalid-cfg");
+        for (const auto successor : block.successors) {
+            if (find_block(successor) == nullptr)
+                return unavailable("open-or-invalid-cfg");
+        }
+    }
+    if (find_block(entry) == nullptr)
+        return unavailable("entry-block");
+
+    const auto valid_register = [](const std::uint8_t index) {
+        return index < 16u;
+    };
+    const auto access_contract_for = [&]
+        (const std::uint32_t site,
+         const OwnerTaskSymbolicValue& address) {
+        std::vector<std::string> contracts;
+        for (const auto& reference : hardware_references) {
+            if (reference.instruction_address != site ||
+                reference.kind != katana::analysis::HardwareAccessKind::Write ||
+                reference.width != sizeof(std::uint32_t))
+                continue;
+            std::string contract =
+                katana::analysis::dreamcast_hardware_region_name(
+                    reference.region);
+            if (!reference.register_name.empty())
+                contract += ':' + reference.register_name;
+            contract += ':';
+            contract += katana::analysis::hardware_runtime_support_name(
+                reference.runtime_support);
+            contracts.push_back(std::move(contract));
+        }
+        std::sort(contracts.begin(), contracts.end());
+        contracts.erase(
+            std::unique(contracts.begin(), contracts.end()), contracts.end());
+        if (contracts.empty())
+            return address.constant.has_value()
+                ? std::string{"exact-address-unclassified"}
+                : std::string{
+                      "dynamic-address-runtime-validation-required"};
+        std::ostringstream result;
+        for (std::size_t index = 0u; index < contracts.size(); ++index) {
+            if (index != 0u) result << ',';
+            result << contracts[index];
+        }
+        return result.str();
+    };
+
+    std::vector<OwnerTaskPathState> completed;
+    completed.reserve(maximum_owner_semantic_task_paths);
+    std::unordered_set<std::uint32_t> reached_blocks;
+    reached_blocks.reserve(function.blocks.size());
+    bool failed = false;
+    bool path_budget_exhausted = false;
+    std::size_t path_count = 0u;
+
+    const auto execute_data_instruction =
+        [&](const katana::ir::Instruction& instruction,
+            OwnerTaskPathState& state) {
+        using Operation = katana::ir::Operation;
+        const auto destination = instruction.destination_register;
+        const auto source = instruction.source_register;
+        const auto assign_t = [&](OwnerTaskSymbolicValue value) {
+            if (!value.available) return false;
+            auto next_sr = owner_task_symbolic_status_with_t(
+                state.sr, value);
+            if (!next_sr.available) return false;
+            state.t = std::move(value);
+            state.sr = std::move(next_sr);
+            return true;
+        };
+        if (!valid_register(destination) || !valid_register(source)) {
+            switch (instruction.operation) {
+            case Operation::Nop:
+            case Operation::ClearT:
+            case Operation::SetT:
+                break;
+            default:
+                return false;
+            }
+        }
+        switch (instruction.operation) {
+        case Operation::Nop:
+            return true;
+        case Operation::MovImmediate:
+        case Operation::Constant32:
+            state.registers[destination] = owner_task_symbolic_constant(
+                static_cast<std::uint32_t>(instruction.immediate));
+            return state.registers[destination].available;
+        case Operation::MovRegister:
+            state.registers[destination] = state.registers[source];
+            return state.registers[destination].available;
+        case Operation::LoadWordSignedPcRelative:
+        case Operation::LoadLongPcRelative: {
+            const auto literal = owner_task_literal(image, instruction);
+            if (!literal.has_value()) return false;
+            const auto value = literal->signed_value
+                ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
+                      static_cast<std::int16_t>(literal->bits)))
+                : literal->bits;
+            state.registers[destination] = owner_task_symbolic_constant(
+                value, !literal->immutable);
+            return true;
+        }
+        case Operation::LoadLong:
+            if (instruction.forwarded_value_register.has_value()) return false;
+            for (const auto& write : state.writes) {
+                if (!write.address.constant.has_value() ||
+                    !state.registers[source].constant.has_value() ||
+                    *write.address.constant ==
+                        *state.registers[source].constant)
+                    return false;
+            }
+            state.registers[destination] = owner_task_symbolic_memory_load(
+                state.registers[source], "32",
+                instruction.source_address);
+            return state.registers[destination].available;
+        case Operation::StoreLong: {
+            if (!state.registers[destination].available ||
+                !state.registers[source].available)
+                return false;
+            state.writes.push_back({
+                instruction.source_address,
+                state.registers[destination],
+                state.registers[source],
+                access_contract_for(
+                    instruction.source_address,
+                    state.registers[destination])});
+            return true;
+        }
+        case Operation::StoreLongR0Indexed: {
+            if (!state.registers[destination].available ||
+                !state.registers[source].available)
+                return false;
+            const auto address = owner_task_symbolic_binary(
+                state.registers[0u], state.registers[destination], '+');
+            if (!address.available) return false;
+            state.writes.push_back({
+                instruction.source_address,
+                address,
+                state.registers[source],
+                access_contract_for(instruction.source_address, address)});
+            return true;
+        }
+        case Operation::AndImmediate:
+        case Operation::OrImmediate:
+        case Operation::XorImmediate: {
+            const auto operation = instruction.operation ==
+                    Operation::AndImmediate
+                ? '&'
+                : instruction.operation == Operation::OrImmediate ? '|' : '^';
+            if (operation == '^') return false;
+            state.registers[0u] = owner_task_symbolic_binary(
+                state.registers[0u],
+                owner_task_symbolic_constant(
+                    static_cast<std::uint32_t>(instruction.immediate)),
+                operation);
+            return state.registers[0u].available;
+        }
+        case Operation::AndRegister:
+        case Operation::OrRegister:
+        case Operation::XorRegister: {
+            const auto operation = instruction.operation ==
+                    Operation::AndRegister
+                ? '&'
+                : instruction.operation == Operation::OrRegister ? '|' : '^';
+            if (operation == '^') return false;
+            state.registers[destination] = owner_task_symbolic_binary(
+                state.registers[destination], state.registers[source], operation);
+            return state.registers[destination].available;
+        }
+        case Operation::AddImmediate:
+            state.registers[destination] = owner_task_symbolic_binary(
+                state.registers[destination],
+                owner_task_symbolic_constant(
+                    static_cast<std::uint32_t>(instruction.immediate)),
+                '+');
+            return state.registers[destination].available;
+        case Operation::AddRegister:
+            state.registers[destination] = owner_task_symbolic_binary(
+                state.registers[destination], state.registers[source], '+');
+            return state.registers[destination].available;
+        case Operation::TestRegister:
+            return assign_t(owner_task_symbolic_test(
+                state.registers[destination], state.registers[source]));
+        case Operation::TestImmediate:
+            return assign_t(owner_task_symbolic_test(
+                state.registers[0u],
+                owner_task_symbolic_constant(
+                    static_cast<std::uint32_t>(instruction.immediate))));
+        case Operation::CompareEqualImmediate:
+            return assign_t(owner_task_symbolic_equal(
+                state.registers[0u],
+                owner_task_symbolic_constant(
+                    static_cast<std::uint32_t>(instruction.immediate))));
+        case Operation::CompareEqualRegister:
+            return assign_t(owner_task_symbolic_equal(
+                state.registers[destination], state.registers[source]));
+        case Operation::ClearT:
+            return assign_t(owner_task_symbolic_constant(0u));
+        case Operation::SetT:
+            return assign_t(owner_task_symbolic_constant(1u));
+        case Operation::MoveT:
+            state.registers[destination] = state.t;
+            return state.registers[destination].available;
+        case Operation::StoreSpecialRegister:
+            if (instruction.special_register ==
+                katana::ir::SpecialRegister::Sr)
+                state.registers[destination] = state.sr;
+            else if (instruction.special_register ==
+                     katana::ir::SpecialRegister::Vbr)
+                state.registers[destination] = state.vbr;
+            else
+                return false;
+            return state.registers[destination].available;
+        case Operation::LoadSpecialRegister:
+            if (instruction.special_register ==
+                katana::ir::SpecialRegister::Sr) {
+                state.sr = state.registers[source];
+                state.t = owner_task_symbolic_bit0(state.sr);
+                if (!state.t.available) return false;
+                state.sr_written = true;
+            } else if (instruction.special_register ==
+                       katana::ir::SpecialRegister::Vbr) {
+                state.vbr = state.registers[source];
+                state.vbr_written = true;
+            } else {
+                return false;
+            }
+            return state.registers[source].available;
+        default:
+            return false;
+        }
+    };
+
+    const auto path_state_text = [&](const OwnerTaskPathState& state) {
+        std::ostringstream output;
+        output << "owner-state-transfer=";
+        bool first = true;
+        for (std::size_t index = 0u; index < state.registers.size(); ++index) {
+            const auto bit = katana::ir::gpr_register_bit(
+                static_cast<std::uint8_t>(index));
+            if ((may_defs & bit) == 0u) continue;
+            if (!state.registers[index].available) return std::string{};
+            if (!first) output << ';';
+            first = false;
+            output << 'r' << index << '='
+                   << owner_task_symbolic_text(state.registers[index]);
+        }
+        if (katana::ir::register_mask_contains(
+                may_defs, katana::ir::TrackedRegister::T)) {
+            if (!state.t.available) return std::string{};
+            if (!first) output << ';';
+            first = false;
+            output << "t=" << owner_task_symbolic_text(state.t);
+        }
+        if (katana::ir::register_mask_contains(
+                may_defs, katana::ir::TrackedRegister::Pr)) {
+            if (!first) output << ';';
+            first = false;
+            output << "pr=" << owner_task_symbolic_text(state.pr);
+        }
+        if (state.sr_written) {
+            if (!state.sr.available) return std::string{};
+            if (!first) output << ';';
+            first = false;
+            output << "sr=" << owner_task_symbolic_text(state.sr);
+        }
+        if (state.vbr_written) {
+            if (!state.vbr.available) return std::string{};
+            if (!first) output << ';';
+            output << "vbr=" << owner_task_symbolic_text(state.vbr);
+        }
+        return output.str();
+    };
+
+    const auto path_effects_text = [&](const OwnerTaskPathState& state) {
+        std::ostringstream output;
+        output << "owner-write-effects=";
+        for (std::size_t index = 0u; index < state.writes.size(); ++index) {
+            const auto& write = state.writes[index];
+            if (!write.address.available || !write.value.available)
+                return std::string{};
+            if (index != 0u) output << '|';
+            const auto relative = write.site >= entry
+                ? write.site - entry : write.site;
+            output << "+0x" << std::hex << relative
+                   << ":write32(address="
+                   << owner_task_symbolic_text(write.address)
+                   << ";value="
+                   << owner_task_symbolic_text(write.value)
+                   << ";access-contract=" << write.access_contract
+                   << ";snapshot-revalidation="
+                   << (write.address.runtime_revalidation_required ||
+                               write.value.runtime_revalidation_required
+                           ? "required" : "none")
+                   << ')';
+        }
+        return output.str();
+    };
+
+    OwnerTaskPathState initial;
+    for (std::size_t index = 0u; index < initial.registers.size(); ++index)
+        initial.registers[index] = owner_task_symbolic_input(
+            "r" + std::to_string(index) + "_in");
+    initial.t = owner_task_symbolic_input("t_in");
+    initial.sr = owner_task_symbolic_input("sr_in");
+    initial.t = owner_task_symbolic_bit0(initial.sr);
+    initial.vbr = owner_task_symbolic_input("vbr_in");
+    initial.pr = owner_task_symbolic_input("pr_in");
+
+    const auto visit = [&](auto&& self,
+                           const katana::ir::BasicBlock* block,
+                           OwnerTaskPathState state,
+                           std::vector<std::uint32_t> active_blocks) -> void {
+        if (failed || block == nullptr) return;
+        if (std::ranges::find(active_blocks, block->start_address) !=
+            active_blocks.end()) {
+            failed = true;
+            return;
+        }
+        active_blocks.push_back(block->start_address);
+        state.blocks.push_back(block->start_address);
+        reached_blocks.insert(block->start_address);
+
+        std::optional<katana::ir::Operation> branch_operation;
+        std::optional<std::uint32_t> branch_target;
+        OwnerTaskSymbolicValue branch_t;
+        bool branch_has_delay_slot = false;
+
+        for (std::size_t index = 0u; index < block->instructions.size();
+             ++index) {
+            const auto& instruction = block->instructions[index];
+            const auto operation = instruction.operation;
+            const bool is_branch =
+                operation == katana::ir::Operation::Branch ||
+                operation == katana::ir::Operation::BranchIfTrue ||
+                operation == katana::ir::Operation::BranchIfFalse;
+            if (is_branch) {
+                const bool has_delay =
+                    instruction.delay_slot.role ==
+                    katana::ir::DelaySlotRole::Owner;
+                const auto expected_end = index + (has_delay ? 2u : 1u);
+                if (!instruction.target_address.has_value() ||
+                    expected_end != block->instructions.size()) {
+                    failed = true;
+                    return;
+                }
+                if (operation == katana::ir::Operation::BranchIfTrue ||
+                    operation == katana::ir::Operation::BranchIfFalse) {
+                    branch_t = state.t;
+                    if (!branch_t.available) {
+                        failed = true;
+                        return;
+                    }
+                }
+                if (has_delay) {
+                    if (index + 1u >= block->instructions.size()) {
+                        failed = true;
+                        return;
+                    }
+                    const auto& slot = block->instructions[index + 1u];
+                    if (slot.delay_slot.role !=
+                            katana::ir::DelaySlotRole::Slot ||
+                        slot.delay_slot.counterpart_address !=
+                            instruction.source_address ||
+                        instruction.delay_slot.counterpart_address !=
+                            slot.source_address ||
+                        slot.source_address != instruction.source_address + 2u ||
+                        !execute_data_instruction(slot, state)) {
+                        failed = true;
+                        return;
+                    }
+                }
+                branch_operation = operation;
+                branch_target = instruction.target_address;
+                branch_has_delay_slot = has_delay;
+                break;
+            }
+            if (operation == katana::ir::Operation::Return) {
+                const bool has_delay =
+                    instruction.delay_slot.role ==
+                    katana::ir::DelaySlotRole::Owner;
+                const auto expected_end = index + (has_delay ? 2u : 1u);
+                if (expected_end != block->instructions.size() ||
+                    !block->successors.empty()) {
+                    failed = true;
+                    return;
+                }
+                if (has_delay) {
+                    const auto& slot = block->instructions[index + 1u];
+                    if (slot.delay_slot.role !=
+                            katana::ir::DelaySlotRole::Slot ||
+                        slot.delay_slot.counterpart_address !=
+                            instruction.source_address ||
+                        instruction.delay_slot.counterpart_address !=
+                            slot.source_address ||
+                        slot.source_address != instruction.source_address + 2u ||
+                        !execute_data_instruction(slot, state)) {
+                        failed = true;
+                        return;
+                    }
+                }
+                if (++path_count > maximum_owner_semantic_task_paths) {
+                    path_budget_exhausted = true;
+                    failed = true;
+                    return;
+                }
+                completed.push_back(std::move(state));
+                return;
+            }
+            if (operation == katana::ir::Operation::ReturnFromException ||
+                operation == katana::ir::Operation::TrapAlways ||
+                operation == katana::ir::Operation::Call ||
+                operation == katana::ir::Operation::CallRegister ||
+                operation == katana::ir::Operation::JumpRegister) {
+                failed = true;
+                return;
+            }
+            if (!execute_data_instruction(instruction, state)) {
+                failed = true;
+                return;
+            }
+        }
+
+        if (branch_operation.has_value()) {
+            const auto target = *branch_target;
+            const auto branch_index = block->instructions.size() -
+                (branch_has_delay_slot ? 2u : 1u);
+            const auto branch_address =
+                block->instructions[branch_index].source_address;
+            const auto fallthrough = branch_address +
+                (branch_has_delay_slot ? 4u : 2u);
+            const auto branch = *branch_operation;
+            if (find_block(target) == nullptr ||
+                std::ranges::find(block->successors, target) ==
+                    block->successors.end()) {
+                failed = true;
+                return;
+            }
+            const bool conditional =
+                branch == katana::ir::Operation::BranchIfTrue ||
+                branch == katana::ir::Operation::BranchIfFalse;
+            if (!conditional) {
+                if (block->successors.size() != 1u ||
+                    block->successors.front() != target) {
+                    failed = true;
+                    return;
+                }
+                self(self, find_block(target), std::move(state),
+                     std::move(active_blocks));
+                return;
+            }
+            if (find_block(fallthrough) == nullptr ||
+                fallthrough == target ||
+                block->successors.size() != 2u ||
+                std::ranges::find(block->successors, fallthrough) ==
+                    block->successors.end()) {
+                failed = true;
+                return;
+            }
+            const bool branch_if_true =
+                branch == katana::ir::Operation::BranchIfTrue;
+            std::array<bool, 2u> choices{true, false};
+            if (branch_t.constant.has_value()) {
+                const bool taken = branch_if_true
+                    ? *branch_t.constant != 0u
+                    : *branch_t.constant == 0u;
+                choices = {taken, taken};
+            }
+            for (std::size_t choice_index = 0u; choice_index < choices.size();
+                 ++choice_index) {
+                const bool taken = choices[choice_index];
+                if (choice_index == 1u && choices[0] == choices[1]) continue;
+                const bool expected_true = branch_if_true ? taken : !taken;
+                const auto guard = owner_task_path_guard_text(
+                    branch_t, expected_true);
+                if (guard.empty()) {
+                    failed = true;
+                    return;
+                }
+                auto next = state;
+                next.guards.push_back(guard);
+                self(self, find_block(taken ? target : fallthrough),
+                     std::move(next), active_blocks);
+                if (failed) return;
+            }
+            return;
+        }
+
+        if (block->successors.size() != 1u) {
+            failed = true;
+            return;
+        }
+        self(self, find_block(block->successors.front()), std::move(state),
+             std::move(active_blocks));
+    };
+
+    visit(visit, find_block(entry), std::move(initial), {});
+    if (failed || path_budget_exhausted || completed.empty() ||
+        reached_blocks.size() != function.blocks.size())
+        return unavailable(
+            path_budget_exhausted ? "path-budget" :
+            failed ? "path-sensitive-transfer" : "incomplete-cfg");
+
+    projection.complete = true;
+    projection.fields.push_back(
+        "owner-state-projection=complete:path-sensitive-symbolic-transfer");
+    projection.fields.push_back(
+        "owner-state-path-count=" + std::to_string(completed.size()));
+    for (std::size_t index = 0u; index < completed.size(); ++index) {
+        const auto state_text = path_state_text(completed[index]);
+        const auto effects_text = path_effects_text(completed[index]);
+        if (state_text.empty() || effects_text.empty())
+            return unavailable("path-sensitive-transfer");
+        std::ostringstream path;
+        path << "owner-state-path=path" << index << ";guard=";
+        if (completed[index].guards.empty()) {
+            path << "true";
+        } else {
+            for (std::size_t guard = 0u;
+                 guard < completed[index].guards.size(); ++guard) {
+                if (guard != 0u) path << "&&";
+                path << completed[index].guards[guard];
+            }
+        }
+        path << ";return=normal;" << state_text << ';' << effects_text;
+        auto field = path.str();
+        if (field.size() > katana::agent::materialization_world_max_text_bytes)
+            return unavailable("text-budget");
+        projection.fields.push_back(std::move(field));
+    }
+    return projection;
+}
+
+OwnerTaskSymbolicProjection owner_task_symbolic_projection(
+    const katana::ir::Function& function,
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t entry,
+    const katana::ir::RegisterMask may_defs,
+    const std::span<const katana::analysis::HardwareAccessReference>
+        hardware_references) {
+    return owner_task_symbolic_path_projection(
+        function, image, entry, may_defs, hardware_references);
+}
+
 struct OwnerSemanticTaskContract final {
     bool complete = false;
     bool state_projection_complete = false;
@@ -25750,6 +26506,30 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
         [owner_entry](const auto& candidate) {
             return candidate.entry_address == owner_entry;
         });
+    const auto is_untracked_special = [](
+        const katana::ir::SpecialRegister special) {
+        switch (special) {
+        case katana::ir::SpecialRegister::Pr:
+        case katana::ir::SpecialRegister::Gbr:
+        case katana::ir::SpecialRegister::Mach:
+        case katana::ir::SpecialRegister::Macl:
+        case katana::ir::SpecialRegister::Fpul:
+        case katana::ir::SpecialRegister::None:
+            return false;
+        default:
+            return true;
+        }
+    };
+    const auto is_store_special = [](const katana::ir::Operation operation) {
+        return operation == katana::ir::Operation::StoreSpecialRegister ||
+               operation ==
+                   katana::ir::Operation::StoreSpecialRegisterPreDecrement;
+    };
+    const auto is_load_special = [](const katana::ir::Operation operation) {
+        return operation == katana::ir::Operation::LoadSpecialRegister ||
+               operation ==
+                   katana::ir::Operation::LoadSpecialRegisterPostIncrement;
+    };
     const auto append_instruction = [&](std::ostringstream& slice,
                                         const katana::ir::Instruction&
                                             instruction) {
@@ -25780,6 +26560,10 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
         if (instruction.widths.displacement !=
             katana::ir::OperandWidth::None)
             slice << ";disp=" << std::dec << instruction.displacement;
+        if (instruction.special_register !=
+            katana::ir::SpecialRegister::None)
+            slice << ";special=" << owner_task_special_register(
+                instruction.special_register);
         if (instruction.effective_address.has_value())
             slice << ";effective=" << guarded_aot_address(
                 *instruction.effective_address);
@@ -25827,6 +26611,7 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
             const katana::ir::BasicBlock* block = nullptr;
             std::size_t end_index = 0u;
             katana::ir::RegisterMask unresolved_inputs = 0u;
+            std::set<std::string_view> unresolved_special_inputs;
             std::vector<const katana::ir::Instruction*> selected;
             std::vector<std::uint32_t> producer_blocks;
             std::vector<std::uint32_t> blocks;
@@ -25835,10 +26620,18 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
         const auto site_use_def =
             katana::ir::instruction_register_use_def(
                 containing_block->instructions[site_index]);
+        std::set<std::string_view> site_unresolved_special_inputs;
+        const auto& site_instruction =
+            containing_block->instructions[site_index];
+        if (is_store_special(site_instruction.operation) &&
+            is_untracked_special(site_instruction.special_register))
+            site_unresolved_special_inputs.insert(
+                owner_task_special_register(site_instruction.special_register));
         std::vector<SlicePath> pending{{
             containing_block,
             site_index,
             site_use_def.uses,
+            site_unresolved_special_inputs,
             {&containing_block->instructions[site_index]},
             {},
             {containing_block->start_address},
@@ -25852,12 +26645,20 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
             pending.pop_back();
             bool instruction_budget_exhausted = false;
             while (path.end_index != 0u &&
-                   path.unresolved_inputs != 0u) {
+                   (path.unresolved_inputs != 0u ||
+                    !path.unresolved_special_inputs.empty())) {
                 const auto& candidate =
                     path.block->instructions[--path.end_index];
                 const auto use_def =
                     katana::ir::instruction_register_use_def(candidate);
-                if ((use_def.defs & path.unresolved_inputs) == 0u)
+                const auto candidate_special = owner_task_special_register(
+                    candidate.special_register);
+                const bool resolves_special =
+                    is_load_special(candidate.operation) &&
+                    is_untracked_special(candidate.special_register) &&
+                    path.unresolved_special_inputs.contains(candidate_special);
+                if ((use_def.defs & path.unresolved_inputs) == 0u &&
+                    !resolves_special)
                     continue;
                 if (path.selected.size() >=
                     maximum_owner_hardware_site_slice_instructions) {
@@ -25874,8 +26675,14 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
                 path.unresolved_inputs =
                     (path.unresolved_inputs & ~use_def.defs) |
                     use_def.uses;
+                if (resolves_special)
+                    path.unresolved_special_inputs.erase(candidate_special);
+                if (is_store_special(candidate.operation) &&
+                    is_untracked_special(candidate.special_register))
+                    path.unresolved_special_inputs.insert(candidate_special);
             }
-            if (path.unresolved_inputs == 0u) {
+            if (path.unresolved_inputs == 0u &&
+                path.unresolved_special_inputs.empty()) {
                 path.terminal = "resolved";
                 resolved_paths.push_back(std::move(path));
                 continue;
@@ -25886,7 +26693,9 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
                 continue;
             }
             if (path.block->start_address == function->entry_address) {
-                path.terminal = "owner-entry-live-in";
+                path.terminal = path.unresolved_special_inputs.empty()
+                    ? "owner-entry-live-in"
+                    : "architectural-live-in";
                 resolved_paths.push_back(std::move(path));
                 continue;
             }
@@ -26003,10 +26812,11 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
                           (!crossed_block_boundary ||
                            owner_control_flow_closed) &&
                           std::ranges::all_of(
-                              resolved_paths,
-                              [](const auto& path) {
-                                  return path.unresolved_inputs == 0u;
-                              })
+                               resolved_paths,
+                               [](const auto& path) {
+                                   return path.unresolved_inputs == 0u &&
+                                       path.unresolved_special_inputs.empty();
+                               })
                       ? "closed-all-static-predecessor-paths"
                       : "partial")
               << ";static-predecessors="
@@ -26032,6 +26842,9 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
             slice << ",terminal:" << path.terminal
                   << ",unresolved:"
                   << owner_task_register_mask(path.unresolved_inputs)
+                  << ",unresolved-special:"
+                  << owner_task_special_register_set(
+                         path.unresolved_special_inputs)
                   << ",sequence:";
             for (auto instruction = path.selected.rbegin();
                  instruction != path.selected.rend(); ++instruction) {
@@ -26390,7 +27203,8 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
         (contract.complete ? "normal-return" : "unknown"));
     const auto state_projection = owner_task_symbolic_projection(
         function, image, entry, may_defs, hardware_references);
-    contract.state_projection_complete = state_projection.complete;
+    contract.state_projection_complete =
+        contract.complete && state_projection.complete;
     contract.fields.insert(
         contract.fields.end(),
         state_projection.fields.begin(),
@@ -26719,11 +27533,11 @@ build_native_disc_materialization_world(
         }
         group.sites.push_back(gap.instruction_address);
     }
-    std::set<std::uint32_t> native_provider_input_read_owners;
+    std::set<std::uint32_t> native_provider_input_read_priority_hint_owners;
     for (const auto& [identity, group] : hardware_groups) {
         static_cast<void>(identity);
         if (!group.native_provider_input_read) continue;
-        native_provider_input_read_owners.insert(
+        native_provider_input_read_priority_hint_owners.insert(
             group.owners.begin(), group.owners.end());
     }
     constexpr std::size_t maximum_native_hardware_sites_per_agent_task = 4u;
@@ -26829,13 +27643,13 @@ build_native_disc_materialization_world(
                 owner_hook_contract.code_identity &&
             !katana::runtime::native_port_hook_closes_product_contract(
                 owner_hook_contract.current_hook->requirement);
-        const bool blocked_by_native_provider_input_read =
-            current_hook_identity_bound_but_non_closing &&
+        const bool priority_hint_native_provider_input_read =
             !group.native_provider_input_read &&
             std::ranges::any_of(
                 group.owners,
                 [&](const auto owner) {
-                    return native_provider_input_read_owners.contains(owner);
+                    return native_provider_input_read_priority_hint_owners.contains(
+                        owner);
                 });
         const bool owner_hook_task_blocked =
             !current_hook_identity_bound_but_non_closing &&
@@ -26897,11 +27711,9 @@ build_native_disc_materialization_world(
             }
             entry.site = "gap-signature-" +
                 katana::io::sha256_bytes(task_identity.str()).substr(0u, 16u);
-            entry.state = blocked_by_native_provider_input_read
-                ? FrontierState::Candidate
-                : owner_hook_task_blocked
-                    ? FrontierState::Blocked
-                    : FrontierState::Open;
+            entry.state = owner_hook_task_blocked
+                ? FrontierState::Blocked
+                : FrontierState::Open;
             entry.proof = FrontierProof::StaticAnalyzer;
             entry.severity = FrontierSeverity::P0;
             entry.missing_proof = task_missing_proof;
@@ -26916,9 +27728,6 @@ build_native_disc_materialization_world(
                 group.native_provider_input_read)
                 entry.contracts.push_back(
                     "task-role:native-provider-input-read");
-            if (blocked_by_native_provider_input_read)
-                entry.contracts.push_back(
-                    "task-prerequisite:native-provider-input-read");
             if (owner_hook_contract.covered_size.has_value() &&
                 !owner_hook_contract.code_identity.empty()) {
                 entry.contracts.push_back(
@@ -26989,9 +27798,9 @@ build_native_disc_materialization_world(
                     "required-provider-proof="
                     "read-value-result-and-state-projection");
             }
-            if (blocked_by_native_provider_input_read)
+            if (priority_hint_native_provider_input_read)
                 entry.blocked_hardware.push_back(
-                    "task-prerequisite=native-provider-input-read");
+                    "priority-hint=native-provider-input-read-owner");
             for (const auto& field : group.provider_contract.fields) {
                 if (entry.blocked_hardware.size() >=
                     materialization_world_max_blocked_items)
@@ -27096,12 +27905,6 @@ build_native_disc_materialization_world(
                       "classified-hardware-operation-and-register-family",
                       "whole-owner-native-hook-admission",
                       owner_hook_contract.candidate_reason}
-                : blocked_by_native_provider_input_read
-                ? std::vector<std::string>{
-                      "owner-function",
-                      "native-provider-input-read-prerequisite",
-                      "classified-hardware-operation-and-register-family",
-                      "missing-provider-result-or-state-proof"}
                 : current_hook_identity_bound_but_non_closing &&
                     group.native_provider_input_read
                 ? std::vector<std::string>{

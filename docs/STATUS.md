@@ -30,7 +30,7 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `58`, Backend-
+Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `59`, Backend-
 Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil `23`.
 Der neue agentische Analyseworkflow mit Materialization-World, Frontier-
 Ledger und identity-bound Analysecheckpoint ist produktnah belegt.

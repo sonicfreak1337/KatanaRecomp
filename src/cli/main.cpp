@@ -11417,12 +11417,15 @@ void write_agent_frontier_json(
 
 int next_analysis_task_cli(const std::filesystem::path& artifact) {
     const auto world = load_agent_world(artifact);
-    katana::agent::AgentTaskView task;
-    const bool has_frontier = katana::agent::next_agent_task(world, task);
+    std::array<katana::agent::AgentTaskView, 3u> tasks{};
+    std::size_t task_count = 0u;
+    const bool has_frontier = katana::agent::next_agent_tasks(
+        world, tasks, task_count);
+    const auto& task = tasks.front();
     const auto decision = has_frontier
         ? task.decision
         : katana::agent::evaluate_agent_decision(world);
-    std::cout << "{\"schema\":1,\"kind\":\"katana-agent-task\""
+    std::cout << "{\"schema\":2,\"kind\":\"katana-agent-task\""
               << ",\"task_id\":" << decision.focus.value
               << ",\"decision\":"
               << katana::io::quote_json(
@@ -11464,6 +11467,44 @@ int next_analysis_task_cli(const std::filesystem::path& artifact) {
         write_agent_frontier_json(std::cout, *task.frontier);
     else
         std::cout << "null";
+    std::cout << ",\"task_count\":" << task_count
+              << ",\"tasks\":[";
+    for (std::size_t index = 0u; index < task_count; ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& batched = tasks[index];
+        const auto* const frontier = batched.frontier;
+        std::cout << "{\"task_id\":" << batched.decision.focus.value
+                  << ",\"priority\":"
+                  << (frontier != nullptr
+                          ? static_cast<unsigned>(frontier->severity) + 1u
+                          : 0u)
+                  << ",\"category\":";
+        if (frontier != nullptr)
+            std::cout << katana::io::quote_json(frontier->family);
+        else
+            std::cout << "null";
+        std::cout << ",\"title\":";
+        if (frontier != nullptr)
+            std::cout << katana::io::quote_json(
+                frontier->missing_proof.empty()
+                    ? frontier->family
+                    : frontier->missing_proof);
+        else
+            std::cout << "null";
+        std::cout << ",\"acceptance_predicate\":{"
+                  << "\"frontier_id\":"
+                  << batched.decision.focus.value
+                  << ",\"must_be_resolved\":true,"
+                  << "\"proof_downgrades\":0,"
+                  << "\"new_incomplete_roots\":0}"
+                  << ",\"frontier\":";
+        if (frontier != nullptr)
+            write_agent_frontier_json(std::cout, *frontier);
+        else
+            std::cout << "null";
+        std::cout << '}';
+    }
+    std::cout << ']';
     std::cout << "}\n" << std::flush;
     if (!std::cout)
         throw std::runtime_error(

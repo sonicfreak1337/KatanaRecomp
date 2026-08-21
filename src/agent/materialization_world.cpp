@@ -280,6 +280,14 @@ template <typename T>
            !entry.blocked_materializations.empty();
 }
 
+[[nodiscard]] bool frontier_is_native_provider_input_read(
+    const FrontierEntry& entry) noexcept {
+    return std::ranges::find(
+               entry.contracts,
+               "task-role:native-provider-input-read") !=
+           entry.contracts.end();
+}
+
 [[nodiscard]] bool frontier_task_priority_less(
     const FrontierEntry& lhs,
     const FrontierEntry& rhs) noexcept {
@@ -289,6 +297,11 @@ template <typename T>
     if (lhs.severity != rhs.severity)
         return static_cast<std::uint8_t>(lhs.severity) <
                static_cast<std::uint8_t>(rhs.severity);
+    const bool lhs_provider_read =
+        frontier_is_native_provider_input_read(lhs);
+    const bool rhs_provider_read =
+        frontier_is_native_provider_input_read(rhs);
+    if (lhs_provider_read != rhs_provider_read) return lhs_provider_read;
     const int lhs_state = frontier_state_rank(lhs.state);
     const int rhs_state = frontier_state_rank(rhs.state);
     if (lhs_state != rhs_state) return lhs_state < rhs_state;
@@ -2346,28 +2359,54 @@ bool parse_agent_world_binary(const std::span<const std::uint8_t> input,
 
 bool next_agent_task(const ExecutableMaterializationWorld& world,
                      AgentTaskView& output) noexcept {
-    output = {};
+    std::size_t written = 0u;
+    return next_agent_tasks(world, std::span<AgentTaskView>{&output, 1u},
+                            written);
+}
+
+bool next_agent_tasks(const ExecutableMaterializationWorld& world,
+                      const std::span<AgentTaskView> output,
+                      std::size_t& written) noexcept {
+    written = 0u;
+    for (auto& item : output) item = {};
+    if (output.empty()) return false;
     if (!world.validate()) return false;
-    output.decision = evaluate_agent_decision(world);
-    if (!output.decision.focus) return false;
+    const auto decision = evaluate_agent_decision(world);
+    if (!decision.focus) return false;
 
     const bool select_runtime =
-        output.decision.kind == AgentDecisionKind::RequiresRuntimeEvidence;
-    const FrontierEntry* selected = nullptr;
-    for (const auto& entry : world.frontier()) {
-        if (entry.state == FrontierState::Closed && entry.static_complete) continue;
-        if (entry.proof == FrontierProof::ExplicitRejection) continue;
-        const bool runtime = entry.runtime_evidence_required ||
-                             entry.state == FrontierState::ObservedHint ||
-                             entry.proof == FrontierProof::RuntimeObservation;
-        if (runtime != select_runtime) continue;
-        if (selected == nullptr || frontier_task_priority_less(entry, *selected))
-            selected = &entry;
+        decision.kind == AgentDecisionKind::RequiresRuntimeEvidence;
+    while (written < output.size()) {
+        const FrontierEntry* selected = nullptr;
+        for (const auto& entry : world.frontier()) {
+            if (entry.state == FrontierState::Closed && entry.static_complete)
+                continue;
+            if (entry.proof == FrontierProof::ExplicitRejection) continue;
+            const bool runtime = entry.runtime_evidence_required ||
+                                 entry.state == FrontierState::ObservedHint ||
+                                 entry.proof == FrontierProof::RuntimeObservation;
+            if (runtime != select_runtime) continue;
+            bool conflicts = false;
+            for (std::size_t index = 0u; index < written; ++index) {
+                const auto* const existing = output[index].frontier;
+                if (existing == nullptr) continue;
+                if (existing->id == entry.id ||
+                    existing->owner == entry.owner) {
+                    conflicts = true;
+                    break;
+                }
+            }
+            if (conflicts) continue;
+            if (selected == nullptr ||
+                frontier_task_priority_less(entry, *selected))
+                selected = &entry;
+        }
+        if (selected == nullptr) break;
+        auto item_decision = decision;
+        item_decision.focus = selected->id;
+        output[written++] = {item_decision, selected};
     }
-    if (selected == nullptr) return false;
-    output.decision.focus = selected->id;
-    output.frontier = selected;
-    return true;
+    return written != 0u;
 }
 
 bool explain_frontier(const ExecutableMaterializationWorld& world,

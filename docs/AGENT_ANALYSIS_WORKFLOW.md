@@ -87,6 +87,13 @@ katana-recomp diff-analysis `
   --format agent-json
 ```
 
+`next-analysis-task` Schema 2 behaelt den hoechst priorisierten Primary-Task
+und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu drei
+Frontiers. Batch-Eintraege besitzen verschiedene Owner, damit parallele
+Agenten nicht dieselbe Provider-/Ownergrenze editieren. Die Reihenfolge bleibt
+deterministisch; echte Read-Rollen werden priorisiert, waehrend eine blosse
+Same-Owner-Beziehung keine Abhaengigkeit erfindet.
+
 Stabile IDs sind in derselben Welt kollisionsgeprueft. Unbekannte Enumwerte,
 ueberlaufende Budgets, unvollstaendige Beziehungen und widerspruechliche
 Identitaeten machen das Artefakt ungueltig.
@@ -124,8 +131,10 @@ Completeness-Beweis missversteht.
 Bei einem identity-bound Provider, der den Produktvertrag noch nicht
 schliesst, markiert Katana statisch klassifizierte Hardware-Reads als
 `native-provider-input-read`. Der Agentselektor priorisiert diese bounded
-Result-/State-Voraussetzungen vor nachgelagerten Provider-Writes, auch wenn
-eine Writegruppe mehr Sites besitzt. Die Readrolle ist typisiert aus dem
+Result-/State-Aufgaben vor anderen gleich schweren Hardwaretasks. Weitere
+Operationen desselben Owners erhalten lediglich einen unverbindlichen
+Prioritaetshinweis: Ohne einen eigenen Datenflussbeweis werden sie weder als
+abhaengig noch als `Candidate` blockiert. Die Readrolle ist typisiert aus dem
 Hardware-Audit abgeleitet; Adressen oder Titelnamen beeinflussen die Prioritaet
 nicht.
 

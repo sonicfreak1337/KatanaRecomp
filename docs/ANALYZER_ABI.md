@@ -1,6 +1,6 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `58`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `59`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 8/Artefaktformat 6 und Analysis-
@@ -14,6 +14,13 @@ dem ersten vollstaendigen `analyze-port`-Ergebnis abgeschlossen werden. Der
 letzte RuntimeOnly-Bring-up-Meilenstein verwendet diesen Analyzer-ABI-
 Vertrag; der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt als ABI-34-Referenz erhalten.
+
+Analyzer-ABI 59 bindet die inkompatible, wertgebundene Pending-ABI-Scalar-
+Lane in `FunctionRegisterValueSummary`. Endliche Pending-Werte und ihr
+Truncationzustand bleiben bis zu einem bewiesenen ABI-/Callback-Gate getrennt
+von Callbackprovenienz; Objekte aus ABI 58 besitzen dieses oeffentliche Layout
+nicht und duerfen weder gelinkt noch aus einem Analysecache wiederverwendet
+werden.
 
 Analyzer-ABI 58 bindet zusaetzlich getrennte current-, detached- und
 Memory-Callback-Loss-Diagnosen sowie autoritative Storage-Summaries. ABI 57
