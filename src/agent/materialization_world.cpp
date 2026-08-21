@@ -2376,6 +2376,20 @@ bool next_agent_tasks(const ExecutableMaterializationWorld& world,
 
     const bool select_runtime =
         decision.kind == AgentDecisionKind::RequiresRuntimeEvidence;
+    const auto text_sets_overlap = [](const auto& lhs,
+                                      const auto& rhs) noexcept {
+        return std::any_of(
+            lhs.begin(), lhs.end(), [&](const auto& value) {
+                return std::find(rhs.begin(), rhs.end(), value) != rhs.end();
+            });
+    };
+    const auto task_owner = [](const FrontierEntry& entry)
+        -> std::string_view {
+        if (entry.family == "replacement-reachability" &&
+            entry.blocked_functions.size() == 1u)
+            return entry.blocked_functions.front();
+        return entry.owner;
+    };
     while (written < output.size()) {
         const FrontierEntry* selected = nullptr;
         for (const auto& entry : world.frontier()) {
@@ -2391,7 +2405,18 @@ bool next_agent_tasks(const ExecutableMaterializationWorld& world,
                 const auto* const existing = output[index].frontier;
                 if (existing == nullptr) continue;
                 if (existing->id == entry.id ||
-                    existing->owner == entry.owner) {
+                    task_owner(*existing) == task_owner(entry) ||
+                    text_sets_overlap(
+                        existing->blocked_sites, entry.blocked_sites) ||
+                    text_sets_overlap(
+                        existing->blocked_functions,
+                        entry.blocked_functions) ||
+                    text_sets_overlap(
+                        existing->blocked_materializations,
+                        entry.blocked_materializations) ||
+                    text_sets_overlap(
+                        existing->blocked_hardware,
+                        entry.blocked_hardware)) {
                     conflicts = true;
                     break;
                 }

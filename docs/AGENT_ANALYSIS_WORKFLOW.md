@@ -90,10 +90,24 @@ katana-recomp diff-analysis `
 `next-analysis-task` Schema 2 behaelt den hoechst priorisierten Primary-Task
 und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu drei
 Frontiers. Batch-Eintraege besitzen verschiedene Owner, damit parallele
-Agenten nicht dieselbe Provider-/Ownergrenze editieren. Die Reihenfolge bleibt
-deterministisch; echte offene Aufgaben schlagen blockierte Aufgaben. Innerhalb
-desselben Frontierzustands werden echte Read-Rollen priorisiert, waehrend eine
-blosse Same-Owner-Beziehung keine Abhaengigkeit erfindet.
+Agenten nicht dieselbe Provider-/Ownergrenze editieren. Sie duerfen ausserdem
+keine konkrete blockierte Site, Funktion, Materialisierung oder
+Hardwareressource teilen. Die Reihenfolge bleibt deterministisch; echte offene
+Aufgaben schlagen blockierte Aufgaben. Innerhalb desselben Frontierzustands
+werden echte Read-Rollen priorisiert, waehrend eine blosse
+Same-Owner-Beziehung keine Abhaengigkeit erfindet.
+
+Auch ein `replacement-reachability`-Task muss handlungsfaehige Evidenz tragen.
+Katana nennt deshalb die Owner-Funktion und fuer jeden bounded Resttransfer den
+typisierten Grund, die konkrete Instruktionssite sowie das Ziel, falls es
+statisch bekannt ist. Residuale indirekte Ziele bleiben ausdruecklich
+`unresolved`; sie werden weder erraten noch aus positiven Teilzielen als
+geschlossen abgeleitet. Ein Task umfasst hoechstens vier dieser Transfers und
+nennt den gesamten Owner-Fanout; nach Schliessen des Slices wird bei Bedarf der
+naechste bounded Slice ausgegeben. Stammt nur der autoritative Owner-Frontier
+aus einem Resume-Checkpoint, ohne dass die aktuelle IR-/CFA-Sicht den
+Einzeltransfer reproduzieren kann, bleibt der Task `Blocked` und fordert einen
+frischen Detailbeweis statt eine scheinbar konkrete Reparatur zu erfinden.
 
 Stabile IDs sind in derselben Welt kollisionsgeprueft. Unbekannte Enumwerte,
 ueberlaufende Budgets, unvollstaendige Beziehungen und widerspruechliche

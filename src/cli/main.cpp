@@ -11356,10 +11356,19 @@ void write_agent_string_vector_json(
 void write_agent_frontier_json(
     std::ostream& output,
     const katana::agent::FrontierEntry& entry) {
+    const bool projected_replacement_owner =
+        entry.family == "replacement-reachability" &&
+        entry.blocked_functions.size() == 1u;
+    const std::string_view agent_owner = projected_replacement_owner
+        ? entry.blocked_functions.front()
+        : entry.owner;
     output << "{\"id\":" << entry.id.value
            << ",\"family\":" << katana::io::quote_json(entry.family)
-           << ",\"owner\":" << katana::io::quote_json(entry.owner)
-           << ",\"site\":" << katana::io::quote_json(entry.site)
+           << ",\"owner\":" << katana::io::quote_json(agent_owner);
+    if (projected_replacement_owner)
+        output << ",\"world_owner\":"
+               << katana::io::quote_json(entry.owner);
+    output << ",\"site\":" << katana::io::quote_json(entry.site)
            << ",\"state\":"
            << katana::io::quote_json(
                   katana::agent::frontier_state_name(entry.state))

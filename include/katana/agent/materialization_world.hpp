@@ -345,9 +345,9 @@ class ExecutableMaterializationWorld;
 [[nodiscard]] bool next_agent_task(const ExecutableMaterializationWorld& world,
                                    AgentTaskView& output) noexcept;
 // Selects a deterministic bounded batch of independent tasks. Entries sharing
-// one owner are not emitted together, so parallel agents cannot race on the
-// same provider/owner contract. The first item is identical to
-// next_agent_task().
+// one owner or one concrete blocked site/function/materialization/hardware item
+// are not emitted together, so parallel agents cannot race on the same proof
+// contract. The first item is identical to next_agent_task().
 [[nodiscard]] bool next_agent_tasks(
     const ExecutableMaterializationWorld& world,
     std::span<AgentTaskView> output,

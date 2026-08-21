@@ -21957,6 +21957,50 @@ struct NativePortExternalEntry final {
     auto operator<=>(const NativePortExternalEntry&) const = default;
 };
 
+enum class NativePortIncompleteOutgoingKind : std::uint8_t {
+    UnownedDirectCallee,
+    UnownedCfgSuccessor,
+    UnownedInstructionTarget,
+    UnownedResolvedTarget,
+    ResidualIndirectSuccessor,
+    IncompleteAnalysisEdge,
+    UnownedAnalysisEdgeTarget,
+    UnownedSeedTarget
+};
+
+struct NativePortIncompleteOutgoingEvidence final {
+    NativePortIncompleteOutgoingKind kind =
+        NativePortIncompleteOutgoingKind::ResidualIndirectSuccessor;
+    std::optional<std::uint32_t> instruction_address;
+    std::optional<std::uint32_t> target_address;
+
+    auto operator<=>(const NativePortIncompleteOutgoingEvidence&) const =
+        default;
+};
+
+std::string_view native_port_incomplete_outgoing_kind_name(
+    const NativePortIncompleteOutgoingKind kind) noexcept {
+    switch (kind) {
+    case NativePortIncompleteOutgoingKind::UnownedDirectCallee:
+        return "unowned-direct-callee";
+    case NativePortIncompleteOutgoingKind::UnownedCfgSuccessor:
+        return "unowned-cfg-successor";
+    case NativePortIncompleteOutgoingKind::UnownedInstructionTarget:
+        return "unowned-instruction-target";
+    case NativePortIncompleteOutgoingKind::UnownedResolvedTarget:
+        return "unowned-resolved-target";
+    case NativePortIncompleteOutgoingKind::ResidualIndirectSuccessor:
+        return "residual-indirect-successor";
+    case NativePortIncompleteOutgoingKind::IncompleteAnalysisEdge:
+        return "incomplete-analysis-edge";
+    case NativePortIncompleteOutgoingKind::UnownedAnalysisEdgeTarget:
+        return "unowned-analysis-edge-target";
+    case NativePortIncompleteOutgoingKind::UnownedSeedTarget:
+        return "unowned-seed-target";
+    }
+    return "unknown";
+}
+
 struct NativePortProgramIndex final {
     std::map<std::uint32_t, std::set<std::uint32_t>> instruction_owners;
     std::map<std::uint32_t, NativePortFunctionBoundaryEvidence>
@@ -21975,6 +22019,12 @@ struct NativePortProgramIndex final {
     std::set<std::uint32_t> exact_external_entries;
     std::set<std::uint32_t> external_function_roots;
     std::set<std::uint32_t> incomplete_outgoing_function_entries;
+    // Diagnostic detail is rebuilt from the currently materialized IR/CFA.
+    // The checkpoint owner set remains authoritative; this map may only
+    // explain an owner already present in that set, never create one.
+    std::map<std::uint32_t,
+             std::set<NativePortIncompleteOutgoingEvidence>>
+        incomplete_outgoing_evidence;
     std::set<std::uint32_t> function_entries;
     std::set<std::uint32_t> guarded_entries;
     std::set<std::uint32_t> seed_entries;
@@ -22318,28 +22368,58 @@ NativePortProgramIndex build_native_port_program_index(
             }
             return false;
         };
+    const auto mark_incomplete_outgoing =
+        [&](const std::uint32_t source_entry,
+            const NativePortIncompleteOutgoingKind kind,
+            const std::optional<std::uint32_t> instruction_address,
+            const std::optional<std::uint32_t> target_address) {
+            index.incomplete_outgoing_function_entries.insert(source_entry);
+            index.incomplete_outgoing_evidence[source_entry].insert(
+                {kind, instruction_address, target_address});
+        };
+    const auto block_control_address = [](const auto& block)
+        -> std::optional<std::uint32_t> {
+        if (block.instructions.empty()) return std::nullopt;
+        const auto* control = &block.instructions.back();
+        if (control->delay_slot.role == katana::ir::DelaySlotRole::Slot) {
+            if (block.instructions.size() < 2u) return std::nullopt;
+            control = &block.instructions[block.instructions.size() - 2u];
+        }
+        return control->source_address;
+    };
     for (const auto& function : program) {
         for (const auto callee : function.direct_callees) {
             if (!append_function_edge(function.entry_address, callee))
-                index.incomplete_outgoing_function_entries.insert(
-                    function.entry_address);
+                mark_incomplete_outgoing(
+                    function.entry_address,
+                    NativePortIncompleteOutgoingKind::UnownedDirectCallee,
+                    std::nullopt, callee);
         }
         for (const auto& block : function.blocks) {
             for (const auto successor : block.successors) {
                 if (!append_function_edge(function.entry_address, successor))
-                    index.incomplete_outgoing_function_entries.insert(
-                        function.entry_address);
+                    mark_incomplete_outgoing(
+                        function.entry_address,
+                        NativePortIncompleteOutgoingKind::UnownedCfgSuccessor,
+                        block_control_address(block), successor);
             }
             for (const auto& instruction : block.instructions) {
                 if (instruction.target_address.has_value() &&
                     !append_function_edge(function.entry_address,
                                           *instruction.target_address))
-                    index.incomplete_outgoing_function_entries.insert(
-                        function.entry_address);
+                    mark_incomplete_outgoing(
+                        function.entry_address,
+                        NativePortIncompleteOutgoingKind::
+                            UnownedInstructionTarget,
+                        instruction.source_address,
+                        *instruction.target_address);
                 for (const auto target : instruction.resolved_targets) {
                     if (!append_function_edge(function.entry_address, target))
-                        index.incomplete_outgoing_function_entries.insert(
-                            function.entry_address);
+                        mark_incomplete_outgoing(
+                            function.entry_address,
+                            NativePortIncompleteOutgoingKind::
+                                UnownedResolvedTarget,
+                            instruction.source_address, target);
                 }
             }
             // `has_indirect_successor` is the authoritative residual-unknown
@@ -22347,8 +22427,11 @@ NativePortProgramIndex build_native_port_program_index(
             // retaining an unbounded remainder; those positive edges do not
             // make a negative reachability proof complete.
             if (block.has_indirect_successor)
-                index.incomplete_outgoing_function_entries.insert(
-                    function.entry_address);
+                mark_incomplete_outgoing(
+                    function.entry_address,
+                    NativePortIncompleteOutgoingKind::
+                        ResidualIndirectSuccessor,
+                    block_control_address(block), std::nullopt);
         }
     }
     for (const auto& edge : analysis.resolved_edges) {
@@ -22367,9 +22450,16 @@ NativePortProgramIndex build_native_port_program_index(
             // remains an incomplete frontier.
             if (!katana::analysis::control_flow_evidence_complete(
                     katana::analysis::resolved_edge_evidence(edge)))
-                index.incomplete_outgoing_function_entries.insert(source);
+                mark_incomplete_outgoing(
+                    source,
+                    NativePortIncompleteOutgoingKind::IncompleteAnalysisEdge,
+                    edge.instruction_address, edge.target_address);
             if (!append_function_edge(source, edge.target_address))
-                index.incomplete_outgoing_function_entries.insert(source);
+                mark_incomplete_outgoing(
+                    source,
+                    NativePortIncompleteOutgoingKind::
+                        UnownedAnalysisEdgeTarget,
+                    edge.instruction_address, edge.target_address);
         }
     }
     for (const auto& fact : analysis.seed_facts) {
@@ -22382,7 +22472,10 @@ NativePortProgramIndex build_native_port_program_index(
             has_owned_source = true;
             for (const auto source : sources->second) {
                 if (!append_function_edge(source, fact.target_address))
-                    index.incomplete_outgoing_function_entries.insert(source);
+                    mark_incomplete_outgoing(
+                        source,
+                        NativePortIncompleteOutgoingKind::UnownedSeedTarget,
+                        *cause.source_address, fact.target_address);
             }
         }
         // A rootless analysis seed is structural discovery evidence, not an
@@ -28101,25 +28194,124 @@ build_native_disc_materialization_world(
     for (const auto site :
          result.admitted_state->native_hardware_closure
              .replacement_reachability_incomplete_frontier) {
+        const auto& program_index =
+            result.admitted_state->native_port_program_index;
+        const auto evidence =
+            program_index.incomplete_outgoing_evidence.find(site);
+        const bool has_detailed_evidence =
+            evidence != program_index.incomplete_outgoing_evidence.end() &&
+            !evidence->second.empty();
+        constexpr std::size_t maximum_task_transfer_details = 4u;
         FrontierEntry entry;
         entry.family = "replacement-reachability";
+        // Preserve the logical frontier identity across diagnostic upgrades.
+        // Agent-facing serialization projects the exact owner function from
+        // blocked_functions; blocked_sites carries the bounded transfer slice.
         entry.owner = "native-product-aot";
         entry.site = guarded_aot_address(site);
-        entry.state = FrontierState::Open;
+        entry.state = has_detailed_evidence
+                          ? FrontierState::Open
+                          : FrontierState::Blocked;
         entry.proof = FrontierProof::StaticAnalyzer;
         entry.severity = FrontierSeverity::P0;
-        entry.missing_proof = "whole-owner replacement reachability";
-        entry.fanout = 1u;
+        entry.missing_proof = "closed outgoing transfer proof";
+        if (has_detailed_evidence) {
+            entry.missing_proof += ": ";
+            entry.missing_proof +=
+                native_port_incomplete_outgoing_kind_name(
+                    evidence->second.begin()->kind);
+        } else {
+            entry.missing_proof +=
+                "; exact edge detail unavailable from resumed checkpoint";
+        }
+        entry.fanout = has_detailed_evidence
+            ? static_cast<std::uint32_t>(std::min<std::size_t>(
+                  evidence->second.size(),
+                  std::numeric_limits<std::uint32_t>::max()))
+            : 1u;
         entry.blocked_kind = FrontierBlockKind::Function;
         entry.evidence = {analysis_evidence, provider_evidence};
         entry.blocked_functions = {guarded_aot_address(site)};
-        entry.causal_chain = {
-            "replacement-hook",
-            "owner-entry",
-            "unproven-reachable-consumer"};
+        entry.contracts = {
+            "checkpoint-owner-frontier-authoritative"};
+        bool selected_slice_requires_analysis_source = false;
+        if (has_detailed_evidence) {
+            entry.contracts.push_back(
+                "outgoing-transfer-slice=" +
+                std::to_string(std::min<std::size_t>(
+                    evidence->second.size(),
+                    maximum_task_transfer_details)) +
+                "-of-" + std::to_string(evidence->second.size()));
+            std::size_t emitted_details = 0u;
+            for (const auto& detail : evidence->second) {
+                if (emitted_details >= maximum_task_transfer_details)
+                    break;
+                std::string contract =
+                    "outgoing-transfer;kind=" +
+                    std::string(native_port_incomplete_outgoing_kind_name(
+                        detail.kind));
+                contract += ";site=";
+                contract += detail.instruction_address.has_value()
+                    ? guarded_aot_address(*detail.instruction_address)
+                    : "unavailable";
+                contract += ";target=";
+                contract += detail.target_address.has_value()
+                    ? guarded_aot_address(*detail.target_address)
+                    : "unresolved";
+                entry.contracts.push_back(std::move(contract));
+                ++emitted_details;
+                selected_slice_requires_analysis_source =
+                    selected_slice_requires_analysis_source ||
+                    detail.kind ==
+                        NativePortIncompleteOutgoingKind::
+                            ResidualIndirectSuccessor ||
+                    detail.kind ==
+                        NativePortIncompleteOutgoingKind::
+                            IncompleteAnalysisEdge;
+                if (detail.instruction_address.has_value() &&
+                    entry.blocked_sites.size() <
+                        maximum_task_transfer_details) {
+                    const auto address = guarded_aot_address(
+                        *detail.instruction_address);
+                    if (std::ranges::find(entry.blocked_sites, address) ==
+                        entry.blocked_sites.end())
+                        entry.blocked_sites.push_back(address);
+                }
+            }
+        }
+        entry.causal_chain = has_detailed_evidence
+            ? std::vector<std::string>{
+                  "owner-entry",
+                  "typed-incomplete-outgoing-transfer",
+                  "target-ownership-or-edge-completeness-unproven"}
+            : std::vector<std::string>{
+                  "checkpoint-owner-frontier",
+                  "recomputed-edge-detail-unavailable",
+                  "fresh-analysis-required-for-actionable-site"};
+        entry.source_paths = {"src/codegen/port_export.cpp"};
+        if (selected_slice_requires_analysis_source) {
+            entry.source_paths.push_back(
+                "src/analysis/function_value_analysis.cpp");
+            entry.source_paths.push_back(
+                "src/analysis/control_flow_analysis.cpp");
+        }
+        entry.source_symbols = {
+            "build_native_port_program_index",
+            "native_port_reachable_function_entries",
+            "native_port_reachability_eliminated_sites",
+            "owner-entry:" + guarded_aot_address(site)};
+        for (const auto& blocked_site : entry.blocked_sites)
+            entry.source_symbols.push_back(
+                "instruction-site:" + blocked_site);
+        entry.invariants = {
+            "checkpoint-owner-frontier-remains-authoritative",
+            "unknown-targets-remain-unresolved",
+            "no-replacement-proof-from-partial-edge-evidence"};
         entry.acceptance_criteria = {
             "identity-bound-owner-cfg",
-            "all-reachable-consumers-subsumed"};
+            "all-listed-outgoing-targets-have-one-owned-function",
+            "all-listed-runtime-only-or-partial-edge-remainders-closed",
+            "listed-transfer-slice-no-longer-blocks-reachability"};
         add_frontier(std::move(entry));
     }
 
