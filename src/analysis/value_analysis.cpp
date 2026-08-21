@@ -134,8 +134,12 @@ std::optional<std::uint32_t> read_immutable_integer(const katana::io::Executable
                                                     const EntrySnapshotState* snapshot = nullptr) {
     if (image == nullptr) return std::nullopt;
     const auto* segment = image->find_segment(address, width);
-    if (segment == nullptr ||
-        (segment->permissions.writable && !snapshot_range_unchanged(snapshot, address, width)))
+    if (segment == nullptr)
+        return std::nullopt;
+    const bool identity_bound_immutable =
+        image->find_immutable_range(address, width) != nullptr;
+    if (segment->permissions.writable && !identity_bound_immutable &&
+        !snapshot_range_unchanged(snapshot, address, width))
         return std::nullopt;
     return read_committed_integer(image, address, width);
 }
@@ -405,11 +409,14 @@ void apply_local_transfer(RegisterConstants& state,
             return;
         }
         const auto* segment = image == nullptr ? nullptr : image->find_segment(address, width);
+        const bool identity_bound_immutable =
+            image != nullptr && image->find_immutable_range(address, width) != nullptr;
         set_constant(state,
                      instruction.destination_register,
                      *value,
                      guarded ? "guarded-writable-pc-relative-literal"
-                     : segment != nullptr && segment->permissions.writable
+                     : segment != nullptr && segment->permissions.writable &&
+                               !identity_bound_immutable
                          ? "entry-snapshot-pc-relative-literal"
                          : "pc-relative-literal");
         return;
@@ -727,10 +734,16 @@ analyze_local_control_flow(const std::span<const katana::sh4::DisassemblyLine> l
                 const auto* segment = resolved_address.has_value()
                                           ? image.find_segment(*resolved_address, 4u)
                                           : nullptr;
-                source_allowed = segment != nullptr && initial_snapshot_segment(image, *segment);
+                const bool identity_bound_immutable =
+                    resolved_address.has_value() &&
+                    image.find_immutable_range(*resolved_address, 4u) != nullptr;
+                source_allowed = segment != nullptr &&
+                    (identity_bound_immutable ||
+                     initial_snapshot_segment(image, *segment));
                 if (source_allowed) {
                     value = read_immutable_integer(&image, *resolved_address, 4u, &snapshot);
-                    source = segment->permissions.writable
+                    source = segment->permissions.writable &&
+                                     !identity_bound_immutable
                                  ? "entry-snapshot-pr-memory"
                                  : "bounded-immutable-pr-memory";
                 }

@@ -2277,13 +2277,9 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 : static_cast<std::uint64_t>(table.entry_count - 1u) *
                           table.entry_stride +
                       table_width;
-        const auto proof_begin = std::min(
-            static_cast<std::uint64_t>(table.dispatch_address),
-            static_cast<std::uint64_t>(table.table_address));
-        const auto proof_end = std::max(
-            static_cast<std::uint64_t>(table.dispatch_address) + 4u,
-            static_cast<std::uint64_t>(table.table_address) + table_extent);
-        const auto identity = std::find_if(
+        const auto table_end =
+            static_cast<std::uint64_t>(table.table_address) + table_extent;
+        const auto table_identity = std::find_if(
             definition.code_identities.begin(),
             definition.code_identities.end(),
             [&](const auto& candidate) {
@@ -2291,20 +2287,33 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                     static_cast<std::uint64_t>(candidate.address) +
                     candidate.size;
                 return candidate.image_id == table.image_id &&
-                       candidate.address <= proof_begin &&
-                       candidate_end >= proof_end;
+                       candidate.address <= table.table_address &&
+                       candidate_end >= table_end;
             });
-        const auto resolved_identity =
-            identity != definition.code_identities.end()
-                ? image.resolve_segment_address(identity->address,
-                                                identity->size)
+        const auto resolved_table_identity =
+            table_identity != definition.code_identities.end()
+                ? image.resolve_segment_address(table_identity->address,
+                                                table_identity->size)
                 : std::nullopt;
+        constexpr auto dispatch_proof_width = sizeof(std::uint32_t);
+        const auto resolved_dispatch = image.resolve_segment_address(
+            table.dispatch_address, dispatch_proof_width);
+        // The declaration correlates two independently bounded facts: the
+        // exact table bytes and the already committed dispatch instruction.
+        // Requiring one CodeIdentity to span both also requires every byte in
+        // the unrelated gap and rejects valid layouts where code and its
+        // literal table have deliberately separate identities.  The control-
+        // flow analyzer still verifies the decoded dispatch kind and transfer
+        // at the exact address before it can publish GuardedComplete evidence.
         declaration.identity_bound_complete =
             table.entry_count != 0u &&
             table_extent <= std::numeric_limits<std::size_t>::max() &&
-            resolved_identity.has_value() &&
-            image.find_immutable_range(*resolved_identity, identity->size) !=
-                nullptr;
+            resolved_table_identity.has_value() &&
+            image.find_immutable_range(
+                *resolved_table_identity, table_identity->size) != nullptr &&
+            resolved_dispatch.has_value() &&
+            image.find_immutable_range(
+                *resolved_dispatch, dispatch_proof_width) != nullptr;
         overrides.jump_tables.push_back(declaration);
     }
     return overrides;

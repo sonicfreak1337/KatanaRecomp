@@ -127,10 +127,11 @@ struct GameProjectSymbol {
 // executable (for example an overlay or a runtime-loaded module). The identity
 // is SHA-256 over exactly [address, address + size). The exporter validates
 // these ranges before accepting title-owned hooks or metadata. In a native
-// product, a base-image JumpTable whose complete byte range is covered by one
-// of these identities makes that complete identity range read-only: analysis
-// may use its exact table/guard literals and the generated runtime rejects
-// writes to the same identity-bound range.
+// product, a base-image JumpTable whose complete table-byte range is covered
+// by one of these identities makes that complete identity range read-only.
+// Analysis separately verifies its committed dispatch instruction and delay
+// slot, may then use the exact table/guard literals, and the generated runtime
+// rejects writes to the same identity-bound table range.
 struct GameProjectCodeIdentity {
     std::uint32_t address = 0u;
     std::uint32_t size = 0u;
