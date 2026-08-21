@@ -1385,6 +1385,7 @@ struct StaticCodePointerChain {
     std::set<std::uint32_t> definition_sites;
     bool complete = false;
     bool preceding_call = false;
+    bool preceding_call_transport_abi_proven = true;
     bool exact_target_guard = false;
     ExactGuardRejectionReason exact_target_rejection_reason =
         ExactGuardRejectionReason::None;
@@ -1396,9 +1397,10 @@ struct StaticCodePointerChain {
 //
 // without promoting mutable/runtime values to complete control-flow proof.
 // Every incoming CFG path must reach the same unique writer chain.  A chain is
-// eligible for an exact edge only when its source bytes are readable,
-// non-writable image bytes, no call intervenes, and the final address is an
-// immutable executable entry.  MOVA is admitted under the same contract for
+// eligible for an exact edge only when its source bytes are identity-bound,
+// every intervening call transports the value in a nonvolatile register of
+// the image's proven guest ABI, and the final address is an immutable
+// executable entry. MOVA is admitted under the same contract for
 // compiler-generated local thunk addresses.
 StaticCodePointerChain resolve_static_code_pointer_chain(
     const WriterSliceIndex& index,
@@ -1415,13 +1417,20 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
         if (!visited.emplace(before_address, register_index).second) return result;
         const auto slice = bounded_writer_slice(index, before_address, register_index);
         result.preceding_call = result.preceding_call || slice.preceding_call;
+        if (slice.preceding_call) {
+            result.preceding_call_transport_abi_proven =
+                result.preceding_call_transport_abi_proven &&
+                image.guest_call_abi() ==
+                    katana::io::GuestCallAbi::SuperHC &&
+                register_index >= 8u && register_index <= 14u;
+        }
         result.definition_sites.insert(slice.writers.begin(), slice.writers.end());
-        // r8-r14 are the SH-4 ABI's nonvolatile general registers.  Crossing a
-        // call in one of them is admitted only as guarded AOT inventory: a
-        // non-conforming callee can still change the runtime target, but the
-        // extra decode-validated candidate cannot redirect execution or prove
-        // the dynamic target set complete. Caller-saved chains remain cut at
-        // every call.
+        // r8-r14 are the SH-C ABI's nonvolatile general registers. With an
+        // unknown ABI, crossing a call in one of them remains guarded AOT
+        // inventory only: a non-conforming callee can still change the live
+        // target. An explicitly bound SuperHC image proves that transport and
+        // may retain the exact immutable chain. Caller-saved chains remain
+        // cut at every call.
         const bool call_transport_admissible =
             !slice.preceding_call ||
             (register_index >= 8u && register_index <= 14u);
@@ -1553,11 +1562,14 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
                      same_proof(dispatch_proof, literal_proof) &&
                      same_proof(dispatch_proof, target_proof);
         result.exact_target_guard =
-            target_opcode_known && !result.preceding_call &&
+            target_opcode_known &&
+            (!result.preceding_call ||
+             result.preceding_call_transport_abi_proven) &&
             immutable_dispatch && immutable_definition_sites &&
             immutable_literal && immutable_target && same_image;
         if (!result.exact_target_guard) {
-            if (result.preceding_call)
+            if (result.preceding_call &&
+                !result.preceding_call_transport_abi_proven)
                 result.exact_target_rejection_reason =
                     ExactGuardRejectionReason::PrecedingCall;
             else if (target_segment == nullptr ||
@@ -1652,7 +1664,8 @@ void classify_dynamic_sites(
                     static_chain.definition_sites.begin(),
                     static_chain.definition_sites.end());
                 resolution.definition_complete =
-                    !static_chain.preceding_call;
+                    !static_chain.preceding_call ||
+                    static_chain.preceding_call_transport_abi_proven;
                 resolution.analysis_candidates.push_back(target);
                 std::sort(resolution.analysis_candidates.begin(),
                           resolution.analysis_candidates.end());
@@ -2568,6 +2581,7 @@ constexpr std::size_t maximum_control_flow_session_seed_evidence_items =
 
 struct ControlFlowSessionOptionsBinding final {
     bool detailed_cache_miss_telemetry = false;
+    bool enable_function_value_analysis = true;
     std::size_t maximum_fixpoint_iterations = 0u;
     std::size_t maximum_instructions = 0u;
     std::size_t maximum_contexts = 0u;
@@ -2581,6 +2595,7 @@ struct ControlFlowSessionOptionsBinding final {
 make_control_flow_session_options_binding(
     const ControlFlowAnalysisOptions& options) noexcept {
     return {options.detailed_cache_miss_telemetry,
+            options.enable_function_value_analysis,
             options.maximum_fixpoint_iterations,
             options.maximum_instructions,
             options.maximum_contexts,
@@ -3290,9 +3305,12 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         options.maximum_persistent_function_analysis_epoch_blob_bytes == 0u ||
         options.persistent_function_analysis_epoch_import_blob.size() >
             options.maximum_persistent_function_analysis_epoch_blob_bytes;
-    // ABI-less inputs still have a valid local CFG/decode contract. They must
-    // not stage an interprocedural delta that FVA deliberately cannot consume.
+    // ABI-less inputs still have a valid local CFG/decode contract. A caller
+    // may also deliberately disable interprocedural FVA without erasing the
+    // image's independently proven local call ABI. Neither case may stage an
+    // interprocedural delta that FVA cannot consume.
     const bool function_value_analysis_supported =
+        options.enable_function_value_analysis &&
         image.guest_call_abi() == katana::io::GuestCallAbi::SuperHC;
     auto& jump_table_cache = session_state.jump_table_cache;
     auto& cfa_scan_cache = session_state.cfa_scan_cache;
@@ -4812,7 +4830,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             candidate_contract_iteration =
                 candidate_cycle_ledger.size();
             report_progress(
-                !function_value_analysis_supported
+                !options.enable_function_value_analysis
+                    ? "function-values-skipped-by-analysis-policy"
+                : !function_value_analysis_supported
                     ? "function-values-skipped-unsupported-abi"
                     : candidate_cycle_ledger.size() == 1u
                           ? "function-values-start"

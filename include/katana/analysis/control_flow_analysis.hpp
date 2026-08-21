@@ -561,6 +561,12 @@ struct ControlFlowAnalysisOptions {
     // Detailed cache-miss history is diagnostic work and remains independent
     // from live progress and execution limits.
     bool detailed_cache_miss_telemetry = false;
+    // Function-value analysis is a discovery policy, not an ABI identity.
+    // Runtime-only products may deliberately omit the interprocedural FVA
+    // fixpoint while local CFA still consumes the image's proven guest ABI
+    // (for example the SH-C nonvolatile r8-r14 contract). Disabling this flag
+    // must never rewrite or weaken ExecutableImage::guest_call_abi().
+    bool enable_function_value_analysis = true;
     // Limits are enforced by the analyzer itself. Progress observers remain
     // observational and their exceptions can never request cancellation.
     std::size_t maximum_fixpoint_iterations =

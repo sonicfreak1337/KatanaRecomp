@@ -400,17 +400,23 @@ std::string native_port_input_compatibility_identity(
 }
 
 std::string boot_analysis_semantic_contract_identity(
-    const PortExportOptions&) {
+    const PortExportOptions&,
+    const bool enable_function_value_analysis) {
     std::ostringstream material;
     const auto append =
         [&material](const std::string_view value) {
             material << value.size() << ':' << value << ';';
         };
-    // The boot analyzer consumes only the already-materialized image and the
-    // explicit AnalysisOverrides passed separately to the cache key. Latent
-    // discovery mode/hints and runtime-only GameProject fields are downstream
-    // contracts and must not invalidate an otherwise identical boot epoch.
-    append("katana-boot-analysis-semantic-contract-v2");
+    // The boot analyzer consumes the already-materialized image, the explicit
+    // AnalysisOverrides passed separately to the cache key, and the policy
+    // which decides whether the interprocedural FVA fixpoint participates.
+    // The policy is independent from the image's real guest ABI and therefore
+    // must be bound explicitly instead of weakening that ABI as a cache-key
+    // side effect. Latent discovery mode/hints remain downstream contracts.
+    append("katana-boot-analysis-semantic-contract-v3");
+    append(enable_function_value_analysis
+               ? "function-value-analysis-enabled"
+               : "function-value-analysis-disabled");
     return katana::io::sha256_bytes(material.str());
 }
 
@@ -25755,8 +25761,6 @@ native_disc_analysis_resume_manifest_identity(
             options.native_port_definition == nullptr,
             options.native_port_definition);
     }
-    if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly)
-        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
     bind_post_bootstrap_immutable_image_ranges(
         image, options.native_port_definition, options.game_project);
     for (const auto root : external_primary_roots)
@@ -25790,7 +25794,9 @@ native_disc_analysis_resume_manifest_identity(
     identity.image_analysis_key = make_boot_analysis_cache_key(
         image,
         overrides ? &*overrides : nullptr,
-        boot_analysis_semantic_contract_identity(options),
+        boot_analysis_semantic_contract_identity(
+            options,
+            analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly),
         options.analysis_cache_implementation_identity);
     identity.key = native_disc_analysis_artifact_identity_key(identity);
     return identity;
@@ -29625,7 +29631,11 @@ try_reuse_native_disc_analysis_artifact(
         const auto image_key = make_boot_analysis_cache_key(
             image,
             current_overrides ? &*current_overrides : nullptr,
-            boot_analysis_semantic_contract_identity(options),
+            boot_analysis_semantic_contract_identity(
+                options,
+                static_cast<PortAnalysisMode>(
+                    expected_identity.analysis_mode) !=
+                    PortAnalysisMode::ConservativeRuntimeOnly),
             options.analysis_cache_implementation_identity);
         if (image_key != artifact.identity.image_analysis_key)
             return reject("image-analysis-key");
@@ -31066,6 +31076,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     const PortExportOptions& options,
     const std::string_view progress_label,
     const bool defer_derived_artifacts = false,
+    const bool enable_function_value_analysis = true,
     katana::analysis::ControlFlowAnalysisSession* const analysis_session =
         nullptr,
     const bool allow_persistent_epoch_import = true) {
@@ -31085,7 +31096,8 @@ PreparedBootAnalysisRun prepare_boot_analysis(
         cache_key = make_boot_analysis_cache_key(
             image,
             overrides,
-            boot_analysis_semantic_contract_identity(options),
+            boot_analysis_semantic_contract_identity(
+                options, enable_function_value_analysis),
             options.analysis_cache_implementation_identity);
         cache = std::make_unique<CodegenCache>(
             options.analysis_cache_root / "boot");
@@ -31179,6 +31191,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
         report_progress(options, "analysis-ir-cache-miss");
 
     const bool epoch_cache_enabled =
+        enable_function_value_analysis &&
         !options.diagnostic_partial &&
         !options.analysis_cache_root.empty() &&
         !options.analysis_implementation_identity.empty();
@@ -31263,6 +31276,8 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     katana::analysis::ControlFlowAnalysisOptions analysis_options;
     analysis_options.detailed_cache_miss_telemetry =
         options.detailed_analysis_telemetry;
+    analysis_options.enable_function_value_analysis =
+        enable_function_value_analysis;
     analysis_options.persistent_function_analysis_epoch_import_blob =
         std::span<const std::uint8_t>(
             reinterpret_cast<const std::uint8_t*>(epoch_import_blob.data()),
@@ -31463,7 +31478,6 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             options.native_port_definition);
     }
     if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly) {
-        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
         report_progress(options,
                         "native-disc-game-project-runtime-only-analysis");
     }
@@ -31613,6 +31627,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         options,
         "native-disc-control-flow",
         true,
+        analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly,
         &analysis_session);
     std::size_t boot_analysis_pipeline_runs =
         prepared_analysis.full_pipeline_runs;
@@ -31806,6 +31821,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             options,
             "native-disc-cross-image-callback-control-flow",
             true,
+            analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly,
             &analysis_session,
             false);
         boot_analysis_pipeline_runs +=
@@ -31979,7 +31995,9 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             external_port_overrides
                 ? &*external_port_overrides
                 : nullptr,
-            boot_analysis_semantic_contract_identity(options),
+            boot_analysis_semantic_contract_identity(
+                options,
+                analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly),
             options.analysis_cache_implementation_identity);
     analysis_artifact_identity.key =
         native_disc_analysis_artifact_identity_key(
@@ -32162,7 +32180,6 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
     external_port_overrides = port_analysis_overrides(
         options.game_project, options.native_port_definition, image);
     if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly) {
-        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
         report_progress(
             options,
             "boot-artifact-game-project-runtime-only-analysis");
@@ -32173,7 +32190,9 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         image,
         external_port_overrides ? &*external_port_overrides : nullptr,
         options,
-        "boot-artifact-control-flow");
+        "boot-artifact-control-flow",
+        false,
+        analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly);
     auto& analysis = prepared_analysis.artifact.analysis;
     auto& program = prepared_analysis.artifact.lowered_program;
     report_progress(options, "ir-optimization");

@@ -1,6 +1,6 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `59`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `60`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
@@ -13,6 +13,17 @@ der erste vollstaendige `analyze-port`-Lauf samt identitaetsgebundenem Resume
 ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt ausschliesslich als
 ABI-34-Referenz erhalten.
+
+Analyzer-ABI 60 trennt die policyseitige Deaktivierung des
+interprozeduralen Function-Value-Fixpunkts von der realen Guest-Call-ABI des
+analysierten Images. RuntimeOnly darf FVA auslassen, ohne dadurch den
+bewiesenen SH-C-Vertrag fuer die nonvolatilen Register r8 bis r14 aus der
+lokalen CFA zu loeschen. Eine identitaetsgebundene statische Pointerkette darf
+einen intervenierenden Call nur dann als exakten Transfer ueberqueren, wenn
+der Wert auf jedem solchen Abschnitt in einem nonvolatilen Register liegt und
+das Image ausdruecklich `SuperHC` bindet. Unbekannte ABI bleibt fail-closed.
+Die neue FVA-Policy ist Teil von Session- und Boot-Cache-Identitaet; ein
+policyfremder Cache oder Resume-Stand kann daher keine Closure publizieren.
 
 Analyzer-ABI 59 bindet die inkompatible, wertgebundene Pending-ABI-Scalar-
 Lane in `FunctionRegisterValueSummary`. Endliche Pending-Werte und ihr
