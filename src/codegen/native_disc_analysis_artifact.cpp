@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -190,6 +191,73 @@ void write_u32_vector(Writer& output, const std::vector<std::uint32_t>& values) 
 
 std::vector<std::uint32_t> read_u32_vector(Reader& input) {
     return read_vector<std::uint32_t>(input, [&] { return input.u32(); });
+}
+
+void write_program_index_adjacencies(
+    Writer& output,
+    const std::vector<NativeDiscProgramIndexAdjacency>& values) {
+    write_vector(output, values, [&](const auto& value) {
+        output.u32(value.address);
+        write_u32_vector(output, value.related_addresses);
+    });
+}
+
+std::vector<NativeDiscProgramIndexAdjacency>
+read_program_index_adjacencies(Reader& input) {
+    return read_vector<NativeDiscProgramIndexAdjacency>(input, [&] {
+        NativeDiscProgramIndexAdjacency value;
+        value.address = input.u32();
+        value.related_addresses = read_u32_vector(input);
+        return value;
+    });
+}
+
+void write_program_index_checkpoint(
+    Writer& output,
+    const NativeDiscProgramIndexCheckpoint& checkpoint) {
+    write_program_index_adjacencies(
+        output, checkpoint.incoming_edge_sources);
+    write_program_index_adjacencies(
+        output, checkpoint.incoming_instruction_addresses);
+    write_program_index_adjacencies(
+        output, checkpoint.outgoing_function_entries);
+    write_u32_vector(output, checkpoint.seed_entries);
+    write_u32_vector(
+        output, checkpoint.incomplete_outgoing_function_entries);
+}
+
+NativeDiscProgramIndexCheckpoint read_program_index_checkpoint(
+    Reader& input) {
+    NativeDiscProgramIndexCheckpoint checkpoint;
+    checkpoint.incoming_edge_sources =
+        read_program_index_adjacencies(input);
+    checkpoint.incoming_instruction_addresses =
+        read_program_index_adjacencies(input);
+    checkpoint.outgoing_function_entries =
+        read_program_index_adjacencies(input);
+    checkpoint.seed_entries = read_u32_vector(input);
+    checkpoint.incomplete_outgoing_function_entries =
+        read_u32_vector(input);
+    return checkpoint;
+}
+
+void write_hardware_gap_details(
+    Writer& output,
+    const std::vector<NativeDiscHardwareGapArtifact>& gaps) {
+    write_vector(output, gaps, [&](const auto& gap) {
+        output.u32(gap.instruction_address);
+        output.text(gap.reason);
+    });
+}
+
+std::vector<NativeDiscHardwareGapArtifact> read_hardware_gap_details(
+    Reader& input) {
+    return read_vector<NativeDiscHardwareGapArtifact>(input, [&] {
+        NativeDiscHardwareGapArtifact gap;
+        gap.instruction_address = input.u32();
+        gap.reason = input.text();
+        return gap;
+    });
 }
 
 void write_u8_vector(Writer& output, const std::vector<std::uint8_t>& values) {
@@ -646,6 +714,50 @@ bool sorted_unique(const std::vector<std::uint32_t>& values) {
            std::adjacent_find(values.begin(), values.end()) == values.end();
 }
 
+bool canonical_program_index_adjacencies(
+    const std::vector<NativeDiscProgramIndexAdjacency>& values) {
+    std::uint32_t previous = 0u;
+    bool first = true;
+    for (const auto& value : values) {
+        if ((!first && value.address <= previous) ||
+            value.related_addresses.empty() ||
+            !sorted_unique(value.related_addresses))
+            return false;
+        first = false;
+        previous = value.address;
+    }
+    return true;
+}
+
+bool canonical_program_index_checkpoint(
+    const NativeDiscProgramIndexCheckpoint& checkpoint) {
+    return canonical_program_index_adjacencies(
+               checkpoint.incoming_edge_sources) &&
+           canonical_program_index_adjacencies(
+               checkpoint.incoming_instruction_addresses) &&
+           canonical_program_index_adjacencies(
+               checkpoint.outgoing_function_entries) &&
+           sorted_unique(checkpoint.seed_entries) &&
+           sorted_unique(
+               checkpoint.incomplete_outgoing_function_entries);
+}
+
+bool canonical_hardware_gap_details(
+    const std::vector<NativeDiscHardwareGapArtifact>& gaps) {
+    for (std::size_t index = 0u; index < gaps.size(); ++index) {
+        if (gaps[index].reason.empty() ||
+            gaps[index].reason.size() > maximum_artifact_string_bytes)
+            return false;
+        if (index != 0u &&
+            std::tie(gaps[index - 1u].instruction_address,
+                     gaps[index - 1u].reason) >=
+                std::tie(gaps[index].instruction_address,
+                         gaps[index].reason))
+            return false;
+    }
+    return true;
+}
+
 void append_identity_key_field(std::string& material,
                                const std::string_view value) {
     material.push_back('s');
@@ -721,6 +833,14 @@ bool native_disc_analysis_artifact_checkpointable(
                boot_analysis_artifact_cacheable(artifact.primary) &&
                sorted_unique(artifact.external_primary_roots) &&
                sorted_unique(artifact.native_resume_entries) &&
+               canonical_program_index_checkpoint(
+                   artifact.native_port_program_index) &&
+               artifact.native_hardware_gap_details.size() ==
+                   artifact.native_hardware_gaps &&
+               canonical_hardware_gap_details(
+                   artifact.native_hardware_gap_details) &&
+               sorted_unique(
+                   artifact.replacement_reachability_incomplete_frontier) &&
                std::all_of(artifact.latent.modules.begin(),
                            artifact.latent.modules.end(), [](const auto& module) {
                                return !module.id.empty() &&
@@ -764,6 +884,13 @@ std::vector<std::uint8_t> serialize_native_disc_analysis_artifact(
     write_hardware_audit(payload, artifact.native_hardware_audit);
     write_u32_vector(payload, artifact.external_primary_roots);
     write_u32_vector(payload, artifact.native_resume_entries);
+    write_program_index_checkpoint(
+        payload, artifact.native_port_program_index);
+    write_hardware_gap_details(
+        payload, artifact.native_hardware_gap_details);
+    write_u32_vector(
+        payload,
+        artifact.replacement_reachability_incomplete_frontier);
     payload.u32(artifact.entry_address);
     payload.u32(artifact.boot_address);
     payload.u64(artifact.boot_size);
@@ -836,6 +963,14 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
         decode_stage = "roots";
         artifact.external_primary_roots = read_u32_vector(payload);
         artifact.native_resume_entries = read_u32_vector(payload);
+        decode_stage = "program-index";
+        artifact.native_port_program_index =
+            read_program_index_checkpoint(payload);
+        decode_stage = "hardware-closure";
+        artifact.native_hardware_gap_details =
+            read_hardware_gap_details(payload);
+        artifact.replacement_reachability_incomplete_frontier =
+            read_u32_vector(payload);
         decode_stage = "summary";
         artifact.entry_address = payload.u32();
         artifact.boot_address = payload.u32();

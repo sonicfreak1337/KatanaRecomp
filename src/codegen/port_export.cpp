@@ -22415,6 +22415,123 @@ NativePortProgramIndex build_native_port_program_index(
     return index;
 }
 
+template <typename Values>
+std::vector<NativeDiscProgramIndexAdjacency>
+native_disc_program_index_adjacencies(const Values& values) {
+    std::vector<NativeDiscProgramIndexAdjacency> result;
+    result.reserve(values.size());
+    for (const auto& [address, related] : values) {
+        if (related.empty()) continue;
+        result.push_back(
+            {address,
+             std::vector<std::uint32_t>(
+                 related.begin(), related.end())});
+    }
+    return result;
+}
+
+NativeDiscProgramIndexCheckpoint native_disc_program_index_checkpoint(
+    const NativePortProgramIndex& index) {
+    NativeDiscProgramIndexCheckpoint checkpoint;
+    checkpoint.incoming_edge_sources =
+        native_disc_program_index_adjacencies(
+            index.incoming_edge_sources);
+    checkpoint.incoming_instruction_addresses =
+        native_disc_program_index_adjacencies(
+            index.incoming_instruction_addresses);
+    checkpoint.outgoing_function_entries =
+        native_disc_program_index_adjacencies(
+            index.outgoing_function_entries);
+    checkpoint.seed_entries.assign(
+        index.seed_entries.begin(), index.seed_entries.end());
+    checkpoint.incomplete_outgoing_function_entries.assign(
+        index.incomplete_outgoing_function_entries.begin(),
+        index.incomplete_outgoing_function_entries.end());
+    return checkpoint;
+}
+
+std::map<std::uint32_t, std::set<std::uint32_t>>
+rehydrate_native_disc_program_index_adjacencies(
+    const std::vector<NativeDiscProgramIndexAdjacency>& values) {
+    std::map<std::uint32_t, std::set<std::uint32_t>> result;
+    for (const auto& value : values) {
+        if (value.related_addresses.empty() ||
+            !std::is_sorted(value.related_addresses.begin(),
+                            value.related_addresses.end()) ||
+            std::adjacent_find(value.related_addresses.begin(),
+                               value.related_addresses.end()) !=
+                value.related_addresses.end() ||
+            !result.emplace(
+                       value.address,
+                       std::set<std::uint32_t>(
+                           value.related_addresses.begin(),
+                           value.related_addresses.end()))
+                 .second)
+            throw std::runtime_error(
+                "native-disc-program-index-checkpoint-noncanonical");
+    }
+    return result;
+}
+
+void rehydrate_native_disc_program_index_checkpoint(
+    NativePortProgramIndex& index,
+    const NativeDiscProgramIndexCheckpoint& checkpoint) {
+    auto incoming_edge_sources =
+        rehydrate_native_disc_program_index_adjacencies(
+            checkpoint.incoming_edge_sources);
+    auto incoming_instruction_addresses =
+        rehydrate_native_disc_program_index_adjacencies(
+            checkpoint.incoming_instruction_addresses);
+    auto outgoing_function_entries =
+        rehydrate_native_disc_program_index_adjacencies(
+            checkpoint.outgoing_function_entries);
+    if (!std::is_sorted(checkpoint.seed_entries.begin(),
+                        checkpoint.seed_entries.end()) ||
+        std::adjacent_find(checkpoint.seed_entries.begin(),
+                           checkpoint.seed_entries.end()) !=
+            checkpoint.seed_entries.end() ||
+        !std::is_sorted(
+            checkpoint.incomplete_outgoing_function_entries.begin(),
+            checkpoint.incomplete_outgoing_function_entries.end()) ||
+        std::adjacent_find(
+            checkpoint.incomplete_outgoing_function_entries.begin(),
+            checkpoint.incomplete_outgoing_function_entries.end()) !=
+            checkpoint.incomplete_outgoing_function_entries.end())
+        throw std::runtime_error(
+            "native-disc-program-index-checkpoint-noncanonical");
+    for (const auto& [source, targets] : outgoing_function_entries) {
+        if (!index.function_entries.contains(source) ||
+            std::any_of(
+                targets.begin(), targets.end(),
+                [&](const auto target) {
+                    return !index.function_entries.contains(target);
+                }))
+            throw std::runtime_error(
+                "native-disc-program-index-checkpoint-function-mismatch");
+    }
+    if (std::any_of(
+            checkpoint.incomplete_outgoing_function_entries.begin(),
+            checkpoint.incomplete_outgoing_function_entries.end(),
+            [&](const auto entry) {
+                return !index.function_entries.contains(entry);
+            }))
+        throw std::runtime_error(
+            "native-disc-program-index-checkpoint-frontier-mismatch");
+
+    index.incoming_edge_sources = std::move(incoming_edge_sources);
+    index.incoming_instruction_addresses =
+        std::move(incoming_instruction_addresses);
+    index.outgoing_function_entries =
+        std::move(outgoing_function_entries);
+    index.seed_entries = std::set<std::uint32_t>(
+        checkpoint.seed_entries.begin(),
+        checkpoint.seed_entries.end());
+    index.incomplete_outgoing_function_entries =
+        std::set<std::uint32_t>(
+            checkpoint.incomplete_outgoing_function_entries.begin(),
+            checkpoint.incomplete_outgoing_function_entries.end());
+}
+
 struct NativePortHookCoverageProof final {
     bool valid = false;
     std::string reason;
@@ -24169,7 +24286,9 @@ prepare_dreamcast_port_project_impl(
     const std::span<const std::uint32_t>
         precomputed_external_primary_roots = {},
     const katana::analysis::DreamcastHardwareAudit*
-        const precomputed_native_hardware_audit = nullptr) {
+        const precomputed_native_hardware_audit = nullptr,
+    const NativeDiscProgramIndexCheckpoint*
+        const precomputed_program_index = nullptr) {
     if (options.diagnostic_partial &&
         options.native_port_definition != nullptr)
         throw std::invalid_argument(
@@ -24882,12 +25001,15 @@ prepare_dreamcast_port_project_impl(
         std::unique(native_product_external_entries.begin(),
                     native_product_external_entries.end()),
         native_product_external_entries.end());
-    const auto native_port_program_index = build_native_port_program_index(
+    auto native_port_program_index = build_native_port_program_index(
         emitted_program,
         prepared.analysis,
         options.game_project,
         options.native_port_definition,
         native_product_external_entries);
+    if (precomputed_program_index != nullptr)
+        rehydrate_native_disc_program_index_checkpoint(
+            native_port_program_index, *precomputed_program_index);
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
             if (!katana::runtime::native_port_hook_is_executable(
@@ -28417,7 +28539,8 @@ try_reuse_native_disc_analysis_artifact(
             std::move(artifact.latent),
             true,
             result.latent_external_primary_roots,
-            &artifact.native_hardware_audit);
+            &artifact.native_hardware_audit,
+            &artifact.native_port_program_index);
         populate_native_disc_analysis_summary(result);
         const auto& closure =
             result.admitted_state->native_hardware_closure;
@@ -28457,6 +28580,24 @@ try_reuse_native_disc_analysis_artifact(
             if (closure.replacement_reachability_proven !=
                 artifact.replacement_reachability_proven)
                 return reject("admission-replay-replacement-reachability");
+            const std::vector<std::uint32_t> current_frontier(
+                closure.replacement_reachability_incomplete_frontier.begin(),
+                closure.replacement_reachability_incomplete_frontier.end());
+            if (current_frontier !=
+                artifact.replacement_reachability_incomplete_frontier)
+                return reject(
+                    "admission-replay-replacement-frontier");
+            if (closure.gaps.size() !=
+                    artifact.native_hardware_gap_details.size() ||
+                !std::equal(
+                    closure.gaps.begin(), closure.gaps.end(),
+                    artifact.native_hardware_gap_details.begin(),
+                    [](const auto& current, const auto& stored) {
+                        return current.instruction_address ==
+                                   stored.instruction_address &&
+                               current.reason == stored.reason;
+                    }))
+                return reject("admission-replay-hardware-gap-details");
             if (!artifact.backend_admitted)
                 return reject("admission-replay-backend-admission");
         }
@@ -28536,6 +28677,20 @@ void publish_native_disc_analysis_artifact(
         result.summary.native_hardware_gaps;
     artifact.sdk_provider_candidates =
         result.summary.sdk_provider_candidates;
+    artifact.native_port_program_index =
+        native_disc_program_index_checkpoint(
+            result.admitted_state->native_port_program_index);
+    artifact.native_hardware_gap_details.reserve(
+        result.admitted_state->native_hardware_closure.gaps.size());
+    for (const auto& gap :
+         result.admitted_state->native_hardware_closure.gaps)
+        artifact.native_hardware_gap_details.push_back(
+            {gap.instruction_address, gap.reason});
+    artifact.replacement_reachability_incomplete_frontier.assign(
+        result.admitted_state->native_hardware_closure
+            .replacement_reachability_incomplete_frontier.begin(),
+        result.admitted_state->native_hardware_closure
+            .replacement_reachability_incomplete_frontier.end());
     artifact.guarded_inventory_complete =
         result.summary.guarded_inventory_complete;
     artifact.native_hardware_closure_complete =

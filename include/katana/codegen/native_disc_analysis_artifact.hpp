@@ -13,7 +13,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 2u;
+inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 3u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
     256u * 1024u * 1024u;
@@ -54,6 +54,40 @@ struct NativeDiscAnalysisArtifactIdentity final {
         const NativeDiscAnalysisArtifactIdentity&) const = default;
 };
 
+// Pointer-free analysis-derived portions of NativePortProgramIndex.  The IR
+// itself reconstructs owners and block boundaries, but these relations also
+// depend on CFA/FVA evidence which the compact boot codec deliberately omits.
+// Keeping them typed and canonical lets a checkpoint recompute NativePort
+// admission under a changed provider contract without silently weakening the
+// analyzed product graph.
+struct NativeDiscProgramIndexAdjacency final {
+    std::uint32_t address = 0u;
+    std::vector<std::uint32_t> related_addresses;
+
+    [[nodiscard]] bool operator==(
+        const NativeDiscProgramIndexAdjacency&) const = default;
+};
+
+struct NativeDiscProgramIndexCheckpoint final {
+    std::vector<NativeDiscProgramIndexAdjacency> incoming_edge_sources;
+    std::vector<NativeDiscProgramIndexAdjacency>
+        incoming_instruction_addresses;
+    std::vector<NativeDiscProgramIndexAdjacency> outgoing_function_entries;
+    std::vector<std::uint32_t> seed_entries;
+    std::vector<std::uint32_t> incomplete_outgoing_function_entries;
+
+    [[nodiscard]] bool operator==(
+        const NativeDiscProgramIndexCheckpoint&) const = default;
+};
+
+struct NativeDiscHardwareGapArtifact final {
+    std::uint32_t instruction_address = 0u;
+    std::string reason;
+
+    [[nodiscard]] bool operator==(
+        const NativeDiscHardwareGapArtifact&) const = default;
+};
+
 // Computes the canonical path-free lookup key from stable input identities.
 // image_analysis_key is deliberately validated after the artifact's proven
 // external roots have been rebound to the current image, avoiding a circular
@@ -81,6 +115,10 @@ struct NativeDiscAnalysisArtifact final {
     std::uint64_t known_hardware_sites = 0u;
     std::uint64_t native_hardware_gaps = 0u;
     std::uint64_t sdk_provider_candidates = 0u;
+    NativeDiscProgramIndexCheckpoint native_port_program_index;
+    std::vector<NativeDiscHardwareGapArtifact> native_hardware_gap_details;
+    std::vector<std::uint32_t>
+        replacement_reachability_incomplete_frontier;
     bool guarded_inventory_complete = false;
     bool native_hardware_closure_complete = false;
     bool replacement_reachability_proven = false;
