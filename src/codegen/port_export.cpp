@@ -1935,7 +1935,7 @@ void bind_post_bootstrap_immutable_image_ranges(
             const auto end = boundaries[index];
             if (begin == end) continue;
             const auto midpoint = begin + (end - begin) / 2u;
-            const auto materialization = std::find_if(
+            const bool bootstrap_materialized = std::any_of(
                 native_port->bootstrap.writes.begin(),
                 native_port->bootstrap.writes.end(),
                 [&](const auto& binding) {
@@ -1946,20 +1946,16 @@ void bind_post_bootstrap_immutable_image_ranges(
                     const auto write_end = write_begin + binding.byte_size;
                     return midpoint >= write_begin && midpoint < write_end;
                 });
-            // A bootstrap write is not automatically mutable after the
-            // transition. IdentityBoundImmutableMaterialization carries an
-            // exact post-range SHA and explicitly installs executable or
-            // read-only bytes; once the verified transition has populated
-            // `image`, those bytes belong to the same immutable post-image
-            // generation as every untouched interval. Treating that policy
-            // like WritableDataOnly loses the source/target correlation of
-            // otherwise exact PC-literal call chains whenever their target
-            // lies outside a smaller game-project identity window.
-            if (materialization != native_port->bootstrap.writes.end() &&
-                materialization->policy ==
-                    katana::runtime::NativePortBootstrapWritePolicy::
-                        WritableDataOnly)
-                continue;
+            // A bootstrap binding authorizes and authenticates the bounded
+            // transition; it does not prove that every byte in that range is
+            // immutable for the rest of product execution. In particular, a
+            // checkpoint materialization may cover executable bytes and
+            // ordinary runtime-owned data in one post-image. Only the precise
+            // GameProject CodeIdentity ranges below may restore post-bootstrap
+            // immutability for code, literals or tables. Otherwise a current
+            // zero stored in a mutable pointer cell could be folded into an
+            // authoritative address and manufacture false hardware accesses.
+            if (bootstrap_materialized) continue;
             const auto source_address =
                 segment.virtual_address +
                 static_cast<std::uint32_t>(begin - segment_physical);
