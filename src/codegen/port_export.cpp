@@ -22559,13 +22559,14 @@ NativePortProgramIndex build_native_port_program_index(
     NativePortProgramIndex index;
     // Preserve the analyzer's typed dynamic-site classification at the
     // ProgramIndex boundary. A residual edge sourced by an explicit
-    // RuntimeOnly callback/parameter/mutable-memory contract is not a static
-    // completeness task. Conversely, a rejected exact immutable chain stays
-    // actionable statically unless all of its bounded candidates belong to
-    // an active writable runtime-image generation: only that residency turns
-    // the rejection into a live-evidence requirement.
+    // RuntimeOnly callback/parameter/stack/mutable-memory contract is not a
+    // static completeness task. A missing dispatch immutable proof does not
+    // change that dynamic target provenance: it may keep the edge open, but it
+    // must not move the site back into the static agent queue. Explicit table
+    // declarations remain static metadata tasks because an exact identity and
+    // complete bounded layout can still close them without runtime evidence.
     const auto resolution_requires_runtime_evidence =
-        [&](const katana::analysis::IndirectControlFlowResolution& resolution) {
+        [](const katana::analysis::IndirectControlFlowResolution& resolution) {
             if (resolution.evidence !=
                     katana::analysis::ControlFlowEvidence::RuntimeOnly ||
                 resolution.origin_class ==
@@ -22574,25 +22575,7 @@ NativePortProgramIndex build_native_port_program_index(
                 resolution.origin_class ==
                     katana::analysis::IndirectControlFlowOriginClass::Table)
                 return false;
-            if (resolution.exact_guard_rejection_reason ==
-                katana::analysis::ExactGuardRejectionReason::None)
-                return true;
-
-            // A literal chain into writable RuntimeMemory correctly fails the
-            // immutable exact-guard contract.  When every bounded candidate
-            // belongs to an active runtime-image generation, that rejection
-            // is itself proof that live target evidence is required rather
-            // than another static-completeness iteration.  This only routes
-            // the still-open frontier; it neither admits an edge nor assigns
-            // target ownership.
-            return !resolution.analysis_candidates.empty() &&
-                   std::all_of(
-                       resolution.analysis_candidates.begin(),
-                       resolution.analysis_candidates.end(),
-                       [&](const auto target) {
-                           return active_runtime_image_address(
-                               game_project, native_port, target);
-                       });
+            return true;
         };
     std::map<std::uint32_t,
              const katana::analysis::IndirectControlFlowResolution*>
