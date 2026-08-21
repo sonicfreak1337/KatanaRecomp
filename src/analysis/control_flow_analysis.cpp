@@ -2709,11 +2709,13 @@ void merge_retained_seed_evidence(
             return std::tie(a.dispatch_address, a.table_address,
                             a.entry_count, a.line, a.entry_stride,
                             a.relative_base, a.encoding, a.transfer,
-                            a.require_dispatch) ==
+                            a.require_dispatch,
+                            a.identity_bound_complete) ==
                    std::tie(b.dispatch_address, b.table_address,
                             b.entry_count, b.line, b.entry_stride,
                             b.relative_base, b.encoding, b.transfer,
-                            b.require_dispatch);
+                            b.require_dispatch,
+                            b.identity_bound_complete);
         });
     return same_functions && same_boundaries && same_entry_hints &&
            same_jumps && same_tables;
@@ -4480,8 +4482,11 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                              : AnalysisDirectiveDiagnosticStatus::Rejected,
                          jump_table.resolved ? "jump-table-validated" : jump_table.reason});
                 }
-                jump_table.evidence = hints ? ControlFlowEvidence::HintCandidate
-                                            : ControlFlowEvidence::ForcedOverride;
+                jump_table.evidence =
+                    hints ? ControlFlowEvidence::HintCandidate
+                    : table.identity_bound_complete && jump_table.resolved
+                        ? ControlFlowEvidence::GuardedComplete
+                        : ControlFlowEvidence::ForcedOverride;
                 jump_table_result_index.insert_or_assign(
                     table.dispatch_address, std::move(jump_table));
                 ++analysis.jump_table_result_entries_rebuilt;

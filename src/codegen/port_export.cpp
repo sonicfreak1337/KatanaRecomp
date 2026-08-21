@@ -590,6 +590,8 @@ std::string persistent_boot_epoch_cache_key(
                         table.transfer));
             append_persistent_epoch_key_value(
                 material, table.require_dispatch);
+            append_persistent_epoch_key_value(
+                material, table.identity_bound_complete);
         }
     }
     return katana::io::sha256_bytes(material.str());
@@ -2250,6 +2252,46 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
             encoding,
             transfer};
         declaration.require_dispatch = function_metadata_are_roots;
+        const auto table_width =
+            table.encoding ==
+                    katana::runtime::GameProjectTableEncoding::
+                        SignedRelative16
+                ? 2u
+                : 4u;
+        const auto table_extent =
+            table.entry_count == 0u
+                ? 0u
+                : static_cast<std::uint64_t>(table.entry_count - 1u) *
+                          table.entry_stride +
+                      table_width;
+        const auto proof_begin = std::min(
+            static_cast<std::uint64_t>(table.dispatch_address),
+            static_cast<std::uint64_t>(table.table_address));
+        const auto proof_end = std::max(
+            static_cast<std::uint64_t>(table.dispatch_address) + 4u,
+            static_cast<std::uint64_t>(table.table_address) + table_extent);
+        const auto identity = std::find_if(
+            definition.code_identities.begin(),
+            definition.code_identities.end(),
+            [&](const auto& candidate) {
+                const auto candidate_end =
+                    static_cast<std::uint64_t>(candidate.address) +
+                    candidate.size;
+                return candidate.image_id == table.image_id &&
+                       candidate.address <= proof_begin &&
+                       candidate_end >= proof_end;
+            });
+        const auto resolved_identity =
+            identity != definition.code_identities.end()
+                ? image.resolve_segment_address(identity->address,
+                                                identity->size)
+                : std::nullopt;
+        declaration.identity_bound_complete =
+            table.entry_count != 0u &&
+            table_extent <= std::numeric_limits<std::size_t>::max() &&
+            resolved_identity.has_value() &&
+            image.find_immutable_range(*resolved_identity, identity->size) !=
+                nullptr;
         overrides.jump_tables.push_back(declaration);
     }
     return overrides;

@@ -1359,6 +1359,7 @@ std::string make_boot_analysis_cache_key(
                     katana::analysis::JumpTableOverrideTransfer>>(
                     table.transfer));
             append_key_value(canonical, table.require_dispatch);
+            append_key_value(canonical, table.identity_bound_complete);
         }
     }
     return katana::io::sha256_bytes(canonical.str());
@@ -1894,11 +1895,14 @@ bool validate_boot_analysis_cache_source_binding(
                 table.evidence =
                     overrides->mode ==
                             katana::analysis::
-                                AnalysisDirectiveMode::Override
+                                AnalysisDirectiveMode::Hint
                         ? katana::analysis::
-                              ControlFlowEvidence::ForcedOverride
+                              ControlFlowEvidence::HintCandidate
+                    : declaration.identity_bound_complete && table.resolved
+                        ? katana::analysis::
+                              ControlFlowEvidence::GuardedComplete
                         : katana::analysis::
-                              ControlFlowEvidence::HintCandidate;
+                              ControlFlowEvidence::ForcedOverride;
                 rebuilt_analysis.jump_tables.push_back(
                     std::move(table));
             }

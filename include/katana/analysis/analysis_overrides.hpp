@@ -70,6 +70,11 @@ struct JumpTableOverride {
     // Once the dispatch is reached, all ordinary exact validation still
     // applies. Parsed `jump_table` directives remain required by default.
     bool require_dispatch = true;
+    // Internal producers may bind both the dispatch and the complete table
+    // layout to immutable executable-image identities.  Only that stronger
+    // contract may close the residual indirect successor after validation;
+    // ordinary user overrides remain ForcedOverride evidence.
+    bool identity_bound_complete = false;
 };
 
 struct AnalysisOverrides {
