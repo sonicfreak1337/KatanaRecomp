@@ -26242,6 +26242,64 @@ build_native_disc_materialization_world(
             descriptor << ";register=" << reference.register_name;
         return descriptor.str();
     };
+    struct NativeHardwareProviderTaskContract final {
+        std::string missing_proof;
+        std::vector<std::string> fields;
+        std::vector<std::string> source_paths;
+        std::vector<std::string> source_symbols;
+        std::vector<std::string> invariants;
+        std::vector<std::string> acceptance_criteria;
+    };
+    const auto native_hardware_provider_task_contract = [](
+        const std::span<
+            const katana::analysis::HardwareAccessReference* const>
+            references) {
+        NativeHardwareProviderTaskContract contract;
+        const bool pvr_soft_reset_write = !references.empty() &&
+            std::ranges::all_of(
+                references,
+                [](const auto* const reference) {
+                    return reference != nullptr &&
+                        reference->region ==
+                            katana::analysis::DreamcastHardwareRegion::Pvr &&
+                        reference->kind ==
+                            katana::analysis::HardwareAccessKind::Write &&
+                        reference->width == 4u &&
+                        reference->register_name == "SOFTRESET";
+                });
+        if (!pvr_soft_reset_write) return contract;
+
+        // NativePortGraphicsDevice deliberately exposes only native vertices,
+        // textures and draw state.  PVR register/TA state belongs neither in
+        // that host service nor in a generated product fallback.  A title-side
+        // adapter must translate this control operation into bounded native
+        // render-work state and prove the hook's guest-visible result.
+        contract.missing_proof =
+            "native-title-render-reset-state-proof-missing";
+        contract.fields = {
+            "hardware-operation=write32:pvr:SOFTRESET",
+            "semantic-register-family=pvr-render-work-reset-control",
+            "expected-native-provider-layer=title-side-native-graphics-adapter",
+            "native-host-service=katana::runtime::NativePortGraphicsDevice",
+            "native-host-service-contract=vertices-textures-and-draw-state-only",
+            "required-native-effect=bounded-title-render-work-reset",
+            "required-provider-proof=title-render-reset-state-projection",
+            "required-provider-proof=guest-visible-hook-result-and-cpu-state",
+            "public-native-reset-api=not-required:title-adapter-owns-render-work-state"};
+        contract.source_paths = {
+            "include/katana/runtime/native_port_graphics.hpp",
+            "src/runtime/native_port_graphics.cpp"};
+        contract.source_symbols = {
+            "katana::runtime::NativePortGraphicsDevice",
+            "katana::runtime::NativePortGraphicsSnapshot"};
+        contract.invariants = {
+            "native-graphics-device-must-not-gain-pvr-register-state",
+            "native-graphics-device-must-not-gain-ta-packet-parser"};
+        contract.acceptance_criteria = {
+            "softreset-effects-projected-to-bounded-title-adapter-state",
+            "native-graphics-backend-remains-pvr-protocol-free"};
+        return contract;
+    };
     std::map<std::uint32_t, std::string> analyzed_function_symbols;
     for (const auto& node : result.call_graph.nodes)
         if (!node.symbol.empty())
@@ -26274,6 +26332,7 @@ build_native_disc_materialization_world(
         std::vector<std::string> descriptors;
         std::set<std::uint32_t> owners;
         std::string expected_provider;
+        NativeHardwareProviderTaskContract provider_contract;
         std::vector<std::uint32_t> sites;
     };
     std::map<std::string, HardwareTaskGroup> hardware_groups;
@@ -26320,6 +26379,12 @@ build_native_disc_materialization_world(
             group.descriptors = std::move(descriptors);
             group.owners = owners;
             group.expected_provider = expected_provider;
+            const auto references =
+                hardware_references_by_site.find(gap.instruction_address);
+            if (references != hardware_references_by_site.end())
+                group.provider_contract =
+                    native_hardware_provider_task_contract(
+                        references->second);
         }
         group.sites.push_back(gap.instruction_address);
     }
@@ -26403,6 +26468,33 @@ build_native_disc_materialization_world(
             }
             return contract;
         }();
+        const bool current_hook_identity_bound_but_non_closing =
+            owner_hook_contract.current_hook != nullptr &&
+            owner_hook_contract.covered_size.has_value() &&
+            owner_hook_contract.current_hook->guest_address ==
+                owner_hook_contract.entry &&
+            owner_hook_contract.current_hook->covered_size ==
+                *owner_hook_contract.covered_size &&
+            owner_hook_contract.current_hook->kind ==
+                katana::runtime::NativePortHookKind::FunctionEntry &&
+            owner_hook_contract.current_hook->original_policy ==
+                katana::runtime::NativePortHookOriginalPolicy::
+                    ReplacesOriginal &&
+            owner_hook_contract.current_hook->code_identity ==
+                owner_hook_contract.code_identity &&
+            !katana::runtime::native_port_hook_closes_product_contract(
+                owner_hook_contract.current_hook->requirement);
+        const auto task_missing_proof =
+            current_hook_identity_bound_but_non_closing
+                ? !group.provider_contract.missing_proof.empty()
+                      ? group.provider_contract.missing_proof
+                      : std::string{
+                            "native-provider-result-or-state-proof-missing"}
+                : group.reason;
+        const auto task_expected_provider =
+            current_hook_identity_bound_but_non_closing
+                ? std::string{owner_hook_contract.current_hook->symbol}
+                : group.expected_provider;
         const auto owner_semantics = owner_semantic_task_contract(
             result.admitted_state->emitted_program,
             result.image,
@@ -26440,20 +26532,20 @@ build_native_disc_materialization_world(
             entry.state = FrontierState::Open;
             entry.proof = FrontierProof::StaticAnalyzer;
             entry.severity = FrontierSeverity::P0;
-            entry.missing_proof = group.reason;
+            entry.missing_proof = task_missing_proof;
             entry.fanout = static_cast<std::uint32_t>(site_count);
             entry.blocked_kind = FrontierBlockKind::Hardware;
             entry.evidence = {analysis_evidence, provider_evidence};
             entry.contracts = {
                 "identity-bound-whole-owner-native-replacement",
-                "expected-native-provider:" + group.expected_provider,
+                "expected-native-provider:" + task_expected_provider,
                 "replacement-reachability-proven"};
             if (owner_hook_contract.covered_size.has_value() &&
                 !owner_hook_contract.code_identity.empty()) {
                 entry.contracts.push_back(
                     "owner-hook-kind:function-entry");
                 entry.contracts.push_back(
-                    "owner-hook-requirement:required");
+                    "required-owner-hook-requirement:required");
                 entry.contracts.push_back(
                     "owner-hook-original-policy:replaces-original");
             }
@@ -26470,6 +26562,22 @@ build_native_disc_materialization_world(
                 "katana::codegen::evaluate_native_port_hardware_closure",
                 "katana::runtime::NativePortHardwareResolution",
                 "katana::runtime::NativePortHookBinding"};
+            for (const auto& path : group.provider_contract.source_paths) {
+                if (entry.source_paths.size() >=
+                    materialization_world_max_source_items)
+                    break;
+                if (std::ranges::find(entry.source_paths, path) ==
+                    entry.source_paths.end())
+                    entry.source_paths.push_back(path);
+            }
+            for (const auto& symbol : group.provider_contract.source_symbols) {
+                if (entry.source_symbols.size() >=
+                    materialization_world_max_source_items)
+                    break;
+                if (std::ranges::find(entry.source_symbols, symbol) ==
+                    entry.source_symbols.end())
+                    entry.source_symbols.push_back(symbol);
+            }
             for (const auto owner : group.owners) {
                 if (entry.blocked_functions.size() >=
                     materialization_world_max_blocked_items)
@@ -26489,11 +26597,17 @@ build_native_disc_materialization_world(
                 entry.source_symbols.push_back(
                     owner_hook_contract.suggested_symbol);
             entry.blocked_hardware.push_back(
-                "expected-native-provider=" + group.expected_provider);
+                "expected-native-provider=" + task_expected_provider);
             entry.blocked_hardware.push_back(
                 "provider-role=identity-bound-hardware-replacement");
             entry.blocked_hardware.push_back(
-                "missing-proof=" + group.reason);
+                "missing-proof=" + task_missing_proof);
+            for (const auto& field : group.provider_contract.fields) {
+                if (entry.blocked_hardware.size() >=
+                    materialization_world_max_blocked_items)
+                    break;
+                entry.blocked_hardware.push_back(field);
+            }
             if (owner_hook_contract.entry != 0u)
                 entry.blocked_hardware.push_back(
                     "owner-hook-guest-address=" +
@@ -26528,8 +26642,16 @@ build_native_disc_materialization_world(
                           std::string(
                               owner_hook_contract.current_hook->symbol)
                     : "owner-hook-current-binding=missing");
+            if (owner_hook_contract.current_hook != nullptr)
+                entry.blocked_hardware.push_back(
+                    "owner-hook-current-requirement=" +
+                    std::string(native_port_hook_requirement_name(
+                        owner_hook_contract.current_hook->requirement)));
             entry.blocked_hardware.push_back(
-                owner_hook_contract.current_hook != nullptr
+                current_hook_identity_bound_but_non_closing
+                    ? "provider-result-or-state-proof="
+                      "missing:current-hook-does-not-close-product-contract"
+                : owner_hook_contract.current_hook != nullptr
                     ? "provider-result-or-state-proof=unproven"
                     : owner_semantics.state_projection_complete
                           ? "provider-result-or-state-proof="
@@ -26547,6 +26669,9 @@ build_native_disc_materialization_world(
             }
             if (options.native_port_definition != nullptr) {
                 for (std::size_t index = 0u; index < site_count; ++index) {
+                    if (entry.blocked_hardware.size() >=
+                        materialization_world_max_blocked_items)
+                        break;
                     const auto site = sites[first_site + index];
                     const auto resolution = std::ranges::find_if(
                         options.native_port_definition->hardware_resolutions,
@@ -26578,11 +26703,42 @@ build_native_disc_materialization_world(
                 "no-mmio-emulation",
                 "no-interpreter-or-jit-fallback",
                 "preserve-owner-state-and-side-effect-order"};
-            entry.acceptance_criteria = {
-                "all-listed-sites-share-owner-and-operation-contract",
-                "exact-boundary-and-byte-identity",
-                "native-provider-semantic-equivalence",
-                "replacement-reachability-with-zero-residual-sites"};
+            for (const auto& invariant :
+                 group.provider_contract.invariants) {
+                if (entry.invariants.size() >=
+                    materialization_world_max_invariants)
+                    break;
+                if (std::ranges::find(entry.invariants, invariant) ==
+                    entry.invariants.end())
+                    entry.invariants.push_back(invariant);
+            }
+            if (current_hook_identity_bound_but_non_closing) {
+                entry.invariants.push_back(
+                    "do-not-upgrade-bring-up-provider-without-result-proof");
+                entry.acceptance_criteria = {
+                    "all-listed-sites-share-owner-and-operation-contract",
+                    "exact-boundary-and-byte-identity",
+                    "provider-result-and-state-projection-proven",
+                    "hook-requirement-upgraded-to-required-only-after-proof",
+                    "site-resolutions-bound-to-the-proven-provider",
+                    "replacement-reachability-with-zero-residual-sites"};
+            } else {
+                entry.acceptance_criteria = {
+                    "all-listed-sites-share-owner-and-operation-contract",
+                    "exact-boundary-and-byte-identity",
+                    "native-provider-semantic-equivalence",
+                    "replacement-reachability-with-zero-residual-sites"};
+            }
+            for (const auto& criterion :
+                 group.provider_contract.acceptance_criteria) {
+                if (entry.acceptance_criteria.size() >=
+                    materialization_world_max_acceptance_criteria)
+                    break;
+                if (std::ranges::find(
+                        entry.acceptance_criteria, criterion) ==
+                    entry.acceptance_criteria.end())
+                    entry.acceptance_criteria.push_back(criterion);
+            }
             add_frontier(std::move(entry));
         }
     }

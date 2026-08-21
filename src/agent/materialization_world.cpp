@@ -1452,14 +1452,14 @@ AgentDecision evaluate_agent_decision(
         if (runtime) {
             runtime_required = true;
             if (first_runtime_entry == nullptr ||
-                frontier_priority_less(entry, *first_runtime_entry)) {
+                frontier_task_priority_less(entry, *first_runtime_entry)) {
                 first_runtime = entry.id;
                 first_runtime_entry = &entry;
             }
         } else {
             ++actionable;
             if (first_static_entry == nullptr ||
-                frontier_priority_less(entry, *first_static_entry)) {
+                frontier_task_priority_less(entry, *first_static_entry)) {
                 first_static = entry.id;
                 first_static_entry = &entry;
             }

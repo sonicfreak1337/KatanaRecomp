@@ -97,6 +97,16 @@ ABI-/Register-/State-/Side-Effect-Beweis als
 `provider-result-or-state-proof=missing` sichtbar; ein Agent darf daraus
 keine Providersemantik erfinden.
 
+Protokollregister werden nicht automatisch als API des nativen Hostbackends
+missverstanden. Fuer einen `PVR.SOFTRESET`-Write benennt Katana beispielsweise
+den title-seitigen Native-Grafikadapter als Provider-Layer und
+`NativePortGraphicsDevice` nur als GPU-Hostdienst fuer Vertices, Texturen und
+Draw-State. Die Aufgabe fordert getrennt den bounded Render-Reset-State-Proof
+und den guest-sichtbaren Hook-Result-/CPU-State-Proof. Sie verbietet zugleich,
+dem nativen Grafikdienst ein PVR-Registermodell oder einen TA-Paketparser
+hinzuzufuegen. Ein vorhandener `BringUpProbe` bleibt sichtbar und darf erst
+nach diesen Beweisen zu `Required` hochgestuft werden.
+
 Fuer bounded, linear geschlossene Owner mit hoechstens 16 Bloecken und 64
 Instruktionen liefert die Aufgabe zusaetzlich eine fail-closed symbolische
 Stateprojektion. `owner-state-transfer` beschreibt die nachweisbaren
@@ -147,6 +157,14 @@ resumierte Stand umfasst `5.667` primaere und `6.284` kombinierte Funktionen,
 ein Latent-Modul, `89` externe Roots, `5` native Resume-Entries, `240`
 Hardware-Sites und `167` offene Hardware-Gaps. Die Entscheidung bleibt
 ehrlich `continue_static_iteration`; es wurde kein Port exportiert.
+
+Nach dem ersten identity-bound Providerdelta lief die admission-only
+Neubewertung in `46,150 s` weiterhin mit
+`boot_analysis_pipeline_runs=0`. Sie behielt `5.667`/`6.284` Funktionen und
+`240` Hardware-Sites bei, reduzierte die offenen Hardware-Gaps auf `161` und
+die handlungsfaehigen Frontiers auf `285`. Damit misst der Workflow
+Providerfortschritt inkrementell, ohne den statischen Whole-Disc-Analyzer kalt
+neu zu starten.
 
 ## Cache- und Exportgrenze
 
