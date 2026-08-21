@@ -594,7 +594,8 @@ std::string persistent_boot_epoch_cache_key(
     return katana::io::sha256_bytes(material.str());
 }
 
-constexpr std::uint32_t latent_primary_root_seed_cache_schema = 1u;
+// KATANA_COMPONENT_IDENTITY_REGION_BEGIN latent-root-seed-contract
+constexpr std::uint32_t latent_primary_root_seed_cache_schema = 2u;
 constexpr std::size_t maximum_latent_primary_root_seed_count = 4'096u;
 constexpr std::size_t maximum_latent_primary_root_seed_cache_bytes =
     96u * 1024u;
@@ -639,9 +640,6 @@ std::string latent_primary_root_seed_semantic_identity(
         material, options.analysis_implementation_identity);
     append_persistent_epoch_key_field(
         material, options.analysis_cache_implementation_identity);
-    append_persistent_epoch_key_field(
-        material, options.codegen_implementation_identity);
-    append_persistent_epoch_key_field(material, options.tool_version);
     append_persistent_epoch_key_field(material, options.console_profile);
     if (options.game_project != nullptr)
         append_persistent_epoch_key_field(
@@ -800,17 +798,14 @@ parse_latent_primary_root_seeds(
 bool validate_latent_primary_root_seeds(
     const katana::io::ExecutableImage& image,
     const std::span<const std::uint32_t> roots,
-    const std::uint32_t boot_address,
-    const std::size_t boot_size) {
+    const std::uint32_t,
+    const std::size_t) {
     if (roots.empty() ||
-        roots.size() > maximum_latent_primary_root_seed_count ||
-        boot_size > std::numeric_limits<std::uint32_t>::max())
+        roots.size() > maximum_latent_primary_root_seed_count)
         return false;
-    const auto boot_end = static_cast<std::uint64_t>(boot_address) + boot_size;
     katana::analysis::detail::GuardedNativeEntryShapeCache shapes(image);
     for (const auto root : roots) {
-        if ((root & 1u) != 0u || root < boot_address ||
-            static_cast<std::uint64_t>(root) + 2u > boot_end)
+        if ((root & 1u) != 0u)
             return false;
         const auto validation =
             katana::analysis::validate_decode_candidate(image, root);
@@ -824,6 +819,7 @@ bool validate_latent_primary_root_seeds(
     }
     return true;
 }
+// KATANA_COMPONENT_IDENTITY_REGION_END latent-root-seed-contract
 
 bool game_project_requires_external_runtime_definition(
     const katana::runtime::GameProjectDefinition& definition) noexcept {
@@ -1340,29 +1336,49 @@ native_optimization_dispatch_entries(
              definition.bootstrap.post_aot_continuations)
             add(continuation.resume_address, Kind::BlockEntry);
 
-        // Hooks never become analysis roots. Once ordinary reachability has
-        // materialized a hook address, preserve that existing execution
-        // boundary through optimization. An absent hook remains absent and
-        // fails the later native admission proof.
+        // Hooks never become analysis roots. Index the already materialized
+        // program once so hook admission remains linear in the program plus
+        // the number of hooks. Rewalking every block (and rebuilding every
+        // block's internal resume entries) for every hook made large native
+        // definitions quadratic without adding any proof.
+        std::vector<std::uint32_t> materialized_block_entries;
+        std::vector<std::uint32_t> materialized_instruction_continuations;
+        for (const auto& function : program) {
+            for (const auto& block : function.blocks) {
+                materialized_block_entries.push_back(block.start_address);
+                const auto internal =
+                    detail::native_aot_internal_resume_entries(block);
+                materialized_instruction_continuations.insert(
+                    materialized_instruction_continuations.end(),
+                    internal.begin(),
+                    internal.end());
+            }
+        }
+        const auto canonicalize = [](auto& addresses) {
+            std::sort(addresses.begin(), addresses.end());
+            addresses.erase(
+                std::unique(addresses.begin(), addresses.end()),
+                addresses.end());
+        };
+        canonicalize(materialized_block_entries);
+        canonicalize(materialized_instruction_continuations);
+
+        // Once ordinary reachability has materialized a hook address,
+        // preserve that existing execution boundary through optimization. An
+        // absent hook remains absent and fails the later native admission
+        // proof.
         for (const auto& hook : definition.hooks) {
             if (!katana::runtime::native_port_hook_is_executable(
                     hook.requirement))
                 continue;
-            bool block_entry = false;
-            bool instruction_continuation = false;
-            for (const auto& function : program) {
-                for (const auto& block : function.blocks) {
-                    block_entry = block_entry ||
-                                  block.start_address ==
-                                      hook.guest_address;
-                    const auto internal =
-                        detail::native_aot_internal_resume_entries(block);
-                    instruction_continuation =
-                        instruction_continuation ||
-                        std::binary_search(internal.begin(), internal.end(),
-                                           hook.guest_address);
-                }
-            }
+            const bool block_entry = std::binary_search(
+                materialized_block_entries.begin(),
+                materialized_block_entries.end(),
+                hook.guest_address);
+            const bool instruction_continuation = std::binary_search(
+                materialized_instruction_continuations.begin(),
+                materialized_instruction_continuations.end(),
+                hook.guest_address);
             if (block_entry)
                 add(hook.guest_address, Kind::BlockEntry);
             else if (instruction_continuation)
@@ -23946,6 +23962,79 @@ struct NativeDiscAnalysisState {
     std::uint32_t product_entry_owner = 0u;
 };
 
+[[nodiscard]] std::vector<katana::sh4::DisassemblyLine>
+rehydrate_analyzed_instruction_slice(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::ir::Function> program) {
+    struct RehydratedInstruction final {
+        std::uint16_t opcode = 0u;
+        bool is_delay_slot = false;
+    };
+    std::map<std::uint32_t, RehydratedInstruction> instructions;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                const RehydratedInstruction current{
+                    instruction.original_opcode,
+                    instruction.delay_slot.role ==
+                        katana::ir::DelaySlotRole::Slot};
+                const auto [existing, inserted] = instructions.try_emplace(
+                    instruction.source_address, current);
+                if (!inserted) {
+                    if (existing->second.opcode != current.opcode)
+                        throw std::runtime_error(
+                            "Gespeichertes IR besitzt widerspruechliche "
+                            "Opcode-Identitaeten fuer dieselbe Gastadresse.");
+                    existing->second.is_delay_slot =
+                        existing->second.is_delay_slot ||
+                        current.is_delay_slot;
+                }
+            }
+        }
+    }
+    if (instructions.empty())
+        throw std::runtime_error(
+            "Gespeichertes IR besitzt keine rehydrierbare "
+            "Instruktionsscheibe.");
+
+    std::vector<katana::sh4::DisassemblyLine> result;
+    result.reserve(instructions.size());
+    for (const auto& [address, retained] : instructions) {
+        const auto* const segment = image.find_segment(address, 2u);
+        const auto offset = segment != nullptr
+                                ? segment->byte_offset(address)
+                                : std::optional<std::size_t>{};
+        if (segment == nullptr || !segment->permissions.executable ||
+            !offset.has_value() || *offset > segment->bytes.size() ||
+            segment->bytes.size() - *offset < 2u)
+            throw std::runtime_error(
+                "Gespeicherte IR-Instruktion besitzt keine aktuelle "
+                "ausfuehrbare Imagebindung.");
+        const auto opcode = static_cast<std::uint16_t>(
+            static_cast<std::uint16_t>(segment->bytes[*offset]) |
+            (static_cast<std::uint16_t>(segment->bytes[*offset + 1u])
+             << 8u));
+        if (opcode != retained.opcode)
+            throw std::runtime_error(
+                "Gespeicherte IR-Instruktion stimmt nicht mit dem "
+                "aktuellen Imageopcode ueberein.");
+        auto decoded = katana::sh4::decode(opcode);
+        if (!decoded.is_known())
+            throw std::runtime_error(
+                "Gespeicherte IR-Instruktion dekodiert im aktuellen "
+                "Analyzer nicht mehr statisch.");
+        const auto target_address =
+            katana::sh4::calculate_direct_branch_target(decoded, address);
+        result.push_back(
+            {address,
+             opcode,
+             std::move(decoded),
+             retained.is_delay_slot,
+             target_address});
+    }
+    return result;
+}
+
 static std::shared_ptr<NativeDiscAnalysisState>
 prepare_dreamcast_port_project_impl(
     const PreparedPortProgram& prepared,
@@ -24759,10 +24848,20 @@ prepare_dreamcast_port_project_impl(
         composite_callback_architectural_boundaries.insert(
             proof.descriptor.continuation_address);
     }
+    std::vector<katana::sh4::DisassemblyLine>
+        rehydrated_analyzed_instructions;
+    const auto analyzed_instructions = [&]()
+        -> std::span<const katana::sh4::DisassemblyLine> {
+        if (!prepared.analysis.recursive.instructions.empty())
+            return prepared.analysis.recursive.instructions;
+        rehydrated_analyzed_instructions =
+            rehydrate_analyzed_instruction_slice(
+                prepared.image, prepared.program);
+        return rehydrated_analyzed_instructions;
+    }();
     const auto native_sdk_provider_candidates =
         katana::analysis::discover_native_sdk_provider_candidates(
-            prepared.image,
-            prepared.analysis.recursive.instructions);
+            prepared.image, analyzed_instructions);
     report_progress(
         options,
         "native-sdk-provider-candidates:" +
@@ -24794,7 +24893,7 @@ prepare_dreamcast_port_project_impl(
 }
 
 constexpr std::string_view native_disc_analysis_artifact_cache_name{
-    "native-disc-analysis-v1.bin"};
+    "native-disc-analysis-v2.bin"};
 
 std::vector<katana::io::InputProvenance> native_disc_input_provenance(
     const katana::platform::DreamcastDiscBoot& disc) {
@@ -25093,52 +25192,348 @@ build_native_disc_materialization_world(
                 world_model_error_name(world.last_error()));
     }
 
-    std::map<std::string, std::vector<std::uint32_t>> hardware_groups;
+    std::map<std::uint32_t,
+             std::vector<const katana::analysis::HardwareAccessReference*>>
+        hardware_references_by_site;
+    for (const auto& reference :
+         result.admitted_state->native_hardware_audit.references)
+        hardware_references_by_site[reference.instruction_address].push_back(
+            &reference);
+    const auto hardware_reference_descriptor = [](const auto& reference) {
+        std::ostringstream descriptor;
+        descriptor << "region="
+                   << katana::analysis::dreamcast_hardware_region_name(
+                          reference.region)
+                   << ";access="
+                   << katana::analysis::hardware_access_kind_name(
+                          reference.kind)
+                   << ";width="
+                   << static_cast<unsigned>(reference.width)
+                   << ";support="
+                   << katana::analysis::hardware_runtime_support_name(
+                          reference.runtime_support);
+        if (!reference.register_name.empty())
+            descriptor << ";register=" << reference.register_name;
+        return descriptor.str();
+    };
+    std::map<std::uint32_t, std::string> analyzed_function_symbols;
+    for (const auto& node : result.call_graph.nodes)
+        if (!node.symbol.empty())
+            analyzed_function_symbols.try_emplace(node.address, node.symbol);
+    const auto expected_native_provider = [&](const std::uint32_t site) {
+        if (options.native_port_definition != nullptr) {
+            const auto resolution = std::ranges::find_if(
+                options.native_port_definition->hardware_resolutions,
+                [site](const auto& candidate) {
+                    return candidate.instruction_address == site;
+                });
+            if (resolution !=
+                options.native_port_definition->hardware_resolutions.end()) {
+                const auto binding = std::ranges::find_if(
+                    options.native_port_definition->hooks,
+                    [&](const auto& candidate) {
+                        return candidate.guest_address ==
+                               resolution->hook_guest_address;
+                    });
+                if (binding != options.native_port_definition->hooks.end() &&
+                    !binding->symbol.empty())
+                    return std::string(binding->symbol);
+            }
+        }
+        return std::string{
+            "katana::runtime::NativePortHookBinding(required,replaces-original)"};
+    };
+    struct HardwareTaskGroup final {
+        std::string reason;
+        std::vector<std::string> descriptors;
+        std::set<std::uint32_t> owners;
+        std::string expected_provider;
+        std::vector<std::uint32_t> sites;
+    };
+    std::map<std::string, HardwareTaskGroup> hardware_groups;
     for (const auto& gap :
-         result.admitted_state->native_hardware_closure.gaps)
-        hardware_groups[gap.reason.empty() ? "unclassified-native-gap"
-                                           : gap.reason]
-            .push_back(gap.instruction_address);
-    std::size_t group_index = 0u;
-    for (auto& [reason, sites] : hardware_groups) {
+         result.admitted_state->native_hardware_closure.gaps) {
+        const auto reason = gap.reason.empty()
+            ? std::string{"unclassified-native-gap"}
+            : gap.reason;
+        std::vector<std::string> descriptors;
+        if (const auto references =
+                hardware_references_by_site.find(gap.instruction_address);
+            references != hardware_references_by_site.end()) {
+            descriptors.reserve(references->second.size());
+            for (const auto* const reference : references->second)
+                if (reference != nullptr)
+                    descriptors.push_back(
+                        hardware_reference_descriptor(*reference));
+            std::sort(descriptors.begin(), descriptors.end());
+            descriptors.erase(
+                std::unique(descriptors.begin(), descriptors.end()),
+                descriptors.end());
+        }
+        const auto owners = native_port_covering_function_entries(
+            result.admitted_state->native_port_program_index,
+            gap.instruction_address);
+        const auto expected_provider =
+            expected_native_provider(gap.instruction_address);
+        std::ostringstream group_identity;
+        append_persistent_epoch_key_field(group_identity, reason);
+        append_persistent_epoch_key_value(
+            group_identity, descriptors.size());
+        for (const auto& descriptor : descriptors)
+            append_persistent_epoch_key_field(
+                group_identity, descriptor);
+        append_persistent_epoch_key_value(
+            group_identity, owners.size());
+        for (const auto owner : owners)
+            append_persistent_epoch_key_value(group_identity, owner);
+        append_persistent_epoch_key_field(
+            group_identity, expected_provider);
+        auto& group = hardware_groups[group_identity.str()];
+        if (group.reason.empty()) {
+            group.reason = reason;
+            group.descriptors = std::move(descriptors);
+            group.owners = owners;
+            group.expected_provider = expected_provider;
+        }
+        group.sites.push_back(gap.instruction_address);
+    }
+    constexpr std::size_t maximum_native_hardware_sites_per_agent_task = 16u;
+    for (auto& [group_identity, group] : hardware_groups) {
+        auto& sites = group.sites;
         std::sort(sites.begin(), sites.end());
         sites.erase(std::unique(sites.begin(), sites.end()), sites.end());
-        FrontierEntry entry;
-        entry.family = "native-hardware-closure";
-        entry.owner = "native-product-aot";
-        entry.site = "gap-group-" + std::to_string(group_index++);
-        entry.state = FrontierState::Open;
-        entry.proof = FrontierProof::StaticAnalyzer;
-        entry.severity = FrontierSeverity::P0;
-        entry.missing_proof = reason;
-        entry.fanout = static_cast<std::uint32_t>(
-            std::min<std::size_t>(sites.size(),
-                                  std::numeric_limits<std::uint32_t>::max()));
-        entry.blocked_kind = FrontierBlockKind::Hardware;
-        entry.evidence = {analysis_evidence, provider_evidence};
-        entry.contracts = {
-            "identity-bound-whole-owner-native-replacement",
-            "replacement-reachability-proven"};
-        for (std::size_t index = 0u;
-             index < sites.size() &&
-             index < materialization_world_max_blocked_items;
-             ++index)
-            entry.blocked_sites.push_back(
-                guarded_aot_address(sites[index]));
-        entry.blocked_hardware.push_back(reason);
-        entry.causal_chain = {
-            "reachable-aot-instruction",
-            "hardware-side-effect",
-            "missing-native-owner-proof"};
-        entry.invariants = {
-            "no-mmio-emulation",
-            "no-interpreter-or-jit-fallback",
-            "preserve-owner-abi-and-side-effect-order"};
-        entry.acceptance_criteria = {
-            "exact-boundary-and-byte-identity",
-            "native-provider-semantic-equivalence",
-            "replacement-reachability-with-zero-residual-sites"};
-        add_frontier(std::move(entry));
+        struct OwnerHookTaskContract final {
+            std::uint32_t entry = 0u;
+            std::optional<std::uint32_t> covered_size;
+            std::string boundary_proof;
+            std::string code_identity;
+            std::string suggested_symbol;
+            std::string candidate_reason;
+            const katana::runtime::NativePortHookBinding* current_hook =
+                nullptr;
+        };
+        const auto owner_hook_contract = [&]() {
+            OwnerHookTaskContract contract;
+            if (group.owners.size() != 1u) {
+                contract.candidate_reason = group.owners.empty()
+                    ? "owner-unmapped"
+                    : "owner-ambiguous";
+                return contract;
+            }
+            contract.entry = *group.owners.begin();
+            const auto boundary = native_port_function_boundary(
+                result.admitted_state->native_port_program_index,
+                contract.entry);
+            if (!boundary.has_value()) {
+                contract.candidate_reason = "exact-boundary-unavailable";
+                return contract;
+            }
+            contract.covered_size = boundary->size;
+            contract.boundary_proof = std::string(
+                native_port_function_boundary_proof_name(boundary->proof));
+            const auto identity = native_port_code_identity(
+                result.image,
+                result.admitted_state->latent_aot.modules,
+                contract.entry,
+                *contract.covered_size);
+            if (!identity.has_value()) {
+                contract.candidate_reason =
+                    "function-code-identity-unavailable";
+                return contract;
+            }
+            contract.code_identity = *identity;
+            contract.suggested_symbol =
+                native_port_suggested_hook_symbol(contract.entry);
+            katana::runtime::NativePortHookBinding synthetic;
+            synthetic.guest_address = contract.entry;
+            synthetic.covered_size = *contract.covered_size;
+            synthetic.kind =
+                katana::runtime::NativePortHookKind::FunctionEntry;
+            synthetic.requirement =
+                katana::runtime::NativePortHookRequirement::Required;
+            synthetic.original_policy =
+                katana::runtime::NativePortHookOriginalPolicy::
+                    ReplacesOriginal;
+            for (const auto site : sites) {
+                const auto proof = prove_native_port_hook_coverage(
+                    result.admitted_state->native_port_program_index,
+                    result.admitted_state->native_aot_resume_entries,
+                    synthetic,
+                    site);
+                if (!proof.valid) {
+                    contract.suggested_symbol.clear();
+                    contract.candidate_reason = proof.reason;
+                    break;
+                }
+            }
+            if (options.native_port_definition != nullptr) {
+                const auto hook = std::ranges::find_if(
+                    options.native_port_definition->hooks,
+                    [&](const auto& candidate) {
+                        return candidate.guest_address == contract.entry;
+                    });
+                if (hook != options.native_port_definition->hooks.end())
+                    contract.current_hook = &*hook;
+            }
+            return contract;
+        }();
+        for (std::size_t first_site = 0u; first_site < sites.size();
+             first_site += maximum_native_hardware_sites_per_agent_task) {
+            const auto site_count = std::min(
+                maximum_native_hardware_sites_per_agent_task,
+                sites.size() - first_site);
+            std::ostringstream task_identity;
+            append_persistent_epoch_key_field(
+                task_identity, group_identity);
+            append_persistent_epoch_key_value(
+                task_identity,
+                first_site /
+                    maximum_native_hardware_sites_per_agent_task);
+            FrontierEntry entry;
+            entry.family = "native-hardware-closure";
+            if (group.owners.size() == 1u) {
+                const auto owner = *group.owners.begin();
+                const auto symbol = analyzed_function_symbols.find(owner);
+                entry.owner = symbol != analyzed_function_symbols.end()
+                    ? symbol->second
+                    : guarded_aot_address(owner);
+            } else if (!group.owners.empty()) {
+                entry.owner = "owner-set-" +
+                    katana::io::sha256_bytes(group_identity).substr(0u, 12u);
+            } else {
+                entry.owner = "native-product-aot";
+            }
+            entry.site = "gap-signature-" +
+                katana::io::sha256_bytes(task_identity.str()).substr(0u, 16u);
+            entry.state = FrontierState::Open;
+            entry.proof = FrontierProof::StaticAnalyzer;
+            entry.severity = FrontierSeverity::P0;
+            entry.missing_proof = group.reason;
+            entry.fanout = static_cast<std::uint32_t>(site_count);
+            entry.blocked_kind = FrontierBlockKind::Hardware;
+            entry.evidence = {analysis_evidence, provider_evidence};
+            entry.contracts = {
+                "identity-bound-whole-owner-native-replacement",
+                "expected-native-provider:" + group.expected_provider,
+                "replacement-reachability-proven"};
+            if (owner_hook_contract.covered_size.has_value() &&
+                !owner_hook_contract.code_identity.empty()) {
+                entry.contracts.push_back(
+                    "owner-hook-kind:function-entry");
+                entry.contracts.push_back(
+                    "owner-hook-requirement:required");
+                entry.contracts.push_back(
+                    "owner-hook-original-policy:replaces-original");
+            }
+            for (std::size_t index = 0u; index < site_count; ++index)
+                entry.blocked_sites.push_back(
+                    guarded_aot_address(sites[first_site + index]));
+            entry.source_paths = {
+                "src/analysis/hardware_audit.cpp",
+                "src/codegen/port_export.cpp",
+                "include/katana/runtime/native_port.hpp",
+                "include/katana/sh4/instruction_metadata.hpp"};
+            entry.source_symbols = {
+                "katana::analysis::audit_dreamcast_hardware",
+                "katana::codegen::evaluate_native_port_hardware_closure",
+                "katana::runtime::NativePortHardwareResolution",
+                "katana::runtime::NativePortHookBinding"};
+            for (const auto owner : group.owners) {
+                if (entry.blocked_functions.size() >=
+                    materialization_world_max_blocked_items)
+                    break;
+                entry.blocked_functions.push_back(guarded_aot_address(owner));
+                const auto symbol = analyzed_function_symbols.find(owner);
+                if (symbol != analyzed_function_symbols.end() &&
+                    symbol->second.size() <=
+                        materialization_world_max_text_bytes &&
+                    entry.source_symbols.size() <
+                        materialization_world_max_source_items)
+                    entry.source_symbols.push_back(symbol->second);
+            }
+            if (!owner_hook_contract.suggested_symbol.empty() &&
+                entry.source_symbols.size() <
+                    materialization_world_max_source_items)
+                entry.source_symbols.push_back(
+                    owner_hook_contract.suggested_symbol);
+            entry.blocked_hardware.push_back(
+                "expected-native-provider=" + group.expected_provider);
+            entry.blocked_hardware.push_back(
+                "missing-proof=" + group.reason);
+            if (owner_hook_contract.entry != 0u)
+                entry.blocked_hardware.push_back(
+                    "owner-hook-guest-address=" +
+                    guarded_aot_address(owner_hook_contract.entry));
+            if (owner_hook_contract.covered_size.has_value())
+                entry.blocked_hardware.push_back(
+                    "owner-hook-covered-size=" +
+                    std::to_string(*owner_hook_contract.covered_size));
+            if (!owner_hook_contract.boundary_proof.empty())
+                entry.blocked_hardware.push_back(
+                    "owner-hook-boundary-proof=" +
+                    owner_hook_contract.boundary_proof);
+            if (!owner_hook_contract.code_identity.empty())
+                entry.blocked_hardware.push_back(
+                    "owner-hook-code-identity=" +
+                    owner_hook_contract.code_identity);
+            if (!owner_hook_contract.suggested_symbol.empty())
+                entry.blocked_hardware.push_back(
+                    "owner-hook-suggested-symbol=" +
+                    owner_hook_contract.suggested_symbol);
+            if (!owner_hook_contract.candidate_reason.empty())
+                entry.blocked_hardware.push_back(
+                    "owner-hook-candidate-reason=" +
+                    owner_hook_contract.candidate_reason);
+            entry.blocked_hardware.push_back(
+                owner_hook_contract.current_hook != nullptr
+                    ? "owner-hook-current-binding=" +
+                          std::string(
+                              owner_hook_contract.current_hook->symbol)
+                    : "owner-hook-current-binding=missing");
+            entry.blocked_hardware.push_back(
+                owner_hook_contract.current_hook != nullptr
+                    ? "provider-result-or-state-proof=unproven"
+                    : "provider-result-or-state-proof=missing");
+            if (options.native_port_definition != nullptr) {
+                for (std::size_t index = 0u; index < site_count; ++index) {
+                    const auto site = sites[first_site + index];
+                    const auto resolution = std::ranges::find_if(
+                        options.native_port_definition->hardware_resolutions,
+                        [site](const auto& candidate) {
+                            return candidate.instruction_address == site;
+                        });
+                    entry.blocked_hardware.push_back(
+                        "site-hook-resolution=" +
+                        guarded_aot_address(site) + "->" +
+                        (resolution != options.native_port_definition->
+                                           hardware_resolutions.end()
+                             ? guarded_aot_address(
+                                   resolution->hook_guest_address)
+                             : std::string{"missing"}));
+                }
+            }
+            for (const auto& descriptor : group.descriptors) {
+                if (entry.blocked_hardware.size() >=
+                    materialization_world_max_blocked_items)
+                    break;
+                entry.blocked_hardware.push_back(descriptor);
+            }
+            entry.causal_chain = {
+                "owner-function",
+                "classified-hardware-operation-and-register-family",
+                "expected-native-provider",
+                "missing-provider-result-or-state-proof"};
+            entry.invariants = {
+                "no-mmio-emulation",
+                "no-interpreter-or-jit-fallback",
+                "preserve-owner-abi-and-side-effect-order"};
+            entry.acceptance_criteria = {
+                "all-listed-sites-share-owner-and-operation-contract",
+                "exact-boundary-and-byte-identity",
+                "native-provider-semantic-equivalence",
+                "replacement-reachability-with-zero-residual-sites"};
+            add_frontier(std::move(entry));
+        }
     }
 
     for (const auto site :
@@ -25329,65 +25724,150 @@ try_reuse_native_disc_analysis_artifact(
     const katana::platform::DreamcastDiscBoot& disc,
     const PortExportOptions& options,
     const NativeDiscAnalysisArtifactIdentity& expected_identity) {
-    if (!native_disc_analysis_positive_product_cache_enabled)
+    const bool analysis_checkpoint_requested =
+        options.agent_analysis_artifacts_requested;
+    if (!analysis_checkpoint_requested &&
+        !native_disc_analysis_positive_product_cache_enabled)
         return std::nullopt;
     if (options.diagnostic_partial ||
         options.analysis_cache_root.empty() ||
         expected_identity.key.empty())
         return std::nullopt;
+    const bool resume_artifact_requested =
+        !options.resume_analysis_artifact.empty();
+    if (resume_artifact_requested &&
+        options.resume_analysis_artifact_key.empty())
+        throw std::invalid_argument(
+            "Resume-Analysearchiv besitzt keine Ledger-Identitaet.");
     CodegenCache cache(options.analysis_cache_root /
                        "native-disc-analysis");
-    const auto stored = cache.load_bounded(
-        expected_identity.key,
-        native_disc_analysis_artifact_cache_name,
-        maximum_native_disc_analysis_artifact_bytes);
-    if (!stored.has_value()) return std::nullopt;
+    std::optional<std::string> cached_artifact;
+    std::span<const std::uint8_t> stored_bytes;
+    std::string_view stored_key = expected_identity.key;
+    if (resume_artifact_requested) {
+        stored_bytes = options.resume_analysis_artifact;
+        stored_key = options.resume_analysis_artifact_key;
+    } else {
+        cached_artifact = cache.load_bounded(
+            expected_identity.key,
+            native_disc_analysis_artifact_cache_name,
+            maximum_native_disc_analysis_artifact_bytes);
+        if (!cached_artifact.has_value()) {
+            report_progress(
+                options, "native-disc-analysis-artifact-cache-miss");
+            return std::nullopt;
+        }
+        stored_bytes = std::span(
+            reinterpret_cast<const std::uint8_t*>(
+                cached_artifact->data()),
+            cached_artifact->size());
+    }
     const auto invalidate = [&] {
+        if (resume_artifact_requested || !cached_artifact.has_value()) return;
         static_cast<void>(cache.erase_bounded_if_matches(
             expected_identity.key,
             native_disc_analysis_artifact_cache_name,
-            *stored,
+            *cached_artifact,
             maximum_native_disc_analysis_artifact_bytes));
+    };
+    const auto reject = [&](const std::string_view reason)
+        -> std::optional<NativeDiscAnalysisResult> {
+        invalidate();
+        report_progress(
+            options,
+            std::string(
+                resume_artifact_requested
+                    ? "native-disc-analysis-resume-artifact-rejected:"
+                    : "native-disc-analysis-artifact-rejected:") +
+                std::string(reason));
+        if (resume_artifact_requested)
+            throw std::runtime_error(
+                "Das gebundene Resume-Analysearchiv wurde bei der "
+                "erneuten Source-/Contractvalidierung abgelehnt (" +
+                std::string(reason) + ").");
+        return std::nullopt;
     };
     try {
         auto parsed = parse_native_disc_analysis_artifact(
-            expected_identity.key,
-            std::span(
-                reinterpret_cast<const std::uint8_t*>(
-                    stored->data()),
-                stored->size()));
+            stored_key, stored_bytes);
         if (parsed.state !=
                 NativeDiscAnalysisArtifactState::Hit) {
-            if (parsed.state ==
-                NativeDiscAnalysisArtifactState::Corrupt)
-                invalidate();
-            return std::nullopt;
+            return reject(parsed.reason);
         }
         auto artifact = std::move(parsed.artifact);
         auto stable_identity = artifact.identity;
         stable_identity.image_analysis_key.clear();
         auto stable_expected = expected_identity;
         stable_expected.image_analysis_key.clear();
-        if (stable_identity != stable_expected ||
+        if (resume_artifact_requested) {
+            // A committed analysis product is independent from subsequent
+            // world/task/code-emission-only edits. Analyzer/cache identities,
+            // ABI, source and every semantic input remain exact; product
+            // admission is replayed below under the current codegen build.
+            stable_identity.key.clear();
+            stable_expected.key.clear();
+            stable_identity.codegen_implementation_identity.clear();
+            stable_expected.codegen_implementation_identity.clear();
+        }
+        const auto identity_mismatch = [&]() -> std::string_view {
+#define KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(field)                         \
+    if (stable_identity.field != stable_expected.field) return #field
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(key);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(content_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(boot_byte_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(project_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(image_analysis_key);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(game_project_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(native_port_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
+                native_port_artifact_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
+                analysis_implementation_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
+                analysis_cache_implementation_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
+                codegen_implementation_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analysis_contract_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analyzer_abi);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(backend_abi);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analysis_mode);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(disc_volume_start_lba);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(disc_extent_lba_bias);
+#undef KATANA_CHECK_ANALYSIS_IDENTITY_FIELD
+            return {};
+        }();
+        if (!identity_mismatch.empty() ||
             artifact.entry_address !=
                 katana::platform::
                     dreamcast_system_bootstrap_entry_address ||
             artifact.boot_address !=
                 katana::platform::dreamcast_disc_boot_address ||
             artifact.boot_size != disc.boot_file.size()) {
-            invalidate();
-            return std::nullopt;
+            return reject(
+                !identity_mismatch.empty()
+                    ? "identity-" + std::string(identity_mismatch)
+                    : "identity-layout");
         }
 
         auto image = initial_image;
-        if (!artifact.external_primary_roots.empty() &&
-            !validate_latent_primary_root_seeds(
+        const auto inferred_gap_entries =
+            latent_aot_inferred_gap_function_entries(
+                options.game_project,
+                options.native_port_definition,
+                image);
+        const auto rebound_external_primary_roots =
+            latent_aot_external_primary_entries(
+                artifact.latent.modules,
+                options.game_project,
+                options.native_port_definition,
                 image,
-                artifact.external_primary_roots,
+                artifact.primary.lowered_program,
+                inferred_gap_entries,
                 artifact.boot_address,
-                artifact.boot_size)) {
-            invalidate();
-            return std::nullopt;
+                static_cast<std::size_t>(artifact.boot_size));
+        if (rebound_external_primary_roots !=
+            artifact.external_primary_roots) {
+            return reject("external-roots");
         }
         for (const auto root : artifact.external_primary_roots)
             image.add_entry_point(root);
@@ -25403,8 +25883,7 @@ try_reuse_native_disc_analysis_artifact(
                 artifact.primary, image) ||
             !validate_latent_aot_discovery_source_binding(
                 disc.source, artifact.latent)) {
-            invalidate();
-            return std::nullopt;
+            return reject("image-or-source-binding");
         }
 
         NativeDiscAnalysisResult result;
@@ -25481,21 +25960,23 @@ try_reuse_native_disc_analysis_artifact(
             closure.replacement_reachability_proven !=
                 artifact.replacement_reachability_proven ||
             !artifact.backend_admitted) {
-            invalidate();
-            return std::nullopt;
+            return reject("admission-replay");
         }
         result.analysis_artifact_bytes.assign(
-            reinterpret_cast<const std::uint8_t*>(stored->data()),
-            reinterpret_cast<const std::uint8_t*>(stored->data()) +
-                stored->size());
+            stored_bytes.begin(), stored_bytes.end());
         if (options.agent_analysis_artifacts_requested)
             populate_native_disc_materialization_artifacts(result, options);
-        report_progress(options, "native-disc-analysis-artifact-hit");
+        report_progress(
+            options,
+            resume_artifact_requested
+                ? "native-disc-analysis-resume-artifact-hit"
+                : "native-disc-analysis-artifact-hit");
         return result;
     } catch (const std::bad_alloc&) {
         throw;
     } catch (...) {
         invalidate();
+        if (resume_artifact_requested) throw;
         return std::nullopt;
     }
 }
@@ -25505,7 +25986,10 @@ void publish_native_disc_analysis_artifact(
     const PortExportOptions& options) {
     const bool archive_requested =
         options.analysis_artifact_archive_requested;
-    if ((!archive_requested &&
+    const bool analysis_checkpoint_requested =
+        options.agent_analysis_artifacts_requested &&
+        !options.analysis_cache_root.empty();
+    if ((!archive_requested && !analysis_checkpoint_requested &&
          !native_disc_analysis_positive_product_cache_enabled) ||
         options.diagnostic_partial || !result.admitted_state ||
         result.analysis_artifact_identity.key.empty())
@@ -25563,7 +26047,7 @@ void publish_native_disc_analysis_artifact(
             std::move(artifact.native_hardware_audit);
         restored = true;
     };
-    if (!native_disc_analysis_artifact_publishable(artifact)) {
+    if (!native_disc_analysis_artifact_checkpointable(artifact)) {
         restore();
         report_progress(
             options, "native-disc-analysis-artifact-incomplete");
@@ -25572,7 +26056,8 @@ void publish_native_disc_analysis_artifact(
     try {
         auto bytes = serialize_native_disc_analysis_artifact(artifact);
         restore();
-        if constexpr (!native_disc_analysis_positive_product_cache_enabled) {
+        if (!analysis_checkpoint_requested &&
+            !native_disc_analysis_positive_product_cache_enabled) {
             if (archive_requested) {
                 result.analysis_artifact_bytes = std::move(bytes);
                 report_progress(
@@ -25580,33 +26065,28 @@ void publish_native_disc_analysis_artifact(
             }
             return;
         }
-        if (options.analysis_cache_root.empty()) {
-            if (archive_requested) {
-                result.analysis_artifact_bytes = std::move(bytes);
+        if (analysis_checkpoint_requested ||
+            native_disc_analysis_positive_product_cache_enabled) {
+            try {
+                CodegenCache cache(options.analysis_cache_root /
+                                   "native-disc-analysis");
+                const auto content = std::string_view(
+                    reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                cache.store_bounded(
+                    result.analysis_artifact_identity.key,
+                    native_disc_analysis_artifact_cache_name,
+                    content,
+                    maximum_native_disc_analysis_artifact_bytes);
+                result.analysis_artifact_cache_published = true;
                 report_progress(
-                    options, "native-disc-analysis-archive-created");
+                    options, "native-disc-analysis-artifact-populated");
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (...) {
+                result.analysis_artifact_cache_publish_missed = true;
+                report_progress(
+                    options, "native-disc-analysis-artifact-publish-missed");
             }
-            return;
-        }
-        try {
-            CodegenCache cache(options.analysis_cache_root /
-                               "native-disc-analysis");
-            const auto content = std::string_view(
-                reinterpret_cast<const char*>(bytes.data()), bytes.size());
-            cache.store_bounded(
-                result.analysis_artifact_identity.key,
-                native_disc_analysis_artifact_cache_name,
-                content,
-                maximum_native_disc_analysis_artifact_bytes);
-            result.analysis_artifact_cache_published = true;
-            report_progress(
-                options, "native-disc-analysis-artifact-populated");
-        } catch (const std::bad_alloc&) {
-            throw;
-        } catch (...) {
-            result.analysis_artifact_cache_publish_missed = true;
-            report_progress(
-                options, "native-disc-analysis-artifact-publish-missed");
         }
         if (archive_requested) {
             result.analysis_artifact_bytes = std::move(bytes);
@@ -25619,7 +26099,8 @@ void publish_native_disc_analysis_artifact(
     } catch (...) {
         restore();
         result.analysis_artifact_bytes.clear();
-        if (native_disc_analysis_positive_product_cache_enabled) {
+        if (analysis_checkpoint_requested ||
+            native_disc_analysis_positive_product_cache_enabled) {
             result.analysis_artifact_cache_publish_missed = true;
             report_progress(
                 options, "native-disc-analysis-artifact-publish-missed");
@@ -26658,6 +27139,7 @@ static PortExportResult export_dreamcast_port_project_impl(
     return result;
 }
 
+// KATANA_COMPONENT_IDENTITY_REGION_BEGIN boot-analysis-pipeline
 struct PreparedBootAnalysisRun {
     PreparedBootAnalysisArtifact artifact;
     katana::analysis::DreamcastHardwareAudit hardware_audit;
@@ -26991,6 +27473,7 @@ PreparedBootAnalysisRun prepare_boot_analysis(
     }
     return result;
 }
+// KATANA_COMPONENT_IDENTITY_REGION_END boot-analysis-pipeline
 
 PortExportResult export_dreamcast_port_project(const PreparedPortProgram& prepared,
                                                const std::filesystem::path& output_root,
@@ -27123,6 +27606,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         reused.has_value())
         return std::move(*reused);
 
+    // KATANA_COMPONENT_IDENTITY_REGION_BEGIN native-disc-root-discovery
     const auto latent_primary_root_seed_key_identity =
         !options.analysis_implementation_identity.empty()
             ? std::string_view{options.analysis_implementation_identity}
@@ -27438,6 +27922,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
             "Latent-Primary-Root-Cache wurde vom autoritativen "
             "Cross-Image-Fixpunkt nicht bestaetigt.");
     }
+    // KATANA_COMPONENT_IDENTITY_REGION_END native-disc-root-discovery
 
     auto& analysis = prepared_analysis.artifact.analysis;
     auto& program = prepared_analysis.artifact.lowered_program;

@@ -8749,6 +8749,7 @@ AgentSessionLedgerState validate_agent_session_ledger(
 struct CommittedAgentGeneration final {
     katana::agent::ExecutableMaterializationWorld world;
     std::string analysis_artifact_id;
+    std::string analysis_archive;
 };
 
 CommittedAgentGeneration load_committed_agent_generation(
@@ -8783,8 +8784,9 @@ CommittedAgentGeneration load_committed_agent_generation(
             "analyze-port --resume verweigert eine unvollstaendige oder "
             "nachtraeglich veraenderte Analysepublikation.");
 
+    std::string archive;
     if (state.analysis_archive_sha256.has_value()) {
-        const auto archive = read_safe_small_port_file(
+        archive = read_safe_small_port_file(
             output_root / "native-disc-analysis.katana-analysis",
             katana::codegen::maximum_native_disc_analysis_artifact_bytes,
             "NativeDisc-Analysearchiv");
@@ -8794,7 +8796,8 @@ CommittedAgentGeneration load_committed_agent_generation(
                 "analyze-port --resume verweigert ein veraendertes "
                 "NativeDisc-Analysearchiv.");
     }
-    return {std::move(world), state.analysis_artifact_id};
+    return {
+        std::move(world), state.analysis_artifact_id, std::move(archive)};
 }
 
 void append_agent_session_ledger(
@@ -9319,6 +9322,11 @@ int export_port_project(const std::filesystem::path& source_path,
     katana::cli::PortBuildTelemetryOptions telemetry_options;
     telemetry_options.jsonl_path =
         normalized_telemetry_jsonl_path;
+    // analyze-port intentionally stops before host configuration, so there is
+    // no CMake-resolved child environment to bind.  Its progress and phase
+    // telemetry remain mandatory when requested; only the build-only
+    // post-configure record is outside this command's contract.
+    telemetry_options.require_resolved_environment = !analysis_only;
     telemetry_options.require_phase_timings =
         normalized_telemetry_jsonl_path.has_value();
     telemetry_options.build_profile =
@@ -9823,6 +9831,7 @@ int export_port_project(const std::filesystem::path& source_path,
         std::optional<katana::agent::ExecutableMaterializationWorld>
             previous_world;
         std::optional<std::string> previous_analysis_artifact_id;
+        std::string previous_analysis_archive;
         if (resume_analysis) {
             if (!safe_regular_port_directory_exists(
                     absolute_output,
@@ -9835,12 +9844,23 @@ int export_port_project(const std::filesystem::path& source_path,
             previous_world = std::move(committed.world);
             previous_analysis_artifact_id =
                 std::move(committed.analysis_artifact_id);
+            previous_analysis_archive =
+                std::move(committed.analysis_archive);
         }
         std::optional<RuntimeFrontierImport> runtime_import;
         if (runtime_frontier_import_path.has_value())
             runtime_import = load_runtime_frontier_import(
                 *runtime_frontier_import_path);
         auto analysis_options = make_export_options({});
+        if (!previous_analysis_archive.empty()) {
+            analysis_options.resume_analysis_artifact =
+                std::span(
+                    reinterpret_cast<const std::uint8_t*>(
+                        previous_analysis_archive.data()),
+                    previous_analysis_archive.size());
+            analysis_options.resume_analysis_artifact_key =
+                *previous_analysis_artifact_id;
+        }
         const auto analysis_started = std::chrono::steady_clock::now();
         auto analyzed =
             katana::codegen::analyze_native_disc_port(
@@ -9943,7 +9963,7 @@ int export_port_project(const std::filesystem::path& source_path,
             world_json,
             "Materialization-World-JSON");
         std::ostringstream report;
-        report << "{\"schema\":1,\"kind\":\"katana-native-disc-analysis\""
+        report << "{\"schema\":2,\"kind\":\"katana-native-disc-analysis\""
                << ",\"project_identity\":"
                << katana::io::quote_json(analyzed.project_identity)
                << ",\"content_identity\":"
@@ -9988,6 +10008,22 @@ int export_port_project(const std::filesystem::path& source_path,
                        ? "true" : "false")
                << ",\"analysis_artifact_cache_published\":"
                << (analyzed.analysis_artifact_cache_published
+                       ? "true" : "false")
+               << ",\"analysis_artifact_cache_publish_missed\":"
+               << (analyzed.analysis_artifact_cache_publish_missed
+                       ? "true" : "false")
+               << ",\"boot_analysis_cache_hit\":"
+               << (analyzed.boot_analysis_cache_hit ? "true" : "false")
+               << ",\"boot_analysis_pipeline_runs\":"
+               << analyzed.boot_analysis_pipeline_runs
+               << ",\"latent_root_seed_cache_hit\":"
+               << (analyzed.latent_primary_root_seed_cache_hit
+                       ? "true" : "false")
+               << ",\"latent_root_seed_cache_published\":"
+               << (analyzed.latent_primary_root_seed_cache_published
+                       ? "true" : "false")
+               << ",\"latent_root_seed_cache_publish_missed\":"
+               << (analyzed.latent_primary_root_seed_cache_publish_missed
                        ? "true" : "false")
                << ",\"resume_requested\":"
                << (resume_analysis ? "true" : "false")

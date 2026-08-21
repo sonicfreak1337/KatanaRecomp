@@ -103,6 +103,14 @@ struct PortExportOptions {
     // Prepared boot/latent IR cache codec and IR contract identity.
     std::string analysis_cache_implementation_identity;
     std::string codegen_implementation_identity;
+    // A transactionally committed analysis archive supplied by
+    // `analyze-port --resume`. The archive remains bound to its ledger key;
+    // current analyzer/cache identities and every source binding are
+    // revalidated before it can seed a new agent generation. This deliberately
+    // bypasses codegen-only identity churn because admission is replayed from
+    // the stored analysis product.
+    std::span<const std::uint8_t> resume_analysis_artifact;
+    std::string_view resume_analysis_artifact_key;
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.
     const katana::runtime::GameProjectDefinition* game_project = nullptr;

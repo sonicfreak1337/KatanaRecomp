@@ -200,6 +200,19 @@ foreach(katana_component_file
     katana_append_component_file(
         katana_analysis_cache_material "${katana_component_file}")
 endforeach()
+foreach(katana_component_region
+        IN LISTS KATANA_ANALYSIS_CACHE_IDENTITY_REGIONS)
+    if(NOT katana_component_region MATCHES
+       "^([^|]+)[|]([A-Za-z0-9_-]+)$")
+        message(FATAL_ERROR
+            "Malformed analysis cache identity region: "
+            "${katana_component_region}")
+    endif()
+    katana_append_component_region(
+        katana_analysis_cache_material
+        "${CMAKE_MATCH_1}"
+        "${CMAKE_MATCH_2}")
+endforeach()
 string(SHA256 KATANA_ANALYSIS_CACHE_COMPONENT_IDENTITY
        "${katana_analysis_cache_material}")
 

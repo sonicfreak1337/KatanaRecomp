@@ -32,15 +32,20 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `58`, Backend-
 Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil `23`.
-Der neue agentische Analyseworkflow mit Materialization-World und Frontier-
-Ledger ist als bounded Grundlage vorhanden; CrashCapsule-v2 ist als Runtime-
-Baustein gebaut, die generierte Produkt-Catch-Verdrahtung aber noch nicht als
-fertig bestaetigt. Kein Teil ersetzt statische Closure durch Laufzeit-
-beobachtung.
-Ein neuer Sonic-Export ist bis zum ersten vollstaendigen `analyze-port`-Lauf
-mit materiellem Root-/Modulgewinn gesperrt; fehlende Disassembly gilt niemals
-als Unreachability- oder Closure-Beweis. Der v141-Export bleibt bis dahin die
-letzte bestaetigte Produktbaseline.
+Der neue agentische Analyseworkflow mit Materialization-World, Frontier-
+Ledger und identity-bound Analysecheckpoint ist produktnah belegt.
+`analyze-port --resume` revalidiert die aktuelle GDI, Definitionen, Payloads,
+Latent-Roots, Images und IR und wiederholt Admission sowie World-Projektion,
+ohne CFA/FVA erneut auszufuehren. CrashCapsule-v2 ist einschliesslich bounded
+Eventserialisierung und der generierten Produkt-Catch-Verdrahtung gebaut. Der
+eigentliche Crashhandler bleibt heap-, lock- und callbackfrei; Hostpointer
+werden nicht ausgegeben. Kein Teil ersetzt statische Closure durch
+Laufzeitbeobachtung.
+
+Der erste vollstaendige Sonic-`analyze-port`-Lauf ist gruen abgeschlossen;
+ein Export wurde bewusst nicht gestartet. Fehlende Disassembly gilt weiterhin
+niemals als Unreachability- oder Closure-Beweis. Der v141-Export bleibt die
+letzte bestaetigte Produktbaseline, bis Katana ehrlich `BuildPort` meldet.
 
 Der v0.49.2-Analyzercheckpoint schliesst den Saved-Stack-/Epoch-/Callback-
 Umbau mit `463/463` gruenen Checks im bestehenden Function-Value-Sanitylauf.
@@ -49,8 +54,28 @@ Fixpunkt und Persistenz getrennt. Nichtautoritative Storage-Summaries werden
 quarantaenisiert; Pending-ABI-Skalare bleiben value- oder domaenengebunden,
 bis ein belegtes ABI-/Callback-Gate sie promoted. Runtimekandidaten aus
 partiell bekannten Contexts bleiben sichtbar, erzeugen aber keine statische
-CFG-Kante. Der erste Sonic-`analyze-port`-Lauf und die generierte
-CrashCapsule-v2-Catch-Verdrahtung bleiben die naechsten offenen Gates.
+CFG-Kante.
+
+Der kalte Sonic-Adventure-PAL-v1.003-Lauf endete in `342,230 s`; der
+identitaetsgebundene Resume in `45,758 s`. Der Report belegt
+`analysis_artifact_cache_hit=true`, `boot_analysis_cache_hit=true` und
+`boot_analysis_pipeline_runs=0`; der Analyseanteil sank laut Ledger von
+`336.588` auf `39.925 ms`. Der aktuelle Stand umfasst `5.667` primaere und
+`6.284` kombinierte Funktionen, ein Latent-Modul, `89` externe Roots, `5`
+native Resume-Entries, `240` Hardware-Sites, `167` offene Hardware-Gaps und
+`289` handlungsfaehige Frontiers. Katana entscheidet deshalb korrekt
+`continue_static_iteration` statt `BuildPort`.
+
+Die Hardwaretasks sind nun fuer kleine Agenten bounded und konkret: Owner,
+Operation/Registerfamilie, erwarteter Native-Provider, fehlender Proof sowie
+gegebenenfalls exakte Hookgroesse, Codeidentitaet, Symbol und Sitezuordnung.
+Die naechste autoritative Aufgabe betrifft genau einen Owner, zwei
+`IML6ERR`-Writes und den fehlenden identity-bound Native-Hook-Vertrag. Ein
+Luna-Max-Review konnte daraus bereits die zwei privaten Sourcehunks ableiten;
+der ABI-/Register-/State-/Side-Effect-Beweis des neuen Providers bleibt
+jedoch korrekt als `provider-result-or-state-proof=missing` fail-closed. Die
+naechste Befundverfeinerung muss genau diesen Semantikvertrag bounded aus der
+analysierten Ownerfunktion projizieren.
 
 Der aktuelle v141-Export bindet den bisher fehlenden SPSR-Layoutschritt
 generisch: drei titelrelevante PCM-Stream-Ringe wurden bounded registriert,

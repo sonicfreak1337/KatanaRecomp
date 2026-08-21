@@ -47,7 +47,8 @@ v1-Grundvertrag additiv um bereits vorhandene, begrenzte Runtimefakten:
 - Runtime-/Source-Modulidentitaet samt Generation und Relocation;
 - letzter Materialisierungs-/Provideruebergang;
 - Wait-, Scheduler- und Schlafzustand;
-- bis zu 16 bereits aufgezeichnete Dispatchdiagnosen.
+- bis zu 16 bereits aufgezeichnete Block-, MMIO-, Scheduler- und
+  Fehlerereignisse in chronologischer Reihenfolge.
 
 Alle Tokens besitzen feste Puffer und akzeptieren nur pfadfreie, portable
 Zeichen. Truncation und ungueltige Zeichen werden markiert. Freie

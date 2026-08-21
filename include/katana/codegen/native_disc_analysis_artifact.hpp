@@ -13,15 +13,14 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 1u;
+inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 2u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
     256u * 1024u * 1024u;
-// Current bytes can authenticate retained instructions, but cannot yet prove
-// that a cached whole-disc result omitted no callback, transfer target or
-// hardware owner. The artifact remains useful for agent query/diff output;
-// product admission must rerun the authoritative analysis until complete
-// disassembly-based revalidation exists.
+// Current bytes can authenticate a bounded analysis checkpoint, but cannot
+// prove that an incomplete whole-disc result omitted no callback, transfer
+// target or hardware owner. Analysis tooling may resume an exact checkpoint;
+// product admission remains independently gated on complete proofs.
 inline constexpr bool native_disc_analysis_positive_product_cache_enabled =
     false;
 
@@ -102,6 +101,16 @@ struct NativeDiscAnalysisArtifactParseResult final {
 };
 
 [[nodiscard]] bool native_disc_analysis_artifact_publishable(
+    const NativeDiscAnalysisArtifact& artifact) noexcept;
+
+// An analysis checkpoint preserves an exact, source-bound analyzer result
+// without promoting its completeness bits. It is consumed only by analysis
+// tooling; native product admission must additionally satisfy the stronger
+// product predicate below.
+[[nodiscard]] bool native_disc_analysis_artifact_checkpointable(
+    const NativeDiscAnalysisArtifact& artifact) noexcept;
+
+[[nodiscard]] bool native_disc_analysis_artifact_product_admissible(
     const NativeDiscAnalysisArtifact& artifact) noexcept;
 
 [[nodiscard]] std::vector<std::uint8_t>

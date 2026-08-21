@@ -265,6 +265,39 @@ template <typename T>
     return 5;
 }
 
+[[nodiscard]] bool frontier_has_concrete_task_evidence(
+    const FrontierEntry& entry) noexcept {
+    return !entry.source_paths.empty() || !entry.source_symbols.empty() ||
+           !entry.blocked_sites.empty() || !entry.blocked_functions.empty() ||
+           !entry.blocked_roots.empty() || !entry.blocked_modules.empty() ||
+           !entry.blocked_hardware.empty() || !entry.causal_chain.empty();
+}
+
+[[nodiscard]] bool frontier_is_aggregate_task(
+    const FrontierEntry& entry) noexcept {
+    return !frontier_has_concrete_task_evidence(entry) &&
+           entry.blocked_kind == FrontierBlockKind::Materialization &&
+           !entry.blocked_materializations.empty();
+}
+
+[[nodiscard]] bool frontier_task_priority_less(
+    const FrontierEntry& lhs,
+    const FrontierEntry& rhs) noexcept {
+    const bool lhs_aggregate = frontier_is_aggregate_task(lhs);
+    const bool rhs_aggregate = frontier_is_aggregate_task(rhs);
+    if (lhs_aggregate != rhs_aggregate) return !lhs_aggregate;
+    if (lhs.severity != rhs.severity)
+        return static_cast<std::uint8_t>(lhs.severity) <
+               static_cast<std::uint8_t>(rhs.severity);
+    const int lhs_state = frontier_state_rank(lhs.state);
+    const int rhs_state = frontier_state_rank(rhs.state);
+    if (lhs_state != rhs_state) return lhs_state < rhs_state;
+    if (lhs.runtime_evidence_required != rhs.runtime_evidence_required)
+        return lhs.runtime_evidence_required < rhs.runtime_evidence_required;
+    if (lhs.fanout != rhs.fanout) return lhs.fanout > rhs.fanout;
+    return lhs.id < rhs.id;
+}
+
 [[nodiscard]] bool dependency_less(const DependencyEdge& lhs,
                                    const DependencyEdge& rhs) noexcept {
     if (lhs.from != rhs.from) return lhs.from < rhs.from;
@@ -2317,8 +2350,24 @@ bool next_agent_task(const ExecutableMaterializationWorld& world,
     if (!world.validate()) return false;
     output.decision = evaluate_agent_decision(world);
     if (!output.decision.focus) return false;
-    output.frontier = find_frontier(world, output.decision.focus);
-    return output.frontier != nullptr;
+
+    const bool select_runtime =
+        output.decision.kind == AgentDecisionKind::RequiresRuntimeEvidence;
+    const FrontierEntry* selected = nullptr;
+    for (const auto& entry : world.frontier()) {
+        if (entry.state == FrontierState::Closed && entry.static_complete) continue;
+        if (entry.proof == FrontierProof::ExplicitRejection) continue;
+        const bool runtime = entry.runtime_evidence_required ||
+                             entry.state == FrontierState::ObservedHint ||
+                             entry.proof == FrontierProof::RuntimeObservation;
+        if (runtime != select_runtime) continue;
+        if (selected == nullptr || frontier_task_priority_less(entry, *selected))
+            selected = &entry;
+    }
+    if (selected == nullptr) return false;
+    output.decision.focus = selected->id;
+    output.frontier = selected;
+    return true;
 }
 
 bool explain_frontier(const ExecutableMaterializationWorld& world,

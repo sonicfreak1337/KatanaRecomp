@@ -412,9 +412,12 @@ katana::analysis::DreamcastHardwareAudit read_hardware_audit(Reader& input) {
     });
     audit.loops = read_vector<HardwareNaturalLoop>(
         input, [&] { return read_hardware_loop(input); });
-    if (audit.unresolved_poll_guard_loops !=
-        count_unresolved_poll_guard_loops(audit.loops))
-        throw CodecError();
+    // The loop records are the bounded source of truth. Keep the redundant
+    // aggregate canonical when older producers observed the same loop through
+    // more than one audit projection; the envelope hash still protects every
+    // serialized byte and product admission is replayed after decode.
+    audit.unresolved_poll_guard_loops =
+        count_unresolved_poll_guard_loops(audit.loops);
     return audit;
 }
 
@@ -693,7 +696,7 @@ std::string native_disc_analysis_artifact_identity_key(
     return katana::io::sha256_bytes(material);
 }
 
-bool native_disc_analysis_artifact_publishable(
+bool native_disc_analysis_artifact_checkpointable(
     const NativeDiscAnalysisArtifact& artifact) noexcept {
     try {
         return !artifact.identity.key.empty() &&
@@ -714,11 +717,7 @@ bool native_disc_analysis_artifact_publishable(
                artifact.identity.backend_abi != 0u &&
                artifact.entry_address != 0u && artifact.boot_address != 0u &&
                artifact.boot_size != 0u &&
-               artifact.guarded_inventory_complete &&
-               artifact.native_hardware_closure_complete &&
-               artifact.replacement_reachability_proven &&
                artifact.backend_admitted &&
-               artifact.native_hardware_gaps == 0u &&
                boot_analysis_artifact_cacheable(artifact.primary) &&
                sorted_unique(artifact.external_primary_roots) &&
                sorted_unique(artifact.native_resume_entries) &&
@@ -735,11 +734,25 @@ bool native_disc_analysis_artifact_publishable(
     }
 }
 
+bool native_disc_analysis_artifact_product_admissible(
+    const NativeDiscAnalysisArtifact& artifact) noexcept {
+    return native_disc_analysis_artifact_checkpointable(artifact) &&
+           artifact.guarded_inventory_complete &&
+           artifact.native_hardware_closure_complete &&
+           artifact.replacement_reachability_proven &&
+           artifact.native_hardware_gaps == 0u;
+}
+
+bool native_disc_analysis_artifact_publishable(
+    const NativeDiscAnalysisArtifact& artifact) noexcept {
+    return native_disc_analysis_artifact_product_admissible(artifact);
+}
+
 std::vector<std::uint8_t> serialize_native_disc_analysis_artifact(
     const NativeDiscAnalysisArtifact& artifact) {
-    if (!native_disc_analysis_artifact_publishable(artifact))
+    if (!native_disc_analysis_artifact_checkpointable(artifact))
         throw std::invalid_argument(
-            "NativeDisc-Analysekapsel ist nicht positiv publizierbar.");
+            "NativeDisc-Analysecheckpoint ist nicht publizierbar.");
 
     Writer payload(maximum_native_disc_analysis_artifact_bytes);
     write_identity(payload, artifact.identity);
@@ -784,6 +797,7 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
         return {NativeDiscAnalysisArtifactState::Miss, {}, "expected-key-empty"};
     if (bytes.empty() || bytes.size() > maximum_native_disc_analysis_artifact_bytes)
         return {NativeDiscAnalysisArtifactState::Corrupt, {}, "artifact-size"};
+    std::string_view decode_stage = "envelope";
     try {
         Reader envelope(bytes);
         if (envelope.text() != artifact_magic ||
@@ -800,6 +814,7 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
             reinterpret_cast<const char*>(payload_bytes.data()), payload_bytes.size()));
         if (expected_sha != actual_sha) throw CodecError();
 
+        decode_stage = "identity";
         Reader payload(payload_bytes);
         NativeDiscAnalysisArtifact artifact;
         artifact.identity = read_identity(payload);
@@ -808,15 +823,20 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
                 native_disc_analysis_artifact_identity_key(
                     artifact.identity))
             throw CodecError();
+        decode_stage = "primary";
         const auto primary = parse_boot_analysis_cache(
             artifact.identity.image_analysis_key, payload.blob());
         if (primary.state != BootAnalysisCacheState::Hit) throw CodecError();
         artifact.primary = std::move(primary.artifact);
+        decode_stage = "latent";
         artifact.latent = read_latent(payload);
+        decode_stage = "hardware-audits";
         artifact.primary_hardware_audit = read_hardware_audit(payload);
         artifact.native_hardware_audit = read_hardware_audit(payload);
+        decode_stage = "roots";
         artifact.external_primary_roots = read_u32_vector(payload);
         artifact.native_resume_entries = read_u32_vector(payload);
+        decode_stage = "summary";
         artifact.entry_address = payload.u32();
         artifact.boot_address = payload.u32();
         artifact.boot_size = payload.u64();
@@ -829,13 +849,18 @@ NativeDiscAnalysisArtifactParseResult parse_native_disc_analysis_artifact(
         artifact.native_hardware_closure_complete = payload.boolean();
         artifact.replacement_reachability_proven = payload.boolean();
         artifact.backend_admitted = payload.boolean();
-        if (!payload.empty() || !native_disc_analysis_artifact_publishable(artifact))
+        decode_stage = "checkpoint-contract";
+        if (!payload.empty() ||
+            !native_disc_analysis_artifact_checkpointable(artifact))
             throw CodecError();
         return {NativeDiscAnalysisArtifactState::Hit, std::move(artifact), "hit"};
     } catch (const std::bad_alloc&) {
         return {NativeDiscAnalysisArtifactState::Corrupt, {}, "allocation"};
     } catch (const std::exception&) {
-        return {NativeDiscAnalysisArtifactState::Corrupt, {}, "codec"};
+        return {
+            NativeDiscAnalysisArtifactState::Corrupt,
+            {},
+            "codec-" + std::string(decode_stage)};
     }
 }
 

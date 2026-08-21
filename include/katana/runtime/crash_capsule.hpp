@@ -482,6 +482,33 @@ serialize_crash_capsule_v2(const CrashCapsule& capsule) noexcept {
     crash_capsule_detail::append_field(writer, "first_error_pc", capsule.first_error_pc);
     crash_capsule_detail::append_field(writer, "first_error_target", capsule.first_error_target);
     crash_capsule_detail::append_field(writer, "ring_events", capsule.event_count);
+    writer.append(",\"events\":[");
+    const auto event_count = capsule.event_count < crash_capsule_event_capacity
+        ? static_cast<std::size_t>(capsule.event_count)
+        : crash_capsule_event_capacity;
+    const auto event_mask = crash_capsule_event_capacity - 1u;
+    const auto oldest_event = event_count < crash_capsule_event_capacity
+        ? 0u
+        : static_cast<std::size_t>(capsule.next_event) & event_mask;
+    for (std::size_t offset = 0u; offset < event_count; ++offset) {
+        const auto index = (oldest_event + offset) & event_mask;
+        const auto& event = capsule.events[index];
+        writer.append(offset == 0u ? "{" : ",{");
+        writer.append("\"guest_cycle\":");
+        writer.append_integer(event.guest_cycle);
+        crash_capsule_detail::append_field(writer, "detail", event.detail);
+        crash_capsule_detail::append_field(writer, "pc", event.pc);
+        crash_capsule_detail::append_field(writer, "subject", event.subject);
+        crash_capsule_detail::append_field(writer, "auxiliary", event.auxiliary);
+        crash_capsule_detail::append_field(
+            writer, "code", static_cast<std::uint32_t>(event.code));
+        crash_capsule_detail::append_field(
+            writer, "kind", static_cast<std::uint32_t>(event.kind));
+        crash_capsule_detail::append_field(
+            writer, "flags", static_cast<std::uint32_t>(event.flags));
+        writer.append("}");
+    }
+    writer.append("]");
     writer.append("}");
     return result;
 }
