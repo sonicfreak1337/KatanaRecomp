@@ -7849,6 +7849,10 @@ struct AgentIterationDelta final {
     std::size_t resolved_frontiers = 0u;
     std::size_t new_frontiers = 0u;
     std::size_t new_runtime_hints = 0u;
+    std::size_t routed_to_runtime_frontiers = 0u;
+    std::size_t routed_to_static_frontiers = 0u;
+    std::size_t static_actionable_before = 0u;
+    std::size_t static_actionable_after = 0u;
     std::size_t proof_upgrades = 0u;
     std::size_t proof_downgrades = 0u;
     std::size_t new_incomplete_roots = 0u;
@@ -8527,10 +8531,24 @@ unsigned agent_node_proof_rank(
     return 0u;
 }
 
-bool actionable_agent_frontier(
+bool unresolved_agent_frontier(
     const katana::agent::FrontierEntry& entry) noexcept {
     return entry.state != katana::agent::FrontierState::Closed &&
-           !entry.static_complete;
+           !entry.static_complete &&
+           entry.proof != katana::agent::FrontierProof::ExplicitRejection;
+}
+
+bool runtime_agent_frontier(
+    const katana::agent::FrontierEntry& entry) noexcept {
+    return entry.runtime_evidence_required ||
+           entry.state == katana::agent::FrontierState::ObservedHint ||
+           entry.proof == katana::agent::FrontierProof::RuntimeObservation;
+}
+
+bool static_actionable_agent_frontier(
+    const katana::agent::FrontierEntry& entry) noexcept {
+    return unresolved_agent_frontier(entry) &&
+           !runtime_agent_frontier(entry);
 }
 
 AgentIterationDelta measure_agent_iteration(
@@ -8538,11 +8556,21 @@ AgentIterationDelta measure_agent_iteration(
     const katana::agent::ExecutableMaterializationWorld& after) {
     AgentIterationDelta result;
     for (const auto& previous : before.frontier()) {
+        if (static_actionable_agent_frontier(previous))
+            ++result.static_actionable_before;
         const auto* current = find_agent_frontier(after, previous.id);
-        if (actionable_agent_frontier(previous) &&
-            (current == nullptr || !actionable_agent_frontier(*current)))
+        if (unresolved_agent_frontier(previous) &&
+            (current == nullptr || !unresolved_agent_frontier(*current)))
             ++result.resolved_frontiers;
         if (current == nullptr) continue;
+        if (static_actionable_agent_frontier(previous) &&
+            unresolved_agent_frontier(*current) &&
+            runtime_agent_frontier(*current))
+            ++result.routed_to_runtime_frontiers;
+        if (unresolved_agent_frontier(previous) &&
+            runtime_agent_frontier(previous) &&
+            static_actionable_agent_frontier(*current))
+            ++result.routed_to_static_frontiers;
         const auto previous_rank = agent_frontier_proof_rank(previous.proof);
         const auto current_rank = agent_frontier_proof_rank(current->proof);
         if ((!previous.static_complete && current->static_complete) ||
@@ -8552,15 +8580,18 @@ AgentIterationDelta measure_agent_iteration(
             current_rank < previous_rank)
             ++result.proof_downgrades;
     }
-    for (const auto& current : after.frontier())
+    for (const auto& current : after.frontier()) {
+        if (static_actionable_agent_frontier(current))
+            ++result.static_actionable_after;
         if (find_agent_frontier(before, current.id) == nullptr &&
-            actionable_agent_frontier(current)) {
+            unresolved_agent_frontier(current)) {
             if (current.state ==
                 katana::agent::FrontierState::ObservedHint)
                 ++result.new_runtime_hints;
             else
                 ++result.new_frontiers;
         }
+    }
     for (const auto& current : after.frontier()) {
         const auto* previous = find_agent_frontier(before, current.id);
         if (previous == nullptr ||
@@ -12411,16 +12442,18 @@ int diff_analysis_cli(const std::filesystem::path& before_path,
         throw std::runtime_error(
             "Materialization-World-Diff konnte nicht vollstaendig erzeugt "
             "werden.");
-    std::cout << "{\"schema\":1,\"kind\":\"katana-agent-diff\""
+    std::cout << "{\"schema\":2,\"kind\":\"katana-agent-diff\""
               << ",\"change_count\":" << result.total
               << ",\"agent_result\":"
               << katana::io::quote_json(
                      delta.proof_downgrades != 0u ||
                              delta.new_frontiers != 0u ||
-                             delta.new_incomplete_roots != 0u
+                             delta.new_incomplete_roots != 0u ||
+                             delta.routed_to_static_frontiers != 0u
                          ? "regression"
                          : delta.resolved_frontiers != 0u ||
-                                   delta.proof_upgrades != 0u
+                                   delta.proof_upgrades != 0u ||
+                                   delta.routed_to_runtime_frontiers != 0u
                                ? "improved"
                                : "no_progress")
               << ",\"resolved_frontiers\":"
@@ -12428,6 +12461,14 @@ int diff_analysis_cli(const std::filesystem::path& before_path,
               << ",\"new_frontiers\":" << delta.new_frontiers
               << ",\"new_runtime_hints\":"
               << delta.new_runtime_hints
+              << ",\"routed_to_runtime_frontiers\":"
+              << delta.routed_to_runtime_frontiers
+              << ",\"routed_to_static_frontiers\":"
+              << delta.routed_to_static_frontiers
+              << ",\"static_actionable_before\":"
+              << delta.static_actionable_before
+              << ",\"static_actionable_after\":"
+              << delta.static_actionable_after
               << ",\"proof_upgrades\":" << delta.proof_upgrades
               << ",\"proof_downgrades\":"
               << delta.proof_downgrades
