@@ -27773,11 +27773,31 @@ build_native_disc_materialization_world(
                     return native_provider_input_read_priority_hint_owners.contains(
                         owner);
                 });
+        const auto owner_semantics = owner_semantic_task_contract(
+            result.admitted_state->emitted_program,
+            result.image,
+            owner_hook_contract.entry,
+            owner_hook_contract.covered_size,
+            result.admitted_state->native_hardware_audit.references);
+        const bool owner_semantics_blocked =
+            owner_hook_contract.candidate_reason.empty() &&
+            !owner_semantics.complete;
         const bool owner_hook_task_blocked =
-            !current_hook_identity_bound_but_non_closing &&
-            !owner_hook_contract.candidate_reason.empty();
+            owner_semantics_blocked ||
+            (!current_hook_identity_bound_but_non_closing &&
+             !owner_hook_contract.candidate_reason.empty());
+        const auto owner_hook_task_block_reason =
+            owner_semantics_blocked
+                ? current_hook_identity_bound_but_non_closing
+                      ? std::string{
+                            "native-provider-owner-semantic-contract-partial"}
+                      : std::string{
+                            "whole-owner-semantic-contract-partial"}
+                : owner_hook_contract.candidate_reason;
         const auto task_missing_proof =
-            current_hook_identity_bound_but_non_closing
+            owner_hook_task_blocked
+                ? owner_hook_task_block_reason
+            : current_hook_identity_bound_but_non_closing
                 ? !group.provider_contract.missing_proof.empty()
                       ? group.provider_contract.missing_proof
                       : group.native_provider_input_read
@@ -27785,19 +27805,11 @@ build_native_disc_materialization_world(
                                 "native-provider-read-result-state-proof-missing"}
                       : std::string{
                             "native-provider-result-or-state-proof-missing"}
-                : owner_hook_task_blocked
-                    ? owner_hook_contract.candidate_reason
                 : group.reason;
         const auto task_expected_provider =
             current_hook_identity_bound_but_non_closing
                 ? std::string{owner_hook_contract.current_hook->symbol}
                 : group.expected_provider;
-        const auto owner_semantics = owner_semantic_task_contract(
-            result.admitted_state->emitted_program,
-            result.image,
-            owner_hook_contract.entry,
-            owner_hook_contract.covered_size,
-            result.admitted_state->native_hardware_audit.references);
         for (std::size_t first_site = 0u; first_site < sites.size();
              first_site += maximum_native_hardware_sites_per_agent_task) {
             const auto site_count = std::min(
@@ -28026,7 +28038,7 @@ build_native_disc_materialization_world(
                       "owner-function",
                       "classified-hardware-operation-and-register-family",
                       "whole-owner-native-hook-admission",
-                      owner_hook_contract.candidate_reason}
+                      owner_hook_task_block_reason}
                 : current_hook_identity_bound_but_non_closing &&
                     group.native_provider_input_read
                 ? std::vector<std::string>{

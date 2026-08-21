@@ -91,8 +91,9 @@ katana-recomp diff-analysis `
 und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu drei
 Frontiers. Batch-Eintraege besitzen verschiedene Owner, damit parallele
 Agenten nicht dieselbe Provider-/Ownergrenze editieren. Die Reihenfolge bleibt
-deterministisch; echte Read-Rollen werden priorisiert, waehrend eine blosse
-Same-Owner-Beziehung keine Abhaengigkeit erfindet.
+deterministisch; echte offene Aufgaben schlagen blockierte Aufgaben. Innerhalb
+desselben Frontierzustands werden echte Read-Rollen priorisiert, waehrend eine
+blosse Same-Owner-Beziehung keine Abhaengigkeit erfindet.
 
 Stabile IDs sind in derselben Welt kollisionsgeprueft. Unbekannte Enumwerte,
 ueberlaufende Budgets, unvollstaendige Beziehungen und widerspruechliche
@@ -115,6 +116,15 @@ Site-Coverage ist `Blocked`, nicht `Open`. Sein `missing_proof` benennt die
 fehlende Admissionsvoraussetzung. Dadurch priorisiert `next-analysis-task`
 keine scheinbar offene Providerimplementierung, die Katana anschliessend
 selbst nicht identitaetsgebunden zulassen koennte.
+
+Dasselbe gilt, wenn der vollstaendige Owner-Semantikvertrag selbst `partial`
+oder `unavailable` ist. Katana darf weder einen neuen Whole-Owner-Hook noch das
+Upgrade eines vorhandenen identity-bound Bring-up-Providers als direkt
+implementierbaren Auftrag ausgeben: Ohne vollstaendigen Whole-Owner-Vertrag
+waere die geforderte Providergleichheit nicht statisch nachpruefbar. Der
+Frontier bleibt mit `whole-owner-semantic-contract-partial` beziehungsweise
+`native-provider-owner-semantic-contract-partial` sichtbar, wird aber als
+`Blocked` hinter tatsaechlich offenen Aufgaben eingeordnet.
 
 Jede Hardwareaufgabe enthaelt hoechstens vier Sites. Fuer jede Site liefert
 Katana einen bounded Rueckwaertsslice der tatsaechlichen

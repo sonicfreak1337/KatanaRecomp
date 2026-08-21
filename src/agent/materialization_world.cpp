@@ -297,14 +297,14 @@ template <typename T>
     if (lhs.severity != rhs.severity)
         return static_cast<std::uint8_t>(lhs.severity) <
                static_cast<std::uint8_t>(rhs.severity);
+    const int lhs_state = frontier_state_rank(lhs.state);
+    const int rhs_state = frontier_state_rank(rhs.state);
+    if (lhs_state != rhs_state) return lhs_state < rhs_state;
     const bool lhs_provider_read =
         frontier_is_native_provider_input_read(lhs);
     const bool rhs_provider_read =
         frontier_is_native_provider_input_read(rhs);
     if (lhs_provider_read != rhs_provider_read) return lhs_provider_read;
-    const int lhs_state = frontier_state_rank(lhs.state);
-    const int rhs_state = frontier_state_rank(rhs.state);
-    if (lhs_state != rhs_state) return lhs_state < rhs_state;
     if (lhs.runtime_evidence_required != rhs.runtime_evidence_required)
         return lhs.runtime_evidence_required < rhs.runtime_evidence_required;
     if (lhs.fanout != rhs.fanout) return lhs.fanout > rhs.fanout;
