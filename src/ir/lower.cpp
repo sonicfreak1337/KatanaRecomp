@@ -1257,6 +1257,11 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         function_boundaries.push_back({entry, size});
         seeds.push_back(entry);
     }
+    std::unordered_set<std::uint32_t> decoded_instruction_addresses;
+    decoded_instruction_addresses.reserve(
+        analysis.recursive.instructions.size());
+    for (const auto& line : analysis.recursive.instructions)
+        decoded_instruction_addresses.insert(line.address);
     std::vector<std::uint32_t> candidate_leaders;
     for (const auto& table : analysis.jump_tables) {
         if (!table.aot_candidates_only) continue;
@@ -1269,6 +1274,18 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
         candidate_leaders.insert(candidate_leaders.end(),
                                  resolution.analysis_candidates.begin(),
                                  resolution.analysis_candidates.end());
+    }
+    // A finite positive target can be carried as a partial/runtime analysis
+    // edge without also appearing in `analysis_candidates`.  It is not a
+    // complete CFG claim, but the validating dispatcher still needs an exact
+    // native block entry for that already decoded target.  Preserve it as a
+    // candidate leader only; do not promote it to a function seed or erase
+    // the residual indirect successor.
+    for (const auto& edge : analysis.resolved_edges) {
+        if (!katana::analysis::control_flow_evidence_complete(
+                katana::analysis::resolved_edge_evidence(edge)) &&
+            decoded_instruction_addresses.contains(edge.target_address))
+            candidate_leaders.push_back(edge.target_address);
     }
     for (const auto& entry : analysis.guarded_aot_entries)
         candidate_leaders.push_back(entry.guest_address);
@@ -1320,10 +1337,6 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     // The source image and materialized blocks are immutable for the remainder
     // of this lowering pass, so the lookup sets preserve the old any-of
     // semantics while keeping entry validation linear.
-    std::unordered_set<std::uint32_t> decoded_instruction_addresses;
-    decoded_instruction_addresses.reserve(analysis.recursive.instructions.size());
-    for (const auto& line : analysis.recursive.instructions)
-        decoded_instruction_addresses.insert(line.address);
     std::unordered_set<std::uint32_t> materialized_block_addresses;
     materialized_block_addresses.reserve(source_blocks.size());
     for (const auto& block : source_blocks)

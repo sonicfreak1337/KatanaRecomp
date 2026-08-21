@@ -22322,6 +22322,13 @@ struct NativePortIncompleteOutgoingEvidence final {
         NativePortIncompleteOutgoingKind::ResidualIndirectSuccessor;
     std::optional<std::uint32_t> instruction_address;
     std::optional<std::uint32_t> target_address;
+    katana::analysis::ControlFlowEvidence control_flow_evidence =
+        katana::analysis::ControlFlowEvidence::Unresolved;
+    katana::analysis::IndirectControlFlowOriginClass origin_class =
+        katana::analysis::IndirectControlFlowOriginClass::NotApplicable;
+    katana::analysis::ExactGuardRejectionReason exact_guard_rejection_reason =
+        katana::analysis::ExactGuardRejectionReason::None;
+    bool runtime_evidence_required = false;
 
     auto operator<=>(const NativePortIncompleteOutgoingEvidence&) const =
         default;
@@ -22603,6 +22610,57 @@ NativePortProgramIndex build_native_port_program_index(
     const katana::runtime::NativePortDefinition* const native_port,
     const std::span<const NativePortExternalEntry> external_entries) {
     NativePortProgramIndex index;
+    // Preserve the analyzer's typed dynamic-site classification at the
+    // ProgramIndex boundary. A residual edge sourced by an explicit
+    // RuntimeOnly callback/parameter/mutable-memory contract is not a static
+    // completeness task. Conversely, a rejected exact immutable chain stays
+    // actionable statically unless all of its bounded candidates belong to
+    // an active writable runtime-image generation: only that residency turns
+    // the rejection into a live-evidence requirement.
+    const auto resolution_requires_runtime_evidence =
+        [&](const katana::analysis::IndirectControlFlowResolution& resolution) {
+            if (resolution.evidence !=
+                    katana::analysis::ControlFlowEvidence::RuntimeOnly ||
+                resolution.origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::
+                        NotApplicable ||
+                resolution.origin_class ==
+                    katana::analysis::IndirectControlFlowOriginClass::Table)
+                return false;
+            if (resolution.exact_guard_rejection_reason ==
+                katana::analysis::ExactGuardRejectionReason::None)
+                return true;
+
+            // A literal chain into writable RuntimeMemory correctly fails the
+            // immutable exact-guard contract.  When every bounded candidate
+            // belongs to an active runtime-image generation, that rejection
+            // is itself proof that live target evidence is required rather
+            // than another static-completeness iteration.  This only routes
+            // the still-open frontier; it neither admits an edge nor assigns
+            // target ownership.
+            return !resolution.analysis_candidates.empty() &&
+                   std::all_of(
+                       resolution.analysis_candidates.begin(),
+                       resolution.analysis_candidates.end(),
+                       [&](const auto target) {
+                           return active_runtime_image_address(
+                               game_project, native_port, target);
+                       });
+        };
+    std::map<std::uint32_t,
+             const katana::analysis::IndirectControlFlowResolution*>
+        dynamic_site_evidence;
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        const auto [found, inserted] = dynamic_site_evidence.try_emplace(
+            resolution.instruction_address, &resolution);
+        if (inserted) continue;
+        // Duplicate views are not expected, but if overlapping analysis
+        // materializations provide them, retain a static proof gap over a
+        // runtime-only view so the task cannot be silently demoted.
+        if (resolution_requires_runtime_evidence(*found->second) &&
+            !resolution_requires_runtime_evidence(resolution))
+            found->second = &resolution;
+    }
     for (const auto& candidate : analysis.recursive.functions) {
         index.function_entries.insert(candidate.address);
         if (candidate.size != 0u)
@@ -22730,8 +22788,23 @@ NativePortProgramIndex build_native_port_program_index(
             const std::optional<std::uint32_t> instruction_address,
             const std::optional<std::uint32_t> target_address) {
             index.incomplete_outgoing_function_entries.insert(source_entry);
+            NativePortIncompleteOutgoingEvidence detail{
+                kind, instruction_address, target_address};
+            if (instruction_address.has_value()) {
+                const auto found =
+                    dynamic_site_evidence.find(*instruction_address);
+                if (found != dynamic_site_evidence.end()) {
+                    const auto& resolution = *found->second;
+                    detail.control_flow_evidence = resolution.evidence;
+                    detail.origin_class = resolution.origin_class;
+                    detail.exact_guard_rejection_reason =
+                        resolution.exact_guard_rejection_reason;
+                    detail.runtime_evidence_required =
+                        resolution_requires_runtime_evidence(resolution);
+                }
+            }
             index.incomplete_outgoing_evidence[source_entry].insert(
-                {kind, instruction_address, target_address});
+                std::move(detail));
         };
     const auto block_control_address = [](const auto& block)
         -> std::optional<std::uint32_t> {
@@ -28985,6 +29058,20 @@ build_native_disc_materialization_world(
                                 options.native_port_definition,
                                 *detail.instruction_address);
                  }));
+        // The frontier is owner-scoped. Demote it to runtime evidence only
+        // when every detailed remainder is explicitly runtime-only; a mixed
+        // owner must keep its static proof gaps visible to the agent.
+        const bool requires_dynamic_runtime_evidence =
+            has_detailed_evidence &&
+            std::all_of(
+                evidence->second.begin(),
+                evidence->second.end(),
+                [](const auto& detail) {
+                    return detail.runtime_evidence_required;
+                });
+        const bool requires_runtime_evidence =
+            requires_runtime_image_evidence ||
+            requires_dynamic_runtime_evidence;
         constexpr std::size_t maximum_task_transfer_details = 4u;
         FrontierEntry entry;
         entry.family = "replacement-reachability";
@@ -29008,15 +29095,15 @@ build_native_disc_materialization_world(
             entry.missing_proof +=
                 "; exact edge detail unavailable from resumed checkpoint";
         }
-        if (requires_runtime_image_evidence)
+        if (requires_runtime_evidence)
             entry.missing_proof +=
-                "; live runtime-image generation evidence required";
+                "; live runtime control-flow evidence required";
         entry.fanout = has_detailed_evidence
             ? static_cast<std::uint32_t>(std::min<std::size_t>(
                   evidence->second.size(),
                   std::numeric_limits<std::uint32_t>::max()))
             : 1u;
-        entry.runtime_evidence_required = requires_runtime_image_evidence;
+        entry.runtime_evidence_required = requires_runtime_evidence;
         entry.blocked_kind = FrontierBlockKind::Function;
         entry.evidence = {analysis_evidence, provider_evidence};
         entry.blocked_functions = {guarded_aot_address(site)};
@@ -29027,6 +29114,12 @@ build_native_disc_materialization_world(
                 "runtime-image-source-is-mutable");
             entry.contracts.push_back(
                 "live-runtime-generation-evidence-required");
+        }
+        if (requires_dynamic_runtime_evidence) {
+            entry.contracts.push_back(
+                "dynamic-site-has-runtime-only-control-flow-contract");
+            entry.contracts.push_back(
+                "live-runtime-target-evidence-required");
         }
         bool selected_slice_requires_analysis_source = false;
         if (has_detailed_evidence) {
@@ -29052,6 +29145,21 @@ build_native_disc_materialization_world(
                 contract += detail.target_address.has_value()
                     ? guarded_aot_address(*detail.target_address)
                     : "unresolved";
+                contract += ";control-flow-evidence=";
+                contract += katana::analysis::control_flow_evidence_name(
+                    detail.control_flow_evidence);
+                contract += ";origin-class=";
+                contract +=
+                    katana::analysis::indirect_control_flow_origin_class_name(
+                        detail.origin_class);
+                contract += ";exact-guard-rejection=";
+                contract +=
+                    katana::analysis::exact_guard_rejection_reason_name(
+                        detail.exact_guard_rejection_reason);
+                contract += ";runtime-evidence-required=";
+                contract += detail.runtime_evidence_required
+                    ? "true"
+                    : "false";
                 entry.contracts.push_back(std::move(contract));
                 ++emitted_details;
                 selected_slice_requires_analysis_source =
@@ -29078,6 +29186,11 @@ build_native_disc_materialization_world(
                 "runtime-image-owner-entry",
                 "mutable-runtime-generation",
                 "live-outgoing-transfer-proof-required"};
+        } else if (requires_dynamic_runtime_evidence) {
+            entry.causal_chain = {
+                "identity-bound-owner-entry",
+                "runtime-only-dynamic-control-flow-site",
+                "live-outgoing-transfer-proof-required"};
         } else if (has_detailed_evidence) {
             entry.causal_chain = {
                 "owner-entry",
@@ -29091,7 +29204,7 @@ build_native_disc_materialization_world(
         }
         entry.source_paths = {"src/codegen/port_export.cpp"};
         if (selected_slice_requires_analysis_source &&
-            !requires_runtime_image_evidence) {
+            !requires_runtime_evidence) {
             entry.source_paths.push_back(
                 "src/analysis/function_value_analysis.cpp");
             entry.source_paths.push_back(
@@ -29115,6 +29228,12 @@ build_native_disc_materialization_world(
                 "listed-transfer-sites-bounded-for-live-generation",
                 "runtime-observation-remains-non-authoritative-static-hint",
                 "no-static-closure-from-payload-template"};
+        } else if (requires_dynamic_runtime_evidence) {
+            entry.acceptance_criteria = {
+                "matching-live-dispatch-observation",
+                "listed-transfer-sites-bounded-for-live-target-evidence",
+                "runtime-observation-remains-non-authoritative-static-hint",
+                "no-static-closure-from-runtime-only-control-flow-contract"};
         } else {
             entry.acceptance_criteria = {
                 "identity-bound-owner-cfg",
