@@ -2,9 +2,11 @@
 
 Aktuelle interne Version: `v0.49.2`
 
-`v0.50.0` bleibt die erste Alpha und wird erst freigegeben, wenn der rein
-native Sonic-Port ohne ARM7, CPU-PVR oder andere emulatoraehnliche
-Produktzustaende das Hauptmenue erreicht.
+`v0.49.2` ist ein ungetaggter Entwicklungsstand und kein regulaerer Release.
+Der naechste echte Release `v0.5.0` wird erst freigegeben und getaggt, wenn
+die vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
+Produktpfad nachgewiesen ist. Das Hauptmenue ist dafuer nur ein
+Zwischenmeilenstein.
 
 ## Repositoryweiter Arbeitsvertrag
 
@@ -744,8 +746,12 @@ KR-5000  native Produktgrenze und Linkisolation
   -> KR-5003  nativer GPU-Pfad
   -> KR-5004  native Disc-/Eingabe-/Save-Dienste
   -> KR-5005  No-Skip-Sonic rein nativ bis Hauptmenue
-  -> v0.50.0 Alpha
+  -> v0.5.0 erst nach nachgewiesener vollstaendiger Spielbarkeit von
+             Sonic Adventure PAL ueber den rein nativen Produktpfad
 ```
+
+Das Hauptmenue ist dabei nur ein Zwischenmeilenstein und kein ausreichender
+Release-Nachweis.
 
 Der fruehere RuntimeOnly-Pfad und KR-4981 bleiben historische Evidenz.
 KR-4982 und KR-4983 bleiben als optionale GPU-Offload-Aufgaben des alten

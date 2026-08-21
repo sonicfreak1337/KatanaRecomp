@@ -2,10 +2,18 @@
 
 Status: Pre-Alpha
 
-Aktuelle Phase: `v0.49.1` - Sonic-Adventure-Native-Port,
+Aktuelle Phase: `v0.49.2` - Sonic-Adventure-Native-Port,
 statisches SH-4-AOT und native PC-Plattformdienste
 
-Erster oeffentlicher Release: `v0.50.0` Alpha
+Naechster regulaerer Release: `v0.5.0`
+
+## Entwicklungs- und Release-Status
+
+`v0.49.2` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
+Fuer `v0.49.2` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
+bleibt `v0.5.0`; er darf erst freigegeben und getaggt werden, wenn die
+vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
+Produktpfad nachgewiesen ist.
 
 ## Aktueller Produktmeilenstein
 
@@ -206,7 +214,7 @@ Der vollstaendige native Produktvertrag in
 hat Vorrang vor allen aelteren RuntimeOnly-, AICA-, PVR- und
 Performancebeschreibungen.
 
-## Aktueller v0.49.1-Native-Portpfad
+## Aktueller v0.49.2-Native-Portpfad
 
 Die neue verbindliche Reihenfolge lautet:
 
@@ -217,7 +225,7 @@ KR-5000  Native Produktgrenze und Linkisolation
   -> KR-5003  Nativer GPU-Pfad
   -> KR-5004  Native Disc-, Eingabe- und Save-Dienste
   -> KR-5005  Nativer No-Skip-Sonic-Produktlauf
-                rein nativ bis Hauptmenue; v0.50.0 Alpha
+                rein nativ bis Hauptmenue; v0.5.0
 ```
 
 Die private Adress- und Funktionskarte aus dem Bring-up wird weiterverwendet.
@@ -666,7 +674,7 @@ PlatformAbi-Optimierungsbefunde bleiben deferred. KR-4981 ist historische
 RuntimeOnly-Evidenz und durch KR-5005 abgeloest. KR-4982 und KR-4983 bleiben
 als alte optionale Offload-Aufgaben gestrichen.
 
-## v0.49.1-Kritischer Pfad
+## v0.49.2-Kritischer Pfad
 
 1. **[x] Native Produktlinkgrenze**
    - eigenes `native-port`-Produktprofil;
@@ -758,9 +766,10 @@ als alte optionale Offload-Aufgaben gestrichen.
 - neue Test-, Konformitaets- oder Threadmatrizen;
 - weitere Controller-Haertung.
 
-## v0.49.1 Definition of Done
+## v0.49.2 Definition of Done
 
-`v0.49.1` ist abgeschlossen und gibt `v0.50.0 Alpha` erst frei, wenn:
+`v0.49.2` erhaelt kein Git-Tag und gibt den naechsten regulaeren Release
+`v0.5.0` erst frei, wenn:
 
 - Recompiler, Runtime und externes Spielprojekt getrennt gebaut werden
   koennen;
@@ -770,6 +779,8 @@ als alte optionale Offload-Aufgaben gestrichen.
 - Audio/Movie, GPU-Grafik, Disc, Eingabe und Save nativ gebunden sind;
 - Opening und Memory-Card-Pfad ohne Skip oder Ersatzpfad durchlaufen;
 - Sonic ueber diesen rein nativen Pfad das Hauptmenue erreicht;
+- die vollstaendige Spielbarkeit von Sonic Adventure PAL ueber diesen rein
+  nativen Pfad nachgewiesen ist;
 - VMU/Saves nativ und atomar erhalten bleiben;
 - normale Iterationen inkrementell ohne historischen Vollreexport bauen;
 - keine Sonic-Sonderfaelle oder Retailbytes im generischen Katana-Kern

@@ -1,8 +1,16 @@
 # KatanaRecomp Task-Katalog
 
-Dieses Dokument enthaelt die aktiven `v0.49`-Produktaufgaben. Historische
+Dieses Dokument enthaelt die aktiven `v0.49.2`-Produktaufgaben. Historische
 Aufgaben und fruehere Detailstaende bleiben in Git und in
 `TASK_ID_REGISTRY.md` nachvollziehbar.
+
+## Aktueller Entwicklungs- und Release-Status
+
+`v0.49.2` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
+Fuer `v0.49.2` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
+bleibt `v0.5.0`; er darf erst freigegeben und getaggt werden, wenn die
+vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
+Produktpfad nachgewiesen ist.
 
 ## Repositoryweiter Taskvertrag
 
@@ -77,7 +85,7 @@ Daher gilt projektweit:
   nicht als Performancefix erhoeht. Der aktuelle P0 muss durch weniger
   notwendige Arbeit geschlossen werden.
 
-## Verbindlicher v0.49.1-Native-Portpfad
+## Verbindlicher v0.49.2-Native-Portpfad
 
 Der Produktport ist kein Emulator. Statisches SH-4-AOT wird an validierten
 Spiel-/SDK-Grenzen mit nativer PC-Grafik, -Audio/-Movie, -Datei-, -Eingabe-
@@ -91,7 +99,7 @@ KR-5000  native Produktgrenze und Linkisolation
   -> KR-5002  nativer Audio-/Moviepfad
   -> KR-5003  nativer GPU-Pfad
   -> KR-5004  native Disc-/Eingabe-/Save-Dienste
-  -> KR-5005  No-Skip-Sonic rein nativ bis Hauptmenue; v0.50.0 Alpha
+  -> KR-5005  No-Skip-Sonic rein nativ bis Hauptmenue; v0.5.0
 ```
 
 `001f3c2` und `24,2926 MHz` bleiben historische Bring-up-Evidenz fuer AOT-
@@ -322,8 +330,9 @@ Brueckenvertrag fail-closed.
 Abnahme:
 korrektes Opening mit Bild
 und Ton, 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue ueber denselben
-rein nativen Pfad sowie native Eingabe. Erst dann wird `v0.50.0 Alpha`
-freigegeben.
+rein nativen Pfad sowie native Eingabe. Die Freigabe von `v0.5.0` bleibt bis
+zum Nachweis der vollstaendigen Spielbarkeit von Sonic Adventure PAL ueber
+denselben rein nativen Pfad gesperrt.
 
 Aktueller Produktbeleg v111/v30: Die MOVIE.BIN-Sequenz `0` ist als
 identitaetsgebundener Multi-Clip-Vertrag geschlossen. Ohne Controllerinput
@@ -1100,8 +1109,9 @@ Analyzer-ABI `36` geschlossen.
 - jeder schwere Root ist terminal identifizierbar;
 - kein neuer Test, keine Testmatrix und kein Produktlauf in KR-4993;
 - KR-4981 bleibt historische RuntimeOnly-Evidenz. Das aktive Produktgate ist
-  KR-5005: rein nativer Pfad ohne ARM7/CPU-PVR bis zum Hauptmenue und damit
-  Freigabe von `v0.50.0 Alpha`.
+  KR-5005: rein nativer Pfad ohne ARM7/CPU-PVR bis zum Hauptmenue. Die
+  Freigabe von `v0.5.0` setzt zusaetzlich den Nachweis der vollstaendigen
+  Spielbarkeit von Sonic Adventure PAL voraus.
 
 D1 und D2 sind begrenzte Diagnoseexporte und decken nicht zwingend alle
 `1.191` Roots ab. Die globale Abwesenheit von

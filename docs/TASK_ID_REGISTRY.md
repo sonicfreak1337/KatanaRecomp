@@ -57,8 +57,11 @@
 ## v0.49 Sonic-Adventure-Produktaufgaben
 
 Ab `v0.49.1` ist KR-5000 bis KR-5005 die aktive native Produktreihenfolge.
-`v0.50.0 Alpha` wird erst durch ein rein nativ erreichtes Sonic-Hauptmenue
-freigegeben. Die folgenden RuntimeOnly-, Candidate-, AICA- und PVR-Angaben
+Der aktuelle Entwicklungsstand `v0.49.2` ist ungetaggt und kein regulaerer
+Release. Der naechste echte Release `v0.5.0` wird erst nach dem Nachweis der
+vollstaendigen Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
+Produktpfad freigegeben und getaggt; das Hauptmenue ist nur ein
+Zwischenmeilenstein. Die folgenden RuntimeOnly-, Candidate-, AICA- und PVR-Angaben
 bleiben historische Bring-up-Evidenz und definieren nicht mehr den
 Produktpfad. Dreamcast-MHz sind kein Produkt- oder Versionsgate mehr.
 

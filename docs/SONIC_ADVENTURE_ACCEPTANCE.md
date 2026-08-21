@@ -11,11 +11,13 @@ ist der massgebliche Produkt- und Integrationstest; neue synthetische Tests,
 Fixtures, Regressionen oder Testmatrizen werden aus Retailbefunden nicht mehr
 abgeleitet.
 
-## Verbindliches v0.50.0-Alpha-Gate
+## Aktives v0.49.2-Entwicklungs- und v0.5.0-Release-Gate
 
-`v0.49.1` bleibt Pre-Alpha, bis der lokal erzeugte Sonic-PAL-Port ueber einen
-rein nativen PC-Pfad das Hauptmenue erreicht. Genau dieser Nachweis gibt
-`v0.50.0 Alpha` frei.
+`v0.49.2` ist ein ungetaggter Entwicklungsstand und kein regulaerer Release.
+Der naechste echte Release `v0.5.0` darf erst freigegeben und getaggt werden,
+wenn der lokal erzeugte Sonic-PAL-Port ueber den rein nativen PC-Pfad die
+vollstaendige Spielbarkeit nachweist. Das Hauptmenue ist dafuer nur ein
+Zwischenmeilenstein und gibt `v0.5.0` nicht frei.
 
 Das Gate verlangt gleichzeitig:
 
@@ -25,14 +27,16 @@ Das Gate verlangt gleichzeitig:
 - native Datei-, Eingabe- und Savepfade;
 - Opening ohne Skip, Ersatzframe oder erzwungenen Playerstatus;
 - 60-Hz-PAL-Pfad, Memory-Card-Screen und Hauptmenue;
+- vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
+  PC-Pfad;
 - kein gelinkter ARM7-Interpreter, CPU-PVR-Softwarerasterizer oder
   vollstaendiger Dreamcast-Geraeteverbund;
 - keinen Laufzeitfallback auf historische Geraetemodelle.
 
 Ein durch die historische RuntimeOnly-Geraeteausfuehrung erreichtes Bild oder
-Menue erfuellt dieses Gate nicht. Dreamcast-MHz sind kein Alpha-Gate; bewertet
-werden reale Ladezeit, Framezeit, Audio-Stabilitaet, Hostauslastung und
-Eingabelatenz. Der vollstaendige Vertrag steht in
+Menue erfuellt diesen Release-Nachweis nicht. Dreamcast-MHz sind kein
+Versionsgate; bewertet werden reale Ladezeit, Framezeit, Audio-Stabilitaet,
+Hostauslastung und Eingabelatenz. Der vollstaendige Vertrag steht in
 `NATIVE_PORT_PRODUCT_CONTRACT.md`.
 
 ## Grundregel
@@ -154,12 +158,13 @@ Nachweis begruendet keine neue Matrixpflicht.
 
 ## Framework-Alpha
 
-Das Katana-Alpha-Gate ist das erste rein nativ erreichte Sonic-Hauptmenue.
-Zusaetzlich bleiben versionierte Frameworkvertraege, reproduzierbare Builds,
-redigierte Diagnosen und die Abwesenheit proprietaerer Daten verbindlich.
+Das erste rein nativ erreichte Sonic-Hauptmenue ist ein Zwischenmeilenstein
+und kein ausreichendes `v0.5.0`-Release-Gate. Zusaetzlich bleiben versionierte
+Frameworkvertraege, reproduzierbare Builds, redigierte Diagnosen und die
+Abwesenheit proprietaerer Daten verbindlich.
 Neue synthetische oder frei lizenzierte Regressionen sind keine Voraussetzung
 und werden nicht als Ersatzabnahme aufgebaut. Ein emulationsnaher
-RuntimeOnly-Erfolg kann `v0.50.0 Alpha` nicht freigeben.
+RuntimeOnly-Erfolg kann `v0.5.0` nicht freigeben.
 
 ## Vertagter Direct-Scanout-Befund vom 27.07.2026
 

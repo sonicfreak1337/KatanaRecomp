@@ -21504,7 +21504,7 @@ merge_latent_aot_external_callback_field_sinks(
 
 LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     const PortExportOptions& options,
-    const katana::io::ExecutableImage& image,
+    const PortAnalysisMode analysis_mode,
     const std::span<const std::uint32_t> external_code_targets,
     const std::span<const std::uint32_t> external_data_targets,
     const std::span<const LatentAotExternalCallbackSink>
@@ -21532,9 +21532,17 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
     // condition the policy on the presence of external hints, otherwise a
     // self-describing transformed module cannot benefit from its own stronger
     // evidence in a project which needs no private hint list.
-    if (image.guest_call_abi() == katana::io::GuestCallAbi::Unknown)
+    switch (analysis_mode) {
+    case PortAnalysisMode::PlatformAbi:
+        break;
+    case PortAnalysisMode::ConservativeRuntimeOnly:
         result.completeness_policy =
             LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
+        break;
+    default:
+        throw std::invalid_argument(
+            "Latent-AOT besitzt einen ungueltigen Analysemodus.");
+    }
     result.analysis_implementation_identity =
         options.analysis_implementation_identity;
     result.analysis_cache_implementation_identity =
@@ -24900,7 +24908,8 @@ prepare_dreamcast_port_project_impl(
                 &declared_external_callback_field_sinks);
         const auto discovery_options =
             port_latent_aot_discovery_options(
-                options, prepared.image, declared_external_targets,
+                options, PortAnalysisMode::PlatformAbi,
+                declared_external_targets,
                 external_data_targets,
                 declared_external_callback_sinks,
                 {},
@@ -31735,7 +31744,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                 ":iteration=" + std::to_string(iteration) + "-complete");
         const auto discovery_options = port_latent_aot_discovery_options(
             options,
-            image,
+            analysis_mode,
             declared_external_targets,
             external_data_targets,
             external_callback_sinks,

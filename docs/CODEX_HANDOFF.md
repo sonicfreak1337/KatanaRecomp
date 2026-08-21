@@ -157,7 +157,7 @@ progress-wait, `1` root-ownership); das ist erweiterte Sichtbarkeit. Der
 noch aus. Private Titeladressen und Dateinamen bleiben ausserhalb des
 Repositorys.
 
-## Verbindlicher v0.49.1-Native-Port
+## Verbindlicher v0.49.2-Native-Port
 
 KatanaRecomp baut einen nativen PC-Port und keinen Emulator. Der Produktpfad
 verwendet statisch rekompilierten SH-4-Code, eine native GPU-API, native
@@ -176,8 +176,11 @@ nicht ein Emulator.
 `001f3c2` und der Lauf bei `24,2926 MHz` sind historische Bring-up-Evidenz.
 AOT-Abdeckung, private Adresskarte und beobachteter No-Skip-Lifecycle bleiben
 nutzbar; ARM7/AICA und CPU-PVR werden nicht weiter fuer den Produktpfad
-optimiert. `0.50.0` wird exakt durch das erste rein nativ erreichte Sonic-
-Hauptmenue freigegeben; bis dahin bleibt der Stand `0.49.1` Pre-Alpha.
+optimiert. `v0.49.2` ist ein ungetaggter Entwicklungsstand und kein
+regulaerer Release. Der naechste echte Release `v0.5.0` wird erst nach dem
+Nachweis der vollstaendigen Spielbarkeit von Sonic Adventure PAL ueber den
+rein nativen Produktpfad freigegeben und getaggt; das Hauptmenue ist nur ein
+Zwischenmeilenstein.
 
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und

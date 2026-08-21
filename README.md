@@ -2,11 +2,11 @@
 
 Aktuelle Pre-Alpha-Version: `0.49.2`
 
-`0.49.2` stabilisiert den agentischen Analyzer und seine inkrementelle
-Saved-Stack-/Callback-Provenienz. `0.50.0` bleibt
-ausdruecklich die erste Alpha und wird erst freigegeben, wenn Sonic ohne
-emulatoraehnliche Produktzustaende ueber den rein nativen PC-Pfad das
-Hauptmenue erreicht.
+`0.49.2` ist ein ungetaggter Entwicklungsstand und kein regulaerer Release.
+Der naechste echte Release `v0.5.0` wird erst freigegeben und getaggt, wenn
+die vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
+PC-Pfad nachgewiesen ist. Das Hauptmenue ist dafuer nur ein
+Zwischenmeilenstein.
 
 ## Verbindlicher nativer Produktpfad
 
@@ -904,7 +904,7 @@ Wichtige Dokumente:
 - [Runtime](docs/RUNTIME.md)
 - [Indirect Control Flow](docs/INDIRECT_CONTROL_FLOW.md)
 - [Sonic-Acceptancevertrag](docs/SONIC_ADVENTURE_ACCEPTANCE.md)
-- [v0.49.2-Releasehinweise](docs/releases/v0.49.2.md)
+- [v0.49.2-Entwicklungsstand-Hinweise](docs/releases/v0.49.2.md)
 - [v0.49.1-Releasehinweise](docs/releases/v0.49.1.md)
 - [v0.49.0-Releasehinweise](docs/releases/v0.49.0.md) (historisch)
 

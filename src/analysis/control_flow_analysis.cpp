@@ -4652,8 +4652,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             continue;
         }
 
-        // ConservativeRuntimeOnly intentionally carries no SH-C ABI and must
-        // not invoke the much heavier interprocedural FunctionValue lattice.
+        // ConservativeRuntimeOnly disables the much heavier interprocedural
+        // FunctionValue lattice through the analysis policy while retaining
+        // the image's real SH-C ABI for exact immutable code-pointer slices.
         // It still needs statically visible callback registrations, however:
         // direct calls often forward an executable literal through one or
         // more small registrar wrappers before storing it in a callback node.

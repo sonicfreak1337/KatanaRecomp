@@ -348,7 +348,8 @@ vollstaendige Hook-/Hardware-Closure.
 5. `KR-5004`: Disc, Eingabe, Save und verbleibende Plattformdienste nativ
    anbinden. [x]
 6. `KR-5005`: echter No-Skip-Sonic-Lauf bis Hauptmenue mit nativer Bild-,
-   Ton- und Eingabekette; erst dieses Gate gibt `v0.50.0 Alpha` frei.
+   Ton- und Eingabekette; `v0.5.0` wird erst nach dem Nachweis der
+   vollstaendigen Spielbarkeit von Sonic Adventure PAL freigegeben.
 
 Der erste Implementierungsschritt ist die hoechste verifizierbare Hookgrenze,
 nicht ein weiterer Umbau der alten Geraeteemulation. XenonRecomp ist das
@@ -368,10 +369,12 @@ Ein Meilenstein gilt nur, wenn derselbe native Produktpfad alle Punkte erfuellt:
 - inkrementeller Portbuild fuer normale Iterationen statt historischem
   Vollreexport.
 
-`v0.49.1` bleibt Pre-Alpha, bis dieser rein native Pfad das Hauptmenue
-erreicht. Genau dieser Nachweis gibt `v0.50.0 Alpha` frei. Ein Hauptmenue, das
-noch ARM7, CPU-PVR oder andere emulierte Dreamcast-Geraete verwendet, erfuellt
-das Gate nicht.
+`v0.49.2` ist ein ungetaggter Entwicklungsstand und kein regulaerer Release.
+Der naechste echte Release `v0.5.0` wird erst freigegeben und getaggt, wenn
+dieser rein native Pfad die vollstaendige Spielbarkeit von Sonic Adventure PAL
+nachweist. Das Hauptmenue ist nur ein Zwischenmeilenstein. Ein Hauptmenue,
+das noch ARM7, CPU-PVR oder andere emulierte Dreamcast-Geraete verwendet,
+erfuellt den Release-Nachweis nicht.
 
 Dreamcast-MHz sind ab diesem Architekturwechsel kein Produktgate mehr. Sie
 waren eine Kennzahl des emulationsnahen RuntimeOnly-Pfads. Fuer den nativen
@@ -383,4 +386,6 @@ Behauptung, eine Dreamcast-CPU oder -Konsole zu emulieren.
 200 MHz nachhaltiger AOT-Durchsatz und 250 MHz unpaced Reserve bleiben
 nachgelagerte Optimierungsziele, soweit diese interne Messung fuer den
 rekompilierten CPU-Pfad noch sinnvoll ist. Sie blockieren nicht die
-Versionsgrenze: `v0.50.0 Alpha` wird durch das native Hauptmenue freigegeben.
+Versionsgrenze: `v0.5.0` wird nicht durch das native Hauptmenue allein,
+sondern erst durch den Nachweis der vollstaendigen Spielbarkeit von Sonic
+Adventure PAL ueber den rein nativen Produktpfad freigegeben und getaggt.

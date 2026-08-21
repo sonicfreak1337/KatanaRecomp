@@ -108,13 +108,19 @@ katana-recomp diff-analysis `
 ```
 
 `next-analysis-task` Schema 2 behaelt den hoechst priorisierten Primary-Task
-und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu drei
-Frontiers. Batch-Eintraege besitzen verschiedene Owner, damit parallele
-Agenten nicht dieselbe Provider-/Ownergrenze editieren. Sie duerfen ausserdem
-keine konkrete blockierte Site, Funktion, Materialisierung oder
-Hardwareressource teilen. Die Reihenfolge bleibt deterministisch; echte offene
-Aufgaben schlagen blockierte Aufgaben. Innerhalb desselben Frontierzustands
-werden echte Read-Rollen priorisiert, waehrend eine blosse
+und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu sechs
+konfliktgeprueften Frontiers. Die Ausgabe ist fuer zwei
+Orchestrierungswellen mit jeweils hoechstens drei gleichzeitig aktiven
+Implementierungen ausgelegt. Die Reihenfolge bleibt eine deterministische
+Artefaktordnung; der Hauptagent waehlt die Kandidaten bewusst aus und
+delegiert sie. Luna entscheidet weder ueber Prioritaet noch ueber Closure
+noch ueber den naechsten Analyseschritt. Nach dem Implementierungsblock
+folgen ein gemeinsamer Review/Build und genau eine inkrementelle Analyse.
+Batch-Eintraege besitzen verschiedene Owner, damit parallele Agenten nicht
+dieselbe Provider-/Ownergrenze editieren. Sie duerfen ausserdem keine konkrete
+blockierte Site, Funktion, Materialisierung oder Hardwareressource teilen.
+Echte offene Aufgaben schlagen blockierte Aufgaben. Innerhalb desselben
+Frontierzustands werden echte Read-Rollen priorisiert, waehrend eine blosse
 Same-Owner-Beziehung keine Abhaengigkeit erfindet.
 
 Auch ein `replacement-reachability`-Task muss handlungsfaehige Evidenz tragen.
