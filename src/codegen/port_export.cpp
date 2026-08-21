@@ -24548,6 +24548,15 @@ std::string native_sdk_provider_candidates_json(
     return output.str();
 }
 
+struct NativePortHookProofGap final {
+    std::uint32_t guest_address = 0u;
+    std::uint32_t covered_size = 0u;
+    katana::runtime::NativePortHookKind kind =
+        katana::runtime::NativePortHookKind::FunctionEntry;
+    std::string symbol;
+    std::string reason;
+};
+
 struct NativeDiscAnalysisState {
     std::optional<DiscExportContext> disc_context;
     LatentAotDiscovery latent_aot;
@@ -24557,6 +24566,7 @@ struct NativeDiscAnalysisState {
     katana::analysis::DreamcastHardwareAudit native_hardware_audit;
     NativePortProgramIndex native_port_program_index;
     NativePortHardwareClosure native_hardware_closure;
+    std::vector<NativePortHookProofGap> native_hook_proof_gaps;
     std::vector<katana::runtime::RuntimeWaitLoopDescriptor>
         wait_loop_descriptors;
     std::vector<MmioWaitLoopBatchProof> mmio_wait_loops;
@@ -25243,6 +25253,32 @@ prepare_dreamcast_port_project_impl(
     }
     std::vector<std::uint32_t> native_aot_resume_entries =
         explicit_native_aot_resume_entries;
+    std::vector<NativePortHookProofGap> native_hook_proof_gaps;
+    const auto retain_native_hook_proof_gap =
+        [&](const katana::runtime::NativePortHookBinding& hook,
+            std::string reason) {
+            backend_admitted = false;
+            if (!agent_frontier_report) return false;
+            const auto duplicate = std::ranges::any_of(
+                native_hook_proof_gaps, [&](const auto& gap) {
+                    return gap.guest_address == hook.guest_address &&
+                           gap.kind == hook.kind &&
+                           gap.reason == reason;
+                });
+            if (!duplicate)
+                native_hook_proof_gaps.push_back(
+                    {hook.guest_address,
+                     hook.covered_size,
+                     hook.kind,
+                     std::string(hook.symbol),
+                     reason});
+            report_progress(
+                options,
+                "agent-frontier-native-hook-proof:" +
+                    guarded_aot_address(hook.guest_address) + ":" +
+                    reason);
+            return true;
+        };
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
             if (!katana::runtime::native_port_hook_is_executable(
@@ -25278,10 +25314,15 @@ prepare_dreamcast_port_project_impl(
                                 : 0u;
                     }
                 }
-                if (block_entries != 1u || resume_entries != 0u)
+                if (block_entries != 1u || resume_entries != 0u) {
+                    if (retain_native_hook_proof_gap(
+                            hook,
+                            "instruction-hook-block-entry-unproven"))
+                        continue;
                     throw std::invalid_argument(
                         "Ausfuehrbarer Instruction-Replacement-Hook besitzt "
                         "keinen eindeutigen statischen AOT-Blockentry.");
+                }
                 // The program-index proof below additionally establishes the
                 // unique emitted function and instruction ownership. Mark
                 // the split block as an architectural dispatch boundary so
@@ -25307,10 +25348,14 @@ prepare_dreamcast_port_project_impl(
             }
             if (block_entries == 1u && resume_entries == 0u)
                 continue;
-            if (block_entries != 0u || resume_entries != 1u)
+            if (block_entries != 0u || resume_entries != 1u) {
+                if (retain_native_hook_proof_gap(
+                        hook, "required-hook-aot-entry-unproven"))
+                    continue;
                 throw std::invalid_argument(
                     "Erforderlicher Native-Port-Hook besitzt keinen "
                     "eindeutigen statischen AOT-Entry.");
+            }
             native_aot_resume_entries.push_back(hook.guest_address);
         }
     }
@@ -25408,7 +25453,9 @@ prepare_dreamcast_port_project_impl(
                 native_aot_resume_entries,
                 hook,
                 hook.guest_address);
-            if (!proof.valid)
+            if (!proof.valid) {
+                if (retain_native_hook_proof_gap(hook, proof.reason))
+                    continue;
                 throw std::invalid_argument(
                     std::string("Native-Port-Replacement-Hook besitzt keinen ") +
                     "vollstaendigen statischen Beweis: symbol=" +
@@ -25416,6 +25463,7 @@ prepare_dreamcast_port_project_impl(
                     guarded_aot_address(hook.guest_address) +
                     ";size=" + std::to_string(hook.covered_size) +
                     ";reason=" + proof.reason);
+            }
         }
     }
     const auto native_hardware_closure =
@@ -25517,6 +25565,8 @@ prepare_dreamcast_port_project_impl(
         std::move(native_port_program_index);
     admitted->native_hardware_closure =
         std::move(native_hardware_closure);
+    admitted->native_hook_proof_gaps =
+        std::move(native_hook_proof_gaps);
     admitted->wait_loop_descriptors = std::move(wait_loop_descriptors);
     admitted->mmio_wait_loops = std::move(mmio_wait_loops);
     admitted->composite_callback_batches =
@@ -28075,6 +28125,68 @@ build_native_disc_materialization_world(
                 world_model_error_name(world.last_error()));
     }
 
+    for (const auto& gap :
+         result.admitted_state->native_hook_proof_gaps) {
+        const auto address = guarded_aot_address(gap.guest_address);
+        const bool function_entry =
+            gap.kind ==
+            katana::runtime::NativePortHookKind::FunctionEntry;
+        FrontierEntry entry;
+        entry.family = "native-hook-admission";
+        entry.owner = address;
+        entry.site = address;
+        entry.state = FrontierState::Open;
+        entry.proof = FrontierProof::StaticAnalyzer;
+        entry.severity = FrontierSeverity::P0;
+        entry.missing_proof =
+            "native replacement hook coverage: " + gap.reason;
+        entry.fanout = 1u;
+        entry.static_complete = false;
+        entry.blocked_kind = function_entry
+            ? FrontierBlockKind::Function
+            : FrontierBlockKind::Site;
+        entry.evidence = {analysis_evidence, provider_evidence};
+        if (function_entry)
+            entry.blocked_functions = {address};
+        else
+            entry.blocked_sites = {address};
+        entry.contracts = {
+            "required-native-replacement-hook",
+            std::string{"hook-kind="} +
+                (function_entry ? "function-entry" : "instruction"),
+            "covered-bytes=" + std::to_string(gap.covered_size),
+            "expected-native-provider=" + gap.symbol,
+            "missing-proof=" + gap.reason};
+        entry.causal_chain = {
+            "identity-bound-native-hook",
+            function_entry ? "declared-function-entry"
+                           : "declared-instruction-entry",
+            gap.reason,
+            "native-product-admission-blocked"};
+        entry.source_paths = {
+            "src/codegen/port_export.cpp",
+            "src/analysis/control_flow_analysis.cpp"};
+        entry.source_symbols = {
+            "port_analysis_overrides",
+            "prove_native_port_hook_coverage",
+            gap.symbol};
+        entry.invariants = {
+            "missing-disassembly-is-not-unreachability-proof",
+            "required-hook-remains-fail-closed-until-static-proof",
+            "no-hook-address-special-casing"};
+        entry.acceptance_criteria = function_entry
+            ? std::vector<std::string>{
+                  "hook-entry-present-in-authoritative-program-index",
+                  "exact-function-boundary-proven",
+                  "unique-function-owner-proven",
+                  "no-external-interior-entry"}
+            : std::vector<std::string>{
+                  "hook-instruction-present-in-authoritative-program-index",
+                  "unique-instruction-owner-proven",
+                  "architectural-hook-block-entry-proven"};
+        add_frontier(std::move(entry));
+    }
+
     std::map<std::uint32_t,
              std::vector<const katana::analysis::HardwareAccessReference*>>
         hardware_references_by_site;
@@ -28974,7 +29086,8 @@ build_native_disc_materialization_world(
         : "guarded inventory, provider and hardware closure must all be complete";
     readiness.fanout = static_cast<std::uint32_t>(
         std::min<std::size_t>(
-            result.summary.native_hardware_gaps + unbound_sdk_providers,
+            result.summary.native_hardware_gaps + unbound_sdk_providers +
+                result.admitted_state->native_hook_proof_gaps.size(),
             std::numeric_limits<std::uint32_t>::max()));
     readiness.static_complete = graph_closed;
     readiness.blocked_kind = FrontierBlockKind::Materialization;
