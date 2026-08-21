@@ -1333,28 +1333,50 @@ struct WriterSliceLocation {
     std::size_t before_index = 0u;
 };
 
+struct WriterSliceBlockEvents {
+    std::array<std::vector<std::size_t>, 16u> register_writes;
+    std::vector<std::size_t> calls;
+};
+
 struct WriterSliceIndex {
     std::unordered_map<std::uint32_t, const BasicBlock*> by_start;
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> predecessors;
     std::unordered_map<std::uint32_t, WriterSliceLocation> locations;
+    std::unordered_map<std::uint32_t, WriterSliceBlockEvents> events;
 };
 
 WriterSliceIndex build_writer_slice_index(const std::span<const BasicBlock> blocks) {
     WriterSliceIndex index;
     index.by_start.reserve(blocks.size());
     index.predecessors.reserve(blocks.size());
+    index.events.reserve(blocks.size());
     std::size_t instruction_count = 0u;
     for (const auto& block : blocks)
         instruction_count += block.lines.size();
     index.locations.reserve(instruction_count);
     for (const auto& block : blocks) {
         index.by_start.emplace(block.start_address, &block);
+        auto& events = index.events[block.start_address];
         for (const auto successor : block.successors)
             index.predecessors[successor].push_back(block.start_address);
         for (std::size_t line_index = 0u; line_index < block.lines.size(); ++line_index) {
+            const auto& line = block.lines[line_index];
             index.locations.insert_or_assign(
-                block.lines[line_index].address,
+                line.address,
                 WriterSliceLocation{block.start_address, line_index});
+            if (line.instruction.control_flow ==
+                    katana::sh4::ControlFlowKind::Call ||
+                line.instruction.control_flow ==
+                    katana::sh4::ControlFlowKind::IndirectCall)
+                events.calls.push_back(line_index);
+            const auto write_mask = general_register_write_mask(line.instruction);
+            for (std::uint8_t register_index = 0u;
+                 register_index < events.register_writes.size();
+                 ++register_index) {
+                if ((write_mask & static_cast<std::uint16_t>(
+                                      1u << register_index)) != 0u)
+                    events.register_writes[register_index].push_back(line_index);
+            }
         }
     }
     return index;
@@ -1363,9 +1385,12 @@ WriterSliceIndex build_writer_slice_index(const std::span<const BasicBlock> bloc
 BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
                                    const std::uint32_t before_address,
                                    const std::uint8_t register_index,
-                                   const std::size_t instruction_budget = 64u,
                                    const std::size_t work_state_budget = 128u) {
     BackwardSlice result;
+    if (register_index >= 16u) {
+        result.path_incomplete = true;
+        return result;
+    }
     const auto initial = index.locations.find(before_address);
     if (initial == index.locations.end()) {
         result.path_incomplete = true;
@@ -1374,10 +1399,9 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
     struct Work {
         std::uint32_t block = 0u;
         std::size_t before_index = 0u;
-        std::size_t depth = 0u;
     };
     std::deque<Work> pending{
-        {initial->second.block, initial->second.before_index, 0u}};
+        {initial->second.block, initial->second.before_index}};
     std::set<std::pair<std::uint32_t, std::size_t>> visited;
     while (!pending.empty()) {
         const auto work = pending.front();
@@ -1395,27 +1419,31 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
         }
         const auto& block = *found->second;
         bool writer_found = false;
-        auto depth = work.depth;
-        for (std::size_t line_index = work.before_index; line_index-- > 0u;) {
-            if (++depth > instruction_budget) {
-                result.path_incomplete = true;
-                result.budget_exhausted = true;
-                writer_found = true;
-                break;
-            }
-            const auto& line = block.lines[line_index];
-            if (line.instruction.control_flow == katana::sh4::ControlFlowKind::Call ||
-                line.instruction.control_flow == katana::sh4::ControlFlowKind::IndirectCall)
+        const auto block_events = index.events.find(block.start_address);
+        if (block_events == index.events.end()) {
+            result.path_incomplete = true;
+            continue;
+        }
+        const auto& writes =
+            block_events->second.register_writes[register_index];
+        const auto writer_after = std::lower_bound(
+            writes.begin(), writes.end(), work.before_index);
+        const auto& calls = block_events->second.calls;
+        const auto call_after = std::lower_bound(
+            calls.begin(), calls.end(), work.before_index);
+        if (writer_after != writes.begin()) {
+            const auto line_index = *std::prev(writer_after);
+            if (call_after != calls.begin() &&
+                *std::prev(call_after) > line_index)
                 result.preceding_call = true;
-            if ((general_register_write_mask(line.instruction) &
-                 static_cast<std::uint16_t>(1u << register_index)) == 0u)
-                continue;
+            const auto& line = block.lines[line_index];
             writer_found = true;
             result.writers.insert(line.address);
             if (line.instruction.destination_register != register_index ||
                 !memory_load(line.instruction.kind))
                 result.writer_not_memory_load = true;
-            break;
+        } else if (call_after != calls.begin()) {
+            result.preceding_call = true;
         }
         if (writer_found) continue;
         const auto incoming = index.predecessors.find(block.start_address);
@@ -1426,7 +1454,8 @@ BackwardSlice bounded_writer_slice(const WriterSliceIndex& index,
         for (const auto predecessor : incoming->second) {
             const auto predecessor_block = index.by_start.find(predecessor);
             if (predecessor_block != index.by_start.end())
-                pending.push_back({predecessor, predecessor_block->second->lines.size(), depth});
+                pending.push_back(
+                    {predecessor, predecessor_block->second->lines.size()});
         }
     }
     return result;
@@ -1478,21 +1507,19 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
         if (!visited.emplace(before_address, register_index).second) return result;
         auto slice = bounded_writer_slice(
             index, before_address, register_index);
-        // Keep the common 64-instruction slice cheap. Compiler-generated
-        // loops often hoist immutable call literals into SH-C nonvolatile
-        // registers before a large loop body, however, and a backedge then
-        // makes every incoming path part of the proof. Retry only that ABI-
-        // eligible shape with a second hard bound; unknown predecessors,
-        // conflicting writers and either budget ending still fail closed.
+        // The per-block event index skips instructions that cannot change the
+        // requested register or its call-transport proof. The remaining hard
+        // bound is therefore over distinct CFG work states rather than source
+        // distance. Retry a larger state frontier only for SH-C nonvolatile
+        // registers; unknown predecessors, conflicting writers and either
+        // state bound ending still fail closed.
         if (slice.budget_exhausted && register_index >= 8u &&
             register_index <= 14u) {
-            constexpr std::size_t extended_instruction_budget = 256u;
             constexpr std::size_t extended_work_state_budget = 512u;
             slice = bounded_writer_slice(
                 index,
                 before_address,
                 register_index,
-                extended_instruction_budget,
                 extended_work_state_budget);
         }
         result.preceding_call = result.preceding_call || slice.preceding_call;
