@@ -3986,6 +3986,27 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         }
         return changed;
     };
+    const auto identity_bound_immutable_range =
+        [&](const std::uint32_t address, const std::size_t size) {
+            const auto* segment = image.find_segment(address, size);
+            if (segment == nullptr || !segment->permissions.readable)
+                return false;
+            return !segment->permissions.writable ||
+                   image.find_immutable_range(address, size) != nullptr;
+        };
+    const auto eligible_signed_relative_table_reproof =
+        [&](const JumpTableAnalysis& table) {
+            if (!table.resolved || table.aot_candidates_only ||
+                table.encoding != JumpTableEncoding::SignedRelative16 ||
+                table.reason != "bounded-signed-relative-table" ||
+                table.entries.empty())
+                return false;
+            const auto byte_count = table.entries.size() * 2u;
+            return identity_bound_immutable_range(
+                       table.table_address, byte_count) &&
+                   identity_bound_immutable_range(
+                       table.dispatch_address, 2u);
+        };
     for (;;) {
         if (analysis.fixpoint_iterations >=
             options.maximum_fixpoint_iterations) {
@@ -4754,6 +4775,55 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             }
         }
         pending_jump_table_seed_sources.clear();
+
+        // A table may be boundary-downgraded while its seeded case blocks are
+        // still being upgraded from decode-candidate to proven instruction.
+        // RecursiveAnalysisSnapshot reports that upgrade separately from its
+        // instruction delta, so the incremental CFA scan does not otherwise
+        // revisit the original dispatch component.  Re-open only the exact
+        // immutable, non-AOT table shape produced by the bounded signed16
+        // recognizer, and only after every accepted target is proven in the
+        // cumulative recursive index.  No address or ownership inference is
+        // performed here.
+        const auto newly_proven =
+            recursive_snapshot.newly_proven_instruction_addresses();
+        if (!newly_proven.empty()) {
+            for (auto& [site, table] : jump_table_result_index) {
+                if (!eligible_signed_relative_table_reproof(table) ||
+                    table.evidence != ControlFlowEvidence::GuardedPartial)
+                    continue;
+                const auto affected = std::any_of(
+                    table.entries.begin(), table.entries.end(),
+                    [&](const auto& entry) {
+                        return std::binary_search(
+                            newly_proven.begin(), newly_proven.end(),
+                            entry.target);
+                    });
+                if (!affected)
+                    continue;
+                ++analysis.jump_table_result_entries_visited;
+                ++analysis.decode_boundary_normalization_entries_visited;
+                const auto boundaries = std::all_of(
+                    table.entries.begin(), table.entries.end(),
+                    [&](const auto& entry) {
+                        return recursive_index.proven_instruction_addresses
+                            .contains(entry.target);
+                    });
+                if (!boundaries)
+                    continue;
+                table.evidence = ControlFlowEvidence::ProvenComplete;
+                ++analysis.jump_table_result_entries_rebuilt;
+                mark_resolved_table_dispatch(
+                    resolution_result_index, table);
+                // The original boundary-downgraded seed publication carried
+                // weaker evidence. Re-run the bounded table seed lane so
+                // the recursive seed contract and persistent replay observe
+                // the same monotone proof upgrade as the resolution/journal.
+                pending_jump_table_seed_sources.insert(site);
+                pending_function_edge_sites.insert(site);
+                changed = true;
+            }
+        }
         if (changed) {
             report_progress("seed-expansion");
             continue;
