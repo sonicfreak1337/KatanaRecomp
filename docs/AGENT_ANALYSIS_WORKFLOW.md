@@ -117,8 +117,8 @@ Routingfortschritt, keine vorgetaeuschte statische Closure. Der umgekehrte Weg
 bleibt eine Regression.
 
 `next-analysis-task` Schema 2 behaelt den hoechst priorisierten Primary-Task
-und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu sechs
-konfliktgeprueften Frontiers. Die Ausgabe ist fuer zwei
+und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu neun
+konfliktgeprueften Frontiers. Die Ausgabe ist fuer drei
 Orchestrierungswellen mit jeweils hoechstens drei gleichzeitig aktiven
 Implementierungen ausgelegt. Die Reihenfolge bleibt eine deterministische
 Artefaktordnung; der Hauptagent waehlt die Kandidaten bewusst aus und

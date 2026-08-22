@@ -12265,11 +12265,11 @@ void write_agent_frontier_json(
 
 int next_analysis_task_cli(const std::filesystem::path& artifact) {
     const auto world = load_agent_world(artifact);
-    // Expose two deterministic conflict-checked implementation waves. The
+    // Expose three deterministic conflict-checked implementation waves. The
     // orchestrator still admits at most three concurrent writers and assigns
-    // the second wave deliberately; emitting six here only avoids another
+    // the later waves deliberately; emitting nine here only avoids another
     // artifact read and leaves scheduling/authority unchanged.
-    std::array<katana::agent::AgentTaskView, 6u> tasks{};
+    std::array<katana::agent::AgentTaskView, 9u> tasks{};
     std::size_t task_count = 0u;
     const bool has_frontier = katana::agent::next_agent_tasks(
         world, tasks, task_count);
