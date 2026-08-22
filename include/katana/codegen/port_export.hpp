@@ -251,6 +251,12 @@ struct NativeDiscAnalysisResult {
     bool analysis_artifact_cache_publish_missed = false;
 };
 
+enum class NativeDiscAnalysisHintPublicationResult : std::uint8_t {
+    NotPending,
+    Published,
+    Missed,
+};
+
 struct PreparedPortProgram {
     const katana::io::ExecutableImage& image;
     const katana::analysis::ControlFlowAnalysisResult& analysis;
@@ -329,6 +335,18 @@ analyze_native_disc_port(
     const katana::platform::DreamcastDiscBoot& disc,
     const PortExportOptions& options,
     PortAnalysisMode analysis_mode = PortAnalysisMode::PlatformAbi);
+
+// Publishes only bounded, fully validated analysis hints that were deferred
+// while analyze-port's archive/World generation was still a candidate. The
+// caller must invoke this exactly after its archive, World and authority
+// ledger transaction has committed. CFA/FVA summaries and latent module
+// artifacts remain outside this hint-only publication path.
+[[nodiscard]] bool has_deferred_native_disc_analysis_hints(
+    const NativeDiscAnalysisResult& analyzed) noexcept;
+
+[[nodiscard]] NativeDiscAnalysisHintPublicationResult
+publish_committed_native_disc_analysis_hints(
+    NativeDiscAnalysisResult& analyzed) noexcept;
 
 // Computes only the stable, pre-analysis identity of the exact materialized
 // disc/options contract. It performs no CFA/FVA, admission, World generation

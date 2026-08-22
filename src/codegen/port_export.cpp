@@ -24669,6 +24669,13 @@ struct NativePortHookProofGap final {
     std::string reason;
 };
 
+struct DeferredLatentPrimaryRootSeedPublication final {
+    std::filesystem::path cache_root;
+    std::string cache_key;
+    std::string observed_payload;
+    std::string validated_payload;
+};
+
 struct NativeDiscAnalysisState {
     std::optional<DiscExportContext> disc_context;
     LatentAotDiscovery latent_aot;
@@ -24687,6 +24694,12 @@ struct NativeDiscAnalysisState {
         composite_callback_architectural_boundaries;
     std::vector<katana::analysis::NativeSdkProviderCandidate>
         native_sdk_provider_candidates;
+    // analyze-port cannot publish this hint before the CLI has committed its
+    // archive/World/ledger authority transaction. The exact cache key,
+    // observed predecessor and already validated bounded payload make the
+    // later one-shot publication an atomic compare-and-replace operation.
+    std::optional<DeferredLatentPrimaryRootSeedPublication>
+        deferred_latent_primary_root_seed_publication;
     // True only when the same state would pass the product backend gates.
     // analyze-port may retain a non-admitted state solely to publish a
     // bounded, authoritative agent frontier; product export never consumes
@@ -32122,40 +32135,60 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     provenance_progress.cached();
     bool latent_primary_root_seed_cache_published = false;
     bool latent_primary_root_seed_cache_publish_missed = false;
-    if (!options.analysis_artifact_archive_requested &&
-        latent_primary_root_seed_cache != nullptr &&
+    std::optional<DeferredLatentPrimaryRootSeedPublication>
+        deferred_latent_primary_root_seed_publication;
+    if (latent_primary_root_seed_cache != nullptr &&
         !latent_primary_root_seed_cache_key.empty() &&
         !latent_external_primary_roots.empty()) {
+        const bool roots_valid = validate_latent_primary_root_seeds(
+            image,
+            latent_external_primary_roots,
+            katana::platform::dreamcast_disc_boot_address,
+            disc.boot_file.size());
         try {
+            if (!roots_valid)
+                throw std::runtime_error(
+                    "Latent-Primary-Root-Cache verweigert einen nicht "
+                    "vollstaendig validierten finalen Root-Fixpunkt.");
             const auto serialized = serialize_latent_primary_root_seeds(
                 latent_primary_root_seed_cache_key,
                 latent_external_primary_roots);
-            if (serialized != loaded_latent_primary_root_seed_payload) {
-                if (!loaded_latent_primary_root_seed_payload.empty()) {
-                    if (!latent_primary_root_seed_cache
-                             ->replace_bounded_if_matches(
-                                 latent_primary_root_seed_cache_key,
-                                 latent_primary_root_seed_artifact_name,
-                                 loaded_latent_primary_root_seed_payload,
-                                 serialized,
-                                 maximum_latent_primary_root_seed_cache_bytes))
-                        throw std::runtime_error(
-                            "Latent-Primary-Root-Cache konnte den exakt "
-                            "gelesenen Seed nicht atomar erweitern.");
-                } else {
-                    latent_primary_root_seed_cache->store_bounded(
+            if (options.analysis_artifact_archive_requested) {
+                deferred_latent_primary_root_seed_publication.emplace(
+                    DeferredLatentPrimaryRootSeedPublication{
+                        options.analysis_cache_root /
+                            "latent-primary-roots",
                         latent_primary_root_seed_cache_key,
-                        latent_primary_root_seed_artifact_name,
-                        serialized,
-                        maximum_latent_primary_root_seed_cache_bytes);
+                        loaded_latent_primary_root_seed_payload,
+                        serialized});
+            } else {
+                if (serialized != loaded_latent_primary_root_seed_payload) {
+                    if (!loaded_latent_primary_root_seed_payload.empty()) {
+                        if (!latent_primary_root_seed_cache
+                                 ->replace_bounded_if_matches(
+                                     latent_primary_root_seed_cache_key,
+                                     latent_primary_root_seed_artifact_name,
+                                     loaded_latent_primary_root_seed_payload,
+                                     serialized,
+                                     maximum_latent_primary_root_seed_cache_bytes))
+                            throw std::runtime_error(
+                                "Latent-Primary-Root-Cache konnte den exakt "
+                                "gelesenen Seed nicht atomar erweitern.");
+                    } else {
+                        latent_primary_root_seed_cache->store_bounded(
+                            latent_primary_root_seed_cache_key,
+                            latent_primary_root_seed_artifact_name,
+                            serialized,
+                            maximum_latent_primary_root_seed_cache_bytes);
+                    }
                 }
+                latent_primary_root_seed_cache_published = true;
+                report_progress(
+                    options,
+                    latent_primary_root_seed_cache_hit
+                        ? "latent-primary-root-seed-cache-hit"
+                        : "latent-primary-root-seed-cache-populated");
             }
-            latent_primary_root_seed_cache_published = true;
-            report_progress(
-                options,
-                latent_primary_root_seed_cache_hit
-                    ? "latent-primary-root-seed-cache-hit"
-                    : "latent-primary-root-seed-cache-populated");
         } catch (const std::bad_alloc&) {
             throw;
         } catch (const std::exception&) {
@@ -32220,6 +32253,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         nullptr,
         nullptr,
         true);
+    result.admitted_state->deferred_latent_primary_root_seed_publication =
+        std::move(deferred_latent_primary_root_seed_publication);
     populate_native_disc_analysis_summary(result);
     analysis_artifact_identity.image_analysis_key =
         make_boot_analysis_cache_key(
@@ -32240,6 +32275,54 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     if (options.agent_analysis_artifacts_requested)
         populate_native_disc_materialization_artifacts(result, options);
     return result;
+}
+
+bool has_deferred_native_disc_analysis_hints(
+    const NativeDiscAnalysisResult& analyzed) noexcept {
+    return analyzed.admitted_state &&
+        analyzed.admitted_state
+            ->deferred_latent_primary_root_seed_publication.has_value();
+}
+
+NativeDiscAnalysisHintPublicationResult
+publish_committed_native_disc_analysis_hints(
+    NativeDiscAnalysisResult& analyzed) noexcept {
+    if (!has_deferred_native_disc_analysis_hints(analyzed))
+        return NativeDiscAnalysisHintPublicationResult::NotPending;
+
+    auto publication = std::move(
+        *analyzed.admitted_state
+             ->deferred_latent_primary_root_seed_publication);
+    analyzed.admitted_state
+        ->deferred_latent_primary_root_seed_publication.reset();
+    try {
+        CodegenCache cache(publication.cache_root);
+        if (publication.validated_payload != publication.observed_payload) {
+            if (!publication.observed_payload.empty()) {
+                if (!cache.replace_bounded_if_matches(
+                        publication.cache_key,
+                        latent_primary_root_seed_artifact_name,
+                        publication.observed_payload,
+                        publication.validated_payload,
+                        maximum_latent_primary_root_seed_cache_bytes))
+                    throw std::runtime_error(
+                        "Latent-Primary-Root-Cache konnte den autoritativ "
+                        "gelesenen Seed nicht atomar ersetzen.");
+            } else {
+                cache.store_bounded(
+                    publication.cache_key,
+                    latent_primary_root_seed_artifact_name,
+                    publication.validated_payload,
+                    maximum_latent_primary_root_seed_cache_bytes);
+            }
+        }
+        return NativeDiscAnalysisHintPublicationResult::Published;
+    } catch (...) {
+        // The archive/World/ledger generation has already committed. A cache
+        // race, allocation failure or unsafe local cache tree can therefore
+        // only remove the optimization from the next run.
+        return NativeDiscAnalysisHintPublicationResult::Missed;
+    }
 }
 
 PortExportResult export_dreamcast_port_project(

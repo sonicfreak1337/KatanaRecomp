@@ -10840,7 +10840,10 @@ int export_port_project(const std::filesystem::path& source_path,
             world_json,
             "Materialization-World-JSON");
         std::ostringstream report;
-        report << "{\"schema\":2,\"kind\":\"katana-native-disc-analysis\""
+        const bool latent_root_seed_cache_publish_deferred =
+            katana::codegen::has_deferred_native_disc_analysis_hints(
+                analyzed);
+        report << "{\"schema\":3,\"kind\":\"katana-native-disc-analysis\""
                << ",\"project_identity\":"
                << katana::io::quote_json(analyzed.project_identity)
                << ",\"content_identity\":"
@@ -10901,6 +10904,9 @@ int export_port_project(const std::filesystem::path& source_path,
                        ? "true" : "false")
                << ",\"latent_root_seed_cache_publish_missed\":"
                << (analyzed.latent_primary_root_seed_cache_publish_missed
+                       ? "true" : "false")
+               << ",\"latent_root_seed_cache_publish_deferred\":"
+               << (latent_root_seed_cache_publish_deferred
                        ? "true" : "false")
                << ",\"resume_requested\":"
                << (resume_analysis ? "true" : "false")
@@ -10979,6 +10985,17 @@ int export_port_project(const std::filesystem::path& source_path,
             current_producer_identity,
             analysis_session_contract_identity);
         publication.commit();
+        const auto hint_publication =
+            katana::codegen::publish_committed_native_disc_analysis_hints(
+                analyzed);
+        if (hint_publication ==
+            katana::codegen::NativeDiscAnalysisHintPublicationResult::Published)
+            std::cout
+                << "KATANA_ANALYZE_PORT_ROOT_SEED_CACHE_COMMITTED\n";
+        else if (hint_publication ==
+                 katana::codegen::NativeDiscAnalysisHintPublicationResult::Missed)
+            std::cout
+                << "KATANA_ANALYZE_PORT_ROOT_SEED_CACHE_PUBLISH_MISSED\n";
         std::cout << "KATANA_ANALYZE_PORT_COMPLETE "
                   << report_path.string() << '\n'
                   << std::flush;
