@@ -5161,6 +5161,7 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             options.analysis_implementation_identity;
     analysis_options.persistent_function_analysis_epoch_publish_callback =
         std::move(persistent_epoch_publish_callback);
+    katana::analysis::ControlFlowAnalysisSession analysis_session;
     std::atomic resolution_retention_limit_reason{
         katana::analysis::ResolutionRetentionLimitReason::None};
     bool runtime_alias_entry_fixpoint_complete = false;
@@ -5173,7 +5174,7 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             katana::analysis::ResolutionRetentionLimitReason::None,
             std::memory_order_relaxed);
         try {
-            analysis = katana::analysis::analyze_control_flow(
+            analysis = analysis_session.analyze(
                 image,
                 nullptr,
                 [&control_flow_progress, &resolution_retention_limit_reason](
@@ -5189,6 +5190,12 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
                     control_flow_progress.update(progress);
                 },
                 analysis_options);
+            // A retained session may consume a persisted FVA epoch only on
+            // its cold admission.  Subsequent alias-root passes reuse the
+            // authoritative in-process epoch; replaying the import would
+            // deliberately invalidate that root-delta path.
+            analysis_options.persistent_function_analysis_epoch_import_blob =
+                {};
         } catch (const std::bad_alloc&) {
             throw;
         } catch (const std::exception&) {
