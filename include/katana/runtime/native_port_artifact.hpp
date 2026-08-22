@@ -13,7 +13,7 @@ namespace katana::runtime {
 // This private tooling artifact has an independent wire contract.  It owns
 // only static NativePortDefinition data; retail image bytes and every process
 // local hook/bootstrap callback remain outside the artifact.
-inline constexpr std::uint32_t native_port_artifact_format_version = 9u;
+inline constexpr std::uint32_t native_port_artifact_format_version = 11u;
 inline constexpr std::uint64_t native_port_artifact_maximum_size =
     16u * 1024u * 1024u;
 
@@ -41,6 +41,33 @@ class NativePortArtifact final {
     [[nodiscard]] const NativePortDefinition& definition() const noexcept;
 
   private:
+    struct ProviderSemanticStorage final {
+        std::uint32_t contract_version =
+            native_port_provider_semantics_contract_version;
+        std::uint32_t hook_guest_address = 0u;
+        bool authoritative = true;
+        std::string provider_symbol;
+        std::string semantic_identity;
+        std::string expected_owner_semantic_identity;
+        std::string provider_implementation_identity;
+        std::vector<std::string> guard_expressions;
+        std::vector<std::string> guard_paths;
+        std::vector<NativePortProviderGuard> guards;
+        std::vector<std::string> effect_regions;
+        std::vector<std::string> effect_register_names;
+        std::vector<std::string> effect_resources;
+        std::vector<std::string> effect_addresses;
+        std::vector<std::string> effect_values;
+        std::vector<std::string> effect_results;
+        std::vector<std::string> effect_paths;
+        std::vector<NativePortProviderEffect> effects;
+        std::string result_target_expression;
+        std::string result_error_expression;
+        std::string result_cpu_state_expression;
+        std::string result_title_state_expression;
+        NativePortProviderResultProjection result;
+    };
+
     NativePortArtifact() = default;
 
     void rebuild_definition();
@@ -76,10 +103,16 @@ class NativePortArtifact final {
 
     std::vector<std::string> hook_symbols_;
     std::vector<std::string> hook_code_identities_;
+    std::vector<std::string> hook_provider_implementation_identities_;
     std::vector<NativePortHookBinding> hooks_;
 
     std::vector<NativePortHardwareResolution> hardware_resolutions_;
     NativePortFrameTimingBinding frame_timing_;
+    std::vector<ProviderSemanticStorage> provider_semantic_storage_;
+    std::vector<NativePortProviderSemanticContract>
+        provider_semantic_contract_views_;
+    NativePortProviderSemanticCoverage provider_semantic_coverage_ =
+        NativePortProviderSemanticCoverage::DeclaredOnly;
 
     NativePortDefinition definition_;
 };

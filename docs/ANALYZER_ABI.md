@@ -1,7 +1,7 @@
 # Analyzer-ABI
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `63`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
+Source-Stand verwendet Runtime-ABI 117, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
@@ -13,6 +13,21 @@ der erste vollstaendige `analyze-port`-Lauf samt identitaetsgebundenem Resume
 ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt ausschliesslich als
 ABI-34-Referenz erhalten.
+
+Der aktuelle Native-Port-Vertrag verwendet
+`NativePortDefinition` `11`, `NativePortArtifact` `11` und
+Hardware-Closure `v8`. Seine fail-closed Beweisschicht bildet
+`OwnerSemanticSummary` auf der Analyzer-Seite und den
+`NativeProviderSemanticContract` (Runtime-Typ
+`NativePortProviderSemanticContract`) auf der Provider-Seite. Das Owner-
+Summary bindet eine exakte, identity-bound Funktion mit geschlossener
+CFG/SCC-, Guard- und Effekt-Sicht; die Ergebnisprojektion muss ebenfalls
+vollstaendig sein. Der Providervertrag bindet Hookadresse und Symbol an
+Owner-Semantikidentitaet und getrennte Provider-Implementierungsidentitaet
+sowie dieselben geordneten Guards, Effekte und Resultate. Jede fehlende,
+unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
+keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
+dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
 
 Analyzer-ABI 63 trennt die IR-Implementierungsidentitaet in unoptimiertes
 Analysis-/Lowering-IR und Produktoptimierung. Boot-/CFA-/FVA-Caches binden nur

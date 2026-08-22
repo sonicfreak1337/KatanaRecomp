@@ -5,6 +5,42 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
+## Aktueller Sourcevertrag (2026-08-22)
+
+Sonic-Run 50 war nach `850478 ms` Wrapper-/`838777 ms` Analyzerzeit gruen.
+Der erste statische Hardware-Provider-Pilot lieferte exakt einen Contract,
+ein Owner-Summary, einen Match und keinen Miss. Gegen Run 48 gab es weder
+Proof-Downgrade noch neue Frontiers oder incomplete Roots. Weil der Pilot im
+`DeclaredOnly`-Modus einen zuvor bereits legacy-zugelassenen Owner beweist,
+entsteht bewusst noch kein Closure-Delta; die etablierte Baseline bleibt
+`89.888074102663 %`. Replacement-Reachability verwendet ausschliesslich die
+vorher semantisch zugelassenen Replacement-Entries. Der Owner->Effekt->
+Provider-Beweis ist damit erstmals am echten Sonic-Gesamtlauf validiert.
+
+Run 49b hatte zuvor nach `961572 ms` erst am finalen Pending-Writer einen
+262 Zeichen langen Windows-Temp-Pfad getroffen. Dieser P0 ist generisch
+geschlossen: Analyse-Temp- und Rollbacknamen sind kurz und
+zielnamenunabhaengig; Ausgabe, Ledger, beide Pending-Slots sowie Create,
+Flush, Same-Directory-Rename, Read und Delete werden unter dem Analyse-Lock
+vor `analyze_native_disc_port()` real vorgeprueft. Run 50 publizierte das
+`95.530.766` Byte grosse Analysearchiv zunaechst vollstaendig in beide
+bounded Pending-Slots und danach als autoritative Generation. Ein spaeteres
+Authority-Gate kann die teure Analyse dadurch nicht mehr still verwerfen.
+
+Der aktuelle Stand verwendet Runtime-ABI `117` und Analyzer-ABI `63` sowie
+`NativePortDefinition` `11`, `NativePortArtifact` `11` und Hardware-Closure
+`v8`. Die fail-closed Beweisschicht vergleicht eine
+`OwnerSemanticSummary`-Sicht der exakt identity-bound Ownerfunktion mit dem
+`NativeProviderSemanticContract` (Runtime-Typ
+`NativePortProviderSemanticContract`). Hookadresse, Symbol, Owner-
+Semantikidentitaet, getrennte Provider-Implementierungsidentitaet, geordnete
+Guards, Effekte und Ergebnisprojektion muessen uebereinstimmen. Ein
+unvollstaendiges, unbekanntes, trunciertes oder nicht identisches Summary/
+Contract-Paar schliesst keinen Replacement-Hook; Hardware-Closure bleibt
+stattdessen mit einem Gap offen. Der alte Dreamcast-Geraetepfad ist nur ein
+internes Offline-Orakel und wird nie in Produktlink oder Produktruntime
+verwendet.
+
 ## Aktueller Frontier-Handoff (2026-08-21)
 
 Der Saved-Stack-/Epoch-/Callback-Umbau ist abgeschlossen. Der bestehende
@@ -112,9 +148,9 @@ generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
 Lauf sind weiterhin offen. Es wurde weder eine Sonic-Analyse noch ein Port
 gestartet oder exportiert.
 
-## Aktueller Produktmeilenstein: v141 / Source-ABI 116-59
+## Aktueller Produktmeilenstein: v141 / Source-ABI 117-63
 
-Der aktuelle Source-Stand ist Runtime-ABI `116`, Analyzer-ABI `59`,
+Der aktuelle Source-Stand ist Runtime-ABI `117`, Analyzer-ABI `63`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
 Profilvertrag `23`. Der agentische Native-Disc-Workflow publiziert eine
 identitaetsgebundene Materialization-World und ein resumierbares Ledger;
@@ -185,7 +221,8 @@ Zwischenmeilenstein.
 `KR-5000` ist als physische Source-, Link- und Installgrenze abgeschlossen.
 Das Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime` und
 `KatanaRecomp::native_port_runtime`; der historische Dreamcast-Geraeteverbund
-ist ein nicht installierbares Buildbaum-Orakel und kein Portprofil.
+ist ausschliesslich ein nicht installierbares Offline-Orakel und wird nie in
+Produktlink oder Produktruntime verwendet.
 Profilvertrag `16`, Portprojektvertrag `93` und der Linkmap-Audit verhindern
 Rueckkanten auf ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple oder
 Interpreter. NativePortDefinition, NativePortArtifact, NativePortContent,
@@ -198,7 +235,7 @@ Der generierte Runner verlangt Executable plus privaten ContentRoot und
 validiert beide Pfade; der Bring-up-Schalter gilt nur bei unvollstaendiger
 Closure. `KR-5001` ist source-seitig abgeschlossen: Die deterministische
 `metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
-`v2` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
+`v8` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
 Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
 range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert, und
 `MemoryAccessError`/Native-Dispatch tragen `GuestInstructionOrigin` auch ohne

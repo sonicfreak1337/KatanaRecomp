@@ -1,12 +1,12 @@
 # Port-Projektexport und Originaldisc-Installation
 
-> v0.49.1: Die folgenden Executable-/Discschritte bleiben Eingabe- und
+> v0.49.2: Die folgenden Executable-/Discschritte bleiben Eingabe- und
 > Diagnosewerkzeuge. Das einzige Produktprofil ist `native-port`; historische
 > RuntimeOnly-, Handoff- und Dreamcast-Geraetepfade werden nicht gelinkt.
 
 ## v0.49: Executable-First als Bring-up-Standard
 
-Aktueller Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `57`,
+Aktueller Source-Vertragsstand: Runtime-ABI `117`, Analyzer-ABI `63`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-Profil
 `23`. Die nachfolgenden alten Exportbeispiele sind historische Messungen;
 der v141-SPSR-Lauf ist der aktuelle Produktnachweis.
@@ -189,7 +189,7 @@ Legacy-Runtime, ARM7/SkyEmu, CPU-PVR/TA und Interpreterbestandteilen sein.
 KR-5000 stellt NativePortDefinition/Artifact/Content/Runtime, Bootstrap,
 read-only Content-Mappings und den Linkaudit bereit. KR-5001 erzeugt die
 deterministische `metadata/native-hook-requirements.json`-Karte und
-Hardware-Closure Schema `v5` und Hookkarte Schema `v4`; Replacement-Proofs bleiben an exakte
+Hardware-Closure Schema `v8` und Hookkarte Schema `v5`; Replacement-Proofs bleiben an exakte
 Grenzen/Eigentuemer/Entrys/Resume-/Seed-/Guarded-/Kontext-/CFG-Eingaenge
 gebunden. Unvollstaendige
 Hook-/Hardware-Closure endet typisiert fail-closed; der explizite Bring-up-

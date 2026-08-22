@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/build_contract.hpp"
+#include "katana/runtime/native_port_semantics.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +21,7 @@ class NativePortLoadedAotBinder;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 10u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 11u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;
@@ -114,6 +115,11 @@ struct NativePortHookBinding final {
     std::string_view symbol;
     // SHA-256 over exactly [guest_address, guest_address + covered_size).
     std::string_view code_identity;
+    // SHA-256 of the native implementation component which exports `symbol`.
+    // It is a separate authority domain from the guest code identity and the
+    // semantic declaration.  Hooks without an authoritative semantic
+    // contract may leave it empty; a closing contract may not.
+    std::string_view provider_implementation_identity;
 };
 
 // Hardware instructions may be discharged only by a required, complete
@@ -240,6 +246,15 @@ struct NativePortDefinition final {
     std::span<const NativePortHookBinding> hooks;
     std::span<const NativePortHardwareResolution> hardware_resolutions;
     NativePortFrameTimingBinding frame_timing{};
+    // Static provider semantics are optional in the legacy definition shape,
+    // but authoritative entries are validated as required replacements.  The
+    // field is trailing so existing generated aggregate initializers remain
+    // source-compatible and simply carry an empty span until the exporter
+    // emits semantic contracts.
+    std::span<const NativePortProviderSemanticContract>
+        provider_semantic_contracts;
+    NativePortProviderSemanticCoverage provider_semantic_coverage =
+        NativePortProviderSemanticCoverage::DeclaredOnly;
 };
 
 enum class NativePortLifecycleState : std::uint8_t {

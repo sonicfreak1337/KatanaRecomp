@@ -14,7 +14,9 @@
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
+#include "katana/analysis/native_provider_equivalence.hpp"
 #include "katana/analysis/native_sdk_provider_analysis.hpp"
+#include "katana/analysis/owner_semantic_summary.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/boot_analysis_cache.hpp"
 #include "katana/codegen/cache.hpp"
@@ -260,7 +262,7 @@ std::string native_port_export_identity(
     katana::runtime::validate_native_port_definition(*definition);
     NativePortIdentityMaterial material;
     material.text("katana.native-port-export.identity");
-    material.u32(2u);
+    material.u32(3u);
     material.u32(definition->contract_version);
     material.text(definition->project_id);
     material.text(definition->project_version);
@@ -322,6 +324,7 @@ std::string native_port_export_identity(
         material.enumeration(hook.original_policy);
         material.text(hook.symbol);
         material.text(hook.code_identity);
+        material.text(hook.provider_implementation_identity);
     }
 
     material.count(definition->hardware_resolutions.size());
@@ -329,6 +332,50 @@ std::string native_port_export_identity(
         material.u32(resolution.instruction_address);
         material.u32(resolution.hook_guest_address);
     }
+
+    material.count(definition->provider_semantic_contracts.size());
+    for (const auto& contract : definition->provider_semantic_contracts) {
+        material.u32(contract.contract_version);
+        material.u32(contract.hook_guest_address);
+        material.boolean(contract.authoritative);
+        material.text(contract.provider_symbol);
+        material.text(contract.semantic_identity);
+        material.text(contract.expected_owner_semantic_identity);
+        material.text(contract.provider_implementation_identity);
+        material.count(contract.guards.size());
+        for (const auto& guard : contract.guards) {
+            material.u32(guard.order);
+            material.text(guard.expression);
+            material.text(guard.path_identity);
+        }
+        material.count(contract.effects.size());
+        for (const auto& effect : contract.effects) {
+            material.u32(effect.order);
+            material.enumeration(effect.operation);
+            material.enumeration(effect.resource_kind);
+            material.u32(effect.width);
+            material.boolean(effect.canonical_address_known);
+            material.u32(effect.canonical_address);
+            material.u32(effect.write_mask);
+            material.u32(effect.clear_mask);
+            material.text(effect.region);
+            material.text(effect.register_name);
+            material.text(effect.resource);
+            material.text(effect.address_expression);
+            material.text(effect.value_expression);
+            material.text(effect.result_expression);
+            material.text(effect.path_identity);
+        }
+        material.enumeration(contract.result.action);
+        material.u32(contract.result.gpr_write_mask);
+        material.u32(contract.result.special_write_mask);
+        material.u32(contract.result.status_write_mask);
+        material.text(contract.result.target_expression);
+        material.text(contract.result.error_expression);
+        material.text(contract.result.cpu_state_expression);
+        material.text(contract.result.title_state_expression);
+    }
+    material.enumeration(definition->provider_semantic_coverage);
 
     material.u32(definition->frame_timing.simulation_rate_hz);
     material.u32(
@@ -397,6 +444,61 @@ std::string native_port_input_compatibility_identity(
         return "DiagnosticOnly";
     }
     throw std::invalid_argument("native-port-hook-requirement");
+}
+
+[[nodiscard]] std::string_view native_port_provider_operation_name(
+    const katana::runtime::NativePortProviderOperation operation) {
+    using Operation = katana::runtime::NativePortProviderOperation;
+    switch (operation) {
+    case Operation::Read: return "Read";
+    case Operation::Write: return "Write";
+    case Operation::ReadModifyWrite: return "ReadModifyWrite";
+    case Operation::AckClear: return "AckClear";
+    case Operation::Wait: return "Wait";
+    case Operation::Interrupt: return "Interrupt";
+    case Operation::Fifo: return "Fifo";
+    }
+    throw std::invalid_argument("native-port-provider-operation");
+}
+
+[[nodiscard]] std::string_view native_port_provider_resource_kind_name(
+    const katana::runtime::NativePortProviderResourceKind resource_kind) {
+    using ResourceKind =
+        katana::runtime::NativePortProviderResourceKind;
+    switch (resource_kind) {
+    case ResourceKind::HardwareRegister: return "HardwareRegister";
+    case ResourceKind::Memory: return "Memory";
+    case ResourceKind::Status: return "Status";
+    case ResourceKind::Queue: return "Queue";
+    case ResourceKind::Interrupt: return "Interrupt";
+    case ResourceKind::ProviderState: return "ProviderState";
+    }
+    throw std::invalid_argument("native-port-provider-resource-kind");
+}
+
+[[nodiscard]] std::string_view native_port_provider_return_action_name(
+    const katana::runtime::NativePortProviderReturnAction action) {
+    using Action = katana::runtime::NativePortProviderReturnAction;
+    switch (action) {
+    case Action::ContinueOriginal: return "ContinueOriginal";
+    case Action::Jump: return "Jump";
+    case Action::Return: return "Return";
+    case Action::Abort: return "Abort";
+    }
+    throw std::invalid_argument("native-port-provider-return-action");
+}
+
+[[nodiscard]] std::string_view native_port_provider_semantic_coverage_name(
+    const katana::runtime::NativePortProviderSemanticCoverage coverage) {
+    using Coverage =
+        katana::runtime::NativePortProviderSemanticCoverage;
+    switch (coverage) {
+    case Coverage::DeclaredOnly:
+        return "katana::runtime::NativePortProviderSemanticCoverage::DeclaredOnly";
+    case Coverage::RequiredForHardwareClosure:
+        return "katana::runtime::NativePortProviderSemanticCoverage::RequiredForHardwareClosure";
+    }
+    throw std::invalid_argument("native-port-provider-semantic-coverage");
 }
 
 std::string boot_analysis_semantic_contract_identity(
@@ -18348,7 +18450,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                        ? "MayContinueOriginal"
                        : "ReplacesOriginal")
                << ", " << katana::io::quote_json(hook.symbol) << ", "
-               << katana::io::quote_json(hook.code_identity) << "},\n";
+               << katana::io::quote_json(hook.code_identity) << ", "
+               << katana::io::quote_json(
+                      hook.provider_implementation_identity)
+               << "},\n";
     output << "}};\n"
            << "constexpr std::array<katana::runtime::NativePortHardwareResolution, "
            << definition.hardware_resolutions.size()
@@ -18358,6 +18463,86 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             << "    {0x" << symbol(resolution.instruction_address)
             << "u, 0x" << symbol(resolution.hook_guest_address)
             << "u},\n";
+    output << "}};\n";
+    for (std::size_t contract_index = 0u;
+         contract_index < definition.provider_semantic_contracts.size();
+         ++contract_index) {
+        const auto& contract =
+            definition.provider_semantic_contracts[contract_index];
+        output
+            << "constexpr std::array<katana::runtime::NativePortProviderGuard, "
+            << contract.guards.size() << "u> native_provider_guards_"
+            << contract_index << "{{\n";
+        for (const auto& guard : contract.guards)
+            output << "    {" << guard.order << "u, "
+                   << katana::io::quote_json(guard.expression) << ", "
+                   << katana::io::quote_json(guard.path_identity)
+                   << "},\n";
+        output << "}};\n"
+               << "constexpr std::array<katana::runtime::NativePortProviderEffect, "
+               << contract.effects.size() << "u> native_provider_effects_"
+               << contract_index << "{{\n";
+        for (const auto& effect : contract.effects) {
+            output
+                << "    {" << effect.order
+                << "u, katana::runtime::NativePortProviderOperation::"
+                << native_port_provider_operation_name(effect.operation)
+                << ", katana::runtime::NativePortProviderResourceKind::"
+                << native_port_provider_resource_kind_name(
+                       effect.resource_kind)
+                << ", " << static_cast<unsigned>(effect.width) << "u, "
+                << (effect.canonical_address_known ? "true" : "false")
+                << ", 0x" << symbol(effect.canonical_address) << "u, 0x"
+                << symbol(effect.write_mask) << "u, 0x"
+                << symbol(effect.clear_mask) << "u, "
+                << katana::io::quote_json(effect.region) << ", "
+                << katana::io::quote_json(effect.register_name) << ", "
+                << katana::io::quote_json(effect.resource) << ", "
+                << katana::io::quote_json(effect.address_expression)
+                << ", " << katana::io::quote_json(effect.value_expression)
+                << ", " << katana::io::quote_json(effect.result_expression)
+                << ", " << katana::io::quote_json(effect.path_identity)
+                << "},\n";
+        }
+        output << "}};\n";
+    }
+    output
+        << "constexpr std::array<katana::runtime::NativePortProviderSemanticContract, "
+        << definition.provider_semantic_contracts.size()
+        << "u> native_provider_semantic_contracts{{\n";
+    for (std::size_t contract_index = 0u;
+         contract_index < definition.provider_semantic_contracts.size();
+         ++contract_index) {
+        const auto& contract =
+            definition.provider_semantic_contracts[contract_index];
+        output
+            << "    {" << contract.contract_version << "u, 0x"
+            << symbol(contract.hook_guest_address) << "u, "
+            << (contract.authoritative ? "true" : "false") << ", "
+            << katana::io::quote_json(contract.provider_symbol) << ", "
+            << katana::io::quote_json(contract.semantic_identity) << ", "
+            << katana::io::quote_json(
+                   contract.expected_owner_semantic_identity)
+            << ", "
+            << katana::io::quote_json(
+                   contract.provider_implementation_identity)
+            << ", native_provider_guards_" << contract_index
+            << ", native_provider_effects_" << contract_index
+            << ", {katana::runtime::NativePortProviderReturnAction::"
+            << native_port_provider_return_action_name(contract.result.action)
+            << ", 0x" << symbol(contract.result.gpr_write_mask)
+            << "u, 0x" << symbol(contract.result.special_write_mask)
+            << "u, " << static_cast<unsigned>(contract.result.status_write_mask)
+            << "u, "
+            << katana::io::quote_json(contract.result.target_expression)
+            << ", "
+            << katana::io::quote_json(contract.result.error_expression)
+            << ", "
+            << katana::io::quote_json(contract.result.cpu_state_expression)
+            << ", "
+            << katana::io::quote_json(contract.result.title_state_expression)
+            << "}},\n";
+    }
     output << "}};\n"
            << "const katana::runtime::NativePortDefinition& "
               "native_port_definition() noexcept {\n"
@@ -18399,7 +18584,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
            << definition.frame_timing.simulation_rate_hz << "u, "
            << definition.frame_timing.default_presentation_rate_hz << "u, "
            << definition.frame_timing.maximum_presentation_rate_hz
-           << "u}};\n"
+           << "u}, native_provider_semantic_contracts, "
+           << native_port_provider_semantic_coverage_name(
+                  definition.provider_semantic_coverage)
+           << "};\n"
               "    return definition;\n"
               "}\n\n"
               "void run_native_port(katana::runtime::NativePortContext& context) {\n"
@@ -22086,6 +22274,14 @@ struct NativePortHardwareClosure final {
     std::size_t unresolved_memory_sites = 0u;
     std::size_t resolved_by_native_cpu_control = 0u;
     std::size_t replaced_by_hook = 0u;
+    std::size_t provider_semantic_contracts = 0u;
+    std::size_t provider_semantic_summaries = 0u;
+    std::size_t provider_semantic_matches = 0u;
+    std::size_t provider_semantic_misses = 0u;
+    std::size_t provider_semantic_legacy_admissions = 0u;
+    katana::runtime::NativePortProviderSemanticCoverage
+        provider_semantic_coverage =
+            katana::runtime::NativePortProviderSemanticCoverage::DeclaredOnly;
     std::size_t eliminated_by_replacement_reachability = 0u;
     std::size_t guarded_native_memory = 0u;
     bool replacement_reachability_proven = false;
@@ -23163,7 +23359,9 @@ native_port_reachability_eliminated_sites(
     const NativePortProgramIndex& index,
     const katana::runtime::NativePortDefinition& definition,
     const std::span<const std::uint32_t> native_resume_entries,
-    const std::set<std::uint32_t>& instruction_addresses) {
+    const std::set<std::uint32_t>& instruction_addresses,
+    const std::set<std::uint32_t>&
+        semantically_admitted_replacement_entries) {
     // Only an incomplete transfer which remains reachable after applying the
     // replacements poisons the negative proof.  Unknown edges in dead,
     // pre-bootstrap or replaced subgraphs do not globally disable an otherwise
@@ -23178,7 +23376,9 @@ native_port_reachability_eliminated_sites(
                 hook.requirement) ||
             hook.original_policy !=
                 katana::runtime::NativePortHookOriginalPolicy::
-                    ReplacesOriginal)
+                    ReplacesOriginal ||
+            !semantically_admitted_replacement_entries.contains(
+                hook.guest_address))
             continue;
         const auto proof = prove_native_port_hook_coverage(
             index, native_resume_entries, hook, hook.guest_address);
@@ -23577,6 +23777,28 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     }
     katana::runtime::validate_native_port_definition(*definition);
 
+    result.provider_semantic_contracts =
+        definition->provider_semantic_contracts.size();
+    result.provider_semantic_coverage =
+        definition->provider_semantic_coverage;
+    std::map<std::uint32_t,
+             const katana::runtime::NativePortProviderSemanticContract*>
+        provider_contracts;
+    for (const auto& contract : definition->provider_semantic_contracts)
+        provider_contracts.emplace(contract.hook_guest_address, &contract);
+
+    struct ProviderSemanticProof final {
+        bool admitted = false;
+        bool matched = false;
+        bool declared = false;
+        std::string reason;
+    };
+    std::map<std::uint32_t, ProviderSemanticProof> provider_semantic_proofs;
+    std::set<std::uint32_t> summarized_provider_hooks;
+    std::set<std::uint32_t> matched_provider_hooks;
+    std::set<std::uint32_t> missed_provider_hooks;
+    std::set<std::uint32_t> legacy_provider_hooks;
+
     std::map<std::uint32_t, const katana::runtime::NativePortHardwareResolution*>
         resolutions;
     for (const auto& resolution : definition->hardware_resolutions)
@@ -23610,23 +23832,6 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
         native_progress_wait_instructions.end());
     for (const auto& site : audit.unresolved_memory_instruction_sites)
         audited_instruction_addresses.insert(site.instruction_address);
-    const auto replacement_reachability =
-        native_port_reachability_eliminated_sites(
-            program_index,
-            *definition,
-            native_resume_entries,
-            audited_instruction_addresses);
-    result.replacement_reachability_proven =
-        replacement_reachability.proven;
-    result.replacement_reachability_incomplete_frontier =
-        replacement_reachability.incomplete_frontier;
-    result.reachability_eliminated_sites =
-        replacement_reachability.eliminated_sites;
-    if (!program_index.external_root_ownership_complete ||
-        program_index.external_function_roots.empty())
-        result.gaps.push_back(
-            {0u, "native-product-root-ownership-unproven"});
-
     const auto proven_hooks =
         [&](const std::uint32_t instruction_address) {
             std::vector<const katana::runtime::NativePortHookBinding*>
@@ -23644,6 +23849,112 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
             }
             return candidates;
         };
+    const auto provider_semantics_admit =
+        [&](const katana::runtime::NativePortHookBinding& hook)
+            -> const ProviderSemanticProof& {
+        const auto cached = provider_semantic_proofs.find(
+            hook.guest_address);
+        if (cached != provider_semantic_proofs.end())
+            return cached->second;
+
+        ProviderSemanticProof proof;
+        const auto contract = provider_contracts.find(hook.guest_address);
+        if (contract == provider_contracts.end()) {
+            if (definition->provider_semantic_coverage ==
+                katana::runtime::NativePortProviderSemanticCoverage::
+                    DeclaredOnly) {
+                proof.admitted = true;
+                proof.reason = "provider-semantic-legacy-admitted";
+                legacy_provider_hooks.insert(hook.guest_address);
+            } else {
+                proof.reason = "provider-semantic-contract-missing";
+                missed_provider_hooks.insert(hook.guest_address);
+            }
+        } else if (hook.kind !=
+                   katana::runtime::NativePortHookKind::FunctionEntry) {
+            proof.declared = true;
+            proof.reason = "provider-semantic-owner-boundary-required";
+        } else {
+            proof.declared = true;
+            const auto functions =
+                program_index.functions_by_entry.find(hook.guest_address);
+            if (functions == program_index.functions_by_entry.end() ||
+                functions->second.size() != 1u ||
+                functions->second.front() == nullptr) {
+                proof.reason =
+                    "provider-semantic-owner-ir-ambiguous";
+            } else {
+                katana::analysis::OwnerSemanticBoundary boundary;
+                boundary.entry_address = hook.guest_address;
+                boundary.size = hook.covered_size;
+                boundary.identity = std::string(hook.code_identity);
+                boundary.exact = true;
+                boundary.identity_bound = true;
+                auto owner = katana::analysis::summarize_owner_semantics(
+                    *functions->second.front(),
+                    std::move(boundary),
+                    audit.references);
+                summarized_provider_hooks.insert(hook.guest_address);
+                const auto match =
+                    katana::analysis::match_native_provider_semantics(
+                        owner, *contract->second);
+                proof.matched = match.matched;
+                proof.admitted = match.matched;
+                proof.reason = std::string("provider-semantic-") +
+                    katana::analysis::
+                        native_provider_equivalence_reason_token(
+                            match.reason);
+            }
+        }
+        if (proof.matched)
+            matched_provider_hooks.insert(hook.guest_address);
+        else if (proof.declared)
+            missed_provider_hooks.insert(hook.guest_address);
+        const auto [inserted, unique] =
+            provider_semantic_proofs.emplace(
+                hook.guest_address, std::move(proof));
+        static_cast<void>(unique);
+        return inserted->second;
+    };
+
+    // A replacement may remove a guest subgraph from the native product only
+    // after its provider semantics have been admitted.  Structural hook
+    // coverage alone proves where the replacement applies, not that dropping
+    // the original hardware effects is equivalent.  In DeclaredOnly mode the
+    // explicit legacy policy still admits undeclared hooks; an invalid declared
+    // contract never receives that compatibility treatment.
+    std::set<std::uint32_t> semantically_admitted_replacement_entries;
+    for (const auto& hook : definition->hooks) {
+        if (hook.kind !=
+                katana::runtime::NativePortHookKind::FunctionEntry ||
+            !katana::runtime::native_port_hook_closes_product_contract(
+                hook.requirement) ||
+            hook.original_policy !=
+                katana::runtime::NativePortHookOriginalPolicy::
+                    ReplacesOriginal ||
+            !provider_semantics_admit(hook).admitted)
+            continue;
+        semantically_admitted_replacement_entries.insert(
+            hook.guest_address);
+    }
+    const auto replacement_reachability =
+        native_port_reachability_eliminated_sites(
+            program_index,
+            *definition,
+            native_resume_entries,
+            audited_instruction_addresses,
+            semantically_admitted_replacement_entries);
+    result.replacement_reachability_proven =
+        replacement_reachability.proven;
+    result.replacement_reachability_incomplete_frontier =
+        replacement_reachability.incomplete_frontier;
+    result.reachability_eliminated_sites =
+        replacement_reachability.eliminated_sites;
+    if (!program_index.external_root_ownership_complete ||
+        program_index.external_function_roots.empty())
+        result.gaps.push_back(
+            {0u, "native-product-root-ownership-unproven"});
+
     const auto native_cpu_control_covers =
         [&](const std::uint32_t instruction_address) {
             const auto found =
@@ -23724,6 +24035,13 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                          proof.reason});
                 return false;
             }
+            const auto& semantic_proof =
+                provider_semantics_admit(*hook);
+            if (!semantic_proof.admitted) {
+                result.gaps.push_back(
+                    {instruction_address, semantic_proof.reason});
+                return false;
+            }
             ++result.replaced_by_hook;
             return true;
         }
@@ -23737,6 +24055,13 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
             result.gaps.push_back(
                 {instruction_address,
                  "hardware-hook-proof-ambiguous"});
+            return false;
+        }
+        const auto& semantic_proof =
+            provider_semantics_admit(*candidates.front());
+        if (!semantic_proof.admitted) {
+            result.gaps.push_back(
+                {instruction_address, semantic_proof.reason});
             return false;
         }
         ++result.replaced_by_hook;
@@ -23790,6 +24115,12 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     if (!complete_module_scope)
         result.gaps.push_back(
             {0u, "latent-module-hardware-audit-missing"});
+    result.provider_semantic_summaries =
+        summarized_provider_hooks.size();
+    result.provider_semantic_matches = matched_provider_hooks.size();
+    result.provider_semantic_misses = missed_provider_hooks.size();
+    result.provider_semantic_legacy_admissions =
+        legacy_provider_hooks.size();
     std::sort(
         result.gaps.begin(),
         result.gaps.end(),
@@ -23806,7 +24137,7 @@ std::string native_port_hardware_closure_json(
     std::ostringstream output;
     katana::io::write_json_report_header(
         output,
-        "katana.native-port-hardware-closure.v7",
+        "katana.native-port-hardware-closure.v8",
         "native-port-hardware-closure");
     output << ",\"definition_present\":"
            << (closure.definition_present ? "true" : "false")
@@ -23821,6 +24152,24 @@ std::string native_port_hardware_closure_json(
            << ",\"resolved_by_native_cpu_control\":"
            << closure.resolved_by_native_cpu_control
            << ",\"replaced_by_hook\":" << closure.replaced_by_hook
+           << ",\"provider_semantic_contracts\":"
+           << closure.provider_semantic_contracts
+           << ",\"provider_semantic_summaries\":"
+           << closure.provider_semantic_summaries
+           << ",\"provider_semantic_matches\":"
+           << closure.provider_semantic_matches
+           << ",\"provider_semantic_misses\":"
+           << closure.provider_semantic_misses
+           << ",\"provider_semantic_legacy_admissions\":"
+           << closure.provider_semantic_legacy_admissions
+           << ",\"provider_semantic_coverage\":"
+           << katana::io::quote_json(
+                  closure.provider_semantic_coverage ==
+                          katana::runtime::
+                              NativePortProviderSemanticCoverage::
+                                  RequiredForHardwareClosure
+                      ? "required-for-hardware-closure"
+                      : "declared-only")
            << ",\"eliminated_by_replacement_reachability\":"
            << closure.eliminated_by_replacement_reachability
            << ",\"replacement_reachability_proven\":"
@@ -26080,6 +26429,26 @@ void populate_native_disc_analysis_summary(
             .known_hardware_sites;
     result.summary.native_hardware_gaps =
         result.admitted_state->native_hardware_closure.gaps.size();
+    result.summary.provider_semantic_contracts =
+        result.admitted_state->native_hardware_closure
+            .provider_semantic_contracts;
+    result.summary.provider_semantic_summaries =
+        result.admitted_state->native_hardware_closure
+            .provider_semantic_summaries;
+    result.summary.provider_semantic_matches =
+        result.admitted_state->native_hardware_closure
+            .provider_semantic_matches;
+    result.summary.provider_semantic_misses =
+        result.admitted_state->native_hardware_closure
+            .provider_semantic_misses;
+    result.summary.provider_semantic_legacy_admissions =
+        result.admitted_state->native_hardware_closure
+            .provider_semantic_legacy_admissions;
+    result.summary.provider_semantic_coverage_required =
+        result.admitted_state->native_hardware_closure
+            .provider_semantic_coverage ==
+        katana::runtime::NativePortProviderSemanticCoverage::
+            RequiredForHardwareClosure;
     result.summary.sdk_provider_candidates =
         result.admitted_state->native_sdk_provider_candidates.size();
     result.summary.guarded_inventory_complete =
@@ -26092,7 +26461,6 @@ void populate_native_disc_analysis_summary(
 }
 
 constexpr std::size_t maximum_owner_semantic_task_blocks = 16u;
-constexpr std::size_t maximum_owner_semantic_task_instructions = 64u;
 constexpr std::size_t maximum_owner_semantic_task_paths = 8u;
 constexpr std::size_t maximum_owner_hardware_site_slice_instructions = 24u;
 constexpr std::size_t maximum_owner_hardware_site_slice_blocks = 8u;
@@ -27902,6 +28270,7 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
     const katana::io::ExecutableImage& image,
     const std::uint32_t entry,
     const std::optional<std::uint32_t> covered_size,
+    const std::string_view code_identity,
     const std::span<const katana::analysis::HardwareAccessReference>
         hardware_references) {
     OwnerSemanticTaskContract contract;
@@ -27918,17 +28287,57 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
     std::size_t instruction_count = 0u;
     for (const auto& block : function.blocks)
         instruction_count += block.instructions.size();
-    if (function.blocks.empty() ||
-        function.blocks.size() > maximum_owner_semantic_task_blocks ||
-        instruction_count == 0u ||
-        instruction_count > maximum_owner_semantic_task_instructions) {
-        contract.fields.push_back(
-            "owner-ir-contract=unavailable:bounded-slice-budget");
+    if (function.blocks.empty() || instruction_count == 0u) {
+        contract.fields.push_back("owner-ir-contract=unavailable:empty-owner");
         contract.fields.push_back(
             "owner-ir-shape=blocks=" +
             std::to_string(function.blocks.size()) +
             ";instructions=" + std::to_string(instruction_count));
         return contract;
+    }
+
+    katana::analysis::OwnerSemanticBoundary semantic_boundary;
+    semantic_boundary.entry_address = entry;
+    semantic_boundary.size = covered_size.value_or(0u);
+    semantic_boundary.identity = std::string(code_identity);
+    semantic_boundary.exact = covered_size.has_value();
+    semantic_boundary.identity_bound =
+        covered_size.has_value() && !code_identity.empty();
+    const auto semantic_summary =
+        katana::analysis::summarize_owner_semantics(
+            function,
+            std::move(semantic_boundary),
+            hardware_references);
+    const bool compositional_complete =
+        semantic_summary.status ==
+        katana::analysis::OwnerSemanticSummaryStatus::Complete;
+    contract.fields.push_back(
+        "owner-semantic-summary=" + std::string(
+            katana::analysis::owner_semantic_summary_status_name(
+                semantic_summary.status)));
+    contract.fields.push_back(
+        "owner-semantic-authority=" + std::string(
+            katana::analysis::owner_semantic_authority_name(
+                semantic_summary.authority)));
+    contract.fields.push_back(
+        "owner-semantic-identity=" + semantic_summary.digest);
+    contract.fields.push_back(
+        "owner-semantic-shape=blocks=" +
+        std::to_string(semantic_summary.blocks.size()) +
+        ";sccs=" + std::to_string(semantic_summary.sccs.size()) +
+        ";instructions=" +
+        std::to_string(semantic_summary.instruction_count) +
+        ";effects=" + std::to_string(semantic_summary.effects.size()) +
+        ";guards=" + std::to_string(semantic_summary.guards.size()));
+    contract.fields.push_back(
+        std::string{"owner-semantic-result-projection="} +
+        (semantic_summary.result.complete ? "complete" : "partial"));
+    for (const auto& reason : semantic_summary.incomplete_reasons) {
+        if (contract.fields.size() >=
+            katana::agent::materialization_world_max_blocked_items)
+            break;
+        contract.fields.push_back(
+            "owner-semantic-missing-proof=" + reason);
     }
 
     const auto liveness = katana::ir::make_register_localization_plan(function);
@@ -28171,7 +28580,7 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
     const bool sequence_complete = sequence_text.size() <=
         katana::agent::materialization_world_max_text_bytes -
             sequence_prefix.size();
-    contract.complete = covered_size.has_value() &&
+    const bool legacy_detail_complete = covered_size.has_value() &&
                         liveness.closed_control_flow &&
                         entry_liveness != nullptr &&
                         unknown_operations == 0u &&
@@ -28183,7 +28592,7 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
                         traps == 0u && sequence_complete;
     contract.fields.push_back(
         std::string{"owner-ir-contract="} +
-        (contract.complete ? "complete" : "partial"));
+        (compositional_complete ? "complete" : "partial"));
     contract.fields.push_back(
         "owner-ir-shape=blocks=" + std::to_string(function.blocks.size()) +
         ";instructions=" + std::to_string(instruction_count) +
@@ -28234,11 +28643,13 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
         ";exception-returns:" + std::to_string(exception_returns) +
         ";traps:" + std::to_string(traps) +
         ";guest-exit:" +
-        (contract.complete ? "normal-return" : "unknown"));
+        (legacy_detail_complete ? "normal-return" : "unknown"));
     const auto state_projection = owner_task_symbolic_projection(
         function, image, entry, may_defs, hardware_references);
+    contract.complete = compositional_complete;
     contract.state_projection_complete =
-        contract.complete && state_projection.complete;
+        contract.complete &&
+        (semantic_summary.result.complete || state_projection.complete);
     contract.fields.insert(
         contract.fields.end(),
         state_projection.fields.begin(),
@@ -28644,6 +29055,9 @@ build_native_disc_materialization_world(
             group.owners.begin(), group.owners.end());
     }
     constexpr std::size_t maximum_native_hardware_sites_per_agent_task = 4u;
+    std::map<std::tuple<std::uint32_t, std::uint32_t, std::string>,
+             OwnerSemanticTaskContract>
+        owner_semantic_contract_cache;
     for (auto& [group_identity, group] : hardware_groups) {
         auto& sites = group.sites;
         std::sort(sites.begin(), sites.end());
@@ -28754,12 +29168,26 @@ build_native_disc_materialization_world(
                     return native_provider_input_read_priority_hint_owners.contains(
                         owner);
                 });
-        const auto owner_semantics = owner_semantic_task_contract(
-            result.admitted_state->emitted_program,
-            result.image,
-            owner_hook_contract.entry,
-            owner_hook_contract.covered_size,
-            result.admitted_state->native_hardware_audit.references);
+        const auto& owner_semantics = [&]() -> const OwnerSemanticTaskContract& {
+            const auto key = std::tuple{
+                owner_hook_contract.entry,
+                owner_hook_contract.covered_size.value_or(0u),
+                owner_hook_contract.code_identity};
+            if (const auto cached =
+                    owner_semantic_contract_cache.find(key);
+                cached != owner_semantic_contract_cache.end())
+                return cached->second;
+            auto contract = owner_semantic_task_contract(
+                result.admitted_state->emitted_program,
+                result.image,
+                owner_hook_contract.entry,
+                owner_hook_contract.covered_size,
+                owner_hook_contract.code_identity,
+                result.admitted_state->native_hardware_audit.references);
+            return owner_semantic_contract_cache
+                .emplace(key, std::move(contract))
+                .first->second;
+        }();
         const bool owner_semantics_blocked =
             owner_hook_contract.candidate_reason.empty() &&
             !owner_semantics.complete;

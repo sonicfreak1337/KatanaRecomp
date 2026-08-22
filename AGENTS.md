@@ -120,6 +120,27 @@ RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen.
 
 ## Laufzeit und Ressourcen
 
+### Generierte Produkt- und Analyseinputs
+
+- Ein teurer Produkt-, Export- oder Analyselauf darf niemals direkt mit
+  versionierten `runXX-*`-Kopien, einem lediglich passend benannten Artefakt
+  oder einem aus einem frueheren Sourcezustand stammenden Generated Input
+  starten.
+- Vor jedem solchen Lauf werden die zustaendigen Authoring-Tools aus dem
+  aktuellen Source gebaut. GameProject, NativePort-Definition, Runtime-Image
+  und weitere generierte Inputs werden kanonisch neu erzeugt oder nur dann
+  wiederverwendet, wenn ein maschinengepruefter Provenance-Vertrag aktuelle
+  Source-, Generator-, Payload- und Artefakt-SHA-256-Identitaeten bindet.
+- Der Consumer liest ausschliesslich die dabei publizierten `current`-
+  Artefakte. Direkt vor Prozessstart werden Source und alle Artefakte erneut
+  gegen die Provenance gehasht; jede Abweichung beendet den Lauf vor der
+  teuren Analyse. Der verwendete Eingabesatz wird als eigenes Manifest neben
+  dem Laufprotokoll festgehalten.
+- Der private Sonic-Workflow verwendet fuer Analysen ausschliesslich
+  `private/run-sonic-native-analysis.ps1`; fuer Exporte bleibt
+  `private/run-sonic-native-export.ps1` autoritativ. Ad-hoc-Skripte duerfen
+  diese Freshness- und Provenance-Gates nicht umgehen.
+
 - Kein gestarteter Prozess und keine einzelne Phase laeuft laenger als
   20 Minuten. Nur eine ausdrueckliche Nutzerfreigabe fuer genau einen benannten
   Lauf hebt diese Grenze voruebergehend auf.

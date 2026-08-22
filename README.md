@@ -26,19 +26,33 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 116, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 117, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 59, Function-Analysis-Epoch-Schema 36, lokales
+Analyzer-ABI 63, Function-Analysis-Epoch-Schema 36, lokales
 In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
 Port-Metadata-Cache-Schema: `12`.
 Der aktuelle GameProject-Vertrag ist `9` mit Artefaktformat `6`; der native
-Port-Definitionsvertrag ist `10` und bleibt davon getrennt; das
-NativePortArtifact-Format steht auf `9`. Die aktuellen
-Analyse-Direktiven stehen auf `5`, das Hardware-Closure-Schema auf `v6`, die
+Port-Definitionsvertrag ist `11` und bleibt davon getrennt; das
+NativePortArtifact-Format steht auf `11`. Die aktuellen
+Analyse-Direktiven stehen auf `5`, das Hardware-Closure-Schema auf `v8`, die
 Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
+
+Die aktuelle Runtime-/Analyzer-Grenze enthält eine fail-closed
+Beweisschicht: `NativeProviderSemanticContract` (Runtime-Typ
+`NativePortProviderSemanticContract`) bindet die exakte Hookadresse und das
+Provider-Symbol an getrennte semantische, Owner- und
+Provider-Implementierungsidentitaeten sowie geordnete Guards, Effekte und
+Ergebnisprojektion. `OwnerSemanticSummary` liefert dafuer eine
+identity-bound Ownergrenze mit geschlossener CFG/SCC-, Effekt- und
+Guard-Sicht. Nur ein vollstaendiges, nicht trunciertes Summary mit
+vollstaendiger Ergebnisprojektion und exakt passendem Contract darf einen
+Replacement-Hook schliessen; fehlende, unbekannte oder widerspruechliche
+Beweise bleiben in Hardware-Closure v8 als Gap offen. Der alte
+Dreamcast-Geraetepfad ist ausschliesslich ein internes Offline-Orakel und wird
+nie in Produktlink oder Produktruntime verwendet.
 
 Der Windows-Native-Port bindet XInput sowie die explizit identifizierten
 WinMM-Layouts von DualSense und DualShock an Plattformvertrag `8`. Die Sony-
@@ -57,7 +71,7 @@ Menutest steht aus, bis ein Nutzer am System ist.
 
 Der aktuelle agentische Analyseworkflow publiziert eine transaktionale,
 identitaetsgebundene Materialization-World samt Frontier- und Resume-Ledger.
-Das Ledger steht auf Schema 4 und bindet eine komponentengenaue
+Das Ledger steht auf Schema 5 und bindet eine komponentengenaue
 Produceridentitaet. `analyze-port --resume --refresh-analysis` kann den
 Whole-Disc-Checkpoint bewusst erneuern, ohne unveraenderte, exakt gebundene
 untere Analyseebenen pauschal zu verwerfen. Ein echter NOOP-Resume ist nur
@@ -67,7 +81,7 @@ Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
 vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
-Source-Stand Runtime-ABI 116 / Analyzer-ABI 59; historische Exportzahlen
+Source-Stand Runtime-ABI 117 / Analyzer-ABI 63; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
 
 Der aktuelle Kaltpfad verschiebt IR-Lowering, Audit und Graphmaterialisierung
@@ -181,7 +195,7 @@ Der historische Dreamcast-Launcher wird niemals als nativer Fallback gelinkt.
 
 KR-5001 ist source-seitig abgeschlossen: Die deterministische
 `metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
-`v5` und Hookanforderungskarte `v4` verlangen exakte Function-/Instruction-
+`v8` und Hookanforderungskarte `v5` verlangen exakte Function-/Instruction-
 Replacement-Proofs an echten
 Funktionsentry-Grenzen. Bekannte
 Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
@@ -594,9 +608,9 @@ v0.49 trennt drei Verantwortungsbereiche:
 
 1. **KatanaRecomp** analysiert SH-4, erzeugt IR, optimiert und emittiert
    statische native C++-Quellen.
-2. **KatanaRuntime** stellt die titelunabhaengigen Dreamcast-Grenzen fuer CPU,
-   Speicher, MMU, Scheduler, Interrupts, BIOS, GD-ROM, PVR/TA, AICA, Maple,
-   Video, Audio und Eingabe bereit.
+2. **KatanaRuntime** stellt die titelunabhaengigen nativen PC-Grenzen fuer CPU,
+   Speicher, Dateien, Grafik, Audio, Eingabe und Speicherstaende bereit. Der
+   historische Dreamcast-Geraetepfad bleibt dabei ein internes Offline-Orakel.
 3. **Externe Spielprojekte** duerfen hashgebundene Funktionsgrenzen,
    Jump-/Callbacktabellen, Runtimecode-Templates, native Overrides,
    Mid-Function-Hooks, Symbole und Direct-Boot-Konfiguration enthalten.
@@ -678,12 +692,12 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 115, Analyzer-ABI 56, Portprojektvertrag 103 und
+KR-5005-Stand verwendet Runtime-ABI 117, Analyzer-ABI 63, Portprojektvertrag 103 und
 Native-Port-Profilvertrag 23. Davon getrennt verwendet `GameProject` Vertrag 9 und
-Artefaktformat 6. `CompletePlatform` erfasst und restauriert den kanonischen
-Satz aus 22 Dreamcast-Geraeten einschliesslich Flash sowie die exakte
-typisierte Scheduler-Timeline. Capture und Apply sind nur im historischen
-Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-
+Artefaktformat 6. `CompletePlatform` gehoert mit dem kanonischen Satz aus 22
+Dreamcast-Geraeten einschliesslich Flash und der typisierten Scheduler-Timeline
+ausschliesslich zum historischen Offline-Orakel. Capture und Apply sind nur im
+historischen Produktport belegt. Der historische PlatformAbi-D-Lauf war der freigegebene KR-4981-
 Produktversuch und bestand das globale Produktgate nicht; ein weiterer Lauf
 ist nicht automatisch freigegeben.
 
@@ -704,8 +718,9 @@ erzeugte Produktport laedt das Handoff lokal ueber
 den vollstaendigen Plattformzustand vor dem ersten Spielblock an.
 `NativeDiscBoot` kompiliert weiterhin den disc-eigenen Bootstrap und bleibt
 Referenz- und finales Genauigkeitsgate sowie Grundlage der
-Nutzerinstallation. Beide Pfade verwenden dieselbe Dreamcast-Runtime; keiner
-interpretiert SH-4.
+Nutzerinstallation. Beide Produktpfade binden native PC-Dienste; der alte
+Dreamcast-Geraetepfad wird nie in Produktlink oder Produktruntime verwendet,
+und keiner interpretiert SH-4.
 
 Vollstaendiger Vertrag:
 [Executable-First-Entwicklung](docs/EXECUTABLE_FIRST_DEVELOPMENT.md)

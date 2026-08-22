@@ -5702,8 +5702,13 @@ class AnalysisArtifactRollback final {
         require_safe_replaceable_port_file(root_, path, description);
         Entry entry;
         entry.path = path;
+        // Do not derive transactional sidecar names from the user-selected
+        // artifact filename.  On Windows an otherwise valid output path can
+        // cross MAX_PATH only after the long suffix is appended, which used
+        // to discard a fully computed analysis at publication time.
         entry.backup = path.parent_path() /
-            (path.filename().string() + ".katana-backup." + token_);
+            (".katana-analysis-backup." + token_ + "." +
+             std::to_string(entries_.size()));
         require_safe_replaceable_port_file(
             root_, entry.backup, "Analyseartefakt-Rollbackdatei");
         if (safe_regular_port_file_exists(
@@ -5783,8 +5788,11 @@ void write_atomic_analysis_file(
     token_input.output_identity = katana::io::sha256_bytes(
         path.lexically_normal().generic_string());
     const auto token = new_port_publish_transaction_token(token_input);
+    // The token already binds the destination path and fresh entropy.  A
+    // fixed short basename preserves same-directory atomic replacement while
+    // avoiding a late Windows path-length failure for long artifact names.
     const auto temporary = path.parent_path() /
-        (path.filename().string() + ".katana-tmp." + token);
+        (".katana-analysis-tmp." + token);
     const auto document = std::string_view(
         reinterpret_cast<const char*>(bytes.data()), bytes.size());
     write_exclusive_safe_port_file(
@@ -5826,6 +5834,26 @@ void write_atomic_analysis_file(
             reinterpret_cast<const std::uint8_t*>(document.data()),
             document.size()),
         description);
+}
+
+void preflight_atomic_analysis_directory(
+    const std::filesystem::path& root,
+    const std::filesystem::path& directory,
+    const std::string_view description) {
+    ensure_safe_port_directory_chain(root, directory, description);
+    PortPublishOutputPaths token_input;
+    token_input.output = directory / "analysis-publication-preflight";
+    token_input.output_identity = katana::io::sha256_bytes(
+        token_input.output.lexically_normal().generic_string());
+    const auto token = new_port_publish_transaction_token(token_input);
+    const auto probe = directory /
+        (".katana-analysis-preflight." + token);
+    const auto document =
+        "KATANA_ANALYSIS_PUBLICATION_PREFLIGHT_V1\n" + token + "\n";
+    write_atomic_analysis_file(
+        root, probe, document, "Analysepublikations-Preflight");
+    remove_owned_safe_port_file(
+        probe, document, "Analysepublikations-Preflight");
 }
 
 void write_port_publish_state(
@@ -9082,6 +9110,80 @@ std::optional<std::string> active_pending_agent_analysis_slot(
         "Aktiver Analyse-Kandidatenslot ist ungueltig.");
 }
 
+void ensure_safe_agent_analysis_output_root(
+    const std::filesystem::path& output_root) {
+    std::error_code output_error;
+    auto output_status = std::filesystem::symlink_status(
+        output_root, output_error);
+    const bool output_missing =
+        output_error == std::errc::no_such_file_or_directory ||
+        (!output_error &&
+         output_status.type() == std::filesystem::file_type::not_found);
+    if (output_missing) {
+        output_error.clear();
+        if (!std::filesystem::create_directory(
+                output_root, output_error) &&
+            output_error)
+            throw std::filesystem::filesystem_error(
+                "Analyseartefaktordner konnte nicht erstellt werden.",
+                output_root,
+                output_error);
+        output_status = std::filesystem::symlink_status(
+            output_root, output_error);
+    }
+    if (output_error ||
+        !std::filesystem::is_directory(output_status) ||
+        unsafe_port_filesystem_link(output_root, output_status))
+        throw std::runtime_error(
+            "Analyseartefaktziel ist kein sicherer lokaler Ordner.");
+}
+
+void preflight_agent_analysis_publication(
+    const std::filesystem::path& output_root) {
+    const auto agent_root = output_root / ".katana" / "agent";
+    const auto pending_root = agent_root / "pending-analysis";
+    const std::array<std::filesystem::path, 2u> slots{
+        pending_root / "slot-0", pending_root / "slot-1"};
+    ensure_safe_port_directory_chain(
+        output_root, agent_root, "Analysepublikations-Preflight");
+    ensure_safe_port_directory_chain(
+        output_root, pending_root, "Analysepublikations-Preflight");
+    for (const auto& slot : slots)
+        ensure_safe_port_directory_chain(
+            output_root, slot, "Analysepublikations-Preflight");
+
+    // Exercise the exact create, flush, same-directory atomic rename, read
+    // and delete capabilities in every directory that will receive a file.
+    // This runs before the expensive analyzer, not after it has produced a
+    // valuable generation.
+    preflight_atomic_analysis_directory(
+        output_root, output_root, "Analysepublikations-Preflight");
+    preflight_atomic_analysis_directory(
+        output_root, agent_root, "Analysepublikations-Preflight");
+    preflight_atomic_analysis_directory(
+        output_root, pending_root, "Analysepublikations-Preflight");
+    for (const auto& slot : slots)
+        preflight_atomic_analysis_directory(
+            output_root, slot, "Analysepublikations-Preflight");
+
+    std::vector<std::filesystem::path> targets{
+        output_root / "native-disc-analysis.json",
+        output_root / "native-disc-analysis.katana-analysis",
+        output_root / "materialization-world.katana-world",
+        output_root / "materialization-world.json",
+        agent_root / "session.jsonl",
+        pending_root / "active-slot.txt"};
+    for (const auto& slot : slots) {
+        targets.push_back(slot / "native-disc-analysis.katana-analysis");
+        targets.push_back(slot / "materialization-world.katana-world");
+        targets.push_back(slot / "materialization-world.json");
+        targets.push_back(slot / "candidate.json");
+    }
+    for (const auto& target : targets)
+        require_safe_replaceable_port_file(
+            output_root, target, "Analysepublikationsziel");
+}
+
 void write_pending_agent_analysis_candidate_manifest_at_slot(
     const std::filesystem::path& slot_root,
     const std::string_view slot,
@@ -9419,6 +9521,29 @@ AgentSessionLedgerState validate_agent_session_ledger(
         throw std::invalid_argument(
             "Agent-Session-Ledger besitzt keinen messbaren Zeitwert.");
     return state;
+}
+
+void preflight_agent_session_ledger(
+    const std::filesystem::path& output_root) {
+    const auto ledger_path =
+        output_root / ".katana" / "agent" / "session.jsonl";
+    if (!safe_regular_port_file_exists(
+            ledger_path, "Agent-Session-Ledger"))
+        return;
+    const auto ledger = read_safe_small_port_file(
+        ledger_path,
+        maximum_agent_session_ledger_bytes,
+        "Agent-Session-Ledger");
+    static_cast<void>(validate_agent_session_ledger(ledger));
+    // Reserve the maximum legal next record before analysis.  Failing early
+    // is preferable to computing a generation that cannot receive its final
+    // commit marker.
+    if (ledger.size() >
+        maximum_agent_session_ledger_bytes -
+            maximum_agent_session_line_bytes)
+        throw std::runtime_error(
+            "Agent-Session-Ledger besitzt vor der Analyse keinen Platz "
+            "fuer einen weiteren maximalen Datensatz.");
 }
 
 struct CommittedAgentGeneration final {
@@ -10606,8 +10731,34 @@ int export_port_project(const std::filesystem::path& source_path,
             analysis_session_contract_identity =
                 agent_analysis_session_contract_identity(
                     current_manifest, analysis_options);
-            if (previous_analysis_session_contract_identity !=
-                analysis_session_contract_identity)
+            bool session_contract_compatible =
+                previous_analysis_session_contract_identity ==
+                analysis_session_contract_identity;
+            if (!session_contract_compatible &&
+                (parsed_manifest.artifact.identity.native_port_identity !=
+                     current_manifest.native_port_identity ||
+                 parsed_manifest.artifact.identity
+                         .native_port_artifact_identity !=
+                     current_manifest.native_port_artifact_identity)) {
+                // NativePort provider semantics and hardware resolutions are
+                // downstream admission inputs.  The analysis-artifact loader
+                // performs the authoritative field-by-field compatibility
+                // check and replays closure under the new definition.  Let
+                // the outer session gate admit exactly that one changed
+                // identity pair while keeping every disc, project, payload,
+                // mode, hint and resume-entry field byte-identical.
+                auto prior_session_manifest = current_manifest;
+                prior_session_manifest.native_port_identity =
+                    parsed_manifest.artifact.identity.native_port_identity;
+                prior_session_manifest.native_port_artifact_identity =
+                    parsed_manifest.artifact.identity
+                        .native_port_artifact_identity;
+                session_contract_compatible =
+                    previous_analysis_session_contract_identity ==
+                    agent_analysis_session_contract_identity(
+                        prior_session_manifest, analysis_options);
+            }
+            if (!session_contract_compatible)
                 throw std::invalid_argument(
                     "analyze-port --resume verweigert einen veraenderten "
                     "semantischen Analysevertrag; eine neue "
@@ -10638,6 +10789,12 @@ int export_port_project(const std::filesystem::path& source_path,
                 return 0;
             }
         }
+        ensure_safe_agent_analysis_output_root(absolute_output);
+        preflight_agent_analysis_publication(absolute_output);
+        preflight_agent_session_ledger(absolute_output);
+        std::cout
+            << "KATANA_ANALYZE_PORT_PUBLICATION_PREFLIGHT_COMPLETE\n"
+            << std::flush;
         const auto analysis_started = std::chrono::steady_clock::now();
         auto analyzed =
             katana::codegen::analyze_native_disc_port(
@@ -10653,32 +10810,6 @@ int export_port_project(const std::filesystem::path& source_path,
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - analysis_started)
                 .count());
-        std::error_code output_error;
-        auto output_status = std::filesystem::symlink_status(
-            absolute_output, output_error);
-        const bool output_missing =
-            output_error == std::errc::no_such_file_or_directory ||
-            (!output_error &&
-             output_status.type() ==
-                 std::filesystem::file_type::not_found);
-        if (output_missing) {
-            output_error.clear();
-            if (!std::filesystem::create_directory(
-                    absolute_output, output_error) &&
-                output_error)
-                throw std::filesystem::filesystem_error(
-                    "Analyseartefaktordner konnte nicht erstellt werden.",
-                    absolute_output,
-                    output_error);
-            output_status = std::filesystem::symlink_status(
-                absolute_output, output_error);
-        }
-        if (output_error ||
-            !std::filesystem::is_directory(output_status) ||
-            unsafe_port_filesystem_link(
-                absolute_output, output_status))
-            throw std::runtime_error(
-                "Analyseartefaktziel ist kein sicherer lokaler Ordner.");
         if (analyzed.analysis_artifact_bytes.empty())
             throw std::runtime_error(
                 "analyze-port erhielt kein autoritatives Analysearchiv.");
@@ -10919,6 +11050,21 @@ int export_port_project(const std::filesystem::path& source_path,
                << analyzed.summary.known_hardware_sites
                << ",\"native_hardware_gaps\":"
                << analyzed.summary.native_hardware_gaps
+               << ",\"provider_semantic_contracts\":"
+               << analyzed.summary.provider_semantic_contracts
+               << ",\"provider_semantic_summaries\":"
+               << analyzed.summary.provider_semantic_summaries
+               << ",\"provider_semantic_matches\":"
+               << analyzed.summary.provider_semantic_matches
+               << ",\"provider_semantic_misses\":"
+               << analyzed.summary.provider_semantic_misses
+               << ",\"provider_semantic_legacy_admissions\":"
+               << analyzed.summary.provider_semantic_legacy_admissions
+               << ",\"provider_semantic_coverage\":"
+               << katana::io::quote_json(
+                      analyzed.summary.provider_semantic_coverage_required
+                          ? "required-for-hardware-closure"
+                          : "declared-only")
                << ",\"sdk_provider_candidates\":"
                << analyzed.summary.sdk_provider_candidates
                << ",\"guarded_inventory_complete\":"

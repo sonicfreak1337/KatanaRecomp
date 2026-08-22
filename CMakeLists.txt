@@ -358,6 +358,7 @@ list(
     "include/katana/runtime/gdi.hpp"
     "include/katana/runtime/native_aot_template.hpp"
     "include/katana/runtime/native_port_artifact.hpp"
+    "include/katana/runtime/native_port_semantics.hpp"
     "include/katana/runtime/packed_disc.hpp"
     "src/runtime/disc_install.cpp"
     "src/runtime/dreamcast_boot.cpp"
@@ -711,6 +712,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/memory.hpp
     include/katana/runtime/native_aot_state.hpp
     include/katana/runtime/native_port.hpp
+    include/katana/runtime/native_port_semantics.hpp
     include/katana/runtime/native_port_audio.hpp
     include/katana/runtime/native_port_audio_engine.hpp
     include/katana/runtime/native_port_sound_bank.hpp
@@ -1040,6 +1042,8 @@ add_library(katana_core_objects OBJECT
     src/analysis/function_analysis.cpp
     src/analysis/function_value_analysis.cpp
     src/analysis/hardware_audit.cpp
+    src/analysis/owner_semantic_summary.cpp
+    src/analysis/native_provider_equivalence.cpp
     src/analysis/executable_inventory.cpp
     src/analysis/recursive_analysis.cpp
     src/analysis/runtime_code_copy_analysis.cpp

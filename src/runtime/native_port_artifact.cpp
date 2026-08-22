@@ -283,6 +283,8 @@ serialize_definition(const NativePortDefinition& definition) {
         writer.enumeration(hook.original_policy);
         writer.string(hook.symbol);
         writer.string(hook.code_identity, artifact_maximum_identity_size);
+        writer.string(hook.provider_implementation_identity,
+                      artifact_maximum_identity_size);
     }
 
     writer.u32(checked_count(definition.hardware_resolutions.size()));
@@ -290,6 +292,52 @@ serialize_definition(const NativePortDefinition& definition) {
         writer.u32(resolution.instruction_address);
         writer.u32(resolution.hook_guest_address);
     }
+    writer.u32(checked_count(definition.provider_semantic_contracts.size()));
+    for (const auto& contract : definition.provider_semantic_contracts) {
+        writer.u32(contract.contract_version);
+        writer.u32(contract.hook_guest_address);
+        writer.boolean(contract.authoritative);
+        writer.string(contract.provider_symbol);
+        writer.string(contract.semantic_identity,
+                      artifact_maximum_identity_size);
+        writer.string(contract.expected_owner_semantic_identity,
+                      artifact_maximum_identity_size);
+        writer.string(contract.provider_implementation_identity,
+                      artifact_maximum_identity_size);
+        writer.u32(checked_count(contract.guards.size()));
+        for (const auto& guard : contract.guards) {
+            writer.u32(guard.order);
+            writer.string(guard.expression);
+            writer.string(guard.path_identity);
+        }
+        writer.u32(checked_count(contract.effects.size()));
+        for (const auto& effect : contract.effects) {
+            writer.u32(effect.order);
+            writer.enumeration(effect.operation);
+            writer.enumeration(effect.resource_kind);
+            writer.u8(effect.width);
+            writer.boolean(effect.canonical_address_known);
+            writer.u32(effect.canonical_address);
+            writer.u32(effect.write_mask);
+            writer.u32(effect.clear_mask);
+            writer.string(effect.region);
+            writer.string(effect.register_name);
+            writer.string(effect.resource);
+            writer.string(effect.address_expression);
+            writer.string(effect.value_expression);
+            writer.string(effect.result_expression);
+            writer.string(effect.path_identity);
+        }
+        writer.enumeration(contract.result.action);
+        writer.u32(contract.result.gpr_write_mask);
+        writer.u32(contract.result.special_write_mask);
+        writer.u32(contract.result.status_write_mask);
+        writer.string(contract.result.target_expression);
+        writer.string(contract.result.error_expression);
+        writer.string(contract.result.cpu_state_expression);
+        writer.string(contract.result.title_state_expression);
+    }
+    writer.enumeration(definition.provider_semantic_coverage);
     writer.u32(definition.frame_timing.simulation_rate_hz);
     writer.u32(definition.frame_timing.default_presentation_rate_hz);
     writer.u32(definition.frame_timing.maximum_presentation_rate_hz);
@@ -463,6 +511,7 @@ void NativePortArtifact::rebuild_definition() {
         image_byte_identities_.size() != images_.size() ||
         hook_symbols_.size() != hooks_.size() ||
         hook_code_identities_.size() != hooks_.size() ||
+        hook_provider_implementation_identities_.size() != hooks_.size() ||
         bootstrap_write_pre_identities_.size() !=
             bootstrap_writes_.size() ||
         bootstrap_write_post_identities_.size() !=
@@ -495,6 +544,60 @@ void NativePortArtifact::rebuild_definition() {
     for (std::size_t index = 0u; index < hooks_.size(); ++index) {
         hooks_[index].symbol = hook_symbols_[index];
         hooks_[index].code_identity = hook_code_identities_[index];
+        hooks_[index].provider_implementation_identity =
+            hook_provider_implementation_identities_[index];
+    }
+    provider_semantic_contract_views_.clear();
+    provider_semantic_contract_views_.reserve(provider_semantic_storage_.size());
+    for (auto& storage : provider_semantic_storage_) {
+        if (storage.guard_expressions.size() != storage.guards.size() ||
+            storage.guard_paths.size() != storage.guards.size() ||
+            storage.effect_regions.size() != storage.effects.size() ||
+            storage.effect_register_names.size() != storage.effects.size() ||
+            storage.effect_resources.size() != storage.effects.size() ||
+            storage.effect_addresses.size() != storage.effects.size() ||
+            storage.effect_values.size() != storage.effects.size() ||
+            storage.effect_results.size() != storage.effects.size() ||
+            storage.effect_paths.size() != storage.effects.size())
+            artifact_error("Native-port artifact semantic ownership is inconsistent.");
+        for (std::size_t index = 0u; index < storage.guards.size(); ++index) {
+            storage.guards[index].expression =
+                storage.guard_expressions[index];
+            storage.guards[index].path_identity =
+                storage.guard_paths[index];
+        }
+        for (std::size_t index = 0u; index < storage.effects.size(); ++index) {
+            storage.effects[index].region = storage.effect_regions[index];
+            storage.effects[index].register_name =
+                storage.effect_register_names[index];
+            storage.effects[index].resource = storage.effect_resources[index];
+            storage.effects[index].address_expression =
+                storage.effect_addresses[index];
+            storage.effects[index].value_expression =
+                storage.effect_values[index];
+            storage.effects[index].result_expression =
+                storage.effect_results[index];
+            storage.effects[index].path_identity =
+                storage.effect_paths[index];
+        }
+        storage.result.target_expression =
+            storage.result_target_expression;
+        storage.result.error_expression = storage.result_error_expression;
+        storage.result.cpu_state_expression =
+            storage.result_cpu_state_expression;
+        storage.result.title_state_expression =
+            storage.result_title_state_expression;
+        provider_semantic_contract_views_.push_back({
+            storage.contract_version,
+            storage.hook_guest_address,
+            storage.authoritative,
+            storage.provider_symbol,
+            storage.semantic_identity,
+            storage.expected_owner_semantic_identity,
+            storage.provider_implementation_identity,
+            storage.guards,
+            storage.effects,
+            storage.result});
     }
     definition_ = {};
     definition_.contract_version = contract_version_;
@@ -512,6 +615,9 @@ void NativePortArtifact::rebuild_definition() {
     definition_.hooks = hooks_;
     definition_.hardware_resolutions = hardware_resolutions_;
     definition_.frame_timing = frame_timing_;
+    definition_.provider_semantic_contracts =
+        provider_semantic_contract_views_;
+    definition_.provider_semantic_coverage = provider_semantic_coverage_;
     validate_native_port_definition(definition_);
 }
 
@@ -629,6 +735,7 @@ NativePortArtifact::load(const std::filesystem::path& path) {
     const auto hook_count = reader.count();
     result->hook_symbols_.reserve(hook_count);
     result->hook_code_identities_.reserve(hook_count);
+    result->hook_provider_implementation_identities_.reserve(hook_count);
     result->hooks_.reserve(hook_count);
     for (std::uint32_t index = 0u; index < hook_count; ++index) {
         NativePortHookBinding hook;
@@ -641,6 +748,8 @@ NativePortArtifact::load(const std::filesystem::path& path) {
         result->hook_symbols_.push_back(reader.string());
         result->hook_code_identities_.push_back(
             reader.string(artifact_maximum_identity_size));
+        result->hook_provider_implementation_identities_.push_back(
+            reader.string(artifact_maximum_identity_size));
         result->hooks_.push_back(hook);
     }
 
@@ -652,6 +761,93 @@ NativePortArtifact::load(const std::filesystem::path& path) {
         resolution.hook_guest_address = reader.u32();
         result->hardware_resolutions_.push_back(resolution);
     }
+    const auto provider_semantic_count = reader.count(
+        static_cast<std::uint32_t>(
+            native_port_provider_semantics_maximum_contracts));
+    result->provider_semantic_storage_.reserve(provider_semantic_count);
+    for (std::uint32_t index = 0u; index < provider_semantic_count; ++index) {
+        NativePortArtifact::ProviderSemanticStorage storage;
+        storage.contract_version = reader.u32();
+        storage.hook_guest_address = reader.u32();
+        storage.authoritative = reader.boolean();
+        storage.provider_symbol = reader.string();
+        storage.semantic_identity = reader.string(
+            artifact_maximum_identity_size);
+        storage.expected_owner_semantic_identity = reader.string(
+            artifact_maximum_identity_size);
+        storage.provider_implementation_identity = reader.string(
+            artifact_maximum_identity_size);
+        const auto guard_count = reader.count(
+            static_cast<std::uint32_t>(
+                native_port_provider_semantics_maximum_guards));
+        storage.guard_expressions.reserve(guard_count);
+        storage.guard_paths.reserve(guard_count);
+        storage.guards.reserve(guard_count);
+        for (std::uint32_t guard_index = 0u;
+             guard_index < guard_count;
+             ++guard_index) {
+            const auto order = reader.u32();
+            if (order > std::numeric_limits<std::uint16_t>::max())
+                artifact_error("Native-port artifact semantic guard order is invalid.");
+            storage.guard_expressions.push_back(reader.string());
+            storage.guard_paths.push_back(reader.string());
+            storage.guards.push_back({
+                static_cast<std::uint16_t>(order), {}, {}});
+        }
+        const auto effect_count = reader.count(
+            static_cast<std::uint32_t>(
+                native_port_provider_semantics_maximum_effects));
+        storage.effect_regions.reserve(effect_count);
+        storage.effect_register_names.reserve(effect_count);
+        storage.effect_resources.reserve(effect_count);
+        storage.effect_addresses.reserve(effect_count);
+        storage.effect_values.reserve(effect_count);
+        storage.effect_results.reserve(effect_count);
+        storage.effect_paths.reserve(effect_count);
+        storage.effects.reserve(effect_count);
+        for (std::uint32_t effect_index = 0u;
+             effect_index < effect_count;
+             ++effect_index) {
+            NativePortProviderEffect effect;
+            const auto order = reader.u32();
+            if (order > std::numeric_limits<std::uint16_t>::max())
+                artifact_error("Native-port artifact semantic effect order is invalid.");
+            effect.order = static_cast<std::uint16_t>(order);
+            effect.operation =
+                reader.enumeration<NativePortProviderOperation>();
+            effect.resource_kind =
+                reader.enumeration<NativePortProviderResourceKind>();
+            effect.width = reader.u8();
+            effect.canonical_address_known = reader.boolean();
+            effect.canonical_address = reader.u32();
+            effect.write_mask = reader.u32();
+            effect.clear_mask = reader.u32();
+            storage.effect_regions.push_back(reader.string());
+            storage.effect_register_names.push_back(reader.string());
+            storage.effect_resources.push_back(reader.string());
+            storage.effect_addresses.push_back(reader.string());
+            storage.effect_values.push_back(reader.string());
+            storage.effect_results.push_back(reader.string());
+            storage.effect_paths.push_back(reader.string());
+            storage.effects.push_back(effect);
+        }
+        storage.result.action =
+            reader.enumeration<NativePortProviderReturnAction>();
+        storage.result.gpr_write_mask = reader.u32();
+        storage.result.special_write_mask = reader.u32();
+        const auto status_write_mask = reader.u32();
+        if (status_write_mask > std::numeric_limits<std::uint8_t>::max())
+            artifact_error("Native-port artifact semantic status mask is invalid.");
+        storage.result.status_write_mask =
+            static_cast<std::uint8_t>(status_write_mask);
+        storage.result_target_expression = reader.string();
+        storage.result_error_expression = reader.string();
+        storage.result_cpu_state_expression = reader.string();
+        storage.result_title_state_expression = reader.string();
+        result->provider_semantic_storage_.push_back(std::move(storage));
+    }
+    result->provider_semantic_coverage_ =
+        reader.enumeration<NativePortProviderSemanticCoverage>();
     result->frame_timing_.simulation_rate_hz = reader.u32();
     result->frame_timing_.default_presentation_rate_hz = reader.u32();
     result->frame_timing_.maximum_presentation_rate_hz = reader.u32();

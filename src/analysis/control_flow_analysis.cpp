@@ -3998,7 +3998,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         [&](const JumpTableAnalysis& table) {
             if (!table.resolved || table.aot_candidates_only ||
                 table.encoding != JumpTableEncoding::SignedRelative16 ||
-                table.reason != "bounded-signed-relative-table" ||
+                (table.reason != "bounded-signed-relative-table" &&
+                 table.reason != "identity-bound-declared-table") ||
                 table.entries.empty())
                 return false;
             const auto byte_count = table.entries.size() * 2u;
@@ -4382,7 +4383,16 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             if (!recognition->jump_table.has_value()) continue;
             auto table = *recognition->jump_table;
             if (table.evidence == ControlFlowEvidence::Unresolved)
-                table.evidence = ControlFlowEvidence::ProvenComplete;
+                // Preserve the authority class which established the table.
+                // A natively recognized immutable table is a direct proof;
+                // an externally declared table remains guarded even after
+                // every target has become a proven recursive boundary. Both
+                // are complete, but collapsing the latter to ProvenComplete
+                // would erase its identity-bound declaration provenance.
+                table.evidence =
+                    table.reason == "identity-bound-declared-table"
+                        ? ControlFlowEvidence::GuardedComplete
+                        : ControlFlowEvidence::ProvenComplete;
             jump_table_result_index.insert_or_assign(site,
                                                      std::move(table));
             ++analysis.jump_table_result_entries_rebuilt;
@@ -4811,7 +4821,14 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     });
                 if (!boundaries)
                     continue;
-                table.evidence = ControlFlowEvidence::ProvenComplete;
+                // Preserve the authority class that established the table.
+                // Identity-bound declarations remain guarded even after the
+                // recursive boundary index proves every target; only native
+                // recognition may become an unconditional direct proof.
+                table.evidence =
+                    table.reason == "identity-bound-declared-table"
+                        ? ControlFlowEvidence::GuardedComplete
+                        : ControlFlowEvidence::ProvenComplete;
                 ++analysis.jump_table_result_entries_rebuilt;
                 mark_resolved_table_dispatch(
                     resolution_result_index, table);

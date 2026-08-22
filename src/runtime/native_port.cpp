@@ -64,6 +64,85 @@ namespace {
     return policy == NativePortBootstrapTimePolicy::NativeHostEpoch;
 }
 
+[[nodiscard]] bool valid_provider_semantic_text(
+    const std::string_view value,
+    const bool required) noexcept {
+    if (required && value.empty()) return false;
+    if (value.size() > native_port_provider_semantics_maximum_text)
+        return false;
+    return std::all_of(value.begin(), value.end(), [](const char character) {
+        const auto byte = static_cast<unsigned char>(character);
+        return byte >= 0x21u && byte <= 0x7Eu;
+    });
+}
+
+[[nodiscard]] bool valid_provider_semantic_operation(
+    const NativePortProviderOperation operation) noexcept {
+    switch (operation) {
+    case NativePortProviderOperation::Read:
+    case NativePortProviderOperation::Write:
+    case NativePortProviderOperation::ReadModifyWrite:
+    case NativePortProviderOperation::AckClear:
+    case NativePortProviderOperation::Wait:
+    case NativePortProviderOperation::Interrupt:
+    case NativePortProviderOperation::Fifo:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_provider_semantic_resource_kind(
+    const NativePortProviderResourceKind resource_kind) noexcept {
+    switch (resource_kind) {
+    case NativePortProviderResourceKind::HardwareRegister:
+    case NativePortProviderResourceKind::Memory:
+    case NativePortProviderResourceKind::Status:
+    case NativePortProviderResourceKind::Queue:
+    case NativePortProviderResourceKind::Interrupt:
+    case NativePortProviderResourceKind::ProviderState:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_provider_semantic_return_action(
+    const NativePortProviderReturnAction action) noexcept {
+    switch (action) {
+    case NativePortProviderReturnAction::ContinueOriginal:
+    case NativePortProviderReturnAction::Jump:
+    case NativePortProviderReturnAction::Return:
+    case NativePortProviderReturnAction::Abort:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_provider_semantic_coverage(
+    const NativePortProviderSemanticCoverage coverage) noexcept {
+    switch (coverage) {
+    case NativePortProviderSemanticCoverage::DeclaredOnly:
+    case NativePortProviderSemanticCoverage::RequiredForHardwareClosure:
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool valid_provider_semantic_width(
+    const std::uint8_t width) noexcept {
+    switch (width) {
+    case 1u:
+    case 2u:
+    case 4u:
+    case 8u:
+    case 16u:
+    case 32u:
+    case 64u:
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 NativePortContractError::NativePortContractError(
@@ -412,6 +491,9 @@ void validate_native_port_definition(
             !range_inside_image(hook.guest_address, hook.covered_size) ||
             !valid_native_port_link_symbol(hook.symbol) ||
             !valid_native_port_sha256_identity(hook.code_identity) ||
+            (!hook.provider_implementation_identity.empty() &&
+             !valid_native_port_sha256_identity(
+                 hook.provider_implementation_identity)) ||
             !hook_addresses.insert(hook.guest_address).second ||
             hook.symbol == definition.bootstrap.symbol ||
             !hook_symbols.insert(hook.symbol).second)
@@ -467,6 +549,137 @@ void validate_native_port_definition(
                 static_cast<std::uint64_t>(hook->guest_address) +
                     hook->covered_size)
             invalid_definition("hook-hardware-resolution");
+    }
+
+    if (!valid_provider_semantic_coverage(
+            definition.provider_semantic_coverage))
+        invalid_definition("provider-semantic-coverage");
+    if (definition.provider_semantic_contracts.size() >
+        native_port_provider_semantics_maximum_contracts)
+        invalid_definition("provider-semantic-contract-count");
+    std::set<std::uint32_t> provider_semantic_hooks;
+    for (const auto& contract : definition.provider_semantic_contracts) {
+        if (contract.contract_version !=
+                native_port_provider_semantics_contract_version ||
+            contract.hook_guest_address == 0u ||
+            (contract.hook_guest_address & 1u) != 0u ||
+            !valid_native_port_link_symbol(contract.provider_symbol) ||
+            !valid_native_port_sha256_identity(contract.semantic_identity) ||
+            (contract.authoritative &&
+             (!valid_native_port_sha256_identity(
+                   contract.expected_owner_semantic_identity) ||
+              !valid_native_port_sha256_identity(
+                   contract.provider_implementation_identity))) ||
+            !provider_semantic_hooks.insert(contract.hook_guest_address)
+                 .second ||
+            contract.guards.size() >
+                native_port_provider_semantics_maximum_guards ||
+            contract.effects.empty() ||
+            contract.effects.size() >
+                native_port_provider_semantics_maximum_effects ||
+            !valid_provider_semantic_return_action(contract.result.action) ||
+            contract.result.gpr_write_mask > 0xFFFFu)
+            invalid_definition("provider-semantic-contract");
+
+        const auto hook = std::ranges::find_if(
+            definition.hooks,
+            [&](const auto& candidate) {
+                return candidate.guest_address ==
+                       contract.hook_guest_address;
+            });
+        if (hook == definition.hooks.end() ||
+            hook->symbol != contract.provider_symbol ||
+            hook->provider_implementation_identity !=
+                contract.provider_implementation_identity ||
+            (contract.authoritative &&
+             (!native_port_hook_closes_product_contract(hook->requirement) ||
+              hook->original_policy !=
+                  NativePortHookOriginalPolicy::ReplacesOriginal)) ||
+            (contract.authoritative &&
+             contract.result.action ==
+                 NativePortProviderReturnAction::ContinueOriginal))
+            invalid_definition("provider-semantic-binding");
+
+        for (std::size_t index = 0u; index < contract.guards.size(); ++index) {
+            const auto& guard = contract.guards[index];
+            if (guard.order != index ||
+                !valid_provider_semantic_text(guard.expression, true) ||
+                !valid_provider_semantic_text(guard.path_identity, true))
+                invalid_definition("provider-semantic-guard");
+        }
+
+        for (std::size_t index = 0u; index < contract.effects.size(); ++index) {
+            const auto& effect = contract.effects[index];
+            if (effect.order != index ||
+                !valid_provider_semantic_operation(effect.operation) ||
+                !valid_provider_semantic_resource_kind(effect.resource_kind) ||
+                !valid_provider_semantic_width(effect.width) ||
+                !valid_provider_semantic_text(effect.region, true) ||
+                !valid_provider_semantic_text(effect.resource, true) ||
+                !valid_provider_semantic_text(effect.register_name, false) ||
+                !valid_provider_semantic_text(
+                    effect.address_expression,
+                    !effect.canonical_address_known) ||
+                !valid_provider_semantic_text(effect.value_expression, false) ||
+                !valid_provider_semantic_text(effect.result_expression, false) ||
+                !valid_provider_semantic_text(effect.path_identity, true))
+                invalid_definition("provider-semantic-effect");
+
+            switch (effect.operation) {
+            case NativePortProviderOperation::Read:
+                if (effect.result_expression.empty() ||
+                    effect.write_mask != 0u || effect.clear_mask != 0u)
+                    invalid_definition("provider-semantic-read");
+                break;
+            case NativePortProviderOperation::Write:
+                if (effect.value_expression.empty() ||
+                    effect.clear_mask != 0u)
+                    invalid_definition("provider-semantic-write");
+                break;
+            case NativePortProviderOperation::ReadModifyWrite:
+                if (effect.value_expression.empty() ||
+                    effect.result_expression.empty() ||
+                    effect.write_mask == 0u)
+                    invalid_definition("provider-semantic-rmw");
+                break;
+            case NativePortProviderOperation::AckClear:
+                if (effect.clear_mask == 0u && effect.write_mask == 0u)
+                    invalid_definition("provider-semantic-ack-clear");
+                break;
+            case NativePortProviderOperation::Wait:
+                if (contract.guards.empty() ||
+                    effect.result_expression.empty())
+                    invalid_definition("provider-semantic-wait");
+                break;
+            case NativePortProviderOperation::Interrupt:
+                if (effect.result_expression.empty())
+                    invalid_definition("provider-semantic-interrupt");
+                break;
+            case NativePortProviderOperation::Fifo:
+                if (effect.value_expression.empty() &&
+                    effect.result_expression.empty())
+                    invalid_definition("provider-semantic-fifo");
+                break;
+            }
+        }
+
+        if (!valid_provider_semantic_text(
+                contract.result.target_expression, false) ||
+            !valid_provider_semantic_text(
+                contract.result.error_expression, false) ||
+            !valid_provider_semantic_text(
+                contract.result.cpu_state_expression, false) ||
+            !valid_provider_semantic_text(
+                contract.result.title_state_expression, false) ||
+            (contract.result.action == NativePortProviderReturnAction::Jump &&
+             contract.result.target_expression.empty()) ||
+            (contract.result.action == NativePortProviderReturnAction::Abort &&
+             contract.result.error_expression.empty()) ||
+            ((contract.result.action ==
+                  NativePortProviderReturnAction::ContinueOriginal ||
+              contract.result.action == NativePortProviderReturnAction::Return) &&
+             !contract.result.target_expression.empty()))
+            invalid_definition("provider-semantic-result");
     }
 }
 

@@ -188,6 +188,12 @@ struct NativeDiscAnalysisSummary {
     std::size_t native_resume_entries = 0u;
     std::size_t known_hardware_sites = 0u;
     std::size_t native_hardware_gaps = 0u;
+    std::size_t provider_semantic_contracts = 0u;
+    std::size_t provider_semantic_summaries = 0u;
+    std::size_t provider_semantic_matches = 0u;
+    std::size_t provider_semantic_misses = 0u;
+    std::size_t provider_semantic_legacy_admissions = 0u;
+    bool provider_semantic_coverage_required = false;
     std::size_t sdk_provider_candidates = 0u;
     bool guarded_inventory_complete = false;
     bool native_hardware_closure_complete = false;

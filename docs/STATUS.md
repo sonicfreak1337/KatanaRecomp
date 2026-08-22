@@ -32,8 +32,39 @@ konkret gebrochen, widerspruechlich oder zahlenmaessig falsch sind.
 
 ## Aktueller Bring-up-Stand
 
-Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `59`, Backend-
+Der autoritative Sonic-Run 50 endete am 22. August 2026 nach `850478 ms`
+Wrapper- beziehungsweise `838777 ms` Analyzerzeit erfolgreich. Er
+publizierte sein `95.530.766` Byte grosses Analysearchiv vollstaendig in
+beide bounded Pending-Slots und danach als autoritative Generation. Der
+ISTERR-Pilot lieferte genau einen Providervertrag, ein vollstaendiges
+Owner-Summary, einen Match und keinen Miss. Gegen Run 48 blieben
+Primary/Combined/Module/Root/Hardware-Gap- und Frontier-Closure unveraendert;
+die verbindliche Ausgangsclosure bleibt deshalb `89.888074102663 %`.
+
+Run 49b war zuvor nach `961572 ms` erst am finalen Pending-Writer an einem
+262 Zeichen langen Windows-Temp-Pfad gescheitert. Dieser P0 ist generisch
+geschlossen: Analyse-Temp- und Rollbacknamen sind kurz und
+zielnamenunabhaengig; Ausgabe, Ledger und beide Pending-Slots werden unter
+dem Analyse-Lock vor der teuren Analyse real vorgeprueft. Zusaetzlich duerfen
+Sonic-Analyse und -Export keine versionierten `runXX-*`-Eingabekopien mehr
+verwenden. Die privaten Authoring-Tools erzeugen kanonische `current`-
+Artefakte, deren Provenance aktuelle Source-, Generator-, Payload- und
+Artefakt-SHA-256 bindet; unmittelbar vor Prozessstart werden alle Identitaeten
+erneut geprueft und als Run-Eingabemanifest gespeichert. Eine veraltete oder
+waehrend des Preflights veraenderte Datei beendet den Lauf vor der Analyse.
+
+Source-Vertragsstand: Runtime-ABI `117`, Analyzer-ABI `63`, Backend-
 Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil `23`.
+Der aktuelle Native-Port-Vertrag verwendet `NativePortDefinition` `11`,
+`NativePortArtifact` `11` und Hardware-Closure `v8`. Die neue
+fail-closed Beweisschicht vergleicht `OwnerSemanticSummary` mit einem
+`NativeProviderSemanticContract` (Runtime-Typ
+`NativePortProviderSemanticContract`): eine exakt identity-bound Ownerfunktion
+liefert geschlossene CFG/SCC-, Guard- und Effektsemantik samt vollständiger
+Ergebnisprojektion; der Provider bindet Hookadresse, Symbol, Owner-
+Semantikidentitaet und getrennte Implementierungsidentitaet. Fehlt eine
+Identitaet, ein Owner-/Provider-Effekt, ein Guard oder ein Resultat, bleibt der
+Replacement-Hook als Gap offen und die Closure fail-closed.
 Der neue agentische Analyseworkflow mit Materialization-World, Frontier-
 Ledger und identity-bound Analysecheckpoint ist produktnah belegt.
 `analyze-port --resume` revalidiert die aktuelle GDI, Definitionen, Payloads,
@@ -223,7 +254,8 @@ steht ohne anwesenden Nutzer noch aus.
 Das installierte Produkt-SDK exportiert nur `KatanaRecomp::aot_runtime`,
 `KatanaRecomp::native_port_runtime` und die explizite native
 Produktheader-Allowlist; der historische Dreamcast-Gerätepfad ist
-nur ein internes, nicht installierbares Diagnoseorakel und kein Exportprofil.
+ausschliesslich ein internes, nicht installierbares Offline-Orakel und wird
+nie in Produktlink oder Produktruntime verwendet.
 Profilvertrag `14`, Portprojektvertrag `91` und der Post-Link-Audit sperren
 ARM7/SkyEmu, AICA, PVR/TA, ASIC, GD-ROM, Maple und Interpreterbestandteile.
 
@@ -239,7 +271,7 @@ Bring-up-Schalter gilt nur bei unvollstaendiger Closure.
 
 `KR-5001` ist source-seitig abgeschlossen: Die deterministische
 `metadata/native-hook-requirements.json`-Karte und Hardware-Closure Schema
-`v2` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
+`v8` verlangen exakte Function-/Instruction-Replacement-Proofs. Bekannte
 Hardware- und unbekannte Instruktionsstellen bleiben hookpflichtig;
 range-gepruefte Native-Memory-Zugriffe enden ausserhalb typisiert, und
 `MemoryAccessError`/Native-Dispatch tragen `GuestInstructionOrigin` auch ohne
