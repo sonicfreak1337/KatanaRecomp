@@ -72,8 +72,11 @@ endif()
 if(NOT "${KATANA_SOURCE_IDENTITY_STATUS}" STREQUAL "")
     message(
         FATAL_ERROR
-        "External SH-4 evidence requires a clean Katana index and worktree. "
-        "Commit or remove all source changes before building the SST runner."
+        "This build tree was configured for trusted external SH-4 evidence, "
+        "but the Katana worktree is now dirty. Reconfigure the same build "
+        "tree before compiling so a local development binary embeds the "
+        "untrusted source sentinel. Commit only after that dirty build is "
+        "reviewed and successful."
     )
 endif()
 

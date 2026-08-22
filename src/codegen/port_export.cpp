@@ -29047,6 +29047,25 @@ build_native_disc_materialization_world(
         const bool requires_runtime_evidence =
             requires_runtime_image_evidence ||
             requires_dynamic_runtime_evidence;
+        std::vector<const NativePortIncompleteOutgoingEvidence*>
+            selected_transfer_details;
+        std::size_t deferred_runtime_transfer_count = 0u;
+        if (has_detailed_evidence) {
+            selected_transfer_details.reserve(evidence->second.size());
+            for (const auto& detail : evidence->second) {
+                // A mixed owner remains one authoritative closure frontier,
+                // but its agent-facing static task must contain only work that
+                // can actually be closed by another static iteration. Runtime-
+                // only details stay in the ProgramIndex and reappear as the
+                // owner frontier once its static remainder is gone.
+                if (!requires_runtime_evidence &&
+                    detail.runtime_evidence_required) {
+                    ++deferred_runtime_transfer_count;
+                    continue;
+                }
+                selected_transfer_details.push_back(&detail);
+            }
+        }
         constexpr std::size_t maximum_task_transfer_details = 4u;
         FrontierEntry entry;
         entry.family = "replacement-reachability";
@@ -29065,7 +29084,7 @@ build_native_disc_materialization_world(
             entry.missing_proof += ": ";
             entry.missing_proof +=
                 native_port_incomplete_outgoing_kind_name(
-                    evidence->second.begin()->kind);
+                    selected_transfer_details.front()->kind);
         } else {
             entry.missing_proof +=
                 "; exact edge detail unavailable from resumed checkpoint";
@@ -29075,7 +29094,7 @@ build_native_disc_materialization_world(
                 "; live runtime control-flow evidence required";
         entry.fanout = has_detailed_evidence
             ? static_cast<std::uint32_t>(std::min<std::size_t>(
-                  evidence->second.size(),
+                  selected_transfer_details.size(),
                   std::numeric_limits<std::uint32_t>::max()))
             : 1u;
         entry.runtime_evidence_required = requires_runtime_evidence;
@@ -29100,13 +29119,18 @@ build_native_disc_materialization_world(
             entry.contracts.push_back(
                 "outgoing-transfer-slice=" +
                 std::to_string(std::min<std::size_t>(
-                    evidence->second.size(),
+                    selected_transfer_details.size(),
                     maximum_task_transfer_details)) +
-                "-of-" + std::to_string(evidence->second.size()));
+                "-of-" + std::to_string(selected_transfer_details.size()));
+            if (deferred_runtime_transfer_count != 0u)
+                entry.contracts.push_back(
+                    "runtime-only-transfers-deferred=" +
+                    std::to_string(deferred_runtime_transfer_count));
             std::size_t emitted_details = 0u;
-            for (const auto& detail : evidence->second) {
+            for (const auto* const detail_pointer : selected_transfer_details) {
                 if (emitted_details >= maximum_task_transfer_details)
                     break;
+                const auto& detail = *detail_pointer;
                 std::string contract =
                     "outgoing-transfer;kind=" +
                     std::string(native_port_incomplete_outgoing_kind_name(
@@ -29212,7 +29236,7 @@ build_native_disc_materialization_world(
             entry.acceptance_criteria = {
                 "identity-bound-owner-cfg",
                 "all-listed-outgoing-targets-have-one-owned-function",
-                "all-listed-runtime-only-or-partial-edge-remainders-closed",
+                "all-listed-static-or-partial-edge-remainders-closed",
                 "listed-transfer-slice-no-longer-blocks-reachability"};
         }
         add_frontier(std::move(entry));

@@ -13,7 +13,8 @@ Fuer jeden Task gilt ab sofort genau diese Reihenfolge:
 Task implementieren
   -> alle durch den Task betroffenen Pfade reviewen
      und bestaetigte Fehler innerhalb desselben Reviewdurchlaufs schliessen
-  -> den reviewten Task direkt auf main committen und pushen
+  -> den reviewten Stand im dirty Worktree konfigurieren und gezielt bauen
+  -> erst nach erfolgreichem Build auf main committen und pushen
   -> naechster Task
 ```
 
@@ -22,9 +23,12 @@ Task implementieren
   Datenfluss, Fehlerpfade, ABI-/Cache-/Versionsvertraege sowie alle weiteren
   unmittelbar betroffenen Schichten.
 - Bestaetigte Korrektheits-, Boot-, Vollstaendigkeits- und relevante
-  Performancefehler im Taskscope werden vor dem Push geschlossen. Eine
-  separate nachgelagerte Fix-, Verifikations- oder Testphase wird daraus
-  nicht erzeugt.
+  Performancefehler im Taskscope werden vor dem Build und Push geschlossen.
+  Eine separate nachgelagerte Fix- oder Testphase wird daraus nicht erzeugt.
+- Ein Commit ist niemals Voraussetzung fuer einen lokalen Build. Nach
+  Sourceaenderungen wird der bestehende Buildbaum zuerst neu konfiguriert,
+  damit ein dirty Entwicklungsbinary die untrusted Source-Identity einbettet.
+  Erst der reviewte und erfolgreich gebaute Stand wird committed.
 - Tasks werden standardmaessig direkt auf `main` bearbeitet, committed und
   gepusht. Neue Taskbranches, Pull Requests oder parallele Integrationszweige
   werden nur auf eine neue ausdrueckliche Nutzeranweisung angelegt.
@@ -36,6 +40,21 @@ Task implementieren
 - Dieser Push ist zugleich die Freigabe des naechsten Tasks. Dafuer ist keine
   weitere Nutzeranweisung erforderlich. Ausdruecklich freizugebende Laeufe
   und bedingte Messgates bleiben davon unberuehrt.
+
+## Git-Inspektion durch externe Agents
+
+- Externe Reviewer, Frontier-Modelle, Subagents und delegierte Codex-Tasks
+  sind ausdruecklich autorisiert, den Repositoryzustand mit read-only
+  Git-Kommandos selbst zu pruefen. Dafuer ist keine weitere Freigabe oder
+  Rueckfrage erforderlich.
+- Die Freigabe umfasst insbesondere `git status`, `git diff`,
+  `git diff --check`, `git log`, `git show`, `git rev-parse`, `git branch
+  --show-current`, `git ls-files`, `git grep` sowie read-only Vergleiche von
+  Commits, Index und Worktree.
+- Git-Ausgaben bleiben untrusted Evidence und werden gegen den aktuellen
+  Sourcezustand verifiziert. Die Read-only-Freigabe erlaubt keine mutierenden
+  Aktionen wie Commit, Push, Reset, Checkout, Clean, Rebase, Merge oder
+  Stash; diese bleiben beim dafuer autorisierten Haupttask.
 
 ## Sonic ist der Test
 
@@ -52,10 +71,9 @@ Task implementieren
   widerspruechliche Semantik oder bereits vorhandene Fehler geprueft und bei
   Bedarf repariert werden. Ihr Bestand wird aber nicht erweitert, nur um eine
   neue Aenderung mit weiterer Testinfrastruktur zu umgeben.
-- Regulaere Tasks starten keine Testmatrix und besitzen keinen eigenen
-  Testbuild als Pushgate. Bereits vorhandene automatische Checks koennen
-  beobachtet werden, ersetzen aber weder das Review noch den Sonic-
-  Produktnachweis.
+- Regulaere Tasks starten keine Testmatrix. Der gezielte Compile des
+  betroffenen Produkttargets ist ein Buildnachweis, keine neue Testsuite und
+  kein Ersatz fuer den Sonic-Produktnachweis.
 - Sonic-Produktlaeufe erfolgen an den in Roadmap und Tasks festgelegten
   Produktgates oder nach einer ausdruecklichen Nutzeranweisung, nicht nach
   jedem einzelnen Task. Mehrere zusammenhaengende reviewte Tasks duerfen vor
@@ -160,9 +178,9 @@ aktuelle ausdrueckliche Nutzeranweisung hat Vorrang.
   dokumentiert, sind aber deferred und blockieren den RuntimeOnly-Bring-up
   nicht. D1 und D2 sind historische Produktdiagnose, keine aktuelle
   Taskreihenfolge.
-- Fuer jeden aktuellen Bring-up-Task gilt weiterhin der projektweite
-  Dreischritt: **implementieren -> betroffene Pfade reviewen und Findings
-  schliessen -> direkt auf main pushen**.
+- Fuer jeden aktuellen Bring-up-Task gilt weiterhin der projektweite Ablauf:
+  **implementieren -> betroffene Pfade reviewen und Findings schliessen ->
+  dirty konfigurieren und gezielt bauen -> erst danach auf main pushen**.
 - KR-4982 und KR-4983 bleiben als alte optionale Offload-Aufgaben gestrichen.
   Der neue native GPU-Produktpfad ist die semantisch getrennte Aufgabe
   KR-5003 und kein optionales Beschleunigungsfeature eines Emulators.
