@@ -2733,7 +2733,7 @@ def main() -> int:
                 > 0
                 and presentation["recursive"]["public_sort_items"] > 0
                 and presentation["recursive"]["public_materialized_items"] > 0
-                and presentation["recursive"]["terminal_epoch_fold_items"] > 0
+                and presentation["recursive"]["terminal_epoch_fold_items"] == 0
                 and presentation["result_index_copy_items"] > 0
                 and presentation["result_index_sort_items"] > 0
                 and presentation["result_index_materialized_items"] > 0

@@ -1998,51 +1998,8 @@ RecursiveAnalysisResult RecursiveAnalysisSession::materialize(
     if (epoch->image_revision != image.analysis_revision())
         throw std::invalid_argument(
             "Recursive-Analyse-Snapshot gehoert zu einer veralteten Image-Revision.");
-    std::vector<const SessionEpoch*> chain;
-    for (auto current = epoch; current != nullptr;
-         current = current->base.get())
-        chain.push_back(current);
-    std::reverse(chain.begin(), chain.end());
     RecursiveAnalysisPhysicalWork materialize_work;
     materialize_work.public_materializations = 1u;
-    materialize_work.public_sort_items += chain.size();
-    std::map<std::uint32_t, RecursiveAnalysisSeedContract> seeds;
-    std::map<std::uint32_t, katana::sh4::DisassemblyLine> lines;
-    std::map<std::uint32_t, FunctionCandidate> functions;
-    std::map<SessionContextKey, ContextualInstruction> contexts;
-    std::map<SessionDiagnosticKey, AnalysisDiagnostic> diagnostics;
-    std::set<std::uint32_t> delay_slots;
-    std::set<std::uint32_t> proven;
-    std::map<std::uint32_t, bool> candidate_membership;
-    for (const auto* layer : chain) {
-        const auto copied_items =
-            layer->seed_updates.size() + layer->line_updates.size() +
-            layer->function_updates.size() + layer->context_updates.size() +
-            layer->diagnostic_updates.size() +
-            layer->delay_slot_additions.size() +
-            layer->proven_additions.size() +
-            layer->candidate_membership_updates.size();
-        materialize_work.public_baseline_copy_items += copied_items;
-        materialize_work.public_sort_items += copied_items;
-        materialize_work.terminal_epoch_fold_items += copied_items;
-        for (const auto& [key, value] : layer->seed_updates)
-            seeds.insert_or_assign(key, value);
-        for (const auto& [key, value] : layer->line_updates)
-            lines.insert_or_assign(key, value);
-        for (const auto& [key, value] : layer->function_updates)
-            functions.insert_or_assign(key, value);
-        for (const auto& [key, value] : layer->context_updates)
-            contexts.insert_or_assign(key, value);
-        for (const auto& [key, value] : layer->diagnostic_updates)
-            diagnostics.insert_or_assign(key, value);
-        delay_slots.insert(layer->delay_slot_additions.begin(),
-                           layer->delay_slot_additions.end());
-        proven.insert(layer->proven_additions.begin(),
-                      layer->proven_additions.end());
-        for (const auto& [key, value] :
-             layer->candidate_membership_updates)
-            candidate_membership[key] = value;
-    }
     RecursiveAnalysisResult result;
     result.retained_baseline_contract_version =
         RecursiveAnalysisResult::baseline_contract_version;
@@ -2052,32 +2009,126 @@ RecursiveAnalysisResult RecursiveAnalysisSession::materialize(
     result.baseline_status = epoch->baseline_status;
     result.processed_work_items = epoch->processed_work_items;
     result.reused_contexts = epoch->reused_contexts;
-    for (auto& [address, value] : seeds) {
-        static_cast<void>(address);
-        result.seed_contract.push_back(std::move(value));
-    }
-    for (auto& [address, value] : lines) {
-        static_cast<void>(address);
-        result.instructions.push_back(std::move(value));
-    }
-    result.proven_instruction_addresses.assign(proven.begin(), proven.end());
-    for (const auto& [address, member] : candidate_membership)
-        if (member && !proven.contains(address))
-            result.guarded_candidate_instruction_addresses.push_back(address);
-    for (auto& [key, value] : contexts) {
-        static_cast<void>(key);
-        result.contextual_instructions.push_back(std::move(value));
-    }
-    for (auto& [address, value] : functions) {
-        static_cast<void>(address);
-        result.functions.push_back(std::move(value));
-    }
-    for (auto& [key, value] : diagnostics) {
-        static_cast<void>(key);
-        result.diagnostics.push_back(std::move(value));
+    std::set<std::uint32_t> folded_delay_slots;
+    const std::set<std::uint32_t>* delay_slots = nullptr;
+    if (snapshot.epoch_data_ == impl_->published.get()) {
+        // A published epoch is committed only after every flattened index has
+        // been updated.  Materializing that exact authoritative snapshot from
+        // those ordered indices avoids folding the complete retained epoch
+        // chain again for every root-delta analysis.  Older or unpublished
+        // snapshots retain the independent chain fold below.
+        materialize_work.public_baseline_copy_items +=
+            impl_->seed_index.size() + impl_->line_index.size() +
+            impl_->function_index.size() + impl_->context_index.size() +
+            impl_->diagnostic_index.size() + impl_->delay_slot_index.size() +
+            impl_->proven_index.size() +
+            impl_->candidate_membership_index.size();
+        result.seed_contract.reserve(impl_->seed_index.size());
+        for (const auto& [address, value] : impl_->seed_index) {
+            static_cast<void>(address);
+            result.seed_contract.push_back(value);
+        }
+        result.instructions.reserve(impl_->line_index.size());
+        for (const auto& [address, value] : impl_->line_index) {
+            static_cast<void>(address);
+            result.instructions.push_back(value);
+        }
+        result.proven_instruction_addresses.assign(
+            impl_->proven_index.begin(), impl_->proven_index.end());
+        for (const auto& [address, member] :
+             impl_->candidate_membership_index)
+            if (member && !impl_->proven_index.contains(address))
+                result.guarded_candidate_instruction_addresses.push_back(
+                    address);
+        result.contextual_instructions.reserve(impl_->context_index.size());
+        for (const auto& [key, value] : impl_->context_index) {
+            static_cast<void>(key);
+            result.contextual_instructions.push_back(value);
+        }
+        result.functions.reserve(impl_->function_index.size());
+        for (const auto& [address, value] : impl_->function_index) {
+            static_cast<void>(address);
+            result.functions.push_back(value);
+        }
+        result.diagnostics.reserve(impl_->diagnostic_index.size());
+        for (const auto& [key, value] : impl_->diagnostic_index) {
+            static_cast<void>(key);
+            result.diagnostics.push_back(value);
+        }
+        delay_slots = &impl_->delay_slot_index;
+    } else {
+        std::vector<const SessionEpoch*> chain;
+        for (auto current = epoch; current != nullptr;
+             current = current->base.get())
+            chain.push_back(current);
+        std::reverse(chain.begin(), chain.end());
+        materialize_work.public_sort_items += chain.size();
+        std::map<std::uint32_t, RecursiveAnalysisSeedContract> seeds;
+        std::map<std::uint32_t, katana::sh4::DisassemblyLine> lines;
+        std::map<std::uint32_t, FunctionCandidate> functions;
+        std::map<SessionContextKey, ContextualInstruction> contexts;
+        std::map<SessionDiagnosticKey, AnalysisDiagnostic> diagnostics;
+        std::set<std::uint32_t> proven;
+        std::map<std::uint32_t, bool> candidate_membership;
+        for (const auto* layer : chain) {
+            const auto copied_items =
+                layer->seed_updates.size() + layer->line_updates.size() +
+                layer->function_updates.size() +
+                layer->context_updates.size() +
+                layer->diagnostic_updates.size() +
+                layer->delay_slot_additions.size() +
+                layer->proven_additions.size() +
+                layer->candidate_membership_updates.size();
+            materialize_work.public_baseline_copy_items += copied_items;
+            materialize_work.public_sort_items += copied_items;
+            materialize_work.terminal_epoch_fold_items += copied_items;
+            for (const auto& [key, value] : layer->seed_updates)
+                seeds.insert_or_assign(key, value);
+            for (const auto& [key, value] : layer->line_updates)
+                lines.insert_or_assign(key, value);
+            for (const auto& [key, value] : layer->function_updates)
+                functions.insert_or_assign(key, value);
+            for (const auto& [key, value] : layer->context_updates)
+                contexts.insert_or_assign(key, value);
+            for (const auto& [key, value] : layer->diagnostic_updates)
+                diagnostics.insert_or_assign(key, value);
+            folded_delay_slots.insert(layer->delay_slot_additions.begin(),
+                                      layer->delay_slot_additions.end());
+            proven.insert(layer->proven_additions.begin(),
+                          layer->proven_additions.end());
+            for (const auto& [key, value] :
+                 layer->candidate_membership_updates)
+                candidate_membership[key] = value;
+        }
+        for (auto& [address, value] : seeds) {
+            static_cast<void>(address);
+            result.seed_contract.push_back(std::move(value));
+        }
+        for (auto& [address, value] : lines) {
+            static_cast<void>(address);
+            result.instructions.push_back(std::move(value));
+        }
+        result.proven_instruction_addresses.assign(proven.begin(), proven.end());
+        for (const auto& [address, member] : candidate_membership)
+            if (member && !proven.contains(address))
+                result.guarded_candidate_instruction_addresses.push_back(
+                    address);
+        for (auto& [key, value] : contexts) {
+            static_cast<void>(key);
+            result.contextual_instructions.push_back(std::move(value));
+        }
+        for (auto& [address, value] : functions) {
+            static_cast<void>(address);
+            result.functions.push_back(std::move(value));
+        }
+        for (auto& [key, value] : diagnostics) {
+            static_cast<void>(key);
+            result.diagnostics.push_back(std::move(value));
+        }
+        delay_slots = &folded_delay_slots;
     }
     for (const auto& candidate : result.functions) {
-        if (!delay_slots.contains(candidate.address)) continue;
+        if (!delay_slots->contains(candidate.address)) continue;
         result.conflicts.push_back(
             {candidate.address, 2u,
              AnalysisConflictKind::FunctionEntryInDelaySlot});

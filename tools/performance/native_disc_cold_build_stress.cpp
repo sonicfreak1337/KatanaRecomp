@@ -4014,7 +4014,7 @@ struct CfaDeltaScaleGate final {
                 presentation.recursive.public_baseline_copy_items != 0u &&
                 presentation.recursive.public_sort_items != 0u &&
                 presentation.recursive.public_materialized_items != 0u &&
-                presentation.recursive.terminal_epoch_fold_items != 0u &&
+                presentation.recursive.terminal_epoch_fold_items == 0u &&
                 presentation.result_index_copy_items != 0u &&
                 presentation.result_index_sort_items != 0u &&
                 presentation.result_index_materialized_items != 0u &&
@@ -5050,7 +5050,11 @@ int main(const int argc, char** argv) {
                           << '\n' << std::flush;
             },
             true);
-        structured_cfa_progress.complete(analysis.fixpoint_iterations);
+        structured_cfa_progress.complete(
+            analysis.fixpoint_iterations,
+            analysis.termination_reason ==
+                    katana::analysis::ControlFlowAnalysisTerminationReason::None &&
+                !analysis.function_budget_exhausted);
         const auto cfa_elapsed = std::chrono::duration_cast<
             std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - cfa_started).count();
