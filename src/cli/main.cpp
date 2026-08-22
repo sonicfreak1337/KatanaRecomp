@@ -12268,6 +12268,21 @@ std::uint64_t parse_agent_stable_id(const std::string_view text) {
     return value;
 }
 
+inline constexpr std::size_t default_agent_task_count = 21u;
+inline constexpr std::size_t maximum_agent_task_count = 64u;
+
+std::size_t parse_agent_task_count(const std::string_view text) {
+    std::size_t value = 0u;
+    const auto parsed = std::from_chars(
+        text.data(), text.data() + text.size(), value, 10);
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != text.data() + text.size() || value == 0u ||
+        value > maximum_agent_task_count)
+        throw std::invalid_argument(
+            "Agenten-Task-Anzahl muss zwischen 1 und 64 liegen.");
+    return value;
+}
+
 void write_agent_string_vector_json(
     std::ostream& output,
     const std::vector<std::string>& values) {
@@ -12350,12 +12365,13 @@ void write_agent_frontier_json(
     output << '}';
 }
 
-int next_analysis_task_cli(const std::filesystem::path& artifact) {
+int next_analysis_task_cli(const std::filesystem::path& artifact,
+                           const std::size_t requested_task_count) {
     const auto world = load_agent_world(artifact);
     // Expose a broad deterministic, conflict-checked candidate pool. The
     // orchestrator still triages proof quality, effort and expected closure
     // before assigning a bounded subset to concurrent writers.
-    std::array<katana::agent::AgentTaskView, 21u> tasks{};
+    std::vector<katana::agent::AgentTaskView> tasks(requested_task_count);
     std::size_t task_count = 0u;
     const bool has_frontier = katana::agent::next_agent_tasks(
         world, tasks, task_count);
@@ -12659,7 +12675,8 @@ void print_usage(std::ostream& output) {
               "[--import-runtime-frontier <Produktlog>] "
               "[dieselben Analyse-/Payload-/Latent-Optionen wie port]\n"
            << "  katana-recomp next-analysis-task --analysis-artifact "
-              "<materialization-world.katana-world> --format agent-json\n"
+              "<materialization-world.katana-world> --format agent-json "
+              "[--task-count <1..64>]\n"
            << "  katana-recomp explain --analysis-artifact "
               "<materialization-world.katana-world> --frontier <ID> "
               "--format agent-json\n"
@@ -13291,6 +13308,8 @@ int main(const int argc, char* argv[]) {
             std::string_view(argv[1]) == "next-analysis-task") {
             std::optional<std::filesystem::path> artifact;
             std::optional<std::string_view> format;
+            std::size_t task_count = default_agent_task_count;
+            bool task_count_set = false;
             if (((argc - 2) & 1) != 0)
                 throw std::invalid_argument(
                     "next-analysis-task erwartet Optionspaare.");
@@ -13300,6 +13319,10 @@ int main(const int argc, char* argv[]) {
                     artifact = std::filesystem::path(argv[index + 1]);
                 else if (option == "--format" && !format)
                     format = std::string_view(argv[index + 1]);
+                else if (option == "--task-count" && !task_count_set) {
+                    task_count = parse_agent_task_count(argv[index + 1]);
+                    task_count_set = true;
+                }
                 else
                     throw std::invalid_argument(
                         "next-analysis-task erhielt eine unbekannte oder "
@@ -13310,7 +13333,7 @@ int main(const int argc, char* argv[]) {
                 throw std::invalid_argument(
                     "next-analysis-task braucht --analysis-artifact und "
                     "--format agent-json.");
-            return next_analysis_task_cli(*artifact);
+            return next_analysis_task_cli(*artifact, task_count);
         }
 
         if (argc >= 2 && std::string_view(argv[1]) == "explain") {

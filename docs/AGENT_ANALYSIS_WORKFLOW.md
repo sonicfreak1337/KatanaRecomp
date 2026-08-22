@@ -121,10 +121,10 @@ keine vorgetaeuschte statische Closure. Proof-/Completeness-Verlust und der
 umgekehrte Weg vom Runtime- in den statischen Kanal bleiben Regressionen.
 
 `next-analysis-task` Schema 2 behaelt den hoechst priorisierten Primary-Task
-und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu neun
-konfliktgeprueften Frontiers. Die Ausgabe ist fuer drei
-Orchestrierungswellen mit jeweils hoechstens drei gleichzeitig aktiven
-Implementierungen ausgelegt. Die Reihenfolge bleibt eine deterministische
+und liefert standardmaessig einen bounded `tasks`-Batch mit bis zu 21
+konfliktgeprueften Frontiers. Fuer zentrale ROI-Triage kann der Orchestrator
+mit `--task-count <1..64>` einen groesseren, weiterhin deterministischen und
+konfliktgeprueften Pool anfordern. Die Reihenfolge bleibt eine deterministische
 Artefaktordnung; der Hauptagent waehlt die Kandidaten bewusst aus und
 delegiert sie. Luna entscheidet weder ueber Prioritaet noch ueber Closure
 noch ueber den naechsten Analyseschritt. Nach dem Implementierungsblock
