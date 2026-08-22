@@ -2346,27 +2346,13 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
             katana::analysis::AnalysisDirectiveMode::Override;
     }
     overrides->source_path = "external-port-contract";
-    // apply_native_port_post_aot_view has already rebuilt this exact set from
-    // explicit roots, active images, callback tables and recognized Katana
-    // library handles.  Seed analysis from the bound post-image view itself
-    // so no external entry class can be accidentally omitted here.
-    const auto post_roots = image.entry_points();
-    for (const auto root : post_roots) {
-        std::uint32_t size = 0u;
-        if (game_project != nullptr) {
-            const auto boundary = std::find_if(
-                game_project->function_boundaries.begin(),
-                game_project->function_boundaries.end(),
-                [&](const auto& candidate) {
-                    return candidate.start == root &&
-                           game_project_metadata_is_active(
-                               native_port, candidate.image_id);
-                });
-            if (boundary != game_project->function_boundaries.end())
-                size = boundary->size;
-        }
-        overrides->functions.push_back({root, 0u, size});
-    }
+    // ExecutableImage::entry_points is the authoritative root lane. Do not
+    // duplicate that monotone set in AnalysisOverrides::functions: every
+    // cross-image root extension would otherwise look like a semantic
+    // override mutation and force ControlFlowAnalysisSession to discard its
+    // recursive/FVA epoch. Exact GameProject boundaries remain bound through
+    // function_boundaries, while callback-table targets remain independent
+    // function directives.
 
     for (const auto& continuation :
          native_port->bootstrap.post_aot_continuations) {
@@ -3713,19 +3699,28 @@ std::vector<CompositeCallbackBatchProof> composite_callback_batch_proofs(
             candidate.origins.begin(), candidate.origins.end(),
             katana::analysis::FunctionOrigin::UserOverride) !=
             candidate.origins.end();
+        const bool explicit_entry_point = std::find(
+            candidate.origins.begin(), candidate.origins.end(),
+            katana::analysis::FunctionOrigin::EntryPoint) !=
+            candidate.origins.end();
         const bool runtime_contract =
             candidate.evidence ==
                 katana::analysis::ControlFlowEvidence::GuardedPartial ||
             candidate.evidence ==
                 katana::analysis::ControlFlowEvidence::RuntimeOnly;
-        const bool authoritative_override =
-            explicit_override &&
+        // Native post-image roots are already committed explicitly through
+        // ExecutableImage::entry_points. Treat that provenance as the same
+        // composite-admission authority that the former duplicate function
+        // override supplied, without coupling root growth to the immutable
+        // AnalysisOverrides contract used by incremental CFA sessions.
+        const bool authoritative_root =
+            (explicit_override || explicit_entry_point) &&
             candidate.evidence !=
                 katana::analysis::ControlFlowEvidence::HintCandidate &&
             candidate.evidence !=
                 katana::analysis::ControlFlowEvidence::Unresolved;
         if ((runtime_provenance && runtime_contract) ||
-            authoritative_override)
+            authoritative_root)
             provenance_strong_candidates.insert(candidate.address);
     }
 
