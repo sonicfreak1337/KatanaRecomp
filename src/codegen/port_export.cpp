@@ -22276,6 +22276,15 @@ struct NativePortIncompleteOutgoingEvidence final {
     katana::analysis::ExactGuardRejectionReason exact_guard_rejection_reason =
         katana::analysis::ExactGuardRejectionReason::None;
     bool runtime_evidence_required = false;
+    bool target_is_materialized_function_entry = false;
+    bool target_is_recursive_function_entry = false;
+    bool target_is_guarded_entry = false;
+    bool target_is_entry_owned_by_source = false;
+    std::uint32_t target_block_entry_count = 0u;
+    std::uint32_t target_safe_resume_entry_count = 0u;
+    std::uint32_t target_instruction_owner_count = 0u;
+    std::uint32_t target_owner_count = 0u;
+    std::vector<std::uint32_t> target_owner_slice;
 
     auto operator<=>(const NativePortIncompleteOutgoingEvidence&) const =
         default;
@@ -22684,7 +22693,8 @@ NativePortProgramIndex build_native_port_program_index(
 
     const auto append_function_edge =
         [&](const std::uint32_t source_entry,
-            const std::uint32_t target_address) {
+            const std::uint32_t target_address,
+            const bool allow_internal_block) {
             // An exact function entry is already the canonical graph node.
             // Overlapping resume/function views may also own its first
             // instruction, but those materialization aliases do not make the
@@ -22693,6 +22703,25 @@ NativePortProgramIndex build_native_port_program_index(
                 index.outgoing_function_entries[source_entry].insert(
                     target_address);
                 return true;
+            }
+            // A proven jump into a block/resume entry already materialized by
+            // this exact source owner is an intra-function CFG edge. Other
+            // overlapping function views do not turn that local edge into an
+            // ambiguous inter-function transfer. Calls deliberately do not
+            // use this path: they still require a canonical unique callee.
+            if (allow_internal_block) {
+                if (const auto owners =
+                        index.entry_owners.find(target_address);
+                    owners != index.entry_owners.end() &&
+                    owners->second.contains(source_entry)) {
+                    // Keep the canonical reflexive edge already published by
+                    // prior ProgramIndex generations. It is reachability-
+                    // neutral, but preserving it makes local-block closure a
+                    // monotone refinement of the persisted positive graph.
+                    index.outgoing_function_entries[source_entry].insert(
+                        source_entry);
+                    return true;
+                }
             }
             std::set<std::uint32_t> target_owners;
             if (const auto owners =
@@ -22733,9 +22762,69 @@ NativePortProgramIndex build_native_port_program_index(
                         resolution_requires_runtime_evidence(resolution);
                 }
             }
+            if (target_address.has_value()) {
+                const auto target = *target_address;
+                detail.target_is_materialized_function_entry =
+                    index.functions_by_entry.contains(target);
+                detail.target_is_recursive_function_entry =
+                    index.function_entries.contains(target);
+                detail.target_is_guarded_entry =
+                    index.guarded_entries.contains(target);
+                if (const auto found = index.block_entry_counts.find(target);
+                    found != index.block_entry_counts.end())
+                    detail.target_block_entry_count =
+                        static_cast<std::uint32_t>(std::min<std::size_t>(
+                            found->second,
+                            std::numeric_limits<std::uint32_t>::max()));
+                if (const auto found =
+                        index.safe_resume_entry_counts.find(target);
+                    found != index.safe_resume_entry_counts.end())
+                    detail.target_safe_resume_entry_count =
+                        static_cast<std::uint32_t>(std::min<std::size_t>(
+                            found->second,
+                            std::numeric_limits<std::uint32_t>::max()));
+
+                std::set<std::uint32_t> target_owners;
+                if (const auto found = index.entry_owners.find(target);
+                    found != index.entry_owners.end()) {
+                    detail.target_is_entry_owned_by_source =
+                        found->second.contains(source_entry);
+                    target_owners.insert(
+                        found->second.begin(), found->second.end());
+                }
+                if (const auto found = index.instruction_owners.find(target);
+                    found != index.instruction_owners.end()) {
+                    detail.target_instruction_owner_count =
+                        static_cast<std::uint32_t>(std::min<std::size_t>(
+                            found->second.size(),
+                            std::numeric_limits<std::uint32_t>::max()));
+                    target_owners.insert(
+                        found->second.begin(), found->second.end());
+                }
+                detail.target_owner_count =
+                    static_cast<std::uint32_t>(std::min<std::size_t>(
+                        target_owners.size(),
+                        std::numeric_limits<std::uint32_t>::max()));
+                constexpr std::size_t maximum_target_owner_slice = 4u;
+                detail.target_owner_slice.reserve(std::min(
+                    target_owners.size(), maximum_target_owner_slice));
+                for (const auto owner : target_owners) {
+                    if (detail.target_owner_slice.size() >=
+                        maximum_target_owner_slice)
+                        break;
+                    detail.target_owner_slice.push_back(owner);
+                }
+            }
             index.incomplete_outgoing_evidence[source_entry].insert(
                 std::move(detail));
         };
+    std::set<std::uint32_t> jump_table_jump_dispatches;
+    for (const auto& table : analysis.jump_tables) {
+        if (table.resolved &&
+            table.dispatch_kind ==
+                katana::analysis::JumpTableDispatchKind::Jump)
+            jump_table_jump_dispatches.insert(table.dispatch_address);
+    }
     const auto block_control_address = [](const auto& block)
         -> std::optional<std::uint32_t> {
         if (block.instructions.empty()) return std::nullopt;
@@ -22757,7 +22846,7 @@ NativePortProgramIndex build_native_port_program_index(
                 local_addresses.insert(instruction.source_address);
         }
         for (const auto callee : function.direct_callees) {
-            if (!append_function_edge(function.entry_address, callee))
+            if (!append_function_edge(function.entry_address, callee, false))
                 mark_incomplete_outgoing(
                     function.entry_address,
                     NativePortIncompleteOutgoingKind::UnownedDirectCallee,
@@ -22772,7 +22861,8 @@ NativePortProgramIndex build_native_port_program_index(
                 if (local_addresses.contains(successor) &&
                     !index.functions_by_entry.contains(successor))
                     continue;
-                if (!append_function_edge(function.entry_address, successor))
+                if (!append_function_edge(
+                        function.entry_address, successor, false))
                     mark_incomplete_outgoing(
                         function.entry_address,
                         NativePortIncompleteOutgoingKind::UnownedCfgSuccessor,
@@ -22789,7 +22879,8 @@ NativePortProgramIndex build_native_port_program_index(
                      index.functions_by_entry.contains(
                          *instruction.target_address)) &&
                     !append_function_edge(function.entry_address,
-                                          *instruction.target_address))
+                                          *instruction.target_address,
+                                          false))
                     mark_incomplete_outgoing(
                         function.entry_address,
                         NativePortIncompleteOutgoingKind::
@@ -22800,7 +22891,8 @@ NativePortProgramIndex build_native_port_program_index(
                     if (!call && local_addresses.contains(target) &&
                         !index.functions_by_entry.contains(target))
                         continue;
-                    if (!append_function_edge(function.entry_address, target))
+                    if (!append_function_edge(
+                            function.entry_address, target, false))
                         mark_incomplete_outgoing(
                             function.entry_address,
                             NativePortIncompleteOutgoingKind::
@@ -22840,7 +22932,10 @@ NativePortProgramIndex build_native_port_program_index(
                     source,
                     NativePortIncompleteOutgoingKind::IncompleteAnalysisEdge,
                     edge.instruction_address, edge.target_address);
-            if (!append_function_edge(source, edge.target_address))
+            if (!append_function_edge(
+                    source, edge.target_address,
+                    edge.kind ==
+                        katana::analysis::ResolvedControlFlowKind::Jump))
                 mark_incomplete_outgoing(
                     source,
                     NativePortIncompleteOutgoingKind::
@@ -22857,7 +22952,13 @@ NativePortProgramIndex build_native_port_program_index(
             if (sources == index.instruction_owners.end()) continue;
             has_owned_source = true;
             for (const auto source : sources->second) {
-                if (!append_function_edge(source, fact.target_address))
+                const bool local_jump_table_entry =
+                    cause.kind == katana::analysis::ControlFlowAnalysisResult::
+                                      SeedCauseKind::JumpTableEntry &&
+                    jump_table_jump_dispatches.contains(
+                        *cause.source_address);
+                if (!append_function_edge(
+                        source, fact.target_address, local_jump_table_entry))
                     mark_incomplete_outgoing(
                         source,
                         NativePortIncompleteOutgoingKind::UnownedSeedTarget,
@@ -29166,6 +29267,43 @@ build_native_disc_materialization_world(
                 contract += detail.runtime_evidence_required
                     ? "true"
                     : "false";
+                if (detail.target_address.has_value()) {
+                    contract += ";target-materialization=";
+                    if (detail.target_is_materialized_function_entry)
+                        contract += "emitted-function-entry";
+                    else if (detail.target_block_entry_count != 0u)
+                        contract += "emitted-block-entry";
+                    else if (detail.target_safe_resume_entry_count != 0u)
+                        contract += "emitted-safe-resume";
+                    else if (detail.target_instruction_owner_count != 0u)
+                        contract += "emitted-instruction";
+                    else if (detail.target_is_guarded_entry)
+                        contract += "guarded-entry";
+                    else if (detail.target_is_recursive_function_entry)
+                        contract += "recursive-entry-only";
+                    else
+                        contract += "absent";
+                    contract += ";target-owner-count=" +
+                        std::to_string(detail.target_owner_count);
+                    contract += ";target-source-entry-owner=";
+                    contract += detail.target_is_entry_owned_by_source
+                        ? "true"
+                        : "false";
+                    contract += ";target-instruction-owner-count=" +
+                        std::to_string(
+                            detail.target_instruction_owner_count);
+                    contract += ";target-owner-slice=";
+                    if (detail.target_owner_slice.empty()) {
+                        contract += "none";
+                    } else {
+                        bool first_owner = true;
+                        for (const auto owner : detail.target_owner_slice) {
+                            if (!first_owner) contract += ',';
+                            contract += guarded_aot_address(owner);
+                            first_owner = false;
+                        }
+                    }
+                }
                 entry.contracts.push_back(std::move(contract));
                 ++emitted_details;
                 selected_slice_requires_analysis_source =

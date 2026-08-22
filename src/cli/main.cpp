@@ -7859,6 +7859,11 @@ struct AgentIterationDelta final {
     std::size_t proof_downgrades = 0u;
     std::size_t new_incomplete_roots = 0u;
     std::size_t resolved_incomplete_roots = 0u;
+    // Exact replacement-owner addresses whose previously open World frontier
+    // is now closed or absent. This is authority evidence, not merely a
+    // diagnostic count: the refresh gate uses it to distinguish a proven
+    // closure improvement from an unexplained loss of ProgramIndex facts.
+    std::vector<std::uint32_t> resolved_replacement_owners;
 };
 
 katana::agent::ExecutableMaterializationWorld load_agent_world(
@@ -8225,6 +8230,20 @@ std::string agent_hex_address(const std::uint32_t value) {
     return output.str();
 }
 
+std::optional<std::uint32_t> parse_agent_hex_address(
+    const std::string_view value) noexcept {
+    if (value.size() != 10u || value[0] != '0' ||
+        (value[1] != 'x' && value[1] != 'X'))
+        return std::nullopt;
+    std::uint32_t result = 0u;
+    const auto parsed = std::from_chars(
+        value.data() + 2u, value.data() + value.size(), result, 16);
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != value.data() + value.size())
+        return std::nullopt;
+    return result;
+}
+
 struct RuntimeHintRecord final {
     std::string family;
     std::string owner;
@@ -8565,9 +8584,18 @@ AgentIterationDelta measure_agent_iteration(
         if (static_actionable_agent_frontier(previous))
             ++result.static_actionable_before;
         const auto* current = find_agent_frontier(after, previous.id);
-        if (unresolved_agent_frontier(previous) &&
-            (current == nullptr || !unresolved_agent_frontier(*current)))
+        const bool resolved =
+            unresolved_agent_frontier(previous) &&
+            (current == nullptr || !unresolved_agent_frontier(*current));
+        if (resolved) {
             ++result.resolved_frontiers;
+            if (previous.family == "replacement-reachability") {
+                if (const auto owner =
+                        parse_agent_hex_address(previous.site);
+                    owner.has_value())
+                    result.resolved_replacement_owners.push_back(*owner);
+            }
+        }
         if (current == nullptr) continue;
         if (static_actionable_agent_frontier(*current))
             ++result.baseline_static_actionable_after;
@@ -8645,6 +8673,12 @@ AgentIterationDelta measure_agent_iteration(
             current.completeness != katana::agent::Completeness::Complete &&
             find_agent_node(before, current.id) == nullptr)
             ++result.new_incomplete_roots;
+    std::sort(result.resolved_replacement_owners.begin(),
+              result.resolved_replacement_owners.end());
+    result.resolved_replacement_owners.erase(
+        std::unique(result.resolved_replacement_owners.begin(),
+                    result.resolved_replacement_owners.end()),
+        result.resolved_replacement_owners.end());
     return result;
 }
 
@@ -8989,23 +9023,39 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
     }
     if (!program_index_adjacency_subset(
             baseline.program_index.incoming_edge_sources,
-            candidate.native_port_program_index.incoming_edge_sources) ||
-        !program_index_adjacency_subset(
+            candidate.native_port_program_index.incoming_edge_sources))
+        return "native-program-index-incoming-edges-lost";
+    if (!program_index_adjacency_subset(
             baseline.program_index.incoming_instruction_addresses,
             candidate.native_port_program_index
-                .incoming_instruction_addresses) ||
-        !program_index_adjacency_subset(
+                .incoming_instruction_addresses))
+        return "native-program-index-incoming-sites-lost";
+    if (!program_index_adjacency_subset(
             baseline.program_index.outgoing_function_entries,
             candidate.native_port_program_index
-                .outgoing_function_entries) ||
-        !sorted_authority_subset(
-            baseline.program_index.incomplete_outgoing_function_entries,
-            candidate.native_port_program_index
-                .incomplete_outgoing_function_entries) ||
-        !sorted_authority_subset(
+                .outgoing_function_entries))
+        return "native-program-index-outgoing-edges-lost";
+    if (!sorted_authority_subset(
             baseline.program_index.seed_entries,
             candidate.native_port_program_index.seed_entries))
-        return "native-program-index-facts-lost";
+        return "native-program-index-seeds-lost";
+    // Incomplete-owner entries are negative closure facts. Requiring them to
+    // grow monotonically rejects the exact successful fix that resolves a
+    // frontier. Permit only losses correlated one-for-one with the same
+    // bounded replacement-owner frontier becoming closed in the candidate
+    // World; hidden/unexplained losses remain fail-closed.
+    std::vector<std::uint32_t> lost_incomplete_owners;
+    std::set_difference(
+        baseline.program_index.incomplete_outgoing_function_entries.begin(),
+        baseline.program_index.incomplete_outgoing_function_entries.end(),
+        candidate.native_port_program_index
+            .incomplete_outgoing_function_entries.begin(),
+        candidate.native_port_program_index
+            .incomplete_outgoing_function_entries.end(),
+        std::back_inserter(lost_incomplete_owners));
+    if (lost_incomplete_owners !=
+        world_delta.resolved_replacement_owners)
+        return "native-program-index-frontier-lost";
     if ((baseline.guarded_inventory_complete &&
          !candidate.guarded_inventory_complete) ||
         (baseline.native_hardware_closure_complete &&
@@ -12302,11 +12352,10 @@ void write_agent_frontier_json(
 
 int next_analysis_task_cli(const std::filesystem::path& artifact) {
     const auto world = load_agent_world(artifact);
-    // Expose three deterministic conflict-checked implementation waves. The
-    // orchestrator still admits at most three concurrent writers and assigns
-    // the later waves deliberately; emitting nine here only avoids another
-    // artifact read and leaves scheduling/authority unchanged.
-    std::array<katana::agent::AgentTaskView, 9u> tasks{};
+    // Expose a broad deterministic, conflict-checked candidate pool. The
+    // orchestrator still triages proof quality, effort and expected closure
+    // before assigning a bounded subset to concurrent writers.
+    std::array<katana::agent::AgentTaskView, 21u> tasks{};
     std::size_t task_count = 0u;
     const bool has_frontier = katana::agent::next_agent_tasks(
         world, tasks, task_count);
