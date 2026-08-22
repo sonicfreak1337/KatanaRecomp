@@ -5632,6 +5632,14 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
     external_contract << 's'
                       << cache_implementation_identity.size()
                       << ':' << cache_implementation_identity
+                      << ';';
+    const std::string_view product_implementation_identity =
+        !options.ir_product_implementation_identity.empty()
+            ? std::string_view{options.ir_product_implementation_identity}
+            : cache_implementation_identity;
+    external_contract << 'o'
+                      << product_implementation_identity.size()
+                      << ':' << product_implementation_identity
                       << ';' << 't' << options.external_code_targets.size()
                       << ';';
     for (const auto target : options.external_code_targets)
@@ -6287,6 +6295,7 @@ std::string latent_aot_catalog_key(
     append_value(options.source_address_end);
     append_string(options.analysis_implementation_identity);
     append_string(options.analysis_cache_implementation_identity);
+    append_string(options.ir_product_implementation_identity);
 
     std::vector<std::string> excluded(excluded_byte_identities.begin(),
                                       excluded_byte_identities.end());
@@ -6384,6 +6393,8 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
         options.analysis_implementation_identity.size() >
             maximum_analysis_implementation_identity_bytes ||
         options.analysis_cache_implementation_identity.size() >
+            maximum_analysis_implementation_identity_bytes ||
+        options.ir_product_implementation_identity.size() >
             maximum_analysis_implementation_identity_bytes ||
         options.external_code_targets.size() > 65'536u ||
         !std::is_sorted(options.external_code_targets.begin(),

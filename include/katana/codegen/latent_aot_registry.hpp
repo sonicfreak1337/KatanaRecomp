@@ -146,8 +146,11 @@ struct LatentAotDiscoveryOptions {
     std::filesystem::path analysis_cache_root;
     // Pure analyzer/FVA semantics and persistent epoch codec identity.
     std::string analysis_implementation_identity;
-    // Latent positive/negative IR-cache codec and IR contract identity.
+    // Latent positive/negative IR-cache codec and lowering contract identity.
     std::string analysis_cache_implementation_identity;
+    // Prepared latent modules retain optimized IR. Keep their cache authority
+    // tied to the optimizer without widening the primary CFA/FVA cache key.
+    std::string ir_product_implementation_identity;
     // Authority-gated agent runs may import exact persistent entries, but
     // must not mutate them until their complete candidate generation has
     // passed the outer session publication gate.

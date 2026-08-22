@@ -216,6 +216,34 @@ endforeach()
 string(SHA256 KATANA_ANALYSIS_CACHE_COMPONENT_IDENTITY
        "${katana_analysis_cache_material}")
 
+set(katana_ir_analysis_material
+    "katana-ir-analysis-lowering-component-v1;${katana_toolchain_material}")
+katana_expand_component_dependency_closure(
+    KATANA_IR_ANALYSIS_IDENTITY_CLOSURE
+    FALSE
+    ${KATANA_IR_ANALYSIS_IDENTITY_INPUTS})
+foreach(katana_component_file IN LISTS KATANA_IR_ANALYSIS_IDENTITY_CLOSURE)
+    katana_append_component_file(
+        katana_ir_analysis_material "${katana_component_file}")
+endforeach()
+string(SHA256 KATANA_IR_ANALYSIS_COMPONENT_IDENTITY
+       "${katana_ir_analysis_material}")
+
+set(katana_ir_product_material
+    "katana-ir-product-optimizer-component-v1;${katana_toolchain_material}")
+katana_expand_component_dependency_closure(
+    KATANA_IR_PRODUCT_IDENTITY_CLOSURE
+    FALSE
+    ${KATANA_IR_PRODUCT_IDENTITY_INPUTS})
+foreach(katana_component_file IN LISTS KATANA_IR_PRODUCT_IDENTITY_CLOSURE)
+    katana_append_component_file(
+        katana_ir_product_material "${katana_component_file}")
+endforeach()
+string(SHA256 KATANA_IR_PRODUCT_COMPONENT_IDENTITY
+       "${katana_ir_product_material}")
+
+# Compatibility aggregate for external diagnostics. Cache authority below uses
+# the split identities and never relies on this broad digest.
 set(katana_ir_material
     "katana-ir-component-v1;${katana_toolchain_material}")
 katana_expand_component_dependency_closure(
@@ -324,6 +352,10 @@ inline constexpr std::string_view analysis_component_identity =
     \"${KATANA_ANALYSIS_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view analysis_cache_component_identity =
     \"${KATANA_ANALYSIS_CACHE_COMPONENT_IDENTITY}\";
+inline constexpr std::string_view ir_analysis_component_identity =
+    \"${KATANA_IR_ANALYSIS_COMPONENT_IDENTITY}\";
+inline constexpr std::string_view ir_product_component_identity =
+    \"${KATANA_IR_PRODUCT_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view ir_component_identity =
     \"${KATANA_IR_COMPONENT_IDENTITY}\";
 inline constexpr std::string_view codegen_component_identity =

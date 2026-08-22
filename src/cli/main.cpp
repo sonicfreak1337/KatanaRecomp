@@ -8086,7 +8086,7 @@ RuntimeFrontierImport load_runtime_frontier_import(
     const std::filesystem::path& path) {
     constexpr std::string_view binding_prefix{"KATANA_RUNTIME_FRONTIER_BINDING "};
     constexpr std::string_view event_prefix{"KATANA_RUNTIME_FRONTIER "};
-    static constexpr std::array<std::string_view, 18u> binding_keys{
+    static constexpr std::array<std::string_view, 19u> binding_keys{
         "version", "analysis_artifact_key", "content_identity",
         "boot_byte_identity", "project_identity",
         "analysis_contract_identity", "image_analysis_key",
@@ -8094,6 +8094,7 @@ RuntimeFrontierImport load_runtime_frontier_import(
         "native_port_artifact_identity",
         "analysis_implementation_identity",
         "analysis_cache_implementation_identity",
+        "ir_product_implementation_identity",
         "codegen_implementation_identity", "analyzer_abi", "backend_abi",
         "analysis_mode", "disc_volume_start_lba", "disc_extent_lba_bias"};
     static constexpr std::array<std::string_view, 13u> event_keys{
@@ -8123,7 +8124,7 @@ RuntimeFrontierImport load_runtime_frontier_import(
             StrictJsonObject object;
             parse_strict_json_object(line.substr(binding_prefix.size()), object);
             require_strict_json_keys(object, binding_keys);
-            if (strict_json_u32(object, "version") != 2u)
+            if (strict_json_u32(object, "version") != 3u)
                 throw std::invalid_argument("Runtime-Frontier-Binding besitzt eine unbekannte Version.");
             auto& identity = result.binding.identity;
             identity.key = strict_json_identifier(
@@ -8149,6 +8150,9 @@ RuntimeFrontierImport load_runtime_frontier_import(
             identity.analysis_cache_implementation_identity =
                 strict_json_identifier(
                     object, "analysis_cache_implementation_identity", 512u);
+            identity.ir_product_implementation_identity =
+                strict_json_identifier(
+                    object, "ir_product_implementation_identity", 512u);
             identity.codegen_implementation_identity = strict_json_identifier(
                 object, "codegen_implementation_identity", 512u);
             identity.analyzer_abi = strict_json_u32(object, "analyzer_abi");
@@ -8659,6 +8663,7 @@ std::string agent_session_producer_identity(
     append(KATANA_RECOMP_VERSION);
     append(identities.analysis);
     append(identities.analysis_cache);
+    append(identities.ir_product);
     append(identities.codegen);
     append(identities.whole_export);
     append(katana::build_contract::
@@ -9171,7 +9176,8 @@ void publish_pending_agent_analysis_candidate(
 bool same_noop_analysis_manifest_identity(
     katana::codegen::NativeDiscAnalysisArtifactIdentity committed,
     katana::codegen::NativeDiscAnalysisArtifactIdentity current) {
-    // Schema-6 checkpoints deliberately omit downstream codegen identity.
+    // Schema-7 checkpoints deliberately omit downstream codegen identity, but
+    // retain the optimizer identity for their serialized product IR.
     // The terminal ledger producer identity binds the current codegen/World
     // contract independently.
     committed.codegen_implementation_identity.clear();
@@ -10417,6 +10423,8 @@ int export_port_project(const std::filesystem::path& source_path,
                 implementation_identities.analysis;
             export_options.analysis_cache_implementation_identity =
                 implementation_identities.analysis_cache;
+            export_options.ir_product_implementation_identity =
+                implementation_identities.ir_product;
             export_options.codegen_implementation_identity =
                 implementation_identities.codegen;
             export_options.game_project =

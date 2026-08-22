@@ -532,6 +532,7 @@ void write_identity(Writer& output,
     output.text(identity.native_port_artifact_identity);
     output.text(identity.analysis_implementation_identity);
     output.text(identity.analysis_cache_implementation_identity);
+    output.text(identity.ir_product_implementation_identity);
     output.u32(identity.analyzer_abi);
     output.u32(identity.backend_abi);
     output.u32(identity.analysis_mode);
@@ -552,6 +553,7 @@ NativeDiscAnalysisArtifactIdentity read_identity(Reader& input) {
     identity.native_port_artifact_identity = input.text();
     identity.analysis_implementation_identity = input.text();
     identity.analysis_cache_implementation_identity = input.text();
+    identity.ir_product_implementation_identity = input.text();
     identity.analyzer_abi = input.u32();
     identity.backend_abi = input.u32();
     identity.analysis_mode = input.u32();
@@ -814,6 +816,8 @@ std::string native_disc_analysis_artifact_identity_key(
         material, identity.analysis_implementation_identity);
     append_identity_key_field(
         material, identity.analysis_cache_implementation_identity);
+    append_identity_key_field(
+        material, identity.ir_product_implementation_identity);
     // Product code generation is downstream from this checkpoint. Reuse
     // always replays current admission and runtime-frontier binding still
     // compares the explicit codegen identity; task/World-only edits therefore
@@ -842,6 +846,7 @@ bool native_disc_analysis_artifact_checkpointable(
                !artifact.identity.native_port_artifact_identity.empty() &&
                !artifact.identity.analysis_implementation_identity.empty() &&
                !artifact.identity.analysis_cache_implementation_identity.empty() &&
+               !artifact.identity.ir_product_implementation_identity.empty() &&
                artifact.identity.analyzer_abi != 0u &&
                artifact.identity.backend_abi != 0u &&
                artifact.entry_address != 0u && artifact.boot_address != 0u &&

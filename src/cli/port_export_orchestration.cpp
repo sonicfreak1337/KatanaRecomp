@@ -69,7 +69,9 @@ port_export_implementation_identities(
         !valid_cache_digest(
             katana::build_contract::analysis_cache_component_identity) ||
         !valid_cache_digest(
-            katana::build_contract::ir_component_identity) ||
+            katana::build_contract::ir_analysis_component_identity) ||
+        !valid_cache_digest(
+            katana::build_contract::ir_product_component_identity) ||
         !valid_cache_digest(
             katana::build_contract::codegen_component_identity) ||
         !valid_cache_digest(
@@ -106,11 +108,13 @@ port_export_implementation_identities(
     const std::array<std::string_view, 4u> analysis_cache_fields{
         identities.analysis,
         katana::build_contract::analysis_cache_component_identity,
-        katana::build_contract::ir_component_identity,
+        katana::build_contract::ir_analysis_component_identity,
         ir_contract};
     identities.analysis_cache = combine(
         "katana-port-analysis-cache-components",
         analysis_cache_fields);
+    identities.ir_product =
+        katana::build_contract::ir_product_component_identity;
 
     const auto backend_abi =
         std::to_string(
@@ -130,8 +134,9 @@ port_export_implementation_identities(
         std::to_string(
             katana::codegen::
                 native_aot_emission_profile_version);
-    const std::array<std::string_view, 6u> codegen_fields{
+    const std::array<std::string_view, 7u> codegen_fields{
         katana::build_contract::codegen_component_identity,
+        identities.ir_product,
         backend_abi,
         partition_schema,
         metadata_schema,
@@ -172,11 +177,12 @@ port_export_implementation_identities(
         native_port_artifact_identity.empty()
             ? std::string_view{"no-native-port-artifact-v1"}
             : native_port_artifact_identity;
-    const std::array<std::string_view, 16u> whole_fields{
+    const std::array<std::string_view, 17u> whole_fields{
         identities.analysis,
         identities.analysis_cache,
+        identities.ir_product,
         identities.codegen,
-        katana::build_contract::ir_component_identity,
+        katana::build_contract::ir_analysis_component_identity,
         katana::build_contract::
             orchestration_component_identity,
         katana::build_contract::

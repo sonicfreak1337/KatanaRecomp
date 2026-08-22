@@ -15325,8 +15325,13 @@ void apply_call(AbstractState& state,
             mark_unknown_memory_write(state);
             continue;
         }
+        const auto storage_contract_state =
+            summary->inventory_storage_contract_state;
         const bool storage_authoritative =
-            summary->inventory_storage_contract_authoritative;
+            storage_contract_authoritative(storage_contract_state);
+        const bool storage_positive =
+            storage_contract_publishes_positive_facts(
+                storage_contract_state);
         if (summary->memory_read_unknown) {
             mark_unknown_memory_read(memory_read_observation);
         } else {
@@ -15339,7 +15344,7 @@ void apply_call(AbstractState& state,
                     range.address,
                     range.width);
         }
-        if (storage_authoritative) {
+        if (storage_positive) {
             returned_unresolved_saved_stack_alias_sources =
                 static_cast<std::uint8_t>(
                     returned_unresolved_saved_stack_alias_sources |
@@ -15398,7 +15403,7 @@ void apply_call(AbstractState& state,
             static_cast<void>(merge_inventory_saved_stack_epoch(
                 state.inventory_unresolved_memory_epoch, memory_epoch, true));
         }
-        if (storage_authoritative) for (const auto& memory : summary->memory_values) {
+        if (storage_positive) for (const auto& memory : summary->memory_values) {
             if (memory.inventory_saved_stack_alias_latent) {
                 const auto existing =
                     returned_memory_saved_stack_alias_latent.find(
@@ -15656,7 +15661,7 @@ void apply_call(AbstractState& state,
             returned_inventory_may_alias_stack = true;
             continue;
         }
-        if (storage_authoritative) {
+        if (storage_positive) {
             returned_stack_callback_loss_unresolved =
                 returned_stack_callback_loss_unresolved ||
                 returned
@@ -15711,7 +15716,7 @@ void apply_call(AbstractState& state,
             !returned->inventory_pc_relative_code_literal_values.empty() ||
             returned->inventory_code_pointer_values_truncated ||
             returned->inventory_pc_relative_code_literal_values_truncated ||
-            (storage_authoritative &&
+            (storage_positive &&
              (!returned->pending_abi_scalar_values.empty() ||
               returned->pending_abi_scalar_values_truncated)) ||
             returned->contextual_candidate_dependency ||
@@ -15726,15 +15731,15 @@ void apply_call(AbstractState& state,
         // epoch.  Its alias relation is independent of ordinary R0 values
         // and therefore must be accumulated before the scalar fast path.
         returned_may_alias_stack =
-            returned_may_alias_stack || !storage_authoritative ||
+            returned_may_alias_stack || !storage_positive ||
             returned->may_alias_stack ||
-            (storage_authoritative &&
+            (storage_positive &&
              (returned->inventory_saved_stack_alias_latent ||
               returned->inventory_saved_stack_epoch.present));
         returned_inventory_may_alias_stack =
-            returned_inventory_may_alias_stack || !storage_authoritative ||
+            returned_inventory_may_alias_stack || !storage_positive ||
             returned->may_alias_stack ||
-            (storage_authoritative &&
+            (storage_positive &&
              (returned->inventory_saved_stack_alias_latent ||
               returned->inventory_saved_stack_epoch.present));
         if (returned->values.empty()) {
@@ -23861,7 +23866,8 @@ void encode(EvaluationKeyEncoder& key,
 void encode(EvaluationKeyEncoder& key,
             const FunctionValueSummary& summary) {
     key.append(summary.function_address);
-    key.append(summary.inventory_storage_contract_authoritative);
+    key.append(static_cast<std::uint8_t>(
+        summary.inventory_storage_contract_state));
     key.append_range(summary.registers,
                      [&](const auto& value) { encode(key, value); });
     key.append(summary.memory_complete);
@@ -23900,7 +23906,8 @@ void encode_function_call_effect(
     EvaluationKeyEncoder& key,
     const FunctionValueSummary& summary) {
     key.append(summary.function_address);
-    key.append(summary.inventory_storage_contract_authoritative);
+    key.append(static_cast<std::uint8_t>(
+        summary.inventory_storage_contract_state));
     key.append(summary.memory_complete);
     key.append(summary.memory_write_unknown);
     key.append_range(summary.memory_write_ranges,
@@ -24053,8 +24060,8 @@ void encode_function_call_effect(
                a.values == b.values;
     };
     if (left.function_address != right.function_address ||
-        left.inventory_storage_contract_authoritative !=
-            right.inventory_storage_contract_authoritative ||
+        left.inventory_storage_contract_state !=
+            right.inventory_storage_contract_state ||
         left.memory_complete != right.memory_complete ||
         left.memory_write_unknown != right.memory_write_unknown ||
         left.memory_write_ranges != right.memory_write_ranges ||
@@ -24227,8 +24234,8 @@ void encode_function_call_effect(
     const FunctionValueSummary& left,
     const FunctionValueSummary& right) noexcept {
     if (left.function_address != right.function_address ||
-        left.inventory_storage_contract_authoritative !=
-            right.inventory_storage_contract_authoritative ||
+        left.inventory_storage_contract_state !=
+            right.inventory_storage_contract_state ||
         left.memory_complete != right.memory_complete ||
         left.memory_write_unknown != right.memory_write_unknown ||
         left.memory_write_ranges != right.memory_write_ranges ||
@@ -24503,6 +24510,76 @@ void discard_provisional_inventory_storage_contract(
     summary.inventory_detached_stack_callback_loss = false;
     summary.inventory_unresolved_memory_callback_loss = false;
     summary.inventory_callback_loss_identity_truncated_sources = 0u;
+}
+
+void make_terminal_top_inventory_storage_contract(
+    FunctionValueSummary& summary) {
+    discard_provisional_inventory_storage_contract(summary);
+    summary.inventory_storage_contract_state =
+        StorageContractState::TerminalTop;
+    summary.memory_complete = false;
+    summary.memory_write_unknown = true;
+    summary.memory_write_ranges.clear();
+    summary.memory_read_complete = true;
+    summary.memory_read_unknown = true;
+    summary.memory_read_ranges.clear();
+}
+
+[[nodiscard]] constexpr StorageContractState
+join_storage_contract_dependency_state(
+    const StorageContractState current,
+    const StorageContractState dependency) noexcept {
+    if (current == StorageContractState::Provisional ||
+        dependency == StorageContractState::Provisional)
+        return StorageContractState::Provisional;
+    if (current == StorageContractState::TerminalTop ||
+        dependency == StorageContractState::TerminalTop)
+        return StorageContractState::TerminalTop;
+    return StorageContractState::Committed;
+}
+
+[[nodiscard]] bool canonical_terminal_top_inventory_storage_contract(
+    const FunctionValueSummary& summary) noexcept {
+    if (!storage_contract_terminal_top(
+            summary.inventory_storage_contract_state) ||
+        summary.memory_complete || !summary.memory_write_unknown ||
+        !summary.memory_write_ranges.empty() ||
+        !summary.memory_read_complete || !summary.memory_read_unknown ||
+        !summary.memory_read_ranges.empty() || !summary.memory_values.empty() ||
+        has_inventory_candidate_carrier_payload(
+            summary.inventory_unresolved_stack_carrier) ||
+        has_pending_abi_scalar_payload(
+            summary.inventory_unresolved_stack_carrier) ||
+        has_inventory_candidate_carrier_payload(
+            summary.inventory_unresolved_memory_carrier) ||
+        has_pending_abi_scalar_payload(
+            summary.inventory_unresolved_memory_carrier) ||
+        summary.inventory_unresolved_stack_epoch.present ||
+        summary.inventory_unresolved_memory_epoch.present ||
+        has_inventory_candidate_carrier_payload(
+            summary.current_stack_epoch_mutation_carrier) ||
+        has_pending_abi_scalar_payload(
+            summary.current_stack_epoch_mutation_carrier) ||
+        summary.current_stack_epoch_mutation_epoch.present ||
+        summary.current_stack_epoch_mutation_callback_loss ||
+        summary.inventory_unresolved_saved_stack_alias_sources != 0u ||
+        summary.inventory_unresolved_saved_stack_alias_tracks_current_sources !=
+            0u ||
+        summary.inventory_unresolved_stack_callback_loss ||
+        summary.inventory_detached_stack_callback_loss ||
+        summary.inventory_unresolved_memory_callback_loss ||
+        summary.inventory_callback_loss_identity_truncated_sources != 0u)
+        return false;
+    return std::none_of(
+        summary.registers.begin(), summary.registers.end(),
+        [](const FunctionRegisterValueSummary& value) {
+            return !value.pending_abi_scalar_values.empty() ||
+                   value.pending_abi_scalar_values_truncated ||
+                   value.inventory_stack_callback_loss_unresolved ||
+                   value.inventory_saved_stack_alias_latent ||
+                   value.inventory_saved_stack_alias_tracks_current_epoch ||
+                   value.inventory_saved_stack_epoch.present;
+        });
 }
 
 void discard_provisional_inventory_storage_state(AbstractState& state) {
@@ -27409,7 +27486,7 @@ inline constexpr std::uint32_t function_program_graph_schema_version = 1u;
 // Complete per-callsite inventory families now replace their correlation-lost
 // aggregate journal, while explicit unknown ingress is evaluated as its own
 // exact partition. Older root artifacts published both journals monotonically.
-inline constexpr std::uint32_t function_analysis_epoch_schema_version = 37u;
+inline constexpr std::uint32_t function_analysis_epoch_schema_version = 38u;
 
 struct CandidateTailCarrier {
     std::uint32_t transfer_site = 0u;
@@ -31392,8 +31469,15 @@ void write_program_graph(PersistentFunctionEpochWriter& writer,
 
 void write_function_summary(PersistentFunctionEpochWriter& writer,
                             const FunctionValueSummary& summary) {
+    if (!storage_contract_authoritative(
+            summary.inventory_storage_contract_state) ||
+        (storage_contract_terminal_top(
+             summary.inventory_storage_contract_state) &&
+         !canonical_terminal_top_inventory_storage_contract(summary)))
+        throw PersistentFunctionEpochIncomplete{};
     writer.scalar(summary.function_address);
-    writer.boolean(summary.inventory_storage_contract_authoritative);
+    writer.scalar(static_cast<std::uint8_t>(
+        summary.inventory_storage_contract_state));
     writer.sequence(summary.registers, [&](const auto& value) {
         writer.scalar(value.register_index);
         writer.boolean(value.complete);
@@ -31487,9 +31571,18 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
     PersistentFunctionEpochReader& reader) {
     FunctionValueSummary summary;
     summary.function_address = reader.scalar<std::uint32_t>();
-    summary.inventory_storage_contract_authoritative = reader.boolean();
-    if (!summary.inventory_storage_contract_authoritative)
+    switch (reader.scalar<std::uint8_t>()) {
+    case static_cast<std::uint8_t>(StorageContractState::Committed):
+        summary.inventory_storage_contract_state =
+            StorageContractState::Committed;
+        break;
+    case static_cast<std::uint8_t>(StorageContractState::TerminalTop):
+        summary.inventory_storage_contract_state =
+            StorageContractState::TerminalTop;
+        break;
+    default:
         throw PersistentFunctionEpochIncomplete{};
+    }
     const auto register_count = reader.count(16u);
     summary.registers.reserve(register_count);
     std::uint8_t previous_register = 0u;
@@ -31744,6 +31837,10 @@ void write_function_summary(PersistentFunctionEpochWriter& writer,
                            epoch_has_call_sites,
                            value.inventory_saved_stack_epoch);
             }))
+        throw PersistentFunctionEpochIncomplete{};
+    if (storage_contract_terminal_top(
+            summary.inventory_storage_contract_state) &&
+        !canonical_terminal_top_inventory_storage_contract(summary))
         throw PersistentFunctionEpochIncomplete{};
     return summary;
 }
@@ -39242,8 +39339,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 fixpoint_functions[member]->entry_address;
             if (summary_dirty_functions.contains(address) ||
                 fixpoint_summary_evaluated[member] == 0u ||
-                !summaries.at(address)
-                     .inventory_storage_contract_authoritative) {
+                !storage_contract_authoritative(
+                    summaries.at(address)
+                        .inventory_storage_contract_state)) {
                 storage_component_authoritative[component] = 0u;
                 break;
             }
@@ -39324,7 +39422,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
         std::uint64_t input_version = 0u;
         std::vector<std::pair<std::size_t, std::uint64_t>>
             summary_versions;
-        bool inventory_storage_dependencies_authoritative = false;
+        StorageContractState inventory_storage_dependency_state =
+            StorageContractState::Provisional;
         bool inventory_storage_consumed_provisional_dependency = false;
         std::optional<FunctionEvaluation> evaluation;
         GuardedCodeInventoryWalkDiagnostics diagnostics;
@@ -39873,11 +39972,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     const auto make_local_cap_summary = [](const std::uint32_t address) {
         FunctionValueSummary summary;
         summary.function_address = address;
-        summary.inventory_storage_contract_authoritative = true;
-        summary.memory_complete = false;
-        summary.memory_write_unknown = true;
-        summary.memory_read_complete = true;
-        summary.memory_read_unknown = true;
+        make_terminal_top_inventory_storage_contract(summary);
         return summary;
     };
     const auto quarantine_local_cap_component =
@@ -40031,8 +40126,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     fixpoint_functions[member]->entry_address;
                 if (fixpoint_summary_evaluated[member] == 0u ||
                     queued.contains(address) ||
-                    !summaries.at(address)
-                         .inventory_storage_contract_authoritative)
+                    !storage_contract_authoritative(
+                        summaries.at(address)
+                            .inventory_storage_contract_state))
                     return;
                 for (const auto dependency :
                      fixpoint_summary_dependencies[member]) {
@@ -40095,7 +40191,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             item.summary_versions.reserve(
                 fixpoint_summary_dependencies[item.function_index]
                     .size());
-            item.inventory_storage_dependencies_authoritative = true;
+            item.inventory_storage_dependency_state =
+                StorageContractState::Committed;
             for (const auto dependency :
                  fixpoint_summary_dependencies[item.function_index]) {
                 const auto dependency_address =
@@ -40108,22 +40205,38 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     storage_component_by_function[dependency];
                 if (dependency_component != owner_component) {
                     if (storage_component_authoritative
-                                [dependency_component] != 0u &&
-                        dependency_summary
-                            .inventory_storage_contract_authoritative)
-                        continue;
-                    item.inventory_storage_dependencies_authoritative = false;
-                    break;
-                }
-                if (dependency_summary
-                        .inventory_storage_contract_authoritative)
+                                [dependency_component] == 0u ||
+                        !storage_contract_authoritative(
+                            dependency_summary
+                                .inventory_storage_contract_state)) {
+                        item.inventory_storage_dependency_state =
+                            StorageContractState::Provisional;
+                        break;
+                    }
+                    item.inventory_storage_dependency_state =
+                        join_storage_contract_dependency_state(
+                            item.inventory_storage_dependency_state,
+                            dependency_summary
+                                .inventory_storage_contract_state);
                     continue;
+                }
+                if (storage_contract_authoritative(
+                        dependency_summary
+                            .inventory_storage_contract_state)) {
+                    item.inventory_storage_dependency_state =
+                        join_storage_contract_dependency_state(
+                            item.inventory_storage_dependency_state,
+                            dependency_summary
+                                .inventory_storage_contract_state);
+                    continue;
+                }
                 if (fixpoint_summary_evaluated[dependency] != 0u) {
                     item.inventory_storage_consumed_provisional_dependency =
                         true;
                     continue;
                 }
-                item.inventory_storage_dependencies_authoritative = false;
+                item.inventory_storage_dependency_state =
+                    StorageContractState::Provisional;
                 break;
             }
             for (const auto dependency :
@@ -40237,7 +40350,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 pending.size());
             auto& owner_input = candidate_inputs.at(item.address);
             const bool authoritative_storage_replay =
-                item.inventory_storage_dependencies_authoritative &&
+                storage_contract_publishes_positive_facts(
+                    item.inventory_storage_dependency_state) &&
                 !item.inventory_storage_consumed_provisional_dependency;
             if (authoritative_storage_replay) {
                 owner_input.fixpoint_candidate_values_truncated =
@@ -40292,20 +40406,35 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             auto& previous = summaries[item.address];
             widen_function_memory_read_contract(
                 evaluation.summary, previous);
+            auto next_storage_contract_state =
+                item.inventory_storage_dependency_state;
+            if (storage_contract_terminal_top(
+                    previous.inventory_storage_contract_state))
+                next_storage_contract_state =
+                    StorageContractState::TerminalTop;
             const bool crossed_storage_authority =
-                item.inventory_storage_dependencies_authoritative &&
-                !previous.inventory_storage_contract_authoritative;
-            evaluation.summary.inventory_storage_contract_authoritative =
-                item.inventory_storage_dependencies_authoritative;
+                storage_contract_authoritative(
+                    next_storage_contract_state) &&
+                !storage_contract_authoritative(
+                    previous.inventory_storage_contract_state);
+            evaluation.summary.inventory_storage_contract_state =
+                next_storage_contract_state;
             const bool crossed_from_provisional_dependencies =
                 crossed_storage_authority &&
                 item.inventory_storage_consumed_provisional_dependency;
-            if (crossed_from_provisional_dependencies)
+            if (storage_contract_terminal_top(next_storage_contract_state)) {
+                make_terminal_top_inventory_storage_contract(
+                    evaluation.summary);
+            } else if (crossed_from_provisional_dependencies) {
                 discard_provisional_inventory_storage_contract(
                     evaluation.summary);
-            if (evaluation.summary
-                    .inventory_storage_contract_authoritative &&
-                previous.inventory_storage_contract_authoritative)
+                evaluation.summary.inventory_storage_contract_state =
+                    StorageContractState::Committed;
+            }
+            if (storage_contract_publishes_positive_facts(
+                    evaluation.summary.inventory_storage_contract_state) &&
+                storage_contract_publishes_positive_facts(
+                    previous.inventory_storage_contract_state))
                 widen_function_inventory_storage_contract(
                     evaluation.summary, previous);
             const bool summary_changed =
@@ -40461,8 +40590,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
             summaries.begin(),
             summaries.end(),
             [](const auto& item) {
-                return !item.second
-                            .inventory_storage_contract_authoritative;
+                return !storage_contract_authoritative(
+                    item.second.inventory_storage_contract_state);
             });
         if (provisional != summaries.end())
             throw std::logic_error(
@@ -40488,14 +40617,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     if (result.budget_exhausted) {
         for (auto& [address, summary] : summaries) {
             static_cast<void>(address);
-            summary.inventory_storage_contract_authoritative = false;
-            summary.memory_complete = false;
-            summary.memory_write_unknown = true;
-            summary.memory_write_ranges.clear();
-            summary.memory_read_complete = true;
-            summary.memory_read_unknown = true;
-            summary.memory_read_ranges.clear();
-            summary.memory_values.clear();
+            make_terminal_top_inventory_storage_contract(summary);
             for (auto& value : summary.registers) {
                 value.complete = false;
                 value.guarded = true;
@@ -44994,7 +45116,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 ContextualAuthorityPhase authority_phase =
                     ContextualAuthorityPhase::Bootstrap;
                 std::uint64_t authority_generation = 0u;
-                bool inventory_storage_dependencies_authoritative = false;
+                StorageContractState inventory_storage_dependency_state =
+                    StorageContractState::Provisional;
                 std::vector<ContextualDependencyVersion> dependencies;
                 ContextualSummaryBindingViews binding_views;
                 std::optional<ContextualSummaryBindings>
@@ -45047,32 +45170,36 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         &item.evidence_layout,
                         &item.dependencies);
                     std::size_t bound_summary_count = 0u;
-                    bool bound_summaries_authoritative = true;
+                    auto bound_storage_contract_state =
+                        StorageContractState::Committed;
                     for (const auto& [call, bindings] :
                          item.binding_views) {
                         static_cast<void>(call);
                         bound_summary_count += bindings.size();
-                        bound_summaries_authoritative =
-                            bound_summaries_authoritative &&
-                            std::all_of(
-                                bindings.begin(),
-                                bindings.end(),
-                                [](const ContextualBoundSummaryView&
-                                       binding) {
-                                    return binding.summary != nullptr &&
-                                           binding.summary
-                                               ->inventory_storage_contract_authoritative;
-                                });
+                        for (const auto& binding : bindings) {
+                            if (binding.summary == nullptr) {
+                                bound_storage_contract_state =
+                                    StorageContractState::Provisional;
+                                break;
+                            }
+                            bound_storage_contract_state =
+                                join_storage_contract_dependency_state(
+                                    bound_storage_contract_state,
+                                    binding.summary
+                                        ->inventory_storage_contract_state);
+                        }
                     }
                     // `dependencies` contains every captured lane edge while
                     // `binding_views` contains only lanes which already own a
                     // Summary.  A missing binding is therefore provisional,
                     // not a vacuously authoritative empty bucket.
-                    item.inventory_storage_dependencies_authoritative =
+                    item.inventory_storage_dependency_state =
                         item.authority_phase ==
-                            ContextualAuthorityPhase::CleanReplay &&
-                        bound_summaries_authoritative &&
-                        bound_summary_count == item.dependencies.size();
+                                    ContextualAuthorityPhase::CleanReplay &&
+                                bound_summary_count ==
+                                    item.dependencies.size()
+                            ? bound_storage_contract_state
+                            : StorageContractState::Provisional;
                     item.fallback_bindings.reset();
                     item.diagnostics = {};
                     item.diagnostics.local_fixpoint_iteration_budget =
@@ -47512,7 +47639,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     discard_provisional_inventory_storage_contract(
                         *lane.replay_summary);
                     lane.replay_summary
-                        ->inventory_storage_contract_authoritative = true;
+                        ->inventory_storage_contract_state =
+                        StorageContractState::Committed;
                     lane.replay_summary_version = 0u;
                     lane.replay_evaluated = false;
                     lane.replay_call_site_tokens.clear();
@@ -47755,8 +47883,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 for (const auto& lane : contextual_lanes) {
                     if (!lane.replay_evaluated ||
                         !lane.replay_summary.has_value() ||
-                        !lane.replay_summary
-                             ->inventory_storage_contract_authoritative)
+                        !storage_contract_authoritative(
+                            lane.replay_summary
+                                ->inventory_storage_contract_state))
                         throw std::logic_error(
                             "Contextual-Clean-Replay liess eine "
                             "provisorische Lane zurueck.");
@@ -48700,8 +48829,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     auto& context_evaluation = *item.evaluation;
                     for (auto& observation :
                          context_evaluation.call_arguments) {
-                        if (!item
-                                 .inventory_storage_dependencies_authoritative)
+                        if (!storage_contract_publishes_positive_facts(
+                                item.inventory_storage_dependency_state))
                             discard_provisional_inventory_storage_state(
                                 observation.state);
                         const auto contextual_mutation_conditional_sources =
@@ -49945,8 +50074,8 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     // through contextual_callers.
                     if (item.authority_phase ==
                             ContextualAuthorityPhase::CleanReplay &&
-                        !item
-                             .inventory_storage_dependencies_authoritative)
+                        !storage_contract_authoritative(
+                            item.inventory_storage_dependency_state))
                         current_snapshots[index] = 0u;
                     // Every monotone edge/input observation from this snapshot
                     // was committed in the first pass above. A stale or locally
@@ -50030,6 +50159,26 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (item.authority_phase !=
                         ContextualAuthorityPhase::CleanReplay)
                         continue;
+                    if (!storage_contract_publishes_positive_facts(
+                            item.inventory_storage_dependency_state)) {
+                        // TerminalTop is authoritative only as a fail-closed
+                        // contract. Its generation-local evaluation may aid
+                        // structural discovery, but exact Cell/Epoch/Pending
+                        // facts must never become descendant lane ingress.
+                        for (auto& [call, targets] :
+                             item.replay_contributions) {
+                            static_cast<void>(call);
+                            for (auto& [lane_id, contribution] : targets) {
+                                static_cast<void>(lane_id);
+                                discard_provisional_inventory_storage_state(
+                                    contribution.match_input);
+                                discard_provisional_inventory_storage_state(
+                                    contribution.input);
+                                discard_provisional_inventory_storage_state(
+                                    contribution.edge_match_input);
+                            }
+                        }
+                    }
                     // Replacement, not widening: a later current replay of
                     // this caller may exactly overwrite a prior Epoch/cell.
                     // Only the latest authority-generation observation may
@@ -50107,19 +50256,25 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (item.authority_phase ==
                         ContextualAuthorityPhase::Bootstrap) {
                         candidate_summary
-                            .inventory_storage_contract_authoritative = false;
+                            .inventory_storage_contract_state =
+                            StorageContractState::Provisional;
                         discard_provisional_inventory_storage_contract(
                             candidate_summary);
                         prior_slot = &current_lane.bootstrap_summary;
                     } else if (item.authority_phase ==
                                ContextualAuthorityPhase::CleanReplay) {
-                        if (!item
-                                 .inventory_storage_dependencies_authoritative)
+                        if (!storage_contract_authoritative(
+                                item.inventory_storage_dependency_state))
                             throw std::logic_error(
                                 "Contextual-Clean-Replay verlor seine "
                                 "private Authority.");
                         candidate_summary
-                            .inventory_storage_contract_authoritative = true;
+                            .inventory_storage_contract_state =
+                            item.inventory_storage_dependency_state;
+                        if (storage_contract_terminal_top(
+                                item.inventory_storage_dependency_state))
+                            make_terminal_top_inventory_storage_contract(
+                                candidate_summary);
                         prior_slot = &current_lane.replay_summary;
                     } else {
                         throw std::logic_error(
@@ -50129,15 +50284,32 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     if (prior_slot->has_value()) {
                         if (item.authority_phase ==
                                 ContextualAuthorityPhase::CleanReplay &&
-                            !prior_slot->value()
-                                 .inventory_storage_contract_authoritative)
+                            !storage_contract_authoritative(
+                                prior_slot->value()
+                                    .inventory_storage_contract_state))
                             throw std::logic_error(
                                 "Contextual-Clean-Replay enthielt einen "
                                 "provisorischen Seed.");
-                        widen_function_memory_read_contract(
-                            candidate_summary, prior_slot->value());
                         if (item.authority_phase ==
-                            ContextualAuthorityPhase::CleanReplay)
+                                ContextualAuthorityPhase::CleanReplay &&
+                            storage_contract_terminal_top(
+                                prior_slot->value()
+                                    .inventory_storage_contract_state))
+                            make_terminal_top_inventory_storage_contract(
+                                candidate_summary);
+                        if (!storage_contract_terminal_top(
+                                candidate_summary
+                                    .inventory_storage_contract_state))
+                            widen_function_memory_read_contract(
+                                candidate_summary, prior_slot->value());
+                        if (item.authority_phase ==
+                                ContextualAuthorityPhase::CleanReplay &&
+                            storage_contract_publishes_positive_facts(
+                                candidate_summary
+                                    .inventory_storage_contract_state) &&
+                            storage_contract_publishes_positive_facts(
+                                prior_slot->value()
+                                    .inventory_storage_contract_state))
                             widen_function_inventory_storage_contract(
                                 candidate_summary, prior_slot->value());
                         const bool semantic_same =
@@ -50146,8 +50318,11 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                         // A completed older snapshot may carry less private
                         // provenance than a newer subscriber replay.  Preserve
                         // every still-represented field before replacing it.
-                        merge_function_call_effect_evidence(
-                            candidate_summary, prior_slot->value());
+                        if (!storage_contract_terminal_top(
+                                candidate_summary
+                                    .inventory_storage_contract_state))
+                            merge_function_call_effect_evidence(
+                                candidate_summary, prior_slot->value());
                         summary_changed[index] = semantic_same ? 0u : 1u;
                         summary_provenance_changed[index] =
                             semantic_same &&
@@ -50263,8 +50438,9 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                     contextual_lanes.end(),
                     [](const ContextualLane& lane) {
                         return !lane.summary.has_value() ||
-                               !lane.summary
-                                    ->inventory_storage_contract_authoritative;
+                               !storage_contract_authoritative(
+                                   lane.summary
+                                       ->inventory_storage_contract_state);
                     }))
                 throw std::logic_error(
                     "Contextual-Return-Fixpunkt verliess seine atomare "

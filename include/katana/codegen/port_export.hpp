@@ -100,8 +100,12 @@ struct PortExportOptions {
     std::filesystem::path codegen_cache_root;
     // Pure analyzer/FVA semantics and persistent epoch codec identity.
     std::string analysis_implementation_identity;
-    // Prepared boot/latent IR cache codec and IR contract identity.
+    // Prepared boot IR cache codec and unoptimized IR/lowering contract.
     std::string analysis_cache_implementation_identity;
+    // Product optimizer identity. Native-disc and latent checkpoints currently
+    // retain optimized IR and therefore bind this independently from generic
+    // codegen/emitter churn.
+    std::string ir_product_implementation_identity;
     std::string codegen_implementation_identity;
     // A transactionally committed analysis archive supplied by
     // `analyze-port --resume`. The archive remains bound to its ledger key;

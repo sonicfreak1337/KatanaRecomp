@@ -9,12 +9,13 @@
 
 namespace katana::cli {
 
-inline constexpr std::uint32_t port_export_cache_version = 9u;
-inline constexpr std::uint32_t port_ir_contract_version = 2u;
+inline constexpr std::uint32_t port_export_cache_version = 10u;
+inline constexpr std::uint32_t port_ir_contract_version = 3u;
 
 struct PortExportImplementationIdentities final {
     std::string analysis;
     std::string analysis_cache;
+    std::string ir_product;
     std::string codegen;
     std::string whole_export;
 };

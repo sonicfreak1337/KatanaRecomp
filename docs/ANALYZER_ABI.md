@@ -1,6 +1,6 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `61`. Der aktuelle
+Der aktuelle oeffentliche Analyzervertrag ist Version `63`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 116, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
@@ -13,6 +13,23 @@ der erste vollstaendige `analyze-port`-Lauf samt identitaetsgebundenem Resume
 ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 `49b0f72a9f49d60a4eb6e0481460cd57c5625735` bleibt ausschliesslich als
 ABI-34-Referenz erhalten.
+
+Analyzer-ABI 63 trennt die IR-Implementierungsidentitaet in unoptimiertes
+Analysis-/Lowering-IR und Produktoptimierung. Boot-/CFA-/FVA-Caches binden nur
+den ersten Vertrag. Der monolithische Native-Disc-Checkpoint bleibt als
+Schema 7 ausdruecklich an die Produktoptimierung gebunden, weil er weiterhin
+optimiertes Primaer- und Latent-IR enthaelt. Eine reine Optimizeraenderung darf
+daher Analysezustand wiederverwenden, aber niemals veraltetes Produkt-IR als
+aktuellen Checkpoint akzeptieren. Runtime-Frontier-Bindings tragen diese
+Identitaet ab Binding-Version 3 ebenfalls explizit.
+
+ABI 63 ersetzt ausserdem die ueberladene boolesche Storage-Authority in
+`FunctionValueSummary` durch die getrennten Zustaende `Provisional`,
+`Committed` und `TerminalTop`. Nur `Committed` darf positive Cell-/Epoch-/
+Loss-Fakten publizieren; `TerminalTop` ist autoritativ und dauerhaft
+fail-closed, ohne provisorische Fakten durch Cache-, Summary- oder
+Contextual-Replay in Caller zu tragen. Persistente Function-Value-Epochen
+binden diesen Vertrag mit Schema 38 und Evaluation-Lens-Schema 8.
 
 Analyzer-ABI 62 erweitert den oeffentlichen Boot-Analyseparser um einen
 bounded Diagnosegrund. Damit bleibt nach einem abgelehnten Checkpoint nicht

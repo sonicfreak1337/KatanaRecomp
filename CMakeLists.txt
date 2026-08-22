@@ -269,14 +269,35 @@ set(
     "src/codegen/port_export.cpp|boot-analysis-pipeline"
     "src/codegen/port_export.cpp|native-disc-root-discovery"
 )
-file(
-    GLOB_RECURSE
+# Analysis checkpoints retain unoptimized lowering IR, while generated
+# products additionally depend on optimizer/register-liveness semantics.  Keep
+# those identities separate so a pure product transform cannot evict CFA/FVA
+# state.  KATANA_IR_IDENTITY_INPUTS remains the compatibility union only.
+set(
+    KATANA_IR_ANALYSIS_IDENTITY_INPUTS
+    "include/katana/ir/ir.hpp"
+    "include/katana/ir/lower.hpp"
+    "include/katana/ir/serialize.hpp"
+    "include/katana/ir/verifier.hpp"
+    "src/ir/accumulator_effect.cpp"
+    "src/ir/lower.cpp"
+    "src/ir/memory_effect.cpp"
+    "src/ir/operand_width.cpp"
+    "src/ir/serialize.cpp"
+    "src/ir/status_effect.cpp"
+    "src/ir/verifier.cpp"
+)
+set(
+    KATANA_IR_PRODUCT_IDENTITY_INPUTS
+    "include/katana/ir/optimize.hpp"
+    "include/katana/ir/register_liveness.hpp"
+    "src/ir/optimize.cpp"
+    "src/ir/register_liveness.cpp"
+)
+set(
     KATANA_IR_IDENTITY_INPUTS
-    CONFIGURE_DEPENDS
-    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-    "src/ir/*.cpp"
-    "src/ir/*.hpp"
-    "include/katana/ir/*.hpp"
+    ${KATANA_IR_ANALYSIS_IDENTITY_INPUTS}
+    ${KATANA_IR_PRODUCT_IDENTITY_INPUTS}
 )
 file(
     GLOB_RECURSE
@@ -368,6 +389,8 @@ set(
 list(REMOVE_DUPLICATES KATANA_ANALYSIS_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_ANALYSIS_CACHE_IDENTITY_REGIONS)
+list(REMOVE_DUPLICATES KATANA_IR_ANALYSIS_IDENTITY_INPUTS)
+list(REMOVE_DUPLICATES KATANA_IR_PRODUCT_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_IR_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_CODEGEN_IDENTITY_INPUTS)
 list(REMOVE_DUPLICATES KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS)
@@ -376,6 +399,8 @@ list(REMOVE_DUPLICATES KATANA_MATERIALIZATION_WORLD_IDENTITY_INPUTS)
 list(SORT KATANA_ANALYSIS_IDENTITY_INPUTS)
 list(SORT KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS)
 list(SORT KATANA_ANALYSIS_CACHE_IDENTITY_REGIONS)
+list(SORT KATANA_IR_ANALYSIS_IDENTITY_INPUTS)
+list(SORT KATANA_IR_PRODUCT_IDENTITY_INPUTS)
 list(SORT KATANA_IR_IDENTITY_INPUTS)
 list(SORT KATANA_CODEGEN_IDENTITY_INPUTS)
 list(SORT KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS)
@@ -415,6 +440,8 @@ foreach(
         KATANA_COMPONENT_IDENTITY_WATCH_INPUTS
         KATANA_ANALYSIS_IDENTITY_INPUTS
         KATANA_ANALYSIS_CACHE_IDENTITY_INPUTS
+        KATANA_IR_ANALYSIS_IDENTITY_INPUTS
+        KATANA_IR_PRODUCT_IDENTITY_INPUTS
         KATANA_IR_IDENTITY_INPUTS
         KATANA_CODEGEN_IDENTITY_INPUTS
         KATANA_PARTITION_CODEGEN_IDENTITY_INPUTS

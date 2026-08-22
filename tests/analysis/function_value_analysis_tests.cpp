@@ -9139,13 +9139,13 @@ int main(const int argc, char* argv[]) {
                         return value.address == 0x80u;
                     });
                 if (cell == summary->memory_values.end())
-                    return std::string{"auth="} +
-                           std::to_string(summary
-                                              ->inventory_storage_contract_authoritative) +
+                    return std::string{"state="} +
+                           std::to_string(static_cast<unsigned>(
+                               summary->inventory_storage_contract_state)) +
                            ",cell=0";
-                return std::string{"auth="} +
-                       std::to_string(summary
-                                          ->inventory_storage_contract_authoritative) +
+                return std::string{"state="} +
+                       std::to_string(static_cast<unsigned>(
+                           summary->inventory_storage_contract_state)) +
                        ",cell=1,latent=" +
                        std::to_string(cell
                                           ->inventory_saved_stack_alias_latent) +

@@ -33,7 +33,7 @@ enum class EvaluationLens : std::uint8_t {
     Count,
 };
 
-inline constexpr std::uint32_t evaluation_lens_schema_version = 7u;
+inline constexpr std::uint32_t evaluation_lens_schema_version = 8u;
 inline constexpr std::size_t evaluation_lens_count =
     static_cast<std::size_t>(EvaluationLens::Count);
 
@@ -286,13 +286,35 @@ struct FunctionMemoryWriteRange {
     auto operator<=>(const FunctionMemoryWriteRange&) const = default;
 };
 
+enum class StorageContractState : std::uint8_t {
+    Provisional = 0u,
+    Committed,
+    TerminalTop,
+};
+
+[[nodiscard]] constexpr bool storage_contract_authoritative(
+    const StorageContractState state) noexcept {
+    return state != StorageContractState::Provisional;
+}
+
+[[nodiscard]] constexpr bool storage_contract_publishes_positive_facts(
+    const StorageContractState state) noexcept {
+    return state == StorageContractState::Committed;
+}
+
+[[nodiscard]] constexpr bool storage_contract_terminal_top(
+    const StorageContractState state) noexcept {
+    return state == StorageContractState::TerminalTop;
+}
+
 struct FunctionValueSummary {
     std::uint32_t function_address = 0u;
     // Positive storage/Epoch/Loss facts may be consumed by callers only after
     // this summary has crossed the fixpoint's revocable bootstrap boundary.
     // Ordinary return values remain usable while the storage contract is
     // provisional; unknown Memory stays conservative.
-    bool inventory_storage_contract_authoritative = false;
+    StorageContractState inventory_storage_contract_state =
+        StorageContractState::Provisional;
     std::vector<FunctionRegisterValueSummary> registers;
     bool memory_complete = false;
     // Relative memory effect. An unknown write invalidates every caller fact;

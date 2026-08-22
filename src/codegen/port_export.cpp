@@ -17768,7 +17768,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 "Runtime-Frontier erhielt keine kanonische vollstaendige "
                 "Analyseidentitaet.");
         std::ostringstream binding;
-        binding << "{\"version\":2,\"analysis_artifact_key\":"
+        binding << "{\"version\":3,\"analysis_artifact_key\":"
                 << katana::io::quote_json(identity.key)
                 << ",\"content_identity\":"
                 << katana::io::quote_json(identity.content_identity)
@@ -17794,6 +17794,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 << ",\"analysis_cache_implementation_identity\":"
                 << katana::io::quote_json(
                        identity.analysis_cache_implementation_identity)
+                << ",\"ir_product_implementation_identity\":"
+                << katana::io::quote_json(
+                       identity.ir_product_implementation_identity)
                 << ",\"codegen_implementation_identity\":"
                 << katana::io::quote_json(
                        identity.codegen_implementation_identity)
@@ -21523,6 +21526,8 @@ LatentAotDiscoveryOptions port_latent_aot_discovery_options(
         options.analysis_implementation_identity;
     result.analysis_cache_implementation_identity =
         options.analysis_cache_implementation_identity;
+    result.ir_product_implementation_identity =
+        options.ir_product_implementation_identity;
     result.persistent_cache_writes_enabled =
         !options.analysis_artifact_archive_requested;
     result.progress = options.progress;
@@ -25777,6 +25782,8 @@ NativeDiscAnalysisArtifactIdentity native_disc_analysis_identity(
         options.analysis_implementation_identity;
     identity.analysis_cache_implementation_identity =
         options.analysis_cache_implementation_identity;
+    identity.ir_product_implementation_identity =
+        options.ir_product_implementation_identity;
     identity.codegen_implementation_identity =
         options.codegen_implementation_identity;
     identity.analyzer_abi = katana::analysis::abi_version;
@@ -29775,6 +29782,8 @@ try_reuse_native_disc_analysis_artifact(
                 analysis_implementation_identity);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
                 analysis_cache_implementation_identity);
+            KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(
+                ir_product_implementation_identity);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analysis_contract_identity);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(analyzer_abi);
             KATANA_CHECK_ANALYSIS_IDENTITY_FIELD(backend_abi);
