@@ -24865,22 +24865,53 @@ prepare_dreamcast_port_project_impl(
         }
         throw std::runtime_error(reason.str());
     }
-    const auto incomplete = std::count_if(
+    const auto incomplete = static_cast<std::size_t>(std::count_if(
         prepared.analysis.indirect_control_flow.begin(),
         prepared.analysis.indirect_control_flow.end(),
         [](const auto& resolution) {
             const auto status = katana::analysis::control_flow_report_status(resolution);
             return status == katana::analysis::ControlFlowReportStatus::GuardedPartial ||
                    status == katana::analysis::ControlFlowReportStatus::Unresolved;
-        });
+        }));
     const bool agent_frontier_report =
         options.agent_analysis_artifacts_requested &&
         !options.diagnostic_partial;
     bool backend_admitted = incomplete == 0u;
     if (!options.diagnostic_partial && !agent_frontier_report &&
         incomplete != 0u) {
-        throw std::runtime_error("Portanalyse ist unvollstaendig: " + std::to_string(incomplete) +
-                                 " partielle oder ungeloeste Kontrollflussstellen.");
+        std::ostringstream reason;
+        reason << "Portanalyse ist unvollstaendig: " << incomplete
+               << " partielle oder ungeloeste Kontrollflussstellen";
+        constexpr std::size_t reported_incomplete_sites = 16u;
+        std::size_t reported = 0u;
+        for (const auto& resolution : prepared.analysis.indirect_control_flow) {
+            const auto status =
+                katana::analysis::control_flow_report_status(resolution);
+            if (status !=
+                    katana::analysis::ControlFlowReportStatus::GuardedPartial &&
+                status !=
+                    katana::analysis::ControlFlowReportStatus::Unresolved)
+                continue;
+            if (reported++ == 0u) reason << ": ";
+            else reason << ", ";
+            reason << guarded_aot_address(resolution.instruction_address)
+                   << '('
+                   << katana::analysis::control_flow_report_status_name(status)
+                   << ",r"
+                   << static_cast<unsigned>(resolution.register_index)
+                   << ",origin="
+                   << katana::analysis::indirect_control_flow_origin_class_name(
+                          resolution.origin_class)
+                   << ",rejection="
+                   << katana::analysis::exact_guard_rejection_reason_name(
+                          resolution.exact_guard_rejection_reason)
+                   << ",targets=" << resolution.targets.size() << ')';
+            if (reported == reported_incomplete_sites) break;
+        }
+        if (reported < incomplete)
+            reason << ", ... (" << incomplete << " insgesamt)";
+        reason << '.';
+        throw std::runtime_error(reason.str());
     }
     const bool guarded_inventory_complete =
         katana::analysis::guarded_aot_inventory_complete(
