@@ -28133,10 +28133,17 @@ build_native_disc_materialization_world(
         return id;
     };
     const auto add_frontier = [&](FrontierEntry entry) {
+        const auto family = entry.family;
+        const auto owner = entry.owner;
+        const auto site = entry.site;
+        const auto contracts = entry.contracts.size();
         if (!world.add_frontier(std::move(entry)))
             throw std::runtime_error(
                 std::string("Materialization-World-Frontier ungueltig: ") +
-                world_model_error_name(world.last_error()));
+                world_model_error_name(world.last_error()) +
+                "; family=" + family + "; owner=" + owner +
+                "; site=" + site + "; contracts=" +
+                std::to_string(contracts));
     };
 
     const auto primary_evidence = add_evidence(
@@ -29044,8 +29051,7 @@ build_native_disc_materialization_world(
                 "runtime-image-source-is-mutable");
             entry.contracts.push_back(
                 "live-runtime-generation-evidence-required");
-        }
-        if (requires_dynamic_runtime_evidence) {
+        } else if (requires_dynamic_runtime_evidence) {
             entry.contracts.push_back(
                 "dynamic-site-has-runtime-only-control-flow-contract");
             entry.contracts.push_back(
@@ -29318,7 +29324,7 @@ build_native_disc_materialization_world(
     return world;
 }
 
-void populate_native_disc_materialization_artifacts(
+void populate_native_disc_materialization_artifacts_unchecked(
     NativeDiscAnalysisResult& result,
     const PortExportOptions& options) {
     auto world = build_native_disc_materialization_world(result, options);
@@ -29369,6 +29375,32 @@ void populate_native_disc_materialization_artifacts(
         result.materialization_world_artifact_bytes.resize(std::min(
             katana::agent::materialization_world_max_binary_artifact_bytes,
             result.materialization_world_artifact_bytes.size() * 2u));
+    }
+}
+
+void populate_native_disc_materialization_artifacts(
+    NativeDiscAnalysisResult& result,
+    const PortExportOptions& options) {
+    try {
+        populate_native_disc_materialization_artifacts_unchecked(
+            result, options);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (...) {
+        // The authoritative, source-bound analysis archive is produced before
+        // this derived agent view. Preserve it for the CLI's bounded pending
+        // generation even when a World invariant or serializer rejects the
+        // projection. The caller remains fail-closed because an empty World is
+        // never committed as an authoritative agent generation.
+        result.materialization_world_artifact_bytes.clear();
+        result.materialization_world_json.clear();
+        result.agent_decision.clear();
+        result.agent_decision_reason =
+            "materialization-world-generation-failed";
+        result.agent_decision_focus = 0u;
+        result.agent_actionable_frontier = 0u;
+        report_progress(
+            options, "native-disc-materialization-world-generation-missed");
     }
 }
 
