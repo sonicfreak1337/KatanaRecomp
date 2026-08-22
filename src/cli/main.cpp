@@ -10758,6 +10758,37 @@ int export_port_project(const std::filesystem::path& source_path,
                     agent_analysis_session_contract_identity(
                         prior_session_manifest, analysis_options);
             }
+            if (!session_contract_compatible && refresh_analysis &&
+                (parsed_manifest.artifact.identity.game_project_identity !=
+                     current_manifest.game_project_identity ||
+                 parsed_manifest.artifact.identity.native_port_identity !=
+                     current_manifest.native_port_identity ||
+                 parsed_manifest.artifact.identity
+                         .native_port_artifact_identity !=
+                     current_manifest.native_port_artifact_identity)) {
+                // An explicit refresh starts a new analyzer generation and
+                // never passes the prior analysis artifact as an input. Keep
+                // the committed generation only as the monotone authority /
+                // diff baseline, and admit exactly definition-identity
+                // changes while every disc, payload, mode, hint and resume
+                // entry remains byte-identical under the old session digest.
+                auto prior_session_manifest = current_manifest;
+                prior_session_manifest.game_project_identity =
+                    parsed_manifest.artifact.identity.game_project_identity;
+                prior_session_manifest.native_port_identity =
+                    parsed_manifest.artifact.identity.native_port_identity;
+                prior_session_manifest.native_port_artifact_identity =
+                    parsed_manifest.artifact.identity
+                        .native_port_artifact_identity;
+                session_contract_compatible =
+                    previous_analysis_session_contract_identity ==
+                    agent_analysis_session_contract_identity(
+                        prior_session_manifest, analysis_options);
+                if (session_contract_compatible)
+                    std::cout
+                        << "KATANA_ANALYZE_PORT_REFRESH_SESSION_REBUILT\n"
+                        << std::flush;
+            }
             if (!session_contract_compatible)
                 throw std::invalid_argument(
                     "analyze-port --resume verweigert einen veraenderten "
