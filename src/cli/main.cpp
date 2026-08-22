@@ -7852,6 +7852,8 @@ struct AgentIterationDelta final {
     std::size_t routed_to_runtime_frontiers = 0u;
     std::size_t routed_to_static_frontiers = 0u;
     std::size_t static_actionable_before = 0u;
+    std::size_t baseline_static_actionable_after = 0u;
+    std::size_t new_static_actionable_after = 0u;
     std::size_t static_actionable_after = 0u;
     std::size_t proof_upgrades = 0u;
     std::size_t proof_downgrades = 0u;
@@ -8567,6 +8569,8 @@ AgentIterationDelta measure_agent_iteration(
             (current == nullptr || !unresolved_agent_frontier(*current)))
             ++result.resolved_frontiers;
         if (current == nullptr) continue;
+        if (static_actionable_agent_frontier(*current))
+            ++result.baseline_static_actionable_after;
         if (static_actionable_agent_frontier(previous) &&
             unresolved_agent_frontier(*current) &&
             runtime_agent_frontier(*current))
@@ -8587,8 +8591,11 @@ AgentIterationDelta measure_agent_iteration(
     for (const auto& current : after.frontier()) {
         if (static_actionable_agent_frontier(current))
             ++result.static_actionable_after;
-        if (find_agent_frontier(before, current.id) == nullptr &&
-            unresolved_agent_frontier(current)) {
+        const bool newly_discovered =
+            find_agent_frontier(before, current.id) == nullptr;
+        if (newly_discovered && static_actionable_agent_frontier(current))
+            ++result.new_static_actionable_after;
+        if (newly_discovered && unresolved_agent_frontier(current)) {
             if (current.state ==
                 katana::agent::FrontierState::ObservedHint)
                 ++result.new_runtime_hints;
@@ -9464,13 +9471,18 @@ void append_agent_session_ledger(
     }
     const auto result = !previous_world.has_value()
         ? "initial"
-        : delta.proof_downgrades != 0u || delta.new_frontiers != 0u ||
-                  delta.new_incomplete_roots != 0u
+        : delta.proof_downgrades != 0u ||
+                  delta.new_incomplete_roots != 0u ||
+                  delta.routed_to_static_frontiers != 0u
             ? "regression"
             : delta.resolved_frontiers != 0u ||
-                      delta.proof_upgrades != 0u
+                      delta.proof_upgrades != 0u ||
+                      delta.routed_to_runtime_frontiers != 0u
                 ? "improved"
-                : "no_progress";
+                : delta.new_frontiers != 0u ||
+                          delta.new_runtime_hints != 0u
+                    ? "expanded"
+                    : "no_progress";
     std::ostringstream line;
     line << "{\"schema\":5,\"kind\":\"katana-agent-session\""
          << ",\"task_id\":" << task_id
@@ -12450,20 +12462,22 @@ int diff_analysis_cli(const std::filesystem::path& before_path,
         throw std::runtime_error(
             "Materialization-World-Diff konnte nicht vollstaendig erzeugt "
             "werden.");
-    std::cout << "{\"schema\":2,\"kind\":\"katana-agent-diff\""
+    std::cout << "{\"schema\":3,\"kind\":\"katana-agent-diff\""
               << ",\"change_count\":" << result.total
               << ",\"agent_result\":"
               << katana::io::quote_json(
                      delta.proof_downgrades != 0u ||
-                             delta.new_frontiers != 0u ||
                              delta.new_incomplete_roots != 0u ||
                              delta.routed_to_static_frontiers != 0u
                          ? "regression"
                          : delta.resolved_frontiers != 0u ||
-                                   delta.proof_upgrades != 0u ||
+                               delta.proof_upgrades != 0u ||
                                    delta.routed_to_runtime_frontiers != 0u
                                ? "improved"
-                               : "no_progress")
+                               : delta.new_frontiers != 0u ||
+                                         delta.new_runtime_hints != 0u
+                                   ? "expanded"
+                                   : "no_progress")
               << ",\"resolved_frontiers\":"
               << delta.resolved_frontiers
               << ",\"new_frontiers\":" << delta.new_frontiers
@@ -12475,6 +12489,10 @@ int diff_analysis_cli(const std::filesystem::path& before_path,
               << delta.routed_to_static_frontiers
               << ",\"static_actionable_before\":"
               << delta.static_actionable_before
+              << ",\"baseline_static_actionable_after\":"
+              << delta.baseline_static_actionable_after
+              << ",\"new_static_actionable_after\":"
+              << delta.new_static_actionable_after
               << ",\"static_actionable_after\":"
               << delta.static_actionable_after
               << ",\"proof_upgrades\":" << delta.proof_upgrades

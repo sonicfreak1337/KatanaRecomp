@@ -107,14 +107,18 @@ katana-recomp diff-analysis `
   --format agent-json
 ```
 
-`diff-analysis` Schema 2 trennt geschlossene Frontiers von einer belegten
+`diff-analysis` Schema 3 trennt geschlossene Frontiers von einer belegten
 Weiterleitung in den Runtime-Evidence-Kanal. Es publiziert deshalb neben den
 Proof- und Root-Deltas auch `static_actionable_before`,
+`baseline_static_actionable_after`, `new_static_actionable_after`,
 `static_actionable_after`, `routed_to_runtime_frontiers` und
-`routed_to_static_frontiers`. Eine statisch nicht mehr loesbare, aber korrekt
-als runtime-abhaengig klassifizierte Luecke ist damit ein messbarer
-Routingfortschritt, keine vorgetaeuschte statische Closure. Der umgekehrte Weg
-bleibt eine Regression.
+`routed_to_static_frontiers`. Der Baseline-Zaehler umfasst nur bereits im
+vorherigen World-Artefakt vorhandene Frontiers; neu entdeckte statische Arbeit
+wird separat ausgewiesen. Reine Coverage-Erweiterung ergibt `expanded` statt
+`regression`. Eine statisch nicht mehr loesbare, aber korrekt als
+runtime-abhaengig klassifizierte Luecke ist ein messbarer Routingfortschritt,
+keine vorgetaeuschte statische Closure. Proof-/Completeness-Verlust und der
+umgekehrte Weg vom Runtime- in den statischen Kanal bleiben Regressionen.
 
 `next-analysis-task` Schema 2 behaelt den hoechst priorisierten Primary-Task
 und liefert zusaetzlich einen bounded `tasks`-Batch mit bis zu neun
