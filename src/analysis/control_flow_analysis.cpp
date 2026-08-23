@@ -1549,12 +1549,11 @@ StaticCodePointerSet resolve_static_code_pointer_set(
             return nullptr;
         return image.find_immutable_range(address, width);
     };
-    const auto same_proof =
+    const auto same_authenticated_view =
         [](const katana::io::ImageImmutableRange* left,
            const katana::io::ImageImmutableRange* right) {
         return left != nullptr && right != nullptr &&
-               left->generation == right->generation &&
-               left->identity == right->identity;
+               left->generation == right->generation;
     };
     const auto* const dispatch_proof =
         immutable_image_proof(dispatch_address, true, 2u);
@@ -1644,9 +1643,9 @@ StaticCodePointerSet resolve_static_code_pointer_set(
                 ExactGuardRejectionReason::TargetImmutableProofMissing;
             return result;
         }
-        if (!same_proof(dispatch_proof, writer_proof) ||
-            !same_proof(dispatch_proof, literal_proof) ||
-            !same_proof(dispatch_proof, target_proof)) {
+        if (!same_authenticated_view(dispatch_proof, writer_proof) ||
+            !same_authenticated_view(dispatch_proof, literal_proof) ||
+            !same_authenticated_view(dispatch_proof, target_proof)) {
             result.exact_target_rejection_reason =
                 ExactGuardRejectionReason::ImageIdentityMismatch;
             return result;
@@ -1832,12 +1831,12 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
                                 : nullptr;
             immutable_literal = literal_proof != nullptr;
         }
-        const auto same_proof = [](const katana::io::ImageImmutableRange* left,
-                                   const katana::io::ImageImmutableRange* right) {
-            return left != nullptr && right != nullptr &&
-                   left->generation == right->generation &&
-                   left->identity == right->identity;
-        };
+        const auto same_authenticated_view =
+            [](const katana::io::ImageImmutableRange* left,
+               const katana::io::ImageImmutableRange* right) {
+                return left != nullptr && right != nullptr &&
+                       left->generation == right->generation;
+            };
         bool immutable_definition_sites = !result.definition_sites.empty();
         bool same_image = dispatch_proof != nullptr;
         for (const auto definition : result.definition_sites) {
@@ -1847,12 +1846,13 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
                 immutable_definition_sites = false;
                 continue;
             }
-            same_image = same_image && same_proof(dispatch_proof, proof);
+            same_image =
+                same_image && same_authenticated_view(dispatch_proof, proof);
         }
         same_image = same_image &&
-                     same_proof(dispatch_proof, writer_proof) &&
-                     same_proof(dispatch_proof, literal_proof) &&
-                     same_proof(dispatch_proof, target_proof);
+                     same_authenticated_view(dispatch_proof, writer_proof) &&
+                     same_authenticated_view(dispatch_proof, literal_proof) &&
+                     same_authenticated_view(dispatch_proof, target_proof);
         result.exact_target_guard =
             target_opcode_known &&
             (!result.preceding_call ||
@@ -3273,6 +3273,7 @@ struct ControlFlowAnalysisSession::Impl final {
         const bool root_only_reuse =
             reusable && bounded &&
             image_identity == image.analysis_instance_identity() &&
+            image_revision == image.analysis_revision() &&
             image_immutable_generation == image.immutable_generation() &&
             immutable_binding_matches &&
             same_analysis_overrides(overrides, next_overrides) &&

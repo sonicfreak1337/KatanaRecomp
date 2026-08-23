@@ -69,9 +69,11 @@ struct ImageAddressAlias {
 // segment permissions are intentionally not enough here: Dreamcast boot
 // images are mixed RWX segments even when a verified post-bootstrap identity
 // proves that a particular code/literal range is no longer writable.  The
-// generation is owned by ExecutableImage and is invalidated whenever image
-// bytes/layout metadata mutates; identity binds all ranges used by one exact
-// pointer chain to the same authenticated image view.
+// producer must authenticate identity against the committed bytes before
+// insertion. The generation is owned by ExecutableImage and is invalidated
+// whenever image bytes/layout metadata mutates. Independently authenticated
+// ranges may participate in one pointer chain only while they all belong to
+// the same still-current generation.
 struct ImageImmutableRange final {
     std::uint32_t address = 0u;
     std::uint64_t size = 0u;
