@@ -435,8 +435,44 @@ AddressDescription describe(const std::uint32_t address) {
 
 AddressDescription describe_image_access(
     const io::ExecutableImage& image,
+    const std::uint32_t instruction_address,
+    const sh4::InstructionKind instruction_kind,
     const std::uint32_t address,
     const std::uint8_t width) {
+    // A latent runtime module is analyzed at an identity-bound synthetic
+    // source address until its loader-selected runtime base is known.  A
+    // directly PC-relative module-local literal access must therefore retain
+    // source-image authority even when that synthetic address happens to
+    // alias a Dreamcast hardware aperture after SH-4 canonicalization. Keep
+    // the exception narrower than propagated pointer accesses: a hardware
+    // address loaded from such a literal must still classify as MMIO when it
+    // is dereferenced by a later instruction.
+    const auto* instruction_segment =
+        image.find_segment(instruction_address, 2u);
+    const auto* instruction_identity =
+        image.find_immutable_range(instruction_address, 2u);
+    const auto* access_identity =
+        width == 0u ? nullptr : image.find_immutable_range(address, width);
+    if (instruction_segment != nullptr &&
+        instruction_segment->source_kind == io::ImageSourceKind::DiscModule &&
+        instruction_segment->load_phase == io::ImageLoadPhase::RuntimeModule &&
+        (instruction_kind == sh4::InstructionKind::MovWordLoadPcRelative ||
+         instruction_kind == sh4::InstructionKind::MovLongLoadPcRelative) &&
+        instruction_identity != nullptr && access_identity != nullptr &&
+        instruction_identity->generation == access_identity->generation &&
+        instruction_identity->identity == access_identity->identity) {
+        const auto* access_segment = image.find_segment(address, width);
+        if (access_segment == instruction_segment) {
+            auto result = describe(address);
+            result.canonical = address;
+            result.region = DreamcastHardwareRegion::Unknown;
+            result.aperture_mapped = false;
+            result.image_backed = true;
+            result.name = "runtime-module-local-data";
+            return result;
+        }
+    }
+
     auto result = describe(address);
     // A statically resolved address backed by the identity-bound input image is
     // source/module data, even when its synthetic analysis address (for
@@ -1991,7 +2027,9 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                     image, block.lines[line_index].address,
                     access.address, access.width);
                 const auto description = describe_image_access(
-                    image, projected_address, access.width);
+                    image, block.lines[line_index].address,
+                    block.lines[line_index].instruction.kind,
+                    projected_address, access.width);
                 if (!is_linear_loop_memory(description)) continue;
                 resolved_linear_writes.push_back({
                     block.lines[line_index].address,
@@ -2181,7 +2219,9 @@ find_natural_hardware_loops(const io::ExecutableImage& image,
                                 access.address,
                                 access.width);
                         const auto description = describe_image_access(
-                            image, projected_address, access.width);
+                            image, block.lines[line_index].address,
+                            block.lines[line_index].instruction.kind,
+                            projected_address, access.width);
                         HardwareLoopAccessEvidence evidence;
                         evidence.instruction_address = block.lines[line_index].address;
                         evidence.guest_address = projected_address;
@@ -2790,7 +2830,9 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                             access.address,
                             access.width);
                     const auto description = describe_image_access(
-                        image, projected_address, access.width);
+                        image, lines[index].address,
+                        lines[index].instruction.kind,
+                        projected_address, access.width);
                     // Unknown is ordinary memory only inside the verified
                     // linear main-RAM aperture. A statically resolved access
                     // anywhere else is an unmapped native-product dependency,

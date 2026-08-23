@@ -9566,8 +9566,7 @@ std::optional<std::vector<AgentCompleteJumpTableFunctionDemotion>>
 complete_jump_table_function_demotions(
     const AgentAnalysisAuthorityBaseline& baseline,
     const katana::codegen::NativeDiscAnalysisArtifact& candidate,
-    const std::vector<std::uint32_t>& candidate_function_entries,
-    const std::vector<std::uint32_t>& resolved_replacement_owners) {
+    const std::vector<std::uint32_t>& candidate_function_entries) {
     std::vector<std::uint32_t> lost_entries;
     std::set_difference(
         baseline.primary_function_entries.begin(),
@@ -9626,10 +9625,6 @@ complete_jump_table_function_demotions(
                 [&](const auto& function) {
                     return function.address == entry;
                 }) ||
-            !std::binary_search(
-                resolved_replacement_owners.begin(),
-                resolved_replacement_owners.end(),
-                entry) ||
             !std::binary_search(
                 baseline.program_index
                     .incomplete_outgoing_function_entries.begin(),
@@ -9965,8 +9960,7 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
         complete_jump_table_function_demotions(
             baseline,
             candidate,
-            candidate_function_entries,
-            world_delta.resolved_replacement_owners);
+            candidate_function_entries);
     if (!complete_table_function_demotions.has_value())
         return "primary-functions-lost";
 
@@ -10030,10 +10024,13 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
             return "latent-materialization-lost";
     }
     // Incomplete-owner entries are negative closure facts. Requiring them to
-    // grow monotonically rejects the exact successful fix that resolves a
-    // frontier. Permit only losses correlated one-for-one with the same
-    // bounded replacement-owner frontier becoming closed in the candidate
-    // World; hidden/unexplained losses remain fail-closed.
+    // grow monotonically rejects both a closed replacement frontier and a
+    // guarded jump-table target that is soundly demoted into its still-open
+    // owner. The complete-table proof above is the authority for the latter;
+    // remove those entries from both observations because the World may also
+    // report the target frontier itself as resolved. Every remaining loss
+    // must still correlate one-for-one with a replacement owner frontier
+    // becoming closed in the candidate World.
     std::vector<std::uint32_t> lost_incomplete_owners;
     std::set_difference(
         baseline.program_index.incomplete_outgoing_function_entries.begin(),
@@ -10043,8 +10040,27 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
         candidate.native_port_program_index
             .incomplete_outgoing_function_entries.end(),
         std::back_inserter(lost_incomplete_owners));
-    if (lost_incomplete_owners !=
-        world_delta.resolved_replacement_owners)
+    std::vector<std::uint32_t> demoted_incomplete_entries;
+    demoted_incomplete_entries.reserve(
+        complete_table_function_demotions->size());
+    for (const auto& demotion : *complete_table_function_demotions)
+        demoted_incomplete_entries.push_back(demotion.entry);
+    std::sort(
+        demoted_incomplete_entries.begin(),
+        demoted_incomplete_entries.end());
+    std::vector<std::uint32_t> unexplained_incomplete_losses;
+    std::set_difference(
+        lost_incomplete_owners.begin(), lost_incomplete_owners.end(),
+        demoted_incomplete_entries.begin(), demoted_incomplete_entries.end(),
+        std::back_inserter(unexplained_incomplete_losses));
+    std::vector<std::uint32_t> non_demotion_resolved_owners;
+    std::set_difference(
+        world_delta.resolved_replacement_owners.begin(),
+        world_delta.resolved_replacement_owners.end(),
+        demoted_incomplete_entries.begin(), demoted_incomplete_entries.end(),
+        std::back_inserter(non_demotion_resolved_owners));
+    if (unexplained_incomplete_losses !=
+        non_demotion_resolved_owners)
         return "native-program-index-frontier-lost";
     if (!program_index_adjacency_subset_with_related_remap(
             baseline.program_index.incoming_edge_sources,
