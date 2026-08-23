@@ -457,6 +457,7 @@ std::string native_port_input_compatibility_identity(
     case Operation::Wait: return "Wait";
     case Operation::Interrupt: return "Interrupt";
     case Operation::Fifo: return "Fifo";
+    case Operation::Prefetch: return "Prefetch";
     }
     throw std::invalid_argument("native-port-provider-operation");
 }

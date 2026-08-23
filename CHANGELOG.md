@@ -4,6 +4,13 @@
 
 ### Geaendert
 
+- Provider-Semantikvertrag 2 bildet einen auditierten SH-4-Store-Queue-
+  `PREF` als eigene geordnete Queue-Operation ab. Kind, Operation und
+  Ressource muessen exakt korrelieren; ein unbekanntes Prefetch-Ziel oder
+  eine als Read degradierte Queue-Transaktion bleibt fail-closed. Der
+  inkompatible oeffentliche Vertrag hebt Runtime-ABI auf 118, Analyzer-ABI
+  auf 64 und das NativePortArtifact-Format auf 12.
+
 - Katana besitzt jetzt einen transaktionalen, agentischen Native-Disc-
   Analyseworkflow. `analyze-port`, `next-analysis-task`, `explain` und
   `diff-analysis` arbeiten auf einer identitaetsgebundenen Materialization-

@@ -12,7 +12,7 @@ namespace katana::runtime {
 // the callback may mutate NativePortContext, while this bounded description
 // is what export-time analysis can compare against the displaced guest owner.
 inline constexpr std::uint32_t native_port_provider_semantics_contract_version =
-    1u;
+    2u;
 inline constexpr std::size_t native_port_provider_semantics_maximum_contracts =
     4'096u;
 inline constexpr std::size_t native_port_provider_semantics_maximum_guards =
@@ -29,7 +29,11 @@ enum class NativePortProviderOperation : std::uint8_t {
     AckClear,
     Wait,
     Interrupt,
-    Fifo
+    Fifo,
+    // The current contract admits only an audited SH-4 store-queue PREF.
+    // Cache or other future prefetch resources require their own explicit
+    // resource mapping; they must not be collapsed into Queue.
+    Prefetch
 };
 
 enum class NativePortProviderResourceKind : std::uint8_t {

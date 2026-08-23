@@ -596,6 +596,10 @@ OwnerSemanticSummary summarize_owner_semantics(
                     : no_hardware_references;
             if (!matching_hardware.empty())
                 summary.provider_contract_required = true;
+            if (instruction.operation == ir::Operation::Prefetch &&
+                matching_hardware.empty())
+                append_reason(summary, options,
+                              "hardware-prefetch-address-unresolved");
 
             if (instruction.operation == ir::Operation::Unknown) {
                 summary.has_unknown_operations = true;
@@ -648,14 +652,15 @@ OwnerSemanticSummary summarize_owner_semantics(
                                 break;
                             case HardwareAccessKind::Prefetch:
                                 effect.kind = OwnerSemanticEffectKind::HardwarePrefetch;
-                                // Provider contracts model prefetch as a read while
-                                // the effect kind retains the stronger distinction.
                                 effect.provider_operation =
-                                    runtime::NativePortProviderOperation::Read;
+                                    runtime::NativePortProviderOperation::Prefetch;
+                                effect.provider_resource_kind =
+                                    runtime::NativePortProviderResourceKind::Queue;
                                 break;
                             }
-                            effect.provider_resource_kind =
-                                runtime::NativePortProviderResourceKind::HardwareRegister;
+                            if (hardware->kind != HardwareAccessKind::Prefetch)
+                                effect.provider_resource_kind =
+                                    runtime::NativePortProviderResourceKind::HardwareRegister;
                         } else {
                             effect.kind = memory_access == ir::MemoryAccessKind::Write
                                               ? OwnerSemanticEffectKind::MemoryWrite
@@ -770,9 +775,9 @@ OwnerSemanticSummary summarize_owner_semantics(
                     case HardwareAccessKind::Prefetch:
                         effect.kind = OwnerSemanticEffectKind::HardwarePrefetch;
                         effect.provider_operation =
-                            runtime::NativePortProviderOperation::Read;
-                        append_reason(summary, options,
-                                      "hardware-prefetch-effect-unrepresentable");
+                            runtime::NativePortProviderOperation::Prefetch;
+                        effect.provider_resource_kind =
+                            runtime::NativePortProviderResourceKind::Queue;
                         break;
                     }
                     append_effect(block_index, std::move(effect));

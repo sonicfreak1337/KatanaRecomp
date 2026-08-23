@@ -53,10 +53,11 @@ Artefakt-SHA-256 bindet; unmittelbar vor Prozessstart werden alle Identitaeten
 erneut geprueft und als Run-Eingabemanifest gespeichert. Eine veraltete oder
 waehrend des Preflights veraenderte Datei beendet den Lauf vor der Analyse.
 
-Source-Vertragsstand: Runtime-ABI `117`, Analyzer-ABI `63`, Backend-
+Source-Vertragsstand: Runtime-ABI `118`, Analyzer-ABI `64`, Backend-
 Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil `23`.
 Der aktuelle Native-Port-Vertrag verwendet `NativePortDefinition` `11`,
-`NativePortArtifact` `11` und Hardware-Closure `v8`. Die neue
+`NativePortArtifact` `12`, Provider-Semantikvertrag `v2` und Hardware-Closure
+`v8`. Die neue
 fail-closed Beweisschicht vergleicht `OwnerSemanticSummary` mit einem
 `NativeProviderSemanticContract` (Runtime-Typ
 `NativePortProviderSemanticContract`): eine exakt identity-bound Ownerfunktion

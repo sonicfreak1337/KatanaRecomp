@@ -60,6 +60,7 @@ void append_text(std::string& output, const std::string_view value) {
     case NativePortProviderOperation::Wait:
     case NativePortProviderOperation::Interrupt:
     case NativePortProviderOperation::Fifo:
+    case NativePortProviderOperation::Prefetch:
         return true;
     }
     return false;
@@ -140,6 +141,12 @@ void append_text(std::string& output, const std::string_view value) {
         return !effect.result_expression.empty();
     case NativePortProviderOperation::Fifo:
         return !effect.value_expression.empty() || !effect.result_expression.empty();
+    case NativePortProviderOperation::Prefetch:
+        return effect.resource_kind == NativePortProviderResourceKind::Queue &&
+               effect.width == 4u && effect.region == "store_queue" &&
+               effect.value_expression.empty() &&
+               effect.result_expression.empty() && effect.write_mask == 0u &&
+               effect.clear_mask == 0u;
     }
     return false;
 }
@@ -187,10 +194,10 @@ void append_text(std::string& output, const std::string_view value) {
     material.clear();
     material.reserve(128u + contract.guards.size() * 16u +
                      contract.effects.size() * 96u);
-    // Identity domain v1.  The provider implementation identity is kept out
+    // Identity domain v2.  The provider implementation identity is kept out
     // of this stream by contract: changing the native implementation must be
     // a separate binding check, while behaviour identity remains stable.
-    append_text(material, "katana-native-provider-semantics-v1");
+    append_text(material, "katana-native-provider-semantics-v2");
     append_u64(material, contract.contract_version);
     append_u64(material, contract.hook_guest_address);
     append_u64(material, contract.authoritative);
@@ -253,10 +260,15 @@ void append_text(std::string& output, const std::string_view value) {
     if (effect.hardware_reference &&
         effect.hardware_reference->runtime_support != HardwareRuntimeSupport::Implemented)
         return false;
-    // A prefetch is intentionally not collapsed into a read: provider
-    // semantics have no prefetch operation, so this would lose an observable
-    // contract distinction.
-    if (effect.kind == OwnerSemanticEffectKind::HardwarePrefetch) return false;
+    if (effect.kind == OwnerSemanticEffectKind::HardwarePrefetch)
+        return effect.provider_operation == NativePortProviderOperation::Prefetch &&
+               effect.provider_resource_kind == NativePortProviderResourceKind::Queue &&
+               effect.width_bytes == 4u && effect.region == "store_queue" &&
+               effect.hardware_reference &&
+               effect.hardware_reference->kind == HardwareAccessKind::Prefetch &&
+               effect.hardware_reference->region == DreamcastHardwareRegion::StoreQueue;
+    if (effect.provider_operation == NativePortProviderOperation::Prefetch)
+        return false;
     return valid_operation(effect.provider_operation) &&
            valid_resource(effect.provider_resource_kind);
 }

@@ -86,6 +86,7 @@ namespace {
     case NativePortProviderOperation::Wait:
     case NativePortProviderOperation::Interrupt:
     case NativePortProviderOperation::Fifo:
+    case NativePortProviderOperation::Prefetch:
         return true;
     }
     return false;
@@ -659,6 +660,15 @@ void validate_native_port_definition(
                 if (effect.value_expression.empty() &&
                     effect.result_expression.empty())
                     invalid_definition("provider-semantic-fifo");
+                break;
+            case NativePortProviderOperation::Prefetch:
+                if (effect.resource_kind !=
+                        NativePortProviderResourceKind::Queue ||
+                    effect.width != 4u || effect.region != "store_queue" ||
+                    !effect.value_expression.empty() ||
+                    !effect.result_expression.empty() ||
+                    effect.write_mask != 0u || effect.clear_mask != 0u)
+                    invalid_definition("provider-semantic-prefetch");
                 break;
             }
         }

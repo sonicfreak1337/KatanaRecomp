@@ -1,7 +1,7 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `63`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 117, Block-ABI 5, PlatformServices-ABI 14,
+Der aktuelle oeffentliche Analyzervertrag ist Version `64`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 118, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 23. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
@@ -15,7 +15,7 @@ ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 ABI-34-Referenz erhalten.
 
 Der aktuelle Native-Port-Vertrag verwendet
-`NativePortDefinition` `11`, `NativePortArtifact` `11` und
+`NativePortDefinition` `11`, `NativePortArtifact` `12` und
 Hardware-Closure `v8`. Seine fail-closed Beweisschicht bildet
 `OwnerSemanticSummary` auf der Analyzer-Seite und den
 `NativeProviderSemanticContract` (Runtime-Typ
@@ -28,6 +28,17 @@ sowie dieselben geordneten Guards, Effekte und Resultate. Jede fehlende,
 unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
 keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
 dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
+
+Analyzer-ABI 64 und Runtime-ABI 118 erweitern den oeffentlichen Provider-
+Effektvertrag um die append-only Operation `Prefetch`. Owner-Effekte muessen
+Kind, Operation und Queue-Ressource exakt korrelieren; ein als Read
+degradierter Prefetch oder ein Prefetch ohne Hardware-Referenz ist nicht
+representierbar. Provider-Semantikvertrag und Semantic-Identity-Domaene
+stehen deshalb auf `v2`, der Native-Port-Artefaktcodec auf Format 12. Alte
+Vertraege und Artefakte werden fail-closed abgelehnt und koennen keine
+Hardware-Closure publizieren. Der aktuelle Vertrag repraesentiert nur einen
+auditierten SH-4-Store-Queue-PREF; Cache- und andere Prefetch-Ressourcen
+bleiben bis zu einer eigenen Klassifikation offen.
 
 Analyzer-ABI 63 trennt die IR-Implementierungsidentitaet in unoptimiertes
 Analysis-/Lowering-IR und Produktoptimierung. Boot-/CFA-/FVA-Caches binden nur

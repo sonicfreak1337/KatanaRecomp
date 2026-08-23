@@ -27,8 +27,8 @@ vor `analyze_native_disc_port()` real vorgeprueft. Run 50 publizierte das
 bounded Pending-Slots und danach als autoritative Generation. Ein spaeteres
 Authority-Gate kann die teure Analyse dadurch nicht mehr still verwerfen.
 
-Der aktuelle Stand verwendet Runtime-ABI `117` und Analyzer-ABI `63` sowie
-`NativePortDefinition` `11`, `NativePortArtifact` `11` und Hardware-Closure
+Der aktuelle Stand verwendet Runtime-ABI `118` und Analyzer-ABI `64` sowie
+`NativePortDefinition` `11`, `NativePortArtifact` `12` und Hardware-Closure
 `v8`. Die fail-closed Beweisschicht vergleicht eine
 `OwnerSemanticSummary`-Sicht der exakt identity-bound Ownerfunktion mit dem
 `NativeProviderSemanticContract` (Runtime-Typ
@@ -37,7 +37,10 @@ Semantikidentitaet, getrennte Provider-Implementierungsidentitaet, geordnete
 Guards, Effekte und Ergebnisprojektion muessen uebereinstimmen. Ein
 unvollstaendiges, unbekanntes, trunciertes oder nicht identisches Summary/
 Contract-Paar schliesst keinen Replacement-Hook; Hardware-Closure bleibt
-stattdessen mit einem Gap offen. Der alte Dreamcast-Geraetepfad ist nur ein
+stattdessen mit einem Gap offen. Provider-Semantikvertrag `2` fuehrt den
+auditierten Store-Queue-PREF als eigene geordnete Queue-Operation; unbekannte
+Prefetch-Ziele bleiben explizit unrepresentierbar. Der alte Dreamcast-
+Geraetepfad ist nur ein
 internes Offline-Orakel und wird nie in Produktlink oder Produktruntime
 verwendet.
 
@@ -148,9 +151,9 @@ generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
 Lauf sind weiterhin offen. Es wurde weder eine Sonic-Analyse noch ein Port
 gestartet oder exportiert.
 
-## Aktueller Produktmeilenstein: v141 / Source-ABI 117-63
+## Aktueller Produktmeilenstein: v141 / Source-ABI 118-64
 
-Der aktuelle Source-Stand ist Runtime-ABI `117`, Analyzer-ABI `63`,
+Der aktuelle Source-Stand ist Runtime-ABI `118`, Analyzer-ABI `64`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
 Profilvertrag `23`. Der agentische Native-Disc-Workflow publiziert eine
 identitaetsgebundene Materialization-World und ein resumierbares Ledger;

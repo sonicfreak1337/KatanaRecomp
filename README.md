@@ -26,16 +26,16 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 117, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 118, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 63, Function-Analysis-Epoch-Schema 36, lokales
+Analyzer-ABI 64, Function-Analysis-Epoch-Schema 36, lokales
 In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
 Port-Metadata-Cache-Schema: `12`.
 Der aktuelle GameProject-Vertrag ist `9` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `11` und bleibt davon getrennt; das
-NativePortArtifact-Format steht auf `11`. Die aktuellen
+NativePortArtifact-Format steht auf `12`. Die aktuellen
 Analyse-Direktiven stehen auf `5`, das Hardware-Closure-Schema auf `v8`, die
 Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
@@ -50,8 +50,11 @@ identity-bound Ownergrenze mit geschlossener CFG/SCC-, Effekt- und
 Guard-Sicht. Nur ein vollstaendiges, nicht trunciertes Summary mit
 vollstaendiger Ergebnisprojektion und exakt passendem Contract darf einen
 Replacement-Hook schliessen; fehlende, unbekannte oder widerspruechliche
-Beweise bleiben in Hardware-Closure v8 als Gap offen. Der alte
-Dreamcast-Geraetepfad ist ausschliesslich ein internes Offline-Orakel und wird
+Beweise bleiben in Hardware-Closure v8 als Gap offen. Provider-
+Semantikvertrag `2` repraesentiert einen auditierten Store-Queue-`PREF` als
+eigene geordnete Queue-Operation; unbekannte oder nicht als Store Queue
+klassifizierte Prefetch-Ziele bleiben fail-closed. Der alte Dreamcast-
+Geraetepfad ist ausschliesslich ein internes Offline-Orakel und wird
 nie in Produktlink oder Produktruntime verwendet.
 
 Der Windows-Native-Port bindet XInput sowie die explizit identifizierten
@@ -81,7 +84,7 @@ Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
 vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
-Source-Stand Runtime-ABI 117 / Analyzer-ABI 63; historische Exportzahlen
+Source-Stand Runtime-ABI 118 / Analyzer-ABI 64; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
 
 Der aktuelle Kaltpfad verschiebt IR-Lowering, Audit und Graphmaterialisierung
@@ -692,7 +695,7 @@ bewiesener Spieleinstieg benoetigt dabei einen titel- und
 Executable-identitaetsgebundenen `GameEntryHandoff` aus dem externen
 Spielprojekt. Der aktuelle Handoff-Vertrag verwendet Schema 3,
 Handoff-Artefaktformat 2 und Plattformzustandsvertrag 2; der aktuelle
-KR-5005-Stand verwendet Runtime-ABI 117, Analyzer-ABI 63, Portprojektvertrag 103 und
+KR-5005-Stand verwendet Runtime-ABI 118, Analyzer-ABI 64, Portprojektvertrag 103 und
 Native-Port-Profilvertrag 23. Davon getrennt verwendet `GameProject` Vertrag 9 und
 Artefaktformat 6. `CompletePlatform` gehoert mit dem kanonischen Satz aus 22
 Dreamcast-Geraeten einschliesslich Flash und der typisierten Scheduler-Timeline
