@@ -8849,10 +8849,44 @@ struct AgentAnalysisModuleAuthority final {
     std::vector<std::uint32_t> instruction_addresses;
 };
 
+using AgentPrimaryInstructionAuthority = katana::ir::Instruction;
+
+struct AgentPrimaryBlockAuthority final {
+    std::uint32_t start_address = 0u;
+    std::vector<AgentPrimaryInstructionAuthority> instructions;
+    std::vector<std::uint32_t> successors;
+    std::vector<std::uint32_t> guarded_case_ownership_targets;
+    bool has_indirect_successor = false;
+};
+
+struct AgentPrimaryFunctionAuthority final {
+    std::uint32_t entry_address = 0u;
+    std::vector<AgentPrimaryBlockAuthority> blocks;
+    std::vector<std::uint32_t> direct_callees;
+    std::vector<std::uint32_t> indirect_call_sites;
+};
+
+struct AgentGuardedPrimaryEntryAuthority final {
+    std::uint32_t guest_address = 0u;
+    std::uint32_t shared_body_address = 0u;
+    katana::analysis::ControlFlowEvidence evidence =
+        katana::analysis::ControlFlowEvidence::Unresolved;
+    std::vector<katana::analysis::GuardedAotEntryOrigin> origins;
+    std::vector<std::uint32_t> source_sites;
+    std::vector<std::uint32_t> source_objects;
+    std::string source_identity;
+    std::uint64_t source_byte_offset = 0u;
+    std::uint32_t entry_byte_extent = 0u;
+    std::string entry_byte_identity;
+};
+
 struct AgentAnalysisAuthorityBaseline final {
     std::vector<std::uint32_t> external_primary_roots;
     std::vector<std::uint32_t> native_resume_entries;
     std::vector<std::uint32_t> primary_function_entries;
+    std::vector<AgentPrimaryFunctionAuthority> primary_functions;
+    std::vector<std::uint32_t> exact_primary_function_boundaries;
+    std::vector<AgentGuardedPrimaryEntryAuthority> guarded_primary_entries;
     std::vector<std::uint32_t> primary_instruction_addresses;
     std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>>
         primary_call_edges;
@@ -8878,14 +8912,111 @@ std::vector<std::uint32_t> latent_module_instruction_addresses(
 }
 
 AgentAnalysisAuthorityBaseline capture_agent_analysis_authority(
-    const katana::codegen::NativeDiscAnalysisArtifact& artifact) {
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact,
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const katana::runtime::NativePortDefinition* const native_port) {
     AgentAnalysisAuthorityBaseline result;
     result.external_primary_roots = artifact.external_primary_roots;
     result.native_resume_entries = artifact.native_resume_entries;
+    const auto canonicalize_addresses = [](auto& addresses) {
+        std::sort(addresses.begin(), addresses.end());
+        addresses.erase(
+            std::unique(addresses.begin(), addresses.end()), addresses.end());
+    };
+    canonicalize_addresses(result.external_primary_roots);
+    canonicalize_addresses(result.native_resume_entries);
+    std::vector<std::uint32_t> table_guarded_candidates;
+    for (const auto& entry : artifact.primary.analysis.guarded_aot_entries) {
+        if (entry.evidence !=
+                katana::analysis::ControlFlowEvidence::GuardedPartial ||
+            std::find(
+                entry.origins.begin(),
+                entry.origins.end(),
+                katana::analysis::GuardedAotEntryOrigin::JumpTableTail) ==
+                entry.origins.end())
+            continue;
+        if (!std::all_of(
+                entry.origins.begin(),
+                entry.origins.end(),
+                [](const auto origin) {
+                    return origin ==
+                               katana::analysis::GuardedAotEntryOrigin::
+                                   TailIngress ||
+                           origin ==
+                               katana::analysis::GuardedAotEntryOrigin::
+                                   JumpTableTail;
+                }))
+            continue;
+        table_guarded_candidates.push_back(entry.guest_address);
+    }
+    canonicalize_addresses(table_guarded_candidates);
     result.primary_function_entries.reserve(
         artifact.primary.lowered_program.size());
-    for (const auto& function : artifact.primary.lowered_program)
+    // Only an already-incomplete, table-guarded replacement owner may later
+    // be demoted into a complete JumpTable owner's internal block. Retaining
+    // compact body authority for that bounded set avoids copying the complete
+    // primary IR.
+    result.primary_functions.reserve(
+        artifact.native_port_program_index
+            .incomplete_outgoing_function_entries.size());
+    for (const auto& function : artifact.primary.lowered_program) {
         result.primary_function_entries.push_back(function.entry_address);
+        if (!std::binary_search(
+                artifact.native_port_program_index
+                    .incomplete_outgoing_function_entries.begin(),
+                artifact.native_port_program_index
+                    .incomplete_outgoing_function_entries.end(),
+                function.entry_address) ||
+            !std::binary_search(
+                table_guarded_candidates.begin(),
+                table_guarded_candidates.end(),
+                function.entry_address))
+            continue;
+        AgentPrimaryFunctionAuthority authority;
+        authority.entry_address = function.entry_address;
+        authority.direct_callees = function.direct_callees;
+        authority.indirect_call_sites = function.indirect_call_sites;
+        canonicalize_addresses(authority.direct_callees);
+        canonicalize_addresses(authority.indirect_call_sites);
+        authority.blocks.reserve(function.blocks.size());
+        for (const auto& block : function.blocks) {
+            AgentPrimaryBlockAuthority block_authority;
+            block_authority.start_address = block.start_address;
+            block_authority.successors = block.successors;
+            block_authority.guarded_case_ownership_targets =
+                block.guarded_case_ownership_targets;
+            block_authority.has_indirect_successor =
+                block.has_indirect_successor;
+            canonicalize_addresses(block_authority.successors);
+            canonicalize_addresses(
+                block_authority.guarded_case_ownership_targets);
+            block_authority.instructions.reserve(block.instructions.size());
+            for (const auto& instruction : block.instructions) {
+                auto instruction_authority = instruction;
+                canonicalize_addresses(
+                    instruction_authority.resolved_targets);
+                block_authority.instructions.push_back(
+                    std::move(instruction_authority));
+            }
+            std::sort(block_authority.instructions.begin(),
+                      block_authority.instructions.end(),
+                      [](const auto& left, const auto& right) {
+                          return left.source_address < right.source_address;
+                      });
+            authority.blocks.push_back(std::move(block_authority));
+        }
+        std::sort(authority.blocks.begin(),
+                  authority.blocks.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.start_address < right.start_address;
+                  });
+        result.primary_functions.push_back(std::move(authority));
+    }
+    std::sort(result.primary_functions.begin(),
+              result.primary_functions.end(),
+              [](const auto& left, const auto& right) {
+                  return left.entry_address < right.entry_address;
+              });
     std::sort(
         result.primary_function_entries.begin(),
         result.primary_function_entries.end());
@@ -8893,6 +9024,63 @@ AgentAnalysisAuthorityBaseline capture_agent_analysis_authority(
         std::unique(result.primary_function_entries.begin(),
                     result.primary_function_entries.end()),
         result.primary_function_entries.end());
+    for (const auto& function : artifact.primary.analysis.recursive.functions)
+        if (function.size != 0u)
+            result.exact_primary_function_boundaries.push_back(
+                function.address);
+    // GameProject FunctionBoundary declarations are non-root identity facts.
+    // Recursive analysis normally carries their exact extent, while the
+    // native ProgramIndex also admits an independently reachable entry after
+    // analysis. Retain both views so a refresh can never turn a boundary-
+    // protected function into an internal table block merely because one
+    // consumer omitted the duplicate extent.
+    if (game_project != nullptr) {
+        for (const auto& boundary : game_project->function_boundaries) {
+            const bool active = boundary.image_id.empty() ||
+                native_port == nullptr ||
+                std::find(
+                    native_port->checkpoint_runtime_image_ids.begin(),
+                    native_port->checkpoint_runtime_image_ids.end(),
+                    boundary.image_id) !=
+                    native_port->checkpoint_runtime_image_ids.end();
+            if (active && boundary.size != 0u)
+                result.exact_primary_function_boundaries.push_back(
+                    boundary.start);
+        }
+    }
+    canonicalize_addresses(result.exact_primary_function_boundaries);
+    result.guarded_primary_entries.reserve(
+        table_guarded_candidates.size());
+    for (const auto& entry : artifact.primary.analysis.guarded_aot_entries) {
+        if (!std::binary_search(
+                table_guarded_candidates.begin(),
+                table_guarded_candidates.end(),
+                entry.guest_address))
+            continue;
+        AgentGuardedPrimaryEntryAuthority authority{
+            entry.guest_address,
+            entry.shared_body_address,
+            entry.evidence,
+            entry.origins,
+            entry.source_sites,
+            entry.source_objects,
+            entry.source_identity,
+            entry.source_byte_offset,
+            entry.entry_byte_extent,
+            entry.entry_byte_identity};
+        std::sort(authority.origins.begin(), authority.origins.end());
+        authority.origins.erase(
+            std::unique(authority.origins.begin(), authority.origins.end()),
+            authority.origins.end());
+        canonicalize_addresses(authority.source_sites);
+        canonicalize_addresses(authority.source_objects);
+        result.guarded_primary_entries.push_back(std::move(authority));
+    }
+    std::sort(result.guarded_primary_entries.begin(),
+              result.guarded_primary_entries.end(),
+              [](const auto& left, const auto& right) {
+                  return left.guest_address < right.guest_address;
+              });
     result.primary_instruction_addresses.reserve(
         artifact.primary.analysis.recursive.instructions.size());
     for (const auto& instruction :
@@ -8942,28 +9130,6 @@ bool sorted_authority_subset(const std::vector<Value>& required,
         candidate.begin(), candidate.end(), required.begin(), required.end());
 }
 
-bool program_index_adjacency_subset(
-    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
-        required,
-    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
-        candidate) {
-    return std::all_of(
-        required.begin(), required.end(), [&](const auto& entry) {
-            const auto found = std::lower_bound(
-                candidate.begin(),
-                candidate.end(),
-                entry.address,
-                [](const auto& value, const std::uint32_t address) {
-                    return value.address < address;
-                });
-            return found != candidate.end() &&
-                   found->address == entry.address &&
-                   sorted_authority_subset(
-                       entry.related_addresses,
-                       found->related_addresses);
-        });
-}
-
 bool program_index_adjacency_contains(
     const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
         values,
@@ -8981,6 +9147,22 @@ bool program_index_adjacency_contains(
                found->related_addresses.begin(),
                found->related_addresses.end(),
                related_address);
+}
+
+const katana::codegen::NativeDiscProgramIndexAdjacency*
+program_index_adjacency(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        values,
+    const std::uint32_t address) {
+    const auto found = std::lower_bound(
+        values.begin(),
+        values.end(),
+        address,
+        [](const auto& value, const std::uint32_t candidate) {
+            return value.address < candidate;
+        });
+    if (found == values.end() || found->address != address) return nullptr;
+    return &*found;
 }
 
 std::optional<std::uint32_t> unique_primary_instruction_owner(
@@ -9004,6 +9186,214 @@ std::optional<std::uint32_t> unique_primary_instruction_owner(
         owner = function.entry_address;
     }
     return owner;
+}
+
+const katana::ir::Function* unique_primary_function(
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact,
+    const std::uint32_t entry_address) {
+    const katana::ir::Function* result = nullptr;
+    for (const auto& function : artifact.primary.lowered_program) {
+        if (function.entry_address != entry_address) continue;
+        if (result != nullptr) return nullptr;
+        result = &function;
+    }
+    return result;
+}
+
+struct AgentPrimaryOwnershipIndex final {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> block_owners;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> instruction_owners;
+};
+
+AgentPrimaryOwnershipIndex primary_ownership_index(
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact) {
+    AgentPrimaryOwnershipIndex result;
+    for (const auto& function : artifact.primary.lowered_program) {
+        for (const auto& block : function.blocks) {
+            result.block_owners.emplace_back(
+                block.start_address, function.entry_address);
+            for (const auto& instruction : block.instructions)
+                result.instruction_owners.emplace_back(
+                    instruction.source_address, function.entry_address);
+        }
+    }
+    const auto canonicalize = [](auto& owners) {
+        std::sort(owners.begin(), owners.end());
+        owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+    };
+    canonicalize(result.block_owners);
+    canonicalize(result.instruction_owners);
+    return result;
+}
+
+std::optional<std::uint32_t> unique_primary_owner(
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>>& owners,
+    const std::uint32_t address) {
+    auto found = std::lower_bound(
+        owners.begin(), owners.end(), std::pair{address, 0u});
+    if (found == owners.end() || found->first != address)
+        return std::nullopt;
+    const auto owner = found->second;
+    for (; found != owners.end() && found->first == address; ++found)
+        if (found->second != owner) return std::nullopt;
+    return owner;
+}
+
+const AgentPrimaryFunctionAuthority* primary_function_authority(
+    const AgentAnalysisAuthorityBaseline& baseline,
+    const std::uint32_t entry_address) {
+    const auto found = std::lower_bound(
+        baseline.primary_functions.begin(),
+        baseline.primary_functions.end(),
+        entry_address,
+        [](const auto& function, const std::uint32_t candidate) {
+            return function.entry_address < candidate;
+        });
+    if (found == baseline.primary_functions.end() ||
+        found->entry_address != entry_address)
+        return nullptr;
+    if (std::next(found) != baseline.primary_functions.end() &&
+        std::next(found)->entry_address == entry_address)
+        return nullptr;
+    return &*found;
+}
+
+std::optional<const AgentGuardedPrimaryEntryAuthority*>
+guarded_primary_entry_authority(
+    const AgentAnalysisAuthorityBaseline& baseline,
+    const std::uint32_t guest_address) {
+    const auto found = std::lower_bound(
+        baseline.guarded_primary_entries.begin(),
+        baseline.guarded_primary_entries.end(),
+        guest_address,
+        [](const auto& entry, const std::uint32_t candidate) {
+            return entry.guest_address < candidate;
+        });
+    if (found == baseline.guarded_primary_entries.end() ||
+        found->guest_address != guest_address)
+        return static_cast<const AgentGuardedPrimaryEntryAuthority*>(nullptr);
+    if (std::next(found) != baseline.guarded_primary_entries.end() &&
+        std::next(found)->guest_address == guest_address)
+        return std::nullopt;
+    return &*found;
+}
+
+std::optional<const katana::analysis::GuardedAotEntry*>
+unique_guarded_primary_entry(
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact,
+    const std::uint32_t guest_address) {
+    const katana::analysis::GuardedAotEntry* result = nullptr;
+    for (const auto& entry : artifact.primary.analysis.guarded_aot_entries) {
+        if (entry.guest_address != guest_address) continue;
+        if (result != nullptr) return std::nullopt;
+        result = &entry;
+    }
+    return result;
+}
+
+template <typename Value>
+bool canonical_authority_subset(const std::vector<Value>& required,
+                                std::vector<Value> candidate) {
+    std::sort(candidate.begin(), candidate.end());
+    candidate.erase(
+        std::unique(candidate.begin(), candidate.end()), candidate.end());
+    return sorted_authority_subset(required, candidate);
+}
+
+template <typename Value>
+bool canonical_authority_equal(std::vector<Value> left,
+                               std::vector<Value> right) {
+    const auto canonicalize = [](auto& values) {
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+    };
+    canonicalize(left);
+    canonicalize(right);
+    return left == right;
+}
+
+bool equivalent_primary_instruction_authority(
+    const AgentPrimaryInstructionAuthority& required,
+    const katana::ir::Instruction& candidate) {
+    return required.source_address == candidate.source_address &&
+           required.original_opcode == candidate.original_opcode &&
+           required.original_operation == candidate.original_operation &&
+           required.operation == candidate.operation &&
+           required.widths == candidate.widths &&
+           required.status_effects == candidate.status_effects &&
+           required.memory_effects == candidate.memory_effects &&
+           required.accumulator_effects == candidate.accumulator_effects &&
+           required.destination_register == candidate.destination_register &&
+           required.source_register == candidate.source_register &&
+           required.branch_register == candidate.branch_register &&
+           required.immediate == candidate.immediate &&
+           required.displacement == candidate.displacement &&
+           required.special_register == candidate.special_register &&
+           required.effective_address == candidate.effective_address &&
+           required.target_address == candidate.target_address &&
+           canonical_authority_equal(
+               required.resolved_targets, candidate.resolved_targets) &&
+           required.forwarded_value_register ==
+               candidate.forwarded_value_register &&
+           required.dynamic_target_class == candidate.dynamic_target_class &&
+           required.delay_slot == candidate.delay_slot &&
+           required.is_privileged == candidate.is_privileged &&
+           required.branch_register_relative ==
+               candidate.branch_register_relative;
+}
+
+bool primary_function_body_subset(
+    const AgentPrimaryFunctionAuthority& required,
+    const katana::ir::Function& candidate,
+    const AgentPrimaryOwnershipIndex& ownership) {
+    for (const auto& required_block : required.blocks) {
+        const auto block_owner = unique_primary_owner(
+            ownership.block_owners, required_block.start_address);
+        if (!block_owner.has_value() ||
+            *block_owner != candidate.entry_address)
+            return false;
+        const katana::ir::BasicBlock* candidate_block = nullptr;
+        for (const auto& block : candidate.blocks) {
+            if (block.start_address != required_block.start_address) continue;
+            if (candidate_block != nullptr) return false;
+            candidate_block = &block;
+        }
+        if (candidate_block == nullptr ||
+            required_block.has_indirect_successor !=
+                candidate_block->has_indirect_successor ||
+            !canonical_authority_subset(
+                required_block.successors, candidate_block->successors) ||
+            !canonical_authority_subset(
+                required_block.guarded_case_ownership_targets,
+                candidate_block->guarded_case_ownership_targets))
+            return false;
+
+        for (const auto& required_instruction :
+             required_block.instructions) {
+            const auto instruction_owner = unique_primary_owner(
+                ownership.instruction_owners,
+                required_instruction.source_address);
+            if (!instruction_owner.has_value() ||
+                *instruction_owner != candidate.entry_address)
+                return false;
+            const katana::ir::Instruction* candidate_instruction = nullptr;
+            for (const auto& instruction : candidate_block->instructions) {
+                if (instruction.source_address !=
+                    required_instruction.source_address)
+                    continue;
+                if (candidate_instruction != nullptr) return false;
+                candidate_instruction = &instruction;
+            }
+            if (candidate_instruction == nullptr ||
+                !equivalent_primary_instruction_authority(
+                    required_instruction, *candidate_instruction))
+                return false;
+        }
+    }
+    return canonical_authority_subset(
+               required.direct_callees, candidate.direct_callees) &&
+           canonical_authority_subset(
+               required.indirect_call_sites, candidate.indirect_call_sites);
 }
 
 std::optional<std::vector<std::uint32_t>>
@@ -9058,6 +9448,350 @@ complete_materialized_indirect_site_targets(
     }
     if (!has_matching_complete_resolution) return std::nullopt;
     return ir_targets;
+}
+
+struct AgentCompleteJumpTableAuthority final {
+    std::uint32_t table_address = 0u;
+    std::vector<std::uint32_t> targets;
+};
+
+std::optional<AgentCompleteJumpTableAuthority> complete_jump_table_authority(
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact,
+    const std::uint32_t instruction_address,
+    const AgentPrimaryOwnershipIndex& ownership,
+    const std::vector<std::uint32_t>& candidate_function_entries) {
+    const katana::analysis::JumpTableAnalysis* matching_table = nullptr;
+    for (const auto& table : artifact.primary.analysis.jump_tables) {
+        if (table.dispatch_address != instruction_address) continue;
+        if (matching_table != nullptr ||
+            table.dispatch_kind !=
+                katana::analysis::JumpTableDispatchKind::Jump ||
+            !table.resolved || table.aot_candidates_only ||
+            table.candidate_scan_truncated || table.requested_entries == 0u ||
+            table.entries.size() != table.requested_entries ||
+            !katana::analysis::control_flow_evidence_complete(
+                table.evidence) ||
+            !std::all_of(
+                table.entries.begin(),
+                table.entries.end(),
+                [](const auto& entry) { return entry.accepted; }))
+            return std::nullopt;
+        matching_table = &table;
+    }
+    if (matching_table == nullptr) return std::nullopt;
+
+    const std::uint32_t entry_stride =
+        matching_table->encoding ==
+                katana::analysis::JumpTableEncoding::SignedRelative16
+            ? 2u
+            : 4u;
+    for (std::size_t index = 0u;
+         index < matching_table->entries.size();
+         ++index) {
+        const auto& entry = matching_table->entries[index];
+        const auto expected_address =
+            static_cast<std::uint64_t>(matching_table->table_address) +
+            static_cast<std::uint64_t>(index) * entry_stride;
+        if (entry.index != index ||
+            expected_address > std::numeric_limits<std::uint32_t>::max() ||
+            entry.entry_address !=
+                static_cast<std::uint32_t>(expected_address))
+            return std::nullopt;
+    }
+
+    std::vector<std::uint32_t> table_targets;
+    table_targets.reserve(matching_table->entries.size());
+    for (const auto& entry : matching_table->entries)
+        table_targets.push_back(entry.target);
+    std::sort(table_targets.begin(), table_targets.end());
+    table_targets.erase(
+        std::unique(table_targets.begin(), table_targets.end()),
+        table_targets.end());
+    const auto materialized_targets =
+        complete_materialized_indirect_site_targets(
+            artifact, instruction_address);
+    if (!materialized_targets.has_value() ||
+        table_targets != *materialized_targets)
+        return std::nullopt;
+    for (const auto target : table_targets) {
+        const auto block_owner =
+            unique_primary_owner(ownership.block_owners, target);
+        const auto instruction_owner =
+            unique_primary_owner(ownership.instruction_owners, target);
+        if (!block_owner.has_value() || !instruction_owner.has_value() ||
+            *block_owner != *instruction_owner ||
+            !std::binary_search(candidate_function_entries.begin(),
+                                candidate_function_entries.end(),
+                                *block_owner))
+            return std::nullopt;
+    }
+
+    std::size_t matching_resolution_count = 0u;
+    for (const auto& resolution :
+         artifact.primary.analysis.indirect_control_flow) {
+        if (resolution.instruction_address != instruction_address) continue;
+        if (resolution.kind !=
+                katana::analysis::IndirectControlFlowKind::Jump ||
+            resolution.status !=
+                katana::analysis::ResolutionStatus::Resolved ||
+            !katana::analysis::control_flow_evidence_complete(
+                resolution.evidence) ||
+            resolution.origin_class !=
+                katana::analysis::IndirectControlFlowOriginClass::Table ||
+            resolution.exact_guard_rejection_reason !=
+                katana::analysis::ExactGuardRejectionReason::None)
+            return std::nullopt;
+        auto resolution_targets = resolution.targets;
+        if (resolution.target.has_value())
+            resolution_targets.push_back(*resolution.target);
+        std::sort(resolution_targets.begin(), resolution_targets.end());
+        resolution_targets.erase(
+            std::unique(resolution_targets.begin(), resolution_targets.end()),
+            resolution_targets.end());
+        if (resolution_targets != table_targets) return std::nullopt;
+        ++matching_resolution_count;
+    }
+    if (matching_resolution_count != 1u) return std::nullopt;
+    return AgentCompleteJumpTableAuthority{
+        matching_table->table_address, std::move(table_targets)};
+}
+
+struct AgentCompleteJumpTableFunctionDemotion final {
+    std::uint32_t entry = 0u;
+    std::uint32_t owner = 0u;
+    std::uint32_t dispatch_site = 0u;
+};
+
+std::optional<std::vector<AgentCompleteJumpTableFunctionDemotion>>
+complete_jump_table_function_demotions(
+    const AgentAnalysisAuthorityBaseline& baseline,
+    const katana::codegen::NativeDiscAnalysisArtifact& candidate,
+    const std::vector<std::uint32_t>& candidate_function_entries,
+    const std::vector<std::uint32_t>& resolved_replacement_owners) {
+    std::vector<std::uint32_t> lost_entries;
+    std::set_difference(
+        baseline.primary_function_entries.begin(),
+        baseline.primary_function_entries.end(),
+        candidate_function_entries.begin(),
+        candidate_function_entries.end(),
+        std::back_inserter(lost_entries));
+    std::vector<AgentCompleteJumpTableFunctionDemotion> demotions;
+    demotions.reserve(lost_entries.size());
+    const auto ownership = primary_ownership_index(candidate);
+    std::vector<std::pair<
+        std::uint32_t,
+        std::optional<AgentCompleteJumpTableAuthority>>> table_target_cache;
+    table_target_cache.reserve(lost_entries.size() + 1u);
+    const auto cached_table_targets = [&](const std::uint32_t site)
+        -> const std::optional<AgentCompleteJumpTableAuthority>& {
+        const auto found = std::find_if(
+            table_target_cache.begin(),
+            table_target_cache.end(),
+            [&](const auto& cached) { return cached.first == site; });
+        if (found != table_target_cache.end()) return found->second;
+        table_target_cache.emplace_back(
+            site,
+            complete_jump_table_authority(
+                candidate, site, ownership, candidate_function_entries));
+        return table_target_cache.back().second;
+    };
+    for (const auto entry : lost_entries) {
+        const auto* required = primary_function_authority(baseline, entry);
+        const auto guarded_authority =
+            guarded_primary_entry_authority(baseline, entry);
+        if (required == nullptr || !guarded_authority.has_value() ||
+            *guarded_authority == nullptr ||
+            std::binary_search(
+                baseline.external_primary_roots.begin(),
+                baseline.external_primary_roots.end(),
+                entry) ||
+            std::binary_search(
+                baseline.native_resume_entries.begin(),
+                baseline.native_resume_entries.end(),
+                entry) ||
+            std::binary_search(
+                baseline.exact_primary_function_boundaries.begin(),
+                baseline.exact_primary_function_boundaries.end(),
+                entry) ||
+            std::any_of(
+                baseline.primary_call_edges.begin(),
+                baseline.primary_call_edges.end(),
+                [&](const auto& edge) {
+                    return std::get<0>(edge) == entry ||
+                           std::get<1>(edge) == entry;
+                }) ||
+            std::any_of(
+                candidate.primary.analysis.recursive.functions.begin(),
+                candidate.primary.analysis.recursive.functions.end(),
+                [&](const auto& function) {
+                    return function.address == entry;
+                }) ||
+            !std::binary_search(
+                resolved_replacement_owners.begin(),
+                resolved_replacement_owners.end(),
+                entry) ||
+            !std::binary_search(
+                baseline.program_index
+                    .incomplete_outgoing_function_entries.begin(),
+                baseline.program_index
+                    .incomplete_outgoing_function_entries.end(),
+                entry) ||
+            std::binary_search(
+                candidate.native_port_program_index
+                    .incomplete_outgoing_function_entries.begin(),
+                candidate.native_port_program_index
+                    .incomplete_outgoing_function_entries.end(),
+                entry))
+            return std::nullopt;
+
+        const auto block_owner =
+            unique_primary_owner(ownership.block_owners, entry);
+        const auto instruction_owner =
+            unique_primary_owner(ownership.instruction_owners, entry);
+        if (!block_owner.has_value() || !instruction_owner.has_value() ||
+            *block_owner != *instruction_owner || *block_owner == entry)
+            return std::nullopt;
+        const auto owner = *block_owner;
+        const auto* owner_function = unique_primary_function(candidate, owner);
+        if (owner_function == nullptr ||
+            !primary_function_body_subset(
+                *required, *owner_function, ownership) ||
+            !program_index_adjacency_contains(
+                baseline.program_index.outgoing_function_entries,
+                owner,
+                entry) ||
+            !program_index_adjacency_contains(
+                candidate.native_port_program_index
+                    .outgoing_function_entries,
+                owner,
+                owner))
+            return std::nullopt;
+
+        const auto* incoming_sources = program_index_adjacency(
+            candidate.native_port_program_index.incoming_edge_sources,
+            entry);
+        if (incoming_sources == nullptr) return std::nullopt;
+        auto canonical_incoming_sources = incoming_sources->related_addresses;
+        std::sort(
+            canonical_incoming_sources.begin(), canonical_incoming_sources.end());
+        canonical_incoming_sources.erase(
+            std::unique(canonical_incoming_sources.begin(),
+                        canonical_incoming_sources.end()),
+            canonical_incoming_sources.end());
+        if (canonical_incoming_sources != std::vector<std::uint32_t>{owner})
+            return std::nullopt;
+
+        const auto* incoming_sites = program_index_adjacency(
+            candidate.native_port_program_index
+                .incoming_instruction_addresses,
+            entry);
+        if (incoming_sites == nullptr) return std::nullopt;
+        std::optional<std::uint32_t> dispatch_site;
+        for (const auto site : incoming_sites->related_addresses) {
+            const auto& table_targets = cached_table_targets(site);
+            if (!table_targets.has_value() ||
+                !std::binary_search(
+                    table_targets->targets.begin(),
+                    table_targets->targets.end(),
+                    entry))
+                continue;
+            const auto dispatch_owner =
+                unique_primary_owner(ownership.instruction_owners, site);
+            if (!dispatch_owner.has_value() || *dispatch_owner != owner ||
+                dispatch_site.has_value())
+                return std::nullopt;
+            dispatch_site = site;
+        }
+        if (!dispatch_site.has_value()) return std::nullopt;
+        if (const auto* guarded = *guarded_authority;
+            guarded != nullptr) {
+            const auto& table_authority =
+                cached_table_targets(*dispatch_site);
+            std::vector<katana::analysis::GuardedAotEntryOrigin>
+                retained_guarded_origins;
+            std::copy_if(
+                guarded->origins.begin(),
+                guarded->origins.end(),
+                std::back_inserter(retained_guarded_origins),
+                [](const auto origin) {
+                    return origin !=
+                           katana::analysis::GuardedAotEntryOrigin::
+                               JumpTableTail;
+                });
+            if (!table_authority.has_value() ||
+                guarded->shared_body_address != entry ||
+                guarded->evidence !=
+                    katana::analysis::ControlFlowEvidence::GuardedPartial ||
+                !std::binary_search(
+                    guarded->origins.begin(),
+                    guarded->origins.end(),
+                    katana::analysis::GuardedAotEntryOrigin::JumpTableTail) ||
+                !std::all_of(
+                    guarded->origins.begin(),
+                    guarded->origins.end(),
+                    [](const auto origin) {
+                        return origin ==
+                                   katana::analysis::GuardedAotEntryOrigin::
+                                       TailIngress ||
+                               origin ==
+                                   katana::analysis::GuardedAotEntryOrigin::
+                                       JumpTableTail;
+                    }) ||
+                guarded->source_sites !=
+                    std::vector<std::uint32_t>{*dispatch_site} ||
+                guarded->source_objects !=
+                    std::vector<std::uint32_t>{
+                        table_authority->table_address})
+                return std::nullopt;
+            const auto candidate_guarded_authority =
+                unique_guarded_primary_entry(candidate, entry);
+            if (!candidate_guarded_authority.has_value())
+                return std::nullopt;
+            if (!retained_guarded_origins.empty()) {
+                const auto* candidate_guarded =
+                    *candidate_guarded_authority;
+                if (candidate_guarded == nullptr ||
+                    candidate_guarded->shared_body_address !=
+                        guarded->shared_body_address ||
+                    candidate_guarded->evidence != guarded->evidence ||
+                    candidate_guarded->source_identity !=
+                        guarded->source_identity ||
+                    candidate_guarded->source_byte_offset !=
+                        guarded->source_byte_offset ||
+                    candidate_guarded->entry_byte_extent !=
+                        guarded->entry_byte_extent ||
+                    candidate_guarded->entry_byte_identity !=
+                        guarded->entry_byte_identity ||
+                    !canonical_authority_equal(
+                        guarded->origins, candidate_guarded->origins) ||
+                    !canonical_authority_equal(
+                        guarded->source_sites,
+                        candidate_guarded->source_sites) ||
+                    !canonical_authority_equal(
+                        guarded->source_objects,
+                        candidate_guarded->source_objects))
+                    return std::nullopt;
+            } else if (*candidate_guarded_authority != nullptr)
+                return std::nullopt;
+        }
+        demotions.push_back({entry, owner, *dispatch_site});
+    }
+    return demotions;
+}
+
+std::uint32_t remap_complete_jump_table_function_entry(
+    const std::vector<AgentCompleteJumpTableFunctionDemotion>& demotions,
+    const std::uint32_t address) {
+    const auto found = std::lower_bound(
+        demotions.begin(),
+        demotions.end(),
+        address,
+        [](const auto& demotion, const std::uint32_t candidate) {
+            return demotion.entry < candidate;
+        });
+    return found != demotions.end() && found->entry == address
+        ? found->owner
+        : address;
 }
 
 std::optional<std::vector<std::pair<std::uint32_t, std::uint32_t>>>
@@ -9146,17 +9880,46 @@ closed_replacement_owner_target_losses(
     return losses;
 }
 
+bool program_index_adjacency_subset_with_related_remap(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        required,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate,
+    const std::vector<AgentCompleteJumpTableFunctionDemotion>& demotions) {
+    for (const auto& entry : required) {
+        const auto* found = program_index_adjacency(candidate, entry.address);
+        if (found == nullptr) return false;
+        for (const auto related_address : entry.related_addresses) {
+            const auto mapped = remap_complete_jump_table_function_entry(
+                demotions, related_address);
+            if (!std::binary_search(
+                    found->related_addresses.begin(),
+                    found->related_addresses.end(),
+                    mapped))
+                return false;
+        }
+    }
+    return true;
+}
+
 bool program_index_outgoing_subset_with_closed_losses(
     const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
         required,
     const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
         candidate,
     const std::vector<std::pair<std::uint32_t, std::uint32_t>>&
-        closed_owner_target_losses) {
+        closed_owner_target_losses,
+    const std::vector<AgentCompleteJumpTableFunctionDemotion>& demotions) {
     for (const auto& outgoing : required) {
         for (const auto target : outgoing.related_addresses) {
+            const auto mapped_owner =
+                remap_complete_jump_table_function_entry(
+                    demotions, outgoing.address);
+            const auto mapped_target =
+                remap_complete_jump_table_function_entry(
+                    demotions, target);
             if (program_index_adjacency_contains(
-                    candidate, outgoing.address, target))
+                    candidate, mapped_owner, mapped_target))
                 continue;
             if (!std::binary_search(
                     closed_owner_target_losses.begin(),
@@ -9190,8 +9953,13 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
         std::unique(candidate_function_entries.begin(),
                     candidate_function_entries.end()),
         candidate_function_entries.end());
-    if (!sorted_authority_subset(
-            baseline.primary_function_entries, candidate_function_entries))
+    const auto complete_table_function_demotions =
+        complete_jump_table_function_demotions(
+            baseline,
+            candidate,
+            candidate_function_entries,
+            world_delta.resolved_replacement_owners);
+    if (!complete_table_function_demotions.has_value())
         return "primary-functions-lost";
 
     std::vector<std::uint32_t> candidate_instruction_addresses;
@@ -9270,9 +10038,10 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
     if (lost_incomplete_owners !=
         world_delta.resolved_replacement_owners)
         return "native-program-index-frontier-lost";
-    if (!program_index_adjacency_subset(
+    if (!program_index_adjacency_subset_with_related_remap(
             baseline.program_index.incoming_edge_sources,
-            candidate.native_port_program_index.incoming_edge_sources))
+            candidate.native_port_program_index.incoming_edge_sources,
+            *complete_table_function_demotions))
         return "native-program-index-incoming-edges-lost";
     const auto closed_owner_target_losses =
         closed_replacement_owner_target_losses(
@@ -9285,7 +10054,8 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
             baseline.program_index.outgoing_function_entries,
             candidate.native_port_program_index
                 .outgoing_function_entries,
-            *closed_owner_target_losses))
+            *closed_owner_target_losses,
+            *complete_table_function_demotions))
         return "native-program-index-outgoing-edges-lost";
     if (!sorted_authority_subset(
             baseline.program_index.seed_entries,
@@ -11110,7 +11880,13 @@ int export_port_project(const std::filesystem::path& source_path,
                     "Analyse-Session ist erforderlich.");
             previous_analysis_authority =
                 capture_agent_analysis_authority(
-                    parsed_manifest.artifact);
+                    parsed_manifest.artifact,
+                    resolved_game_project.has_value()
+                        ? &*resolved_game_project
+                        : nullptr,
+                    verified_native_port
+                        ? &verified_native_port->definition()
+                        : nullptr);
             if (refresh_analysis) {
                 try {
                     pending_analysis_candidate =
