@@ -36,8 +36,8 @@ vor `analyze_native_disc_port()` real vorgeprueft. Run 50 publizierte das
 bounded Pending-Slots und danach als autoritative Generation. Ein spaeteres
 Authority-Gate kann die teure Analyse dadurch nicht mehr still verwerfen.
 
-Der aktuelle Stand verwendet Runtime-ABI `119` und Analyzer-ABI `65` sowie
-`NativePortDefinition` `12`, `NativePortArtifact` `13` und Hardware-Closure
+Der aktuelle Stand verwendet Runtime-ABI `120` und Analyzer-ABI `66` sowie
+`NativePortDefinition` `12`, `NativePortArtifact` `14` und Hardware-Closure
 `v8`. Die fail-closed Beweisschicht vergleicht eine
 `OwnerSemanticSummary`-Sicht der exakt identity-bound Ownerfunktion mit dem
 `NativeProviderSemanticContract` (Runtime-Typ
@@ -46,8 +46,8 @@ Semantikidentitaet, getrennte Provider-Implementierungsidentitaet, geordnete
 Guards, Effekte und Ergebnisprojektion muessen uebereinstimmen. Ein
 unvollstaendiges, unbekanntes, trunciertes oder nicht identisches Summary/
 Contract-Paar schliesst keinen Replacement-Hook; Hardware-Closure bleibt
-stattdessen mit einem Gap offen. Provider-Semantikvertrag `2` fuehrt den
-auditierten Store-Queue-PREF als eigene geordnete Queue-Operation; unbekannte
+stattdessen mit einem Gap offen. Provider-Semantikvertrag `3` fuehrt den
+auditierten Store-Queue-PREF als eigene geordnete 32-Byte-Queue-Operation; unbekannte
 Prefetch-Ziele bleiben explizit unrepresentierbar. Der alte Dreamcast-
 Geraetepfad ist nur ein
 internes Offline-Orakel und wird nie in Produktlink oder Produktruntime
@@ -160,9 +160,9 @@ generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
 Lauf sind weiterhin offen. Es wurde weder eine Sonic-Analyse noch ein Port
 gestartet oder exportiert.
 
-## Aktueller Source-Meilenstein: v142 / Source-ABI 119-65
+## Aktueller Source-Meilenstein: v142 / Source-ABI 120-66
 
-Der aktuelle Source-Stand ist Runtime-ABI `119`, Analyzer-ABI `65`,
+Der aktuelle Source-Stand ist Runtime-ABI `120`, Analyzer-ABI `66`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
 Profilvertrag `24`. Der agentische Native-Disc-Workflow publiziert eine
 identitaetsgebundene Materialization-World und ein resumierbares Ledger;

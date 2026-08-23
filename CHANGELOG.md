@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- Provider-Semantikvertrag 3 korrigiert den auditierten SH-4-Store-Queue-
+  `PREF` auf seine beobachtbare 32-Byte-Transaktion. Runtimevalidator und
+  Analyzer-Aequivalenz verwenden nun dieselbe oeffentliche Breitenkonstante;
+  ein alter 4-Byte-Vertrag wird fail-closed abgelehnt. Der inkompatible
+  Vertrag hebt Runtime-ABI auf 120, Analyzer-ABI auf 66 und das
+  NativePortArtifact-Format auf 14. Der neue read-only CLI-Inspector
+  `inspect-native-provider-semantics` vergleicht deklarierte und kanonisch
+  berechnete Vertragsidentitaeten vor einem teuren Analysezyklus.
+
 - Provider-Semantikvertrag 2 bildet einen auditierten SH-4-Store-Queue-
   `PREF` als eigene geordnete Queue-Operation ab. Kind, Operation und
   Ressource muessen exakt korrelieren; ein unbekanntes Prefetch-Ziel oder

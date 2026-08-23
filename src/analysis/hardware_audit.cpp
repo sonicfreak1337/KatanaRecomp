@@ -4,6 +4,7 @@
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/json_report.hpp"
 #include "katana/ir/lower.hpp"
+#include "katana/runtime/native_port_semantics.hpp"
 #include "katana/sh4/instruction.hpp"
 
 #include <algorithm>
@@ -1359,7 +1360,7 @@ EffectiveAccessSet effective_accesses(const sh4::DisassemblyLine& line,
         break;
     case K::Prefetch:
         kind = HardwareAccessKind::Prefetch;
-        width = 32u;
+        width = runtime::native_port_store_queue_prefetch_width;
         address = before.registers[instruction.source_register];
         break;
     case K::FmovLoad:

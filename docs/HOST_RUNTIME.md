@@ -1,8 +1,8 @@
 # Native Audio-, Eingabe- und Hostruntime
 
-Aktueller Source-Vertragsstand: Runtime-ABI `116`, Analyzer-ABI `57`,
+Aktueller Source-Vertragsstand: Runtime-ABI `120`, Analyzer-ABI `66`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil
-`23`. Die Audio-/SPSR- und Save-Abschnitte unten beschreiben den nativen
+`24`. Die Audio-/SPSR- und Save-Abschnitte unten beschreiben den nativen
 Produktpfad; historische Replay-/AICA-Messungen sind ausdrücklich Diagnose-
 und Vergleichsevidenz.
 

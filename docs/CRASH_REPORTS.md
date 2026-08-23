@@ -1,7 +1,8 @@
 # Kontrollierte Crashberichte
 
-Der aktuelle additive Runtimebaustein `CrashCapsule` v2 ist an Runtime-ABI
-`116` gebunden. Er ergaenzt den portablen v1-Bericht um begrenzte PC/PR-,
+Der additive Runtimebaustein `CrashCapsule` v2 wurde mit Runtime-ABI `116`
+eingefuehrt und ist im aktuellen Runtime-ABI `120` enthalten. Er ergaenzt den
+portablen v1-Bericht um begrenzte PC/PR-,
 Modul-/Generations-, Materialisierungs-, Wait- und Dispatchdaten. Die
 Produkt-Catch-Verdrahtung verwendet dafuer feste, sanitizte Tokens. Freie
 Hosttexte, Pfade, Retailbytes und Heap-/iostream-Nutzung bleiben im Crashpfad

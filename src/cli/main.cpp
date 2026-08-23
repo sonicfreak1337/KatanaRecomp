@@ -6,6 +6,8 @@
 #include "katana/analysis/function_analysis.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
+#include "katana/analysis/abi.hpp"
+#include "katana/analysis/native_provider_equivalence.hpp"
 #include "katana/analysis/parallel_work.hpp"
 #include "katana/analysis/recursive_analysis.hpp"
 #include "katana/app/application.hpp"
@@ -14035,6 +14037,126 @@ int diff_analysis_cli(const std::filesystem::path& before_path,
     return 0;
 }
 
+int inspect_native_provider_semantics_cli(
+    const std::filesystem::path& artifact_path) {
+    const auto artifact =
+        katana::runtime::NativePortArtifact::load(artifact_path);
+    const auto contracts =
+        artifact->definition().provider_semantic_contracts;
+    struct InspectionEntry final {
+        std::size_t contract_index = 0u;
+        std::string computed_identity;
+        bool checked = false;
+        bool match = false;
+    };
+
+    std::vector<std::size_t> output_order(contracts.size());
+    std::iota(output_order.begin(), output_order.end(), 0u);
+    std::stable_sort(
+        output_order.begin(), output_order.end(),
+        [&](const std::size_t left, const std::size_t right) {
+            const auto& lhs = contracts[left];
+            const auto& rhs = contracts[right];
+            if (lhs.hook_guest_address != rhs.hook_guest_address)
+                return lhs.hook_guest_address < rhs.hook_guest_address;
+            if (lhs.provider_symbol != rhs.provider_symbol)
+                return lhs.provider_symbol < rhs.provider_symbol;
+            return left < right;
+        });
+
+    std::vector<InspectionEntry> entries;
+    entries.reserve(contracts.size());
+    std::size_t identity_match_count = 0u;
+    for (const auto contract_index : output_order) {
+        const auto& contract = contracts[contract_index];
+        InspectionEntry entry;
+        entry.contract_index = contract_index;
+        try {
+            entry.computed_identity =
+                katana::analysis::native_provider_semantic_identity(contract);
+            entry.checked = !entry.computed_identity.empty();
+        } catch (...) {
+            // Keep canonicalization failures inside the bounded agent report;
+            // exception text is neither stable nor part of the JSON contract.
+            entry.computed_identity.clear();
+            entry.checked = false;
+        }
+        entry.match = entry.checked &&
+                      entry.computed_identity == contract.semantic_identity;
+        if (entry.match)
+            ++identity_match_count;
+        entries.push_back(std::move(entry));
+    }
+
+    const bool all_match = identity_match_count == contracts.size() &&
+                           std::all_of(
+                               entries.begin(), entries.end(),
+                               [](const InspectionEntry& entry) {
+                                   return entry.checked && entry.match;
+                               });
+    katana::io::write_json_report_header(
+        std::cout,
+        "katana.native-provider-semantics-inspection.v1",
+        "native-provider-semantics-inspection",
+        all_match ? "success" : "failure");
+    std::cout << ",\"artifact_identity\":"
+              << katana::io::quote_json(artifact->artifact_identity())
+              << ",\"runtime_abi_version\":"
+              << katana::runtime::abi_version
+              << ",\"analyzer_abi_version\":"
+              << katana::analysis::abi_version
+              << ",\"artifact_format_version\":"
+              << katana::runtime::native_port_artifact_format_version
+              << ",\"contract_version\":"
+              << katana::runtime::
+                     native_port_provider_semantics_contract_version
+              << ",\"identity_domain\":"
+              << katana::io::quote_json(
+                     katana::runtime::
+                         native_port_provider_semantics_identity_domain)
+              << ",\"contract_count\":" << contracts.size()
+              << ",\"identity_match_count\":" << identity_match_count
+              << ",\"all_match\":" << (all_match ? "true" : "false")
+              << ",\"contracts\":[";
+    for (std::size_t index = 0u; index < contracts.size(); ++index) {
+        if (index != 0u) std::cout << ',';
+        const auto& entry = entries[index];
+        const auto& contract = contracts[entry.contract_index];
+        std::cout << "{\"hook_guest_address\":"
+                  << contract.hook_guest_address
+                  << ",\"provider_symbol\":"
+                  << katana::io::quote_json(contract.provider_symbol)
+                  << ",\"authoritative\":"
+                  << (contract.authoritative ? "true" : "false")
+                  << ",\"declared_identity\":"
+                  << katana::io::quote_json(contract.semantic_identity)
+                  << ",\"computed_identity\":";
+        if (entry.checked)
+            std::cout << katana::io::quote_json(entry.computed_identity);
+        else
+            std::cout << "null";
+        std::cout << ",\"checked\":"
+                  << (entry.checked ? "true" : "false")
+                  << ",\"match\":"
+                  << (entry.match ? "true" : "false")
+                  << ",\"canonicalization_error\":";
+        if (entry.checked)
+            std::cout << "null";
+        else
+            std::cout << katana::io::quote_json("canonicalization-failed");
+        std::cout
+                  << '}';
+    }
+    std::cout << "]}\n" << std::flush;
+    if (!std::cout)
+        throw std::runtime_error(
+            "Provider-Semantikinspektion konnte nicht vollstaendig "
+            "ausgegeben werden.");
+    return katana::cli::exit_status(
+        all_match ? katana::cli::ExitCode::Success
+                  : katana::cli::ExitCode::ProcessingFailure);
+}
+
 void print_usage(std::ostream& output) {
     output << "Verwendung:\n"
            << "  katana-recomp <Opcode>\n"
@@ -14100,6 +14222,8 @@ void print_usage(std::ostream& output) {
               "--format agent-json\n"
            << "  katana-recomp diff-analysis --before <world> --after <world> "
               "--format agent-json\n"
+           << "  katana-recomp inspect-native-provider-semantics "
+              "<private .katana-native-port> --format agent-json\n"
            << "  katana-recomp probe-port <Quelle.gdi> --output <Ordner> --target-name <Name> "
               "[--console-profile <...>] [--telemetry-jsonl <Datei>]\n"
            << "  katana-recomp port-executable <boot.katana-executable> --output <Ordner> "
@@ -14809,6 +14933,18 @@ int main(const int argc, char* argv[]) {
                     "diff-analysis braucht --before, --after und --format "
                     "agent-json.");
             return diff_analysis_cli(*before, *after);
+        }
+
+        if (argc == 5 &&
+            std::string_view(argv[1]) ==
+                "inspect-native-provider-semantics") {
+            if (std::string_view(argv[3]) != "--format" ||
+                std::string_view(argv[4]) != "agent-json")
+                throw std::invalid_argument(
+                    "inspect-native-provider-semantics erwartet ein "
+                    "Native-Port-Artefakt und --format agent-json.");
+            return inspect_native_provider_semantics_cli(
+                std::filesystem::path(argv[2]));
         }
 
         const auto port_command =

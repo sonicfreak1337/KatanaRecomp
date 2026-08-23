@@ -51,6 +51,11 @@ void append_text(std::string& output, const std::string_view value) {
                        });
 }
 
+[[nodiscard]] bool optional_canonical_sha256(
+    const std::string_view value) noexcept {
+    return value.empty() || canonical_sha256(value);
+}
+
 [[nodiscard]] bool valid_operation(const NativePortProviderOperation operation) noexcept {
     switch (operation) {
     case NativePortProviderOperation::Read:
@@ -143,7 +148,9 @@ void append_text(std::string& output, const std::string_view value) {
         return !effect.value_expression.empty() || !effect.result_expression.empty();
     case NativePortProviderOperation::Prefetch:
         return effect.resource_kind == NativePortProviderResourceKind::Queue &&
-               effect.width == 4u && effect.region == "store_queue" &&
+               effect.width ==
+                   runtime::native_port_store_queue_prefetch_width &&
+               effect.region == "store_queue" &&
                effect.value_expression.empty() &&
                effect.result_expression.empty() && effect.write_mask == 0u &&
                effect.clear_mask == 0u;
@@ -183,8 +190,13 @@ void append_text(std::string& output, const std::string_view value) {
             runtime::native_port_provider_semantics_contract_version ||
         contract.hook_guest_address == 0u || (contract.hook_guest_address & 1u) != 0u ||
         !bounded_text(contract.provider_symbol, true) ||
-        !canonical_sha256(contract.expected_owner_semantic_identity) ||
-        !canonical_sha256(contract.provider_implementation_identity) ||
+        (contract.authoritative
+             ? (!canonical_sha256(contract.expected_owner_semantic_identity) ||
+                !canonical_sha256(contract.provider_implementation_identity))
+             : (!optional_canonical_sha256(
+                    contract.expected_owner_semantic_identity) ||
+                !optional_canonical_sha256(
+                    contract.provider_implementation_identity))) ||
         contract.guards.size() > runtime::native_port_provider_semantics_maximum_guards ||
         contract.effects.empty() ||
         contract.effects.size() > runtime::native_port_provider_semantics_maximum_effects ||
@@ -194,10 +206,12 @@ void append_text(std::string& output, const std::string_view value) {
     material.clear();
     material.reserve(128u + contract.guards.size() * 16u +
                      contract.effects.size() * 96u);
-    // Identity domain v2.  The provider implementation identity is kept out
+    // Identity domain v3.  The provider implementation identity is kept out
     // of this stream by contract: changing the native implementation must be
     // a separate binding check, while behaviour identity remains stable.
-    append_text(material, "katana-native-provider-semantics-v2");
+    append_text(
+        material,
+        runtime::native_port_provider_semantics_identity_domain);
     append_u64(material, contract.contract_version);
     append_u64(material, contract.hook_guest_address);
     append_u64(material, contract.authoritative);
@@ -263,7 +277,9 @@ void append_text(std::string& output, const std::string_view value) {
     if (effect.kind == OwnerSemanticEffectKind::HardwarePrefetch)
         return effect.provider_operation == NativePortProviderOperation::Prefetch &&
                effect.provider_resource_kind == NativePortProviderResourceKind::Queue &&
-               effect.width_bytes == 4u && effect.region == "store_queue" &&
+               effect.width_bytes ==
+                   runtime::native_port_store_queue_prefetch_width &&
+               effect.region == "store_queue" &&
                effect.hardware_reference &&
                effect.hardware_reference->kind == HardwareAccessKind::Prefetch &&
                effect.hardware_reference->region == DreamcastHardwareRegion::StoreQueue;

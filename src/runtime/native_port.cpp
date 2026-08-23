@@ -683,7 +683,8 @@ void validate_native_port_definition(
             case NativePortProviderOperation::Prefetch:
                 if (effect.resource_kind !=
                         NativePortProviderResourceKind::Queue ||
-                    effect.width != 4u || effect.region != "store_queue" ||
+                    effect.width != native_port_store_queue_prefetch_width ||
+                    effect.region != "store_queue" ||
                     !effect.value_expression.empty() ||
                     !effect.result_expression.empty() ||
                     effect.write_mask != 0u || effect.clear_mask != 0u)

@@ -6,7 +6,7 @@
 
 ## v0.49: Executable-First als Bring-up-Standard
 
-Aktueller Source-Vertragsstand: Runtime-ABI `119`, Analyzer-ABI `65`,
+Aktueller Source-Vertragsstand: Runtime-ABI `120`, Analyzer-ABI `66`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-Profil
 `24`. Die nachfolgenden alten Exportbeispiele sind historische Messungen;
 der v141-SPSR-Lauf ist der aktuelle Produktnachweis.

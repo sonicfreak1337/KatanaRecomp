@@ -13,6 +13,21 @@ duerfen hinzugefuegt werden; eine inkompatible Bedeutungs- oder Typaenderung
 braucht eine neue fachliche Schema-Kennung. Listen, deren Reihenfolge keine
 Gastsemantik traegt, werden vor der Ausgabe nach Gastadresse und Typ sortiert.
 
+`inspect-native-provider-semantics` erzeugt den agentischen Bericht
+`katana.native-provider-semantics-inspection.v1`. Er bindet Artefaktidentitaet,
+Runtime-/Analyzer-ABI, Native-Port-Artefaktformat, Semantikvertrag und
+Identitaetsdomain. Die `contracts`-Eintraege werden deterministisch nach
+`hook_guest_address` und danach `provider_symbol` sortiert. `checked` ist nur
+dann `true`, wenn die Vertragsdeklaration kanonisiert werden konnte; `match`
+ist nur dann `true`, wenn `checked` gilt und die berechnete Identitaet der
+`declared_identity` entspricht. Ein nicht-autoritatives Contract darf leere
+Owner- und Provider-Implementierungsidentitaeten tragen; sein `match` prueft
+weiterhin nur die kanonische Deklarationsidentitaet und ist keine Aussage ueber
+eine autoritative Provider-/Owner-Bindung. Bei einer Kanonisierungsstoerung
+werden `computed_identity: null`, `checked: false`, `match: false` und der
+stabile Fehlerwert `canonicalization_error: "canonicalization-failed"`
+ausgegeben; der Bericht hat dann `status=failure` und den Fehler-Exitcode.
+
 `katana-recomp analyze-json <manifest> [overrides]` erzeugt den lokalen
 Detailbericht `katana-control-flow-v3`. Version 3 fuehrt disjunkte
 Vollstaendigkeitszustaende und typisierte Herkunftsklassen ein. Der

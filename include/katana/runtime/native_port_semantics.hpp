@@ -12,7 +12,14 @@ namespace katana::runtime {
 // the callback may mutate NativePortContext, while this bounded description
 // is what export-time analysis can compare against the displaced guest owner.
 inline constexpr std::uint32_t native_port_provider_semantics_contract_version =
-    2u;
+    3u;
+inline constexpr std::string_view native_port_provider_semantics_identity_domain =
+    "katana-native-provider-semantics-v3";
+// SH-4 PREF commits one complete 32-byte store-queue line. Keep the width in
+// the public semantic contract so runtime validation and analyzer matching
+// cannot silently disagree about a scalar instruction encoding versus the
+// observable queue transaction.
+inline constexpr std::uint8_t native_port_store_queue_prefetch_width = 32u;
 inline constexpr std::size_t native_port_provider_semantics_maximum_contracts =
     4'096u;
 inline constexpr std::size_t native_port_provider_semantics_maximum_guards =

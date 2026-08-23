@@ -1,7 +1,7 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `65`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 119, Block-ABI 5, PlatformServices-ABI 14,
+Der aktuelle oeffentliche Analyzervertrag ist Version `66`. Der aktuelle
+Source-Stand verwendet Runtime-ABI 120, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 24. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
@@ -15,7 +15,7 @@ ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 ABI-34-Referenz erhalten.
 
 Der aktuelle Native-Port-Vertrag verwendet
-`NativePortDefinition` `12`, `NativePortArtifact` `13` und
+`NativePortDefinition` `12`, `NativePortArtifact` `14` und
 Hardware-Closure `v8`. Seine fail-closed Beweisschicht bildet
 `OwnerSemanticSummary` auf der Analyzer-Seite und den
 `NativeProviderSemanticContract` (Runtime-Typ
@@ -29,7 +29,20 @@ unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
 keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
 dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
 
-Analyzer-ABI 65 und Runtime-ABI 119 binden latente AOT-Owner erstmals an
+Analyzer-ABI 66 und Runtime-ABI 120 korrigieren den oeffentlichen Store-
+Queue-PREF-Effektvertrag: SH-4 `PREF` commitet eine vollstaendige 32-Byte-
+Queuezeile. Runtimevalidator und Analyzer-Aequivalenz binden dieselbe
+oeffentliche Breitenkonstante; der zuvor akzeptierte, aber zum Hardwareaudit
+inkompatible 4-Byte-Providervertrag wird fail-closed abgelehnt. Provider-
+Semantikvertrag und Semantic-Identity-Domaene stehen deshalb auf `v3`, das
+Native-Port-Artefaktformat auf 14. Cache- und andere Prefetch-Ressourcen
+bleiben unveraendert ausserhalb dieses engen Vertrags.
+`inspect-native-provider-semantics <Artefakt> --format agent-json` laedt ein
+privates Native-Port-Artefakt read-only, gibt fuer jeden Providervertrag die
+deklarierte und kanonisch berechnete Semantikidentitaet aus und endet bei
+einer Abweichung fail-closed.
+
+Analyzer-ABI 65 und Runtime-ABI 119 banden latente AOT-Owner erstmals an
 dieselbe Beweiskette wie statische Image-Owner. Das Native-Disc-
 Analyseartefakt Schema 8 traegt dazu nur einen bounded, gegen die aktuelle
 Disc- und Modulidentitaet revalidierten Ledger exakter PC-relativer s16/u32-
