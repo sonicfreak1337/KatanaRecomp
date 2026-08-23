@@ -23288,7 +23288,10 @@ NativePortProgramIndex build_native_port_program_index(
             // the canonical graph node. Overlapping resume/function views may
             // also own its first instruction, but those materialization aliases
             // do not make the callee identity ambiguous.
-            if (index.functions_by_entry.contains(target_address)) {
+            if (const auto functions =
+                    index.functions_by_entry.find(target_address);
+                functions != index.functions_by_entry.end() &&
+                functions->second.size() == 1u) {
                 index.outgoing_function_entries[source_entry].insert(
                     target_address);
                 return true;
@@ -23737,12 +23740,18 @@ void rehydrate_native_disc_program_index_checkpoint(
             checkpoint.incomplete_outgoing_function_entries.end())
         throw std::runtime_error(
             "native-disc-program-index-checkpoint-noncanonical");
+    const auto unique_function_entry =
+        [&index](const std::uint32_t entry) {
+            const auto functions = index.functions_by_entry.find(entry);
+            return functions != index.functions_by_entry.end() &&
+                   functions->second.size() == 1u;
+        };
     for (const auto& [source, targets] : outgoing_function_entries) {
-        if (!index.functions_by_entry.contains(source) ||
+        if (!unique_function_entry(source) ||
             std::any_of(
                 targets.begin(), targets.end(),
                 [&](const auto target) {
-                    return !index.functions_by_entry.contains(target);
+                    return !unique_function_entry(target);
                 }))
             throw std::runtime_error(
                 "native-disc-program-index-checkpoint-function-mismatch");
@@ -23751,7 +23760,7 @@ void rehydrate_native_disc_program_index_checkpoint(
             checkpoint.incomplete_outgoing_function_entries.begin(),
             checkpoint.incomplete_outgoing_function_entries.end(),
             [&](const auto entry) {
-                return !index.functions_by_entry.contains(entry);
+                return !unique_function_entry(entry);
             }))
         throw std::runtime_error(
             "native-disc-program-index-checkpoint-frontier-mismatch");

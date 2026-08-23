@@ -1492,6 +1492,181 @@ struct StaticCodePointerChain {
         ExactGuardRejectionReason::None;
 };
 
+struct StaticCodePointerSet {
+    std::vector<std::uint32_t> targets;
+    std::set<std::uint32_t> definition_sites;
+    bool complete = false;
+    ExactGuardRejectionReason exact_target_rejection_reason =
+        ExactGuardRejectionReason::None;
+};
+
+// Resolve the compiler form in which a closed conditional chooses between
+// exactly two PC-relative code literals before a shared JSR/JMP.  This is not
+// a value-analysis hint: the backward CFG slice must account for every
+// predecessor path, and both first writers, literal cells, target opcodes and
+// the dispatch must belong to the same authenticated immutable image view.
+// The live register is still checked against the complete two-target set by
+// GuardedComplete codegen; an unexpected value aborts before the global
+// dispatcher.
+StaticCodePointerSet resolve_static_code_pointer_set(
+    const WriterSliceIndex& index,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t dispatch_address,
+    const std::uint8_t register_index) {
+    StaticCodePointerSet result;
+    auto slice = bounded_writer_slice(
+        index, dispatch_address, register_index);
+    if (slice.budget_exhausted && register_index >= 8u &&
+        register_index <= 14u) {
+        constexpr std::size_t extended_work_state_budget = 512u;
+        slice = bounded_writer_slice(
+            index,
+            dispatch_address,
+            register_index,
+            extended_work_state_budget);
+    }
+    result.definition_sites = slice.writers;
+    if (slice.path_incomplete || slice.budget_exhausted ||
+        slice.writer_not_memory_load || slice.preceding_call ||
+        slice.writers.size() != 2u) {
+        if (slice.preceding_call)
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::PrecedingCall;
+        return result;
+    }
+
+    const auto immutable_image_proof =
+        [&](const std::uint32_t address,
+            const bool require_executable,
+            const std::size_t width)
+        -> const katana::io::ImageImmutableRange* {
+        const auto* segment = image.find_segment(address, width);
+        if (segment == nullptr || !segment->permissions.readable ||
+            segment->source_kind ==
+                katana::io::ImageSourceKind::RuntimeMemory ||
+            (require_executable && !segment->permissions.executable))
+            return nullptr;
+        return image.find_immutable_range(address, width);
+    };
+    const auto same_proof =
+        [](const katana::io::ImageImmutableRange* left,
+           const katana::io::ImageImmutableRange* right) {
+        return left != nullptr && right != nullptr &&
+               left->generation == right->generation &&
+               left->identity == right->identity;
+    };
+    const auto* const dispatch_proof =
+        immutable_image_proof(dispatch_address, true, 2u);
+    if (dispatch_proof == nullptr) {
+        result.exact_target_rejection_reason =
+            ExactGuardRejectionReason::DispatchImmutableProofMissing;
+        return result;
+    }
+
+    using K = katana::sh4::InstructionKind;
+    for (const auto writer_address : slice.writers) {
+        const auto* const writer = find_line(lines, writer_address);
+        if (writer == nullptr ||
+            writer->instruction.destination_register != register_index ||
+            writer->instruction.kind != K::MovLongLoadPcRelative) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::ConflictingTargets;
+            return result;
+        }
+        const auto* const writer_proof =
+            immutable_image_proof(writer_address, true, 2u);
+        if (writer_proof == nullptr) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::WriterImmutableProofMissing;
+            return result;
+        }
+        if (writer_address >
+            std::numeric_limits<std::uint32_t>::max() - 4u) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::LiteralImmutableProofMissing;
+            return result;
+        }
+        const auto base =
+            static_cast<std::uint64_t>((writer_address + 4u) & ~3u);
+        const auto displacement =
+            static_cast<std::int64_t>(writer->instruction.displacement);
+        if (displacement < 0 ||
+            base + static_cast<std::uint64_t>(displacement) >
+                std::numeric_limits<std::uint32_t>::max()) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::LiteralImmutableProofMissing;
+            return result;
+        }
+        const auto literal_address = static_cast<std::uint32_t>(
+            base + static_cast<std::uint64_t>(displacement));
+        const auto resolved_literal =
+            image.resolve_segment_address(literal_address, 4u);
+        const auto* const literal_proof =
+            resolved_literal.has_value()
+                ? immutable_image_proof(*resolved_literal, false, 4u)
+                : nullptr;
+        if (!resolved_literal.has_value() || literal_proof == nullptr) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::LiteralImmutableProofMissing;
+            return result;
+        }
+
+        const auto candidate = image.read_u32_le(*resolved_literal);
+        const auto validation = validate_decode_candidate(image, candidate);
+        if (!validation.valid()) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::TargetNotExecutable;
+            return result;
+        }
+        const auto* const target_segment =
+            image.find_segment(validation.resolved_address, 2u);
+        const auto target_offset =
+            target_segment != nullptr
+                ? target_segment->byte_offset(validation.resolved_address)
+                : std::optional<std::size_t>{};
+        const bool target_opcode_known =
+            target_segment != nullptr && target_offset.has_value() &&
+            *target_offset <= target_segment->bytes.size() &&
+            target_segment->bytes.size() - *target_offset >= 2u &&
+            katana::sh4::decode(katana::io::read_u16_le(
+                target_segment->bytes, *target_offset))
+                .is_known();
+        if (!target_opcode_known) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::UnknownTargetOpcode;
+            return result;
+        }
+        const auto* const target_proof =
+            immutable_image_proof(validation.resolved_address, true, 2u);
+        if (target_proof == nullptr) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::TargetImmutableProofMissing;
+            return result;
+        }
+        if (!same_proof(dispatch_proof, writer_proof) ||
+            !same_proof(dispatch_proof, literal_proof) ||
+            !same_proof(dispatch_proof, target_proof)) {
+            result.exact_target_rejection_reason =
+                ExactGuardRejectionReason::ImageIdentityMismatch;
+            return result;
+        }
+        result.targets.push_back(validation.resolved_address);
+    }
+    std::sort(result.targets.begin(), result.targets.end());
+    result.targets.erase(
+        std::unique(result.targets.begin(), result.targets.end()),
+        result.targets.end());
+    if (result.targets.size() != 2u) {
+        result.targets.clear();
+        result.exact_target_rejection_reason =
+            ExactGuardRejectionReason::ConflictingTargets;
+        return result;
+    }
+    result.complete = true;
+    return result;
+}
+
 // Resolve the common compiler form
 //
 //   mov.l @(literal,pc), rN  [; mov rN,rM] [; add #imm,rM] ; jsr/jmp @rM
@@ -1826,6 +2001,78 @@ void classify_dynamic_sites(
                         resolution.reason =
                             "runtime-contract-static-code-pointer-chain";
                     }
+                }
+            }
+            if (!control_flow_evidence_complete(resolution.evidence)) {
+                const auto static_set = resolve_static_code_pointer_set(
+                    writer_slice_index,
+                    lines,
+                    image,
+                    resolution.instruction_address,
+                    resolution.register_index);
+                if (static_set.complete && static_set.targets.size() == 2u) {
+                    const auto target_outside_set =
+                        [&static_set](const std::uint32_t target) {
+                            return !std::binary_search(
+                                static_set.targets.begin(),
+                                static_set.targets.end(),
+                                target);
+                        };
+                    const auto contains_outside_target =
+                        [&target_outside_set](
+                            const std::vector<std::uint32_t>& targets) {
+                            return std::any_of(
+                                targets.begin(),
+                                targets.end(),
+                                target_outside_set);
+                        };
+                    const bool existing_target_conflict =
+                        (resolution.target.has_value() &&
+                         target_outside_set(*resolution.target)) ||
+                        contains_outside_target(resolution.targets) ||
+                        contains_outside_target(
+                            resolution.analysis_candidates);
+                    resolution.definition_sites.assign(
+                        static_set.definition_sites.begin(),
+                        static_set.definition_sites.end());
+                    resolution.definition_complete = true;
+                    if (!existing_target_conflict) {
+                        resolution.target.reset();
+                        resolution.targets = static_set.targets;
+                        resolution.analysis_candidates.insert(
+                            resolution.analysis_candidates.end(),
+                            static_set.targets.begin(),
+                            static_set.targets.end());
+                        std::sort(resolution.analysis_candidates.begin(),
+                                  resolution.analysis_candidates.end());
+                        resolution.analysis_candidates.erase(
+                            std::unique(
+                                resolution.analysis_candidates.begin(),
+                                resolution.analysis_candidates.end()),
+                            resolution.analysis_candidates.end());
+                        resolution.status = ResolutionStatus::Guarded;
+                        resolution.evidence =
+                            ControlFlowEvidence::GuardedComplete;
+                        resolution.evidence_origins = {
+                            AnalysisEvidenceOrigin::LocalValue};
+                        resolution.reason =
+                            "guarded-complete-immutable-pc-relative-code-pointer-set";
+                        resolution.value_source =
+                            "immutable-image-literal-set";
+                        resolution.exact_target_guard = false;
+                        resolution.exact_guard_rejection_reason =
+                            ExactGuardRejectionReason::None;
+                    } else {
+                        resolution.exact_guard_rejection_reason =
+                            ExactGuardRejectionReason::ConflictingTargets;
+                    }
+                } else if (
+                    static_set.exact_target_rejection_reason !=
+                        ExactGuardRejectionReason::None &&
+                    resolution.exact_guard_rejection_reason ==
+                        ExactGuardRejectionReason::None) {
+                    resolution.exact_guard_rejection_reason =
+                        static_set.exact_target_rejection_reason;
                 }
             }
         }
@@ -5510,6 +5757,73 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     proof.callees.end());
                 if (proof.targets.empty()) {
                     pending_function_edge_sites.insert(site);
+                    continue;
+                }
+                if (base->reason ==
+                        "guarded-complete-immutable-pc-relative-code-pointer-set" &&
+                    base->evidence ==
+                        ControlFlowEvidence::GuardedComplete) {
+                    auto local_targets = base->targets;
+                    if (base->target.has_value())
+                        local_targets.push_back(*base->target);
+                    std::sort(local_targets.begin(), local_targets.end());
+                    local_targets.erase(
+                        std::unique(local_targets.begin(),
+                                    local_targets.end()),
+                        local_targets.end());
+                    const bool summary_outside_local_set = std::any_of(
+                        proof.targets.begin(),
+                        proof.targets.end(),
+                        [&local_targets](const std::uint32_t target) {
+                            return !std::binary_search(
+                                local_targets.begin(),
+                                local_targets.end(),
+                                target);
+                        });
+                    const bool complete_summary_mismatch =
+                        proof.complete && proof.targets != local_targets;
+                    if (!summary_outside_local_set &&
+                        !complete_summary_mismatch) {
+                        // An incomplete function summary may observe a strict
+                        // subset of the two closed local paths. It is not
+                        // counterevidence. A complete summary must agree
+                        // exactly, and any observed target outside the local
+                        // set invalidates the promotion below.
+                        continue;
+                    }
+
+                    auto candidates = base->analysis_candidates;
+                    candidates.insert(candidates.end(),
+                                      local_targets.begin(),
+                                      local_targets.end());
+                    candidates.insert(candidates.end(),
+                                      proof.targets.begin(),
+                                      proof.targets.end());
+                    std::sort(candidates.begin(), candidates.end());
+                    candidates.erase(
+                        std::unique(candidates.begin(), candidates.end()),
+                        candidates.end());
+                    resolution->status = ResolutionStatus::Unresolved;
+                    resolution->evidence = ControlFlowEvidence::RuntimeOnly;
+                    resolution->evidence_origins = {
+                        AnalysisEvidenceOrigin::LocalValue,
+                        AnalysisEvidenceOrigin::FunctionSummary};
+                    resolution->target.reset();
+                    resolution->targets.clear();
+                    resolution->analysis_candidates =
+                        std::move(candidates);
+                    resolution->reason =
+                        "runtime-contract-static-code-pointer-set-summary-mismatch";
+                    resolution->value_source =
+                        "immutable-image-literal-set-with-summary-counterevidence";
+                    resolution->definition_complete = false;
+                    resolution->exact_target_guard = false;
+                    resolution->exact_guard_rejection_reason =
+                        ExactGuardRejectionReason::ConflictingTargets;
+                    resolution->evidence_call_sites = proof.call_sites;
+                    resolution->evidence_callees = proof.callees;
+                    pending_function_edge_sites.insert(site);
+                    pending_resolution_seed_sources.insert(site);
                     continue;
                 }
                 // A recognized table owns the finite AOT candidate set for
