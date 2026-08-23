@@ -474,11 +474,23 @@ std::string analysis_cache_key_for_module(
         !options.analysis_cache_implementation_identity.empty()
             ? std::string_view{options.analysis_cache_implementation_identity}
             : std::string_view{options.analysis_implementation_identity};
+    const std::string_view product_implementation_identity =
+        !options.ir_product_implementation_identity.empty()
+            ? std::string_view{options.ir_product_implementation_identity}
+            : cache_implementation_identity;
     external_contract << 's' << cache_implementation_identity.size() << ':'
-                      << cache_implementation_identity << ';' << 't'
+                      << cache_implementation_identity << ';' << 'o'
+                      << product_implementation_identity.size() << ':'
+                      << product_implementation_identity << ';' << 't'
                       << options.external_code_targets.size() << ';';
     for (const auto target : options.external_code_targets)
         external_contract << target << ';';
+    if (!options.external_data_targets.empty()) {
+        external_contract << 'd' << options.external_data_targets.size()
+                          << ';';
+        for (const auto target : options.external_data_targets)
+            external_contract << target << ';';
+    }
     external_contract << 'c' << options.external_callback_sinks.size() << ';';
     for (const auto& sink : options.external_callback_sinks)
         external_contract << sink.function_address << ':'
@@ -497,6 +509,21 @@ std::string analysis_cache_key_for_module(
                           << sink.load_instruction_address << ':'
                           << sink.displacement << ':' << +sink.width << ':'
                           << sink.call << ';';
+    if (!options.external_callback_record_tables.empty()) {
+        external_contract << 'r'
+                          << options.external_callback_record_tables.size()
+                          << ';';
+        for (const auto& table : options.external_callback_record_tables)
+            external_contract << table.function_address << ':'
+                              << table.call_instruction_address << ':'
+                              << table.callback_load_instruction_address
+                              << ':' << table.callback_sink_address << ':'
+                              << table.header_table_pointer_displacement
+                              << ':' << table.record_stride << ':'
+                              << table.callback_displacement << ':'
+                              << +table.callback_argument << ':'
+                              << +table.width << ';';
+    }
     inputs.analyzer_implementation_id =
         std::string(
             katana::codegen::latent_aot_analysis_implementation_id) +
@@ -1145,6 +1172,126 @@ int main() {
                     std::vector<std::uint32_t>{0u},
             "Exakter Latent-AOT-Hint hinter dem Heuristik-Kandidatenlimit "
             "blieb ungebunden oder loeste eine unangeforderte Heuristik aus.");
+
+        const std::array pinned_source_hints{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(first_cap_bytes),
+                21u * sector_size,
+                static_cast<std::uint32_t>(first_cap_bytes.size()),
+                0u},
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(hinted_cap_bytes),
+                22u * sector_size,
+                static_cast<std::uint32_t>(hinted_cap_bytes.size()),
+                0u,
+                0x88002000u}};
+        const auto pinned_sources =
+            katana::codegen::discover_latent_aot_modules(
+                cap_source,
+                0u,
+                0u,
+                {},
+                exact_only_options,
+                {},
+                pinned_source_hints);
+        const auto pinned_module = std::ranges::find_if(
+            pinned_sources.modules,
+            [&](const auto& candidate) {
+                return candidate.byte_identity ==
+                       byte_identity(hinted_cap_bytes);
+            });
+        const auto automatic_module = std::ranges::find_if(
+            pinned_sources.modules,
+            [&](const auto& candidate) {
+                return candidate.byte_identity ==
+                       byte_identity(first_cap_bytes);
+            });
+        require(
+            pinned_sources.modules.size() == 2u &&
+                pinned_module != pinned_sources.modules.end() &&
+                pinned_module->source_address == 0x88002000u &&
+                automatic_module != pinned_sources.modules.end() &&
+                automatic_module->source_address == 0x88000000u,
+            "Exakt gebundene Modulbasis verschob einen ungebundenen "
+            "Nachbarkandidaten oder verlor ihre identity-bound Adresse.");
+
+        rejected = false;
+        const std::array pinned_collision{
+            katana::codegen::LatentAotOccupiedRange{
+                0x88002000u, 4096u}};
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    cap_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_only_options,
+                    pinned_collision,
+                    std::span{
+                        pinned_source_hints}.subspan(1u)));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-source-address-collision";
+        }
+        require(
+            rejected,
+            "Exakt gebundene Modulbasis durfte eine belegte Source-Range "
+            "ueberlappen.");
+
+        rejected = false;
+        auto out_of_range_hint = pinned_source_hints[1];
+        out_of_range_hint.source_address =
+            exact_only_options.source_address_end;
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    cap_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_only_options,
+                    {},
+                    std::span{&out_of_range_hint, 1u}));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-source-address-invalid";
+        }
+        require(
+            rejected,
+            "Exakt gebundene Modulbasis ausserhalb des Latent-Ranges wurde "
+            "akzeptiert.");
+
+        rejected = false;
+        const std::array conflicting_source_hints{
+            pinned_source_hints[1],
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(hinted_cap_bytes),
+                22u * sector_size,
+                static_cast<std::uint32_t>(hinted_cap_bytes.size()),
+                2u,
+                0x88003000u}};
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    cap_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_only_options,
+                    {},
+                    conflicting_source_hints));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-source-address-conflict";
+        }
+        require(
+            rejected,
+            "Widerspruechliche identity-bound Modulbasen wurden nicht "
+            "fail-closed abgelehnt.");
 
         const std::vector<std::uint8_t> header_module_bytes{
             0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x0Bu, 0x00u, 0x09u, 0x00u};

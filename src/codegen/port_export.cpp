@@ -724,7 +724,7 @@ std::string latent_primary_root_seed_semantic_identity(
     const PortAnalysisMode analysis_mode) {
     std::ostringstream material;
     append_persistent_epoch_key_field(
-        material, "katana-latent-primary-root-seed-contract-v1");
+        material, "katana-latent-primary-root-seed-contract-v2");
     append_persistent_epoch_key_value(
         material, latent_primary_root_seed_cache_schema);
     append_persistent_epoch_key_value(material, katana::analysis::abi_version);
@@ -770,11 +770,13 @@ std::string latent_primary_root_seed_semantic_identity(
         return std::tie(left.byte_identity,
                         left.disc_byte_offset,
                         left.byte_size,
-                        left.module_relative_offset) <
+                        left.module_relative_offset,
+                        left.source_address) <
                std::tie(right.byte_identity,
                         right.disc_byte_offset,
                         right.byte_size,
-                        right.module_relative_offset);
+                        right.module_relative_offset,
+                        right.source_address);
     });
     append_persistent_epoch_key_value(material, hints.size());
     for (const auto& hint : hints) {
@@ -783,6 +785,7 @@ std::string latent_primary_root_seed_semantic_identity(
         append_persistent_epoch_key_value(material, hint.byte_size);
         append_persistent_epoch_key_value(
             material, hint.module_relative_offset);
+        append_persistent_epoch_key_value(material, hint.source_address);
     }
 
     std::vector<std::uint32_t> resume_entries(
@@ -1013,7 +1016,7 @@ std::string latent_primary_root_seed_resume_semantic_identity(
     const std::string_view native_port_artifact_identity) {
     std::ostringstream material;
     append_persistent_epoch_key_field(
-        material, "katana-latent-primary-root-seed-contract-v1");
+        material, "katana-latent-primary-root-seed-contract-v2");
     append_persistent_epoch_key_value(
         material, latent_primary_root_seed_cache_schema);
     append_persistent_epoch_key_value(material, katana::analysis::abi_version);
@@ -1058,11 +1061,13 @@ std::string latent_primary_root_seed_resume_semantic_identity(
         return std::tie(left.byte_identity,
                         left.disc_byte_offset,
                         left.byte_size,
-                        left.module_relative_offset) <
+                        left.module_relative_offset,
+                        left.source_address) <
                std::tie(right.byte_identity,
                         right.disc_byte_offset,
                         right.byte_size,
-                        right.module_relative_offset);
+                        right.module_relative_offset,
+                        right.source_address);
     });
     append_persistent_epoch_key_value(material, hints.size());
     for (const auto& hint : hints) {
@@ -1071,6 +1076,7 @@ std::string latent_primary_root_seed_resume_semantic_identity(
         append_persistent_epoch_key_value(material, hint.byte_size);
         append_persistent_epoch_key_value(
             material, hint.module_relative_offset);
+        append_persistent_epoch_key_value(material, hint.source_address);
     }
 
     std::vector<std::uint32_t> resume_entries(

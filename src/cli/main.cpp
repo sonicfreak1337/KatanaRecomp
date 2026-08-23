@@ -7563,6 +7563,8 @@ bool valid_latent_aot_entry_hint(
            hint.byte_size <=
                katana::runtime::maximum_native_aot_template_extent &&
            (hint.module_relative_offset & 1u) == 0u &&
+           (hint.source_address == 0u ||
+            (hint.source_address & 0xFFFu) == 0u) &&
            hint.disc_byte_offset <=
                std::numeric_limits<std::uint64_t>::max() - hint.byte_size;
 }
@@ -7608,7 +7610,7 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
         throw std::invalid_argument(
             "--latent-aot-entry erwartet "
             "sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
-            "<module-relative-offset>.");
+            "<module-relative-offset>[:<canonical-source-address>].");
     const auto identity = text.substr(0u, at);
     const auto fields = text.substr(at + 1u);
     const auto first_separator = fields.find(':');
@@ -7616,34 +7618,56 @@ LatentAotEntryHintArgument parse_latent_aot_entry_hint(const std::string_view te
         first_separator == std::string_view::npos
             ? std::string_view::npos
             : fields.find(':', first_separator + 1u);
+    const auto third_separator =
+        second_separator == std::string_view::npos
+            ? std::string_view::npos
+            : fields.find(':', second_separator + 1u);
     if (first_separator == 0u || second_separator == std::string_view::npos ||
         second_separator == first_separator + 1u ||
         second_separator + 1u >= fields.size() ||
-        fields.find(':', second_separator + 1u) != std::string_view::npos ||
+        (third_separator != std::string_view::npos &&
+         (third_separator == second_separator + 1u ||
+          third_separator + 1u >= fields.size() ||
+          fields.find(':', third_separator + 1u) != std::string_view::npos)) ||
         !valid_latent_aot_entry_identity(identity))
         throw std::invalid_argument(
             "--latent-aot-entry erwartet "
             "sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
-            "<module-relative-offset>.");
+            "<module-relative-offset>[:<canonical-source-address>].");
     const auto disc_byte_offset = parse_latent_aot_entry_integer(
         fields.substr(0u, first_separator), "Disc-Byteoffset");
     const auto byte_size = parse_latent_aot_entry_integer(
         fields.substr(first_separator + 1u, second_separator - first_separator - 1u),
         "Modulgroesse");
     const auto module_relative_offset = parse_latent_aot_entry_integer(
-        fields.substr(second_separator + 1u), "Modulentryoffset");
+        fields.substr(
+            second_separator + 1u,
+            third_separator == std::string_view::npos
+                ? std::string_view::npos
+                : third_separator - second_separator - 1u),
+        "Modulentryoffset");
+    const auto source_address =
+        third_separator == std::string_view::npos
+            ? 0u
+            : parse_latent_aot_entry_integer(
+                  fields.substr(third_separator + 1u),
+                  "kanonische Modulbasis");
     if ((disc_byte_offset % latent_aot_entry_disc_sector_size) != 0u ||
         byte_size == 0u ||
         byte_size > std::numeric_limits<std::uint32_t>::max() ||
         module_relative_offset > std::numeric_limits<std::uint32_t>::max() ||
+        source_address > std::numeric_limits<std::uint32_t>::max() ||
         (module_relative_offset & 1u) != 0u ||
+        (third_separator != std::string_view::npos && source_address == 0u) ||
+        (source_address != 0u && (source_address & 0xFFFu) != 0u) ||
         disc_byte_offset > std::numeric_limits<std::uint64_t>::max() - byte_size)
         throw std::invalid_argument(
             "--latent-aot-entry besitzt eine ungueltige Modulbindung.");
     return {std::string(identity),
             disc_byte_offset,
             static_cast<std::uint32_t>(byte_size),
-            static_cast<std::uint32_t>(module_relative_offset)};
+            static_cast<std::uint32_t>(module_relative_offset),
+            static_cast<std::uint32_t>(source_address)};
 }
 
 std::vector<LatentAotEntryHintArgument> load_latent_aot_entry_hint_file(
@@ -7739,7 +7763,9 @@ bool latent_aot_entry_hint_less(const LatentAotEntryHintArgument& left,
     if (left.disc_byte_offset != right.disc_byte_offset)
         return left.disc_byte_offset < right.disc_byte_offset;
     if (left.byte_size != right.byte_size) return left.byte_size < right.byte_size;
-    return left.module_relative_offset < right.module_relative_offset;
+    if (left.module_relative_offset != right.module_relative_offset)
+        return left.module_relative_offset < right.module_relative_offset;
+    return left.source_address < right.source_address;
 }
 
 std::vector<LatentAotEntryHintArgument> normalize_latent_aot_entry_hints(
@@ -7761,7 +7787,7 @@ std::string latent_aot_entry_hint_identity(
     const std::vector<LatentAotEntryHintArgument>& hints,
     const LatentAotDiscoveryModeArgument discovery_mode) {
     std::ostringstream identity;
-    append_port_export_cache_field(identity, "katana-latent-aot-entry-hints-v2");
+    append_port_export_cache_field(identity, "katana-latent-aot-entry-hints-v3");
     switch (discovery_mode) {
     case LatentAotDiscoveryModeArgument::HintsAndHeuristics:
         append_port_export_cache_field(identity, "heuristic");
@@ -7779,6 +7805,8 @@ std::string latent_aot_entry_hint_identity(
         append_port_export_cache_field(identity, std::to_string(hint.byte_size));
         append_port_export_cache_field(
             identity, std::to_string(hint.module_relative_offset));
+        append_port_export_cache_field(
+            identity, std::to_string(hint.source_address));
     }
     return katana::io::sha256_bytes(identity.str());
 }
@@ -8758,7 +8786,7 @@ std::string agent_analysis_session_contract_identity(
     const auto append_value = [&](const std::uint64_t value) {
         material << 'i' << value << ';';
     };
-    append("katana-agent-analysis-session-contract-v1");
+    append("katana-agent-analysis-session-contract-v2");
     append(identity.content_identity);
     append(identity.boot_byte_identity);
     append(identity.project_identity);
@@ -8780,11 +8808,13 @@ std::string agent_analysis_session_contract_identity(
         return std::tie(left.byte_identity,
                         left.disc_byte_offset,
                         left.byte_size,
-                        left.module_relative_offset) <
+                        left.module_relative_offset,
+                        left.source_address) <
                std::tie(right.byte_identity,
                         right.disc_byte_offset,
                         right.byte_size,
-                        right.module_relative_offset);
+                        right.module_relative_offset,
+                        right.source_address);
     });
     append_value(hints.size());
     for (const auto& hint : hints) {
@@ -8792,6 +8822,7 @@ std::string agent_analysis_session_contract_identity(
         append_value(hint.disc_byte_offset);
         append_value(hint.byte_size);
         append_value(hint.module_relative_offset);
+        append_value(hint.source_address);
     }
 
     std::vector<std::uint32_t> resume_entries(
@@ -14206,7 +14237,7 @@ void print_usage(std::ostream& output) {
               "[--latent-aot-mode <heuristic|exact-only>] "
               "[--latent-aot-entry "
               "<sha256:<64-lowerhex>@<disc-byte-offset>:<encoded-byte-size>:"
-              "<module-relative-offset>>]... "
+              "<module-relative-offset>[:<canonical-source-address>]>]... "
               "[--latent-aot-entry-file <Datei>]...\n"
            << "  katana-recomp analyze-port <Quelle.gdi> --output <privater-Analyseordner> "
               "--target-name <Name> --game-project <Descriptor-Artefakt> "

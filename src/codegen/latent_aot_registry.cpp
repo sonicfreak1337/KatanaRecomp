@@ -172,7 +172,9 @@ bool valid_entry_hint(const LatentAotEntryHint& hint) noexcept {
     // The identity-specific raw/decoded candidate path validates the aligned
     // entry against the resolved executable bytes before accepting the hint.
     return valid_sha256_identity(hint.byte_identity) && hint.byte_size != 0u &&
-           (hint.module_relative_offset & 1u) == 0u;
+           (hint.module_relative_offset & 1u) == 0u &&
+           (hint.source_address == 0u ||
+            (hint.source_address & 0xFFFu) == 0u);
 }
 
 bool entry_hint_less(const LatentAotEntryHint& left,
@@ -182,7 +184,9 @@ bool entry_hint_less(const LatentAotEntryHint& left,
     if (left.disc_byte_offset != right.disc_byte_offset)
         return left.disc_byte_offset < right.disc_byte_offset;
     if (left.byte_size != right.byte_size) return left.byte_size < right.byte_size;
-    return left.module_relative_offset < right.module_relative_offset;
+    if (left.module_relative_offset != right.module_relative_offset)
+        return left.module_relative_offset < right.module_relative_offset;
+    return left.source_address < right.source_address;
 }
 
 std::vector<LatentAotEntryHint>
@@ -6453,7 +6457,7 @@ std::string latent_aot_catalog_key(
     const auto append_value = [&material](const auto value) {
         material << 'i' << +value << ';';
     };
-    append_string("katana-latent-aot-catalog-v1");
+    append_string("katana-latent-aot-catalog-v2");
     append_string(source.identity());
     append_value(source.size());
     append_value(volume_start_lba);
@@ -6509,6 +6513,7 @@ std::string latent_aot_catalog_key(
         append_value(hint.disc_byte_offset);
         append_value(hint.byte_size);
         append_value(hint.module_relative_offset);
+        append_value(hint.source_address);
     }
     append_value(prioritized_file_references.size());
     for (const auto& reference : prioritized_file_references)
@@ -6965,8 +6970,34 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             throw std::overflow_error("Latenter Discdateioffset laeuft ueber.");
         return absolute_lba * iso_sector_size;
     };
-    const auto place_candidate = [&](DiscFileCandidate candidate,
-                                     const bool explicit_entries) {
+    const auto place_candidate = [&](
+        DiscFileCandidate candidate,
+        const bool explicit_entries,
+        const std::optional<std::uint32_t> requested_source_address =
+            std::nullopt) {
+        if (requested_source_address.has_value()) {
+            const auto source_begin =
+                static_cast<std::uint64_t>(*requested_source_address);
+            const auto source_end = source_begin + candidate.bytes.size();
+            if ((*requested_source_address & 0xFFFu) != 0u ||
+                source_begin < options.source_address_begin ||
+                source_end > options.source_address_end)
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-source-address-invalid");
+            const LatentAotOccupiedRange proposed{
+                *requested_source_address, candidate.bytes.size()};
+            if (std::any_of(occupied.begin(), occupied.end(),
+                            [&](const auto range) {
+                                return physical_overlap(proposed, range);
+                            }))
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-source-address-collision");
+            candidate.source_address = *requested_source_address;
+            occupied.push_back(proposed);
+            candidates.push_back(std::move(candidate));
+            candidates_have_explicit_entries.push_back(explicit_entries);
+            return true;
+        }
         bool placed = false;
         next_source = align_up(next_source, 4096u);
         while (static_cast<std::uint64_t>(next_source) + candidate.bytes.size() <=
@@ -6999,7 +7030,27 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
     std::size_t source_binding_count = 0u;
     std::size_t transformed_candidate_bytes = 0u;
     std::set<std::pair<std::uint64_t, std::uint32_t>> exact_file_extents;
-    for (const auto& file : files) {
+    std::vector<std::size_t> exact_hint_file_order(files.size());
+    std::iota(exact_hint_file_order.begin(), exact_hint_file_order.end(), 0u);
+    std::stable_partition(
+        exact_hint_file_order.begin(), exact_hint_file_order.end(),
+        [&](const auto index) {
+            const auto& entry = files[index].second;
+            const auto disc_byte_offset = disc_byte_offset_for(entry);
+            return std::any_of(
+                normalized_entry_hints.begin(), normalized_entry_hints.end(),
+                [&](const auto& hint) {
+                    return hint.source_address != 0u &&
+                           hint.disc_byte_offset == disc_byte_offset &&
+                           hint.byte_size == entry.size;
+                });
+        });
+    // Reserve exact pinned ranges before automatic placement reaches them.
+    // Pinned candidates do not advance next_source; processing them first
+    // therefore preserves the addresses of every unpinned candidate while
+    // making the requested range unavailable to later placement.
+    for (const auto file_index : exact_hint_file_order) {
+        const auto& file = files[file_index];
         const auto& entry = file.second;
         const auto disc_byte_offset = disc_byte_offset_for(entry);
         std::vector<std::size_t> extent_hint_indices;
@@ -7081,11 +7132,19 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                             reinterpret_cast<const char*>(bytes.data()), bytes.size()));
         std::vector<std::size_t> matching_entry_hints;
         std::vector<std::uint32_t> explicit_entry_offsets;
+        std::optional<std::uint32_t> requested_source_address;
         for (const auto hint_index : extent_hint_indices) {
             const auto& hint = normalized_entry_hints[hint_index];
             if (hint.byte_identity == byte_identity) {
                 matching_entry_hints.push_back(hint_index);
                 explicit_entry_offsets.push_back(hint.module_relative_offset);
+                if (hint.source_address != 0u) {
+                    if (requested_source_address.has_value() &&
+                        *requested_source_address != hint.source_address)
+                        throw std::runtime_error(
+                            "latent-aot-entry-hint-source-address-conflict");
+                    requested_source_address = hint.source_address;
+                }
             }
         }
         if (matching_entry_hints.empty() ||
@@ -7142,6 +7201,10 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             if (candidate.size != candidate_size)
                 throw std::runtime_error(
                     "latent-aot-entry-hint-byte-identity-size-mismatch");
+            if (requested_source_address.has_value() &&
+                candidate.source_address != *requested_source_address)
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-source-address-conflict");
             if (source_binding_count >= maximum_latent_aot_source_bindings)
                 throw std::runtime_error(
                     "latent-aot-source-binding-budget");
@@ -7168,7 +7231,8 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                      entry_offsets,
                      std::nullopt,
                      false},
-                    true))
+                    true,
+                    requested_source_address))
                 break;
             candidate_by_byte_identity_and_size.emplace(
                 std::move(candidate_key), candidates.size() - 1u);

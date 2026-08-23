@@ -44,12 +44,17 @@ inline constexpr std::uint64_t
 // byte_size binds the encoded disc extent. byte_identity and
 // module_relative_offset bind the executable view: for an identity source
 // that is the same extent, while a declared transform such as Sega PRS binds
-// the decoded bytes. The offset is never inferred from mutable runtime memory.
+// the decoded bytes. The optional source_address pins the page-aligned
+// analysis address for products whose native hook ABI already binds that
+// canonical latent range. Zero retains deterministic automatic placement.
+// Neither the offset nor the pinned address is inferred from mutable runtime
+// memory.
 struct LatentAotEntryHint {
     std::string byte_identity;
     std::uint64_t disc_byte_offset = 0u;
     std::uint32_t byte_size = 0u;
     std::uint32_t module_relative_offset = 0u;
+    std::uint32_t source_address = 0u;
 
     [[nodiscard]] bool operator==(const LatentAotEntryHint&) const = default;
 };
