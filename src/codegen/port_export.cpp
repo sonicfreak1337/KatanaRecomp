@@ -25967,19 +25967,29 @@ prepare_dreamcast_port_project_impl(
                 "Native-Port-Bootstrap stimmt nicht mit dem statischen "
                 "Programmeinstieg ueberein.");
         for (const auto& hook : native_port_definition->hooks) {
-            const auto bytes = game_project_image_bytes(
-                prepared.image,
-                hook.guest_address,
-                hook.covered_size);
-            const auto identity =
-                "sha256:" +
-                katana::io::sha256_bytes(std::string_view(
-                    reinterpret_cast<const char*>(bytes.data()),
-                    bytes.size()));
-            if (identity != hook.code_identity)
+            if (hook.code_source ==
+                katana::runtime::NativePortHookCodeSource::StaticImage) {
+                const auto bytes = game_project_image_bytes(
+                    prepared.image,
+                    hook.guest_address,
+                    hook.covered_size);
+                const auto identity =
+                    "sha256:" +
+                    katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(bytes.data()),
+                        bytes.size()));
+                if (identity == hook.code_identity) continue;
                 throw std::invalid_argument(
                     "Native-Port-Hook stimmt nicht mit seiner exakten "
                     "Codeidentitaet ueberein.");
+            }
+
+            const auto source_proof = prove_native_port_hook_code_source(
+                latent_aot.modules, hook);
+            if (!source_proof.valid)
+                throw std::invalid_argument(
+                    "Native-Port-Hook besitzt keine exakte latente "
+                    "Codeidentitaet: " + source_proof.reason);
         }
         const auto& source_image = prepared.pre_bootstrap_image != nullptr
                                        ? *prepared.pre_bootstrap_image
