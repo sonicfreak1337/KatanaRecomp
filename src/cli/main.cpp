@@ -9707,6 +9707,11 @@ complete_jump_table_function_demotions(
             guarded != nullptr) {
             const auto& table_authority =
                 cached_table_targets(*dispatch_site);
+            const auto shared_block_owner = unique_primary_owner(
+                ownership.block_owners, guarded->shared_body_address);
+            const auto shared_instruction_owner = unique_primary_owner(
+                ownership.instruction_owners,
+                guarded->shared_body_address);
             std::vector<katana::analysis::GuardedAotEntryOrigin>
                 retained_guarded_origins;
             std::copy_if(
@@ -9719,7 +9724,10 @@ complete_jump_table_function_demotions(
                                JumpTableTail;
                 });
             if (!table_authority.has_value() ||
-                guarded->shared_body_address != entry ||
+                !shared_block_owner.has_value() ||
+                !shared_instruction_owner.has_value() ||
+                *shared_block_owner != owner ||
+                *shared_instruction_owner != owner ||
                 guarded->evidence !=
                     katana::analysis::ControlFlowEvidence::GuardedPartial ||
                 !std::binary_search(
