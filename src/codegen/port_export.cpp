@@ -24552,6 +24552,78 @@ std::optional<std::string> native_port_code_identity(
     return ambiguous_match ? std::nullopt : match;
 }
 
+struct NativePortFunctionCodeIdentity final {
+    std::string code_identity;
+    katana::runtime::NativePortHookCodeSource source =
+        katana::runtime::NativePortHookCodeSource::StaticImage;
+    std::string source_identity;
+};
+
+std::optional<NativePortFunctionCodeIdentity>
+native_port_function_code_identity(
+    const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules,
+    const std::uint32_t address,
+    const std::uint32_t size) {
+    if (size == 0u) return std::nullopt;
+    try {
+        const auto bytes = game_project_image_bytes(image, address, size);
+        const auto identity = std::string("sha256:") +
+            katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        return NativePortFunctionCodeIdentity{
+            std::move(identity),
+            katana::runtime::NativePortHookCodeSource::StaticImage,
+            {}};
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        // A non-primary owner must be tied to one exact latent module below.
+    }
+
+    std::optional<NativePortFunctionCodeIdentity> match;
+    for (const auto& module : latent_modules) {
+        const auto module_begin =
+            static_cast<std::uint64_t>(module.source_address);
+        const auto module_end = module_begin + module.byte_size;
+        const auto range_begin = static_cast<std::uint64_t>(address);
+        const auto range_end = range_begin + size;
+        if (range_begin < module_begin || range_end > module_end) continue;
+
+        const auto source_offset = address - module.source_address;
+        const auto identity = std::ranges::find_if(
+            module.function_identities,
+            [&](const auto& candidate) {
+                return candidate.source_offset == source_offset &&
+                       candidate.size == size;
+            });
+        if (identity == module.function_identities.end() ||
+            std::ranges::count_if(
+                module.program,
+                [&](const auto& function) {
+                    return function.entry_address == address;
+                }) != 1)
+            continue;
+        if (match.has_value()) return std::nullopt;
+        match = NativePortFunctionCodeIdentity{
+            identity->sha256,
+            katana::runtime::NativePortHookCodeSource::LatentAotModule,
+            module.byte_identity};
+    }
+    return match;
+}
+
+std::string_view native_port_code_source_name(
+    const katana::runtime::NativePortHookCodeSource source) noexcept {
+    switch (source) {
+    case katana::runtime::NativePortHookCodeSource::StaticImage:
+        return "static-image";
+    case katana::runtime::NativePortHookCodeSource::LatentAotModule:
+        return "latent-aot-module";
+    }
+    return "unknown";
+}
+
 std::string native_port_suggested_hook_symbol(
     const std::uint32_t entry_address) {
     std::ostringstream output;
@@ -29434,6 +29506,10 @@ build_native_disc_materialization_world(
             std::optional<std::uint32_t> covered_size;
             std::string boundary_proof;
             std::string code_identity;
+            katana::runtime::NativePortHookCodeSource code_source =
+                katana::runtime::NativePortHookCodeSource::StaticImage;
+            std::string code_source_identity;
+            bool code_source_proven = false;
             std::string suggested_symbol;
             std::string candidate_reason;
             bool control_flow_closed = false;
@@ -29465,17 +29541,20 @@ build_native_disc_materialization_world(
                 boundary->proof ==
                     NativePortFunctionBoundaryProof::
                         IdentityBoundExactAndClosedControlFlow;
-            const auto identity = native_port_code_identity(
+            const auto identity = native_port_function_code_identity(
                 result.image,
                 result.admitted_state->latent_aot.modules,
                 contract.entry,
                 *contract.covered_size);
             if (!identity.has_value()) {
                 contract.candidate_reason =
-                    "function-code-identity-unavailable";
+                    "function-code-source-identity-unavailable";
                 return contract;
             }
-            contract.code_identity = *identity;
+            contract.code_identity = identity->code_identity;
+            contract.code_source = identity->source;
+            contract.code_source_identity = identity->source_identity;
+            contract.code_source_proven = true;
             contract.suggested_symbol =
                 native_port_suggested_hook_symbol(contract.entry);
             katana::runtime::NativePortHookBinding synthetic;
@@ -29513,6 +29592,7 @@ build_native_disc_materialization_world(
         }();
         const bool current_hook_identity_bound_but_non_closing =
             owner_hook_contract.current_hook != nullptr &&
+            owner_hook_contract.code_source_proven &&
             owner_hook_contract.covered_size.has_value() &&
             owner_hook_contract.current_hook->guest_address ==
                 owner_hook_contract.entry &&
@@ -29525,6 +29605,10 @@ build_native_disc_materialization_world(
                     ReplacesOriginal &&
             owner_hook_contract.current_hook->code_identity ==
                 owner_hook_contract.code_identity &&
+            owner_hook_contract.current_hook->code_source ==
+                owner_hook_contract.code_source &&
+            owner_hook_contract.current_hook->code_source_identity ==
+                owner_hook_contract.code_source_identity &&
             !katana::runtime::native_port_hook_closes_product_contract(
                 owner_hook_contract.current_hook->requirement);
         const bool priority_hint_native_provider_input_read =
@@ -29642,8 +29726,19 @@ build_native_disc_materialization_world(
                     "task-role:native-provider-input-read");
             if (owner_hook_contract.covered_size.has_value() &&
                 !owner_hook_contract.code_identity.empty()) {
-                entry.contracts.push_back(
-                    "owner-hook-kind:function-entry");
+                auto hook_kind_contract =
+                    std::string{"owner-hook-kind:function-entry"};
+                if (owner_hook_contract.code_source_proven) {
+                    hook_kind_contract += ";code-source=";
+                    hook_kind_contract += native_port_code_source_name(
+                        owner_hook_contract.code_source);
+                    if (!owner_hook_contract.code_source_identity.empty()) {
+                        hook_kind_contract += ";source-identity=";
+                        hook_kind_contract +=
+                            owner_hook_contract.code_source_identity;
+                    }
+                }
+                entry.contracts.push_back(std::move(hook_kind_contract));
                 entry.contracts.push_back(
                     "required-owner-hook-requirement:required");
                 entry.contracts.push_back(
@@ -29747,10 +29842,23 @@ build_native_disc_materialization_world(
                 entry.blocked_hardware.push_back(
                     "owner-hook-boundary-proof=" +
                     owner_hook_contract.boundary_proof);
-            if (!owner_hook_contract.code_identity.empty())
-                entry.blocked_hardware.push_back(
+            if (!owner_hook_contract.code_identity.empty()) {
+                auto code_identity_field =
                     "owner-hook-code-identity=" +
-                    owner_hook_contract.code_identity);
+                    owner_hook_contract.code_identity;
+                if (owner_hook_contract.code_source_proven) {
+                    code_identity_field += ";source=";
+                    code_identity_field += native_port_code_source_name(
+                        owner_hook_contract.code_source);
+                    if (!owner_hook_contract.code_source_identity.empty()) {
+                        code_identity_field += ";source-identity=";
+                        code_identity_field +=
+                            owner_hook_contract.code_source_identity;
+                    }
+                }
+                entry.blocked_hardware.push_back(
+                    std::move(code_identity_field));
+            }
             if (!owner_hook_contract.suggested_symbol.empty())
                 entry.blocked_hardware.push_back(
                     "owner-hook-suggested-symbol=" +
