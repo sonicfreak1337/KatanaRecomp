@@ -9993,8 +9993,58 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
                     candidate_call_edges.end()),
         candidate_call_edges.end());
     if (!sorted_authority_subset(
-            baseline.primary_call_edges, candidate_call_edges))
+            baseline.primary_call_edges, candidate_call_edges)) {
+        std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>>
+            lost_call_edges;
+        std::set_difference(
+            baseline.primary_call_edges.begin(),
+            baseline.primary_call_edges.end(),
+            candidate_call_edges.begin(),
+            candidate_call_edges.end(),
+            std::back_inserter(lost_call_edges));
+        constexpr std::size_t maximum_reported_call_edge_losses = 64u;
+        const auto reported = std::min(
+            lost_call_edges.size(), maximum_reported_call_edge_losses);
+        std::ostringstream diagnostic;
+        for (std::size_t index = 0u; index < reported; ++index) {
+            const auto [source, target, callsite] = lost_call_edges[index];
+            diagnostic
+                << "KATANA_ANALYZE_PORT_AUTHORITY_LOSS "
+                   "kind=primary-call-edge source=0x"
+                << std::hex << std::uppercase << source
+                << " target=0x" << target
+                << " callsite=0x" << callsite << std::dec
+                << "\n";
+            std::size_t related_reported = 0u;
+            for (const auto& candidate_edge : candidate_call_edges) {
+                if (related_reported == 16u)
+                    break;
+                const auto [candidate_source,
+                            candidate_target,
+                            candidate_callsite] = candidate_edge;
+                if ((candidate_source != source &&
+                     candidate_target != target) ||
+                    candidate_edge == lost_call_edges[index])
+                    continue;
+                diagnostic
+                    << "KATANA_ANALYZE_PORT_AUTHORITY_REPLACEMENT_CANDIDATE "
+                       "kind=primary-call-edge source=0x"
+                    << std::hex << std::uppercase << candidate_source
+                    << " target=0x" << candidate_target
+                    << " callsite=0x" << candidate_callsite << std::dec
+                    << "\n";
+                ++related_reported;
+            }
+        }
+        if (reported != lost_call_edges.size())
+            diagnostic
+                << "KATANA_ANALYZE_PORT_AUTHORITY_LOSS_TRUNCATED "
+                   "kind=primary-call-edge total="
+                << lost_call_edges.size()
+                << " reported=" << reported << "\n";
+        std::cerr << diagnostic.str() << std::flush;
         return "primary-call-edges-lost";
+    }
 
     for (const auto& required : baseline.modules) {
         const auto found = std::find_if(
