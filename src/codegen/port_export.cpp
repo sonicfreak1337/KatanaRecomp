@@ -22857,6 +22857,12 @@ NativePortProgramIndex build_native_port_program_index(
         }
     }
     for (const auto& edge : analysis.resolved_edges) {
+        // A resolved edge supersedes discovery/seed evidence, but it must not
+        // discard the concrete instruction-site provenance that made the
+        // target externally reachable.  Whole-owner replacement admission
+        // consumes this relation to reject foreign interior entries.
+        index.incoming_instruction_addresses[edge.target_address].insert(
+            edge.instruction_address);
         const auto owners =
             index.instruction_owners.find(edge.instruction_address);
         if (owners == index.instruction_owners.end()) continue;
@@ -22864,6 +22870,8 @@ NativePortProgramIndex build_native_port_program_index(
             index.incoming_edge_sources[edge.target_address].insert(owner);
     }
     for (const auto& continuation : analysis.static_return_continuations) {
+        index.incoming_instruction_addresses[continuation.target_address]
+            .insert(continuation.instruction_address);
         const auto owners =
             index.instruction_owners.find(continuation.instruction_address);
         if (owners == index.instruction_owners.end()) continue;
@@ -23225,6 +23233,48 @@ NativeDiscProgramIndexCheckpoint native_disc_program_index_checkpoint(
         index.incomplete_outgoing_function_entries.begin(),
         index.incomplete_outgoing_function_entries.end());
     return checkpoint;
+}
+
+bool retain_resolved_site_provenance(
+    NativeDiscProgramIndexCheckpoint& checkpoint,
+    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    const auto retain = [&](const std::uint32_t target,
+                            const std::uint32_t site) {
+        auto adjacency = std::lower_bound(
+            checkpoint.incoming_instruction_addresses.begin(),
+            checkpoint.incoming_instruction_addresses.end(),
+            target,
+            [](const auto& value, const std::uint32_t address) {
+                return value.address < address;
+            });
+        if (adjacency ==
+                checkpoint.incoming_instruction_addresses.end() ||
+            adjacency->address != target) {
+            checkpoint.incoming_instruction_addresses.insert(
+                adjacency, NativeDiscProgramIndexAdjacency{target, {site}});
+            return true;
+        }
+        const auto related = std::lower_bound(
+            adjacency->related_addresses.begin(),
+            adjacency->related_addresses.end(),
+            site);
+        if (related != adjacency->related_addresses.end() &&
+            *related == site)
+            return false;
+        adjacency->related_addresses.insert(related, site);
+        return true;
+    };
+
+    bool changed = false;
+    for (const auto& edge : analysis.resolved_edges)
+        changed = retain(edge.target_address, edge.instruction_address) ||
+                  changed;
+    for (const auto& continuation : analysis.static_return_continuations)
+        changed = retain(
+                      continuation.target_address,
+                      continuation.instruction_address) ||
+                  changed;
+    return changed;
 }
 
 std::map<std::uint32_t, std::set<std::uint32_t>>
@@ -30302,6 +30352,15 @@ try_reuse_native_disc_analysis_artifact(
             return reject(parsed.reason);
         }
         auto artifact = std::move(parsed.artifact);
+        // Format-12 checkpoints produced before resolved-edge site retention
+        // may contain the complete positive edge while omitting the exact
+        // instruction provenance formerly carried by its seed.  Repair that
+        // monotone relation from the source-bound CFA payload already inside
+        // the same archive; no target or completeness fact is invented.
+        const bool program_index_site_provenance_repaired =
+            retain_resolved_site_provenance(
+                artifact.native_port_program_index,
+                artifact.primary.analysis);
         const bool native_port_contract_changed =
             resume_artifact_requested &&
             (artifact.identity.native_port_identity !=
@@ -30591,9 +30650,13 @@ try_reuse_native_disc_analysis_artifact(
             report_progress(
                 options,
                 "native-disc-analysis-resume-admission-revalidated");
-        } else {
+        } else if (!program_index_site_provenance_repaired) {
             result.analysis_artifact_bytes.assign(
                 stored_bytes.begin(), stored_bytes.end());
+        } else {
+            report_progress(
+                options,
+                "native-disc-analysis-program-index-site-provenance-repaired");
         }
         if (options.agent_analysis_artifacts_requested)
             populate_native_disc_materialization_artifacts(result, options);
