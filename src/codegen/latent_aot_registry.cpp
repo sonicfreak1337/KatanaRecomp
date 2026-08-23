@@ -992,6 +992,175 @@ std::optional<std::uint32_t> latent_read_u32(
            (static_cast<std::uint32_t>(candidate.bytes[offset + 3u]) << 24u);
 }
 
+std::optional<std::uint32_t> read_latent_pc_literal(
+    const std::span<const std::uint8_t> bytes,
+    const std::uint32_t source_address,
+    const std::uint32_t address,
+    const std::uint8_t width) noexcept {
+    if ((width != 2u && width != 4u) || address < source_address)
+        return std::nullopt;
+    const auto offset = address - source_address;
+    if (offset > bytes.size() || width > bytes.size() - offset)
+        return std::nullopt;
+    std::uint32_t value = 0u;
+    for (std::uint8_t index = 0u; index < width; ++index)
+        value |= static_cast<std::uint32_t>(bytes[offset + index])
+                 << (index * 8u);
+    return value;
+}
+
+bool pc_literal_evidence_less(
+    const PreparedLatentAotPcLiteralEvidence& left,
+    const PreparedLatentAotPcLiteralEvidence& right) noexcept {
+    return std::tie(left.instruction_offset, left.literal_offset, left.bits,
+                    left.width_bytes, left.signed_value) <
+           std::tie(right.instruction_offset, right.literal_offset, right.bits,
+                    right.width_bytes, right.signed_value);
+}
+
+std::optional<std::vector<PreparedLatentAotPcLiteralEvidence>>
+collect_latent_pc_literal_evidence(
+    const std::uint32_t source_address,
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const katana::ir::Function> program) {
+    std::vector<PreparedLatentAotPcLiteralEvidence> result;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                const auto width =
+                    instruction.operation ==
+                            katana::ir::Operation::LoadWordSignedPcRelative
+                        ? static_cast<std::uint8_t>(2u)
+                        : instruction.operation ==
+                                  katana::ir::Operation::LoadLongPcRelative
+                              ? static_cast<std::uint8_t>(4u)
+                              : static_cast<std::uint8_t>(0u);
+                if (width == 0u) continue;
+                if ((instruction.source_address & 1u) != 0u ||
+                    instruction.source_address < source_address ||
+                    instruction.effective_address == std::nullopt)
+                    return std::nullopt;
+                const auto instruction_offset =
+                    instruction.source_address - source_address;
+                const auto literal_address = *instruction.effective_address;
+                if ((literal_address & (width - 1u)) != 0u ||
+                    literal_address < source_address ||
+                    literal_address - source_address >= bytes.size())
+                    return std::nullopt;
+                const auto instruction_opcode = read_latent_pc_literal(
+                    bytes, source_address, instruction.source_address, 2u);
+                const auto literal_bits = read_latent_pc_literal(
+                    bytes, source_address, literal_address, width);
+                if (!instruction_opcode || !literal_bits ||
+                    *instruction_opcode != instruction.original_opcode)
+                    return std::nullopt;
+                const auto decoded = katana::sh4::decode(
+                    static_cast<std::uint16_t>(*instruction_opcode));
+                const auto decoded_kind = decoded.kind;
+                const auto expected_kind =
+                    width == 2u
+                        ? katana::sh4::InstructionKind::MovWordLoadPcRelative
+                        : katana::sh4::InstructionKind::MovLongLoadPcRelative;
+                if (!decoded.is_known() || decoded_kind != expected_kind)
+                    return std::nullopt;
+                const auto pc_base =
+                    width == 2u
+                        ? static_cast<std::uint64_t>(
+                              instruction.source_address) +
+                              4u
+                        : (static_cast<std::uint64_t>(
+                               instruction.source_address) +
+                           4u) &
+                              ~std::uint64_t{3u};
+                const auto decoded_literal_address =
+                    pc_base + static_cast<std::uint32_t>(
+                                  decoded.displacement);
+                if (decoded_literal_address >
+                        std::numeric_limits<std::uint32_t>::max() ||
+                    decoded_literal_address != literal_address)
+                    return std::nullopt;
+                result.push_back(
+                    {instruction_offset,
+                     literal_address - source_address,
+                     *literal_bits,
+                     width,
+                     width == 2u});
+            }
+        }
+    }
+    std::sort(result.begin(), result.end(), pc_literal_evidence_less);
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    if (result.size() > maximum_prepared_latent_aot_pc_literal_evidence)
+        return std::nullopt;
+    return result;
+}
+
+bool validate_latent_pc_literal_evidence(
+    const PreparedLatentAotModule& module,
+    const std::span<const std::uint8_t> decoded) {
+    if (module.pc_literal_evidence.size() >
+            maximum_prepared_latent_aot_pc_literal_evidence ||
+        !std::is_sorted(module.pc_literal_evidence.begin(),
+                        module.pc_literal_evidence.end(),
+                        pc_literal_evidence_less) ||
+        std::adjacent_find(module.pc_literal_evidence.begin(),
+                           module.pc_literal_evidence.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.instruction_offset ==
+                                      right.instruction_offset;
+                           }) != module.pc_literal_evidence.end())
+        return false;
+    for (const auto& evidence : module.pc_literal_evidence) {
+        if ((evidence.instruction_offset & 1u) != 0u ||
+            (evidence.literal_offset &
+             (static_cast<std::uint32_t>(evidence.width_bytes) - 1u)) != 0u ||
+            (evidence.width_bytes != 2u && evidence.width_bytes != 4u) ||
+            evidence.instruction_offset > decoded.size() ||
+            decoded.size() - evidence.instruction_offset < 2u ||
+            evidence.literal_offset > decoded.size() ||
+            evidence.width_bytes > decoded.size() - evidence.literal_offset)
+            return false;
+        const auto opcode = static_cast<std::uint16_t>(
+            static_cast<std::uint16_t>(decoded[evidence.instruction_offset]) |
+            static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(
+                    decoded[evidence.instruction_offset + 1u])
+                << 8u));
+        const auto decoded_instruction = katana::sh4::decode(opcode);
+        const auto expected_kind = evidence.width_bytes == 2u
+                                        ? katana::sh4::InstructionKind::
+                                              MovWordLoadPcRelative
+                                        : katana::sh4::InstructionKind::
+                                              MovLongLoadPcRelative;
+        if (!decoded_instruction.is_known() ||
+            decoded_instruction.kind != expected_kind)
+            return false;
+        const auto instruction_address =
+            static_cast<std::uint64_t>(module.source_address) +
+            evidence.instruction_offset;
+        const auto pc_base = evidence.width_bytes == 2u
+                                 ? instruction_address + 4u
+                                 : (instruction_address + 4u) &
+                                       ~std::uint64_t{3u};
+        const auto literal_address =
+            pc_base + static_cast<std::uint32_t>(
+                          decoded_instruction.displacement);
+        if (literal_address > std::numeric_limits<std::uint32_t>::max() ||
+            literal_address < module.source_address ||
+            literal_address - module.source_address != evidence.literal_offset)
+            return false;
+        std::uint32_t bits = 0u;
+        for (std::uint8_t index = 0u; index < evidence.width_bytes; ++index)
+            bits |= static_cast<std::uint32_t>(
+                        decoded[evidence.literal_offset + index])
+                    << (index * 8u);
+        if (bits != evidence.bits || evidence.signed_value !=
+                                         (evidence.width_bytes == 2u))
+            return false;
+    }
+    return true;
+}
+
 bool valid_latent_runtime_base(const std::uint32_t base,
                                const std::uint32_t byte_size) noexcept {
     return (base & (latent_aot_runtime_page_size - 1u)) == 0u &&
@@ -4587,6 +4756,7 @@ CandidateAnalysisOutcome finalize_candidate_program(
         pending_external_callback_evidence;
     std::vector<PreparedLatentAotCodePointerEvidence>
         pending_external_record_table_evidence;
+    std::vector<PreparedLatentAotPcLiteralEvidence> pc_literal_evidence;
     try {
         auto external_transfers = resolve_latent_literal_transfers(
             candidate, program, options.external_code_targets);
@@ -4607,6 +4777,13 @@ CandidateAnalysisOutcome finalize_candidate_program(
             return reject_candidate(
                 LatentAotAnalysisRejection::ProgramInvalid);
         }
+        const auto collected_pc_literal_evidence =
+            collect_latent_pc_literal_evidence(
+                candidate.source_address, candidate.bytes, program);
+        if (!collected_pc_literal_evidence.has_value())
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        pc_literal_evidence = *collected_pc_literal_evidence;
         katana::ir::require_valid_program(program);
         // Preserve the cross-image facts across isolated optimization; they
         // are attached to the prepared module only after all local validation
@@ -5051,6 +5228,7 @@ CandidateAnalysisOutcome finalize_candidate_program(
             candidate.size,
             candidate.source_address,
             candidate.source_bindings,
+            std::move(pc_literal_evidence),
             std::vector<std::uint32_t>(
                 published_entry_offsets.begin(),
                 published_entry_offsets.end()),
@@ -7668,6 +7846,8 @@ bool validate_latent_aot_discovery_source_binding(
                             decoded.size())) != module.byte_identity)
                     return false;
             }
+            if (!validate_latent_pc_literal_evidence(module, decoded))
+                return false;
 
             katana::ir::require_valid_program(module.program);
             std::set<std::uint32_t> block_entries;

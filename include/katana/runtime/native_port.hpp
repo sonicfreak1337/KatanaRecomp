@@ -21,7 +21,7 @@ class NativePortLoadedAotBinder;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     build_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 11u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 12u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;
@@ -67,6 +67,16 @@ enum class NativePortHookRequirement : std::uint8_t {
 enum class NativePortHookOriginalPolicy : std::uint8_t {
     ReplacesOriginal,
     MayContinueOriginal
+};
+
+// Identifies the immutable byte authority for a hook boundary.  Static-image
+// hooks are contained by NativePortDefinition::images.  A latent AOT module
+// is instead discovered from the current disc, transformed and hash-bound by
+// the analyzer before its native body exists; it must therefore name that
+// module identity explicitly rather than inventing a static image mapping.
+enum class NativePortHookCodeSource : std::uint8_t {
+    StaticImage,
+    LatentAotModule
 };
 
 enum class NativePortHookAction : std::uint8_t {
@@ -120,6 +130,12 @@ struct NativePortHookBinding final {
     // semantic declaration.  Hooks without an authoritative semantic
     // contract may leave it empty; a closing contract may not.
     std::string_view provider_implementation_identity;
+    NativePortHookCodeSource code_source =
+        NativePortHookCodeSource::StaticImage;
+    // Empty for StaticImage.  LatentAotModule binds the complete transformed
+    // module identity; export admission separately proves that the exact
+    // hook range and code_identity belong to one function in that module.
+    std::string_view code_source_identity;
 };
 
 // Hardware instructions may be discharged only by a required, complete

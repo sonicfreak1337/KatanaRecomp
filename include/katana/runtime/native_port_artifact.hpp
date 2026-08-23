@@ -13,7 +13,7 @@ namespace katana::runtime {
 // This private tooling artifact has an independent wire contract.  It owns
 // only static NativePortDefinition data; retail image bytes and every process
 // local hook/bootstrap callback remain outside the artifact.
-inline constexpr std::uint32_t native_port_artifact_format_version = 12u;
+inline constexpr std::uint32_t native_port_artifact_format_version = 13u;
 inline constexpr std::uint64_t native_port_artifact_maximum_size =
     16u * 1024u * 1024u;
 
@@ -104,6 +104,7 @@ class NativePortArtifact final {
     std::vector<std::string> hook_symbols_;
     std::vector<std::string> hook_code_identities_;
     std::vector<std::string> hook_provider_implementation_identities_;
+    std::vector<std::string> hook_code_source_identities_;
     std::vector<NativePortHookBinding> hooks_;
 
     std::vector<NativePortHardwareResolution> hardware_resolutions_;

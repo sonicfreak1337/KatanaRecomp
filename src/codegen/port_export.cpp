@@ -18454,6 +18454,14 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << katana::io::quote_json(hook.code_identity) << ", "
                << katana::io::quote_json(
                       hook.provider_implementation_identity)
+               << ", katana::runtime::NativePortHookCodeSource::"
+               << (hook.code_source ==
+                           katana::runtime::NativePortHookCodeSource::
+                               LatentAotModule
+                       ? "LatentAotModule"
+                       : "StaticImage")
+               << ", "
+               << katana::io::quote_json(hook.code_source_identity)
                << "},\n";
     output << "}};\n"
            << "constexpr std::array<katana::runtime::NativePortHardwareResolution, "
@@ -23919,12 +23927,118 @@ NativePortHookCoverageProof prove_native_port_hook_coverage(
     return {true, {}};
 }
 
+struct NativePortHookCodeSourceProof final {
+    bool valid = false;
+    std::string reason;
+};
+
+[[nodiscard]] NativePortHookCodeSourceProof
+prove_native_port_hook_code_source(
+    const std::span<const PreparedLatentAotModule> latent_modules,
+    const katana::runtime::NativePortHookBinding& hook) {
+    if (hook.code_source ==
+        katana::runtime::NativePortHookCodeSource::StaticImage)
+        return {true, {}};
+    if (hook.code_source !=
+            katana::runtime::NativePortHookCodeSource::LatentAotModule ||
+        hook.kind != katana::runtime::NativePortHookKind::FunctionEntry ||
+        hook.code_source_identity.empty())
+        return {false, "hook-code-source-invalid"};
+
+    const PreparedLatentAotModule* matched_module = nullptr;
+    for (const auto& module : latent_modules) {
+        if (module.byte_identity != hook.code_source_identity) continue;
+        if (matched_module != nullptr)
+            return {false, "hook-latent-module-identity-ambiguous"};
+        matched_module = &module;
+    }
+    if (matched_module == nullptr)
+        return {false, "hook-latent-module-identity-missing"};
+
+    const auto module_begin =
+        static_cast<std::uint64_t>(matched_module->source_address);
+    const auto module_end = module_begin + matched_module->byte_size;
+    const auto hook_begin = static_cast<std::uint64_t>(hook.guest_address);
+    const auto hook_end = hook_begin + hook.covered_size;
+    if (hook_begin < module_begin || hook_end > module_end)
+        return {false, "hook-latent-module-range-mismatch"};
+
+    const auto source_offset =
+        hook.guest_address - matched_module->source_address;
+    const auto identity = std::ranges::find_if(
+        matched_module->function_identities,
+        [&](const auto& candidate) {
+            return candidate.source_offset == source_offset &&
+                   candidate.size == hook.covered_size &&
+                   candidate.sha256 == hook.code_identity;
+        });
+    if (identity == matched_module->function_identities.end())
+        return {false, "hook-latent-function-identity-mismatch"};
+    if (std::ranges::count_if(
+            matched_module->program,
+            [&](const auto& function) {
+                return function.entry_address == hook.guest_address;
+            }) != 1)
+        return {false, "hook-latent-function-owner-ambiguous"};
+    return {true, {}};
+}
+
+[[nodiscard]] std::optional<
+    std::vector<katana::analysis::OwnerSemanticLiteralEvidence>>
+owner_semantic_literal_evidence(
+    const katana::ir::Function& function,
+    const std::span<const PreparedLatentAotModule> latent_modules) {
+    std::set<std::uint32_t> instruction_addresses;
+    for (const auto& block : function.blocks)
+        for (const auto& instruction : block.instructions)
+            instruction_addresses.insert(instruction.source_address);
+
+    std::map<std::uint32_t,
+             katana::analysis::OwnerSemanticLiteralEvidence> collected;
+    for (const auto& module : latent_modules) {
+        for (const auto& literal : module.pc_literal_evidence) {
+            const auto instruction_address =
+                static_cast<std::uint64_t>(module.source_address) +
+                literal.instruction_offset;
+            const auto literal_address =
+                static_cast<std::uint64_t>(module.source_address) +
+                literal.literal_offset;
+            if (instruction_address >
+                    std::numeric_limits<std::uint32_t>::max() ||
+                literal_address >
+                    std::numeric_limits<std::uint32_t>::max() ||
+                !instruction_addresses.contains(
+                    static_cast<std::uint32_t>(instruction_address)))
+                continue;
+            katana::analysis::OwnerSemanticLiteralEvidence evidence{
+                static_cast<std::uint32_t>(instruction_address),
+                static_cast<std::uint32_t>(literal_address),
+                literal.bits,
+                literal.width_bytes,
+                literal.signed_value,
+                module.byte_identity};
+            const auto [found, inserted] = collected.try_emplace(
+                evidence.instruction_address, evidence);
+            if (!inserted && found->second != evidence)
+                return std::nullopt;
+        }
+    }
+    std::vector<katana::analysis::OwnerSemanticLiteralEvidence> result;
+    result.reserve(collected.size());
+    for (auto& [instruction, evidence] : collected) {
+        static_cast<void>(instruction);
+        result.push_back(std::move(evidence));
+    }
+    return result;
+}
+
 NativePortHardwareClosure evaluate_native_port_hardware_closure(
     const katana::analysis::DreamcastHardwareAudit& audit,
     const katana::runtime::NativePortDefinition* const definition,
     const bool complete_module_scope,
     const NativePortProgramIndex& program_index,
-    const std::span<const std::uint32_t> native_resume_entries) {
+    const std::span<const std::uint32_t> native_resume_entries,
+    const std::span<const PreparedLatentAotModule> latent_modules) {
     NativePortHardwareClosure result;
     result.definition_present = definition != nullptr;
     if (definition == nullptr) {
@@ -23996,6 +24110,9 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                 if (!katana::runtime::native_port_hook_closes_product_contract(
                         hook.requirement))
                     continue;
+                if (!prove_native_port_hook_code_source(
+                         latent_modules, hook).valid)
+                    continue;
                 const auto proof = prove_native_port_hook_coverage(
                     program_index,
                     native_resume_entries,
@@ -24015,7 +24132,12 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
 
         ProviderSemanticProof proof;
         const auto contract = provider_contracts.find(hook.guest_address);
-        if (contract == provider_contracts.end()) {
+        const auto code_source = prove_native_port_hook_code_source(
+            latent_modules, hook);
+        if (!code_source.valid) {
+            proof.reason = code_source.reason;
+            missed_provider_hooks.insert(hook.guest_address);
+        } else if (contract == provider_contracts.end()) {
             if (definition->provider_semantic_coverage ==
                 katana::runtime::NativePortProviderSemanticCoverage::
                     DeclaredOnly) {
@@ -24046,20 +24168,30 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                 boundary.identity = std::string(hook.code_identity);
                 boundary.exact = true;
                 boundary.identity_bound = true;
-                auto owner = katana::analysis::summarize_owner_semantics(
-                    *functions->second.front(),
-                    std::move(boundary),
-                    audit.references);
-                summarized_provider_hooks.insert(hook.guest_address);
-                const auto match =
-                    katana::analysis::match_native_provider_semantics(
-                        owner, *contract->second);
-                proof.matched = match.matched;
-                proof.admitted = match.matched;
-                proof.reason = std::string("provider-semantic-") +
-                    katana::analysis::
-                        native_provider_equivalence_reason_token(
-                            match.reason);
+                const auto literal_evidence =
+                    owner_semantic_literal_evidence(
+                        *functions->second.front(), latent_modules);
+                if (!literal_evidence.has_value()) {
+                    proof.reason =
+                        "provider-semantic-literal-authority-ambiguous";
+                } else {
+                    auto owner =
+                        katana::analysis::summarize_owner_semantics(
+                            *functions->second.front(),
+                            std::move(boundary),
+                            audit.references,
+                            *literal_evidence);
+                    summarized_provider_hooks.insert(hook.guest_address);
+                    const auto match =
+                        katana::analysis::match_native_provider_semantics(
+                            owner, *contract->second);
+                    proof.matched = match.matched;
+                    proof.admitted = match.matched;
+                    proof.reason = std::string("provider-semantic-") +
+                        katana::analysis::
+                            native_provider_equivalence_reason_token(
+                                match.reason);
+                }
             }
         }
         if (proof.matched)
@@ -26047,6 +26179,17 @@ prepare_dreamcast_port_project_impl(
             if (!katana::runtime::native_port_hook_is_executable(
                     hook.requirement))
                 continue;
+            const auto source_proof = prove_native_port_hook_code_source(
+                latent_aot.modules, hook);
+            if (!source_proof.valid) {
+                if (retain_native_hook_proof_gap(
+                        hook, source_proof.reason))
+                    continue;
+                throw std::invalid_argument(
+                    "Ausfuehrbarer Native-Port-Hook besitzt keine "
+                    "identitaetsgebundene Codequelle: " +
+                    source_proof.reason);
+            }
             if (hook.kind ==
                     katana::runtime::NativePortHookKind::FunctionEntry &&
                 hook.original_policy ==
@@ -26211,6 +26354,17 @@ prepare_dreamcast_port_project_impl(
                     katana::runtime::NativePortHookOriginalPolicy::
                         ReplacesOriginal)
                 continue;
+            const auto source_proof = prove_native_port_hook_code_source(
+                latent_aot.modules, hook);
+            if (!source_proof.valid) {
+                if (retain_native_hook_proof_gap(
+                        hook, source_proof.reason))
+                    continue;
+                throw std::invalid_argument(
+                    "Native-Port-Replacement-Hook besitzt keine "
+                    "identitaetsgebundene Codequelle: " +
+                    source_proof.reason);
+            }
             const auto proof = prove_native_port_hook_coverage(
                 native_port_program_index,
                 native_aot_resume_entries,
@@ -26235,7 +26389,8 @@ prepare_dreamcast_port_project_impl(
             native_port_definition,
             true,
             native_port_program_index,
-            native_aot_resume_entries);
+            native_aot_resume_entries,
+            latent_aot.modules);
     if (!options.diagnostic_partial && blocking_diagnostics != 0u) {
         if (native_port_definition == nullptr)
             throw std::runtime_error(
@@ -26722,7 +26877,9 @@ struct OwnerTaskLiteralValue final {
 
 std::optional<OwnerTaskLiteralValue> owner_task_literal(
     const katana::io::ExecutableImage& image,
-    const katana::ir::Instruction& instruction) {
+    const katana::ir::Instruction& instruction,
+    const std::span<const katana::analysis::OwnerSemanticLiteralEvidence>
+        authenticated_literals = {}) {
     std::size_t width = 0u;
     bool signed_value = false;
     if (instruction.operation ==
@@ -26736,6 +26893,19 @@ std::optional<OwnerTaskLiteralValue> owner_task_literal(
         return std::nullopt;
     }
     if (!instruction.effective_address.has_value()) return std::nullopt;
+    const auto authenticated = std::ranges::find_if(
+        authenticated_literals,
+        [&](const auto& literal) {
+            return literal.instruction_address == instruction.source_address &&
+                   literal.literal_address ==
+                       *instruction.effective_address &&
+                   literal.width_bytes == width &&
+                   literal.signed_value == signed_value &&
+                   !literal.identity.empty();
+        });
+    if (authenticated != authenticated_literals.end())
+        return OwnerTaskLiteralValue{
+            authenticated->bits, width, signed_value, true};
     const auto resolved = image.resolve_segment_address(
         *instruction.effective_address, width);
     if (!resolved.has_value()) return std::nullopt;
@@ -26958,6 +27128,8 @@ enum class OwnerTaskInstructionTransfer : std::uint8_t {
 OwnerTaskInstructionTransfer owner_task_apply_register_transfer(
     const katana::ir::Instruction& instruction,
     const katana::io::ExecutableImage& image,
+    const std::span<const katana::analysis::OwnerSemanticLiteralEvidence>
+        authenticated_literals,
     OwnerTaskRegisterTransferState& state) {
     using Operation = katana::ir::Operation;
     const auto destination = instruction.destination_register;
@@ -26994,7 +27166,8 @@ OwnerTaskInstructionTransfer owner_task_apply_register_transfer(
     case Operation::LoadLongPcRelative: {
         if (!valid_register(destination))
             return OwnerTaskInstructionTransfer::Failed;
-        const auto literal = owner_task_literal(image, instruction);
+        const auto literal = owner_task_literal(
+            image, instruction, authenticated_literals);
         if (!literal.has_value()) return OwnerTaskInstructionTransfer::Failed;
         const auto value = literal->signed_value
             ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
@@ -27140,6 +27313,8 @@ struct OwnerTaskSymbolicProjection final {
 OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
     const katana::ir::Function& function,
     const katana::io::ExecutableImage& image,
+    const std::span<const katana::analysis::OwnerSemanticLiteralEvidence>
+        authenticated_literals,
     const std::uint32_t entry,
     const katana::ir::RegisterMask may_defs,
     const std::span<const katana::analysis::HardwareAccessReference>
@@ -27238,7 +27413,7 @@ OwnerTaskSymbolicProjection owner_task_symbolic_linear_projection(
             const auto destination = instruction.destination_register;
             const auto source = instruction.source_register;
             const auto transfer = owner_task_apply_register_transfer(
-                instruction, image, transfer_state);
+                instruction, image, authenticated_literals, transfer_state);
             if (transfer == OwnerTaskInstructionTransfer::Applied) continue;
             if (transfer == OwnerTaskInstructionTransfer::Failed)
                 return fail();
@@ -27547,6 +27722,8 @@ std::string owner_task_path_guard_text(
 OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
     const katana::ir::Function& function,
     const katana::io::ExecutableImage& image,
+    const std::span<const katana::analysis::OwnerSemanticLiteralEvidence>
+        authenticated_literals,
     const std::uint32_t entry,
     const katana::ir::RegisterMask may_defs,
     const std::span<const katana::analysis::HardwareAccessReference>
@@ -27580,7 +27757,8 @@ OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
         });
     if (!has_conditional_branch)
         return owner_task_symbolic_linear_projection(
-            function, image, entry, may_defs, hardware_references);
+            function, image, authenticated_literals, entry, may_defs,
+            hardware_references);
 
     if (function.blocks.empty() || function.blocks.size() >
                                       maximum_owner_semantic_task_blocks)
@@ -27654,7 +27832,7 @@ OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
         const auto destination = instruction.destination_register;
         const auto source = instruction.source_register;
         const auto transfer = owner_task_apply_register_transfer(
-            instruction, image, state);
+            instruction, image, authenticated_literals, state);
         if (transfer == OwnerTaskInstructionTransfer::Applied) return true;
         if (transfer == OwnerTaskInstructionTransfer::Failed) return false;
         switch (instruction.operation) {
@@ -28034,12 +28212,15 @@ OwnerTaskSymbolicProjection owner_task_symbolic_path_projection(
 OwnerTaskSymbolicProjection owner_task_symbolic_projection(
     const katana::ir::Function& function,
     const katana::io::ExecutableImage& image,
+    const std::span<const katana::analysis::OwnerSemanticLiteralEvidence>
+        authenticated_literals,
     const std::uint32_t entry,
     const katana::ir::RegisterMask may_defs,
     const std::span<const katana::analysis::HardwareAccessReference>
         hardware_references) {
     return owner_task_symbolic_path_projection(
-        function, image, entry, may_defs, hardware_references);
+        function, image, authenticated_literals, entry, may_defs,
+        hardware_references);
 }
 
 struct OwnerSemanticTaskContract final {
@@ -28055,6 +28236,7 @@ struct OwnerHardwareSiteTaskContract final {
 OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
     const std::span<const katana::ir::Function> program,
     const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules,
     const std::uint32_t owner_entry,
     const bool owner_control_flow_closed,
     const std::span<const std::uint32_t> sites) {
@@ -28064,6 +28246,14 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
         [owner_entry](const auto& candidate) {
             return candidate.entry_address == owner_entry;
         });
+    std::vector<katana::analysis::OwnerSemanticLiteralEvidence>
+        authenticated_literals;
+    if (function != program.end()) {
+        const auto collected = owner_semantic_literal_evidence(
+            *function, latent_modules);
+        if (collected.has_value())
+            authenticated_literals = *collected;
+    }
     const auto is_untracked_special = [](
         const katana::ir::SpecialRegister special) {
         switch (special) {
@@ -28129,7 +28319,8 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
                 katana::ir::Operation::LoadWordSignedPcRelative ||
             instruction.operation ==
                 katana::ir::Operation::LoadLongPcRelative) {
-            const auto literal = owner_task_literal(image, instruction);
+            const auto literal = owner_task_literal(
+                image, instruction, authenticated_literals);
             slice << ";literal="
                   << (literal.has_value()
                           ? owner_task_literal_text(*literal)
@@ -28424,6 +28615,7 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
 OwnerSemanticTaskContract owner_semantic_task_contract(
     const std::span<const katana::ir::Function> program,
     const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules,
     const std::uint32_t entry,
     const std::optional<std::uint32_t> covered_size,
     const std::string_view code_identity,
@@ -28459,11 +28651,19 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
     semantic_boundary.exact = covered_size.has_value();
     semantic_boundary.identity_bound =
         covered_size.has_value() && !code_identity.empty();
+    const auto literal_evidence = owner_semantic_literal_evidence(
+        function, latent_modules);
+    if (!literal_evidence.has_value()) {
+        contract.fields.push_back(
+            "owner-ir-contract=unavailable:literal-authority-ambiguous");
+        return contract;
+    }
     const auto semantic_summary =
         katana::analysis::summarize_owner_semantics(
             function,
             std::move(semantic_boundary),
-            hardware_references);
+            hardware_references,
+            *literal_evidence);
     const bool compositional_complete =
         semantic_summary.status ==
         katana::analysis::OwnerSemanticSummaryStatus::Complete;
@@ -28677,7 +28877,7 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
                 instruction.operation ==
                     katana::ir::Operation::LoadLongPcRelative) {
                 const auto literal = owner_task_literal(
-                    image, instruction);
+                    image, instruction, *literal_evidence);
                 if (literal.has_value()) {
                     sequence << ";literal="
                              << owner_task_literal_text(*literal);
@@ -28801,7 +29001,8 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
         ";guest-exit:" +
         (legacy_detail_complete ? "normal-return" : "unknown"));
     const auto state_projection = owner_task_symbolic_projection(
-        function, image, entry, may_defs, hardware_references);
+        function, image, *literal_evidence, entry, may_defs,
+        hardware_references);
     contract.complete = compositional_complete;
     contract.state_projection_complete =
         contract.complete &&
@@ -29336,6 +29537,7 @@ build_native_disc_materialization_world(
             auto contract = owner_semantic_task_contract(
                 result.admitted_state->emitted_program,
                 result.image,
+                result.admitted_state->latent_aot.modules,
                 owner_hook_contract.entry,
                 owner_hook_contract.covered_size,
                 owner_hook_contract.code_identity,
@@ -29383,6 +29585,7 @@ build_native_disc_materialization_world(
             const auto site_semantics = owner_hardware_site_task_contract(
                 result.admitted_state->emitted_program,
                 result.image,
+                result.admitted_state->latent_aot.modules,
                 owner_hook_contract.entry,
                 owner_hook_contract.control_flow_closed,
                 std::span<const std::uint32_t>{

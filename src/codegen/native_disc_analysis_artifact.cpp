@@ -574,6 +574,13 @@ void write_latent_module(Writer& output, const PreparedLatentAotModule& module) 
         output.u64(value.disc_byte_offset);
         output.u32(value.byte_size);
     });
+    write_vector(output, module.pc_literal_evidence, [&](const auto& value) {
+        output.u32(value.instruction_offset);
+        output.u32(value.literal_offset);
+        output.u32(value.bits);
+        output.u8(value.width_bytes);
+        output.boolean(value.signed_value);
+    });
     write_u32_vector(output, module.entry_offsets);
     write_u32_vector(output, module.external_code_pointer_candidates);
     write_vector(output, module.external_code_pointer_evidence, [&](const auto& value) {
@@ -618,6 +625,16 @@ PreparedLatentAotModule read_latent_module(Reader& input) {
             value.byte_size = input.u32();
             return value;
         }, 1024u);
+    module.pc_literal_evidence =
+        read_vector<PreparedLatentAotPcLiteralEvidence>(input, [&] {
+            PreparedLatentAotPcLiteralEvidence value;
+            value.instruction_offset = input.u32();
+            value.literal_offset = input.u32();
+            value.bits = input.u32();
+            value.width_bytes = input.u8();
+            value.signed_value = input.boolean();
+            return value;
+        }, maximum_prepared_latent_aot_pc_literal_evidence);
     module.entry_offsets = read_u32_vector(input);
     module.external_code_pointer_candidates = read_u32_vector(input);
     module.external_code_pointer_evidence =
@@ -730,6 +747,37 @@ LatentAotDiscovery read_latent(Reader& input) {
 bool sorted_unique(const std::vector<std::uint32_t>& values) {
     return std::is_sorted(values.begin(), values.end()) &&
            std::adjacent_find(values.begin(), values.end()) == values.end();
+}
+
+bool canonical_pc_literal_evidence(
+    const PreparedLatentAotModule& module) {
+    const auto& values = module.pc_literal_evidence;
+    if (values.size() > maximum_prepared_latent_aot_pc_literal_evidence)
+        return false;
+    const auto less = [](const auto& left, const auto& right) {
+        return std::tie(left.instruction_offset, left.literal_offset,
+                        left.bits, left.width_bytes, left.signed_value) <
+               std::tie(right.instruction_offset, right.literal_offset,
+                        right.bits, right.width_bytes, right.signed_value);
+    };
+    if (!std::is_sorted(values.begin(), values.end(), less)) return false;
+    for (std::size_t index = 0u; index < values.size(); ++index) {
+        const auto& value = values[index];
+        if ((value.instruction_offset & 1u) != 0u ||
+            (value.width_bytes != 2u && value.width_bytes != 4u) ||
+            value.signed_value != (value.width_bytes == 2u) ||
+            value.instruction_offset > module.byte_size ||
+            module.byte_size - value.instruction_offset < 2u ||
+            (value.literal_offset & (value.width_bytes - 1u)) != 0u ||
+            value.literal_offset > module.byte_size ||
+            value.width_bytes > module.byte_size - value.literal_offset ||
+            (value.width_bytes == 2u && value.bits > 0xFFFFu) ||
+            (index != 0u &&
+             values[index - 1u].instruction_offset ==
+                 value.instruction_offset))
+            return false;
+    }
+    return true;
 }
 
 bool canonical_program_index_adjacencies(
@@ -863,11 +911,13 @@ bool native_disc_analysis_artifact_checkpointable(
                sorted_unique(
                    artifact.replacement_reachability_incomplete_frontier) &&
                std::all_of(artifact.latent.modules.begin(),
-                           artifact.latent.modules.end(), [](const auto& module) {
+                           artifact.latent.modules.end(),
+                           [](const auto& module) {
                                return !module.id.empty() &&
                                       !module.byte_identity.empty() &&
                                       module.byte_size != 0u &&
                                       !module.program.empty() &&
+                                      canonical_pc_literal_evidence(module) &&
                                       sorted_unique(module.entry_offsets);
                            });
     } catch (...) {

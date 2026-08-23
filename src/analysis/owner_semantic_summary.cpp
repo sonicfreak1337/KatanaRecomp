@@ -2,8 +2,10 @@
 
 #include "katana/io/input_provenance.hpp"
 #include "katana/ir/register_liveness.hpp"
+#include "katana/runtime/block_table.hpp"
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <iomanip>
 #include <limits>
@@ -309,6 +311,170 @@ void append_text(std::string& output,
     return copy;
 }
 
+struct TwoPhaseStatusWait final {
+    std::array<BlockIndex, 2u> phase_blocks{};
+    std::array<std::uint32_t, 2u> read_instructions{};
+    std::uint32_t mask = 0u;
+    std::uint8_t mask_register = 0u;
+    std::uint8_t data_register = 0u;
+    std::string literal_identity;
+};
+
+[[nodiscard]] std::optional<TwoPhaseStatusWait>
+match_two_phase_spg_status_wait(
+    const ir::Function& function,
+    const std::vector<std::vector<BlockIndex>>& successors,
+    const std::unordered_map<
+        std::uint32_t,
+        std::vector<const HardwareAccessReference*>>& hardware_by_instruction,
+    const std::unordered_map<
+        std::uint32_t,
+        const OwnerSemanticLiteralEvidence*>& literal_by_instruction) {
+    if (function.blocks.size() != 4u ||
+        !function.direct_callees.empty() ||
+        !function.indirect_call_sites.empty())
+        return std::nullopt;
+
+    const auto block_at = [&](const std::uint32_t address)
+        -> std::optional<BlockIndex> {
+        for (BlockIndex index = 0u; index < function.blocks.size(); ++index)
+            if (function.blocks[index].start_address == address)
+                return index;
+        return std::nullopt;
+    };
+    const auto entry = block_at(function.entry_address);
+    if (!entry || successors[*entry].size() != 1u)
+        return std::nullopt;
+    const auto first_phase = successors[*entry].front();
+    if (first_phase == *entry || successors[first_phase].size() != 2u)
+        return std::nullopt;
+    const auto other_successor = [&](const BlockIndex block)
+        -> std::optional<BlockIndex> {
+        const auto& values = successors[block];
+        if (values.size() != 2u ||
+            std::count(values.begin(), values.end(), block) != 1)
+            return std::nullopt;
+        const auto found = std::find_if(values.begin(), values.end(),
+                                        [&](const auto value) {
+                                            return value != block;
+                                        });
+        return found != values.end()
+            ? std::optional<BlockIndex>{*found}
+            : std::nullopt;
+    };
+    const auto second_phase = other_successor(first_phase);
+    if (!second_phase || *second_phase == *entry ||
+        *second_phase == first_phase)
+        return std::nullopt;
+    const auto exit = other_successor(*second_phase);
+    if (!exit || *exit == *entry || *exit == first_phase ||
+        *exit == *second_phase || !successors[*exit].empty())
+        return std::nullopt;
+
+    const auto& prelude = function.blocks[*entry];
+    const auto& terminal = function.blocks[*exit];
+    if (prelude.has_indirect_successor || terminal.has_indirect_successor ||
+        prelude.instructions.size() != 1u ||
+        prelude.instructions.front().operation !=
+            ir::Operation::LoadWordSignedPcRelative ||
+        terminal.instructions.size() != 2u ||
+        terminal.instructions[0u].operation != ir::Operation::Return ||
+        terminal.instructions[1u].operation != ir::Operation::Nop)
+        return std::nullopt;
+
+    const auto literal_for = [&](const ir::Instruction& instruction,
+                                 const std::uint8_t width,
+                                 const bool signed_value)
+        -> const OwnerSemanticLiteralEvidence* {
+        const auto found = literal_by_instruction.find(
+            instruction.source_address);
+        if (found == literal_by_instruction.end() ||
+            found->second == nullptr ||
+            !instruction.effective_address.has_value() ||
+            found->second->literal_address !=
+                *instruction.effective_address ||
+            found->second->width_bytes != width ||
+            found->second->signed_value != signed_value ||
+            found->second->identity.empty())
+            return nullptr;
+        return found->second;
+    };
+    const auto* const mask_literal = literal_for(
+        prelude.instructions.front(), 2u, true);
+    if (mask_literal == nullptr ||
+        (mask_literal->bits & 0xFFFFu) == 0u)
+        return std::nullopt;
+
+    TwoPhaseStatusWait wait;
+    wait.phase_blocks = {first_phase, *second_phase};
+    wait.mask = static_cast<std::uint32_t>(static_cast<std::int32_t>(
+        static_cast<std::int16_t>(mask_literal->bits)));
+    wait.mask_register = prelude.instructions.front().destination_register;
+    wait.literal_identity = mask_literal->identity;
+    if (wait.mask_register >= 16u) return std::nullopt;
+
+    const auto match_phase = [&](const BlockIndex block_index,
+                                 const ir::Operation branch,
+                                 const std::size_t phase) {
+        const auto& block = function.blocks[block_index];
+        if (block.has_indirect_successor ||
+            block.instructions.size() != 5u)
+            return false;
+        const auto& pointer = block.instructions[0u];
+        const auto& read = block.instructions[1u];
+        const auto& mask = block.instructions[2u];
+        const auto& test = block.instructions[3u];
+        const auto& condition = block.instructions[4u];
+        if (pointer.operation != ir::Operation::LoadLongPcRelative ||
+            read.operation != ir::Operation::LoadLong ||
+            mask.operation != ir::Operation::AndRegister ||
+            test.operation != ir::Operation::TestRegister ||
+            condition.operation != branch ||
+            condition.target_address !=
+                std::optional<std::uint32_t>{block.start_address} ||
+            pointer.destination_register >= 16u ||
+            read.source_register != pointer.destination_register ||
+            read.destination_register != pointer.destination_register ||
+            mask.destination_register != pointer.destination_register ||
+            mask.source_register != wait.mask_register ||
+            test.destination_register != pointer.destination_register ||
+            test.source_register != pointer.destination_register)
+            return false;
+        const auto* const pointer_literal = literal_for(pointer, 4u, false);
+        if (pointer_literal == nullptr ||
+            pointer_literal->identity != wait.literal_identity)
+            return false;
+        const auto hardware = hardware_by_instruction.find(
+            read.source_address);
+        if (hardware == hardware_by_instruction.end() ||
+            hardware->second.size() != 1u ||
+            hardware->second.front() == nullptr)
+            return false;
+        const auto& reference = *hardware->second.front();
+        if (reference.region != DreamcastHardwareRegion::Pvr ||
+            reference.kind != HardwareAccessKind::Read ||
+            reference.width != 4u ||
+            reference.runtime_support != HardwareRuntimeSupport::Implemented ||
+            reference.register_name != "SPG_STATUS" ||
+            katana::runtime::canonical_physical_address(
+                pointer_literal->bits) != reference.canonical_address)
+            return false;
+        if (phase == 0u) {
+            wait.data_register = pointer.destination_register;
+            if (wait.data_register == wait.mask_register)
+                return false;
+        } else if (pointer.destination_register != wait.data_register) {
+            return false;
+        }
+        wait.read_instructions[phase] = read.source_address;
+        return true;
+    };
+    if (!match_phase(first_phase, ir::Operation::BranchIfTrue, 0u) ||
+        !match_phase(*second_phase, ir::Operation::BranchIfFalse, 1u))
+        return std::nullopt;
+    return wait;
+}
+
 } // namespace
 
 const char* owner_semantic_summary_status_name(
@@ -374,6 +540,7 @@ OwnerSemanticSummary summarize_owner_semantics(
     const ir::Function& function,
     OwnerSemanticBoundary boundary,
     const std::span<const HardwareAccessReference> hardware_references,
+    const std::span<const OwnerSemanticLiteralEvidence> literal_evidence,
     const OwnerSemanticSummaryOptions options) {
     OwnerSemanticSummary summary;
     summary.boundary = std::move(boundary);
@@ -470,6 +637,45 @@ OwnerSemanticSummary summarize_owner_semantics(
                   });
     }
     const std::vector<const HardwareAccessReference*> no_hardware_references;
+
+    std::unordered_map<
+        std::uint32_t,
+        const OwnerSemanticLiteralEvidence*> literal_by_instruction;
+    literal_by_instruction.reserve(literal_evidence.size());
+    bool literal_evidence_valid = true;
+    std::optional<std::uint32_t> previous_literal_instruction;
+    for (const auto& literal : literal_evidence) {
+        const auto instruction = [&]() -> const ir::Instruction* {
+            for (const auto& block : function.blocks)
+                for (const auto& candidate : block.instructions)
+                    if (candidate.source_address ==
+                        literal.instruction_address)
+                        return &candidate;
+            return nullptr;
+        }();
+        const bool expected_word = instruction != nullptr &&
+            instruction->operation ==
+                ir::Operation::LoadWordSignedPcRelative;
+        const bool expected_long = instruction != nullptr &&
+            instruction->operation == ir::Operation::LoadLongPcRelative;
+        if ((previous_literal_instruction.has_value() &&
+             literal.instruction_address <= *previous_literal_instruction) ||
+            (!expected_word && !expected_long) ||
+            !instruction->effective_address.has_value() ||
+            *instruction->effective_address != literal.literal_address ||
+            literal.width_bytes != (expected_word ? 2u : 4u) ||
+            literal.signed_value != expected_word ||
+            literal.identity.empty() ||
+            literal.identity.size() > options.maximum_text_bytes ||
+            !literal_by_instruction.emplace(
+                literal.instruction_address, &literal).second) {
+            literal_evidence_valid = false;
+            continue;
+        }
+        previous_literal_instruction = literal.instruction_address;
+    }
+    if (!literal_evidence_valid)
+        append_reason(summary, options, "authenticated-literal-evidence-invalid");
 
     const auto block_end = [&](const std::uint32_t start) {
         return static_cast<std::uint64_t>(start) + 2u;
@@ -834,6 +1040,77 @@ OwnerSemanticSummary summarize_owner_semantics(
         }
     }
 
+    // PC-relative reads are ordinary memory effects, but an authenticated
+    // ledger may additionally state their exact scalar value.  Preserve that
+    // value in the provider contract instead of treating the IR effective
+    // address as byte authority.
+    for (auto& effect : summary.effects) {
+        const auto literal = literal_by_instruction.find(
+            effect.instruction_address);
+        if (literal == literal_by_instruction.end() ||
+            literal->second == nullptr)
+            continue;
+        effect.value_expression =
+            std::string{"authenticated-literal:"} +
+            (literal->second->signed_value ? "s16:" : "u32:") +
+            hex_token(literal->second->signed_value
+                          ? literal->second->bits & 0xFFFFu
+                          : literal->second->bits);
+    }
+
+    auto two_phase_status_wait = literal_evidence_valid
+        ? match_two_phase_spg_status_wait(
+              function, successors, hardware_by_instruction,
+              literal_by_instruction)
+        : std::nullopt;
+    if (two_phase_status_wait.has_value()) {
+        std::array<OwnerSemanticEffect*, 2u> wait_effects{};
+        for (auto& effect : summary.effects) {
+            for (std::size_t phase = 0u;
+                 two_phase_status_wait.has_value() &&
+                 phase < wait_effects.size();
+                 ++phase)
+                if (effect.instruction_address ==
+                    two_phase_status_wait->read_instructions[phase]) {
+                    if (wait_effects[phase] != nullptr)
+                        two_phase_status_wait.reset();
+                    else
+                        wait_effects[phase] = &effect;
+                }
+            if (!two_phase_status_wait.has_value()) break;
+        }
+        if (two_phase_status_wait.has_value() &&
+            std::ranges::all_of(wait_effects,
+                                [](const auto* effect) {
+                                    return effect != nullptr;
+                                })) {
+            const auto mask = hex_token(two_phase_status_wait->mask);
+            for (std::size_t phase = 0u; phase < wait_effects.size(); ++phase) {
+                auto& effect = *wait_effects[phase];
+                effect.provider_operation =
+                    runtime::NativePortProviderOperation::Wait;
+                effect.provider_resource_kind =
+                    runtime::NativePortProviderResourceKind::Status;
+                effect.value_expression =
+                    "mask:" + mask +
+                    (phase == 0u ? ";until-set" : ";until-clear");
+                effect.result_expression =
+                    std::string{"status-mask:"} + mask +
+                    (phase == 0u ? ":set" : ":clear");
+            }
+            summary.result.cpu_state_expression =
+                "owner-status-wait-v1:" + summary.boundary.identity +
+                ":literal=" + two_phase_status_wait->literal_identity +
+                ":r" +
+                std::to_string(two_phase_status_wait->data_register) +
+                "=0x00000000:r" +
+                std::to_string(two_phase_status_wait->mask_register) +
+                "=" + mask + ":t=1:pr=preserved";
+        } else {
+            two_phase_status_wait.reset();
+        }
+    }
+
     // Iterative Kosaraju keeps the summary usable for large owners without
     // consuming the host call stack.  Missing successors were already marked
     // open above and are intentionally absent from this graph.
@@ -927,6 +1204,13 @@ OwnerSemanticSummary summarize_owner_semantics(
         scc.successor_scc_indices.erase(
             std::unique(scc.successor_scc_indices.begin(), scc.successor_scc_indices.end()),
             scc.successor_scc_indices.end());
+        const bool authenticated_status_wait_scc =
+            two_phase_status_wait.has_value() &&
+            scc.block_indices.size() == 1u &&
+            std::ranges::find(
+                two_phase_status_wait->phase_blocks,
+                scc.block_indices.front()) !=
+                two_phase_status_wait->phase_blocks.end();
         scc.structurally_stable =
             scc.cyclic && std::all_of(scc.block_indices.begin(), scc.block_indices.end(),
                                       [&](const auto block_index) {
@@ -935,6 +1219,8 @@ OwnerSemanticSummary summarize_owner_semantics(
                                               function.blocks[block_index].instructions.end(),
                                               is_stateless_loop_instruction);
                                       });
+        scc.structurally_stable =
+            scc.structurally_stable || authenticated_status_wait_scc;
         if (scc.cyclic) {
             if (!scc.structurally_stable) {
                 // No abstract value transfer is performed by this structural
@@ -992,6 +1278,25 @@ OwnerSemanticSummary summarize_owner_semantics(
     append_u64(digest_material, summary.boundary.exact);
     append_u64(digest_material, summary.boundary.identity_bound);
     append_text(digest_material, summary.boundary.identity, options.maximum_text_bytes);
+    // Keep summaries which consume no authenticated literal ledger bit-for-bit
+    // compatible with the preceding contract.  This avoids invalidating every
+    // already reviewed static-image provider merely because latent-module
+    // authority became representable.  A non-empty ledger has an explicit
+    // domain separator and therefore cannot alias the legacy material.
+    if (!literal_evidence.empty()) {
+        append_text(digest_material, "pc-literal-evidence-v1",
+                    options.maximum_text_bytes);
+        append_u64(digest_material, literal_evidence.size());
+        for (const auto& literal : literal_evidence) {
+            append_u64(digest_material, literal.instruction_address);
+            append_u64(digest_material, literal.literal_address);
+            append_u64(digest_material, literal.bits);
+            append_u64(digest_material, literal.width_bytes);
+            append_u64(digest_material, literal.signed_value);
+            append_text(digest_material, literal.identity,
+                        options.maximum_text_bytes);
+        }
+    }
     append_u64(digest_material, static_cast<std::uint8_t>(summary.status));
     append_u64(digest_material, static_cast<std::uint8_t>(summary.authority));
     append_u64(digest_material, summary.boundary_valid);

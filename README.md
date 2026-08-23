@@ -26,16 +26,16 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 118, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 119, Block-ABI 5,
 PlatformServices-ABI 14,
-Analyzer-ABI 64, Function-Analysis-Epoch-Schema 36, lokales
+Analyzer-ABI 65, Function-Analysis-Epoch-Schema 36, lokales
 In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
-Portprojektvertrag 103, Native-Port-Profilvertrag 23 sowie PVR-State-Contract 3.
+Portprojektvertrag 103, Native-Port-Profilvertrag 24 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
 Port-Metadata-Cache-Schema: `12`.
 Der aktuelle GameProject-Vertrag ist `9` mit Artefaktformat `6`; der native
-Port-Definitionsvertrag ist `11` und bleibt davon getrennt; das
-NativePortArtifact-Format steht auf `12`. Die aktuellen
+Port-Definitionsvertrag ist `12` und bleibt davon getrennt; das
+NativePortArtifact-Format steht auf `13`. Die aktuellen
 Analyse-Direktiven stehen auf `5`, das Hardware-Closure-Schema auf `v8`, die
 Hookanforderungskarte auf `v5` und die exportierten GameProject-Metadaten auf
 `katana-game-project-v5`.
@@ -84,7 +84,7 @@ Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
 vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
-Source-Stand Runtime-ABI 118 / Analyzer-ABI 64; historische Exportzahlen
+Source-Stand Runtime-ABI 119 / Analyzer-ABI 65; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
 
 Der aktuelle Kaltpfad verschiebt IR-Lowering, Audit und Graphmaterialisierung

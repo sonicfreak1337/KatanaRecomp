@@ -9631,7 +9631,7 @@ load_pending_agent_analysis_candidate(
 bool same_noop_analysis_manifest_identity(
     katana::codegen::NativeDiscAnalysisArtifactIdentity committed,
     katana::codegen::NativeDiscAnalysisArtifactIdentity current) {
-    // Schema-7 checkpoints deliberately omit downstream codegen identity, but
+    // Schema-8 checkpoints deliberately omit downstream codegen identity, but
     // retain the optimizer identity for their serialized product IR.
     // The terminal ledger producer identity binds the current codegen/World
     // contract independently.

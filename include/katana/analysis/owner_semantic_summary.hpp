@@ -27,6 +27,21 @@ struct OwnerSemanticBoundary final {
     [[nodiscard]] bool operator==(const OwnerSemanticBoundary&) const = default;
 };
 
+// One scalar PC-relative literal whose bytes were independently bound to the
+// current input identity.  Owner summaries consume values only through this
+// explicit ledger; an effective address in IR is not itself byte authority.
+struct OwnerSemanticLiteralEvidence final {
+    std::uint32_t instruction_address = 0u;
+    std::uint32_t literal_address = 0u;
+    std::uint32_t bits = 0u;
+    std::uint8_t width_bytes = 0u;
+    bool signed_value = false;
+    std::string identity;
+
+    [[nodiscard]] bool operator==(
+        const OwnerSemanticLiteralEvidence&) const = default;
+};
+
 enum class OwnerSemanticSummaryStatus : std::uint8_t {
     Incomplete,
     Complete,
@@ -181,6 +196,7 @@ struct OwnerSemanticSummary final {
     const ir::Function& function,
     OwnerSemanticBoundary boundary,
     std::span<const HardwareAccessReference> hardware_references = {},
+    std::span<const OwnerSemanticLiteralEvidence> literal_evidence = {},
     OwnerSemanticSummaryOptions options = {});
 
 [[nodiscard]] const char*

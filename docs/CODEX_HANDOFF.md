@@ -5,7 +5,16 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
-## Aktueller Sourcevertrag (2026-08-22)
+## Aktueller Sourcevertrag (2026-08-23)
+
+Der Source-Meilenstein v142 fuehrt einen bounded, disc- und
+modulidentitaetsgebundenen PC-Literal-Ledger fuer latente AOT-Module ein und
+bindet latente FunctionEntry-Hooks an ihre exakte Modul- und
+Funktionsidentitaet. Der erste enge Consumer ist ein exakt erkanntes
+zweiphasiges SPG_STATUS-Wait-Leaf; nur seine belegten Set-/Clear-Schleifen
+werden als native Framegrenze repraesentiert. Das ist kein PVR-Geraetemodell
+und keine globale Schleifenpromotion. Der letzte Produktnachweis bleibt bis
+zum naechsten autoritativen Sonic-Lauf weiterhin v141.
 
 Sonic-Run 50 war nach `850478 ms` Wrapper-/`838777 ms` Analyzerzeit gruen.
 Der erste statische Hardware-Provider-Pilot lieferte exakt einen Contract,
@@ -27,8 +36,8 @@ vor `analyze_native_disc_port()` real vorgeprueft. Run 50 publizierte das
 bounded Pending-Slots und danach als autoritative Generation. Ein spaeteres
 Authority-Gate kann die teure Analyse dadurch nicht mehr still verwerfen.
 
-Der aktuelle Stand verwendet Runtime-ABI `118` und Analyzer-ABI `64` sowie
-`NativePortDefinition` `11`, `NativePortArtifact` `12` und Hardware-Closure
+Der aktuelle Stand verwendet Runtime-ABI `119` und Analyzer-ABI `65` sowie
+`NativePortDefinition` `12`, `NativePortArtifact` `13` und Hardware-Closure
 `v8`. Die fail-closed Beweisschicht vergleicht eine
 `OwnerSemanticSummary`-Sicht der exakt identity-bound Ownerfunktion mit dem
 `NativeProviderSemanticContract` (Runtime-Typ
@@ -151,11 +160,11 @@ generierten Produktcatch sowie Gesamtbuild und erster Sonic-`analyze-port`-
 Lauf sind weiterhin offen. Es wurde weder eine Sonic-Analyse noch ein Port
 gestartet oder exportiert.
 
-## Aktueller Produktmeilenstein: v141 / Source-ABI 118-64
+## Aktueller Source-Meilenstein: v142 / Source-ABI 119-65
 
-Der aktuelle Source-Stand ist Runtime-ABI `118`, Analyzer-ABI `64`,
+Der aktuelle Source-Stand ist Runtime-ABI `119`, Analyzer-ABI `65`,
 Backend-Interface-ABI `24`, Portprojektvertrag `103` und Native-Port-
-Profilvertrag `23`. Der agentische Native-Disc-Workflow publiziert eine
+Profilvertrag `24`. Der agentische Native-Disc-Workflow publiziert eine
 identitaetsgebundene Materialization-World und ein resumierbares Ledger;
 Runtime-Frontiers werden ausschliesslich als `ObservedHint` importiert und
 niemals automatisch zu AOT-Roots oder Hardware-Closure.

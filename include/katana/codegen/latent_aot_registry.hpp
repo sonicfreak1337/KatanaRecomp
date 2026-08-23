@@ -33,6 +33,8 @@ inline constexpr std::size_t
 inline constexpr std::size_t
     maximum_prepared_latent_aot_code_pointer_evidence = 16'384u;
 inline constexpr std::size_t
+    maximum_prepared_latent_aot_pc_literal_evidence = 65'536u;
+inline constexpr std::size_t
     maximum_prepared_latent_aot_function_identities = 2'048u;
 inline constexpr std::uint64_t
     maximum_prepared_latent_aot_function_identity_bytes =
@@ -404,6 +406,21 @@ struct PreparedLatentAotSourceBinding {
     [[nodiscard]] bool operator==(const PreparedLatentAotSourceBinding&) const = default;
 };
 
+// One exact PC-relative scalar consumed by authenticated module IR.  The
+// parent module identity binds the bytes; retaining only this bounded ledger
+// lets later owner/provider proof recover immutable literals without keeping
+// retail source bytes in the analysis artifact.
+struct PreparedLatentAotPcLiteralEvidence final {
+    std::uint32_t instruction_offset = 0u;
+    std::uint32_t literal_offset = 0u;
+    std::uint32_t bits = 0u;
+    std::uint8_t width_bytes = 0u;
+    bool signed_value = false;
+
+    [[nodiscard]] bool operator==(
+        const PreparedLatentAotPcLiteralEvidence&) const = default;
+};
+
 // Export-time description of one byte template whose finite native SH-4 graph
 // was accepted. Multiple exact disc extents may bind the same template. Paths,
 // names and source bytes deliberately do not survive this boundary.
@@ -413,6 +430,10 @@ struct PreparedLatentAotModule {
     std::uint32_t byte_size = 0u;
     std::uint32_t source_address = 0u;
     std::vector<PreparedLatentAotSourceBinding> source_bindings;
+    // Sorted by instruction/literal offset.  Every entry is regenerated from
+    // the validated transformed module and rechecked against the current disc
+    // binding before admission or resume publication.
+    std::vector<PreparedLatentAotPcLiteralEvidence> pc_literal_evidence;
     // Contains offset zero for a heuristic candidate, or exactly the accepted
     // hash-bound offsets for an authoritative candidate. Authoritative roots
     // are either explicit external hints or a complete bounded entry table

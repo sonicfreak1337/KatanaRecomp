@@ -483,13 +483,24 @@ void validate_native_port_definition(
                 NativePortHookOriginalPolicy::ReplacesOriginal ||
             hook.original_policy ==
                 NativePortHookOriginalPolicy::MayContinueOriginal;
+        const auto valid_code_source =
+            hook.code_source == NativePortHookCodeSource::StaticImage ||
+            hook.code_source == NativePortHookCodeSource::LatentAotModule;
+        const auto valid_code_source_binding =
+            hook.code_source == NativePortHookCodeSource::StaticImage
+                ? hook.code_source_identity.empty() &&
+                      range_inside_image(hook.guest_address,
+                                         hook.covered_size)
+                : hook.kind == NativePortHookKind::FunctionEntry &&
+                      valid_native_port_sha256_identity(
+                          hook.code_source_identity);
         if ((hook.guest_address & 1u) != 0u ||
             hook.covered_size < 2u ||
             (hook.covered_size & 1u) != 0u ||
             end > 0x1'0000'0000ull ||
             !valid_kind || !valid_requirement ||
             !valid_original_policy ||
-            !range_inside_image(hook.guest_address, hook.covered_size) ||
+            !valid_code_source || !valid_code_source_binding ||
             !valid_native_port_link_symbol(hook.symbol) ||
             !valid_native_port_sha256_identity(hook.code_identity) ||
             (!hook.provider_implementation_identity.empty() &&
@@ -525,7 +536,6 @@ void validate_native_port_definition(
     std::set<std::uint32_t> resolved_instructions;
     for (const auto& resolution : definition.hardware_resolutions) {
         if ((resolution.instruction_address & 1u) != 0u ||
-            !range_inside_image(resolution.instruction_address, 2u) ||
             !resolved_instructions.insert(
                 resolution.instruction_address).second)
             invalid_definition("hardware-resolution");
@@ -540,7 +550,16 @@ void validate_native_port_definition(
         // admission separately proves the exact function boundary and rejects
         // every external, guarded, seeded or resume entry into the covered
         // interior before it may certify an interior hardware instruction.
+        const auto resolution_source_bound =
+            range_inside_image(resolution.instruction_address, 2u) ||
+            (hook != definition.hooks.end() &&
+             hook->code_source == NativePortHookCodeSource::LatentAotModule &&
+             resolution.instruction_address >= hook->guest_address &&
+             static_cast<std::uint64_t>(resolution.instruction_address) + 2u <=
+                 static_cast<std::uint64_t>(hook->guest_address) +
+                     hook->covered_size);
         if (hook == definition.hooks.end() ||
+            !resolution_source_bound ||
             !native_port_hook_closes_product_contract(
                 hook->requirement) ||
             hook->original_policy !=

@@ -285,6 +285,9 @@ serialize_definition(const NativePortDefinition& definition) {
         writer.string(hook.code_identity, artifact_maximum_identity_size);
         writer.string(hook.provider_implementation_identity,
                       artifact_maximum_identity_size);
+        writer.enumeration(hook.code_source);
+        writer.string(hook.code_source_identity,
+                      artifact_maximum_identity_size);
     }
 
     writer.u32(checked_count(definition.hardware_resolutions.size()));
@@ -512,6 +515,7 @@ void NativePortArtifact::rebuild_definition() {
         hook_symbols_.size() != hooks_.size() ||
         hook_code_identities_.size() != hooks_.size() ||
         hook_provider_implementation_identities_.size() != hooks_.size() ||
+        hook_code_source_identities_.size() != hooks_.size() ||
         bootstrap_write_pre_identities_.size() !=
             bootstrap_writes_.size() ||
         bootstrap_write_post_identities_.size() !=
@@ -546,6 +550,8 @@ void NativePortArtifact::rebuild_definition() {
         hooks_[index].code_identity = hook_code_identities_[index];
         hooks_[index].provider_implementation_identity =
             hook_provider_implementation_identities_[index];
+        hooks_[index].code_source_identity =
+            hook_code_source_identities_[index];
     }
     provider_semantic_contract_views_.clear();
     provider_semantic_contract_views_.reserve(provider_semantic_storage_.size());
@@ -736,6 +742,7 @@ NativePortArtifact::load(const std::filesystem::path& path) {
     result->hook_symbols_.reserve(hook_count);
     result->hook_code_identities_.reserve(hook_count);
     result->hook_provider_implementation_identities_.reserve(hook_count);
+    result->hook_code_source_identities_.reserve(hook_count);
     result->hooks_.reserve(hook_count);
     for (std::uint32_t index = 0u; index < hook_count; ++index) {
         NativePortHookBinding hook;
@@ -749,6 +756,10 @@ NativePortArtifact::load(const std::filesystem::path& path) {
         result->hook_code_identities_.push_back(
             reader.string(artifact_maximum_identity_size));
         result->hook_provider_implementation_identities_.push_back(
+            reader.string(artifact_maximum_identity_size));
+        hook.code_source =
+            reader.enumeration<NativePortHookCodeSource>();
+        result->hook_code_source_identities_.push_back(
             reader.string(artifact_maximum_identity_size));
         result->hooks_.push_back(hook);
     }

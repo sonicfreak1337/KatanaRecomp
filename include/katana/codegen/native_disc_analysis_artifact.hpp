@@ -13,13 +13,15 @@
 
 namespace katana::codegen {
 
-// Schema 7 binds the optimized Primary/Latent IR retained by this monolithic
+// Schema 8 binds the optimized Primary/Latent IR retained by this monolithic
 // checkpoint to its product optimizer independently from lowering/CFA caches.
+// Schema 8 additionally retains the bounded, source-authenticated PC-relative
+// literal ledger of every accepted latent module.
 // Schema 6 gave incomplete analyzer closure a distinct, bounded nested
 // checkpoint envelope. It also removes downstream codegen implementation
 // churn from the canonical analysis lookup key; current product admission is
 // always replayed and validated before any result is consumed.
-inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 7u;
+inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 8u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
     256u * 1024u * 1024u;
@@ -53,7 +55,7 @@ struct NativeDiscAnalysisArtifactIdentity final {
     // This identity is therefore authoritative even though generic emitter and
     // packaging changes remain downstream.
     std::string ir_product_implementation_identity;
-    // Downstream runtime-frontier binding only. Schema-7 analysis checkpoints
+    // Downstream runtime-frontier binding only. Schema-8 analysis checkpoints
     // deliberately neither hash nor serialize this field; current admission
     // fills it after replay before any generated product can consume it.
     std::string codegen_implementation_identity;
