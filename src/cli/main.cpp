@@ -9006,6 +9006,60 @@ std::optional<std::uint32_t> unique_primary_instruction_owner(
     return owner;
 }
 
+std::optional<std::vector<std::uint32_t>>
+complete_materialized_indirect_site_targets(
+    const katana::codegen::NativeDiscAnalysisArtifact& artifact,
+    const std::uint32_t instruction_address) {
+    std::optional<std::vector<std::uint32_t>> ir_targets;
+    for (const auto& function : artifact.primary.lowered_program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.source_address != instruction_address)
+                    continue;
+                if (block.has_indirect_successor ||
+                    instruction.resolved_targets.empty())
+                    return std::nullopt;
+                auto current = instruction.resolved_targets;
+                std::sort(current.begin(), current.end());
+                current.erase(
+                    std::unique(current.begin(), current.end()),
+                    current.end());
+                if (ir_targets.has_value() && *ir_targets != current)
+                    return std::nullopt;
+                ir_targets = std::move(current);
+            }
+        }
+    }
+    if (!ir_targets.has_value() || ir_targets->empty())
+        return std::nullopt;
+
+    bool has_matching_complete_resolution = false;
+    for (const auto& resolution :
+         artifact.primary.analysis.indirect_control_flow) {
+        if (resolution.instruction_address != instruction_address)
+            continue;
+        if (resolution.status !=
+                katana::analysis::ResolutionStatus::Resolved ||
+            !katana::analysis::control_flow_evidence_complete(
+                resolution.evidence) ||
+            resolution.origin_class !=
+                katana::analysis::IndirectControlFlowOriginClass::Table ||
+            resolution.exact_guard_rejection_reason !=
+                katana::analysis::ExactGuardRejectionReason::None)
+            continue;
+        auto current = resolution.targets;
+        if (resolution.target.has_value())
+            current.push_back(*resolution.target);
+        std::sort(current.begin(), current.end());
+        current.erase(
+            std::unique(current.begin(), current.end()), current.end());
+        if (current != *ir_targets) return std::nullopt;
+        has_matching_complete_resolution = true;
+    }
+    if (!has_matching_complete_resolution) return std::nullopt;
+    return ir_targets;
+}
+
 std::optional<std::vector<std::pair<std::uint32_t, std::uint32_t>>>
 closed_replacement_owner_target_losses(
     const AgentAnalysisAuthorityBaseline& baseline,
@@ -9023,8 +9077,6 @@ closed_replacement_owner_target_losses(
                 continue;
             const auto owner =
                 unique_primary_instruction_owner(candidate, site);
-            bool has_resolved_site_target = false;
-            bool retains_previous_target = false;
             std::vector<std::uint32_t> resolved_site_targets;
             for (const auto& edge : candidate.primary.analysis.resolved_edges) {
                 if (edge.instruction_address != site ||
@@ -9032,23 +9084,47 @@ closed_replacement_owner_target_losses(
                     !katana::analysis::control_flow_evidence_complete(
                         katana::analysis::resolved_edge_evidence(edge)))
                     continue;
-                has_resolved_site_target = true;
                 resolved_site_targets.push_back(edge.target_address);
-                retains_previous_target =
-                    retains_previous_target ||
-                    edge.target_address == incoming.address;
             }
+            std::sort(
+                resolved_site_targets.begin(), resolved_site_targets.end());
+            resolved_site_targets.erase(
+                std::unique(
+                    resolved_site_targets.begin(),
+                    resolved_site_targets.end()),
+                resolved_site_targets.end());
+            if (const auto materialized_targets =
+                    complete_materialized_indirect_site_targets(
+                        candidate, site);
+                materialized_targets.has_value()) {
+                if (!resolved_site_targets.empty() &&
+                    resolved_site_targets != *materialized_targets)
+                    return std::nullopt;
+                resolved_site_targets = *materialized_targets;
+            }
+            const bool has_resolved_site_target =
+                !resolved_site_targets.empty();
+            const bool retains_previous_target = std::binary_search(
+                resolved_site_targets.begin(),
+                resolved_site_targets.end(),
+                incoming.address);
             const bool has_materialized_resolved_target =
-                owner.has_value() &&
-                std::any_of(
+                owner.has_value() && has_resolved_site_target &&
+                std::all_of(
                     resolved_site_targets.begin(),
                     resolved_site_targets.end(),
                     [&](const auto target) {
-                        return program_index_adjacency_contains(
-                            candidate.native_port_program_index
-                                .outgoing_function_entries,
-                            *owner,
-                            target);
+                        return
+                            program_index_adjacency_contains(
+                                candidate.native_port_program_index
+                                    .incoming_instruction_addresses,
+                                target,
+                                site) &&
+                            program_index_adjacency_contains(
+                                candidate.native_port_program_index
+                                    .outgoing_function_entries,
+                                *owner,
+                                target);
                     });
             if (!owner.has_value() ||
                 !std::binary_search(

@@ -22756,6 +22756,75 @@ std::string_view native_port_function_boundary_proof_name(
     return "unknown";
 }
 
+std::set<std::pair<std::uint32_t, std::uint32_t>>
+complete_materialized_indirect_site_targets(
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::span<const katana::ir::Function> program) {
+    const auto canonical_targets = [](std::vector<std::uint32_t> targets) {
+        std::sort(targets.begin(), targets.end());
+        targets.erase(
+            std::unique(targets.begin(), targets.end()), targets.end());
+        return targets;
+    };
+    std::map<std::uint32_t, std::vector<std::uint32_t>> proof_targets;
+    std::set<std::uint32_t> conflicting_proofs;
+    for (const auto& resolution : analysis.indirect_control_flow) {
+        if (resolution.status !=
+                katana::analysis::ResolutionStatus::Resolved ||
+            !katana::analysis::control_flow_evidence_complete(
+                resolution.evidence) ||
+            resolution.origin_class !=
+                katana::analysis::IndirectControlFlowOriginClass::Table ||
+            resolution.exact_guard_rejection_reason !=
+                katana::analysis::ExactGuardRejectionReason::None)
+            continue;
+        auto targets = resolution.targets;
+        if (resolution.target.has_value())
+            targets.push_back(*resolution.target);
+        targets = canonical_targets(std::move(targets));
+        if (targets.empty()) {
+            conflicting_proofs.insert(resolution.instruction_address);
+            continue;
+        }
+        const auto [found, inserted] = proof_targets.try_emplace(
+            resolution.instruction_address, targets);
+        if (!inserted && found->second != targets)
+            conflicting_proofs.insert(resolution.instruction_address);
+    }
+
+    std::map<std::uint32_t, std::vector<std::uint32_t>> ir_targets;
+    std::set<std::uint32_t> conflicting_ir;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.resolved_targets.empty()) continue;
+                const auto targets = canonical_targets(
+                    instruction.resolved_targets);
+                if (block.has_indirect_successor || targets.empty()) {
+                    conflicting_ir.insert(instruction.source_address);
+                    continue;
+                }
+                const auto [found, inserted] = ir_targets.try_emplace(
+                    instruction.source_address, targets);
+                if (!inserted && found->second != targets)
+                    conflicting_ir.insert(instruction.source_address);
+            }
+        }
+    }
+
+    std::set<std::pair<std::uint32_t, std::uint32_t>> result;
+    for (const auto& [site, targets] : ir_targets) {
+        const auto proof = proof_targets.find(site);
+        if (proof == proof_targets.end() || proof->second != targets ||
+            conflicting_proofs.contains(site) ||
+            conflicting_ir.contains(site))
+            continue;
+        for (const auto target : targets)
+            result.emplace(site, target);
+    }
+    return result;
+}
+
 NativePortProgramIndex build_native_port_program_index(
     const std::span<const katana::ir::Function> program,
     const katana::analysis::ControlFlowAnalysisResult& analysis,
@@ -22763,6 +22832,8 @@ NativePortProgramIndex build_native_port_program_index(
     const katana::runtime::NativePortDefinition* const native_port,
     const std::span<const NativePortExternalEntry> external_entries) {
     NativePortProgramIndex index;
+    const auto complete_materialized_indirect_targets =
+        complete_materialized_indirect_site_targets(analysis, program);
     // Preserve the analyzer's typed dynamic-site classification at the
     // ProgramIndex boundary. A residual edge sourced by an explicit
     // RuntimeOnly callback/parameter/stack/mutable-memory contract is not a
@@ -22841,6 +22912,20 @@ NativePortProgramIndex build_native_port_program_index(
             for (const auto& instruction : block.instructions)
                 index.instruction_owners[instruction.source_address].insert(
                     function.entry_address);
+            for (const auto& instruction : block.instructions) {
+                // Final IR resolved_targets are authoritative executable
+                // graph edges only after the non-residual IR and the complete
+                // bounded-table proof agree on the exact target set. Preserve
+                // those sites even when no parallel
+                // ResolvedControlFlowEdge is serialized.
+                for (const auto target : instruction.resolved_targets) {
+                    if (!complete_materialized_indirect_targets.contains(
+                            {instruction.source_address, target}))
+                        continue;
+                    index.incoming_instruction_addresses[target].insert(
+                        instruction.source_address);
+                }
+            }
         }
     }
     for (const auto& [entry, functions] : index.functions_by_entry) {
@@ -22861,8 +22946,11 @@ NativePortProgramIndex build_native_port_program_index(
         // discard the concrete instruction-site provenance that made the
         // target externally reachable.  Whole-owner replacement admission
         // consumes this relation to reject foreign interior entries.
-        index.incoming_instruction_addresses[edge.target_address].insert(
-            edge.instruction_address);
+        if (!edge.analysis_candidate_carrier &&
+            katana::analysis::control_flow_evidence_complete(
+                katana::analysis::resolved_edge_evidence(edge)))
+            index.incoming_instruction_addresses[edge.target_address].insert(
+                edge.instruction_address);
         const auto owners =
             index.instruction_owners.find(edge.instruction_address);
         if (owners == index.instruction_owners.end()) continue;
@@ -22870,8 +22958,10 @@ NativePortProgramIndex build_native_port_program_index(
             index.incoming_edge_sources[edge.target_address].insert(owner);
     }
     for (const auto& continuation : analysis.static_return_continuations) {
-        index.incoming_instruction_addresses[continuation.target_address]
-            .insert(continuation.instruction_address);
+        if (katana::analysis::control_flow_evidence_complete(
+                continuation.evidence))
+            index.incoming_instruction_addresses[continuation.target_address]
+                .insert(continuation.instruction_address);
         const auto owners =
             index.instruction_owners.find(continuation.instruction_address);
         if (owners == index.instruction_owners.end()) continue;
@@ -23237,7 +23327,8 @@ NativeDiscProgramIndexCheckpoint native_disc_program_index_checkpoint(
 
 bool retain_resolved_site_provenance(
     NativeDiscProgramIndexCheckpoint& checkpoint,
-    const katana::analysis::ControlFlowAnalysisResult& analysis) {
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::span<const katana::ir::Function> program) {
     const auto retain = [&](const std::uint32_t target,
                             const std::uint32_t site) {
         auto adjacency = std::lower_bound(
@@ -23266,14 +23357,28 @@ bool retain_resolved_site_provenance(
     };
 
     bool changed = false;
-    for (const auto& edge : analysis.resolved_edges)
+    for (const auto& edge : analysis.resolved_edges) {
+        if (edge.analysis_candidate_carrier ||
+            !katana::analysis::control_flow_evidence_complete(
+                katana::analysis::resolved_edge_evidence(edge)))
+            continue;
         changed = retain(edge.target_address, edge.instruction_address) ||
                   changed;
-    for (const auto& continuation : analysis.static_return_continuations)
+    }
+    for (const auto& continuation : analysis.static_return_continuations) {
+        if (!katana::analysis::control_flow_evidence_complete(
+                continuation.evidence))
+            continue;
         changed = retain(
                       continuation.target_address,
                       continuation.instruction_address) ||
                   changed;
+    }
+    const auto complete_materialized_indirect_targets =
+        complete_materialized_indirect_site_targets(analysis, program);
+    for (const auto& [site, target] :
+         complete_materialized_indirect_targets)
+        changed = retain(target, site) || changed;
     return changed;
 }
 
@@ -30360,7 +30465,8 @@ try_reuse_native_disc_analysis_artifact(
         const bool program_index_site_provenance_repaired =
             retain_resolved_site_provenance(
                 artifact.native_port_program_index,
-                artifact.primary.analysis);
+                artifact.primary.analysis,
+                artifact.primary.lowered_program);
         const bool native_port_contract_changed =
             resume_artifact_requested &&
             (artifact.identity.native_port_identity !=
