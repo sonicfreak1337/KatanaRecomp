@@ -650,6 +650,53 @@ int main() {
                 guarded_candidate_completion < guarded_candidate_dispatch,
             "Ein aufgeloester Guarded-Call betritt sein Ziel vor dem zentralen Blockabschluss.");
 
+    auto guarded_complete_program = indirect_call_program;
+    auto* guarded_complete_call =
+        make_dynamic(guarded_complete_program,
+                     katana::ir::DynamicTargetClass::GuardedComplete);
+    if (guarded_complete_call == nullptr) {
+        std::cerr << "TEST FEHLGESCHLAGEN: Guarded-Complete-Testcallsite fehlt.\n";
+        return EXIT_FAILURE;
+    }
+    guarded_complete_call->resolved_targets = {0x00001000u, 0x00002000u};
+    for (auto& function : guarded_complete_program) {
+        if (std::find(function.indirect_call_sites.begin(),
+                      function.indirect_call_sites.end(),
+                      guarded_complete_call->source_address) ==
+            function.indirect_call_sites.end())
+            continue;
+        function.direct_callees.insert(function.direct_callees.end(),
+                                       guarded_complete_call->resolved_targets.begin(),
+                                       guarded_complete_call->resolved_targets.end());
+        std::sort(function.direct_callees.begin(), function.direct_callees.end());
+        function.direct_callees.erase(
+            std::unique(function.direct_callees.begin(),
+                        function.direct_callees.end()),
+            function.direct_callees.end());
+    }
+    require(katana::ir::verify_program(guarded_complete_program).empty(),
+            "Guarded-Complete-Testcallsite besitzt inkonsistente Callee-Metadaten.");
+    const auto guarded_complete_source =
+        katana::codegen::emit_cpp_program(guarded_complete_program, 0u);
+    require(
+        guarded_complete_source.find(
+            "katana_exact_guarded_target_matches(call_target, 0x00001000u)") !=
+                std::string::npos &&
+            guarded_complete_source.find(
+                "katana_exact_guarded_target_matches(call_target, 0x00002000u)") !=
+                std::string::npos &&
+            guarded_complete_source.find(
+                "exact_guarded_call(cpu, call_target, 0x00001000u)") !=
+                std::string::npos,
+        "Guarded-Complete-Mehrzielcall bindet Aliasvergleich oder fail-closed "
+        "Defaultpfad nicht an die vollstaendige Zielmenge.");
+
+    auto empty_guarded_complete = dynamic_program;
+    static_cast<void>(make_dynamic(empty_guarded_complete,
+                                   katana::ir::DynamicTargetClass::GuardedComplete));
+    require(!katana::ir::verify_program(empty_guarded_complete).empty(),
+            "Guarded-Complete-IR akzeptiert eine leere erlaubte Zielmenge.");
+
     auto unresolved_program = dynamic_program;
     static_cast<void>(make_dynamic(unresolved_program, katana::ir::DynamicTargetClass::Unresolved));
     const auto unresolved_source = katana::codegen::emit_cpp_program(unresolved_program, 0u);

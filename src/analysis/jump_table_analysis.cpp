@@ -5,6 +5,7 @@
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction.hpp"
+#include "jump_table_analysis_internal.hpp"
 #include "snapshot_pointer_candidates.hpp"
 
 #include <algorithm>
@@ -66,6 +67,17 @@ bool contiguous(const katana::sh4::DisassemblyLine& left,
                 const katana::sh4::DisassemblyLine& right) {
     return left.address <= std::numeric_limits<std::uint32_t>::max() - 2u &&
            left.address + 2u == right.address;
+}
+
+void append_dispatch_delay_slot_evidence(
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index,
+    detail::SnapshotAbsoluteJumpTableProducerEvidence* const evidence) {
+    if (evidence == nullptr || dispatch_index + 1u >= lines.size() ||
+        !contiguous(lines[dispatch_index], lines[dispatch_index + 1u]))
+        return;
+    evidence->instruction_addresses.push_back(
+        lines[dispatch_index + 1u].address);
 }
 
 bool outside_dispatch_path(const std::uint32_t target,
@@ -150,7 +162,11 @@ bool bounded_fallback_exits_dispatch_path(
 
     const auto terminal_index = scale_index - 2u;
     const auto delay_index = scale_index - 1u;
-    if (terminal_index < fallback_begin || !lines[delay_index].is_delay_slot)
+    // The architectural delay slot is implied by the immediately preceding
+    // BRA/JMP. Synthetic and cached line sets need not carry the derived
+    // is_delay_slot annotation, so validate the structural pair itself.
+    if (terminal_index < fallback_begin ||
+        lines[delay_index].instruction.changes_control_flow())
         return false;
     for (auto index = fallback_begin; index < terminal_index; ++index) {
         if (lines[index].instruction.changes_control_flow()) return false;
@@ -179,7 +195,8 @@ std::optional<JumpTableAnalysis>
 recognize_snapshot_displaced_absolute_pointer_candidates(
     const katana::io::ExecutableImage& image,
     const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::size_t dispatch_index) {
+    const std::size_t dispatch_index,
+    detail::SnapshotAbsoluteJumpTableProducerEvidence* const producer_evidence) {
     constexpr std::uint32_t provenance_byte_budget = 14u;
     constexpr detail::SnapshotPointerCandidateScanPolicy scan_policy{
         .minimum_entries = 1u,
@@ -258,16 +275,41 @@ recognize_snapshot_displaced_absolute_pointer_candidates(
         static_cast<std::uint32_t>(table_load.instruction.displacement);
     if (table_address64 > std::numeric_limits<std::uint32_t>::max())
         return std::nullopt;
+    const auto table_address = static_cast<std::uint32_t>(table_address64);
     auto result = detail::analyze_snapshot_pointer_candidates(
         image,
         dispatch.address,
-        static_cast<std::uint32_t>(table_address64),
+        table_address,
         dispatch.instruction.kind == katana::sh4::InstructionKind::Jsr
             ? JumpTableDispatchKind::Call
             : JumpTableDispatchKind::Jump,
         scan_policy);
     if (result.has_value())
         result->reason = "snapshot-displaced-absolute-pointer-candidates";
+    if (producer_evidence != nullptr) {
+        producer_evidence->literal_address =
+            static_cast<std::uint32_t>(literal_address64);
+        const auto resolved_table = image.resolve_segment_address(table_address, 4u);
+        if (resolved_table.has_value()) {
+            const auto target = image.read_u32_le(*resolved_table);
+            const auto validation = validate_decode_candidate(image, target);
+            if (validation.valid()) {
+                producer_evidence->fixed_entry = true;
+                producer_evidence->fixed_entry_address = *resolved_table;
+                producer_evidence->fixed_target = validation.resolved_address;
+            }
+        }
+        producer_evidence->instruction_addresses.clear();
+        for (const auto& line : lines) {
+            if (line.address < base_load->address ||
+                line.address > dispatch.address)
+                continue;
+            producer_evidence->instruction_addresses.push_back(
+                line.address);
+        }
+        append_dispatch_delay_slot_evidence(
+            lines, dispatch_index, producer_evidence);
+    }
     return result;
 }
 
@@ -1011,11 +1053,13 @@ analyze_snapshot_absolute_pointer_candidates(
         });
 }
 
-std::optional<JumpTableAnalysis>
-recognize_snapshot_absolute_jump_table_candidates(
+static std::optional<JumpTableAnalysis>
+recognize_snapshot_absolute_jump_table_candidates_impl(
     const katana::io::ExecutableImage& image,
     const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::size_t dispatch_index) {
+    const std::size_t dispatch_index,
+    detail::SnapshotAbsoluteJumpTableProducerEvidence* const producer_evidence) {
+    if (producer_evidence != nullptr) *producer_evidence = {};
     if (dispatch_index < 2u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
     if (dispatch.instruction.kind != katana::sh4::InstructionKind::Jmp &&
@@ -1023,9 +1067,103 @@ recognize_snapshot_absolute_jump_table_candidates(
         return std::nullopt;
 
     if (auto displaced = recognize_snapshot_displaced_absolute_pointer_candidates(
-            image, lines, dispatch_index);
+            image, lines, dispatch_index, producer_evidence);
         displaced.has_value())
         return displaced;
+
+    // A direct immutable function pointer is the degenerate one-entry form
+    // used by SDK callback veneers:
+    //
+    //   mov.l @(disp,pc),Rn
+    //   jsr/jmp @Rn
+    //
+    // Keep it typed as a one-entry absolute table so the external declaration
+    // and ProgramIndex use the same finite-target contract. Unlike a table
+    // scan, adjacent literals are unrelated and therefore cannot extend this
+    // singleton or make it appear truncated.
+    // The Incremental CFA supplies a bounded 48-instruction contiguous
+    // window. Walk that complete window until the first clobber/control-flow
+    // barrier instead of imposing an unrelated three-instruction distance.
+    for (std::size_t distance = 1u;
+         distance <= dispatch_index;
+         ++distance) {
+        const auto producer_index = dispatch_index - distance;
+        const auto& producer = lines[producer_index];
+        if (producer.instruction.kind !=
+                katana::sh4::InstructionKind::MovLongLoadPcRelative ||
+            producer.instruction.destination_register !=
+                dispatch.instruction.branch_register ||
+            producer.is_delay_slot)
+            continue;
+        bool clobbered = false;
+        for (auto index = producer_index + 1u;
+             index < dispatch_index;
+             ++index) {
+            if (!contiguous(lines[index - 1u], lines[index]) ||
+                lines[index].instruction.changes_control_flow() ||
+                (general_register_write_mask(lines[index].instruction) &
+                 static_cast<std::uint16_t>(
+                     1u << dispatch.instruction.branch_register)) != 0u) {
+                clobbered = true;
+                break;
+            }
+        }
+        if (clobbered ||
+            !contiguous(lines[dispatch_index - 1u], dispatch))
+            continue;
+        const auto literal_address =
+            ((producer.address + 4u) & ~3u) +
+            static_cast<std::uint32_t>(
+                producer.instruction.displacement);
+        const auto resolved_literal =
+            image.resolve_segment_address(literal_address, 4u);
+        const auto* literal_segment =
+            resolved_literal.has_value()
+                ? image.find_segment(*resolved_literal, 4u)
+                : nullptr;
+        if (literal_segment == nullptr ||
+            !snapshot_candidate_source(image, *literal_segment))
+            continue;
+        const auto target = image.read_u32_le(*resolved_literal);
+        const auto validation = validate_decode_candidate(image, target);
+        if (!validation.valid() || validation.segment == nullptr ||
+            !snapshot_candidate_source(image, *validation.segment))
+            continue;
+
+        JumpTableAnalysis singleton;
+        singleton.dispatch_address = dispatch.address;
+        singleton.table_address = *resolved_literal;
+        singleton.requested_entries = 1u;
+        singleton.dispatch_kind =
+            dispatch.instruction.kind ==
+                    katana::sh4::InstructionKind::Jsr
+                ? JumpTableDispatchKind::Call
+                : JumpTableDispatchKind::Jump;
+        singleton.encoding = JumpTableEncoding::Absolute32;
+        singleton.resolved = true;
+        singleton.aot_candidates_only = true;
+        singleton.evidence = ControlFlowEvidence::GuardedPartial;
+        singleton.entries.push_back(
+            {0u,
+             *resolved_literal,
+             validation.resolved_address,
+             true,
+             "snapshot-pc-relative-singleton-target"});
+        singleton.reason =
+            "snapshot-pc-relative-singleton-candidate";
+        if (producer_evidence != nullptr) {
+            producer_evidence->literal_address = literal_address;
+            producer_evidence->instruction_addresses.clear();
+            for (auto index = producer_index;
+                 index <= dispatch_index;
+                 ++index)
+                producer_evidence->instruction_addresses.push_back(
+                    lines[index].address);
+            append_dispatch_delay_slot_evidence(
+                lines, dispatch_index, producer_evidence);
+        }
+        return singleton;
+    }
 
     std::optional<std::size_t> indexed_load_index;
     for (std::size_t distance = 1u; distance <= 3u && distance <= dispatch_index; ++distance) {
@@ -1128,7 +1266,7 @@ recognize_snapshot_absolute_jump_table_candidates(
         return std::nullopt;
 
     const auto table_pointer = image.read_u32_le(*resolved_literal);
-    return analyze_snapshot_absolute_pointer_candidates(
+    auto result = analyze_snapshot_absolute_pointer_candidates(
         image,
         dispatch.address,
         table_pointer,
@@ -1136,6 +1274,38 @@ recognize_snapshot_absolute_jump_table_candidates(
             ? JumpTableDispatchKind::Call
             : JumpTableDispatchKind::Jump,
         2u);
+    if (result.has_value() && producer_evidence != nullptr) {
+        producer_evidence->literal_address = literal_address;
+        producer_evidence->instruction_addresses.clear();
+        for (const auto& line : lines) {
+            if (line.address < base_load->address ||
+                line.address > dispatch.address)
+                continue;
+            producer_evidence->instruction_addresses.push_back(line.address);
+        }
+        append_dispatch_delay_slot_evidence(
+            lines, dispatch_index, producer_evidence);
+    }
+    return result;
+}
+
+std::optional<JumpTableAnalysis>
+recognize_snapshot_absolute_jump_table_candidates(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index) {
+    return recognize_snapshot_absolute_jump_table_candidates_impl(
+        image, lines, dispatch_index, nullptr);
+}
+
+std::optional<JumpTableAnalysis>
+detail::recognize_snapshot_absolute_jump_table_candidates_with_producer(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index,
+    SnapshotAbsoluteJumpTableProducerEvidence* const producer_evidence) {
+    return recognize_snapshot_absolute_jump_table_candidates_impl(
+        image, lines, dispatch_index, producer_evidence);
 }
 
 std::optional<RelativeCallIslandCandidates>

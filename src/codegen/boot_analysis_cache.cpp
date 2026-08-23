@@ -14,6 +14,7 @@
 #include "katana/ir/verifier.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
+#include "../analysis/jump_table_analysis_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,6 +25,7 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -1853,6 +1855,21 @@ bool validate_boot_analysis_cache_source_binding(
         }
 
         if (overrides != nullptr) {
+            const auto identity_bound_immutable_range =
+                [&](const std::uint32_t address,
+                    const std::size_t size) {
+                    const auto resolved =
+                        image.resolve_segment_address(address, size);
+                    const auto* segment =
+                        resolved.has_value()
+                            ? image.find_segment(*resolved, size)
+                            : nullptr;
+                    return resolved.has_value() && segment != nullptr &&
+                           segment->permissions.readable &&
+                           (!segment->permissions.writable ||
+                            image.find_immutable_range(*resolved, size) !=
+                                nullptr);
+                };
             for (const auto& declaration : overrides->jump_tables) {
                 const auto dispatch =
                     line_by_address.find(
@@ -1924,13 +1941,135 @@ bool validate_boot_analysis_cache_source_binding(
                               JumpTableDispatchKind::Call
                         : katana::analysis::
                               JumpTableDispatchKind::Jump;
+                constexpr std::size_t recognition_lookback = 48u;
+                auto first_index = dispatch->second;
+                for (std::size_t distance = 0u;
+                     distance < recognition_lookback && first_index != 0u;
+                     ++distance) {
+                    const auto previous = first_index - 1u;
+                    if (current_lines[previous].address >
+                            std::numeric_limits<std::uint32_t>::max() - 2u ||
+                        current_lines[previous].address + 2u !=
+                            current_lines[first_index].address)
+                        break;
+                    first_index = previous;
+                }
+                auto last_index = dispatch->second;
+                if (last_index + 1u < current_lines.size() &&
+                    current_lines[last_index].address <=
+                        std::numeric_limits<std::uint32_t>::max() - 2u &&
+                    current_lines[last_index].address + 2u ==
+                        current_lines[last_index + 1u].address)
+                    ++last_index;
+                const auto recognition_lines =
+                    std::span<const katana::sh4::DisassemblyLine>{
+                        current_lines}
+                        .subspan(
+                            first_index,
+                            last_index - first_index + 1u);
+                const auto recognition_dispatch_index =
+                    dispatch->second - first_index;
+                std::optional<katana::analysis::JumpTableAnalysis>
+                    native_table;
+                katana::analysis::detail::
+                    SnapshotAbsoluteJumpTableProducerEvidence producer;
+                if (current_lines[dispatch->second].instruction.kind ==
+                    katana::sh4::InstructionKind::Braf) {
+                    native_table =
+                        katana::analysis::
+                            recognize_bounded_relative_jump_table(
+                                image,
+                                recognition_lines,
+                                recognition_dispatch_index);
+                } else if (
+                    current_lines[dispatch->second].instruction.kind ==
+                        katana::sh4::InstructionKind::Jmp ||
+                    current_lines[dispatch->second].instruction.kind ==
+                        katana::sh4::InstructionKind::Jsr) {
+                    native_table =
+                        katana::analysis::detail::
+                            recognize_snapshot_absolute_jump_table_candidates_with_producer(
+                                image,
+                                recognition_lines,
+                                recognition_dispatch_index,
+                                &producer);
+                }
+                const bool native_full_table_match =
+                    native_table.has_value() && native_table->resolved &&
+                    !native_table->candidate_scan_truncated &&
+                    native_table->dispatch_address ==
+                        table.dispatch_address &&
+                    native_table->table_address == table.table_address &&
+                    native_table->target_base == table.target_base &&
+                    native_table->requested_entries ==
+                        table.requested_entries &&
+                    native_table->dispatch_kind == table.dispatch_kind &&
+                    native_table->encoding == table.encoding &&
+                    native_table->entries.size() == table.entries.size() &&
+                    std::equal(
+                        native_table->entries.begin(),
+                        native_table->entries.end(),
+                        table.entries.begin(),
+                        [](const auto& recognized, const auto& declared) {
+                            return recognized.index == declared.index &&
+                                   recognized.entry_address ==
+                                       declared.entry_address &&
+                                   recognized.target == declared.target &&
+                                   recognized.accepted && declared.accepted;
+                        });
+                const bool native_fixed_entry_match =
+                    native_table.has_value() && native_table->resolved &&
+                    producer.fixed_entry &&
+                    native_table->dispatch_address ==
+                        table.dispatch_address &&
+                    native_table->dispatch_kind == table.dispatch_kind &&
+                    native_table->encoding == table.encoding &&
+                    table.requested_entries == 1u &&
+                    table.entries.size() == 1u &&
+                    table.entries.front().accepted &&
+                    table.table_address == producer.fixed_entry_address &&
+                    table.entries.front().entry_address ==
+                        producer.fixed_entry_address &&
+                    table.entries.front().target == producer.fixed_target &&
+                    std::any_of(
+                        native_table->entries.begin(),
+                        native_table->entries.end(),
+                        [&](const auto& recognized) {
+                            return recognized.accepted &&
+                                   recognized.entry_address ==
+                                       producer.fixed_entry_address &&
+                                   recognized.target == producer.fixed_target;
+                        });
+                const bool native_entries_match =
+                    native_full_table_match || native_fixed_entry_match;
+                bool native_producer_identity_bound =
+                    native_entries_match;
+                if (encoding ==
+                    katana::analysis::JumpTableEncoding::Absolute32) {
+                    native_producer_identity_bound =
+                        native_producer_identity_bound &&
+                        producer.literal_address != 0u &&
+                        !producer.instruction_addresses.empty() &&
+                        identity_bound_immutable_range(
+                            producer.literal_address,
+                            sizeof(std::uint32_t)) &&
+                        std::all_of(
+                            producer.instruction_addresses.begin(),
+                            producer.instruction_addresses.end(),
+                            [&](const auto address) {
+                                return identity_bound_immutable_range(
+                                    address,
+                                    sizeof(std::uint16_t));
+                            });
+                }
                 table.evidence =
                     overrides->mode ==
                             katana::analysis::
                                 AnalysisDirectiveMode::Hint
                         ? katana::analysis::
                               ControlFlowEvidence::HintCandidate
-                    : declaration.identity_bound_complete && table.resolved
+                    : declaration.identity_bound_complete && table.resolved &&
+                              native_producer_identity_bound
                         ? katana::analysis::
                               ControlFlowEvidence::GuardedComplete
                         : katana::analysis::

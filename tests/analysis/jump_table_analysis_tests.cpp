@@ -308,10 +308,16 @@ int main() {
             "Displaced Tabellenbasis wurde ohne die beobachtete Registerkopie geraten.");
     auto mismatched_branch_lines = displaced_lines;
     mismatched_branch_lines[6].instruction = katana::sh4::decode(0x5423u);
-    require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
-                 displaced_pointer_run, mismatched_branch_lines, 7u)
-                 .has_value(),
-            "Displaced Load in ein anderes Register wurde dem JSR zugeschrieben.");
+    const auto mismatched_branch =
+        katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
+            displaced_pointer_run, mismatched_branch_lines, 7u);
+    require(mismatched_branch.has_value() && mismatched_branch->resolved &&
+                mismatched_branch->entries.size() == 1u &&
+                mismatched_branch->entries.front().target == 0x3040u &&
+                mismatched_branch->reason ==
+                    "snapshot-pc-relative-singleton-candidate",
+            "Der durch den Register-Mismatch verbleibende direkte Literal-Call "
+            "wurde nicht als Singleton klassifiziert.");
     auto delay_slot_base_lines = displaced_lines;
     delay_slot_base_lines[0].is_delay_slot = true;
     require(!katana::analysis::recognize_snapshot_absolute_jump_table_candidates(

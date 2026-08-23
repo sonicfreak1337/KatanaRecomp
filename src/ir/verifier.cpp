@@ -385,6 +385,14 @@ std::vector<VerificationIssue> verify_function(const Function& function) {
                           instruction.source_address,
                           "Exact-Guarded-Kontrollfluss benoetigt genau ein erlaubtes Ziel.");
             }
+            if (instruction.dynamic_target_class ==
+                    DynamicTargetClass::GuardedComplete &&
+                instruction.resolved_targets.empty()) {
+                add_issue(
+                    issues,
+                    instruction.source_address,
+                    "Guarded-Complete-Kontrollfluss benoetigt mindestens ein erlaubtes Ziel.");
+            }
             if (instruction.branch_register_relative &&
                 instruction.operation != Operation::JumpRegister &&
                 instruction.operation != Operation::CallRegister) {

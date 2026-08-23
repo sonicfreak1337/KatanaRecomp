@@ -268,6 +268,7 @@ set(
     "src/codegen/port_export.cpp|latent-root-seed-contract"
     "src/codegen/port_export.cpp|boot-analysis-pipeline"
     "src/codegen/port_export.cpp|native-disc-root-discovery"
+    "src/codegen/port_export.cpp|native-port-program-index"
 )
 # Analysis checkpoints retain unoptimized lowering IR, while generated
 # products additionally depend on optimizer/register-liveness semantics.  Keep

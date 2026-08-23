@@ -831,6 +831,70 @@ std::string latent_primary_root_seed_semantic_identity(
     return katana::io::sha256_bytes(material.str());
 }
 
+std::string latent_primary_root_seed_cache_semantic_identity(
+    const PortExportOptions& options,
+    const std::string_view disc_project_identity,
+    const std::uint32_t data_track_lba,
+    const std::uint32_t extent_lba_bias,
+    const PortAnalysisMode analysis_mode) {
+    // Hardware-resolution and provider-semantic declarations are consumed
+    // only after CFA/FVA and latent root discovery have reached their final
+    // fixpoint. Keep every other NativePort field fail-closed through the
+    // existing export identity and the explicit hook-source supplement below,
+    // while allowing those downstream declarations to reuse an already
+    // authoritative root seed.
+    static_assert(
+        katana::runtime::native_port_definition_contract_version == 12u,
+        "Review the latent-root NativePort projection for the new contract.");
+    if (options.native_port_definition == nullptr)
+        return latent_primary_root_seed_semantic_identity(
+            options,
+            disc_project_identity,
+            data_track_lba,
+            extent_lba_bias,
+            analysis_mode);
+    auto projected_options = options;
+    std::optional<katana::runtime::NativePortDefinition>
+        projected_native_port;
+    std::vector<katana::runtime::NativePortHookBinding> projected_hooks;
+    katana::runtime::validate_native_port_definition(
+        *options.native_port_definition);
+    projected_native_port = *options.native_port_definition;
+    projected_native_port->hardware_resolutions = {};
+    projected_native_port->provider_semantic_contracts = {};
+    projected_native_port->provider_semantic_coverage =
+        katana::runtime::NativePortProviderSemanticCoverage::DeclaredOnly;
+    projected_hooks.assign(
+        projected_native_port->hooks.begin(),
+        projected_native_port->hooks.end());
+    for (auto& hook : projected_hooks)
+        hook.provider_implementation_identity = {};
+    projected_native_port->hooks = projected_hooks;
+    projected_options.native_port_definition = &*projected_native_port;
+
+    // native_port_export_identity() predates the explicit hook code-source
+    // authority. Bind those remaining current-definition fields here so
+    // only the deliberately cleared downstream contracts are ignored.
+    NativePortIdentityMaterial source_identity;
+    source_identity.text(
+        "katana.native-port-latent-root-projection.identity");
+    source_identity.u32(2u);
+    source_identity.u32(projected_native_port->contract_version);
+    source_identity.count(projected_native_port->hooks.size());
+    for (const auto& hook : projected_native_port->hooks) {
+        source_identity.enumeration(hook.code_source);
+        source_identity.text(hook.code_source_identity);
+    }
+    projected_options.native_port_artifact_identity =
+        katana::io::sha256_bytes(std::move(source_identity).finish());
+    return latent_primary_root_seed_semantic_identity(
+        projected_options,
+        disc_project_identity,
+        data_track_lba,
+        extent_lba_bias,
+        analysis_mode);
+}
+
 std::string serialize_latent_primary_root_seeds(
     const std::string_view cache_key,
     const std::span<const std::uint32_t> roots) {
@@ -22419,6 +22483,7 @@ katana::analysis::DreamcastHardwareAudit combine_native_hardware_audits(
     return combined;
 }
 
+// KATANA_COMPONENT_IDENTITY_REGION_BEGIN native-port-program-index
 enum class NativePortFunctionBoundaryProof : std::uint8_t {
     IdentityBoundExact,
     ClosedControlFlow,
@@ -22994,14 +23059,229 @@ NativePortProgramIndex build_native_port_program_index(
         }
     }
 
+    // A complete, identity-bound jump table may target internal landing
+    // blocks which analysis also materializes through a wider dispatcher
+    // view.  Those overlapping IR views are not distinct runtime callees.
+    // Project such an edge to the declared boundary only when every layer of
+    // the generic proof agrees: the active declaration, the analyzer's exact
+    // resolved table, the immutable CodeIdentity, the materialized target
+    // ownership and one (and only one) containing exact boundary.  Any
+    // mismatch leaves the ordinary multi-owner path fail-closed.
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint32_t>
+        identity_bound_table_target_owners;
+    std::set<std::pair<std::uint32_t, std::uint32_t>>
+        ambiguous_identity_bound_table_targets;
+    if (game_project != nullptr) {
+        struct IdentityBoundBoundary final {
+            std::uint32_t start = 0u;
+            std::uint32_t size = 0u;
+            std::string_view image_id;
+        };
+        const auto code_identity_contains =
+            [&](const std::uint32_t address,
+                const std::uint64_t size,
+                const std::string_view image_id) {
+                const auto end = static_cast<std::uint64_t>(address) + size;
+                return std::any_of(
+                    game_project->code_identities.begin(),
+                    game_project->code_identities.end(),
+                    [&](const auto& identity) {
+                        return identity.image_id == image_id &&
+                               game_project_metadata_is_active(
+                                   native_port, identity.image_id) &&
+                               identity.address <= address &&
+                               static_cast<std::uint64_t>(identity.address) +
+                                       identity.size >=
+                                   end;
+                    });
+            };
+        std::vector<IdentityBoundBoundary> exact_boundaries;
+        for (const auto& boundary : game_project->function_boundaries) {
+            if (boundary.size == 0u ||
+                !game_project_metadata_is_active(
+                    native_port, boundary.image_id) ||
+                !index.functions_by_entry.contains(boundary.start) ||
+                index.functions_by_entry.at(boundary.start).size() != 1u)
+                continue;
+            const auto evidence =
+                index.function_boundaries.find(boundary.start);
+            const auto exact_identity = std::find_if(
+                game_project->code_identities.begin(),
+                game_project->code_identities.end(),
+                [&](const auto& identity) {
+                    return identity.address == boundary.start &&
+                           identity.size == boundary.size &&
+                           identity.image_id == boundary.image_id &&
+                           game_project_metadata_is_active(
+                               native_port, identity.image_id);
+                });
+            const auto resolved_boundary =
+                native_port_function_boundary(index, boundary.start);
+            if (exact_identity == game_project->code_identities.end() ||
+                evidence == index.function_boundaries.end() ||
+                !evidence->second.identity_bound_exact_sizes.contains(
+                    boundary.size) ||
+                !resolved_boundary.has_value() ||
+                resolved_boundary->size != boundary.size ||
+                (resolved_boundary->proof !=
+                     NativePortFunctionBoundaryProof::
+                         IdentityBoundExactAndClosedControlFlow &&
+                 resolved_boundary->proof !=
+                     NativePortFunctionBoundaryProof::
+                         IdentityBoundExactAndGuardedOwnerExtent))
+                continue;
+            exact_boundaries.push_back(
+                {boundary.start, boundary.size, boundary.image_id});
+        }
+
+        const auto declared_encoding = [](const auto encoding) {
+            switch (encoding) {
+            case katana::runtime::GameProjectTableEncoding::Absolute32:
+                return katana::analysis::JumpTableEncoding::Absolute32;
+            case katana::runtime::GameProjectTableEncoding::SignedRelative16:
+                return katana::analysis::JumpTableEncoding::SignedRelative16;
+            case katana::runtime::GameProjectTableEncoding::SignedRelative32:
+                return katana::analysis::JumpTableEncoding::SignedRelative32;
+            }
+            return katana::analysis::JumpTableEncoding::Absolute32;
+        };
+        for (const auto& declaration : game_project->jump_tables) {
+            if (!game_project_metadata_is_active(
+                    native_port, declaration.image_id) ||
+                declaration.transfer !=
+                    katana::runtime::GameProjectControlTransferKind::Jump)
+                continue;
+            if (declaration.entry_count == 0u ||
+                declaration.entry_stride == 0u)
+                continue;
+            const auto entry_width =
+                declaration.encoding ==
+                        katana::runtime::GameProjectTableEncoding::
+                            SignedRelative16
+                    ? 2u
+                    : 4u;
+            const auto table_extent =
+                static_cast<std::uint64_t>(declaration.entry_count - 1u) *
+                    declaration.entry_stride +
+                entry_width;
+            if (!code_identity_contains(
+                    declaration.dispatch_address,
+                    2u,
+                    declaration.image_id) ||
+                !code_identity_contains(
+                    declaration.table_address,
+                    table_extent,
+                    declaration.image_id))
+                continue;
+            std::vector<const katana::analysis::JumpTableAnalysis*> matches;
+            for (const auto& table : analysis.jump_tables) {
+                if (table.dispatch_address == declaration.dispatch_address &&
+                    table.table_address == declaration.table_address &&
+                    table.target_base == declaration.relative_base &&
+                    table.requested_entries == declaration.entry_count &&
+                    table.dispatch_kind ==
+                        katana::analysis::JumpTableDispatchKind::Jump &&
+                    table.encoding == declared_encoding(declaration.encoding) &&
+                    table.resolved && !table.aot_candidates_only &&
+                    !table.candidate_scan_truncated &&
+                    katana::analysis::control_flow_evidence_complete(
+                        table.evidence))
+                    matches.push_back(&table);
+            }
+            if (matches.size() != 1u) continue;
+            const auto& table = *matches.front();
+            if (table.entries.size() != declaration.entry_count) continue;
+
+            bool complete = true;
+            std::set<std::size_t> indices;
+            std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint32_t>
+                projected;
+            for (const auto& entry : table.entries) {
+                const auto expected_address =
+                    static_cast<std::uint64_t>(declaration.table_address) +
+                    static_cast<std::uint64_t>(entry.index) *
+                        declaration.entry_stride;
+                if (!entry.accepted || entry.index >= declaration.entry_count ||
+                    expected_address >
+                        std::numeric_limits<std::uint32_t>::max() ||
+                    entry.entry_address != expected_address ||
+                    !indices.insert(entry.index).second) {
+                    complete = false;
+                    break;
+                }
+
+                std::set<std::uint32_t> materialized_owners;
+                if (const auto owners = index.entry_owners.find(entry.target);
+                    owners != index.entry_owners.end())
+                    materialized_owners.insert(
+                        owners->second.begin(), owners->second.end());
+                if (const auto owners =
+                        index.instruction_owners.find(entry.target);
+                    owners != index.instruction_owners.end())
+                    materialized_owners.insert(
+                        owners->second.begin(), owners->second.end());
+
+                std::vector<std::uint32_t> containing_boundaries;
+                for (const auto& boundary : exact_boundaries) {
+                    if (boundary.image_id != declaration.image_id) continue;
+                    const auto end =
+                        static_cast<std::uint64_t>(boundary.start) +
+                        boundary.size;
+                    if (entry.target >= boundary.start &&
+                        static_cast<std::uint64_t>(entry.target) + 2u <= end)
+                        containing_boundaries.push_back(boundary.start);
+                }
+                if (containing_boundaries.size() != 1u ||
+                    !materialized_owners.contains(
+                        containing_boundaries.front())) {
+                    complete = false;
+                    break;
+                }
+                projected.emplace(
+                    std::pair{declaration.dispatch_address, entry.target},
+                    containing_boundaries.front());
+            }
+            if (!complete || indices.size() != declaration.entry_count ||
+                projected.empty())
+                continue;
+            for (const auto& [edge, owner] : projected) {
+                if (ambiguous_identity_bound_table_targets.contains(edge))
+                    continue;
+                const auto [found, inserted] =
+                    identity_bound_table_target_owners.emplace(edge, owner);
+                if (!inserted && found->second != owner) {
+                    identity_bound_table_target_owners.erase(found);
+                    ambiguous_identity_bound_table_targets.insert(edge);
+                }
+            }
+        }
+    }
+
     const auto append_function_edge =
         [&](const std::uint32_t source_entry,
             const std::uint32_t target_address,
-            const bool allow_internal_block) {
-            // An exact function entry is already the canonical graph node.
-            // Overlapping resume/function views may also own its first
-            // instruction, but those materialization aliases do not make the
-            // callee identity ambiguous.
+            const bool allow_internal_block,
+            const std::optional<std::uint32_t> instruction_address) {
+            // A fully proven table projection is more specific than the
+            // generic materialized-entry view. Table landing blocks are often
+            // emitted as overlapping function entries; accepting that view
+            // first would bypass the exact boundary proof and retain the
+            // artificial multi-owner edge.
+            if (instruction_address.has_value()) {
+                const auto projected =
+                    identity_bound_table_target_owners.find(
+                        {*instruction_address, target_address});
+                if (projected !=
+                    identity_bound_table_target_owners.end()) {
+                    index.outgoing_function_entries[source_entry].insert(
+                        projected->second);
+                    return true;
+                }
+            }
+            // Outside an exact table projection, a function entry is already
+            // the canonical graph node. Overlapping resume/function views may
+            // also own its first instruction, but those materialization aliases
+            // do not make the callee identity ambiguous.
             if (index.functions_by_entry.contains(target_address)) {
                 index.outgoing_function_entries[source_entry].insert(
                     target_address);
@@ -23149,7 +23429,8 @@ NativePortProgramIndex build_native_port_program_index(
                 local_addresses.insert(instruction.source_address);
         }
         for (const auto callee : function.direct_callees) {
-            if (!append_function_edge(function.entry_address, callee, false))
+            if (!append_function_edge(
+                    function.entry_address, callee, false, std::nullopt))
                 mark_incomplete_outgoing(
                     function.entry_address,
                     NativePortIncompleteOutgoingKind::UnownedDirectCallee,
@@ -23165,7 +23446,10 @@ NativePortProgramIndex build_native_port_program_index(
                     !index.functions_by_entry.contains(successor))
                     continue;
                 if (!append_function_edge(
-                        function.entry_address, successor, false))
+                        function.entry_address,
+                        successor,
+                        false,
+                        block_control_address(block)))
                     mark_incomplete_outgoing(
                         function.entry_address,
                         NativePortIncompleteOutgoingKind::UnownedCfgSuccessor,
@@ -23183,7 +23467,8 @@ NativePortProgramIndex build_native_port_program_index(
                          *instruction.target_address)) &&
                     !append_function_edge(function.entry_address,
                                           *instruction.target_address,
-                                          false))
+                                          false,
+                                          instruction.source_address))
                     mark_incomplete_outgoing(
                         function.entry_address,
                         NativePortIncompleteOutgoingKind::
@@ -23195,7 +23480,10 @@ NativePortProgramIndex build_native_port_program_index(
                         !index.functions_by_entry.contains(target))
                         continue;
                     if (!append_function_edge(
-                            function.entry_address, target, false))
+                            function.entry_address,
+                            target,
+                            false,
+                            instruction.source_address))
                         mark_incomplete_outgoing(
                             function.entry_address,
                             NativePortIncompleteOutgoingKind::
@@ -23238,7 +23526,8 @@ NativePortProgramIndex build_native_port_program_index(
             if (!append_function_edge(
                     source, edge.target_address,
                     edge.kind ==
-                        katana::analysis::ResolvedControlFlowKind::Jump))
+                        katana::analysis::ResolvedControlFlowKind::Jump,
+                    edge.instruction_address))
                 mark_incomplete_outgoing(
                     source,
                     NativePortIncompleteOutgoingKind::
@@ -23261,7 +23550,10 @@ NativePortProgramIndex build_native_port_program_index(
                     jump_table_jump_dispatches.contains(
                         *cause.source_address);
                 if (!append_function_edge(
-                        source, fact.target_address, local_jump_table_entry))
+                        source,
+                        fact.target_address,
+                        local_jump_table_entry,
+                        *cause.source_address))
                     mark_incomplete_outgoing(
                         source,
                         NativePortIncompleteOutgoingKind::UnownedSeedTarget,
@@ -23471,6 +23763,7 @@ void rehydrate_native_disc_program_index_checkpoint(
             checkpoint.incomplete_outgoing_function_entries.begin(),
             checkpoint.incomplete_outgoing_function_entries.end());
 }
+// KATANA_COMPONENT_IDENTITY_REGION_END native-port-program-index
 
 struct NativePortHookCoverageProof final {
     bool valid = false;
@@ -32848,7 +33141,7 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     if (latent_primary_root_seed_cache_enabled) {
         try {
             const auto semantic_identity =
-                latent_primary_root_seed_semantic_identity(
+                latent_primary_root_seed_cache_semantic_identity(
                     options,
                     katana::platform::dreamcast_disc_project_identity(disc),
                     disc.data_track_lba,

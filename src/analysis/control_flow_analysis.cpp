@@ -5,6 +5,7 @@
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/instruction.hpp"
 #include "guarded_native_entry_shape.hpp"
+#include "jump_table_analysis_internal.hpp"
 #include "static_callback_inventory.hpp"
 
 #include <algorithm>
@@ -471,6 +472,8 @@ class IncrementalCfaScanCache final {
     struct DispatchRecognition final {
         std::optional<RelativeCallIslandCandidates> relative_call_island;
         std::optional<JumpTableAnalysis> jump_table;
+        std::optional<detail::SnapshotAbsoluteJumpTableProducerEvidence>
+            snapshot_absolute_producer;
     };
 
     void clear() {
@@ -689,8 +692,12 @@ class IncrementalCfaScanCache final {
                 window.push_back(current->second);
                 if (current == dispatch) break;
             }
-            telemetry.jump_table_instruction_visits += window.size();
             const auto dispatch_index = window.size() - 1u;
+            if (const auto delay = std::next(dispatch);
+                delay != lines_.end() &&
+                contiguous(dispatch->second, delay->second))
+                window.push_back(delay->second);
+            telemetry.jump_table_instruction_visits += window.size();
             DispatchRecognition recognition;
             const auto kind = dispatch->second.instruction.kind;
             if (kind == katana::sh4::InstructionKind::Bsrf) {
@@ -703,9 +710,13 @@ class IncrementalCfaScanCache final {
                         image, window, dispatch_index,
                         &jump_table_cache);
             } else {
+                detail::SnapshotAbsoluteJumpTableProducerEvidence producer;
                 recognition.jump_table =
-                    recognize_snapshot_absolute_jump_table_candidates(
-                        image, window, dispatch_index);
+                    detail::recognize_snapshot_absolute_jump_table_candidates_with_producer(
+                        image, window, dispatch_index, &producer);
+                if (recognition.jump_table.has_value())
+                    recognition.snapshot_absolute_producer =
+                        std::move(producer);
             }
             if (recognition.relative_call_island.has_value() ||
                 recognition.jump_table.has_value())
@@ -1719,7 +1730,8 @@ void classify_dynamic_sites(
     for (auto& resolution : resolutions) {
         if (resolution.origin_class != IndirectControlFlowOriginClass::Table &&
             resolution.status == ResolutionStatus::Resolved &&
-            control_flow_evidence_complete(resolution.evidence))
+            control_flow_evidence_complete(resolution.evidence) &&
+            resolution.exact_target_guard)
             continue;
         resolution.exact_target_guard = false;
         resolution.exact_guard_rejection_reason =
@@ -4638,9 +4650,102 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                              : AnalysisDirectiveDiagnosticStatus::Rejected,
                          jump_table.resolved ? "jump-table-validated" : jump_table.reason});
                 }
+                const auto* native_recognition =
+                    cfa_scan_cache.dispatch_recognition(
+                        table.dispatch_address);
+                const auto* native_table =
+                    native_recognition != nullptr &&
+                            native_recognition->jump_table.has_value()
+                        ? &*native_recognition->jump_table
+                        : nullptr;
+                const auto* native_producer =
+                    native_recognition != nullptr &&
+                            native_recognition->jump_table.has_value() &&
+                            native_recognition
+                                ->snapshot_absolute_producer.has_value()
+                        ? &*native_recognition
+                               ->snapshot_absolute_producer
+                        : nullptr;
+                const bool native_full_table_match =
+                    native_table != nullptr && native_table->resolved &&
+                    !native_table->candidate_scan_truncated &&
+                    native_table->dispatch_address ==
+                        jump_table.dispatch_address &&
+                    native_table->table_address == jump_table.table_address &&
+                    native_table->target_base == jump_table.target_base &&
+                    native_table->requested_entries ==
+                        jump_table.requested_entries &&
+                    native_table->dispatch_kind == jump_table.dispatch_kind &&
+                    native_table->encoding == jump_table.encoding &&
+                    native_table->entries.size() == jump_table.entries.size() &&
+                    std::equal(
+                        native_table->entries.begin(),
+                        native_table->entries.end(),
+                        jump_table.entries.begin(),
+                        [](const auto& recognized, const auto& declared) {
+                            return recognized.index == declared.index &&
+                                   recognized.entry_address ==
+                                       declared.entry_address &&
+                                   recognized.target == declared.target &&
+                                   recognized.accepted && declared.accepted;
+                        });
+                const bool native_fixed_entry_match =
+                    native_table != nullptr && native_table->resolved &&
+                    native_producer != nullptr &&
+                    native_producer->fixed_entry &&
+                    native_table->dispatch_address ==
+                        jump_table.dispatch_address &&
+                    native_table->dispatch_kind == jump_table.dispatch_kind &&
+                    native_table->encoding == jump_table.encoding &&
+                    jump_table.requested_entries == 1u &&
+                    jump_table.entries.size() == 1u &&
+                    jump_table.entries.front().accepted &&
+                    jump_table.table_address ==
+                        native_producer->fixed_entry_address &&
+                    jump_table.entries.front().entry_address ==
+                        native_producer->fixed_entry_address &&
+                    jump_table.entries.front().target ==
+                        native_producer->fixed_target &&
+                    std::any_of(
+                        native_table->entries.begin(),
+                        native_table->entries.end(),
+                        [&](const auto& recognized) {
+                            return recognized.accepted &&
+                                   recognized.entry_address ==
+                                       native_producer->fixed_entry_address &&
+                                   recognized.target ==
+                                       native_producer->fixed_target;
+                        });
+                const bool native_entries_match =
+                    native_full_table_match || native_fixed_entry_match;
+                bool native_producer_identity_bound = native_entries_match;
+                if (encoding == JumpTableEncoding::Absolute32) {
+                    native_producer_identity_bound =
+                        native_producer_identity_bound &&
+                        native_producer != nullptr;
+                    if (native_producer_identity_bound) {
+                        const auto& producer =
+                            *native_producer;
+                        native_producer_identity_bound =
+                            producer.literal_address != 0u &&
+                            !producer.instruction_addresses.empty() &&
+                            identity_bound_immutable_range(
+                                producer.literal_address,
+                                sizeof(std::uint32_t)) &&
+                            std::all_of(
+                                producer.instruction_addresses.begin(),
+                                producer.instruction_addresses.end(),
+                                [&](const auto address) {
+                                    return identity_bound_immutable_range(
+                                        address,
+                                        sizeof(std::uint16_t));
+                                });
+                    }
+                }
                 jump_table.evidence =
                     hints ? ControlFlowEvidence::HintCandidate
-                    : table.identity_bound_complete && jump_table.resolved
+                    : table.identity_bound_complete && jump_table.resolved &&
+                              native_producer_identity_bound
                         ? ControlFlowEvidence::GuardedComplete
                         : ControlFlowEvidence::ForcedOverride;
                 jump_table_result_index.insert_or_assign(
