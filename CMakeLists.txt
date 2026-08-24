@@ -2145,6 +2145,20 @@ add_test(
     COMMAND katana-memory-diagnostics-tests
 )
 
+add_executable(
+    katana-native-port-content-tests
+    tests/runtime/native_port_content_tests.cpp
+)
+target_link_libraries(
+    katana-native-port-content-tests
+    PRIVATE katana_native_port_runtime
+)
+katana_enable_warnings(katana-native-port-content-tests)
+add_test(
+    NAME katana-native-port-content-tests
+    COMMAND katana-native-port-content-tests
+)
+
 add_executable(katana-wait-loop-trace-tests
     tests/runtime/wait_loop_trace_tests.cpp
 )

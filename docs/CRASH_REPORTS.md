@@ -1,14 +1,24 @@
 # Kontrollierte Crashberichte
 
 Der additive Runtimebaustein `CrashCapsule` wurde mit Runtime-ABI `116`
-eingefuehrt und liegt im aktuellen Runtime-ABI als v3 vor. Er ergaenzt den
+eingefuehrt und liegt im aktuellen Runtime-ABI als v4 vor. Er ergaenzt den
 portablen v1-Bericht um begrenzte PC/PR-/Register-,
 Modul-/Generations-, Materialisierungs-, Wait- und Dispatchdaten. Die
 Produkt-Catch-Verdrahtung verwendet dafuer feste, sanitizte Tokens. Ein
 kontrollierter Contract- oder Exceptiontext darf nur ueber den festen,
-pfadfreien v3-Diagnosepuffer laufen. Hostpfade und Heap-/iostream-Nutzung
+pfadfreien v4-Diagnosepuffer laufen. Hostpfade und Heap-/iostream-Nutzung
 bleiben im Crashpfad ausgeschlossen; Gastbytes erscheinen ausschliesslich in
 den expliziten festen Direct-RAM-Fenstern des Runtime-ABI-122-Vertrags.
+Runtime-ABI 123 und CrashCapsule v4 ergaenzen dazu den pfadfreien Lifecycle
+von festen Runtime-Images und staged, aktiven oder retired geladenen
+AOT-Modulen. Diese Identitaet ist vom zielbezogenen `loaded_aot_*`-Blockbeweis
+und von der Immutable-Write-Generation getrennt. Der feste Lookahead-Ring
+zeichnet nur ereignisgetriebene, bereits gebundene Absichten und ihre monotonen
+Zustaende `planned`, `validated`, `committed`, `completed` oder `cancelled`
+auf; er wird nie als Closure- oder Dispatch-Autoritaet verwendet. Ueberlaeuft
+die feste JSON-Kapazitaet trotz des 64-KiB-Budgets, wird statt einer
+abgeschnittenen Zeile ein gueltiges minimales `truncated=true`-Objekt
+ausgegeben.
 
 Der versionierte Bericht `katana-crash-report` beschreibt einen kontrollierten
 Runtime-Abbruch ohne freien Hostfehlertext. Sein `stop_code` und alle Herkunfts-
@@ -38,13 +48,13 @@ SPC uebernommen.
 Der portable v1-Bericht enthaelt bewusst keinen Runtime-Speicherdump und keine
 freie Exceptionnachricht. Symbol- und Source-Map-Werkzeuge koennen die
 numerischen Gastadressen nachtraeglich anreichern, ohne den v1-Crashvertrag zu
-veraendern. Die additive Produkt-CrashCapsule v3 kann davon getrennt die unten
+veraendern. Die additive Produkt-CrashCapsule v4 kann davon getrennt die unten
 beschriebenen festen Direct-RAM-Fenster tragen.
 
-## Produkt-CrashCapsule v3
+## Produkt-CrashCapsule v4
 
 Der generierte Native-Port besitzt daneben einen allocation-, formatierungs-
-und lockfreien Crashpfad. `CrashCapsule` v3 erweitert den unveraenderten
+und lockfreien Crashpfad. `CrashCapsule` v4 erweitert den unveraenderten
 v1-Grundvertrag additiv um bereits vorhandene, begrenzte Runtimefakten:
 
 - Hostexception- und Contractcode sowie sanitizte Typ-Tokens;

@@ -28,12 +28,25 @@ class NativePortImmutableWriteGuard final {
     // activated.  Once active, their exact executable block ranges join the
     // same immutable-write contract as bootstrap code; data bytes in the file
     // remain writable.
+    void reserve_additional_runtime_executable_ranges(
+        std::size_t maximum_additional_ranges);
     void add_runtime_executable_range(std::uint32_t address,
                                       std::size_t size);
+    void validate_runtime_executable_range_present(
+        std::uint32_t address,
+        std::size_t size) const;
     // Removes one exact range previously registered by a runtime-image
     // binding. Bootstrap/static immutable ranges can never be removed.
     void remove_runtime_executable_range(std::uint32_t address,
                                          std::size_t size);
+    // Commit half of a prepare/commit transaction. The exact range must have
+    // passed validate_runtime_executable_range_present after the last
+    // mutation. Capacity is reserved before any mapping becomes active, so
+    // this path cannot allocate or throw while another lifecycle owner is
+    // already being retired.
+    void remove_runtime_executable_range_committed(
+        std::uint32_t address,
+        std::size_t size) noexcept;
     void observe_write(const GuestWriteEvent& event) noexcept;
 
     [[nodiscard]] std::uint64_t generation() const noexcept;
@@ -43,7 +56,7 @@ class NativePortImmutableWriteGuard final {
     [[nodiscard]] std::uint8_t first_write_kind_mask() const noexcept;
 
   private:
-    void rebuild_ranges();
+    void rebuild_ranges() noexcept;
     [[nodiscard]] std::uint8_t range_kind_mask(
         std::uint32_t address,
         std::size_t size) const noexcept;
@@ -51,6 +64,7 @@ class NativePortImmutableWriteGuard final {
     std::vector<NativePortImmutableRange> fixed_ranges_;
     std::vector<NativePortImmutableRange> runtime_ranges_;
     std::vector<NativePortImmutableRange> ranges_;
+    std::size_t maximum_runtime_ranges_ = 0u;
     std::uint64_t generation_ = 0u;
     std::uint32_t first_write_address_ = 0u;
     std::size_t first_write_size_ = 0u;

@@ -8,6 +8,7 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -518,25 +519,148 @@ void NativePortMemory::load_verified_images(
     }
 }
 
+struct NativePortExecutableLifecycleLedger::Impl final {
+    struct Entry final {
+        std::uint32_t runtime_start = 0u;
+        std::uint32_t byte_size = 0u;
+        std::uint64_t generation = 0u;
+    };
+
+    std::size_t maximum_active_ranges = 0u;
+    std::uint64_t generation = 0u;
+    std::vector<Entry> active;
+};
+
+NativePortExecutableLifecycleLedger::NativePortExecutableLifecycleLedger(
+    const std::size_t maximum_active_ranges)
+    : impl_(std::make_unique<Impl>()) {
+    if (maximum_active_ranges >
+        static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+        throw NativePortContractError(
+            NativePortContractFailure::InvalidDefinition,
+            "native-executable-lifecycle-capacity");
+    impl_->maximum_active_ranges = maximum_active_ranges;
+    impl_->active.reserve(maximum_active_ranges);
+}
+
+NativePortExecutableLifecycleLedger::~NativePortExecutableLifecycleLedger()
+    noexcept = default;
+
+void NativePortExecutableLifecycleLedger::validate_available(
+    std::uint32_t runtime_start,
+    const std::size_t byte_size) const {
+    runtime_start = canonical_native_port_runtime_alias(runtime_start);
+    if (byte_size == 0u ||
+        byte_size > std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(runtime_start) + byte_size >
+            0x1'0000'0000ull)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-executable-lifecycle-range");
+    const auto runtime_end =
+        static_cast<std::uint64_t>(runtime_start) + byte_size;
+    for (const auto& active : impl_->active) {
+        const auto active_end =
+            static_cast<std::uint64_t>(active.runtime_start) +
+            active.byte_size;
+        if (runtime_start < active_end && active.runtime_start < runtime_end)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "native-executable-lifecycle-overlap");
+    }
+    if (impl_->active.size() >= impl_->maximum_active_ranges)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-executable-lifecycle-capacity");
+    if (impl_->generation == std::numeric_limits<std::uint64_t>::max())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-executable-lifecycle-generation-overflow");
+}
+
+std::uint64_t NativePortExecutableLifecycleLedger::acquire(
+    const std::uint32_t runtime_start,
+    const std::size_t byte_size) {
+    validate_available(runtime_start, byte_size);
+    const auto generation = ++impl_->generation;
+    // The constructor reserved the complete generated product budget and
+    // validate_available checked it, so this trivially-copyable insertion
+    // cannot allocate or throw.
+    impl_->active.push_back(
+        {canonical_native_port_runtime_alias(runtime_start),
+         static_cast<std::uint32_t>(byte_size), generation});
+    return generation;
+}
+
+void NativePortExecutableLifecycleLedger::validate_release(
+    const std::uint64_t generation) const {
+    const auto found = std::ranges::find(
+        impl_->active, generation, &Impl::Entry::generation);
+    if (found == impl_->active.end())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-executable-lifecycle-release");
+    if (impl_->generation == std::numeric_limits<std::uint64_t>::max())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "native-executable-lifecycle-generation-overflow");
+}
+
+std::uint64_t NativePortExecutableLifecycleLedger::release(
+    const std::uint64_t generation) {
+    validate_release(generation);
+    return release_committed(generation);
+}
+
+std::uint64_t NativePortExecutableLifecycleLedger::release_committed(
+    const std::uint64_t generation) noexcept {
+    const auto found = std::ranges::find(
+        impl_->active, generation, &Impl::Entry::generation);
+    if (found == impl_->active.end() ||
+        impl_->generation == std::numeric_limits<std::uint64_t>::max())
+        std::terminate();
+    impl_->active.erase(found);
+    return ++impl_->generation;
+}
+
+std::uint64_t NativePortExecutableLifecycleLedger::release_noexcept(
+    const std::uint64_t generation) noexcept {
+    if (!impl_ || generation == 0u) return 0u;
+    const auto found = std::ranges::find(
+        impl_->active, generation, &Impl::Entry::generation);
+    if (found == impl_->active.end()) return 0u;
+    impl_->active.erase(found);
+    if (impl_->generation == std::numeric_limits<std::uint64_t>::max())
+        return 0u;
+    return ++impl_->generation;
+}
+
 struct NativePortRuntimeImageBindings::Impl final {
     struct ActiveBinding final {
         std::size_t image_index = 0u;
+        std::uint64_t lifecycle_generation = 0u;
         std::unique_ptr<ScopedCodeAddressMapping> mapping;
     };
 
     CpuState& cpu;
     std::span<const NativePortRuntimeImageView> images;
     NativePortImmutableWriteGuard& immutable_guard;
+    NativePortExecutableLifecycleLedger& lifecycle_ledger;
+    CrashCapsule* crash_capsule = nullptr;
     std::vector<ActiveBinding> active;
 };
 
 NativePortRuntimeImageBindings::NativePortRuntimeImageBindings(
     CpuState& cpu,
     const std::span<const NativePortRuntimeImageView> images,
-    NativePortImmutableWriteGuard& immutable_guard)
+    NativePortImmutableWriteGuard& immutable_guard,
+    NativePortExecutableLifecycleLedger& lifecycle_ledger,
+    CrashCapsule* const crash_capsule)
     : impl_(std::make_unique<Impl>(
-          Impl{cpu, images, immutable_guard, {}})) {
+          Impl{cpu, images, immutable_guard, lifecycle_ledger,
+               crash_capsule, {}})) {
     constexpr std::uint32_t maximum_image_bytes = 4u * 1024u * 1024u;
+    std::size_t maximum_runtime_ranges = 0u;
     for (std::size_t image_index = 0u;
          image_index < images.size(); ++image_index) {
         const auto& image = images[image_index];
@@ -569,6 +693,13 @@ NativePortRuntimeImageBindings::NativePortRuntimeImageBindings(
                     "runtime-image-identity-overlap");
         }
         std::optional<std::uint32_t> previous_offset;
+        if (image.block_identities.size() >
+            std::numeric_limits<std::size_t>::max() -
+                maximum_runtime_ranges)
+            throw NativePortContractError(
+                NativePortContractFailure::InvalidDefinition,
+                "runtime-image-block-capacity");
+        maximum_runtime_ranges += image.block_identities.size();
         for (const auto& block : image.block_identities) {
             const auto block_end =
                 static_cast<std::uint64_t>(block.source_offset) +
@@ -585,6 +716,8 @@ NativePortRuntimeImageBindings::NativePortRuntimeImageBindings(
             previous_offset = block.source_offset;
         }
     }
+    impl_->immutable_guard.reserve_additional_runtime_executable_ranges(
+        maximum_runtime_ranges);
     impl_->active.reserve(images.size());
 }
 
@@ -596,14 +729,29 @@ NativePortRuntimeImageBindings::~NativePortRuntimeImageBindings() noexcept {
     for (auto active = impl_->active.rbegin();
          active != impl_->active.rend(); ++active) {
         const auto& image = impl_->images[active->image_index];
+        bool guard_cleanup_complete = true;
         for (const auto& block : image.block_identities) {
             try {
                 impl_->immutable_guard.remove_runtime_executable_range(
                     image.runtime_start + block.source_offset,
                     block.byte_size);
             } catch (...) {
+                guard_cleanup_complete = false;
             }
         }
+        active->mapping.reset();
+        const auto retirement_generation =
+            impl_->lifecycle_ledger.release_noexcept(
+                active->lifecycle_generation);
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                image.sha256, image.source_start,
+                canonical_native_port_runtime_alias(image.runtime_start),
+                image.byte_size, active->lifecycle_generation,
+                retirement_generation,
+                guard_cleanup_complete && retirement_generation != 0u
+                    ? 3u
+                    : 0u);
     }
 }
 
@@ -645,6 +793,8 @@ void NativePortRuntimeImageBindings::activate(
                 NativePortContractFailure::AotContractViolation,
                 "runtime-image-active-range-overlap");
     }
+    impl_->lifecycle_ledger.validate_available(
+        canonical_runtime_start, found->byte_size);
     const auto image_bytes = native_port_direct_bytes(
         impl_->cpu, found->runtime_start, found->byte_size);
     if (!image_bytes.has_value())
@@ -660,28 +810,39 @@ void NativePortRuntimeImageBindings::activate(
                 NativePortContractFailure::AotContractViolation,
                 "runtime-image-block-identity-mismatch");
     }
-    auto mapping = std::make_unique<ScopedCodeAddressMapping>(
-        CodeAddressMapping{found->source_start, canonical_runtime_start,
-                           found->byte_size});
+    const auto lifecycle_generation = impl_->lifecycle_ledger.acquire(
+        canonical_runtime_start, found->byte_size);
+    std::unique_ptr<ScopedCodeAddressMapping> mapping;
     std::size_t registered = 0u;
     try {
+        mapping = std::make_unique<ScopedCodeAddressMapping>(
+            CodeAddressMapping{found->source_start, canonical_runtime_start,
+                               found->byte_size});
         for (const auto& block : found->block_identities) {
             impl_->immutable_guard.add_runtime_executable_range(
                 found->runtime_start + block.source_offset,
                 block.byte_size);
             ++registered;
         }
+        impl_->active.push_back(
+            {image_index, lifecycle_generation, std::move(mapping)});
     } catch (...) {
         while (registered != 0u) {
             --registered;
             const auto& block = found->block_identities[registered];
-            impl_->immutable_guard.remove_runtime_executable_range(
+            impl_->immutable_guard.remove_runtime_executable_range_committed(
                 found->runtime_start + block.source_offset,
                 block.byte_size);
         }
+        mapping.reset();
+        static_cast<void>(impl_->lifecycle_ledger.release_noexcept(
+            lifecycle_generation));
         throw;
     }
-    impl_->active.push_back({image_index, std::move(mapping)});
+    if (impl_->crash_capsule != nullptr)
+        impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+            found->sha256, found->source_start, canonical_runtime_start,
+            found->byte_size, lifecycle_generation, 0u, 2u);
 }
 
 std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
@@ -691,9 +852,9 @@ std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
     runtime_start = canonical_native_port_runtime_alias(runtime_start);
     const auto requested_end =
         static_cast<std::uint64_t>(runtime_start) + byte_size;
-    std::vector<std::size_t> selected;
-    for (std::size_t active_index = 0u;
-         active_index < impl_->active.size(); ++active_index) {
+    std::size_t selected = 0u;
+    for (std::size_t active_index = impl_->active.size();
+         active_index-- > 0u;) {
         const auto& image =
             impl_->images[impl_->active[active_index].image_index];
         const auto image_runtime_start =
@@ -704,21 +865,27 @@ std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
         if (runtime_start >= image_end ||
             image_runtime_start >= requested_end)
             continue;
-        selected.push_back(active_index);
-    }
-    for (auto selected_index = selected.rbegin();
-         selected_index != selected.rend(); ++selected_index) {
-        const auto active_index = *selected_index;
-        const auto& image =
-            impl_->images[impl_->active[active_index].image_index];
+        const auto lifecycle_generation =
+            impl_->active[active_index].lifecycle_generation;
         for (const auto& block : image.block_identities)
-            impl_->immutable_guard.remove_runtime_executable_range(
+            impl_->immutable_guard.remove_runtime_executable_range_committed(
                 image.runtime_start + block.source_offset,
                 block.byte_size);
+        impl_->active[active_index].mapping.reset();
+        const auto retirement_generation =
+            impl_->lifecycle_ledger.release_committed(
+                lifecycle_generation);
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                image.sha256, image.source_start,
+                canonical_native_port_runtime_alias(image.runtime_start),
+                image.byte_size, lifecycle_generation,
+                retirement_generation, 3u);
         impl_->active.erase(
             impl_->active.begin() + static_cast<std::ptrdiff_t>(active_index));
+        ++selected;
     }
-    return selected.size();
+    return selected;
 }
 
 void NativePortRuntimeImageBindings::validate_deactivate_runtime_range(
@@ -750,6 +917,13 @@ void NativePortRuntimeImageBindings::validate_deactivate_runtime_range(
         validate_no_live_native_port_continuation(
             impl_->cpu, image_runtime_start, image_end,
             "runtime-image-deactivate-live-continuation");
+        for (const auto& block : image.block_identities)
+            impl_->immutable_guard
+                .validate_runtime_executable_range_present(
+                    image.runtime_start + block.source_offset,
+                    block.byte_size);
+        impl_->lifecycle_ledger.validate_release(
+            active.lifecycle_generation);
     }
 }
 
@@ -763,17 +937,27 @@ bool NativePortRuntimeImageBindings::active(
 }
 
 struct NativePortLoadedAotBinder::Impl final {
+    struct PendingBinding final {
+        std::size_t module_index = 0u;
+        std::uint32_t runtime_start = 0u;
+        std::uint64_t lifecycle_generation = 0u;
+        std::uint64_t stage_lookahead_sequence = 0u;
+    };
+
     struct ActiveBinding final {
         std::size_t module_index = 0u;
         std::uint32_t runtime_start = 0u;
         std::uint64_t code_generation = 0u;
+        std::uint64_t lifecycle_generation = 0u;
         std::unique_ptr<ScopedCodeAddressMapping> mapping;
     };
 
     CpuState& cpu;
     std::span<const NativePortLoadedAotModuleView> modules;
     NativePortImmutableWriteGuard& immutable_guard;
+    NativePortExecutableLifecycleLedger& lifecycle_ledger;
     CrashCapsule* crash_capsule = nullptr;
+    std::vector<PendingBinding> pending;
     std::vector<ActiveBinding> active;
 };
 
@@ -781,10 +965,13 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
     CpuState& cpu,
     const std::span<const NativePortLoadedAotModuleView> modules,
     NativePortImmutableWriteGuard& immutable_guard,
+    NativePortExecutableLifecycleLedger& lifecycle_ledger,
     CrashCapsule* const crash_capsule)
     : impl_(std::make_unique<Impl>(
-          Impl{cpu, modules, immutable_guard, crash_capsule, {}})) {
+          Impl{cpu, modules, immutable_guard, lifecycle_ledger,
+               crash_capsule, {}, {}})) {
     constexpr std::uint32_t maximum_module_bytes = 4u * 1024u * 1024u;
+    std::size_t maximum_runtime_ranges = 0u;
     for (std::size_t module_index = 0u;
          module_index < modules.size(); ++module_index) {
         const auto& module = modules[module_index];
@@ -812,6 +999,13 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
                     "loaded-aot-module-source-overlap");
         }
         std::optional<std::uint32_t> previous_offset;
+        if (module.block_identities.size() >
+            std::numeric_limits<std::size_t>::max() -
+                maximum_runtime_ranges)
+            throw NativePortContractError(
+                NativePortContractFailure::InvalidDefinition,
+                "loaded-aot-block-capacity");
+        maximum_runtime_ranges += module.block_identities.size();
         for (const auto& block : module.block_identities) {
             const auto block_end =
                 static_cast<std::uint64_t>(block.source_offset) +
@@ -828,6 +1022,9 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
             previous_offset = block.source_offset;
         }
     }
+    impl_->immutable_guard.reserve_additional_runtime_executable_ranges(
+        maximum_runtime_ranges);
+    impl_->pending.reserve(modules.size());
     impl_->active.reserve(modules.size());
 }
 
@@ -839,6 +1036,7 @@ NativePortLoadedAotBinder::~NativePortLoadedAotBinder() noexcept {
     for (auto active = impl_->active.rbegin();
          active != impl_->active.rend(); ++active) {
         const auto& module = impl_->modules[active->module_index];
+        bool guard_cleanup_complete = true;
         for (const auto& block : module.block_identities) {
             try {
                 impl_->immutable_guard.remove_runtime_executable_range(
@@ -847,7 +1045,39 @@ NativePortLoadedAotBinder::~NativePortLoadedAotBinder() noexcept {
             } catch (...) {
                 // Destructors cannot recover or report a second exception.
                 // Normal runtime retirement remains strict and throwing.
+                guard_cleanup_complete = false;
             }
+        }
+        active->mapping.reset();
+        const auto retirement_generation =
+            impl_->lifecycle_ledger.release_noexcept(
+                active->lifecycle_generation);
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                module.sha256, module.source_start,
+                canonical_native_port_runtime_alias(active->runtime_start),
+                module.byte_size, active->lifecycle_generation,
+                retirement_generation,
+                guard_cleanup_complete && retirement_generation != 0u
+                    ? 3u
+                    : 0u);
+    }
+    for (auto pending = impl_->pending.rbegin();
+         pending != impl_->pending.rend(); ++pending) {
+        const auto& module = impl_->modules[pending->module_index];
+        const auto retirement_generation =
+            impl_->lifecycle_ledger.release_noexcept(
+                pending->lifecycle_generation);
+        if (impl_->crash_capsule != nullptr) {
+            impl_->crash_capsule->update_v3_lookahead(
+                pending->stage_lookahead_sequence,
+                CrashCapsuleLookaheadState::Cancelled);
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                module.sha256, module.source_start,
+                canonical_native_port_runtime_alias(pending->runtime_start),
+                module.byte_size, pending->lifecycle_generation,
+                retirement_generation,
+                retirement_generation != 0u ? 3u : 0u);
         }
     }
 }
@@ -890,6 +1120,9 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
             : 0u;
     const auto note_loaded_aot = [&]() noexcept {
         if (impl_->crash_capsule == nullptr) return;
+        impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+            module.sha256, module.source_start, match_runtime_start,
+            module.byte_size, match->lifecycle_generation, 0u, 2u);
         impl_->crash_capsule->note_v3_loaded_aot(
             target, match_runtime_start, module.source_start, offset,
             module.byte_size, block_size, match->code_generation,
@@ -928,6 +1161,100 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
     return true;
 }
 
+std::uint64_t NativePortLoadedAotBinder::stage_runtime_module(
+    const NativePortLoadedAotModuleActivation& activation) {
+    constexpr std::uint32_t maximum_module_bytes = 4u * 1024u * 1024u;
+    auto runtime_start =
+        canonical_native_port_runtime_alias(activation.runtime_start);
+    if ((activation.source_start & 3u) != 0u ||
+        (runtime_start & 3u) != 0u || activation.byte_size < 2u ||
+        activation.byte_size > maximum_module_bytes ||
+        static_cast<std::uint64_t>(activation.source_start) +
+                activation.byte_size >
+            0x1'0000'0000ull ||
+        static_cast<std::uint64_t>(runtime_start) + activation.byte_size >
+            0x1'0000'0000ull ||
+        !valid_sha256_identity(activation.sha256))
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-stage-definition");
+
+    std::optional<std::size_t> module_index;
+    for (std::size_t index = 0u; index < impl_->modules.size(); ++index) {
+        const auto& module = impl_->modules[index];
+        if (module.source_start != activation.source_start ||
+            module.byte_size != activation.byte_size ||
+            module.sha256 != activation.sha256)
+            continue;
+        if (module_index.has_value())
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-stage-identity-ambiguous");
+        module_index = index;
+    }
+    if (!module_index.has_value())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-stage-identity-missing");
+
+    const auto same_module = [module_index](const auto& binding) {
+        return binding.module_index == *module_index;
+    };
+    if (std::any_of(
+            impl_->pending.begin(), impl_->pending.end(), same_module) ||
+        std::any_of(impl_->active.begin(), impl_->active.end(), same_module))
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-stage-module-duplicate");
+
+    const auto runtime_end =
+        static_cast<std::uint64_t>(runtime_start) + activation.byte_size;
+    const auto overlaps = [&](const auto& binding) {
+        const auto& module = impl_->modules[binding.module_index];
+        const auto begin =
+            canonical_native_port_runtime_alias(binding.runtime_start);
+        const auto end = static_cast<std::uint64_t>(begin) + module.byte_size;
+        return runtime_start < end && begin < runtime_end;
+    };
+    if (std::any_of(impl_->pending.begin(), impl_->pending.end(), overlaps) ||
+        std::any_of(impl_->active.begin(), impl_->active.end(), overlaps))
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-stage-runtime-overlap");
+    impl_->lifecycle_ledger.validate_available(
+        runtime_start, activation.byte_size);
+    const auto lifecycle_generation = impl_->lifecycle_ledger.acquire(
+        runtime_start, activation.byte_size);
+    // pending was reserved to the generated module count and the unique-module
+    // invariant bounds the vector to that count, so commit cannot allocate.
+    try {
+        impl_->pending.push_back(
+            {*module_index, runtime_start, lifecycle_generation, 0u});
+    } catch (...) {
+        static_cast<void>(impl_->lifecycle_ledger.release_noexcept(
+            lifecycle_generation));
+        throw;
+    }
+    if (impl_->crash_capsule != nullptr) {
+        const auto& module = impl_->modules[*module_index];
+        const auto lookahead_sequence =
+            impl_->crash_capsule->note_v3_lookahead(
+                CrashCapsuleLookaheadKind::RuntimeModuleStage,
+                impl_->cpu.active_instruction_pc, runtime_start,
+                impl_->cpu.pr, activation.source_start, runtime_start, 0u,
+                activation.byte_size, lifecycle_generation,
+                activation.sha256);
+        impl_->pending.back().stage_lookahead_sequence =
+            lookahead_sequence;
+        impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+            module.sha256, module.source_start, runtime_start,
+            module.byte_size, lifecycle_generation, 0u, 1u);
+        impl_->crash_capsule->update_v3_lookahead(
+            lookahead_sequence, CrashCapsuleLookaheadState::Committed);
+    }
+    return lifecycle_generation;
+}
+
 bool NativePortLoadedAotBinder::bind_entry(
     const std::uint32_t target) {
     if (validate_bound_entry(target)) return true;
@@ -938,55 +1265,130 @@ bool NativePortLoadedAotBinder::bind_entry(
     struct Candidate final {
         std::size_t module_index = 0u;
         std::uint32_t runtime_start = 0u;
+        std::uint64_t lifecycle_generation = 0u;
+        std::uint64_t stage_lookahead_sequence = 0u;
+        std::uint64_t transfer_lookahead_sequence = 0u;
+        std::optional<std::size_t> pending_index;
     };
-    std::optional<Candidate> match;
-    for (std::size_t module_index = 0u;
-         module_index < impl_->modules.size(); ++module_index) {
+    const auto module_bytes_match = [&](
+        const std::size_t module_index,
+        const std::uint32_t runtime_start) {
         const auto& module = impl_->modules[module_index];
-        for (const auto& block : module.block_identities) {
-            if (runtime_target < block.source_offset) continue;
-            const auto runtime_start = runtime_target - block.source_offset;
-            if ((runtime_start & 3u) != 0u ||
-                static_cast<std::uint64_t>(runtime_start) +
-                        module.byte_size >
-                    0x1'0000'0000ull)
-                continue;
-            const auto block_bytes = native_port_direct_bytes(
-                impl_->cpu, target, block.byte_size);
-            if (!block_bytes.has_value() ||
-                sha256_identity(*block_bytes) != block.sha256)
-                continue;
-            const auto module_bytes = native_port_direct_bytes(
-                impl_->cpu, runtime_start, module.byte_size);
-            if (!module_bytes.has_value())
-                continue;
-            // Loaded title modules commonly mix executable blocks with mutable
-            // data.  Prefer the whole decoded-image identity while it is still
-            // intact, but admit a later binding only when every block emitted
-            // as AOT code still has its exact export-time identity.  This keeps
-            // data initialization from invalidating safe static code without
-            // weakening the executable closure.
-            if (sha256_identity(*module_bytes) != module.sha256) {
-                const auto code_identity_matches = std::all_of(
-                    module.block_identities.begin(),
-                    module.block_identities.end(), [&](const auto& candidate) {
-                        const auto bytes = native_port_direct_bytes(
-                            impl_->cpu,
-                            runtime_start + candidate.source_offset,
-                            candidate.byte_size);
-                        return bytes.has_value() &&
-                               sha256_identity(*bytes) == candidate.sha256;
-                    });
-                if (!code_identity_matches) continue;
+        const auto module_bytes = native_port_direct_bytes(
+            impl_->cpu, runtime_start, module.byte_size);
+        if (!module_bytes.has_value()) return false;
+        // Loaded title modules commonly mix executable blocks with mutable
+        // data. Prefer the complete decoded identity while it is intact, but
+        // after initialization require every emitted code block to retain its
+        // exact export-time identity.
+        if (sha256_identity(*module_bytes) == module.sha256) return true;
+        return std::all_of(
+            module.block_identities.begin(), module.block_identities.end(),
+            [&](const auto& block) {
+                const auto bytes = native_port_direct_bytes(
+                    impl_->cpu, runtime_start + block.source_offset,
+                    block.byte_size);
+                return bytes.has_value() &&
+                       sha256_identity(*bytes) == block.sha256;
+            });
+    };
+
+    std::optional<Candidate> match;
+    for (std::size_t pending_index = 0u;
+         pending_index < impl_->pending.size(); ++pending_index) {
+        const auto& pending = impl_->pending[pending_index];
+        const auto& module = impl_->modules[pending.module_index];
+        const auto pending_start =
+            canonical_native_port_runtime_alias(pending.runtime_start);
+        const auto pending_end =
+            static_cast<std::uint64_t>(pending_start) + module.byte_size;
+        if (runtime_target < pending_start || runtime_target >= pending_end)
+            continue;
+        if (match.has_value())
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-staged-mapping-ambiguous");
+
+        const auto offset = runtime_target - pending_start;
+        const auto block = std::lower_bound(
+            module.block_identities.begin(), module.block_identities.end(),
+            offset, [](const auto& candidate, const std::uint32_t value) {
+                return candidate.source_offset < value;
+            });
+        const auto block_size =
+            block != module.block_identities.end() &&
+                    block->source_offset == offset
+                ? block->byte_size
+                : 0u;
+        if (impl_->crash_capsule != nullptr) {
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                module.sha256, module.source_start, pending_start,
+                module.byte_size, pending.lifecycle_generation, 0u, 1u);
+            impl_->crash_capsule->note_v3_loaded_aot(
+                target, pending_start, module.source_start, offset,
+                module.byte_size, block_size, 0u,
+                impl_->immutable_guard.generation(), module.sha256);
+        }
+        if (block_size == 0u) {
+            std::ostringstream detail;
+            detail << "loaded-aot-entry-identity-missing:target=0x"
+                   << std::hex << runtime_target << ";runtime-start=0x"
+                   << pending_start << ";source-start=0x"
+                   << module.source_start << ";offset=0x" << offset
+                   << ";pc=0x" << impl_->cpu.pc << ";pr=0x"
+                   << impl_->cpu.pr << ";active-instruction=0x"
+                   << impl_->cpu.active_instruction_pc
+                   << ";active-block=0x"
+                   << impl_->cpu.active_block_virtual_start;
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                detail.str());
+        }
+        if (!module_bytes_match(pending.module_index, pending_start))
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-staged-byte-identity-mismatch");
+        match = Candidate{
+            pending.module_index, pending_start,
+            pending.lifecycle_generation,
+            pending.stage_lookahead_sequence, 0u, pending_index};
+    }
+
+    // Retain the existing byte-derived discovery as a compatibility path for
+    // title loaders that have not yet published a lifecycle identity. An
+    // exact staged range always wins; it may never be reinterpreted as another
+    // module sharing the same destination window.
+    if (!match.has_value()) {
+        for (std::size_t module_index = 0u;
+             module_index < impl_->modules.size(); ++module_index) {
+            const auto& module = impl_->modules[module_index];
+            for (const auto& block : module.block_identities) {
+                if (runtime_target < block.source_offset) continue;
+                const auto runtime_start =
+                    runtime_target - block.source_offset;
+                if ((runtime_start & 3u) != 0u ||
+                    static_cast<std::uint64_t>(runtime_start) +
+                            module.byte_size >
+                        0x1'0000'0000ull)
+                    continue;
+                const auto block_bytes = native_port_direct_bytes(
+                    impl_->cpu, target, block.byte_size);
+                if (!block_bytes.has_value() ||
+                    sha256_identity(*block_bytes) != block.sha256)
+                    continue;
+                if (!module_bytes_match(module_index, runtime_start))
+                    continue;
+                const Candidate candidate{
+                    module_index, runtime_start, 0u, 0u, 0u,
+                    std::nullopt};
+                if (match.has_value() &&
+                    (match->module_index != candidate.module_index ||
+                     match->runtime_start != candidate.runtime_start))
+                    throw NativePortContractError(
+                        NativePortContractFailure::AotContractViolation,
+                        "loaded-aot-runtime-identity-ambiguous");
+                match = candidate;
             }
-            const Candidate candidate{module_index, runtime_start};
-            if (match.has_value() &&
-                (match->module_index != candidate.module_index ||
-                 match->runtime_start != candidate.runtime_start))
-                throw NativePortContractError(
-                    NativePortContractFailure::AotContractViolation,
-                    "loaded-aot-runtime-identity-ambiguous");
-            match = candidate;
         }
     }
     if (!match.has_value()) {
@@ -998,69 +1400,121 @@ bool NativePortLoadedAotBinder::bind_entry(
     }
 
     const auto& module = impl_->modules[match->module_index];
-    for (const auto& active : impl_->active) {
-        const auto& active_module = impl_->modules[active.module_index];
-        const auto active_runtime_start =
-            canonical_native_port_runtime_alias(active.runtime_start);
-        const auto active_end =
-            static_cast<std::uint64_t>(active_runtime_start) +
-            active_module.byte_size;
-        const auto candidate_end =
-            static_cast<std::uint64_t>(match->runtime_start) +
-            module.byte_size;
-        if (match->runtime_start < active_end &&
-            active_runtime_start < candidate_end)
+    bool acquired_lifecycle = false;
+    if (match->lifecycle_generation == 0u) {
+        const auto duplicate_module = [&](const auto& binding) {
+            return binding.module_index == match->module_index;
+        };
+        if (std::any_of(
+                impl_->pending.begin(), impl_->pending.end(),
+                duplicate_module) ||
+            std::any_of(
+                impl_->active.begin(), impl_->active.end(),
+                duplicate_module))
             throw NativePortContractError(
                 NativePortContractFailure::AotContractViolation,
-                "loaded-aot-runtime-range-overlap");
+                "loaded-aot-runtime-module-duplicate");
+        impl_->lifecycle_ledger.validate_available(
+            match->runtime_start, module.byte_size);
+        match->lifecycle_generation = impl_->lifecycle_ledger.acquire(
+            match->runtime_start, module.byte_size);
+        acquired_lifecycle = true;
     }
-    auto mapping = std::make_unique<ScopedCodeAddressMapping>(
-        CodeAddressMapping{module.source_start, match->runtime_start,
-                           module.byte_size});
-    if (unrelocate_code_address(runtime_target) !=
-        module.source_start + (runtime_target - match->runtime_start))
+    const auto source_offset = runtime_target - match->runtime_start;
+    const auto bound_block = std::lower_bound(
+        module.block_identities.begin(), module.block_identities.end(),
+        source_offset,
+        [](const auto& candidate, const std::uint32_t value) {
+            return candidate.source_offset < value;
+        });
+    const auto block_size =
+        bound_block != module.block_identities.end() &&
+                bound_block->source_offset == source_offset
+            ? bound_block->byte_size
+            : 0u;
+    if (block_size == 0u) {
+        if (acquired_lifecycle)
+            static_cast<void>(impl_->lifecycle_ledger.release_noexcept(
+                match->lifecycle_generation));
         throw NativePortContractError(
             NativePortContractFailure::AotContractViolation,
-            "loaded-aot-runtime-mapping");
+            "loaded-aot-runtime-block-identity");
+    }
+    if (impl_->crash_capsule != nullptr) {
+        match->transfer_lookahead_sequence =
+            impl_->crash_capsule->note_v3_lookahead(
+                CrashCapsuleLookaheadKind::LoadedAotTransfer,
+                impl_->cpu.active_instruction_pc, runtime_target,
+                impl_->cpu.pr, module.source_start, match->runtime_start,
+                source_offset, block_size, match->lifecycle_generation,
+                module.sha256);
+        impl_->crash_capsule->update_v3_lookahead(
+            match->transfer_lookahead_sequence,
+            CrashCapsuleLookaheadState::Validated);
+    }
+
+    std::unique_ptr<ScopedCodeAddressMapping> mapping;
     std::size_t registered = 0u;
     try {
+        mapping = std::make_unique<ScopedCodeAddressMapping>(
+            CodeAddressMapping{module.source_start, match->runtime_start,
+                               module.byte_size});
+        if (unrelocate_code_address(runtime_target) !=
+            module.source_start + source_offset)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-runtime-mapping");
         for (const auto& block : module.block_identities) {
             impl_->immutable_guard.add_runtime_executable_range(
                 match->runtime_start + block.source_offset,
                 block.byte_size);
             ++registered;
         }
+        // The unique-module invariant bounds active to the reserved generated
+        // module count, so this commit cannot allocate after guard admission.
+        impl_->active.push_back(
+            {match->module_index, match->runtime_start,
+             impl_->immutable_guard.generation(),
+             match->lifecycle_generation, std::move(mapping)});
     } catch (...) {
         while (registered != 0u) {
             --registered;
             const auto& block = module.block_identities[registered];
-            impl_->immutable_guard.remove_runtime_executable_range(
+            impl_->immutable_guard.remove_runtime_executable_range_committed(
                 match->runtime_start + block.source_offset,
                 block.byte_size);
         }
+        mapping.reset();
+        if (acquired_lifecycle)
+            static_cast<void>(impl_->lifecycle_ledger.release_noexcept(
+                match->lifecycle_generation));
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->update_v3_lookahead(
+                match->transfer_lookahead_sequence,
+                CrashCapsuleLookaheadState::Cancelled);
         throw;
     }
-    impl_->active.push_back(
-        {match->module_index, match->runtime_start,
-         impl_->immutable_guard.generation(), std::move(mapping)});
+    if (match->pending_index.has_value()) {
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->update_v3_lookahead(
+                match->stage_lookahead_sequence,
+                CrashCapsuleLookaheadState::Completed);
+        impl_->pending.erase(
+            impl_->pending.begin() + static_cast<std::ptrdiff_t>(
+                *match->pending_index));
+    }
     if (impl_->crash_capsule != nullptr) {
-        const auto source_offset = runtime_target - match->runtime_start;
-        const auto bound_block = std::lower_bound(
-            module.block_identities.begin(), module.block_identities.end(),
-            source_offset,
-            [](const auto& candidate, const std::uint32_t value) {
-                return candidate.source_offset < value;
-            });
-        const auto block_size =
-            bound_block != module.block_identities.end() &&
-                    bound_block->source_offset == source_offset
-                ? bound_block->byte_size
-                : 0u;
         impl_->crash_capsule->note_v3_loaded_aot(
             target, match->runtime_start, module.source_start,
             source_offset, module.byte_size, block_size,
             impl_->immutable_guard.generation(),
             impl_->immutable_guard.generation(), module.sha256);
+        impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+            module.sha256, module.source_start, match->runtime_start,
+            module.byte_size, match->lifecycle_generation, 0u, 2u);
+        impl_->crash_capsule->update_v3_lookahead(
+            match->transfer_lookahead_sequence,
+            CrashCapsuleLookaheadState::Completed);
     }
     return true;
 }
@@ -1078,6 +1532,21 @@ void NativePortLoadedAotBinder::validate_deactivate_runtime_range(
             "loaded-aot-deactivate-range");
     const auto requested_end =
         static_cast<std::uint64_t>(runtime_start) + byte_size;
+    for (const auto& pending : impl_->pending) {
+        const auto& module = impl_->modules[pending.module_index];
+        const auto module_start =
+            canonical_native_port_runtime_alias(pending.runtime_start);
+        const auto module_end =
+            static_cast<std::uint64_t>(module_start) + module.byte_size;
+        if (runtime_start >= module_end || module_start >= requested_end)
+            continue;
+        if (runtime_start > module_start || requested_end < module_end)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-deactivate-staged-partial");
+        impl_->lifecycle_ledger.validate_release(
+            pending.lifecycle_generation);
+    }
     for (const auto& active : impl_->active) {
         const auto& module = impl_->modules[active.module_index];
         const auto module_start =
@@ -1093,6 +1562,13 @@ void NativePortLoadedAotBinder::validate_deactivate_runtime_range(
         validate_no_live_native_port_continuation(
             impl_->cpu, module_start, module_end,
             "loaded-aot-deactivate-live-continuation");
+        for (const auto& block : module.block_identities)
+            impl_->immutable_guard
+                .validate_runtime_executable_range_present(
+                    active.runtime_start + block.source_offset,
+                    block.byte_size);
+        impl_->lifecycle_ledger.validate_release(
+            active.lifecycle_generation);
     }
 }
 
@@ -1103,32 +1579,66 @@ std::size_t NativePortLoadedAotBinder::deactivate_runtime_range(
     runtime_start = canonical_native_port_runtime_alias(runtime_start);
     const auto requested_end =
         static_cast<std::uint64_t>(runtime_start) + byte_size;
-    std::vector<std::size_t> selected;
-    for (std::size_t active_index = 0u;
-         active_index < impl_->active.size(); ++active_index) {
-        const auto& active = impl_->active[active_index];
+    std::size_t selected_active = 0u;
+    for (std::size_t active_index = impl_->active.size();
+         active_index-- > 0u;) {
+        auto& active = impl_->active[active_index];
         const auto& module = impl_->modules[active.module_index];
         const auto module_start =
             canonical_native_port_runtime_alias(active.runtime_start);
         const auto module_end =
             static_cast<std::uint64_t>(module_start) + module.byte_size;
-        if (runtime_start < module_end && module_start < requested_end)
-            selected.push_back(active_index);
-    }
-    for (auto selected_index = selected.rbegin();
-         selected_index != selected.rend(); ++selected_index) {
-        const auto active_index = *selected_index;
-        const auto& active = impl_->active[active_index];
-        const auto& module = impl_->modules[active.module_index];
+        if (runtime_start >= module_end || module_start >= requested_end)
+            continue;
         for (const auto& block : module.block_identities)
-            impl_->immutable_guard.remove_runtime_executable_range(
+            impl_->immutable_guard.remove_runtime_executable_range_committed(
                 active.runtime_start + block.source_offset,
                 block.byte_size);
+        active.mapping.reset();
+        const auto retirement_generation =
+            impl_->lifecycle_ledger.release_committed(
+                active.lifecycle_generation);
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                module.sha256, module.source_start,
+                canonical_native_port_runtime_alias(active.runtime_start),
+                module.byte_size, active.lifecycle_generation,
+                retirement_generation, 3u);
         impl_->active.erase(
             impl_->active.begin() +
             static_cast<std::ptrdiff_t>(active_index));
+        ++selected_active;
     }
-    return selected.size();
+    std::size_t selected_pending = 0u;
+    for (std::size_t pending_index = impl_->pending.size();
+         pending_index-- > 0u;) {
+        const auto& pending = impl_->pending[pending_index];
+        const auto& module = impl_->modules[pending.module_index];
+        const auto module_start =
+            canonical_native_port_runtime_alias(pending.runtime_start);
+        const auto module_end =
+            static_cast<std::uint64_t>(module_start) + module.byte_size;
+        if (runtime_start >= module_end || module_start >= requested_end)
+            continue;
+        const auto retirement_generation =
+            impl_->lifecycle_ledger.release_committed(
+                pending.lifecycle_generation);
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->update_v3_lookahead(
+                pending.stage_lookahead_sequence,
+                CrashCapsuleLookaheadState::Cancelled);
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                module.sha256, module.source_start,
+                canonical_native_port_runtime_alias(pending.runtime_start),
+                module.byte_size, pending.lifecycle_generation,
+                retirement_generation, 3u);
+        impl_->pending.erase(
+            impl_->pending.begin() +
+            static_cast<std::ptrdiff_t>(pending_index));
+        ++selected_pending;
+    }
+    return selected_active + selected_pending;
 }
 
 NativePortExecutableRetirement deactivate_native_port_executable_range(

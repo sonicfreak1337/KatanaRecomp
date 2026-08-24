@@ -73,6 +73,55 @@ struct NativePortLoadedAotModuleView {
     std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
 };
 
+// Identity supplied by a title-owned loader before a decoded module becomes
+// executable.  Staging does not authorize code: the binder still verifies the
+// exact generated module and every emitted block against the bytes resident at
+// runtime_start before it installs a mapping.  It only carries the already
+// authenticated loader identity across the decode-to-first-dispatch gap.
+struct NativePortLoadedAotModuleActivation final {
+    std::string_view sha256;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t byte_size = 0u;
+};
+
+// One context-owned range ledger arbitrates every executable title mapping,
+// regardless of whether it is a fixed runtime image or a loader-staged AOT
+// overlay. Its bounded capacity is reserved at construction, so range
+// admission and retirement never allocate after product startup.
+class NativePortExecutableLifecycleLedger final {
+  public:
+    explicit NativePortExecutableLifecycleLedger(
+        std::size_t maximum_active_ranges);
+    ~NativePortExecutableLifecycleLedger() noexcept;
+
+    NativePortExecutableLifecycleLedger(
+        const NativePortExecutableLifecycleLedger&) = delete;
+    NativePortExecutableLifecycleLedger& operator=(
+        const NativePortExecutableLifecycleLedger&) = delete;
+    NativePortExecutableLifecycleLedger(
+        NativePortExecutableLifecycleLedger&&) = delete;
+    NativePortExecutableLifecycleLedger& operator=(
+        NativePortExecutableLifecycleLedger&&) = delete;
+
+    void validate_available(
+        std::uint32_t runtime_start,
+        std::size_t byte_size) const;
+    [[nodiscard]] std::uint64_t acquire(
+        std::uint32_t runtime_start,
+        std::size_t byte_size);
+    void validate_release(std::uint64_t generation) const;
+    [[nodiscard]] std::uint64_t release(std::uint64_t generation);
+    [[nodiscard]] std::uint64_t release_committed(
+        std::uint64_t generation) noexcept;
+    [[nodiscard]] std::uint64_t release_noexcept(
+        std::uint64_t generation) noexcept;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 // A fixed-address title image is executable only while its exact identity is
 // active at the declared runtime range.  Unlike bootstrap code, such ranges
 // may be replaced by a later title overlay through this explicit lifecycle.
@@ -93,7 +142,9 @@ class NativePortRuntimeImageBindings final {
     NativePortRuntimeImageBindings(
         CpuState& cpu,
         std::span<const NativePortRuntimeImageView> images,
-        NativePortImmutableWriteGuard& immutable_guard);
+        NativePortImmutableWriteGuard& immutable_guard,
+        NativePortExecutableLifecycleLedger& lifecycle_ledger,
+        CrashCapsule* crash_capsule = nullptr);
     ~NativePortRuntimeImageBindings() noexcept;
 
     NativePortRuntimeImageBindings(const NativePortRuntimeImageBindings&) = delete;
@@ -125,6 +176,7 @@ class NativePortLoadedAotBinder final {
         CpuState& cpu,
         std::span<const NativePortLoadedAotModuleView> modules,
         NativePortImmutableWriteGuard& immutable_guard,
+        NativePortExecutableLifecycleLedger& lifecycle_ledger,
         CrashCapsule* crash_capsule = nullptr);
     ~NativePortLoadedAotBinder() noexcept;
 
@@ -138,6 +190,12 @@ class NativePortLoadedAotBinder final {
     // Returns true only when target belongs to an already active mapping.
     // An exact block-identity mismatch is a typed AOT-contract failure.
     [[nodiscard]] bool validate_bound_entry(std::uint32_t target) const;
+    // Records one exact loader-selected module at its destination. The module
+    // remains non-executable until bind_entry verifies its current bytes and
+    // an exact emitted block at the requested entry. Returns the independent,
+    // monotone overlay-lifecycle generation assigned to this activation.
+    [[nodiscard]] std::uint64_t stage_runtime_module(
+        const NativePortLoadedAotModuleActivation& activation);
     // Installs one unambiguous exact executable-closure mapping for target.
     // False means no analyzed module matches; ambiguous, malformed, or stale
     // generated-code state fails closed.

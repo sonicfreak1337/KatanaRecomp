@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <system_error>
 #include <string_view>
 #include <type_traits>
@@ -15,11 +16,18 @@ inline constexpr std::uint32_t crash_capsule_contract_version = 1u;
 // extension is additive and is emitted only through the bounded v2 serializer below.
 inline constexpr std::uint32_t crash_capsule_v2_contract_version = 2u;
 inline constexpr std::uint32_t crash_capsule_v3_contract_version = 3u;
+// Version 4 adds bounded executable-lifecycle and lookahead records.  Keeping
+// this distinct from v3 lets strict consumers reject unknown keys instead of
+// silently accepting a structurally different line under the old contract.
+inline constexpr std::uint32_t crash_capsule_v4_contract_version = 4u;
 inline constexpr std::size_t crash_capsule_event_capacity = 64u;
 inline constexpr std::size_t crash_capsule_token_capacity = 512u;
 inline constexpr std::size_t crash_capsule_v2_line_capacity = 32768u;
+inline constexpr std::size_t crash_capsule_v4_line_capacity = 65536u;
 inline constexpr std::size_t crash_capsule_memory_window_capacity = 20u;
 inline constexpr std::size_t crash_capsule_memory_window_word_capacity = 16u;
+inline constexpr std::size_t crash_capsule_lookahead_capacity = 8u;
+inline constexpr std::size_t crash_capsule_module_lifecycle_capacity = 8u;
 static_assert((crash_capsule_event_capacity &
                (crash_capsule_event_capacity - 1u)) == 0u);
 
@@ -62,6 +70,25 @@ enum CrashCapsuleV3Field : std::uint32_t {
     CrashCapsuleV3FieldProductState = 1u << 4u,
     CrashCapsuleV3FieldPlatform = 1u << 5u,
     CrashCapsuleV3FieldMemoryWindows = 1u << 6u,
+    CrashCapsuleV3FieldRuntimeModuleLifecycle = 1u << 7u,
+    CrashCapsuleV3FieldLookahead = 1u << 8u,
+};
+
+enum class CrashCapsuleLookaheadKind : std::uint32_t {
+    RuntimeModuleDecode = 1u,
+    RuntimeModuleStage = 2u,
+    LoadedAotTransfer = 3u,
+    AudioRouteSelection = 4u,
+    AdxStreamStart = 5u,
+    SoundBankCommand = 6u,
+};
+
+enum class CrashCapsuleLookaheadState : std::uint32_t {
+    Planned = 1u,
+    Validated = 2u,
+    Committed = 3u,
+    Completed = 4u,
+    Cancelled = 5u,
 };
 
 enum CrashCapsuleTokenFlag : std::uint8_t {
@@ -259,6 +286,36 @@ struct CrashCapsuleMemoryWindow {
     std::array<std::uint32_t, crash_capsule_memory_window_word_capacity> words{};
 };
 
+// Bounded intent captured before a risky runtime transition begins.  It is a
+// diagnostic look-ahead, not authority to execute the target: the consumer
+// still has to validate the ordinary image, generation and block contracts.
+struct CrashCapsuleLookahead final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint32_t kind = 0u;
+    std::uint32_t state = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t continuation = 0u;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t source_offset = 0u;
+    std::uint32_t byte_size = 0u;
+    std::array<std::uint32_t, 4u> arguments{};
+    CrashCapsuleToken identity;
+};
+
+struct CrashCapsuleRuntimeModuleLifecycle final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t lifecycle_generation = 0u;
+    std::uint64_t retirement_generation = 0u;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t module_size = 0u;
+    std::uint32_t state = 0u;
+    CrashCapsuleToken identity;
+};
+
 // Additive v3 flight-recorder state. Hot paths write only fixed-width values;
 // text remains bounded and path-free. Contract-detail hashes cover only the
 // bounded, sanitized token so arbitrary exception text is never retained even
@@ -285,6 +342,11 @@ struct CrashCapsuleV3Fields {
     std::uint32_t loaded_aot_source_offset = 0u;
     std::uint32_t loaded_aot_module_size = 0u;
     std::uint32_t loaded_aot_block_size = 0u;
+    std::uint32_t runtime_module_source_start = 0u;
+    std::uint32_t runtime_module_runtime_start = 0u;
+    std::uint32_t runtime_module_size = 0u;
+    // 1 = staged, 2 = active, 3 = retired. Zero means unavailable.
+    std::uint32_t runtime_module_lifecycle_state = 0u;
     std::uint32_t stop_reason = 0u;
     std::uint32_t bootstrap_phase = 0u;
     std::uint32_t input_trace_mode = 0u;
@@ -296,6 +358,8 @@ struct CrashCapsuleV3Fields {
     std::uint64_t exception_generation = 0u;
     std::uint64_t loaded_aot_expected_generation = 0u;
     std::uint64_t loaded_aot_current_generation = 0u;
+    std::uint64_t runtime_module_lifecycle_generation = 0u;
+    std::uint64_t runtime_module_retirement_generation = 0u;
     std::uint64_t frame_index = 0u;
     std::uint64_t input_polls = 0u;
     std::uint64_t input_connection_generation = 0u;
@@ -304,11 +368,23 @@ struct CrashCapsuleV3Fields {
     std::uint64_t input_trace_hash = 0u;
     CrashCapsuleToken contract_detail;
     CrashCapsuleToken loaded_aot_identity;
+    CrashCapsuleToken runtime_module_lifecycle_identity;
     CrashCapsuleToken input_trace;
     CrashCapsuleToken input_identity;
     std::array<CrashCapsuleMemoryWindow,
                crash_capsule_memory_window_capacity> memory_windows{};
     std::uint32_t memory_window_count = 0u;
+    std::array<CrashCapsuleLookahead,
+               crash_capsule_lookahead_capacity> lookahead{};
+    std::uint64_t lookahead_sequence = 0u;
+    std::uint32_t lookahead_count = 0u;
+    std::uint32_t next_lookahead = 0u;
+    std::array<CrashCapsuleRuntimeModuleLifecycle,
+               crash_capsule_module_lifecycle_capacity>
+        runtime_module_lifecycles{};
+    std::uint64_t runtime_module_lifecycle_sequence = 0u;
+    std::uint32_t runtime_module_lifecycle_count = 0u;
+    std::uint32_t next_runtime_module_lifecycle = 0u;
 
     static constexpr std::uint64_t hash_text(
         const std::string_view value) noexcept {
@@ -395,6 +471,119 @@ struct CrashCapsuleV3Fields {
         present |= CrashCapsuleV3FieldLoadedAot;
     }
 
+    void note_runtime_module_lifecycle(
+        const std::string_view identity,
+        const std::uint32_t source_start,
+        const std::uint32_t runtime_start,
+        const std::uint32_t module_size,
+        const std::uint64_t lifecycle_generation,
+        const std::uint64_t retirement_generation,
+        const std::uint32_t lifecycle_state) noexcept {
+        runtime_module_lifecycle_identity.assign(identity);
+        runtime_module_source_start = source_start;
+        runtime_module_runtime_start = runtime_start;
+        runtime_module_size = module_size;
+        runtime_module_lifecycle_generation = lifecycle_generation;
+        runtime_module_retirement_generation = retirement_generation;
+        runtime_module_lifecycle_state = lifecycle_state;
+        if (runtime_module_lifecycle_sequence ==
+            std::numeric_limits<std::uint64_t>::max()) {
+            for (auto& item : runtime_module_lifecycles) item = {};
+            runtime_module_lifecycle_sequence = 0u;
+            runtime_module_lifecycle_count = 0u;
+            next_runtime_module_lifecycle = 0u;
+        }
+        auto& item =
+            runtime_module_lifecycles[next_runtime_module_lifecycle];
+        item = {};
+        item.sequence = ++runtime_module_lifecycle_sequence;
+        item.lifecycle_generation = lifecycle_generation;
+        item.retirement_generation = retirement_generation;
+        item.source_start = source_start;
+        item.runtime_start = runtime_start;
+        item.module_size = module_size;
+        item.state = lifecycle_state;
+        item.identity.assign(identity);
+        next_runtime_module_lifecycle =
+            (next_runtime_module_lifecycle + 1u) %
+            crash_capsule_module_lifecycle_capacity;
+        if (runtime_module_lifecycle_count <
+            crash_capsule_module_lifecycle_capacity)
+            ++runtime_module_lifecycle_count;
+        present |= CrashCapsuleV3FieldRuntimeModuleLifecycle;
+    }
+
+    [[nodiscard]] std::uint64_t begin_lookahead(
+        const CrashCapsuleLookaheadKind kind,
+        const std::uint32_t callsite,
+        const std::uint32_t target,
+        const std::uint32_t continuation,
+        const std::uint32_t source_start,
+        const std::uint32_t runtime_start,
+        const std::uint32_t source_offset,
+        const std::uint32_t byte_size,
+        const std::uint64_t generation,
+        const std::string_view identity,
+        const std::array<std::uint32_t, 4u> arguments = {}) noexcept {
+        if (lookahead_sequence == std::numeric_limits<std::uint64_t>::max()) {
+            for (auto& item : lookahead) item = {};
+            lookahead_sequence = 0u;
+            lookahead_count = 0u;
+            next_lookahead = 0u;
+        }
+        const auto sequence = ++lookahead_sequence;
+        auto& item = lookahead[next_lookahead];
+        item = {};
+        item.sequence = sequence;
+        item.generation = generation;
+        item.kind = static_cast<std::uint32_t>(kind);
+        item.state = static_cast<std::uint32_t>(
+            CrashCapsuleLookaheadState::Planned);
+        item.callsite = callsite;
+        item.target = target;
+        item.continuation = continuation;
+        item.source_start = source_start;
+        item.runtime_start = runtime_start;
+        item.source_offset = source_offset;
+        item.byte_size = byte_size;
+        item.arguments = arguments;
+        item.identity.assign(identity);
+        next_lookahead =
+            (next_lookahead + 1u) % crash_capsule_lookahead_capacity;
+        if (lookahead_count < crash_capsule_lookahead_capacity)
+            ++lookahead_count;
+        present |= CrashCapsuleV3FieldLookahead;
+        return sequence;
+    }
+
+    void update_lookahead(
+        const std::uint64_t sequence,
+        const CrashCapsuleLookaheadState state) noexcept {
+        if (sequence == 0u) return;
+        for (auto& item : lookahead) {
+            if (item.sequence != sequence) continue;
+            const auto current = static_cast<CrashCapsuleLookaheadState>(
+                item.state);
+            if (current == CrashCapsuleLookaheadState::Completed ||
+                current == CrashCapsuleLookaheadState::Cancelled)
+                return;
+            if (state == CrashCapsuleLookaheadState::Cancelled) {
+                item.state = static_cast<std::uint32_t>(state);
+                return;
+            }
+            if (state != CrashCapsuleLookaheadState::Validated &&
+                state != CrashCapsuleLookaheadState::Committed &&
+                state != CrashCapsuleLookaheadState::Completed)
+                return;
+            const auto next_value = static_cast<std::uint32_t>(state);
+            if (state == CrashCapsuleLookaheadState::Planned ||
+                next_value <= item.state)
+                return;
+            item.state = next_value;
+            return;
+        }
+    }
+
     void note_input_trace(const std::string_view trace,
                           const std::string_view identity,
                           const std::uint32_t mode) noexcept {
@@ -471,7 +660,7 @@ struct CrashCapsuleV3Fields {
 };
 
 struct CrashCapsuleSerializedLine {
-    std::array<char, crash_capsule_v2_line_capacity> bytes{};
+    std::array<char, crash_capsule_v4_line_capacity> bytes{};
     std::uint32_t size = 0u;
     bool truncated = false;
 
@@ -661,6 +850,42 @@ struct CrashCapsule {
             block_size, expected_generation, current_generation, identity);
     }
 
+    void note_v3_runtime_module_lifecycle(
+        const std::string_view identity,
+        const std::uint32_t source_start,
+        const std::uint32_t runtime_start,
+        const std::uint32_t module_size,
+        const std::uint64_t lifecycle_generation,
+        const std::uint64_t retirement_generation,
+        const std::uint32_t lifecycle_state) noexcept {
+        v3.note_runtime_module_lifecycle(
+            identity, source_start, runtime_start, module_size,
+            lifecycle_generation, retirement_generation, lifecycle_state);
+    }
+
+    [[nodiscard]] std::uint64_t note_v3_lookahead(
+        const CrashCapsuleLookaheadKind kind,
+        const std::uint32_t callsite,
+        const std::uint32_t target,
+        const std::uint32_t continuation,
+        const std::uint32_t source_start,
+        const std::uint32_t runtime_start,
+        const std::uint32_t source_offset,
+        const std::uint32_t byte_size,
+        const std::uint64_t generation,
+        const std::string_view identity,
+        const std::array<std::uint32_t, 4u> arguments = {}) noexcept {
+        return v3.begin_lookahead(
+            kind, callsite, target, continuation, source_start, runtime_start,
+            source_offset, byte_size, generation, identity, arguments);
+    }
+
+    void update_v3_lookahead(
+        const std::uint64_t sequence,
+        const CrashCapsuleLookaheadState state) noexcept {
+        v3.update_lookahead(sequence, state);
+    }
+
     void note_v3_input_trace(const std::string_view trace,
                              const std::string_view identity,
                              const std::uint32_t mode) noexcept {
@@ -715,6 +940,10 @@ static_assert(std::is_standard_layout_v<CrashCapsuleV3Fields>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleV3Fields>);
 static_assert(std::is_standard_layout_v<CrashCapsuleMemoryWindow>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleMemoryWindow>);
+static_assert(std::is_standard_layout_v<CrashCapsuleLookahead>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleLookahead>);
+static_assert(std::is_standard_layout_v<CrashCapsuleRuntimeModuleLifecycle>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleRuntimeModuleLifecycle>);
 static_assert(std::is_standard_layout_v<CrashCapsuleSerializedLine>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleSerializedLine>);
 static_assert(std::is_standard_layout_v<CrashCapsule>);
@@ -875,13 +1104,13 @@ serialize_crash_capsule_v2(const CrashCapsule& capsule) noexcept {
 }
 
 [[nodiscard]] inline CrashCapsuleSerializedLine
-serialize_crash_capsule_v3(const CrashCapsule& capsule) noexcept {
+serialize_crash_capsule_v4(const CrashCapsule& capsule) noexcept {
     CrashCapsuleSerializedLine result;
     crash_capsule_detail::LineWriter writer{result};
     const auto& fields = capsule.v2;
     const auto& flight = capsule.v3;
     writer.append("{\"schema\":\"katana-crash-capsule\",\"version\":");
-    writer.append_integer(crash_capsule_v3_contract_version);
+    writer.append_integer(crash_capsule_v4_contract_version);
     crash_capsule_detail::append_field(writer, "present", fields.present);
     crash_capsule_detail::append_field(writer, "present_v3", flight.present);
     crash_capsule_detail::append_field(writer, "host_exception_code",
@@ -987,6 +1216,117 @@ serialize_crash_capsule_v3(const CrashCapsule& capsule) noexcept {
                                         flight.loaded_aot_expected_generation);
     crash_capsule_detail::append_field(writer, "loaded_aot_current_generation",
                                         flight.loaded_aot_current_generation);
+    crash_capsule_detail::append_token_field(
+        writer, "runtime_module_lifecycle_identity",
+        flight.runtime_module_lifecycle_identity);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_source_start",
+        flight.runtime_module_source_start);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_runtime_start",
+        flight.runtime_module_runtime_start);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_size", flight.runtime_module_size);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_lifecycle_generation",
+        flight.runtime_module_lifecycle_generation);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_retirement_generation",
+        flight.runtime_module_retirement_generation);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_lifecycle_state",
+        flight.runtime_module_lifecycle_state);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_lifecycle_sequence",
+        flight.runtime_module_lifecycle_sequence);
+    crash_capsule_detail::append_field(
+        writer, "runtime_module_lifecycle_count",
+        flight.runtime_module_lifecycle_count);
+    writer.append(",\"runtime_module_lifecycles\":[");
+    const auto lifecycle_count =
+        flight.runtime_module_lifecycle_count <
+                flight.runtime_module_lifecycles.size()
+            ? static_cast<std::size_t>(
+                  flight.runtime_module_lifecycle_count)
+            : flight.runtime_module_lifecycles.size();
+    const auto oldest_lifecycle =
+        lifecycle_count < flight.runtime_module_lifecycles.size()
+            ? 0u
+            : static_cast<std::size_t>(
+                  flight.next_runtime_module_lifecycle);
+    for (std::size_t offset = 0u; offset < lifecycle_count; ++offset) {
+        const auto index =
+            (oldest_lifecycle + offset) %
+            flight.runtime_module_lifecycles.size();
+        const auto& item = flight.runtime_module_lifecycles[index];
+        writer.append(offset == 0u ? "{" : ",{");
+        writer.append("\"sequence\":");
+        writer.append_integer(item.sequence);
+        crash_capsule_detail::append_field(
+            writer, "lifecycle_generation", item.lifecycle_generation);
+        crash_capsule_detail::append_field(
+            writer, "retirement_generation", item.retirement_generation);
+        crash_capsule_detail::append_field(
+            writer, "source_start", item.source_start);
+        crash_capsule_detail::append_field(
+            writer, "runtime_start", item.runtime_start);
+        crash_capsule_detail::append_field(
+            writer, "module_size", item.module_size);
+        crash_capsule_detail::append_field(writer, "state", item.state);
+        crash_capsule_detail::append_token_field(
+            writer, "identity", item.identity);
+        writer.append("}");
+    }
+    writer.append("]");
+    crash_capsule_detail::append_field(
+        writer, "lookahead_sequence", flight.lookahead_sequence);
+    crash_capsule_detail::append_field(
+        writer, "lookahead_count", flight.lookahead_count);
+    writer.append(",\"lookahead\":[");
+    const auto lookahead_count =
+        flight.lookahead_count < flight.lookahead.size()
+            ? static_cast<std::size_t>(flight.lookahead_count)
+            : flight.lookahead.size();
+    const auto oldest_lookahead =
+        lookahead_count < flight.lookahead.size()
+            ? 0u
+            : static_cast<std::size_t>(flight.next_lookahead);
+    for (std::size_t offset = 0u; offset < lookahead_count; ++offset) {
+        const auto index =
+            (oldest_lookahead + offset) % flight.lookahead.size();
+        const auto& item = flight.lookahead[index];
+        writer.append(offset == 0u ? "{" : ",{");
+        writer.append("\"sequence\":");
+        writer.append_integer(item.sequence);
+        crash_capsule_detail::append_field(writer, "generation",
+                                            item.generation);
+        crash_capsule_detail::append_field(writer, "kind", item.kind);
+        crash_capsule_detail::append_field(writer, "state", item.state);
+        crash_capsule_detail::append_field(writer, "callsite",
+                                            item.callsite);
+        crash_capsule_detail::append_field(writer, "target", item.target);
+        crash_capsule_detail::append_field(writer, "continuation",
+                                            item.continuation);
+        crash_capsule_detail::append_field(writer, "source_start",
+                                            item.source_start);
+        crash_capsule_detail::append_field(writer, "runtime_start",
+                                            item.runtime_start);
+        crash_capsule_detail::append_field(writer, "source_offset",
+                                            item.source_offset);
+        crash_capsule_detail::append_field(writer, "byte_size",
+                                            item.byte_size);
+        writer.append(",\"arguments\":[");
+        for (std::size_t argument = 0u;
+             argument < item.arguments.size(); ++argument) {
+            if (argument != 0u) writer.append(",");
+            writer.append_integer(item.arguments[argument]);
+        }
+        writer.append("]");
+        crash_capsule_detail::append_token_field(writer, "identity",
+                                                  item.identity);
+        writer.append("}");
+    }
+    writer.append("]");
     crash_capsule_detail::append_token_field(writer, "input_trace",
                                               flight.input_trace);
     crash_capsule_detail::append_token_field(writer, "input_identity",
@@ -1062,6 +1402,56 @@ serialize_crash_capsule_v3(const CrashCapsule& capsule) noexcept {
         writer.append("}");
     }
     writer.append("]}");
+    if (!result.truncated) return result;
+
+    // Never publish a partial JSON object.  If a future bounded section grows
+    // beyond the fixed wire budget, retain the essential fault identity in a
+    // compact, valid v4 record and mark the omitted detail explicitly.
+    result = {};
+    crash_capsule_detail::LineWriter fallback{result};
+    fallback.append("{\"schema\":\"katana-crash-capsule\",\"version\":");
+    fallback.append_integer(crash_capsule_v4_contract_version);
+    fallback.append(",\"truncated\":true");
+    crash_capsule_detail::append_field(
+        fallback, "present", capsule.v2.present);
+    crash_capsule_detail::append_field(
+        fallback, "present_v3", capsule.v3.present);
+    crash_capsule_detail::append_field(
+        fallback, "contract_code", capsule.v2.contract_code);
+    crash_capsule_detail::append_field(
+        fallback, "guest_pc", capsule.v2.guest_pc);
+    crash_capsule_detail::append_field(fallback, "pr", capsule.v2.pr);
+    crash_capsule_detail::append_field(
+        fallback, "first_error_code", capsule.first_error_code);
+    crash_capsule_detail::append_field(
+        fallback, "first_error_pc", capsule.first_error_pc);
+    crash_capsule_detail::append_field(
+        fallback, "first_error_target", capsule.first_error_target);
+    crash_capsule_detail::append_token_field(
+        fallback, "runtime_module_lifecycle_identity",
+        capsule.v3.runtime_module_lifecycle_identity);
+    crash_capsule_detail::append_field(
+        fallback, "runtime_module_source_start",
+        capsule.v3.runtime_module_source_start);
+    crash_capsule_detail::append_field(
+        fallback, "runtime_module_runtime_start",
+        capsule.v3.runtime_module_runtime_start);
+    crash_capsule_detail::append_field(
+        fallback, "runtime_module_size",
+        capsule.v3.runtime_module_size);
+    crash_capsule_detail::append_field(
+        fallback, "runtime_module_lifecycle_generation",
+        capsule.v3.runtime_module_lifecycle_generation);
+    crash_capsule_detail::append_field(
+        fallback, "runtime_module_retirement_generation",
+        capsule.v3.runtime_module_retirement_generation);
+    crash_capsule_detail::append_field(
+        fallback, "runtime_module_lifecycle_state",
+        capsule.v3.runtime_module_lifecycle_state);
+    crash_capsule_detail::append_field(
+        fallback, "lookahead_count", capsule.v3.lookahead_count);
+    fallback.append("}");
+    result.truncated = true;
     return result;
 }
 

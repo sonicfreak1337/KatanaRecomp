@@ -1,7 +1,7 @@
 # Analyzer-ABI
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `66`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 122, Block-ABI 5, PlatformServices-ABI 14,
+Source-Stand verwendet Runtime-ABI 123, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 24. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 10
@@ -28,6 +28,19 @@ sowie dieselben geordneten Guards, Effekte und Resultate. Jede fehlende,
 unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
 keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
 dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
+
+Runtime-ABI 123 fuehrt einen gemeinsamen, monotonen Executable-Lifecycle fuer
+feste Runtime-Images und dynamisch geladene AOT-Module ein. Ein titelgebundener
+Loader darf eine vollstaendig identitaetsgebundene Modulaktivierung vor der
+Dekodierung vormerken; erst der erste exakte, statisch emittierte Block darf
+nach Bytepruefung die Abbildung aktivieren. Die gemeinsame Range-Autoritaet
+lehnt Ueberlappungen zwischen beiden Domaenen ab, und Retirement invalidiert
+staged und aktive Module. Die versionierte CrashCapsule-v4-Ausgabe fuehrt
+Modulidentitaet, Source-/Runtime-Basis, Groesse, Lifecycle-/Retirement-
+Generation und einen festen Lookahead-Ring getrennt vom Immutable-Write-Guard.
+Lookahead-Zustaende sind monoton und rein diagnostisch; sie autorisieren keine
+Ausfuehrung. So bleiben wiederverwendete Runtimefenster fail-closed, ohne
+Adressen oder Titelidentitaeten in den oeffentlichen Core aufzunehmen.
 
 Runtime-ABI 122 erweitert CrashCapsule v3 um feste Direct-RAM-Fenster um
 GPR, PC, PR, GBR und VBR. Die Fenster werden nur im kontrollierten

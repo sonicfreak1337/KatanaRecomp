@@ -302,35 +302,59 @@ int main() {
         0x0C9001A0u, 0x0C900000u, 0x80000000u, 0x1A0u,
         0x1000u, 0x40u, 7u, 8u,
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    crash_capsule.note_v3_runtime_module_lifecycle(
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        0x80000000u, 0x0C900000u, 0x1000u, 9u, 0u, 2u);
+    const auto lookahead_sequence = crash_capsule.note_v3_lookahead(
+        katana::runtime::CrashCapsuleLookaheadKind::LoadedAotTransfer,
+        0x8C0986F6u, 0x0C9001A0u, 0x8C0986FAu, 0x80000000u,
+        0x0C900000u, 0x1A0u, 0x40u, 9u,
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    crash_capsule.update_v3_lookahead(
+        lookahead_sequence,
+        katana::runtime::CrashCapsuleLookaheadState::Completed);
+    crash_capsule.update_v3_lookahead(
+        lookahead_sequence,
+        katana::runtime::CrashCapsuleLookaheadState::Validated);
     crash_capsule.note_v3_input_trace(
         "katana-input-1-2.kat1",
         "sonic-adventure-pal-v1003-input-v1", 3u);
     crash_capsule.note_v3_product_state(2u, 4u, 99u, 88u);
     crash_capsule.note_v3_platform(77u, 6u);
-    const auto crash_v3 =
-        katana::runtime::serialize_crash_capsule_v3(crash_capsule);
-    const std::string crash_v3_json(
-        crash_v3.bytes.data(), crash_v3.bytes.data() + crash_v3.size);
+    const auto crash_v4 =
+        katana::runtime::serialize_crash_capsule_v4(crash_capsule);
+    const std::string crash_v4_json(
+        crash_v4.bytes.data(), crash_v4.bytes.data() + crash_v4.size);
     require(
-        crash_v3.size != 0u &&
-            crash_v3_json.find("\"version\":3") != std::string::npos &&
-            crash_v3_json.find("\"gpr\":[256,257,258") !=
+        crash_v4.size != 0u && !crash_v4.truncated &&
+            crash_v4_json.find("\"version\":4") != std::string::npos &&
+            crash_v4_json.find("\"gpr\":[256,257,258") !=
                 std::string::npos &&
-            crash_v3_json.find(
+            crash_v4_json.find(
                 "\"contract_detail\":\"loaded-aot-entry-identity-missing:"
                 "target=0x8c926ca0;runtime-start=0x8c920000;source-start="
                 "0x80239000;offset=0x6ca0;pc=0xc926ca0;pr=0x8c0986fa;"
                 "active-instruction=0x8c0986f8;active-block=0x0\"") !=
                 std::string::npos &&
-            crash_v3_json.find("\"loaded_aot_source_offset\":416") !=
+            crash_v4_json.find("\"loaded_aot_source_offset\":416") !=
                 std::string::npos &&
-            crash_v3_json.find(
+            crash_v4_json.find(
                 "\"input_trace\":\"katana-input-1-2.kat1\"") !=
                 std::string::npos &&
-            crash_v3_json.find("\"presented_frames\":88") !=
+            crash_v4_json.find("\"presented_frames\":88") !=
+                std::string::npos &&
+            crash_v4_json.find(
+                "\"runtime_module_lifecycle_generation\":9") !=
+                std::string::npos &&
+            crash_v4_json.find(
+                "\"runtime_module_lifecycle_count\":1") !=
+                std::string::npos &&
+            crash_v4_json.find("\"lookahead_count\":1") !=
+                std::string::npos &&
+            crash_v4_json.find("\"state\":4") !=
                 std::string::npos,
-        "Crash-Capsule v3 verliert CPU-, Contract-, Loaded-AOT-, Replay- oder "
-        "Produktdiagnostik.");
+        "Crash-Capsule v4 verliert CPU-, Contract-, Lifecycle-, Lookahead-, "
+        "Replay- oder Produktdiagnostik.");
 
     katana::runtime::CrashCapsuleV3Fields bounded_detail;
     const std::string long_detail(
