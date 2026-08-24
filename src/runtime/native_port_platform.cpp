@@ -1283,6 +1283,7 @@ class NativePortInputTrace final {
     static constexpr std::size_t encoded_gamepad_bytes = 52u;
     static constexpr std::size_t encoded_frame_bytes =
         16u + native_port_gamepad_count * encoded_gamepad_bytes;
+    static constexpr std::size_t journal_flush_frame_interval = 256u;
 
     NativePortInputTrace(std::string identity,
                          const std::size_t maximum_frames,
@@ -1397,6 +1398,17 @@ class NativePortInputTrace final {
                 reinterpret_cast<volatile LONG64*>(journal_view_ +
                                                     frame_count_offset),
                 static_cast<LONG64>(frames_.size()));
+            if (frames_.size() % journal_flush_frame_interval == 0u) {
+                const auto committed_bytes =
+                    journal_data_offset_ +
+                    frames_.size() * encoded_frame_bytes;
+                if (FlushViewOfFile(journal_view_, committed_bytes) == FALSE ||
+                    !journal_file_ ||
+                    FlushFileBuffers(journal_file_.get()) == FALSE)
+                    fail_platform(NativePortPlatformFailure::InputBackend,
+                                  GetLastError(),
+                                  "input-record-journal-flush");
+            }
         }
     }
 
@@ -1624,6 +1636,8 @@ class NativePortInputTrace final {
             const auto committed_bytes =
                 journal_data_offset_ + frames_.size() * encoded_frame_bytes;
             static_cast<void>(FlushViewOfFile(journal_view_, committed_bytes));
+            if (journal_file_)
+                static_cast<void>(FlushFileBuffers(journal_file_.get()));
             static_cast<void>(UnmapViewOfFile(journal_view_));
             journal_view_ = nullptr;
         }

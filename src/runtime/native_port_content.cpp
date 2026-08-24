@@ -1,6 +1,7 @@
 #include "katana/runtime/native_port_content.hpp"
 
 #include "katana/runtime/block_abi.hpp"
+#include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/native_port_aot_runtime.hpp"
 
 #include <algorithm>
@@ -772,15 +773,17 @@ struct NativePortLoadedAotBinder::Impl final {
     CpuState& cpu;
     std::span<const NativePortLoadedAotModuleView> modules;
     NativePortImmutableWriteGuard& immutable_guard;
+    CrashCapsule* crash_capsule = nullptr;
     std::vector<ActiveBinding> active;
 };
 
 NativePortLoadedAotBinder::NativePortLoadedAotBinder(
     CpuState& cpu,
     const std::span<const NativePortLoadedAotModuleView> modules,
-    NativePortImmutableWriteGuard& immutable_guard)
+    NativePortImmutableWriteGuard& immutable_guard,
+    CrashCapsule* const crash_capsule)
     : impl_(std::make_unique<Impl>(
-          Impl{cpu, modules, immutable_guard, {}})) {
+          Impl{cpu, modules, immutable_guard, crash_capsule, {}})) {
     constexpr std::uint32_t maximum_module_bytes = 4u * 1024u * 1024u;
     for (std::size_t module_index = 0u;
          module_index < modules.size(); ++module_index) {
@@ -871,17 +874,6 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
     }
     if (match == nullptr) return false;
 
-    // Binding verifies the complete immutable AOT identity once and registers
-    // every emitted block with the write observer. Re-hashing a block on every
-    // dispatch turns a static overlay into an O(code-size) runtime hot path.
-    // The observer generation is the authoritative O(1) proof that no bound
-    // executable byte changed since activation.
-    if (impl_->immutable_guard.write_detected() ||
-        match->code_generation != impl_->immutable_guard.generation())
-        throw NativePortContractError(
-            NativePortContractFailure::AotContractViolation,
-            "loaded-aot-entry-code-generation");
-
     const auto& module = impl_->modules[match->module_index];
     const auto match_runtime_start =
         canonical_native_port_runtime_alias(match->runtime_start);
@@ -891,8 +883,34 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
         offset, [](const auto& candidate, const std::uint32_t value) {
             return candidate.source_offset < value;
         });
+    const auto block_size =
+        block != module.block_identities.end() &&
+                block->source_offset == offset
+            ? block->byte_size
+            : 0u;
+    const auto note_loaded_aot = [&]() noexcept {
+        if (impl_->crash_capsule == nullptr) return;
+        impl_->crash_capsule->note_v3_loaded_aot(
+            target, match_runtime_start, module.source_start, offset,
+            module.byte_size, block_size, match->code_generation,
+            impl_->immutable_guard.generation(), module.sha256);
+    };
+
+    // Binding verifies the complete immutable AOT identity once and registers
+    // every emitted block with the write observer. Re-hashing a block on every
+    // dispatch turns a static overlay into an O(code-size) runtime hot path.
+    // The observer generation is the authoritative O(1) proof that no bound
+    // executable byte changed since activation.
+    if (impl_->immutable_guard.write_detected() ||
+        match->code_generation != impl_->immutable_guard.generation()) {
+        note_loaded_aot();
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-entry-code-generation");
+    }
     if (block == module.block_identities.end() ||
         block->source_offset != offset) {
+        note_loaded_aot();
         std::ostringstream detail;
         detail << "loaded-aot-entry-identity-missing:target=0x" << std::hex
                << runtime_target << ";runtime-start=0x"
@@ -971,7 +989,13 @@ bool NativePortLoadedAotBinder::bind_entry(
             match = candidate;
         }
     }
-    if (!match.has_value()) return false;
+    if (!match.has_value()) {
+        if (impl_->crash_capsule != nullptr)
+            impl_->crash_capsule->note_v3_loaded_aot(
+                target, 0u, 0u, 0u, 0u, 0u, 0u,
+                impl_->immutable_guard.generation(), {});
+        return false;
+    }
 
     const auto& module = impl_->modules[match->module_index];
     for (const auto& active : impl_->active) {
@@ -1019,6 +1043,25 @@ bool NativePortLoadedAotBinder::bind_entry(
     impl_->active.push_back(
         {match->module_index, match->runtime_start,
          impl_->immutable_guard.generation(), std::move(mapping)});
+    if (impl_->crash_capsule != nullptr) {
+        const auto source_offset = runtime_target - match->runtime_start;
+        const auto bound_block = std::lower_bound(
+            module.block_identities.begin(), module.block_identities.end(),
+            source_offset,
+            [](const auto& candidate, const std::uint32_t value) {
+                return candidate.source_offset < value;
+            });
+        const auto block_size =
+            bound_block != module.block_identities.end() &&
+                    bound_block->source_offset == source_offset
+                ? bound_block->byte_size
+                : 0u;
+        impl_->crash_capsule->note_v3_loaded_aot(
+            target, match->runtime_start, module.source_start,
+            source_offset, module.byte_size, block_size,
+            impl_->immutable_guard.generation(),
+            impl_->immutable_guard.generation(), module.sha256);
+    }
     return true;
 }
 

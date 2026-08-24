@@ -26,7 +26,7 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 120, Block-ABI 5,
+Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 121, Block-ABI 5,
 PlatformServices-ABI 14,
 Analyzer-ABI 66, Function-Analysis-Epoch-Schema 36, lokales
 In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
@@ -84,7 +84,7 @@ Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
 vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
-Source-Stand Runtime-ABI 120 / Analyzer-ABI 66; historische Exportzahlen
+Source-Stand Runtime-ABI 121 / Analyzer-ABI 66; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
 
 Der aktuelle Kaltpfad verschiebt IR-Lowering, Audit und Graphmaterialisierung

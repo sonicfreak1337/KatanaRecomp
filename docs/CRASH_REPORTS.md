@@ -1,12 +1,13 @@
 # Kontrollierte Crashberichte
 
-Der additive Runtimebaustein `CrashCapsule` v2 wurde mit Runtime-ABI `116`
-eingefuehrt und ist im aktuellen Runtime-ABI `120` enthalten. Er ergaenzt den
-portablen v1-Bericht um begrenzte PC/PR-,
+Der additive Runtimebaustein `CrashCapsule` wurde mit Runtime-ABI `116`
+eingefuehrt und liegt im aktuellen Runtime-ABI als v3 vor. Er ergaenzt den
+portablen v1-Bericht um begrenzte PC/PR-/Register-,
 Modul-/Generations-, Materialisierungs-, Wait- und Dispatchdaten. Die
-Produkt-Catch-Verdrahtung verwendet dafuer feste, sanitizte Tokens. Freie
-Hosttexte, Pfade, Retailbytes und Heap-/iostream-Nutzung bleiben im Crashpfad
-ausgeschlossen.
+Produkt-Catch-Verdrahtung verwendet dafuer feste, sanitizte Tokens. Ein
+kontrollierter Contract- oder Exceptiontext darf nur ueber den festen,
+pfadfreien v3-Diagnosepuffer laufen; Hostpfade, Retailbytes und
+Heap-/iostream-Nutzung bleiben im Crashpfad ausgeschlossen.
 
 Der versionierte Bericht `katana-crash-report` beschreibt einen kontrollierten
 Runtime-Abbruch ohne freien Hostfehlertext. Sein `stop_code` und alle Herkunfts-
@@ -37,30 +38,34 @@ Der Bericht enthaelt bewusst keinen Runtime-Speicherdump und keine freie
 Exceptionnachricht. Symbol- und Source-Map-Werkzeuge koennen die numerischen
 Gastadressen nachtraeglich anreichern, ohne den Crashvertrag zu veraendern.
 
-## Produkt-CrashCapsule v2
+## Produkt-CrashCapsule v3
 
 Der generierte Native-Port besitzt daneben einen allocation-, formatierungs-
-und lockfreien Crashpfad. `CrashCapsule` v2 erweitert den unveraenderten
+und lockfreien Crashpfad. `CrashCapsule` v3 erweitert den unveraenderten
 v1-Grundvertrag additiv um bereits vorhandene, begrenzte Runtimefakten:
 
 - Hostexception- und Contractcode sowie sanitizte Typ-Tokens;
-- Gast-PC und PR, aktive Callsite und aktiver Entry;
+- Gast-PC, PR, GPR/SR/GBR/VBR/MACH/MACL/FPUL/FPSCR, aktive Callsite und
+  aktiver Entry;
 - Runtime-/Source-Modulidentitaet samt Generation und Relocation;
 - letzter Materialisierungs-/Provideruebergang;
 - Wait-, Scheduler- und Schlafzustand;
-- bis zu 16 bereits aufgezeichnete Block-, MMIO-, Scheduler- und
+- bis zu 64 bereits aufgezeichnete Block-, Hardware-, Scheduler- und
   Fehlerereignisse in chronologischer Reihenfolge.
 
 Alle Tokens besitzen feste Puffer und akzeptieren nur pfadfreie, portable
-Zeichen. Truncation und ungueltige Zeichen werden markiert. Freie
-Exceptiontexte, Hostpfade, Retailbytes, Dumps und erfundene Thread-/Task-IDs
-werden nicht uebernommen.
+Zeichen. Der v3-Contract-Detailpuffer besitzt 511 Nutzbytes und akzeptiert
+zusaetzlich die fuer bounded Adress-/Werttupel benoetigte portable
+Interpunktion. Anfuehrungszeichen, Pfadtrenner und Steuerzeichen werden
+fail-closed abgelehnt; Truncation und ungueltige Zeichen werden markiert, der
+Hash bindet weiterhin den vollstaendigen Eingabetext. Freie Hostpfade,
+Retailbytes, Dumps und erfundene Thread-/Task-IDs werden nicht uebernommen.
 
-Die v2-Serializerbausteine sind `noexcept`, besitzen feste
+Die v3-Serializerbausteine sind `noexcept`, besitzen feste
 Ausgabebudgets und traversieren im Crashpfad keine Ownershipgraphen. Der
-eigentliche SEH- und aeussere Catch-Pfad besitzt keinen Capture-
-Funktionszeiger: Er liest ausschliesslich die vorab aufgezeichnete feste
-CrashCapsule-POD-Struktur. Exception-Adresse und sonstige Hostpointer werden
+eigentliche SEH- und aeussere Catch-Pfad liest ausschliesslich den gebundenen
+CPU-Zeiger und die vorab aufgezeichnete feste CrashCapsule-POD-Struktur.
+Exception-Adresse und sonstige Hostpointer werden
 fail-closed nicht serialisiert; bei fehlendem PC bleibt der Wert null.
 Die reichere Runtime-Aufzeichnung erfolgt nur vor dem eigentlichen Handler
 ueber den normalen, kontrollierten Pfad; der Handler selbst verwendet den
@@ -75,7 +80,7 @@ Terminalzusammenfassung nur feste Tokens. Lifecycle verwendet
 callsite/return_address aus dem POD-Evidence; beim Probe-Abbruch werden beide
 Werte als null uebergeben und intern auf last_pc zurueckgefuehrt.
 Die bestehende v1-Zeile wird davor weiterhin ebenfalls bounded ausgegeben;
-Auswerter koennen daher schrittweise auf die additive v2-Zeile wechseln.
+Auswerter koennen daher schrittweise auf die additive v3-Zeile wechseln.
 
 Ein Runtime-Frontier-Record ist davon getrennt: Er ist ein streng
 identitaetsgebundener Beobachtungshinweis fuer den naechsten statischen

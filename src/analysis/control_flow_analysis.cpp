@@ -3273,7 +3273,6 @@ struct ControlFlowAnalysisSession::Impl final {
         const bool root_only_reuse =
             reusable && bounded &&
             image_identity == image.analysis_instance_identity() &&
-            image_revision == image.analysis_revision() &&
             image_immutable_generation == image.immutable_generation() &&
             immutable_binding_matches &&
             same_analysis_overrides(overrides, next_overrides) &&

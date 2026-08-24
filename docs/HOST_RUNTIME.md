@@ -150,24 +150,28 @@ Frame-Hotpaths mit `save()` geschrieben.
 Der native Produktpfad besitzt zusaetzlich einen identitaetsgebundenen
 `NativePortPlatformServices`-Trace fuer genau die vier
 `NativePortGamepadState`-Slots, die `context.platform->poll_gamepads()` liefert.
-Er wird ausschliesslich ueber einen expliziten Startmodus aktiviert:
+Replay wird ausschliesslich ueber einen expliziten Startmodus aktiviert;
+ein normaler Produktstart zeichnet dagegen automatisch einen eindeutigen,
+crash-toleranten Trace im `user-data`-Verzeichnis auf:
 
 ```text
 game.exe --record-input <capture.kat1>
 game.exe --replay-input <capture.kat1>
 ```
 
-Ein normaler Doppelklick auf `game.exe` aktiviert weder Record noch Replay.
-Record und Replay sind gegenseitig exklusiv. Die Datei wird vor dem Lauf
-vollstaendig geladen und auf Plattformvertrag, Slotzahl, Identitaet,
+Ein normaler Doppelklick auf `game.exe` aktiviert damit Record, aber niemals
+Replay. Explizites Record und Replay sind gegenseitig exklusiv. Die Datei wird
+vor dem Lauf vollstaendig geladen und auf Plattformvertrag, Slotzahl, Identitaet,
 Framebudget, monotone Pollsequenzen und Wertebereiche geprueft. Replay ersetzt
 den XInput-/WinMM-Poll vollstaendig; im Frame-Hotpath gibt es dann weder
 Datei-I/O, Locks noch Allokationen. Recording schreibt in einen vorreservierten
 bounded Puffer und zugleich in ein vorallokiertes, speichergemapptes Journal.
-Der Frame-Hotpath fuehrt dadurch weiterhin keine Dateisystemaufrufe, Locks oder
-Allokationen aus. Jeder vollstaendig geschriebene Frame wird erst danach im
-Journal als committed markiert; beim Prozessende bleibt deshalb auch nach
-einem harten Produktabbruch ein replayfaehiger Praefix erhalten.
+Der normale Framepfad fuehrt keine Allokationen oder Locks aus; alle 256 Frames
+wird der bereits committed Praefix begrenzt auf Datentraeger geflusht. Jeder
+vollstaendig geschriebene Frame wird erst danach im Journal als committed
+markiert; beim Prozessende bleibt deshalb auch nach einem harten
+Produktabbruch ein replayfaehiger, hoechstens ein Flushintervall alter Praefix
+erhalten.
 `finalize_clean_shutdown()` kompaktiert ihn ueber einen atomaren
 Temp-to-target-Replacement. Ein kontrollierter typisierter Fehler tut dasselbe
 beim Owner-Thread-Unwind; ein Maschinen-/Dateisystemausfall ausserhalb des

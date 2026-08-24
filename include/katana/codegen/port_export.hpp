@@ -45,6 +45,14 @@ inline constexpr std::uint32_t port_metadata_cache_schema_version = 12u;
 using PortExportProgressCallback =
     std::function<void(std::string_view phase)>;
 
+// Structural half of committed-analysis GameProject admission. The current
+// definition may only add authenticated base-image byte ranges and exact
+// non-root function boundaries over one of those ranges. Export then binds
+// every newly added byte range to the current executable image before reuse.
+void validate_analysis_generation_game_project_delta(
+    const katana::runtime::GameProjectDefinition& baseline,
+    const katana::runtime::GameProjectDefinition& current);
+
 // One authoritative code-generation budget contract is shared by the actual
 // partition workers and post-configure telemetry. The global value is the
 // primary request; the legacy port-local value remains a restricting cap.
@@ -115,6 +123,17 @@ struct PortExportOptions {
     // the stored analysis product.
     std::span<const std::uint8_t> resume_analysis_artifact;
     std::string_view resume_analysis_artifact_key;
+    // True only when the public product command supplied a transactionally
+    // committed analyze-port generation. Ordinary product exports must not
+    // turn an arbitrary resume span into authority for skipping CFA/FVA.
+    bool product_analysis_generation_reuse_requested = false;
+    // Exact GameProject definition that produced the committed analysis
+    // generation. Product replay may bind a newer definition only when the
+    // exporter proves that its sole delta is additive base-image
+    // GameProjectCodeIdentity evidence or an exact FunctionBoundary paired
+    // with that evidence, and revalidates every affected edge.
+    const katana::runtime::GameProjectDefinition*
+        analysis_generation_game_project = nullptr;
     // Optional external, identity-bound game project. The caller owns the
     // definition and all referenced spans for the complete export call.
     const katana::runtime::GameProjectDefinition* game_project = nullptr;

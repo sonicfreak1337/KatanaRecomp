@@ -55,6 +55,17 @@ std::filesystem::path validate_relative_path(const std::filesystem::path& path) 
             throw std::invalid_argument("Codegen-Projektartefakt verlaesst das Ausgabeziel.");
         }
     }
+    const auto portable = normalized.generic_string();
+    if (!std::ranges::all_of(portable, [](const unsigned char character) {
+            return (character >= 'a' && character <= 'z') ||
+                   (character >= 'A' && character <= 'Z') ||
+                   (character >= '0' && character <= '9') ||
+                   character == '_' || character == '-' ||
+                   character == '.' || character == '/';
+        })) {
+        throw std::invalid_argument(
+            "Codegen-Projektartefakt besitzt keinen portablen Buildgraph-Pfad.");
+    }
     return normalized;
 }
 
@@ -240,6 +251,7 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "    message(FATAL_ERROR \"Find KatanaRecomp or set KATANA_RUNTIME_ROOT\")\n"
            << "  else()\n"
            << "    include(\"${KATANA_RUNTIME_ROOT}/cmake/KatanaVersions.cmake\")\n"
+           << "    set(KATANA_SOURCE_IDENTITY_TRUSTED 0)\n"
            << "    file(MAKE_DIRECTORY "
               "\"${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana\")\n"
            << "    configure_file(\n"
@@ -329,6 +341,9 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "      set_property(SOURCE \"${KATANA_AOT_HOT_SOURCE}\" PROPERTY "
               "SKIP_PRECOMPILE_HEADERS ON)\n"
            << "    endforeach()\n"
+           << "  elseif(DEFINED KATANA_PORT_BUILD_PROFILE AND\n"
+           << "         KATANA_PORT_BUILD_PROFILE STREQUAL \"performance\")\n"
+           << "    target_compile_options(katana_generated PRIVATE /O2 /Ob2)\n"
            << "  endif()\n"
            << "  if(CMAKE_GENERATOR MATCHES \"^Visual Studio\")\n"
            << "    target_compile_options(katana_generated PRIVATE "
@@ -455,7 +470,7 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
             } catch (const std::exception&) {
                 // The project cache is optional. Unsafe local state is a miss.
             }
-            if (cached) {
+            if (cached && *cached == artifact.content) {
                 write_file(root, artifact.relative_path, *cached);
                 hit = true;
             } else {

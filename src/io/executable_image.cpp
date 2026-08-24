@@ -214,17 +214,14 @@ ExecutableImage::operator=(const ExecutableImage& other) {
     std::swap(initial_snapshot_entry_,
               replacement.initial_snapshot_entry_);
     std::swap(address_model_, replacement.address_model_);
+    std::swap(analysis_instance_identity_,
+              replacement.analysis_instance_identity_);
     std::swap(immutable_generation_, replacement.immutable_generation_);
     // Assignment replaces the complete analyzed view. Preserve the
-    // replacement's immutable proof; ordinary in-place mutation uses
-    // mark_analysis_mutation() and intentionally invalidates such proofs.
-    if (analysis_revision_ ==
-        std::numeric_limits<std::uint64_t>::max()) {
-        analysis_instance_identity_ = allocate_executable_image_identity();
-        analysis_revision_ = 0u;
-    } else {
-        ++analysis_revision_;
-    }
+    // replacement's immutable proof while taking its fresh instance identity.
+    // Ordinary in-place mutation uses mark_analysis_mutation() and
+    // intentionally invalidates such proofs.
+    analysis_revision_ = replacement.analysis_revision_;
     return *this;
 }
 
@@ -262,13 +259,11 @@ ExecutableImage::operator=(ExecutableImage&& other) noexcept {
     initial_snapshot_entry_ = other.initial_snapshot_entry_;
     address_model_ = other.address_model_;
     immutable_generation_ = other.immutable_generation_;
-    if (analysis_revision_ ==
-        std::numeric_limits<std::uint64_t>::max()) {
-        analysis_instance_identity_ = allocate_executable_image_identity();
-        analysis_revision_ = 0u;
-    } else {
-        ++analysis_revision_;
-    }
+    // Moving a complete analyzed view into an existing object must invalidate
+    // every session bound to the destination's prior bytes. Keep the moved
+    // immutable proof, but expose it through a fresh image instance identity.
+    analysis_instance_identity_ = allocate_executable_image_identity();
+    analysis_revision_ = 0u;
     immutable_ranges_ = std::move(moved_immutable_ranges);
     for (auto& range : immutable_ranges_)
         range.generation = immutable_generation_;

@@ -54,7 +54,7 @@ Buildprofil, Compiler und Linker werden ausserhalb des verteilbaren Projekts
 gewaehlt:
 
 ```text
-KATANA_PORT_BUILD_PROFILE=bringup|gate
+KATANA_PORT_BUILD_PROFILE=bringup|performance|gate
 KATANA_PORT_CXX_COMPILER=msvc|clang-cl
 KATANA_PORT_LINKER=default|msvc|lld
 KATANA_HOST_BUILD_GENERATOR=Ninja

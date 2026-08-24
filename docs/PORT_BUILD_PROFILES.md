@@ -5,7 +5,8 @@
 > Referenz. Ein Produktartifact darf weder ARM7-/SkyEmu-, CPU-PVR- noch
 > Diagnoseinterpretercode linken und nicht auf diese Pfade zurueckfallen.
 
-KatanaRecomp v0.49 trennt den schnellen Bring-up-Build vom finalen Gatebuild.
+KatanaRecomp v0.49 trennt den schnellen Bring-up-Build, den volloptimierten
+Performance-Build ohne globales LTCG und den finalen Gatebuild.
 
 ## Bring-up
 
@@ -74,6 +75,16 @@ Bring-up-Standard. Der darauffolgende kalte Vollport kompilierte 233 Host-TUs,
 bestand den Post-Link-Audit und beendete den kompletten Export in `408,278 s`;
 der eigentliche Hostbuild benoetigte `337,205 s`. Das erzeugte Produktbinary
 ist `473.506.304` Byte gross.
+
+## Performance
+
+`KATANA_PORT_BUILD_PROFILE=performance` verwendet standardmaessig `Release`
+und kompiliert alle generierten AOT-Einheiten mit `/O2 /Ob2`. Der Link bleibt
+nichtinkrementell und verwendet `/OPT:REF /OPT:ICF`, erzwingt aber bewusst kein
+globales IPO/LTCG. Damit ist dieses Profil der reproduzierbare
+Spielbarkeits-/Laufzeitvergleich zwischen schnellem Bring-up und finalem Gate;
+es ist kein Closure-Ersatz. Das Produkt meldet Profilname und ob alle AOT-TUs
+im Performanceprofil gebaut wurden beim Start.
 
 ## Gate
 

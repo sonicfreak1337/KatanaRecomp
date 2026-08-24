@@ -39,9 +39,9 @@ struct NativePortPlatformConfig final {
     std::uint64_t maximum_content_file_bytes = 16ull * 1024u * 1024u * 1024u;
     std::uint32_t maximum_save_payload_bytes = 16u * 1024u * 1024u;
     // Optional deterministic input diagnostics. Empty paths disable the
-    // feature. Generated products expose these only through explicit
-    // --record-input / --replay-input launch modes; an ordinary double-click
-    // can therefore never inherit or activate a replay implicitly.
+    // feature. Generated products accept explicit --record-input /
+    // --replay-input modes and may choose a unique automatic recording path
+    // for ordinary launches. Replay itself always remains explicit.
     std::filesystem::path input_record_path;
     std::filesystem::path input_replay_path;
     std::string_view input_identity;

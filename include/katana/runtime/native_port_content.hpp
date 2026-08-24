@@ -14,6 +14,7 @@
 namespace katana::runtime {
 
 class NativePortImmutableWriteGuard;
+struct CrashCapsule;
 
 inline constexpr std::uint32_t native_port_main_memory_physical_base =
     0x0C000000u;
@@ -123,7 +124,8 @@ class NativePortLoadedAotBinder final {
     NativePortLoadedAotBinder(
         CpuState& cpu,
         std::span<const NativePortLoadedAotModuleView> modules,
-        NativePortImmutableWriteGuard& immutable_guard);
+        NativePortImmutableWriteGuard& immutable_guard,
+        CrashCapsule* crash_capsule = nullptr);
     ~NativePortLoadedAotBinder() noexcept;
 
     NativePortLoadedAotBinder(const NativePortLoadedAotBinder&) = delete;

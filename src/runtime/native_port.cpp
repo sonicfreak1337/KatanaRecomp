@@ -151,10 +151,14 @@ NativePortContractError::NativePortContractError(
     const std::string_view detail)
     : std::runtime_error(
           "native-port-contract: " + std::string(detail)),
-      failure_(failure) {}
+      failure_(failure), detail_(detail) {}
 
 NativePortContractFailure NativePortContractError::failure() const noexcept {
     return failure_;
+}
+
+std::string_view NativePortContractError::detail() const noexcept {
+    return detail_;
 }
 
 bool valid_native_port_sha256_identity(

@@ -7,11 +7,13 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace katana::runtime {
 
 struct CpuState;
+struct CrashCapsule;
 class NativePortGraphicsDevice;
 class NativePortPlatformServices;
 class NativePortTextureRegistry;
@@ -380,6 +382,7 @@ class NativePortContext final {
     NativePortCpuControl* cpu_control = nullptr;
     NativePortRuntimeImageBindings* runtime_images = nullptr;
     NativePortLoadedAotBinder* loaded_aot = nullptr;
+    CrashCapsule* crash_capsule = nullptr;
     NativePortAotBridge aot;
     void* title_state = nullptr;
     std::uint64_t frame_index = 0u;
@@ -428,9 +431,11 @@ class NativePortContractError final : public std::runtime_error {
                             std::string_view detail);
 
     [[nodiscard]] NativePortContractFailure failure() const noexcept;
+    [[nodiscard]] std::string_view detail() const noexcept;
 
   private:
     NativePortContractFailure failure_;
+    std::string detail_;
 };
 
 [[nodiscard]] bool

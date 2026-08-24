@@ -1,6 +1,7 @@
 #include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/memory.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -281,6 +282,79 @@ int main() {
     mmio_diagnostics.write_u32(0x00007000u, 0x01020304u);
     require(crash_capsule.last_mmio_value == 0x55AA00FFu,
             "Eine geloeste Crash Capsule wird weiterhin beschrieben.");
+
+    std::array<std::uint32_t, 16u> crash_registers{};
+    for (std::size_t index = 0u; index < crash_registers.size(); ++index)
+        crash_registers[index] = static_cast<std::uint32_t>(0x100u + index);
+    crash_capsule.note_v3_cpu_state(
+        crash_registers, 0x700000F0u, true, false, true, 0x8C100000u,
+        0x8C000000u, 0x11111111u, 0x22222222u, 0x33333333u,
+        0x44444444u, 0x0C010002u, 0x0C010000u, 0x20u, 1234u,
+        1200u, 5678u, 90u, 3u, 0x8C010002u, 0x0C010002u,
+        0x8C010000u);
+    constexpr std::string_view contract_detail =
+        "loaded-aot-entry-identity-missing:target=0x8c926ca0;"
+        "runtime-start=0x8c920000;source-start=0x80239000;offset=0x6ca0;"
+        "pc=0xc926ca0;pr=0x8c0986fa;active-instruction=0x8c0986f8;"
+        "active-block=0x0";
+    crash_capsule.note_v3_contract_detail(contract_detail);
+    crash_capsule.note_v3_loaded_aot(
+        0x0C9001A0u, 0x0C900000u, 0x80000000u, 0x1A0u,
+        0x1000u, 0x40u, 7u, 8u,
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    crash_capsule.note_v3_input_trace(
+        "katana-input-1-2.kat1",
+        "sonic-adventure-pal-v1003-input-v1", 3u);
+    crash_capsule.note_v3_product_state(2u, 4u, 99u, 88u);
+    crash_capsule.note_v3_platform(77u, 6u);
+    const auto crash_v3 =
+        katana::runtime::serialize_crash_capsule_v3(crash_capsule);
+    const std::string crash_v3_json(
+        crash_v3.bytes.data(), crash_v3.bytes.data() + crash_v3.size);
+    require(
+        crash_v3.size != 0u &&
+            crash_v3_json.find("\"version\":3") != std::string::npos &&
+            crash_v3_json.find("\"gpr\":[256,257,258") !=
+                std::string::npos &&
+            crash_v3_json.find(
+                "\"contract_detail\":\"loaded-aot-entry-identity-missing:"
+                "target=0x8c926ca0;runtime-start=0x8c920000;source-start="
+                "0x80239000;offset=0x6ca0;pc=0xc926ca0;pr=0x8c0986fa;"
+                "active-instruction=0x8c0986f8;active-block=0x0\"") !=
+                std::string::npos &&
+            crash_v3_json.find("\"loaded_aot_source_offset\":416") !=
+                std::string::npos &&
+            crash_v3_json.find(
+                "\"input_trace\":\"katana-input-1-2.kat1\"") !=
+                std::string::npos &&
+            crash_v3_json.find("\"presented_frames\":88") !=
+                std::string::npos,
+        "Crash-Capsule v3 verliert CPU-, Contract-, Loaded-AOT-, Replay- oder "
+        "Produktdiagnostik.");
+
+    katana::runtime::CrashCapsuleV3Fields bounded_detail;
+    const std::string long_detail(
+        katana::runtime::crash_capsule_token_capacity + 64u, 'a');
+    bounded_detail.note_contract_detail(long_detail);
+    require(
+        bounded_detail.contract_detail.view().size() ==
+                katana::runtime::crash_capsule_token_capacity - 1u &&
+            (bounded_detail.contract_detail.flag_bits() &
+             katana::runtime::CrashCapsuleTokenFlagTruncated) != 0u &&
+            bounded_detail.contract_detail_hash ==
+                katana::runtime::CrashCapsuleV3Fields::hash_text(
+                    bounded_detail.contract_detail.view()),
+        "Crash-Capsule v3 hasht Contract-Details ausserhalb des gebundenen "
+        "diagnostischen Tokens.");
+    bounded_detail.note_contract_detail("C:\\private\\retail.bin\nforged-line");
+    require(
+        bounded_detail.contract_detail.view().empty() &&
+            (bounded_detail.contract_detail.flag_bits() &
+             katana::runtime::CrashCapsuleTokenFlagInvalid) != 0u &&
+            bounded_detail.contract_detail_hash ==
+                katana::runtime::CrashCapsuleV3Fields::hash_text(
+                    std::string_view{}),
+        "Crash-Capsule v3 behaelt oder hasht pfad-/logfaehige Contract-Details.");
 
     require(throws<std::invalid_argument>([&observed_bus] {
                 static_cast<void>(observed_bus.add_watchpoint(0x00005000u,

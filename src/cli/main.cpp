@@ -10975,7 +10975,12 @@ int export_port_project(const std::filesystem::path& source_path,
                         const bool resume_analysis = false,
                         const bool refresh_analysis = false,
                         const std::optional<std::filesystem::path>&
-                            runtime_frontier_import_path = std::nullopt) {
+                            runtime_frontier_import_path = std::nullopt,
+                        const std::optional<std::filesystem::path>&
+                            analysis_generation_path = std::nullopt,
+                        const std::optional<std::filesystem::path>&
+                            analysis_generation_game_project_path =
+                                std::nullopt) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
@@ -10996,6 +11001,16 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--resume und --import-runtime-frontier sind ausschliesslich "
             "fuer analyze-port erlaubt.");
+    if (analysis_generation_path.has_value() &&
+        (analysis_only || diagnostic_partial || boot_executable_artifact))
+        throw std::invalid_argument(
+            "--analysis-generation ist ausschliesslich fuer einen "
+            "vollstaendigen NativeDisc-Port erlaubt.");
+    if (analysis_generation_game_project_path.has_value() &&
+        !analysis_generation_path.has_value())
+        throw std::invalid_argument(
+            "--analysis-generation-game-project braucht eine gebundene "
+            "--analysis-generation.");
     if (refresh_analysis && (!analysis_only || !resume_analysis))
         throw std::invalid_argument(
             "--refresh-analysis braucht einen expliziten "
@@ -11427,6 +11442,8 @@ int export_port_project(const std::filesystem::path& source_path,
         verified_game_entry_handoff;
     std::shared_ptr<katana::runtime::GameProjectArtifact>
         verified_game_project;
+    std::shared_ptr<katana::runtime::GameProjectArtifact>
+        verified_analysis_generation_game_project;
     std::optional<katana::runtime::GameProjectDefinition>
         resolved_game_project;
     std::vector<std::vector<std::uint8_t>>
@@ -11470,6 +11487,20 @@ int export_port_project(const std::filesystem::path& source_path,
             katana::runtime::GameProjectArtifact::load(
                 *game_project_path);
         resolved_game_project = verified_game_project->definition();
+    }
+    if (analysis_generation_game_project_path.has_value()) {
+        if (!verified_game_project)
+            throw std::invalid_argument(
+                "--analysis-generation-game-project braucht ein aktuelles "
+                "--game-project.");
+        verified_analysis_generation_game_project =
+            katana::runtime::GameProjectArtifact::load(
+                *analysis_generation_game_project_path);
+        const auto& baseline =
+            verified_analysis_generation_game_project->definition();
+        const auto& current = verified_game_project->definition();
+        katana::codegen::validate_analysis_generation_game_project_delta(
+            baseline, current);
     }
     if (verified_native_port) {
         native_port_artifact_identity =
@@ -11727,6 +11758,28 @@ int export_port_project(const std::filesystem::path& source_path,
         verified_game_entry_handoff
             ? verified_game_entry_handoff->artifact_identity()
             : std::string{};
+    std::optional<CommittedAgentGeneration> committed_analysis_generation;
+    if (analysis_generation_path.has_value()) {
+        const auto generation_root = std::filesystem::absolute(
+            *analysis_generation_path).lexically_normal();
+        if (path_is_within(generation_root, absolute_output) ||
+            path_is_within(absolute_output, generation_root))
+            throw std::invalid_argument(
+                "--analysis-generation und --output muessen disjunkte "
+                "Ordner sein.");
+        if (!safe_regular_port_directory_exists(
+                generation_root,
+                "Gebundene Analyse-Generation"))
+            throw std::invalid_argument(
+                "--analysis-generation braucht einen vorhandenen, sicheren "
+                "analyze-port-Ausgabeordner.");
+        committed_analysis_generation =
+            load_committed_agent_generation(generation_root);
+        if (committed_analysis_generation->analysis_archive.empty())
+            throw std::invalid_argument(
+                "Die gebundene Analyse-Generation besitzt kein "
+                "NativeDisc-Analysearchiv.");
+    }
     const auto latent_aot_hint_identity =
         latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
                                        latent_aot_discovery_mode);
@@ -11746,6 +11799,11 @@ int export_port_project(const std::filesystem::path& source_path,
         latent_aot_hint_identity,
         analysis_mode_identity,
         implementation_identities.whole_export);
+    // A committed analysis generation is an explicit input authority. Do not
+    // let an older whole-export cache bypass its ledger/archive validation;
+    // component codegen caches remain keyed and reusable below.
+    if (committed_analysis_generation.has_value())
+        whole_export_cache_key.reset();
     const auto workspace_key = port_export_workspace_key(
         whole_export_source_kind,
         *verified_install_recipe,
@@ -11807,6 +11865,10 @@ int export_port_project(const std::filesystem::path& source_path,
                 resolved_game_project.has_value()
                     ? &*resolved_game_project
                     : nullptr;
+            export_options.analysis_generation_game_project =
+                verified_analysis_generation_game_project
+                    ? &verified_analysis_generation_game_project->definition()
+                    : nullptr;
             export_options.native_port_definition =
                 verified_native_port
                     ? &verified_native_port->definition()
@@ -11829,8 +11891,128 @@ int export_port_project(const std::filesystem::path& source_path,
                 analysis_only;
             export_options.analysis_artifact_refresh_requested =
                 analysis_only && refresh_analysis;
+            if (committed_analysis_generation.has_value()) {
+                const auto& archive =
+                    committed_analysis_generation->analysis_archive;
+                export_options.resume_analysis_artifact = std::span(
+                    reinterpret_cast<const std::uint8_t*>(archive.data()),
+                    archive.size());
+                export_options.resume_analysis_artifact_key =
+                    committed_analysis_generation->analysis_artifact_id;
+                export_options.product_analysis_generation_reuse_requested =
+                    true;
+            }
             return export_options;
         };
+    if (committed_analysis_generation.has_value()) {
+        if (!verified_native_disc)
+            throw std::logic_error(
+                "Gebundene Analyse-Generation besitzt keine validierte "
+                "NativeDisc-Quelle.");
+        const auto& generation = *committed_analysis_generation;
+        if (generation.producer_identity.empty() ||
+            generation.analysis_session_contract_identity.empty())
+            throw std::invalid_argument(
+                "--analysis-generation verweigert eine Legacy-Session "
+                "ohne Producer- und Analysevertragsbindung.");
+        const auto parsed =
+            katana::codegen::parse_native_disc_analysis_artifact(
+                generation.analysis_artifact_id,
+                std::span(
+                    reinterpret_cast<const std::uint8_t*>(
+                        generation.analysis_archive.data()),
+                    generation.analysis_archive.size()));
+        if (parsed.state !=
+            katana::codegen::NativeDiscAnalysisArtifactState::Hit)
+            throw std::invalid_argument(
+                "--analysis-generation besitzt kein revalidierbares "
+                "NativeDisc-Analysearchiv.");
+        auto validation_options = make_export_options({});
+        if (validation_options.analysis_generation_game_project != nullptr)
+            validation_options.game_project =
+                validation_options.analysis_generation_game_project;
+        const auto current_manifest =
+            katana::codegen::native_disc_analysis_resume_manifest_identity(
+                *verified_native_disc,
+                validation_options,
+                parsed.artifact.external_primary_roots,
+                analysis_mode);
+        const auto current_session_contract =
+            agent_analysis_session_contract_identity(
+                current_manifest, validation_options);
+        bool session_contract_matches =
+            generation.analysis_session_contract_identity ==
+            current_session_contract;
+        // The canonical artifact key binds every analysis-visible identity.
+        // image_analysis_key is intentionally validated outside that key
+        // after the proven roots have been rebound. Code generation is the
+        // sole remaining struct field and is deliberately downstream of a
+        // schema-8 analysis checkpoint, so a current consumer may differ.
+        bool manifest_matches =
+            parsed.artifact.identity.key == current_manifest.key &&
+            parsed.artifact.identity.image_analysis_key ==
+                current_manifest.image_analysis_key;
+        const bool world_matches =
+            materialization_world_matches_analysis_identity(
+                generation.world, parsed.artifact.identity);
+        const bool native_port_admission_candidate =
+            parsed.artifact.identity.native_port_identity !=
+                current_manifest.native_port_identity ||
+            parsed.artifact.identity.native_port_artifact_identity !=
+                current_manifest.native_port_artifact_identity;
+        if ((!session_contract_matches || !manifest_matches) &&
+            native_port_admission_candidate) {
+            // NativePort provider semantics are replayed field-by-field by
+            // the analysis-artifact loader. Let this outer ledger guard
+            // recognize only the prior NativePort identity pair; the loader
+            // still has to prove the old analysis contract, image key,
+            // roots, ABI and every non-NativePort identity before codegen.
+            auto prior_session_manifest = current_manifest;
+            prior_session_manifest.native_port_identity =
+                parsed.artifact.identity.native_port_identity;
+            prior_session_manifest.native_port_artifact_identity =
+                parsed.artifact.identity.native_port_artifact_identity;
+            session_contract_matches =
+                generation.analysis_session_contract_identity ==
+                agent_analysis_session_contract_identity(
+                    prior_session_manifest, validation_options);
+            if (session_contract_matches) {
+                manifest_matches = true;
+                std::cout
+                    << "KATANA_PORT_ANALYSIS_GENERATION_REPLAY_CANDIDATE "
+                       "class=native-port-admission\n"
+                    << std::flush;
+            }
+        }
+        if (!session_contract_matches || !manifest_matches || !world_matches) {
+            std::ostringstream error;
+            error
+                << "--analysis-generation passt nicht exakt zum aktuellen "
+                   "Disc-/Projekt-/Payload-/World-Vertrag: session="
+                << (session_contract_matches ? "match" : "mismatch")
+                << " manifest="
+                << (manifest_matches ? "match" : "mismatch")
+                << " world="
+                << (world_matches ? "match" : "mismatch")
+                << " prior-session="
+                << generation.analysis_session_contract_identity
+                << " current-session=" << current_session_contract
+                << " archive-manifest=" << parsed.artifact.identity.key
+                << " current-manifest=" << current_manifest.key;
+            throw std::invalid_argument(error.str());
+        }
+        const auto current_producer_identity =
+            agent_session_producer_identity(implementation_identities);
+        std::cout
+            << "KATANA_PORT_ANALYSIS_GENERATION_VALIDATED artifact="
+            << generation.analysis_artifact_id
+            << " producer="
+            << (generation.producer_identity == current_producer_identity
+                    ? "exact"
+                    : "downstream-consumer-delta")
+            << '\n'
+            << std::flush;
+    }
     if (analysis_only) {
         if (!verified_native_disc)
             throw std::logic_error(
@@ -12680,15 +12862,18 @@ int export_port_project(const std::filesystem::path& source_path,
         const auto build_profile =
             configured_environment_value("KATANA_PORT_BUILD_PROFILE")
                 .value_or("bringup");
-        if (build_profile != "bringup" && build_profile != "gate")
+        if (build_profile != "bringup" &&
+            build_profile != "performance" &&
+            build_profile != "gate")
             throw std::invalid_argument(
-                "KATANA_PORT_BUILD_PROFILE muss bringup oder gate sein.");
+                "KATANA_PORT_BUILD_PROFILE muss bringup, performance oder "
+                "gate sein.");
         const auto host_build_configuration =
             configured_environment_value(
                 "KATANA_PORT_HOST_BUILD_CONFIGURATION")
-                .value_or(build_profile == "bringup"
-                              ? "Release"
-                              : "RelWithDebInfo");
+                .value_or(build_profile == "gate"
+                              ? "RelWithDebInfo"
+                              : "Release");
         if (host_build_configuration != "RelWithDebInfo" &&
             host_build_configuration != "Release")
             throw std::invalid_argument(
@@ -14227,6 +14412,8 @@ void print_usage(std::ostream& output) {
               "[--console-profile <japan-ntsc|north-america-ntsc|europe-pal|vga>] "
               "[--game-project <Descriptor-Artefakt>] "
               "[--native-port-definition <private .katana-native-port>] "
+              "[--analysis-generation <committed analyze-port-Ordner>] "
+              "[--analysis-generation-game-project <gebundenes Analyse-GameProject>] "
                "[--analysis-mode <platform|runtime-only>] "
                "[--native-aot-resume-entry <0xAdresse>]... "
                "[--runtime-image-payload <Image-ID>=<private-Datei>] "
@@ -15021,6 +15208,10 @@ int main(const int argc, char* argv[]) {
             bool detailed_analysis_telemetry = false;
             std::optional<std::filesystem::path>
                 runtime_frontier_import_path;
+            std::optional<std::filesystem::path>
+                analysis_generation_path;
+            std::optional<std::filesystem::path>
+                analysis_generation_game_project_path;
             std::vector<std::string_view> paired_arguments;
             paired_arguments.reserve(static_cast<std::size_t>(argc) - 3u);
             for (std::size_t argument = 3u;
@@ -15096,6 +15287,18 @@ int main(const int argc, char* argv[]) {
                     analysis_only &&
                     !runtime_frontier_import_path.has_value()) {
                     runtime_frontier_import_path =
+                        std::filesystem::path(value);
+                } else if (
+                    option == "--analysis-generation" &&
+                    port_command == "port" &&
+                    !analysis_generation_path.has_value()) {
+                    analysis_generation_path =
+                        std::filesystem::path(value);
+                } else if (
+                    option == "--analysis-generation-game-project" &&
+                    port_command == "port" &&
+                    !analysis_generation_game_project_path.has_value()) {
+                    analysis_generation_game_project_path =
                         std::filesystem::path(value);
                 } else if (
                     option == "--runtime-image-payload" &&
@@ -15223,7 +15426,9 @@ int main(const int argc, char* argv[]) {
                                        analysis_only,
                                        resume_analysis,
                                        refresh_analysis,
-                                       runtime_frontier_import_path);
+                                       runtime_frontier_import_path,
+                                       analysis_generation_path,
+                                       analysis_generation_game_project_path);
         }
 
         if ((argc == 3 || argc == 4) &&

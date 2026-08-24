@@ -1,7 +1,7 @@
 # Analyzer-ABI
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `66`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 120, Block-ABI 5, PlatformServices-ABI 14,
+Source-Stand verwendet Runtime-ABI 121, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 24. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
 Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
@@ -28,6 +28,12 @@ sowie dieselben geordneten Guards, Effekte und Resultate. Jede fehlende,
 unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
 keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
 dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
+
+Runtime-ABI 121 erweitert den kontrollierten Produktfehlerpfad um die
+CrashCapsule-v3-Bindung im `NativePortContext` und einen festen, pfadfreien
+Diagnosetextpuffer. Damit bleiben vollstaendige, adressgebundene
+Contract-Details erhalten, ohne Heapallokation, unbeschraenkte Ausgabe oder
+Hostpfade in den Crashpfad aufzunehmen. Der Analyzervertrag bleibt 66.
 
 Analyzer-ABI 66 und Runtime-ABI 120 korrigieren den oeffentlichen Store-
 Queue-PREF-Effektvertrag: SH-4 `PREF` commitet eine vollstaendige 32-Byte-
