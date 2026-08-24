@@ -50,15 +50,45 @@ function Import-KatanaVisualStudioEnvironment {
             $row.Substring($separator + 1),
             [EnvironmentVariableTarget]::Process)
     }
-    # A parent process can expose both Path and PATH. VsDevCmd's uppercase row
-    # is authoritative; never let a stale mixed-case alias drop the SDK paths.
+    # Environment variable names are case-insensitive on Windows, but cmd.exe
+    # preserves the spelling inherited from its parent. Accept the one Path
+    # row by name instead of requiring a particular casing; all Path aliases
+    # were deliberately skipped above so only this imported value survives.
     $pathRow = $environmentRows |
         Where-Object { $_ -clike 'PATH=*' } |
         Select-Object -First 1
     if ([string]::IsNullOrWhiteSpace($pathRow)) {
-        throw 'Visual Studio environment did not publish PATH.'
+        $pathRow = $environmentRows |
+            Where-Object {
+                $separator = $_.IndexOf('=')
+                $separator -gt 0 -and
+                    $_.Substring(0, $separator).Equals(
+                        'Path', [StringComparison]::OrdinalIgnoreCase)
+            } |
+            Select-Object -First 1
     }
-    $env:Path = $pathRow.Substring(5)
+    if ([string]::IsNullOrWhiteSpace($pathRow)) {
+        throw 'Visual Studio environment did not publish Path.'
+    }
+    # pwsh can preserve both `Path` and `PATH` rows inherited from a native
+    # parent. Command discovery follows the uppercase row on this host, so
+    # replace that exact alias with VsDevCmd's authoritative value.
+    $env:PATH = $pathRow.Substring($pathRow.IndexOf('=') + 1)
+}
+
+function Get-KatanaCMakeCacheValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $CachePath,
+        [Parameter(Mandatory = $true)]
+        [string] $Name
+    )
+    $escaped = [Regex]::Escape($Name)
+    $match = Select-String -LiteralPath $CachePath `
+        -Pattern ('^' + $escaped + ':[^=]*=(.*)$') |
+        Select-Object -First 1
+    if ($null -eq $match) { return $null }
+    return $match.Matches[0].Groups[1].Value
 }
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -86,6 +116,40 @@ if ([string]::IsNullOrWhiteSpace($env:INCLUDE) -or
 $compiler = Get-Command cl.exe -ErrorAction Stop
 if ($compiler.Source -notmatch 'Hostx64\\x64\\cl\.exe$') {
     throw "Unexpected compiler environment: $($compiler.Source)"
+}
+
+$cachePath = Join-Path $buildRoot 'CMakeCache.txt'
+if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
+    $cacheHome = Get-KatanaCMakeCacheValue $cachePath 'CMAKE_HOME_DIRECTORY'
+    $cacheGenerator = Get-KatanaCMakeCacheValue $cachePath 'CMAKE_GENERATOR'
+    $cacheCompiler = Get-KatanaCMakeCacheValue $cachePath 'CMAKE_CXX_COMPILER'
+    $cacheBuildType = Get-KatanaCMakeCacheValue $cachePath 'CMAKE_BUILD_TYPE'
+    $expectedHome = [IO.Path]::GetFullPath($repositoryRoot)
+    $observedHome = if ([string]::IsNullOrWhiteSpace($cacheHome)) {
+        $null
+    } else {
+        [IO.Path]::GetFullPath(($cacheHome -replace '/', '\'))
+    }
+    $observedCompiler = if ([string]::IsNullOrWhiteSpace($cacheCompiler)) {
+        $null
+    } else {
+        [IO.Path]::GetFullPath(($cacheCompiler -replace '/', '\'))
+    }
+    $expectedCompiler = [IO.Path]::GetFullPath($compiler.Source)
+    if (-not [string]::Equals(
+            $observedHome, $expectedHome,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        $cacheGenerator -ne 'Ninja' -or
+        -not [string]::Equals(
+            $observedCompiler, $expectedCompiler,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        $cacheBuildType -ne 'Release') {
+        throw "Stale or foreign CMake cache at $cachePath. " +
+            "Expected source=$expectedHome generator=Ninja compiler=$expectedCompiler " +
+            "build_type=Release; observed source=$cacheHome generator=$cacheGenerator " +
+            "compiler=$cacheCompiler build_type=$cacheBuildType. " +
+            "Use a fresh validated build-* directory."
+    }
 }
 
 Push-Location -LiteralPath $repositoryRoot

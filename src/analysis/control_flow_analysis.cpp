@@ -3357,6 +3357,7 @@ struct ControlFlowAnalysisSession::Impl final {
         recursive_index.clear();
         guarded_native_entry_shapes.reset();
         function_value_session.reset();
+        static_callback_inventory_session.reset();
         jump_table_cache = JumpTableSnapshotCache{};
         cfa_scan_cache.clear();
         function_boundary_index.clear();

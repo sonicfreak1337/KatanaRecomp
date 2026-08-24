@@ -31,7 +31,7 @@ PlatformServices-ABI 14,
 Analyzer-ABI 66, Function-Analysis-Epoch-Schema 36, lokales
 In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 24 sowie PVR-State-Contract 3.
-Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `9`.
+Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `10`.
 Port-Metadata-Cache-Schema: `12`.
 Der aktuelle GameProject-Vertrag ist `9` mit Artefaktformat `6`; der native
 Port-Definitionsvertrag ist `12` und bleibt davon getrennt; das

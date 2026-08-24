@@ -14,7 +14,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_platform_contract_version = 8u;
+inline constexpr std::uint32_t native_port_platform_contract_version = 9u;
 inline constexpr std::size_t native_port_gamepad_count = 4u;
 inline constexpr std::uint32_t native_port_input_recording_version = 2u;
 // Replay compatibility is deliberately independent from the wider platform
@@ -47,6 +47,10 @@ struct NativePortPlatformConfig final {
     std::string_view input_identity;
     std::size_t maximum_input_record_frames =
         native_port_input_recording_maximum_frames;
+    // Automatic product diagnostics must never terminate gameplay merely
+    // because their bounded trace is full. Explicit recording keeps the
+    // strict default so an incomplete requested capture cannot look whole.
+    bool stop_input_recording_at_capacity = false;
     bool require_gamepad_backend = true;
 };
 

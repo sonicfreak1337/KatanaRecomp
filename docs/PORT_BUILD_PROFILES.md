@@ -29,7 +29,7 @@ Eintraege werden weiterhin abgelehnt. Damit
 bleibt die statische AOT-Closure unveraendert, waehrend der wiederkehrende
 Titel-/Gameplay-Hotpfad ohne einen erneuten Vollbuild Produkttempo erreicht.
 
-Das Partitionsschema 9 begrenzt normale generierte Einheiten auf 2.048
+Das Partitionsschema 10 begrenzt normale generierte Einheiten auf 2.048
 Gastinstruktionen beziehungsweise 128 Funktionen. Eine einzelne groessere
 Gastfunktion bleibt atomar in einer eigenen Einheit. Damit bleiben MSVC-
 Optimierung, Parallelitaet und inkrementelle Neubauten bounded, ohne die AOT-

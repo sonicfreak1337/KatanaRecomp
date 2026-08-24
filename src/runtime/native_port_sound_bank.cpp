@@ -74,8 +74,19 @@ void saturating_add(std::uint64_t& destination,
     return std::exp2(-std::max(0.0, attenuation) / 16.0);
 }
 
+[[nodiscard]] const std::array<double, 256u>&
+aica_attenuation_gain_table() noexcept {
+    static const auto values = [] {
+        std::array<double, 256u> result{};
+        for (std::size_t index = 0u; index < result.size(); ++index)
+            result[index] = aica_attenuation_gain(static_cast<double>(index));
+        return result;
+    }();
+    return values;
+}
+
 [[nodiscard]] double aica_send_gain(const std::uint8_t level) noexcept {
-    return aica_attenuation_gain(aica_send_attenuation[level & 15u]);
+    return aica_attenuation_gain_table()[aica_send_attenuation[level & 15u]];
 }
 
 [[nodiscard]] std::pair<double, double>
@@ -411,6 +422,13 @@ class NativePortSoundBankEngine::Impl final {
         std::uint8_t velocity = 0u;
         double phase = 0.0;
         double base_step = 1.0;
+        double lfo_step = 0.0;
+        std::array<double, 256u> lfo_pitch_ratio{};
+        std::int16_t cached_external_pitch_bend = 0;
+        std::int8_t cached_channel_pitch = 0;
+        std::uint8_t cached_modulation = 0u;
+        bool pitch_cache_valid = false;
+        bool lfo_pitch_cache_valid = false;
         std::uint8_t bend_high = 0u;
         std::uint8_t bend_low = 0u;
         // AICA amplitude attenuation is logarithmic: 0 is full scale and
@@ -427,10 +445,21 @@ class NativePortSoundBankEngine::Impl final {
         EnvelopeStage filter_stage = EnvelopeStage::Attack;
         double filter_previous_1 = 0.0;
         double filter_previous_2 = 0.0;
+        double filter_a0 = 0.0;
+        double filter_b1 = 0.0;
+        double filter_b2 = 0.0;
+        std::uint32_t filter_coefficient_value = 0u;
+        bool filter_coefficient_cache_valid = false;
         std::uint64_t release_tick = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t delayed_until_tick = 0u;
         float velocity_gain = 1.0f;
         std::shared_ptr<VoiceControls> controls;
+        float cached_external_pan = 0.0f;
+        double cached_pan_left = 1.0;
+        double cached_pan_right = 1.0;
+        std::uint8_t cached_channel_pan = 0u;
+        std::uint8_t cached_qsound_position = 0u;
+        bool pan_cache_valid = false;
         bool key_released = false;
         bool sustained = false;
         std::uint64_t start_serial = 0u;
@@ -464,6 +493,12 @@ class NativePortSoundBankEngine::Impl final {
         validate_config(config_);
         feed_ = audio_.create_pcm_feed();
         audio_.play(feed_);
+        sequences_.reserve(config_.maximum_active_sequences);
+        active_sequence_indices_.reserve(config_.maximum_active_sequences);
+        active_sequence_positions_.reserve(config_.maximum_active_sequences);
+        voices_.reserve(config_.maximum_synth_voices);
+        active_voice_indices_.reserve(config_.maximum_synth_voices);
+        active_voice_positions_.reserve(config_.maximum_synth_voices);
         mix_.resize(static_cast<std::size_t>(config_.render_block_frames) * 2u);
         output_.resize(static_cast<std::size_t>(config_.render_block_frames) * 2u);
     }
@@ -666,6 +701,48 @@ class NativePortSoundBankEngine::Impl final {
         if (generation == 0u) generation = 1u;
     }
 
+    static constexpr std::size_t invalid_active_position =
+        std::numeric_limits<std::size_t>::max();
+
+    static void activate_slot(std::vector<std::uint32_t>& active,
+                              std::vector<std::size_t>& positions,
+                              const std::size_t slot) {
+        if (slot >= positions.size()) positions.resize(slot + 1u, invalid_active_position);
+        if (positions[slot] != invalid_active_position) return;
+        const auto insertion = std::lower_bound(
+            active.begin(), active.end(), static_cast<std::uint32_t>(slot));
+        const auto position = static_cast<std::size_t>(insertion - active.begin());
+        active.insert(insertion, static_cast<std::uint32_t>(slot));
+        for (std::size_t index = position; index < active.size(); ++index)
+            positions[active[index]] = index;
+    }
+
+    static void deactivate_slot(std::vector<std::uint32_t>& active,
+                                std::vector<std::size_t>& positions,
+                                const std::size_t slot) noexcept {
+        if (slot >= positions.size()) return;
+        const auto position = positions[slot];
+        if (position == invalid_active_position || position >= active.size()) return;
+        active.erase(active.begin() + static_cast<std::ptrdiff_t>(position));
+        positions[slot] = invalid_active_position;
+        for (std::size_t index = position; index < active.size(); ++index)
+            positions[active[index]] = index;
+    }
+
+    void erase_sequence_slot(const std::size_t index) noexcept {
+        if (index >= sequences_.size() || !sequences_[index].value.has_value()) return;
+        sequences_[index].value.reset();
+        bump_generation(sequences_[index].generation);
+        deactivate_slot(active_sequence_indices_, active_sequence_positions_, index);
+    }
+
+    void erase_voice_slot(const std::size_t index) noexcept {
+        if (index >= voices_.size() || !voices_[index].value.has_value()) return;
+        voices_[index].value.reset();
+        bump_generation(voices_[index].generation);
+        deactivate_slot(active_voice_indices_, active_voice_positions_, index);
+    }
+
     [[nodiscard]] NativePortSoundCollectionHandle insert_collection(
         Collection collection) {
         std::size_t index = collections_.size();
@@ -741,15 +818,13 @@ class NativePortSoundBankEngine::Impl final {
 
     [[nodiscard]] bool collection_in_use(
         const NativePortSoundCollectionHandle handle) const noexcept {
-        for (const auto& slot : sequences_)
-            if (slot.value.has_value() &&
-                slot.value->collection.slot == handle.slot &&
-                slot.value->collection.generation == handle.generation)
+        for (const auto index : active_sequence_indices_)
+            if (sequences_[index].value->collection.slot == handle.slot &&
+                sequences_[index].value->collection.generation == handle.generation)
                 return true;
-        for (const auto& slot : voices_)
-            if (slot.value.has_value() &&
-                slot.value->collection.slot == handle.slot &&
-                slot.value->collection.generation == handle.generation)
+        for (const auto index : active_voice_indices_)
+            if (voices_[index].value->collection.slot == handle.slot &&
+                voices_[index].value->collection.generation == handle.generation)
                 return true;
         for (const auto& slot : groups_)
             if (slot.value.has_value() &&
@@ -1688,10 +1763,9 @@ class NativePortSoundBankEngine::Impl final {
 
     void release_sequence(const NativePortSoundSequenceHandle handle) {
         require_owner_thread();
-        auto& slot = require_sequence_slot(handle);
+        static_cast<void>(require_sequence_slot(handle));
         remove_sequence_voices(handle, false);
-        slot.value.reset();
-        bump_generation(slot.generation);
+        erase_sequence_slot(handle.slot);
     }
 
     void set_sequence_gain_pan(const NativePortSoundSequenceHandle handle,
@@ -2031,10 +2105,9 @@ class NativePortSoundBankEngine::Impl final {
             if (!port_slot.value.has_value()) continue;
             port_slot.value->sequence.reset();
         }
-        for (std::size_t index = 0u; index < sequences_.size(); ++index) {
-            if (!sequences_[index].value.has_value()) continue;
-            release_sequence({static_cast<std::uint32_t>(index),
-                              sequences_[index].generation});
+        while (!active_sequence_indices_.empty()) {
+            const auto index = active_sequence_indices_.back();
+            release_sequence({index, sequences_[index].generation});
         }
     }
 
@@ -2062,15 +2135,10 @@ class NativePortSoundBankEngine::Impl final {
 
     void stop_all() {
         require_owner_thread();
-        for (auto& slot : sequences_) {
-            if (!slot.value.has_value()) continue;
-            slot.value->state = NativePortSoundSequenceState::Stopped;
-        }
-        for (auto& slot : voices_) {
-            if (!slot.value.has_value()) continue;
-            slot.value.reset();
-            bump_generation(slot.generation);
-        }
+        for (const auto index : active_sequence_indices_)
+            sequences_[index].value->state = NativePortSoundSequenceState::Stopped;
+        while (!active_voice_indices_.empty())
+            erase_voice_slot(active_voice_indices_.back());
         for (auto& slot : groups_) {
             if (!slot.value.has_value()) continue;
             slot.value.reset();
@@ -2095,16 +2163,10 @@ class NativePortSoundBankEngine::Impl final {
             slot.value.reset();
             bump_generation(slot.generation);
         }
-        for (auto& slot : sequences_) {
-            if (!slot.value.has_value()) continue;
-            slot.value.reset();
-            bump_generation(slot.generation);
-        }
-        for (auto& slot : voices_) {
-            if (!slot.value.has_value()) continue;
-            slot.value.reset();
-            bump_generation(slot.generation);
-        }
+        while (!active_sequence_indices_.empty())
+            erase_sequence_slot(active_sequence_indices_.back());
+        while (!active_voice_indices_.empty())
+            erase_voice_slot(active_voice_indices_.back());
         for (auto& slot : groups_) {
             if (!slot.value.has_value()) continue;
             slot.value.reset();
@@ -2155,11 +2217,10 @@ class NativePortSoundBankEngine::Impl final {
         result.rendered_frames = sequence.rendered_frames;
         result.dispatched_events = sequence.dispatched_events;
         result.loop_count = sequence.loop_count;
-        for (const auto& slot : voices_)
-            if (slot.value.has_value() &&
-                slot.value->sequence.has_value() &&
-                slot.value->sequence->slot == handle.slot &&
-                slot.value->sequence->generation == handle.generation)
+        for (const auto index : active_voice_indices_)
+            if (voices_[index].value->sequence.has_value() &&
+                voices_[index].value->sequence->slot == handle.slot &&
+                voices_[index].value->sequence->generation == handle.generation)
                 ++result.active_voices;
         return result;
     }
@@ -2204,15 +2265,16 @@ class NativePortSoundBankEngine::Impl final {
         result.effect_frames = effect_frames_;
         for (const auto& slot : collections_)
             result.active_collections += slot.value.has_value() ? 1u : 0u;
-        for (const auto& slot : sequences_)
+        for (const auto index : active_sequence_indices_)
             result.active_sequences +=
-                slot.value.has_value() &&
-                        (slot.value->state == NativePortSoundSequenceState::Playing ||
-                         slot.value->state == NativePortSoundSequenceState::Paused)
+                sequences_[index].value->state ==
+                            NativePortSoundSequenceState::Playing ||
+                        sequences_[index].value->state ==
+                            NativePortSoundSequenceState::Paused
                     ? 1u
                     : 0u;
-        for (const auto& slot : voices_)
-            result.active_voices += slot.value.has_value() ? 1u : 0u;
+        result.active_voices =
+            static_cast<std::uint32_t>(active_voice_indices_.size());
         for (const auto& slot : pcm_stream_rings_) {
             if (!slot.value.has_value()) continue;
             ++result.active_pcm_stream_rings;
@@ -2227,19 +2289,21 @@ class NativePortSoundBankEngine::Impl final {
     [[nodiscard]] NativePortSoundSequenceHandle insert_sequence(
         ActiveSequence sequence) {
         std::size_t index = sequences_.size();
-        std::size_t active_count = 0u;
         for (std::size_t candidate = 0u; candidate < sequences_.size();
              ++candidate) {
-            if (sequences_[candidate].value.has_value())
-                ++active_count;
-            else if (index == sequences_.size())
+            if (!sequences_[candidate].value.has_value() &&
+                index == sequences_.size())
                 index = candidate;
         }
-        if (active_count == config_.maximum_active_sequences)
+        if (active_sequence_indices_.size() == config_.maximum_active_sequences)
             fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
                             "active-sequence-limit");
-        if (index == sequences_.size()) sequences_.push_back({});
+        if (index == sequences_.size()) {
+            sequences_.push_back({});
+            active_sequence_positions_.push_back(invalid_active_position);
+        }
         sequences_[index].value.emplace(std::move(sequence));
+        activate_slot(active_sequence_indices_, active_sequence_positions_, index);
         return {static_cast<std::uint32_t>(index), sequences_[index].generation};
     }
 
@@ -2343,8 +2407,7 @@ class NativePortSoundBankEngine::Impl final {
     void release_sequence_if_live(const NativePortSoundSequenceHandle handle) {
         if (!sequence_is_live(handle)) return;
         remove_sequence_voices(handle, false);
-        sequences_[handle.slot].value.reset();
-        bump_generation(sequences_[handle.slot].generation);
+        erase_sequence_slot(handle.slot);
     }
 
     [[nodiscard]] bool valid_midi_port_config(
@@ -2430,23 +2493,18 @@ class NativePortSoundBankEngine::Impl final {
 
     [[nodiscard]] NativePortSoundVoiceHandle insert_voice(SynthVoice voice) {
         std::size_t index = voices_.size();
-        std::size_t active_count = 0u;
         for (std::size_t candidate = 0u; candidate < voices_.size(); ++candidate) {
-            if (voices_[candidate].value.has_value())
-                ++active_count;
-            else if (index == voices_.size())
+            if (!voices_[candidate].value.has_value() && index == voices_.size())
                 index = candidate;
         }
-        if (active_count == config_.maximum_synth_voices) {
+        if (active_voice_indices_.size() == config_.maximum_synth_voices) {
             // The Manatee driver targets a finite hardware voice pool and
             // steals an existing slot under pressure. Reproduce that semantic
             // lifecycle natively instead of turning legitimate polyphony into
             // a product-fatal resource error. Released voices are preferred;
             // ties and the fallback are deterministic oldest-first.
             std::optional<std::size_t> victim;
-            for (std::size_t candidate = 0u; candidate < voices_.size();
-                 ++candidate) {
-                if (!voices_[candidate].value.has_value()) continue;
+            for (const auto candidate : active_voice_indices_) {
                 if (!victim.has_value() ||
                     (voices_[candidate].value->key_released &&
                      !voices_[*victim].value->key_released) ||
@@ -2460,11 +2518,14 @@ class NativePortSoundBankEngine::Impl final {
                 fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
                                 "synth-voice-limit");
             index = *victim;
-            voices_[index].value.reset();
-            bump_generation(voices_[index].generation);
+            erase_voice_slot(index);
         }
-        if (index == voices_.size()) voices_.push_back({});
+        if (index == voices_.size()) {
+            voices_.push_back({});
+            active_voice_positions_.push_back(invalid_active_position);
+        }
         voices_[index].value.emplace(std::move(voice));
+        activate_slot(active_voice_indices_, active_voice_positions_, index);
         return {static_cast<std::uint32_t>(index), voices_[index].generation};
     }
 
@@ -2482,8 +2543,7 @@ class NativePortSoundBankEngine::Impl final {
             voices_[handle.slot].generation != handle.generation ||
             !voices_[handle.slot].value.has_value())
             return;
-        voices_[handle.slot].value.reset();
-        bump_generation(voices_[handle.slot].generation);
+        erase_voice_slot(handle.slot);
     }
 
     void collect_stale_groups_and_ports() noexcept {
@@ -2510,17 +2570,21 @@ class NativePortSoundBankEngine::Impl final {
 
     void remove_sequence_voices(const NativePortSoundSequenceHandle handle,
                                 const bool release) {
-        for (auto& slot : voices_) {
-            if (!slot.value.has_value() || !slot.value->sequence.has_value() ||
-                slot.value->sequence->slot != handle.slot ||
-                slot.value->sequence->generation != handle.generation)
+        std::size_t active = 0u;
+        while (active < active_voice_indices_.size()) {
+            const auto index = active_voice_indices_[active];
+            auto& voice = *voices_[index].value;
+            if (!voice.sequence.has_value() ||
+                voice.sequence->slot != handle.slot ||
+                voice.sequence->generation != handle.generation) {
+                ++active;
                 continue;
-            if (release)
-                key_off(*slot.value);
-            else {
-                slot.value.reset();
-                bump_generation(slot.generation);
             }
+            if (release)
+                key_off(voice);
+            else
+                erase_voice_slot(index);
+            if (release) ++active;
         }
     }
 
@@ -2556,16 +2620,19 @@ class NativePortSoundBankEngine::Impl final {
         if (std::ranges::any_of(drum_groups, [](const bool value) {
                 return value;
             })) {
-            for (auto& slot : voices_) {
-                if (!slot.value.has_value() ||
-                    slot.value->collection.slot != collection_handle.slot ||
-                    slot.value->collection.generation !=
+            std::size_t active = 0u;
+            while (active < active_voice_indices_.size()) {
+                const auto index = active_voice_indices_[active];
+                const auto& voice = *voices_[index].value;
+                if (voice.collection.slot != collection_handle.slot ||
+                    voice.collection.generation !=
                         collection_handle.generation ||
-                    !slot.value->split->drum ||
-                    !drum_groups[slot.value->split->drum_group])
+                    !voice.split->drum ||
+                    !drum_groups[voice.split->drum_group]) {
+                    ++active;
                     continue;
-                slot.value.reset();
-                bump_generation(slot.generation);
+                }
+                erase_voice_slot(index);
             }
         }
         std::vector<NativePortSoundVoiceHandle> created;
@@ -2592,12 +2659,14 @@ class NativePortSoundBankEngine::Impl final {
                     voice.velocity_gain = velocity_gain(bank, split, velocity);
                     voice.controls = controls;
                     voice.base_step = pitch_step(split, note, 0);
+                    voice.lfo_step =
+                        lfo_frequency(split.lfo_frequency) /
+                        config_.output_sample_rate;
                     voice.lfo_phase =
                         split.lfo_sync
                             ? 0.0
                             : std::fmod(static_cast<double>(current_render_frame_) *
-                                            lfo_frequency(split.lfo_frequency) /
-                                            config_.output_sample_rate,
+                                            voice.lfo_step,
                                         1.0);
                     voice.filter_level = split.filter_levels[0u];
                     ++voice_serial_;
@@ -2964,12 +3033,14 @@ class NativePortSoundBankEngine::Impl final {
 
     void release_sustained(const NativePortSoundSequenceHandle handle,
                            const std::uint8_t channel) {
-        for (auto& slot : voices_)
-            if (slot.value.has_value() && sequence_matches(*slot.value, handle) &&
-                slot.value->channel == channel && slot.value->sustained) {
-                slot.value->sustained = false;
-                key_off(*slot.value);
+        for (const auto index : active_voice_indices_) {
+            auto& voice = *voices_[index].value;
+            if (sequence_matches(voice, handle) && voice.channel == channel &&
+                voice.sustained) {
+                voice.sustained = false;
+                key_off(voice);
             }
+        }
     }
 
     [[nodiscard]] const Sequence& sequence_definition(
@@ -3151,9 +3222,8 @@ class NativePortSoundBankEngine::Impl final {
 
     [[nodiscard]] bool has_sequence_voices(
         const NativePortSoundSequenceHandle handle) const noexcept {
-        return std::ranges::any_of(voices_, [&](const auto& slot) {
-            return slot.value.has_value() &&
-                   sequence_matches(*slot.value, handle);
+        return std::ranges::any_of(active_voice_indices_, [&](const auto index) {
+            return sequence_matches(*voices_[index].value, handle);
         });
     }
 
@@ -3171,13 +3241,10 @@ class NativePortSoundBankEngine::Impl final {
     }
 
     [[nodiscard]] bool has_live_work() const noexcept {
-        if (std::ranges::any_of(voices_, [](const auto& slot) {
-                return slot.value.has_value();
-            }))
-            return true;
-        return std::ranges::any_of(sequences_, [](const auto& slot) {
-            return slot.value.has_value() &&
-                   slot.value->state == NativePortSoundSequenceState::Playing;
+        if (!active_voice_indices_.empty()) return true;
+        return std::ranges::any_of(active_sequence_indices_, [&](const auto index) {
+            return sequences_[index].value->state ==
+                   NativePortSoundSequenceState::Playing;
         });
     }
 
@@ -3222,32 +3289,54 @@ class NativePortSoundBankEngine::Impl final {
         const auto& split = *voice.split;
         const auto wave_pitch = lfo_wave(split.lfo_pitch_wave, voice.lfo_phase);
         const auto wave_amp = lfo_wave(split.lfo_amp_wave, voice.lfo_phase);
-        const auto modulation = static_cast<double>(channel.modulation) / 127.0;
-        const auto pitch_cents =
-            (static_cast<double>(wave_pitch) - 128.0) / 128.0 *
-            lfo_pitch_cents(split.lfo_pitch_depth) * modulation;
-        const auto channel_bend =
-            channel.pitch >= 0
-                ? static_cast<double>(channel.pitch) / 63.0
-                : static_cast<double>(channel.pitch) / 64.0;
-        const auto external_bend =
-            external_pitch_bend >= 0
-                ? static_cast<double>(external_pitch_bend) / 8191.0
-                : static_cast<double>(external_pitch_bend) / 8192.0;
-        const auto combined_bend =
-            std::clamp(channel_bend + external_bend, -1.0, 1.0);
-        const auto step = pitch_step(split,
-                                     voice.note,
-                                     combined_bend,
-                                     voice.bend_high,
-                                     voice.bend_low) *
-                          std::pow(2.0, pitch_cents / 1200.0) *
-                          aica_source_sample_rate /
-                          config_.output_sample_rate;
+        if (!voice.lfo_pitch_cache_valid ||
+            voice.cached_modulation != channel.modulation) {
+            const auto modulation =
+                static_cast<double>(channel.modulation) / 127.0;
+            if (split.lfo_pitch_depth == 0u || channel.modulation == 0u) {
+                voice.lfo_pitch_ratio.fill(1.0);
+            } else {
+                const auto depth = lfo_pitch_cents(split.lfo_pitch_depth);
+                for (std::size_t index = 0u;
+                     index < voice.lfo_pitch_ratio.size(); ++index) {
+                    const auto cents =
+                        (static_cast<double>(index) - 128.0) / 128.0 *
+                        depth * modulation;
+                    voice.lfo_pitch_ratio[index] =
+                        std::pow(2.0, cents / 1200.0);
+                }
+            }
+            voice.cached_modulation = channel.modulation;
+            voice.lfo_pitch_cache_valid = true;
+        }
+        if (!voice.pitch_cache_valid ||
+            voice.cached_channel_pitch != channel.pitch ||
+            voice.cached_external_pitch_bend != external_pitch_bend) {
+            const auto channel_bend =
+                channel.pitch >= 0
+                    ? static_cast<double>(channel.pitch) / 63.0
+                    : static_cast<double>(channel.pitch) / 64.0;
+            const auto external_bend =
+                external_pitch_bend >= 0
+                    ? static_cast<double>(external_pitch_bend) / 8191.0
+                    : static_cast<double>(external_pitch_bend) / 8192.0;
+            const auto combined_bend =
+                std::clamp(channel_bend + external_bend, -1.0, 1.0);
+            voice.base_step =
+                pitch_step(split,
+                           voice.note,
+                           combined_bend,
+                           voice.bend_high,
+                           voice.bend_low) *
+                aica_source_sample_rate / config_.output_sample_rate;
+            voice.cached_channel_pitch = channel.pitch;
+            voice.cached_external_pitch_bend = external_pitch_bend;
+            voice.pitch_cache_valid = true;
+        }
+        const auto step = voice.base_step * voice.lfo_pitch_ratio[wave_pitch];
         if (!(step > 0.0) || !std::isfinite(step))
             fail_sound_bank(NativePortSoundBankFailure::InvalidSample,
                             "voice-pitch");
-        voice.base_step = step;
         auto position = static_cast<std::uint64_t>(voice.phase);
         if (split.loop_start_link &&
             voice.envelope_stage == EnvelopeStage::Attack &&
@@ -3277,32 +3366,38 @@ class NativePortSoundBankEngine::Impl final {
             const auto value = static_cast<std::uint32_t>(std::clamp(
                 std::llround(voice.filter_level), 0ll, 8184ll));
             const auto exponent = value >> 9u;
-            const auto mantissa = (value & 0x1FFu) | 0x200u;
-            std::uint64_t a0 =
-                (static_cast<std::uint64_t>(mantissa) << 30u) >>
-                ((15u - exponent) * 2u);
-            a0 *= (mantissa - 1u) / 8u;
-            a0 >>= 17u;
-            std::int64_t frequency =
-                (static_cast<std::int64_t>(mantissa) << exponent) << 5u;
-            frequency +=
-                static_cast<std::int64_t>(
-                    aica_filter_q[split.filter_resonance]) *
-                frequency / 4096;
-            constexpr double coefficient_scale = 1073741824.0;
-            const auto b1 = 2147483648.0 -
-                            (static_cast<double>(frequency) +
-                             static_cast<double>(a0));
-            const auto b2 = 1073741824.0 -
-                            static_cast<double>(frequency);
+            if (!voice.filter_coefficient_cache_valid ||
+                voice.filter_coefficient_value != value) {
+                const auto mantissa = (value & 0x1FFu) | 0x200u;
+                std::uint64_t a0 =
+                    (static_cast<std::uint64_t>(mantissa) << 30u) >>
+                    ((15u - exponent) * 2u);
+                a0 *= (mantissa - 1u) / 8u;
+                a0 >>= 17u;
+                std::int64_t frequency =
+                    (static_cast<std::int64_t>(mantissa) << exponent) << 5u;
+                frequency +=
+                    static_cast<std::int64_t>(
+                        aica_filter_q[split.filter_resonance]) *
+                    frequency / 4096;
+                voice.filter_a0 = static_cast<double>(a0);
+                voice.filter_b1 =
+                    2147483648.0 -
+                    (static_cast<double>(frequency) + voice.filter_a0);
+                voice.filter_b2 =
+                    1073741824.0 - static_cast<double>(frequency);
+                voice.filter_coefficient_value = value;
+                voice.filter_coefficient_cache_valid = true;
+            }
             if (exponent == 0u) {
                 voice.filter_previous_1 = 0.0;
                 voice.filter_previous_2 = 0.0;
             }
+            constexpr double coefficient_scale = 1073741824.0;
             const auto filtered =
-                (-static_cast<double>(a0) * sample +
-                 b1 * voice.filter_previous_1 -
-                 b2 * voice.filter_previous_2) /
+                (-voice.filter_a0 * sample +
+                 voice.filter_b1 * voice.filter_previous_1 -
+                 voice.filter_b2 * voice.filter_previous_2) /
                 coefficient_scale;
             voice.filter_previous_2 = voice.filter_previous_1;
             voice.filter_previous_1 = std::clamp(filtered,
@@ -3324,12 +3419,17 @@ class NativePortSoundBankEngine::Impl final {
             static_cast<double>(channel.volume) / 127.0 *
             static_cast<double>(channel.expression) / 127.0 *
             static_cast<double>(channel.pressure) / 127.0;
-        sample *= aica_attenuation_gain(total_attenuation) *
+        const auto attenuation_gain =
+            !(total_attenuation < 255.0)
+                ? 0.0
+                : aica_attenuation_gain_table()[
+                      static_cast<std::uint8_t>(
+                          std::max(0.0, total_attenuation))];
+        sample *= attenuation_gain *
                   voice.velocity_gain * static_cast<double>(external_gain) *
                   channel_gain;
         voice.phase += step;
-        voice.lfo_phase +=
-            lfo_frequency(split.lfo_frequency) / config_.output_sample_rate;
+        voice.lfo_phase += voice.lfo_step;
         voice.lfo_phase -= std::floor(voice.lfo_phase);
         return sample;
     }
@@ -3346,17 +3446,17 @@ class NativePortSoundBankEngine::Impl final {
                             0.0);
         for (std::uint32_t frame = 0u; frame < frames; ++frame) {
             current_render_frame_ = rendered_frames_ + frame;
-            for (std::size_t index = 0u; index < sequences_.size(); ++index) {
-                if (!sequences_[index].value.has_value()) continue;
+            for (const auto index : active_sequence_indices_) {
                 auto& active = *sequences_[index].value;
                 const NativePortSoundSequenceHandle handle{
-                    static_cast<std::uint32_t>(index), sequences_[index].generation};
+                    index, sequences_[index].generation};
                 process_sequence_events(handle, active);
             }
 
-            for (std::size_t index = 0u; index < voices_.size(); ++index) {
+            std::size_t active_voice = 0u;
+            while (active_voice < active_voice_indices_.size()) {
+                const auto index = active_voice_indices_[active_voice];
                 auto& slot = voices_[index];
-                if (!slot.value.has_value()) continue;
                 auto& voice = *slot.value;
                 Channel direct_channel;
                 const Channel* channel = &direct_channel;
@@ -3372,16 +3472,14 @@ class NativePortSoundBankEngine::Impl final {
                         sequences_[voice.sequence->slot].generation !=
                             voice.sequence->generation ||
                         !sequences_[voice.sequence->slot].value.has_value()) {
-                        slot.value.reset();
-                        bump_generation(slot.generation);
+                        erase_voice_slot(index);
                         continue;
                     }
                     const auto& sequence =
                         *sequences_[voice.sequence->slot].value;
                     paused = sequence.state == NativePortSoundSequenceState::Paused;
                     if (sequence.state == NativePortSoundSequenceState::Stopped) {
-                        slot.value.reset();
-                        bump_generation(slot.generation);
+                        erase_voice_slot(index);
                         continue;
                     }
                     channel = &sequence.channels[voice.channel];
@@ -3398,31 +3496,45 @@ class NativePortSoundBankEngine::Impl final {
                     external_direct_level = voice.controls->direct_level;
                     external_effect_level = voice.controls->effect_level;
                 }
-                if (paused) continue;
+                if (paused) {
+                    ++active_voice;
+                    continue;
+                }
                 const auto mono = render_voice(voice,
                                                *channel,
                                                tick,
                                                external_gain,
                                                external_pitch_bend);
                 if (voice.envelope_stage == EnvelopeStage::Complete) {
-                    slot.value.reset();
-                    bump_generation(slot.generation);
+                    erase_voice_slot(index);
                     continue;
                 }
-                const auto pan = combined_pan(*voice.split,
-                                              *channel,
-                                              external_pan);
-                const auto pan_amount = static_cast<std::uint8_t>(std::clamp(
-                    std::llround(std::abs(pan) * 15.0), 0ll, 15ll));
-                const auto raw_pan = static_cast<std::uint8_t>(
-                    pan < 0.0 ? 0x10u | pan_amount : pan_amount);
-                const auto [left, right] = aica_pan_gains(raw_pan);
+                if (!voice.pan_cache_valid ||
+                    voice.cached_channel_pan != channel->pan ||
+                    voice.cached_qsound_position != channel->qsound_position ||
+                    voice.cached_external_pan != external_pan) {
+                    const auto pan = combined_pan(*voice.split,
+                                                  *channel,
+                                                  external_pan);
+                    const auto pan_amount = static_cast<std::uint8_t>(std::clamp(
+                        std::llround(std::abs(pan) * 15.0), 0ll, 15ll));
+                    const auto raw_pan = static_cast<std::uint8_t>(
+                        pan < 0.0 ? 0x10u | pan_amount : pan_amount);
+                    const auto [left, right] = aica_pan_gains(raw_pan);
+                    voice.cached_pan_left = left;
+                    voice.cached_pan_right = right;
+                    voice.cached_channel_pan = channel->pan;
+                    voice.cached_qsound_position = channel->qsound_position;
+                    voice.cached_external_pan = external_pan;
+                    voice.pan_cache_valid = true;
+                }
                 const auto direct =
                     aica_send_gain(voice.split->direct_level) *
                     static_cast<double>(external_direct_level) / 127.0;
                 const auto destination = static_cast<std::size_t>(frame) * 2u;
-                mix_[destination] += mono * direct * left;
-                mix_[destination + 1u] += mono * direct * right;
+                mix_[destination] += mono * direct * voice.cached_pan_left;
+                mix_[destination + 1u] +=
+                    mono * direct * voice.cached_pan_right;
                 const auto send =
                     mono * aica_send_gain(voice.split->effect_level) *
                     static_cast<double>(channel->effect_depth) / 127.0 *
@@ -3438,17 +3550,18 @@ class NativePortSoundBankEngine::Impl final {
                             maximum_effect_buses +
                         voice.split->effect_bus] += send;
                 }
+                ++active_voice;
             }
 
             for (auto& collection : collections_)
                 if (collection.value.has_value() &&
                     collection.value->qsound_reverb_medium)
                     process_effect_frame(*collection.value, frame);
-            for (auto& slot : sequences_) {
-                if (!slot.value.has_value() ||
-                    slot.value->state != NativePortSoundSequenceState::Playing)
+            for (const auto index : active_sequence_indices_) {
+                auto& sequence = *sequences_[index].value;
+                if (sequence.state != NativePortSoundSequenceState::Playing)
                     continue;
-                advance_sequence_time(*slot.value);
+                advance_sequence_time(sequence);
             }
         }
         for (std::size_t sample = 0u; sample < sample_count; ++sample) {
@@ -3514,7 +3627,11 @@ class NativePortSoundBankEngine::Impl final {
     NativePortAudioVoiceHandle feed_;
     std::vector<Slot<Collection>> collections_;
     std::vector<Slot<ActiveSequence>> sequences_;
+    std::vector<std::uint32_t> active_sequence_indices_;
+    std::vector<std::size_t> active_sequence_positions_;
     std::vector<Slot<SynthVoice>> voices_;
+    std::vector<std::uint32_t> active_voice_indices_;
+    std::vector<std::size_t> active_voice_positions_;
     std::vector<Slot<VoiceGroup>> groups_;
     std::vector<Slot<MidiPort>> ports_;
     std::array<Slot<NativePortSoundPcmStreamRingConfig>, maximum_mlt_banks>

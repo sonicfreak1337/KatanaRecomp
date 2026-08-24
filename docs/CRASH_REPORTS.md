@@ -73,7 +73,9 @@ Zeichen. Der v3-Contract-Detailpuffer besitzt 511 Nutzbytes und akzeptiert
 zusaetzlich die fuer bounded Adress-/Werttupel benoetigte portable
 Interpunktion. Anfuehrungszeichen, Pfadtrenner und Steuerzeichen werden
 fail-closed abgelehnt; Truncation und ungueltige Zeichen werden markiert, der
-Hash bindet weiterhin den vollstaendigen Eingabetext. Freie Hostpfade,
+Hash bindet weiterhin den vollstaendigen gebundenen und sanitizten Token;
+bei markierter Truncation ist das bewusst nicht der verworfene Eingaberest.
+Freie Hostpfade,
 unbeschraenkte Dumps und erfundene Thread-/Task-IDs werden nicht uebernommen;
 die explizit markierten festen RAM-Fenster bleiben der einzige begrenzte
 Speicherinhalt der v3-Zeile.
@@ -102,3 +104,11 @@ Auswerter koennen daher schrittweise auf die additive v3-Zeile wechseln.
 Ein Runtime-Frontier-Record ist davon getrennt: Er ist ein streng
 identitaetsgebundener Beobachtungshinweis fuer den naechsten statischen
 Analyselauf und niemals selbst Closure-Evidenz.
+
+Die automatische Inputaufzeichnung ist ebenfalls Diagnose und nie Teil der
+Titelsemantik. Ihr gebundener Journalheader markiert Kapazitaets- oder
+Speicherfehler explizit; ein so unvollstaendiger Trace wird als Replay
+fail-closed abgelehnt. Im automatischen Modus beendet weder ein volles Journal
+noch ein Flushfehler das Spiel. Ein explizit angefordertes Recording bleibt
+dagegen strikt und meldet jeden Verlust, damit kein gekappter Lauf als
+vollstaendige Reproduktion gelten kann.

@@ -2,7 +2,8 @@
 
 #include <algorithm>
 #include <limits>
-#include <list>
+#include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -23,6 +24,8 @@ namespace katana::runtime {
 namespace {
 
 constexpr std::uint32_t maximum_audio_queue_budget_frames = 192'000u * 60u;
+constexpr std::size_t native_audio_block_pool_size = 16u;
+constexpr std::uint32_t native_audio_pooled_block_frames = 16'384u;
 
 void validate_config(const NativePortAudioConfig& config) {
     if (config.format.sample_rate < 8'000u || config.format.sample_rate > 192'000u ||
@@ -41,11 +44,36 @@ void saturating_add(std::uint64_t& destination, const std::uint64_t value) noexc
 } // namespace
 
 class NativePortAudioStream::Impl final {
+#ifdef _WIN32
+    struct Block;
+    struct PendingBlock;
+#endif
+
   public:
     explicit Impl(const NativePortAudioConfig& config)
         : config_(config), owner_thread_(std::this_thread::get_id()) {
         validate_config(config_);
 #ifdef _WIN32
+        pool_.reserve(native_audio_block_pool_size);
+        free_pool_indices_.reserve(native_audio_block_pool_size);
+        for (std::size_t index = 0u; index < native_audio_block_pool_size;
+             ++index) {
+            auto block = std::make_unique<Block>();
+            block->samples.resize(
+                static_cast<std::size_t>(native_audio_pooled_block_frames) *
+                config_.format.channels);
+            block->header.lpData =
+                reinterpret_cast<LPSTR>(block->samples.data());
+            pool_.push_back(std::move(block));
+            free_pool_indices_.push_back(native_audio_block_pool_size - 1u -
+                                         index);
+        }
+        const auto maximum_oversized_blocks =
+            static_cast<std::size_t>(config_.maximum_queued_frames /
+                                     (native_audio_pooled_block_frames + 1u)) +
+            1u;
+        pending_.reserve(native_audio_block_pool_size +
+                         maximum_oversized_blocks);
         WAVEFORMATEX format{};
         format.wFormatTag = WAVE_FORMAT_PCM;
         format.nChannels = config_.format.channels;
@@ -85,30 +113,57 @@ class NativePortAudioStream::Impl final {
 #ifdef _WIN32
         if (samples.size_bytes() > std::numeric_limits<DWORD>::max())
             throw std::out_of_range("native-port-audio-buffer-bytes");
-        auto block = std::make_unique<Block>();
-        block->frames = static_cast<std::uint32_t>(frames);
-        block->samples.assign(samples.begin(), samples.end());
-        block->header.lpData = reinterpret_cast<LPSTR>(block->samples.data());
-        block->header.dwBufferLength = static_cast<DWORD>(samples.size_bytes());
-        // Allocate the list node before the driver can retain WAVEHDR or PCM
-        // storage. No throwing allocation may follow a successful write.
-        blocks_.push_back(std::move(block));
-        auto& submitted = *blocks_.back();
-        auto result = waveOutPrepareHeader(device_, &submitted.header, sizeof(submitted.header));
+        PendingBlock pending;
+        if (frames <= native_audio_pooled_block_frames &&
+            !free_pool_indices_.empty()) {
+            pending.pool_index = free_pool_indices_.back();
+            free_pool_indices_.pop_back();
+            pending.block = pool_[*pending.pool_index].get();
+            std::copy(samples.begin(), samples.end(), pending.block->samples.begin());
+        } else {
+            pending.owned = std::make_unique<Block>();
+            pending.owned->samples.assign(samples.begin(), samples.end());
+            pending.block = pending.owned.get();
+            pending.block->header.lpData =
+                reinterpret_cast<LPSTR>(pending.block->samples.data());
+        }
+        pending.block->frames = static_cast<std::uint32_t>(frames);
+        const auto buffer_bytes = static_cast<DWORD>(samples.size_bytes());
+        if (pending.block->prepared &&
+            pending.block->header.dwBufferLength != buffer_bytes) {
+            const auto unprepare = waveOutUnprepareHeader(
+                device_, &pending.block->header, sizeof(pending.block->header));
+            if (unprepare != MMSYSERR_NOERROR) {
+                if (pending.pool_index.has_value())
+                    free_pool_indices_.push_back(*pending.pool_index);
+                fail(unprepare, "resize-unprepare");
+            }
+            pending.block->prepared = false;
+        }
+        pending.block->header.dwBufferLength = buffer_bytes;
+        pending_.push_back(std::move(pending));
+        auto& submitted = *pending_.back().block;
+        auto result = submitted.prepared
+                          ? MMSYSERR_NOERROR
+                          : waveOutPrepareHeader(
+                                device_, &submitted.header, sizeof(submitted.header));
         if (result != MMSYSERR_NOERROR) {
-            blocks_.pop_back();
+            release_failed_submission(pending_.back());
+            pending_.pop_back();
             fail(result, "prepare");
         }
         submitted.prepared = true;
+        submitted.header.dwFlags &= ~WHDR_DONE;
         result = waveOutWrite(device_, &submitted.header, sizeof(submitted.header));
         if (result != MMSYSERR_NOERROR) {
             const auto unprepare =
                 waveOutUnprepareHeader(device_, &submitted.header, sizeof(submitted.header));
             if (unprepare == MMSYSERR_NOERROR) {
                 submitted.prepared = false;
-                blocks_.pop_back();
+                release_failed_submission(pending_.back());
+                pending_.pop_back();
             }
-            // If the driver still owns the header, retain it in blocks_ so
+            // If the driver still owns the header, retain it in pending_ so
             // stop_unchecked() can reset and release it deterministically.
             fail(result, "submit");
         }
@@ -123,18 +178,26 @@ class NativePortAudioStream::Impl final {
     void poll() {
         require_owner_thread();
 #ifdef _WIN32
-        while (!blocks_.empty()) {
-            auto& block = *blocks_.front();
-            if (block.prepared) {
-                const auto result =
-                    waveOutUnprepareHeader(device_, &block.header, sizeof(block.header));
+        for (auto& pending : pending_) {
+            auto& block = *pending.block;
+            if ((block.header.dwFlags & WHDR_DONE) == 0u) break;
+            if (pending.owned && block.prepared) {
+                const auto result = waveOutUnprepareHeader(
+                    device_, &block.header, sizeof(block.header));
                 if (result == WAVERR_STILLPLAYING) break;
                 if (result != MMSYSERR_NOERROR) fail(result, "unprepare");
                 block.prepared = false;
             }
             saturating_add(completed_frames_, block.frames);
             queued_frames_ = queued_frames_ >= block.frames ? queued_frames_ - block.frames : 0u;
-            blocks_.pop_front();
+            if (pending.pool_index.has_value())
+                free_pool_indices_.push_back(*pending.pool_index);
+            pending.block = nullptr;
+        }
+        if (const auto first_live = std::ranges::find_if(
+                pending_, [](const auto& value) { return value.block != nullptr; });
+            first_live != pending_.begin()) {
+            pending_.erase(pending_.begin(), first_live);
         }
 #endif
     }
@@ -186,25 +249,37 @@ class NativePortAudioStream::Impl final {
 #ifdef _WIN32
         if (device_ != nullptr) {
             observe_error(waveOutReset(device_));
-            for (auto& block : blocks_) {
+            for (auto& block : pool_) {
                 if (!block->prepared) continue;
                 const auto result =
                     waveOutUnprepareHeader(device_, &block->header, sizeof(block->header));
                 observe_error(result);
                 if (result == MMSYSERR_NOERROR) block->prepared = false;
             }
+            for (auto& pending : pending_) {
+                if (!pending.owned || !pending.block->prepared) continue;
+                const auto result = waveOutUnprepareHeader(
+                    device_, &pending.block->header, sizeof(pending.block->header));
+                observe_error(result);
+                if (result == MMSYSERR_NOERROR) pending.block->prepared = false;
+            }
             const auto close_result = waveOutClose(device_);
             observe_error(close_result);
             if (close_result == MMSYSERR_NOERROR) {
                 // A successful close is the final ownership boundary: the
                 // driver no longer retains any submitted WAVEHDR storage.
-                blocks_.clear();
+                pending_.clear();
+                pool_.clear();
             } else {
                 // The driver may still reference submitted storage after a
                 // failed close. Leak it rather than freeing live DMA data.
-                for (auto& block : blocks_)
+                for (auto& block : pool_)
                     static_cast<void>(block.release());
-                blocks_.clear();
+                for (auto& pending : pending_)
+                    if (pending.owned)
+                        static_cast<void>(pending.owned.release());
+                pending_.clear();
+                pool_.clear();
             }
             device_ = nullptr;
         }
@@ -234,6 +309,14 @@ class NativePortAudioStream::Impl final {
     }
 
   private:
+#ifdef _WIN32
+    void release_failed_submission(PendingBlock& pending) noexcept {
+        if (pending.pool_index.has_value())
+            free_pool_indices_.push_back(*pending.pool_index);
+        pending.block = nullptr;
+    }
+#endif
+
 #ifdef _WIN32
     void update_playback_position() {
         if (device_ == nullptr) return;
@@ -285,8 +368,15 @@ class NativePortAudioStream::Impl final {
         std::uint32_t frames = 0u;
         bool prepared = false;
     };
+    struct PendingBlock final {
+        Block* block = nullptr;
+        std::optional<std::size_t> pool_index;
+        std::unique_ptr<Block> owned;
+    };
     HWAVEOUT device_ = nullptr;
-    std::list<std::unique_ptr<Block>> blocks_;
+    std::vector<std::unique_ptr<Block>> pool_;
+    std::vector<std::size_t> free_pool_indices_;
+    std::vector<PendingBlock> pending_;
 #endif
     NativePortAudioConfig config_;
     std::thread::id owner_thread_;

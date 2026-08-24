@@ -112,11 +112,18 @@ int main() {
         write_codegen_project(fixture.root / "parallel", artifacts, {4u, &cache, key});
     const auto serial_snapshot = snapshot(fixture.root / "serial");
     const auto parallel_snapshot = snapshot(fixture.root / "parallel");
+    auto serial_artifacts = serial_snapshot;
+    auto parallel_artifacts = parallel_snapshot;
+    serial_artifacts.erase(".katana-generated-artifacts");
+    parallel_artifacts.erase(".katana-generated-artifacts");
     require(serial.cache_hits == 0u && serial.cache_misses == artifacts.size() &&
                 parallel.cache_hits == artifacts.size() && parallel.cache_misses == 0u &&
                 serial.written_files == parallel.written_files &&
-                serial_snapshot == parallel_snapshot,
+                serial_artifacts == parallel_artifacts,
             "Serielle und parallele Ausgabe oder Cachetreffer sind nicht deterministisch.");
+    require(serial_snapshot.at(".katana-generated-artifacts").starts_with(
+                "katana-codegen-artifacts-v2\ngeneration\tsha256:"),
+            "Der Artefaktmanifest v2 fehlt die gebundene Generation.");
     require(serial_snapshot.at("CMakeLists.txt").find("code/unit-00000.cpp") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/bigobj") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("KATANA_AOT_COMPILE_JOBS") !=
@@ -169,11 +176,57 @@ int main() {
             "Archiv nicht eigenstaendig.");
 
     const auto reused = fixture.root / "reused";
-    static_cast<void>(write_codegen_project(reused,
-                                            {{"code/unit-00000.cpp", "first-0\n"},
-                                             {"code/unit-00001.cpp", "first-1\n"},
-                                             {"metadata/blocks.json", "blocks\n"},
-                                             {"symbols/names.json", "symbols\n"}}));
+    const std::vector<ProjectArtifact> reused_artifacts = {
+        {"code/unit-00000.cpp", "first-0\n"},
+        {"code/unit-00001.cpp", "first-1\n"},
+        {"metadata/blocks.json", "blocks\n"},
+        {"symbols/names.json", "symbols\n"}};
+    static_cast<void>(write_codegen_project(reused, reused_artifacts));
+    {
+        std::ofstream externally_mutated(reused / "code/unit-00000.cpp", std::ios::binary);
+        externally_mutated << "alter-0\n";
+    }
+    static_cast<void>(write_codegen_project(reused, reused_artifacts));
+    {
+        std::ifstream repaired(reused / "code/unit-00000.cpp", std::ios::binary);
+        std::ostringstream repaired_content;
+        repaired_content << repaired.rdbuf();
+        require(repaired_content.str() == "first-0\n",
+                "Eine externe Same-Size-Mutation wird vom Manifest-Skip nicht repariert.");
+    }
+    {
+        std::ofstream v1_user_file(reused / "v1-user-owned.txt", std::ios::binary);
+        v1_user_file << "must survive v1 recovery\n";
+        std::ofstream legacy_manifest(reused / ".katana-generated-artifacts",
+                                       std::ios::binary | std::ios::trunc);
+        legacy_manifest << "katana-codegen-artifacts-v1\n"
+                        << "v1-user-owned.txt\n"
+                        << "code/unit-00000.cpp\n"
+                        << "code/unit-00001.cpp\n"
+                        << "metadata/blocks.json\n"
+                        << "symbols/names.json\n"
+                        << "CMakeLists.txt\n"
+                        << "build.ninja\n"
+                        << "compile_commands.json\n";
+    }
+    {
+        std::ofstream externally_mutated(reused / "code/unit-00000.cpp", std::ios::binary);
+        externally_mutated << "legacy-0\n";
+    }
+    static_cast<void>(write_codegen_project(reused, reused_artifacts));
+    {
+        std::ifstream recovered_manifest(reused / ".katana-generated-artifacts",
+                                         std::ios::binary);
+        std::string header;
+        std::getline(recovered_manifest, header);
+        require(header == "katana-codegen-artifacts-v2",
+                "Ein v1-Manifest wird nicht sauber in einen v2-Cold-Recovery-Lauf ueberfuehrt.");
+        std::ifstream v1_user_file(reused / "v1-user-owned.txt", std::ios::binary);
+        std::ostringstream v1_user_content;
+        v1_user_content << v1_user_file.rdbuf();
+        require(v1_user_content.str() == "must survive v1 recovery\n",
+                "Ein ungebundenes v1-Manifest autorisiert das Loeschen einer Nutzerdatei.");
+    }
     {
         std::ofstream user_file(reused / "user-notes.txt", std::ios::binary);
         user_file << "keep me\n";
@@ -196,14 +249,11 @@ int main() {
     static_cast<void>(write_codegen_project(failing, {{"code/stale.cpp", "stale\n"}}));
     std::filesystem::remove(failing / "code/stale.cpp");
     std::filesystem::create_directories(failing / "code/stale.cpp/child");
-    bool cleanup_reported = false;
-    try {
-        static_cast<void>(write_codegen_project(failing, {{"code/current.cpp", "current\n"}}));
-    } catch (const std::runtime_error& error) {
-        cleanup_reported = std::string(error.what()).find("code/stale.cpp") != std::string::npos;
-    }
-    require(cleanup_reported,
-            "Fehlgeschlagene Bereinigung wird nicht mit dem betroffenen Pfad gemeldet.");
+    static_cast<void>(
+        write_codegen_project(failing, {{"code/current.cpp", "current\n"}}));
+    require(std::filesystem::is_directory(failing / "code/stale.cpp") &&
+                std::filesystem::is_directory(failing / "code/stale.cpp/child"),
+            "Eine extern ersetzte stale Artefaktdatei wird trotz abweichender Bindung geloescht.");
 
     const auto outside = fixture.root / "outside-symlink-target";
     std::filesystem::create_directories(outside);

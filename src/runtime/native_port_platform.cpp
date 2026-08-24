@@ -1284,14 +1284,18 @@ class NativePortInputTrace final {
     static constexpr std::size_t encoded_frame_bytes =
         16u + native_port_gamepad_count * encoded_gamepad_bytes;
     static constexpr std::size_t journal_flush_frame_interval = 256u;
+    static constexpr std::uint32_t incomplete_capacity = 1u << 0u;
+    static constexpr std::uint32_t incomplete_journal_failure = 1u << 1u;
 
     NativePortInputTrace(std::string identity,
                          const std::size_t maximum_frames,
                          const bool replay,
+                         const bool stop_at_capacity = false,
                          const std::filesystem::path& record_path = {})
         : identity_(std::move(identity)),
           maximum_frames_(maximum_frames),
-          replay_(replay) {
+          replay_(replay),
+          stop_at_capacity_(stop_at_capacity) {
         frames_.reserve(maximum_frames_);
         if (!replay_ && !record_path.empty()) open_live_journal(record_path);
     }
@@ -1326,7 +1330,7 @@ class NativePortInputTrace final {
         const auto storage_frame_count =
             read_u64(input, "input-replay-storage-frame-count");
         const auto frame_bytes = read_u32(input, "input-replay-frame-bytes");
-        const auto reserved = read_u32(input, "input-replay-reserved");
+        const auto flags = read_u32(input, "input-replay-flags");
         if (version != native_port_input_recording_version ||
             contract != native_port_input_recording_contract_version ||
             slot_count != native_port_gamepad_count ||
@@ -1334,7 +1338,7 @@ class NativePortInputTrace final {
             identity_bytes > maximum_platform_identifier_bytes ||
             frame_count > storage_frame_count ||
             storage_frame_count > maximum_frames ||
-            frame_bytes != encoded_frame_bytes || reserved != 0u)
+            frame_bytes != encoded_frame_bytes || flags != 0u)
             fail_platform(NativePortPlatformFailure::InputBackend,
                           ERROR_REVISION_MISMATCH,
                           "input-replay-contract");
@@ -1346,7 +1350,7 @@ class NativePortInputTrace final {
                           "input-replay-identity");
 
         auto result = std::make_unique<NativePortInputTrace>(
-            std::move(identity), maximum_frames, true);
+            std::move(identity), maximum_frames, true, false);
         result->frames_.reserve(static_cast<std::size_t>(frame_count));
         std::uint64_t previous_sequence = 0u;
         for (std::uint64_t index = 0u; index < frame_count; ++index) {
@@ -1378,12 +1382,17 @@ class NativePortInputTrace final {
     }
 
     void append(const NativePortInputSnapshot& snapshot) {
-        if (replay_) return;
-        throw_if_journal_flush_failed();
-        if (frames_.size() == maximum_frames_)
+        if (replay_ || recording_stopped_) return;
+        if (observe_journal_flush_failure()) return;
+        if (frames_.size() == maximum_frames_) {
+            if (stop_at_capacity_) {
+                mark_recording_incomplete(incomplete_capacity);
+                return;
+            }
             fail_platform(NativePortPlatformFailure::ResourceLimit,
                           ERROR_BUFFER_OVERFLOW,
                           "input-record-frame-budget");
+        }
         frames_.push_back(snapshot);
         if (journal_view_ != nullptr) {
             const auto index = frames_.size() - 1u;
@@ -1402,10 +1411,10 @@ class NativePortInputTrace final {
                     committed_bytes);
             }
         }
-        // The asynchronous flusher records its first failure without ever
-        // throwing on the worker.  Re-check on the owner so a failed journal
-        // cannot be silently used for the next frame.
-        throw_if_journal_flush_failed();
+        // Explicit captures remain strict. Automatic crash diagnostics stop
+        // themselves and mark the trace non-replayable instead of replacing
+        // the title failure with a diagnostic-I/O failure.
+        static_cast<void>(observe_journal_flush_failure());
     }
 
     [[nodiscard]] NativePortInputSnapshot next() {
@@ -1419,52 +1428,59 @@ class NativePortInputTrace final {
     void save_atomic(const std::filesystem::path& path) {
         if (replay_) return;
         close_live_journal();
-        throw_if_journal_flush_failed();
+        static_cast<void>(observe_journal_flush_failure());
         const auto temporary = std::filesystem::path(path.native() +
                                                      std::filesystem::path(
                                                          L".tmp").native());
-        std::error_code cleanup_error;
-        std::filesystem::remove(temporary, cleanup_error);
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-        if (!output)
-            fail_platform(NativePortPlatformFailure::InputBackend,
-                          ERROR_ACCESS_DENIED,
-                          "input-record-open");
-        output.write("KATANAIR", 8);
-        write_u32(output, native_port_input_recording_version);
-        write_u32(output, native_port_input_recording_contract_version);
-        write_u32(output, native_port_gamepad_count);
-        write_u32(output, static_cast<std::uint32_t>(identity_.size()));
-        write_u64(output, frames_.size());
-        write_u64(output, frames_.size());
-        write_u32(output, static_cast<std::uint32_t>(encoded_frame_bytes));
-        write_u32(output, 0u);
-        output.write(identity_.data(),
-                     static_cast<std::streamsize>(identity_.size()));
-        for (const auto& snapshot : frames_) {
-            write_u64(output, snapshot.poll_sequence);
-            write_u64(output, snapshot.connection_generation);
-            for (const auto& gamepad : snapshot.gamepads)
-                write_gamepad(output, gamepad);
-        }
-        output.flush();
-        if (!output)
+        try {
+            std::error_code cleanup_error;
+            std::filesystem::remove(temporary, cleanup_error);
+            std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+            if (!output)
+                fail_platform(NativePortPlatformFailure::InputBackend,
+                              ERROR_ACCESS_DENIED,
+                              "input-record-open");
+            output.write("KATANAIR", 8);
+            write_u32(output, native_port_input_recording_version);
+            write_u32(output, native_port_input_recording_contract_version);
+            write_u32(output, native_port_gamepad_count);
+            write_u32(output, static_cast<std::uint32_t>(identity_.size()));
+            write_u64(output, frames_.size());
+            write_u64(output, frames_.size());
+            write_u32(output, static_cast<std::uint32_t>(encoded_frame_bytes));
+            write_u32(output, incomplete_flags_);
+            output.write(identity_.data(),
+                         static_cast<std::streamsize>(identity_.size()));
+            for (const auto& snapshot : frames_) {
+                write_u64(output, snapshot.poll_sequence);
+                write_u64(output, snapshot.connection_generation);
+                for (const auto& gamepad : snapshot.gamepads)
+                    write_gamepad(output, gamepad);
+            }
+            output.flush();
+            if (!output)
+                fail_platform(NativePortPlatformFailure::InputBackend,
+                              ERROR_WRITE_FAULT,
+                              "input-record-write");
+            output.close();
+            // Never remove an existing trace before publication. Windows'
+            // native replace operation preserves same-volume atomicity.
+            if (MoveFileExW(
+                    extended_path(temporary).c_str(),
+                    extended_path(path).c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                return;
+            std::error_code remove_error;
+            std::filesystem::remove(temporary, remove_error);
             fail_platform(NativePortPlatformFailure::InputBackend,
                           ERROR_WRITE_FAULT,
-                          "input-record-write");
-        output.close();
-        // Never remove an existing trace before publication.  Windows' native
-        // replace operation preserves the same-volume atomicity guarantee for
-        // both first publication and replacement.
-        if (MoveFileExW(extended_path(temporary).c_str(),
-                        extended_path(path).c_str(),
-                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-            return;
-        std::error_code remove_error;
-        std::filesystem::remove(temporary, remove_error);
-        fail_platform(NativePortPlatformFailure::InputBackend,
-                      ERROR_WRITE_FAULT,
-                      "input-record-atomic-rename");
+                          "input-record-atomic-rename");
+        } catch (...) {
+            std::error_code remove_error;
+            std::filesystem::remove(temporary, remove_error);
+            if (!stop_at_capacity_) throw;
+            mark_recording_incomplete(incomplete_journal_failure);
+        }
     }
 
   private:
@@ -1632,6 +1648,10 @@ class NativePortInputTrace final {
     void close_live_journal() noexcept {
         if (journal_view_ != nullptr) {
             stop_journal_flusher();
+            if (stop_at_capacity_ &&
+                journal_flush_error_code_.load(std::memory_order_acquire) !=
+                    ERROR_SUCCESS)
+                mark_recording_incomplete(incomplete_journal_failure);
             const auto committed_bytes =
                 journal_data_offset_ + frames_.size() * encoded_frame_bytes;
             // The worker is joined before the final owner-thread commit, so
@@ -1778,13 +1798,33 @@ class NativePortInputTrace final {
             std::memory_order_relaxed));
     }
 
-    void throw_if_journal_flush_failed() const {
+    void mark_recording_incomplete(const std::uint32_t flag) noexcept {
+        incomplete_flags_ |= flag;
+        recording_stopped_ = true;
+        if (journal_view_ == nullptr) return;
+        static_assert(44u % alignof(LONG) == 0u);
+        static_cast<void>(InterlockedOr(
+            reinterpret_cast<volatile LONG*>(journal_view_ + 44u),
+            static_cast<LONG>(flag)));
+        // Best effort only: the automatic diagnostic must not replace the
+        // product failure if the storage device is already failing.
+        static_cast<void>(FlushViewOfFile(
+            journal_view_, static_cast<SIZE_T>(journal_data_offset_)));
+        if (journal_file_)
+            static_cast<void>(FlushFileBuffers(journal_file_.get()));
+    }
+
+    [[nodiscard]] bool observe_journal_flush_failure() {
         const auto error = journal_flush_error_code_.load(
             std::memory_order_acquire);
-        if (error != ERROR_SUCCESS)
-            fail_platform(NativePortPlatformFailure::InputBackend,
-                          error,
-                          "input-record-journal-flush");
+        if (error == ERROR_SUCCESS) return false;
+        if (stop_at_capacity_) {
+            mark_recording_incomplete(incomplete_journal_failure);
+            return true;
+        }
+        fail_platform(NativePortPlatformFailure::InputBackend,
+                      error,
+                      "input-record-journal-flush");
     }
 
     void journal_flush_loop() noexcept {
@@ -1953,6 +1993,9 @@ class NativePortInputTrace final {
     std::string identity_;
     std::size_t maximum_frames_ = 0u;
     bool replay_ = false;
+    bool stop_at_capacity_ = false;
+    bool recording_stopped_ = false;
+    std::uint32_t incomplete_flags_ = 0u;
     std::vector<NativePortInputSnapshot> frames_;
     std::size_t cursor_ = 0u;
     std::thread journal_flush_worker_;
@@ -2073,6 +2116,7 @@ class NativePortPlatformServices::Impl final {
                     validated_identity,
                     config.maximum_input_record_frames,
                     false,
+                    config.stop_input_recording_at_capacity,
                     input_record_path_);
             }
         }

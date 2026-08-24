@@ -4,7 +4,7 @@ Der aktuelle oeffentliche Analyzervertrag ist Version `66`. Der aktuelle
 Source-Stand verwendet Runtime-ABI 122, Block-ABI 5, PlatformServices-ABI 14,
 Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
 Profilvertrag 24. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
-Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 9
+Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 10
 und Port-Metadata-Cache-
 Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
 Analyzer-ABI-Zaehler.

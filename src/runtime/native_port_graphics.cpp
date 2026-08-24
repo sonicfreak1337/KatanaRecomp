@@ -1068,6 +1068,7 @@ class NativePortGraphicsDevice::Impl final {
         index_buffer_write_offset_ = 0u;
         vertex_buffer_discarded_ = false;
         index_buffer_discarded_ = false;
+        invalidate_draw_state_shadow();
         frame_depth_buffer_ = frame.depth_buffer;
         frame_open_ = true;
         saturating_increment(snapshot_.begun_frames);
@@ -1245,8 +1246,15 @@ class NativePortGraphicsDevice::Impl final {
                 0.0f};
             constants.light_colors[index] = light.color;
         }
-        context_->UpdateSubresource(
-            draw_constants_.Get(), 0u, nullptr, &constants, 0u, 0u);
+        if (!draw_constants_valid_ ||
+            std::memcmp(&last_draw_constants_,
+                        &constants,
+                        sizeof(constants)) != 0) {
+            context_->UpdateSubresource(
+                draw_constants_.Get(), 0u, nullptr, &constants, 0u, 0u);
+            last_draw_constants_ = constants;
+            draw_constants_valid_ = true;
+        }
 
         const auto current_layout = layout();
         const auto viewport_rect =
@@ -1269,31 +1277,69 @@ class NativePortGraphicsDevice::Impl final {
         auto* const rasterizer = resolve_rasterizer_state(host_rasterizer);
         auto* const sampler = resolve_sampler_state(packet.sampler);
         constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
-        context_->OMSetBlendState(
-            blend, blend_factor.data(), 0xFFFFFFFFu);
-        context_->OMSetDepthStencilState(depth, 0u);
-        context_->RSSetState(rasterizer);
-        context_->IASetInputLayout(input_layout_.Get());
-        context_->IASetPrimitiveTopology(primitive_topology(topology));
+        if (!bound_blend_valid_ || bound_blend_ != blend) {
+            context_->OMSetBlendState(
+                blend, blend_factor.data(), 0xFFFFFFFFu);
+            bound_blend_ = blend;
+            bound_blend_valid_ = true;
+        }
+        if (!bound_depth_valid_ || bound_depth_ != depth) {
+            context_->OMSetDepthStencilState(depth, 0u);
+            bound_depth_ = depth;
+            bound_depth_valid_ = true;
+        }
+        if (!bound_rasterizer_valid_ || bound_rasterizer_ != rasterizer) {
+            context_->RSSetState(rasterizer);
+            bound_rasterizer_ = rasterizer;
+            bound_rasterizer_valid_ = true;
+        }
+        if (!draw_pipeline_bound_) {
+            context_->IASetInputLayout(input_layout_.Get());
+            context_->VSSetShader(draw_vertex_shader_.Get(), nullptr, 0u);
+            context_->VSSetConstantBuffers(
+                0u, 1u, draw_constants_.GetAddressOf());
+            context_->PSSetShader(draw_pixel_shader_.Get(), nullptr, 0u);
+            const std::array<ID3D11Buffer*, 2u> pixel_constant_buffers{
+                draw_constants_.Get(), fog_table_constants_.Get()};
+            context_->PSSetConstantBuffers(
+                0u,
+                static_cast<UINT>(pixel_constant_buffers.size()),
+                pixel_constant_buffers.data());
+            draw_pipeline_bound_ = true;
+        }
+        const auto host_topology = primitive_topology(topology);
+        if (!bound_topology_valid_ || bound_topology_ != host_topology) {
+            context_->IASetPrimitiveTopology(host_topology);
+            bound_topology_ = host_topology;
+            bound_topology_valid_ = true;
+        }
         const UINT stride = sizeof(NativePortVertex);
-        context_->IASetVertexBuffers(
-            0u, 1u, &bound_vertex_buffer, &stride,
-            &vertex_buffer_offset);
-        if (index_count != 0u)
+        if (!bound_vertex_buffer_valid_ ||
+            bound_vertex_buffer_ != bound_vertex_buffer ||
+            bound_vertex_buffer_offset_ != vertex_buffer_offset) {
+            context_->IASetVertexBuffers(
+                0u, 1u, &bound_vertex_buffer, &stride,
+                &vertex_buffer_offset);
+            bound_vertex_buffer_ = bound_vertex_buffer;
+            bound_vertex_buffer_offset_ = vertex_buffer_offset;
+            bound_vertex_buffer_valid_ = true;
+        }
+        if (index_count != 0u &&
+            (!bound_index_buffer_valid_ ||
+             bound_index_buffer_ != bound_index_buffer ||
+             bound_index_buffer_offset_ != index_buffer_offset)) {
             context_->IASetIndexBuffer(
                 bound_index_buffer, DXGI_FORMAT_R32_UINT,
                 index_buffer_offset);
-        context_->VSSetShader(draw_vertex_shader_.Get(), nullptr, 0u);
-        context_->VSSetConstantBuffers(
-            0u, 1u, draw_constants_.GetAddressOf());
-        context_->PSSetShader(draw_pixel_shader_.Get(), nullptr, 0u);
-        const std::array<ID3D11Buffer*, 2u> pixel_constant_buffers{
-            draw_constants_.Get(), fog_table_constants_.Get()};
-        context_->PSSetConstantBuffers(0u,
-                                       static_cast<UINT>(
-                                           pixel_constant_buffers.size()),
-                                       pixel_constant_buffers.data());
-        context_->PSSetSamplers(0u, 1u, &sampler);
+            bound_index_buffer_ = bound_index_buffer;
+            bound_index_buffer_offset_ = index_buffer_offset;
+            bound_index_buffer_valid_ = true;
+        }
+        if (!bound_sampler_valid_ || bound_sampler_ != sampler) {
+            context_->PSSetSamplers(0u, 1u, &sampler);
+            bound_sampler_ = sampler;
+            bound_sampler_valid_ = true;
+        }
         auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
                                     : white_view_.Get();
         context_->PSSetShaderResources(0u, 1u, &view);
@@ -1364,6 +1410,7 @@ class NativePortGraphicsDevice::Impl final {
         context_->Draw(3u, 0u);
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
+        invalidate_draw_state_shadow();
         const auto result = swap_chain_->Present(
             config_.synchronize_present ? 1u : 0u, 0u);
         if (result == DXGI_STATUS_OCCLUDED) {
@@ -1822,10 +1869,17 @@ class NativePortGraphicsDevice::Impl final {
 
     [[nodiscard]] ID3D11BlendState* resolve_blend_state(
         const NativePortBlendState& key) {
+        if (last_blend_key_valid_ && last_blend_key_ == key)
+            return last_blend_state_;
         const auto existing = std::find_if(
             blend_states_.begin(), blend_states_.end(),
             [&](const BlendStateSlot& slot) { return slot.key == key; });
-        if (existing != blend_states_.end()) return existing->value.Get();
+        if (existing != blend_states_.end()) {
+            last_blend_key_ = key;
+            last_blend_key_valid_ = true;
+            last_blend_state_ = existing->value.Get();
+            return last_blend_state_;
+        }
         require_pipeline_state_budget("blend-state-budget");
         D3D11_BLEND_DESC description{};
         auto& target = description.RenderTarget[0];
@@ -1856,15 +1910,25 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result), "blend-state");
         blend_states_.push_back({key, std::move(state)});
-        return blend_states_.back().value.Get();
+        last_blend_key_ = key;
+        last_blend_key_valid_ = true;
+        last_blend_state_ = blend_states_.back().value.Get();
+        return last_blend_state_;
     }
 
     [[nodiscard]] ID3D11DepthStencilState* resolve_depth_state(
         const NativePortDepthState& key) {
+        if (last_depth_key_valid_ && last_depth_key_ == key)
+            return last_depth_state_;
         const auto existing = std::find_if(
             depth_states_.begin(), depth_states_.end(),
             [&](const DepthStateSlot& slot) { return slot.key == key; });
-        if (existing != depth_states_.end()) return existing->value.Get();
+        if (existing != depth_states_.end()) {
+            last_depth_key_ = key;
+            last_depth_key_valid_ = true;
+            last_depth_state_ = existing->value.Get();
+            return last_depth_state_;
+        }
         require_pipeline_state_budget("depth-state-budget");
         D3D11_DEPTH_STENCIL_DESC description{};
         description.DepthEnable = key.test_enabled ? TRUE : FALSE;
@@ -1879,15 +1943,25 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result), "depth-state");
         depth_states_.push_back({key, std::move(state)});
-        return depth_states_.back().value.Get();
+        last_depth_key_ = key;
+        last_depth_key_valid_ = true;
+        last_depth_state_ = depth_states_.back().value.Get();
+        return last_depth_state_;
     }
 
     [[nodiscard]] ID3D11RasterizerState* resolve_rasterizer_state(
         const NativePortRasterizerState& key) {
+        if (last_rasterizer_key_valid_ && last_rasterizer_key_ == key)
+            return last_rasterizer_state_;
         const auto existing = std::find_if(
             rasterizer_states_.begin(), rasterizer_states_.end(),
             [&](const RasterizerStateSlot& slot) { return slot.key == key; });
-        if (existing != rasterizer_states_.end()) return existing->value.Get();
+        if (existing != rasterizer_states_.end()) {
+            last_rasterizer_key_ = key;
+            last_rasterizer_key_valid_ = true;
+            last_rasterizer_state_ = existing->value.Get();
+            return last_rasterizer_state_;
+        }
         require_pipeline_state_budget("rasterizer-state-budget");
         D3D11_RASTERIZER_DESC description{};
         description.FillMode = key.fill == NativePortFillMode::Wireframe
@@ -1909,15 +1983,25 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result), "rasterizer-state");
         rasterizer_states_.push_back({key, std::move(state)});
-        return rasterizer_states_.back().value.Get();
+        last_rasterizer_key_ = key;
+        last_rasterizer_key_valid_ = true;
+        last_rasterizer_state_ = rasterizer_states_.back().value.Get();
+        return last_rasterizer_state_;
     }
 
     [[nodiscard]] ID3D11SamplerState* resolve_sampler_state(
         const NativePortSamplerState& key) {
+        if (last_sampler_key_valid_ && last_sampler_key_ == key)
+            return last_sampler_state_;
         const auto existing = std::find_if(
             sampler_states_.begin(), sampler_states_.end(),
             [&](const SamplerStateSlot& slot) { return slot.key == key; });
-        if (existing != sampler_states_.end()) return existing->value.Get();
+        if (existing != sampler_states_.end()) {
+            last_sampler_key_ = key;
+            last_sampler_key_valid_ = true;
+            last_sampler_state_ = existing->value.Get();
+            return last_sampler_state_;
+        }
         require_pipeline_state_budget("sampler-state-budget");
         D3D11_SAMPLER_DESC description{};
         description.Filter = texture_filter(key.filter);
@@ -1936,7 +2020,10 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result), "sampler-state");
         sampler_states_.push_back({key, std::move(state)});
-        return sampler_states_.back().value.Get();
+        last_sampler_key_ = key;
+        last_sampler_key_valid_ = true;
+        last_sampler_state_ = sampler_states_.back().value.Get();
+        return last_sampler_state_;
     }
 
     void create_render_surface() {
@@ -2033,6 +2120,7 @@ class NativePortGraphicsDevice::Impl final {
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
         context_->OMSetRenderTargets(0u, nullptr, nullptr);
+        invalidate_draw_state_shadow();
         swap_chain_target_.Reset();
         const auto result = swap_chain_->ResizeBuffers(
             0u,
@@ -2494,9 +2582,26 @@ class NativePortGraphicsDevice::Impl final {
                            image.extent.height);
     }
 
+    void invalidate_draw_state_shadow() noexcept {
+        bound_viewport_valid_ = false;
+        bound_blend_valid_ = false;
+        bound_depth_valid_ = false;
+        bound_rasterizer_valid_ = false;
+        bound_topology_valid_ = false;
+        bound_vertex_buffer_valid_ = false;
+        bound_index_buffer_valid_ = false;
+        bound_sampler_valid_ = false;
+        draw_pipeline_bound_ = false;
+    }
+
     void set_viewport(const NativePortPixelRect rect) {
         if (rect.width == 0u || rect.height == 0u)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "viewport-empty");
+        if (bound_viewport_valid_ && bound_viewport_.x == rect.x &&
+            bound_viewport_.y == rect.y &&
+            bound_viewport_.width == rect.width &&
+            bound_viewport_.height == rect.height)
+            return;
         D3D11_VIEWPORT viewport{};
         viewport.TopLeftX = static_cast<float>(rect.x);
         viewport.TopLeftY = static_cast<float>(rect.y);
@@ -2511,6 +2616,8 @@ class NativePortGraphicsDevice::Impl final {
             static_cast<LONG>(rect.x + rect.width),
             static_cast<LONG>(rect.y + rect.height)};
         context_->RSSetScissorRects(1u, &scissor);
+        bound_viewport_ = rect;
+        bound_viewport_valid_ = true;
     }
 
     [[nodiscard]] std::wstring environment_value(
@@ -2823,6 +2930,40 @@ class NativePortGraphicsDevice::Impl final {
     bool index_buffer_discarded_ = false;
     std::array<float, native_port_fog_table_entries> last_fog_lookup_table_{};
     bool fog_lookup_table_valid_ = false;
+    DrawConstants last_draw_constants_{};
+    bool draw_constants_valid_ = false;
+    NativePortBlendState last_blend_key_{};
+    NativePortDepthState last_depth_key_{};
+    NativePortRasterizerState last_rasterizer_key_{};
+    NativePortSamplerState last_sampler_key_{};
+    ID3D11BlendState* last_blend_state_ = nullptr;
+    ID3D11DepthStencilState* last_depth_state_ = nullptr;
+    ID3D11RasterizerState* last_rasterizer_state_ = nullptr;
+    ID3D11SamplerState* last_sampler_state_ = nullptr;
+    bool last_blend_key_valid_ = false;
+    bool last_depth_key_valid_ = false;
+    bool last_rasterizer_key_valid_ = false;
+    bool last_sampler_key_valid_ = false;
+    NativePortPixelRect bound_viewport_{};
+    ID3D11BlendState* bound_blend_ = nullptr;
+    ID3D11DepthStencilState* bound_depth_ = nullptr;
+    ID3D11RasterizerState* bound_rasterizer_ = nullptr;
+    ID3D11SamplerState* bound_sampler_ = nullptr;
+    ID3D11Buffer* bound_vertex_buffer_ = nullptr;
+    ID3D11Buffer* bound_index_buffer_ = nullptr;
+    UINT bound_vertex_buffer_offset_ = 0u;
+    UINT bound_index_buffer_offset_ = 0u;
+    D3D11_PRIMITIVE_TOPOLOGY bound_topology_ =
+        D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    bool bound_viewport_valid_ = false;
+    bool bound_blend_valid_ = false;
+    bool bound_depth_valid_ = false;
+    bool bound_rasterizer_valid_ = false;
+    bool bound_sampler_valid_ = false;
+    bool bound_vertex_buffer_valid_ = false;
+    bool bound_index_buffer_valid_ = false;
+    bool bound_topology_valid_ = false;
+    bool draw_pipeline_bound_ = false;
     std::vector<NativePortVertex> prepared_vertices_;
     std::vector<BlendStateSlot> blend_states_;
     std::vector<DepthStateSlot> depth_states_;

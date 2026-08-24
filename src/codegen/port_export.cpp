@@ -9269,7 +9269,7 @@ std::string handwritten_main(
            "            return false;\n"
            "        auto literal_value = proven_literal_value;\n"
            "        if (!pointer_from_register) {\n"
-           "            const katana::runtime::GuestInstructionAttempt pointer_attempt(\n"
+           "            katana::runtime::ExplicitGuestInstructionAttempt pointer_attempt(\n"
            "                cpu_, descriptor.loop_header,\n"
            "                descriptor.pre_read_guest_cycles);\n"
            "            try {\n"
@@ -9278,6 +9278,7 @@ std::string handwritten_main(
            "                literal_value = katana::runtime::guest_read_u32_at(\n"
            "                    cpu_, pointer_origin, descriptor.pointer_literal_address);\n"
            "                cpu_.r[descriptor.pointer_register] = literal_value;\n"
+           "                pointer_attempt.complete();\n"
            "            } catch (const katana::runtime::MemoryAccessError& error) {\n"
            "                katana::runtime::enter_memory_exception(\n"
            "                    cpu_, error, descriptor.loop_header);\n"
@@ -9339,7 +9340,7 @@ std::string handwritten_main(
            "        }\n"
            "        std::uint32_t mmio_value = 0u;\n"
            "        {\n"
-           "            const katana::runtime::GuestInstructionAttempt read_attempt(\n"
+           "            katana::runtime::ExplicitGuestInstructionAttempt read_attempt(\n"
            "                cpu_, descriptor.read_site, descriptor.read_guest_cycles);\n"
            "            try {\n"
            "                const auto read_origin =\n"
@@ -9351,6 +9352,7 @@ std::string handwritten_main(
            "                mmio_value = katana::runtime::guest_read_u32_at(\n"
            "                    cpu_, read_origin, literal_value);\n"
            "                cpu_.r[descriptor.value_register] = mmio_value;\n"
+           "                read_attempt.complete();\n"
            "            } catch (const katana::runtime::MemoryAccessError& error) {\n"
            "                katana::runtime::enter_memory_exception(\n"
            "                    cpu_, error, descriptor.read_site);\n"
@@ -9362,17 +9364,19 @@ std::string handwritten_main(
            "            (mmio_value & test_mask) == 0u;\n"
            "        const auto finish_scalar_round = [&] {\n"
            "            {\n"
-           "                const katana::runtime::GuestInstructionAttempt test_attempt(\n"
+           "                katana::runtime::ExplicitGuestInstructionAttempt test_attempt(\n"
            "                    cpu_, descriptor.loop_header + test_offset,\n"
            "                    descriptor.test_guest_cycles);\n"
            "                cpu_.t = test_result;\n"
+           "                test_attempt.complete();\n"
            "            }\n"
            "            {\n"
-           "                const katana::runtime::GuestInstructionAttempt branch_attempt(\n"
+           "                katana::runtime::ExplicitGuestInstructionAttempt branch_attempt(\n"
            "                    cpu_, descriptor.backedge_instruction_address,\n"
            "                    descriptor.branch_guest_cycles);\n"
            "                cpu_.pc = test_result == descriptor.branch_on_true\n"
            "                    ? descriptor.loop_header : descriptor.loop_header + block_size;\n"
+           "                branch_attempt.complete();\n"
            "            }\n"
            "            katana::runtime::flush_pending_guest_cycles(cpu_, *this);\n"
            "            return true;\n"
@@ -9526,7 +9530,7 @@ std::string handwritten_main(
            "        cpu_.active_block_size = 8u;\n"
            "        std::uint32_t limit_bits = 0u;\n"
            "        {\n"
-           "            const katana::runtime::GuestInstructionAttempt limit_attempt(\n"
+           "            katana::runtime::ExplicitGuestInstructionAttempt limit_attempt(\n"
            "                cpu_, descriptor.guard_address,\n"
            "                descriptor.prefix_guest_cycles);\n"
            "            try {\n"
@@ -9539,6 +9543,7 @@ std::string handwritten_main(
            "                    : katana::runtime::guest_read_u32_at(\n"
            "                          cpu_, limit_origin, descriptor.limit_address);\n"
            "                cpu_.r[descriptor.limit_register] = limit_bits;\n"
+           "                limit_attempt.complete();\n"
            "            } catch (const katana::runtime::MemoryAccessError& error) {\n"
            "                katana::runtime::enter_memory_exception(\n"
            "                    cpu_, error, descriptor.guard_address);\n"
@@ -9565,7 +9570,7 @@ std::string handwritten_main(
            "            static_cast<std::uint32_t>(descriptor.counter_displacement));\n"
            "        std::uint32_t current_bits = 0u;\n"
            "        {\n"
-           "            const katana::runtime::GuestInstructionAttempt "
+           "            katana::runtime::ExplicitGuestInstructionAttempt "
            "first_counter_read_attempt(\n"
            "                cpu_, descriptor.first_counter_read_instruction_address,\n"
            "                descriptor.first_counter_read_guest_cycles);\n"
@@ -9576,6 +9581,7 @@ std::string handwritten_main(
            "                current_bits = katana::runtime::guest_read_u32_at(\n"
            "                    cpu_, counter_origin, staged_counter_address);\n"
            "                cpu_.r[descriptor.compare_register] = current_bits;\n"
+           "                first_counter_read_attempt.complete();\n"
            "            } catch (const katana::runtime::MemoryAccessError& error) {\n"
            "                katana::runtime::enter_memory_exception(\n"
            "                    cpu_, error,\n"
@@ -16912,6 +16918,8 @@ std::string native_product_main(
            ";\n"
            "        if (input_record_launch || automatic_input_record_launch)\n"
            "            platform_config.input_record_path = input_trace_path;\n"
+           "        platform_config.stop_input_recording_at_capacity =\n"
+           "            automatic_input_record_launch;\n"
            "        if (input_replay_launch)\n"
            "            platform_config.input_replay_path = input_trace_path;\n"
            "        const auto input_trace_mode = input_replay_launch ? 2u :\n"
@@ -31549,6 +31557,122 @@ validate_native_disc_checkpoint_latent_source_binding(
     return {true, "valid"};
 }
 
+bool analysis_generation_boundary_has_persisted_owner(
+    const katana::runtime::GameProjectFunctionBoundary& boundary,
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::span<const katana::ir::Function> program) {
+    if (boundary.size == 0u) return false;
+    const auto boundary_end =
+        static_cast<std::uint64_t>(boundary.start) + boundary.size;
+
+    // A new metadata boundary must describe a function which the committed
+    // recursive analysis already materialized with the exact same extent.
+    // CodeIdentity bytes alone authenticate bytes, not function ownership or
+    // the old CFA/FVA view.
+    const auto recursive_owner = std::find_if(
+        analysis.recursive.functions.begin(),
+        analysis.recursive.functions.end(),
+        [&](const auto& candidate) {
+            return candidate.address == boundary.start &&
+                   candidate.size == boundary.size;
+        });
+    if (recursive_owner == analysis.recursive.functions.end()) return false;
+    if (std::count_if(
+            analysis.recursive.functions.begin(),
+            analysis.recursive.functions.end(),
+            [&](const auto& candidate) {
+                return candidate.address == boundary.start;
+            }) != 1u)
+        return false;
+
+    // No persisted function range may be hidden by the newly admitted
+    // extent. Checking only interior starts misses a preceding function whose
+    // old body overlaps the new boundary.
+    for (const auto& candidate : analysis.recursive.functions) {
+        if (candidate.address == boundary.start &&
+            candidate.size == boundary.size)
+            continue;
+        const auto candidate_end =
+            static_cast<std::uint64_t>(candidate.address) + candidate.size;
+        if (candidate.size != 0u &&
+            static_cast<std::uint64_t>(candidate.address) < boundary_end &&
+            candidate_end > boundary.start)
+            return false;
+    }
+
+    const auto materialized = std::find_if(
+        program.begin(), program.end(),
+        [&](const auto& function) {
+            return function.entry_address == boundary.start;
+        });
+    if (materialized == program.end() ||
+        std::count_if(
+            program.begin(), program.end(),
+            [&](const auto& function) {
+                return function.entry_address == boundary.start;
+            }) != 1u)
+        return false;
+
+    // The persisted IR body must itself remain inside the exact boundary. A
+    // size match on the recursive candidate is not enough if stale IR carries
+    // an out-of-range block or instruction.
+    for (const auto& block : materialized->blocks) {
+        if (block.start_address < boundary.start ||
+            static_cast<std::uint64_t>(block.start_address) >= boundary_end)
+            return false;
+        for (const auto& instruction : block.instructions) {
+            if (instruction.source_address < boundary.start ||
+                static_cast<std::uint64_t>(instruction.source_address) + 2u >
+                    boundary_end)
+                return false;
+        }
+    }
+    // The lowered program is a second persisted ownership view. Reject a
+    // boundary which captures any block or instruction from another view,
+    // including a function whose entry precedes the boundary.
+    for (const auto& function : program) {
+        if (&function == &*materialized) continue;
+        if (function.entry_address >= boundary.start &&
+            static_cast<std::uint64_t>(function.entry_address) < boundary_end)
+            return false;
+        for (const auto& block : function.blocks) {
+            if (block.start_address >= boundary.start &&
+                static_cast<std::uint64_t>(block.start_address) < boundary_end)
+                return false;
+            for (const auto& instruction : block.instructions) {
+                const auto instruction_end =
+                    static_cast<std::uint64_t>(instruction.source_address) + 2u;
+                if (static_cast<std::uint64_t>(instruction.source_address) <
+                        boundary_end &&
+                    instruction_end > boundary.start)
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool validate_analysis_generation_boundary_ownership(
+    const katana::runtime::GameProjectDefinition& baseline,
+    const katana::runtime::GameProjectDefinition& current,
+    const katana::analysis::ControlFlowAnalysisResult& analysis,
+    const std::span<const katana::ir::Function> program) {
+    for (const auto& boundary : current.function_boundaries) {
+        const bool existed = std::any_of(
+            baseline.function_boundaries.begin(),
+            baseline.function_boundaries.end(),
+            [&](const auto& candidate) {
+                return same_game_project_function_boundary(
+                    boundary, candidate);
+            });
+        if (existed) continue;
+        if (!analysis_generation_boundary_has_persisted_owner(
+                boundary, analysis, program))
+            return false;
+    }
+    return true;
+}
+
 std::size_t revalidate_current_game_project_singleton_edges(
     const katana::io::ExecutableImage& image,
     const katana::runtime::GameProjectDefinition& game_project,
@@ -31596,6 +31720,20 @@ std::size_t revalidate_current_game_project_singleton_edges(
             trace_rejection(declaration.dispatch_address, "missing-table");
             continue;
         }
+        // Analysis-generation replay is not allowed to manufacture the
+        // producer proof which the normal CFA requires before publishing a
+        // GuardedComplete table.  A singleton declaration may only be
+        // revalidated when the committed analysis already recorded the
+        // identity-bound native producer; otherwise the replay would turn a
+        // ForcedOverride/partial or RuntimeOnly result into an exact edge
+        // merely because the current GameProject repeats the table cell.
+        if (analyzed->evidence !=
+            katana::analysis::ControlFlowEvidence::GuardedComplete) {
+            trace_rejection(
+                declaration.dispatch_address,
+                "persisted-native-producer-proof-missing");
+            continue;
+        }
         if (analyzed->aot_candidates_only ||
             analyzed->candidate_scan_truncated ||
             analyzed->entries.size() != 1u ||
@@ -31629,6 +31767,15 @@ std::size_t revalidate_current_game_project_singleton_edges(
                     katana::runtime::GameProjectControlTransferKind::Call
                 ? katana::analysis::IndirectControlFlowKind::Call
                 : katana::analysis::IndirectControlFlowKind::Jump;
+        if (resolution->kind != expected_kind ||
+            !resolution->definition_complete ||
+            !resolution->exact_target_guard ||
+            resolution->exact_guard_rejection_reason !=
+                katana::analysis::ExactGuardRejectionReason::None) {
+            trace_rejection(declaration.dispatch_address,
+                            "persisted-resolution-proof-missing");
+            continue;
+        }
         std::vector<std::uint32_t> observed = resolution->targets;
         observed.insert(observed.end(),
                         resolution->analysis_candidates.begin(),
@@ -32077,6 +32224,14 @@ try_reuse_native_disc_analysis_artifact(
         result.pre_bootstrap_image = pre_bootstrap_image;
         result.analysis = std::move(artifact.primary.analysis);
         result.program = std::move(artifact.primary.lowered_program);
+        if (game_project_admission_delta &&
+            !validate_analysis_generation_boundary_ownership(
+                *options.analysis_generation_game_project,
+                *options.game_project,
+                result.analysis,
+                result.program))
+            return reject(
+                "game-project-admission-delta-boundary-ownership-mismatch");
         std::size_t game_project_edges_revalidated = 0u;
         if (product_generation_reuse_requested &&
             options.game_project != nullptr) {

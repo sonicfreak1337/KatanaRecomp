@@ -2091,11 +2091,11 @@ int run_test(const int argc, char* argv[]) {
                   mmio_wait_method_begin,
                   mmio_wait_method_end - mmio_wait_method_begin);
     const auto mmio_pointer_attempt =
-        mmio_wait_method.find("GuestInstructionAttempt pointer_attempt");
+        mmio_wait_method.find("ExplicitGuestInstructionAttempt pointer_attempt");
     const auto mmio_prefix_flush =
         mmio_wait_method.find("flush_pending_guest_cycles(cpu_, *this)", mmio_pointer_attempt);
     const auto mmio_read_attempt =
-        mmio_wait_method.find("GuestInstructionAttempt read_attempt", mmio_prefix_flush);
+        mmio_wait_method.find("ExplicitGuestInstructionAttempt read_attempt", mmio_prefix_flush);
     const auto mmio_scalar_completion =
         mmio_wait_method.find("const auto finish_scalar_round", mmio_read_attempt);
     const auto mmio_scalar_flush =
@@ -3088,7 +3088,7 @@ int run_test(const int argc, char* argv[]) {
             : std::string_view{counted_loop_main}.substr(
                   counted_loop_method_begin, counted_loop_method_end - counted_loop_method_begin);
     const auto counted_limit_attempt =
-        counted_loop_method.find("GuestInstructionAttempt limit_attempt");
+        counted_loop_method.find("ExplicitGuestInstructionAttempt limit_attempt");
     const auto counted_limit_read = std::min(
         {counted_loop_method.find("guest_read_u16_at(", counted_limit_attempt),
          counted_loop_method.find("guest_read_s16_at(", counted_limit_attempt),
@@ -3105,7 +3105,7 @@ int run_test(const int argc, char* argv[]) {
     const auto counted_post_flush_limit_snapshot =
         counted_loop_method.find("post_flush_limit_unchanged", counted_post_flush_contract);
     const auto counted_first_read_attempt = counted_loop_method.find(
-        "GuestInstructionAttempt first_counter_read_attempt",
+        "ExplicitGuestInstructionAttempt first_counter_read_attempt",
         counted_post_flush_contract);
     const auto counted_first_read =
         counted_loop_method.find("guest_read_u32_at(", counted_first_read_attempt);
