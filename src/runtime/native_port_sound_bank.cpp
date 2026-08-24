@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -2038,12 +2039,27 @@ class NativePortSoundBankEngine::Impl final {
         config.effect_level = port.config.effect_level;
         config.enable_authored_loops = enable_authored_loops;
         // Validate and prepare the replacement before retiring the old
-        // sequence.  Insertion stays after retirement so a port can replace
-        // its own sequence even when the global active-sequence budget is
-        // otherwise full.
+        // sequence.  A live port replaces its own active slot in place: the
+        // prepared state is nothrow-movable, so the previous handle remains
+        // valid until every fallible validation step has completed and no
+        // second capacity check can discard it after retirement.
         auto replacement = prepare_sequence(port.collection, config);
-        if (port.sequence.has_value())
-            release_sequence_if_live(*port.sequence);
+        if (port.sequence.has_value() && sequence_is_live(*port.sequence)) {
+            static_assert(std::is_nothrow_move_assignable_v<ActiveSequence>);
+            const auto previous = *port.sequence;
+            auto& slot = require_sequence_slot(previous);
+            remove_sequence_voices(previous, false);
+            *slot.value = std::move(replacement);
+            bump_generation(slot.generation);
+            const NativePortSoundSequenceHandle result{
+                previous.slot, slot.generation};
+            port.sequence = result;
+            return result;
+        }
+        // A non-live retained handle carries no recoverable playback state.
+        // Clear it before the fallible insertion path so a failed fresh start
+        // cannot leave the MIDI port advertising a stale sequence binding.
+        port.sequence.reset();
         const auto result = insert_sequence(std::move(replacement));
         port.sequence = result;
         return result;

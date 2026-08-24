@@ -2270,6 +2270,8 @@ effective_inventory_provenance_mask(
     std::uint32_t inventory_stack_alias_creation_contract = 0u);
 
 bool merge_value(AbstractValue& destination, const AbstractValue& source);
+[[nodiscard]] bool saved_stack_epoch_authorizes_restore(
+    const AbstractValue& value);
 [[nodiscard]] AbstractValue value_with_saved_stack_epoch(
     const AbstractState& state,
     std::uint8_t source_register,
@@ -8671,9 +8673,19 @@ void load_memory_values(AbstractValue& destination,
         may_load_unresolved_stack_callback;
     materialize_observed_memory_epochs(loaded);
     materialize_domain_carriers(loaded);
+    // A SavedEpoch may carry an unknown scalar stack pointer while still
+    // representing an exact suspended stack namespace.  Authorize that
+    // namespace only when this exact cell was definitely written through a
+    // complete address domain.  Fixed-storage inventory stores deliberately
+    // clear the definite-write set, so their incomplete SavedEpoch remains a
+    // MAY carrier and can never promote an R15 restore.
     if (exact_saved_stack_restore != nullptr)
         *exact_saved_stack_restore =
-            exact_cell_load && has_saved_stack_epoch(loaded);
+            exact_cell_load &&
+            memory_range_fully_covered(
+                state.memory_definitely_written_ranges,
+                addresses.front(), width) &&
+            saved_stack_epoch_authorizes_restore(loaded);
     destination = std::move(loaded);
 }
 
@@ -9008,6 +9020,29 @@ r0_indexed_inventory_stack_slots(const AbstractState& state,
     const AbstractValue& value) {
     return value.inventory_saved_stack_epoch.present ||
            value.inventory_saved_stack_epoch.unresolved;
+}
+
+[[nodiscard]] bool saved_stack_epoch_authorizes_restore(
+    const InventorySavedStackEpoch& epoch,
+    const std::size_t depth = 0u) {
+    if (!epoch.present || epoch.unresolved ||
+        epoch.candidate_payload_lost ||
+        direct_inventory_candidate_carrier_truncated(
+            epoch.unresolved_candidate_carrier) ||
+        epoch.current_epoch_base_offsets.size() > 1u ||
+        epoch.origin_channels.size() > 1u ||
+        depth >= maximum_saved_stack_epoch_nesting)
+        return false;
+    return epoch.origin_channels.empty() ||
+           saved_stack_epoch_authorizes_restore(
+               epoch.origin_channels.front(), depth + 1u);
+}
+
+[[nodiscard]] bool saved_stack_epoch_authorizes_restore(
+    const AbstractValue& value) {
+    return !value.inventory_stack_callback_loss_unresolved &&
+           saved_stack_epoch_authorizes_restore(
+               value.inventory_saved_stack_epoch);
 }
 
 [[nodiscard]] bool has_direct_stack_callback_loss(
@@ -9934,7 +9969,14 @@ materialize_raw_stack_storage_saved_epoch(const AbstractState& state,
             memory_read_observation, state, address, width);
         const auto forwarded = state.memory_values.find(address);
         if (forwarded == state.memory_values.end()) continue;
-        if (has_saved_stack_epoch(forwarded->second)) {
+        // Fixed-storage and joined stores may retain an incomplete epoch for
+        // guarded inventory.  Only an exact cell definitely written through
+        // a complete address domain is an authoritative stack-context
+        // restore; the saved scalar itself may legitimately remain unknown.
+        if (memory_range_fully_covered(
+                state.memory_definitely_written_ranges,
+                address, width) &&
+            saved_stack_epoch_authorizes_restore(forwarded->second)) {
             restored = true;
             auto& destination_epoch =
                 destination.inventory_saved_stack_epoch;

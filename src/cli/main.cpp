@@ -65,6 +65,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -6472,7 +6473,15 @@ inline constexpr std::uintmax_t maximum_port_export_cache_state_bytes =
 inline constexpr std::string_view generated_artifact_manifest_name =
     ".katana-generated-artifacts";
 inline constexpr std::string_view generated_artifact_manifest_header =
-    "katana-codegen-artifacts-v1";
+    "katana-codegen-artifacts-v2";
+inline constexpr std::string_view generated_artifact_manifest_generation_prefix =
+    "generation\t";
+inline constexpr std::uintmax_t maximum_generated_artifact_manifest_bytes =
+    16u * 1024u * 1024u;
+inline constexpr std::size_t maximum_generated_artifact_manifest_entries =
+    131'072u;
+inline constexpr std::size_t maximum_generated_artifact_manifest_line_bytes =
+    4'608u;
 
 struct CachedPortExport {
     std::string key;
@@ -6491,6 +6500,12 @@ bool valid_cache_digest(const std::string_view value) noexcept {
            });
 }
 
+bool valid_generated_artifact_digest(const std::string_view value) noexcept {
+    constexpr std::string_view prefix = "sha256:";
+    return value.starts_with(prefix) &&
+           valid_cache_digest(value.substr(prefix.size()));
+}
+
 bool valid_generated_artifact_relative_path(
     const std::filesystem::path& relative,
     const std::string_view source_text) {
@@ -6506,7 +6521,11 @@ bool valid_generated_artifact_relative_path(
 }
 
 std::optional<std::vector<std::filesystem::path>>
-read_generated_artifact_manifest(const std::filesystem::path& generated_root) {
+read_generated_artifact_manifest(
+    const std::filesystem::path& generated_root,
+    std::map<std::filesystem::path,
+             std::pair<std::uintmax_t, std::string>>* validated_content =
+        nullptr) {
     const auto manifest = generated_root / generated_artifact_manifest_name;
     std::error_code status_error;
     const auto status =
@@ -6514,23 +6533,104 @@ read_generated_artifact_manifest(const std::filesystem::path& generated_root) {
     if (status_error || !std::filesystem::is_regular_file(status) ||
         unsafe_port_filesystem_link(manifest, status))
         return std::nullopt;
+    std::error_code size_error;
+    const auto manifest_size = std::filesystem::file_size(manifest, size_error);
+    if (size_error || manifest_size == 0u ||
+        manifest_size > maximum_generated_artifact_manifest_bytes)
+        return std::nullopt;
     std::ifstream input(manifest, std::ios::binary);
     std::string line;
     if (!input || !std::getline(input, line) ||
         line != generated_artifact_manifest_header)
         return std::nullopt;
+    if (!std::getline(input, line) ||
+        !line.starts_with(generated_artifact_manifest_generation_prefix))
+        return std::nullopt;
+    const auto generation = line.substr(
+        generated_artifact_manifest_generation_prefix.size());
+    if (!valid_generated_artifact_digest(generation)) return std::nullopt;
     std::vector<std::filesystem::path> listed;
+    std::map<std::filesystem::path,
+             std::pair<std::uintmax_t, std::string>> current_content;
+    std::string records;
+    records.reserve(static_cast<std::size_t>(manifest_size));
     std::string previous;
     while (std::getline(input, line)) {
         if (line.empty() ||
-            !valid_generated_artifact_relative_path(
-                std::filesystem::path(line), line) ||
-            (!previous.empty() && previous >= line))
+            line.size() > maximum_generated_artifact_manifest_line_bytes ||
+            listed.size() >= maximum_generated_artifact_manifest_entries)
             return std::nullopt;
-        previous = line;
-        listed.emplace_back(line);
+        const auto first_separator = line.find('\t');
+        const auto second_separator =
+            first_separator == std::string::npos
+                ? std::string::npos
+                : line.find('\t', first_separator + 1u);
+        const auto third_separator =
+            second_separator == std::string::npos
+                ? std::string::npos
+                : line.find('\t', second_separator + 1u);
+        if (first_separator == std::string::npos ||
+            second_separator == std::string::npos ||
+            third_separator == std::string::npos ||
+            line.find('\t', third_separator + 1u) != std::string::npos)
+            return std::nullopt;
+        const auto path_text = std::string_view(line).substr(0u, first_separator);
+        const auto size_text = std::string_view(line).substr(
+            first_separator + 1u,
+            second_separator - first_separator - 1u);
+        const auto sha256 = std::string_view(line).substr(
+            second_separator + 1u,
+            third_separator - second_separator - 1u);
+        const auto binding =
+            std::string_view(line).substr(third_separator + 1u);
+        std::uintmax_t declared_size = 0u;
+        const auto converted = std::from_chars(
+            size_text.data(), size_text.data() + size_text.size(), declared_size, 10);
+        if (path_text.empty() || size_text.empty() ||
+            converted.ec != std::errc{} ||
+            converted.ptr != size_text.data() + size_text.size() ||
+            !valid_generated_artifact_digest(sha256) ||
+            !valid_generated_artifact_digest(binding) ||
+            !valid_generated_artifact_relative_path(
+                std::filesystem::path(path_text), path_text) ||
+            (!previous.empty() && previous >= path_text))
+            return std::nullopt;
+        const auto relative = std::filesystem::path(path_text);
+        const auto artifact = generated_root / relative;
+        std::error_code artifact_size_error;
+        if (std::filesystem::file_size(artifact,
+                                       artifact_size_error) != declared_size ||
+            artifact_size_error)
+            return std::nullopt;
+        try {
+            // A manifest record authorizes the actual current artifact bytes,
+            // not merely a same-sized path.  Capture once here; callers which
+            // compute the whole-tree key may reuse this authenticated digest
+            // instead of rereading every generated TU a second time.
+            const auto provenance = katana::io::capture_input_provenance(
+                "generated-artifact-manifest", artifact);
+            if (provenance.size != declared_size ||
+                "sha256:" + provenance.sha256 != sha256)
+                return std::nullopt;
+            if (validated_content != nullptr) {
+                current_content.emplace(
+                    artifact,
+                    std::pair<std::uintmax_t, std::string>{
+                        declared_size, std::string(sha256)});
+            }
+        } catch (...) {
+            return std::nullopt;
+        }
+        previous = path_text;
+        listed.push_back(relative);
+        records.append(line);
+        records.push_back('\n');
     }
-    if (!input.eof()) return std::nullopt;
+    if (!input.eof() ||
+        generation != "sha256:" + katana::io::sha256_bytes(records))
+        return std::nullopt;
+    if (validated_content != nullptr)
+        *validated_content = std::move(current_content);
     return listed;
 }
 
@@ -6565,9 +6665,17 @@ collect_generated_artifact_files(const std::filesystem::path& generated_root) {
 }
 
 std::optional<std::vector<std::filesystem::path>>
-validated_generated_artifact_files(const std::filesystem::path& root) {
+validated_generated_artifact_files(
+    const std::filesystem::path& root,
+    std::map<std::filesystem::path,
+             std::pair<std::uintmax_t, std::string>>* validated_content =
+        nullptr) {
     const auto generated_root = root / "generated";
-    const auto listed = read_generated_artifact_manifest(generated_root);
+    std::map<std::filesystem::path,
+             std::pair<std::uintmax_t, std::string>> current_content;
+    const auto listed = read_generated_artifact_manifest(
+        generated_root,
+        validated_content != nullptr ? &current_content : nullptr);
     const auto actual = collect_generated_artifact_files(generated_root);
     if (!listed || !actual) return std::nullopt;
     auto expected = *listed;
@@ -6581,6 +6689,8 @@ validated_generated_artifact_files(const std::filesystem::path& root) {
     absolute_files.reserve(actual->size());
     for (const auto& relative : *actual)
         absolute_files.push_back(generated_root / relative);
+    if (validated_content != nullptr)
+        *validated_content = std::move(current_content);
     return absolute_files;
 }
 
@@ -7219,8 +7329,10 @@ std::optional<std::string> port_codegen_tree_identity(
             return skipped_progress();
         files.push_back(path);
     }
+    std::map<std::filesystem::path,
+             std::pair<std::uintmax_t, std::string>> generated_content;
     const auto generated_files =
-        validated_generated_artifact_files(root);
+        validated_generated_artifact_files(root, &generated_content);
     if (!generated_files) return skipped_progress();
     files.insert(files.end(),
                  generated_files->begin(),
@@ -7244,6 +7356,14 @@ std::optional<std::string> port_codegen_tree_identity(
     identity << "katana-port-codegen-tree-v3;";
     for (const auto& file : files) {
         const auto relative = file.lexically_relative(root).generic_string();
+        const auto generated = generated_content.find(file);
+        if (generated != generated_content.end()) {
+            const auto& [size, digest] = generated->second;
+            identity << relative << ':' << size << ':'
+                     << std::string_view(digest).substr(7u) << ';';
+            identity_progress.advance(1u);
+            continue;
+        }
         const auto provenance =
             katana::io::capture_input_provenance("port-codegen-cache", file);
         identity << relative << ':' << provenance.size << ':' << provenance.sha256 << ';';

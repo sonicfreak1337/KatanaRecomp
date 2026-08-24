@@ -6843,6 +6843,7 @@ CandidateAnalysisOutcome analyze_candidate(
 
     counters.full_pipeline_runs.fetch_add(
         1u, std::memory_order_relaxed);
+    std::string published_epoch_identity;
     katana::analysis::PersistentFunctionAnalysisEpochPublishCallback
         epoch_publish_callback;
     if (options.persistent_cache_writes_enabled &&
@@ -6851,11 +6852,19 @@ CandidateAnalysisOutcome analyze_candidate(
             [cache,
              epoch_cache_key,
              &epoch_import_blob,
+             &published_epoch_identity,
              epoch_artifact_name](
                 const std::span<const std::uint8_t> blob) {
                 const auto serialized = std::string_view(
                     reinterpret_cast<const char*>(blob.data()),
                     blob.size());
+                // Bind the in-process static state to the epoch produced by
+                // this analysis even when the optional persistent-cache write
+                // fails.  Leaving the state keyed as the imported E0 after it
+                // was derived from E1 would authorize an invalid warm reuse;
+                // an E1 key safely misses until E1 is actually persisted.
+                published_epoch_identity =
+                    "sha256:" + katana::io::sha256_bytes(serialized);
                 if (!epoch_import_blob.empty() &&
                     epoch_import_blob != serialized)
                     static_cast<void>(
@@ -6890,6 +6899,16 @@ CandidateAnalysisOutcome analyze_candidate(
         std::move(epoch_publish_callback),
         nullptr,
         generated_static_state.get());
+    // The callback may publish a newer FVA epoch than the one imported into
+    // static_key.  Bind the retained state to the epoch that was actually
+    // produced so the immediately following identical fixpoint round can
+    // reuse it instead of missing on E0 -> E1 solely because publication
+    // happened during this analysis. A failed persistent write leaves an E1
+    // state which conservatively misses the still-persisted E0 key.
+    if (generated_static_state != nullptr &&
+        !published_epoch_identity.empty())
+        generated_static_state->key.persistent_epoch_identity =
+            std::move(published_epoch_identity);
     if (analyzed.module && generated_static_state != nullptr &&
         static_cache_retained_bytes != nullptr)
         store_static_candidate_state(

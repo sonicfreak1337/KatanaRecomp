@@ -3,10 +3,14 @@ param(
     [ValidateRange(1, 256)]
     [int] $Jobs = 24,
     [ValidatePattern('^build-[A-Za-z0-9][A-Za-z0-9._-]*$')]
-    [string] $BuildDirectory = 'build-contextual-dirty'
+    [string] $BuildDirectory = 'build-contextual-dirty',
+    [ValidatePattern(
+        '^[A-Za-z0-9][A-Za-z0-9._+-]*(,[A-Za-z0-9][A-Za-z0-9._+-]*)*$')]
+    [string] $Targets = 'katana-recomp'
 )
 
 $ErrorActionPreference = 'Stop'
+$targetList = @($Targets.Split(','))
 
 function Import-KatanaVisualStudioEnvironment {
     $hasEnvironment =
@@ -170,13 +174,15 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Katana CLI configure failed: $LASTEXITCODE"
     }
-    & cmake --build $buildRoot --target katana-recomp --parallel $Jobs
+    & cmake --build $buildRoot --target @targetList --parallel $Jobs
     if ($LASTEXITCODE -ne 0) {
-        throw "Katana CLI build failed: $LASTEXITCODE"
+        throw "Katana target build failed: $LASTEXITCODE"
     }
 }
 finally {
     Pop-Location
 }
 
-Write-Output "KATANA_CLI_BUILD_SUCCESS jobs=$Jobs build=$buildRoot"
+Write-Output (
+    "KATANA_BUILD_SUCCESS jobs=$Jobs targets=" +
+    $Targets + " build=$buildRoot")

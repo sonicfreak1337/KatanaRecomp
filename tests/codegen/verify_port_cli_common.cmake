@@ -1506,7 +1506,7 @@ endif()
 
 # Jeder Whole-Export-Miss muss die vollstaendige Analyse wiederholen und exakt
 # dieselben kanonischen Artefakte wie der Cold-Lauf erzeugen.
-string(REPLACE "katana-codegen-artifacts-v1"
+string(REPLACE "katana-codegen-artifacts-v2"
                "katana-codegen-artifacts-v0"
                invalid_generated_manifest
                "${bootcache_generated_manifest_content}")

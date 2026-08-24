@@ -14,6 +14,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -242,6 +243,150 @@ struct CallbackFunctionModel final {
     bool persistent_stores_truncated = false;
 };
 
+// The retained cache owns only the immutable per-function model.  Values
+// derived from cross-function receiver/sink composition stay invocation-local;
+// copying these small summaries avoids cloning every call, field origin and
+// persistent-store vector on each fixpoint cache hit.
+struct CallbackFunctionAnalysisState final {
+    std::shared_ptr<const CallbackFunctionModel> model;
+    std::uint8_t local_sink_mask = 0u;
+    std::uint8_t local_persistent_pointer_mask = 0u;
+    std::vector<StoredCodeAddressCandidate> local_candidates;
+    bool local_candidates_truncated = false;
+};
+
+[[nodiscard]] CallbackFunctionAnalysisState make_analysis_state(
+    std::shared_ptr<const CallbackFunctionModel> model) {
+    CallbackFunctionAnalysisState result;
+    result.local_sink_mask = model->local_sink_mask;
+    result.local_persistent_pointer_mask =
+        model->local_persistent_pointer_mask;
+    result.local_candidates = model->local_candidates;
+    result.local_candidates_truncated = model->local_candidates_truncated;
+    result.model = std::move(model);
+    return result;
+}
+
+// These are retained-session cache budgets, not a claim about the analyzer's
+// total transient memory. Invocation-local composition remains governed by
+// the existing callback candidate/forwarding budgets and is never retained.
+constexpr std::size_t maximum_model_cache_entries = 8192u;
+constexpr std::size_t maximum_model_cache_bytes = 256u * 1024u * 1024u;
+
+[[nodiscard]] std::size_t saturated_add(const std::size_t left,
+                                         const std::size_t right) {
+    if (right > std::numeric_limits<std::size_t>::max() - left)
+        return std::numeric_limits<std::size_t>::max();
+    return left + right;
+}
+
+[[nodiscard]] std::size_t saturated_multiply(const std::size_t left,
+                                              const std::size_t right) {
+    if (left != 0u && right > std::numeric_limits<std::size_t>::max() / left)
+        return std::numeric_limits<std::size_t>::max();
+    return left * right;
+}
+
+template <typename T>
+[[nodiscard]] std::size_t retained_set_bytes(const std::set<T>& values) {
+    // A node-based container has no capacity to report.  Include the value
+    // and four links/color/allocator words per retained node; this is a
+    // deliberately conservative accounting bound for admission decisions.
+    constexpr std::size_t node_overhead = 4u * sizeof(void*);
+    return saturated_multiply(
+        values.size(), saturated_add(sizeof(T), node_overhead));
+}
+
+[[nodiscard]] std::size_t estimate_callback_field_origin_bytes(
+    const CallbackFieldOrigin& origin) {
+    std::size_t bytes = retained_set_bytes(origin.receiver_constants);
+    bytes = saturated_add(
+        bytes, saturated_multiply(origin.receiver_progressions.capacity(),
+                                  sizeof(ReceiverProgression)));
+    return bytes;
+}
+
+[[nodiscard]] std::size_t estimate_callback_value_bytes(
+    const CallbackValue& value) {
+    std::size_t bytes = retained_set_bytes(value.constants);
+    bytes = saturated_add(bytes, retained_set_bytes(value.code_constants));
+    bytes = saturated_add(bytes, retained_set_bytes(value.receiver_constants));
+    bytes = saturated_add(
+        bytes, saturated_multiply(value.receiver_progressions.capacity(),
+                                  sizeof(ReceiverProgression)));
+    bytes = saturated_add(
+        bytes, saturated_multiply(value.field_origins.capacity(),
+                                  sizeof(CallbackFieldOrigin)));
+    for (const auto& origin : value.field_origins)
+        bytes = saturated_add(bytes,
+                              estimate_callback_field_origin_bytes(origin));
+    return bytes;
+}
+
+[[nodiscard]] std::size_t estimate_stored_candidate_bytes(
+    const StoredCodeAddressCandidate& candidate) {
+    std::size_t bytes = saturated_multiply(
+        candidate.store_instruction_addresses.capacity(), sizeof(std::uint32_t));
+    bytes = saturated_add(
+        bytes, saturated_multiply(candidate.evidence_call_sites.capacity(),
+                                  sizeof(std::uint32_t)));
+    bytes = saturated_add(
+        bytes, saturated_multiply(candidate.evidence_callees.capacity(),
+                                  sizeof(std::uint32_t)));
+    return bytes;
+}
+
+[[nodiscard]] std::size_t estimate_callback_model_bytes(
+    const CallbackFunctionModel& model) {
+    std::size_t bytes = sizeof(CallbackFunctionModel);
+    bytes = saturated_add(
+        bytes, saturated_multiply(model.calls.capacity(),
+                                  sizeof(CallbackCall)));
+    for (const auto& call : model.calls)
+        for (const auto& argument : call.arguments)
+            bytes = saturated_add(
+                bytes, estimate_callback_value_bytes(argument));
+
+    bytes = saturated_add(
+        bytes, saturated_multiply(model.field_sinks.capacity(),
+                                  sizeof(CallbackFieldSink)));
+    for (const auto& sink : model.field_sinks)
+        bytes = saturated_add(
+            bytes, estimate_callback_field_origin_bytes(sink.field));
+
+    bytes = saturated_add(
+        bytes, saturated_multiply(model.persistent_stores.capacity(),
+                                  sizeof(CallbackPersistentStore)));
+    for (const auto& store : model.persistent_stores) {
+        bytes = saturated_add(
+            bytes, estimate_callback_value_bytes(store.source));
+        bytes = saturated_add(bytes,
+                              estimate_callback_value_bytes(store.receiver));
+    }
+
+    constexpr std::size_t map_node_overhead = 4u * sizeof(void*);
+    bytes = saturated_add(
+        bytes, saturated_multiply(
+                   model.indexed_persistent_stores.size(),
+                   saturated_add(
+                       sizeof(std::pair<const std::uint32_t,
+                                         CallbackIndexedPersistentStore>),
+                       map_node_overhead)));
+    for (const auto& [site, store] : model.indexed_persistent_stores) {
+        static_cast<void>(site);
+        bytes = saturated_add(
+            bytes, estimate_callback_value_bytes(store.source));
+    }
+
+    bytes = saturated_add(
+        bytes, saturated_multiply(model.local_candidates.capacity(),
+                                  sizeof(StoredCodeAddressCandidate)));
+    for (const auto& candidate : model.local_candidates)
+        bytes = saturated_add(
+            bytes, estimate_stored_candidate_bytes(candidate));
+    return bytes;
+}
+
 struct CallbackModelLineBinding final {
     std::uint32_t address = 0u;
     std::uint16_t opcode = 0u;
@@ -274,6 +419,33 @@ struct CallbackModelInputBinding final {
 
     bool operator==(const CallbackModelInputBinding&) const = default;
 };
+
+[[nodiscard]] std::size_t estimate_callback_binding_bytes(
+    const CallbackModelInputBinding& binding) {
+    std::size_t bytes = sizeof(CallbackModelInputBinding);
+    const auto add_addresses = [&](const auto& addresses) {
+        bytes = saturated_add(
+            bytes, saturated_multiply(addresses.capacity(),
+                                      sizeof(std::uint32_t)));
+    };
+    add_addresses(binding.block_addresses);
+    add_addresses(binding.direct_callees);
+    add_addresses(binding.indirect_call_sites);
+    add_addresses(binding.shared_block_addresses);
+    add_addresses(binding.tail_jump_targets);
+    bytes = saturated_add(
+        bytes, saturated_multiply(binding.blocks.capacity(),
+                                  sizeof(CallbackModelBlockBinding)));
+    for (const auto& block : binding.blocks) {
+        add_addresses(block.successors);
+        bytes = saturated_add(
+            bytes, saturated_multiply(block.lines.capacity(),
+                                      sizeof(CallbackModelLineBinding)));
+    }
+    // Account conservatively for the shared owner and the node-based cache
+    // map envelope in addition to the dynamic binding/model payloads.
+    return saturated_add(bytes, 6u * sizeof(void*));
+}
 
 [[nodiscard]] std::optional<CallbackModelInputBinding>
 callback_model_input_binding(
@@ -1566,7 +1738,7 @@ void observe_loaded_static_descriptor_table(
     }
 }
 
-void observe_persistent_store(CallbackFunctionModel& model,
+void observe_persistent_store(CallbackFunctionAnalysisState& state,
                               const katana::io::ExecutableImage& image,
                               const CallbackValue& source,
                               const std::uint32_t instruction_address,
@@ -1580,20 +1752,20 @@ void observe_persistent_store(CallbackFunctionModel& model,
     // an ordinary data pointer stored at (for example) record +4 poisons every
     // caller of the constructor as a higher-order callback API.
     if (receiver_identity_proven) {
-        model.local_sink_mask = static_cast<std::uint8_t>(
-            model.local_sink_mask | source.direct_input_mask);
+        state.local_sink_mask = static_cast<std::uint8_t>(
+            state.local_sink_mask | source.direct_input_mask);
     }
     if (source.code_constants_truncated)
-        model.local_candidates_truncated = true;
+        state.local_candidates_truncated = true;
     // The field offset is derived from an actual indirect-call load. Preserve
     // bounded executable scalars through this local model; the terminal
     // inventory gate below still requires either a complete standalone shape
     // or an independent non-root function-entry hint before publication.
     for (const auto constant : source.constants)
-        add_candidate(model.local_candidates, image, constant,
+        add_candidate(state.local_candidates, image, constant,
                       instruction_address);
     for (const auto constant : source.code_constants)
-        add_candidate(model.local_candidates, image, constant,
+        add_candidate(state.local_candidates, image, constant,
                       instruction_address);
 }
 
@@ -2452,8 +2624,9 @@ void canonicalize_candidate(StoredCodeAddressCandidate& candidate) {
 struct StaticCallbackInventorySession::Impl final {
     struct CachedModel final {
         CallbackModelInputBinding binding;
-        CallbackFunctionModel model;
+        std::shared_ptr<const CallbackFunctionModel> model;
         std::size_t limited_evaluations = 0u;
+        std::size_t retained_bytes = 0u;
     };
 
     bool image_bound = false;
@@ -2461,6 +2634,7 @@ struct StaticCallbackInventorySession::Impl final {
     std::uint64_t immutable_generation = 0u;
     std::vector<katana::io::ImageImmutableRange> immutable_ranges;
     std::map<std::uint32_t, CachedModel> models;
+    std::size_t retained_model_bytes = 0u;
 
     void bind(const katana::io::ExecutableImage& image) {
         const auto ranges = image.immutable_ranges();
@@ -2471,7 +2645,10 @@ struct StaticCallbackInventorySession::Impl final {
             immutable_ranges.size() == ranges.size() &&
             std::equal(immutable_ranges.begin(), immutable_ranges.end(),
                        ranges.begin(), ranges.end());
-        if (!same_image) models.clear();
+        if (!same_image) {
+            models.clear();
+            retained_model_bytes = 0u;
+        }
         image_bound = true;
         image_identity = image.analysis_instance_identity();
         immutable_generation = image.immutable_generation();
@@ -2484,6 +2661,7 @@ struct StaticCallbackInventorySession::Impl final {
         immutable_generation = 0u;
         immutable_ranges.clear();
         models.clear();
+        retained_model_bytes = 0u;
     }
 };
 
@@ -2634,9 +2812,11 @@ GuardedCodeInventory analyze_static_callback_inventory(
     bool candidate_values_truncated = false;
     bool forwarding_truncated = false;
     std::size_t receiver_may_alias_stores = 0u;
-    std::map<std::uint32_t, CallbackFunctionModel> models;
+    std::map<std::uint32_t, CallbackFunctionAnalysisState> models;
     std::size_t model_cache_hits = 0u;
     std::size_t model_cache_misses = 0u;
+    std::size_t model_cache_budget_skips = 0u;
+    std::size_t model_cache_derived = 0u;
     std::set<std::uint32_t> current_model_entries;
     if (session != nullptr) session->impl_->bind(image);
     for (const auto& function : functions) {
@@ -2650,8 +2830,9 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 cached->second.binding == *binding) {
                 limited_evaluations +=
                     cached->second.limited_evaluations;
-                models.emplace(function.entry_address,
-                               cached->second.model);
+                models.emplace(
+                    function.entry_address,
+                    make_analysis_state(cached->second.model));
                 ++model_cache_hits;
                 continue;
             }
@@ -2662,26 +2843,51 @@ GuardedCodeInventory analyze_static_callback_inventory(
                                           native_entry_shapes,
                                           &model_limited_evaluations);
         limited_evaluations += model_limited_evaluations;
+        auto shared_model =
+            std::make_shared<CallbackFunctionModel>(std::move(model));
         if (session != nullptr && binding.has_value()) {
-            session->impl_->models.insert_or_assign(
-                function.entry_address,
-                StaticCallbackInventorySession::Impl::CachedModel{
-                    *binding, model, model_limited_evaluations});
+            auto& cache = *session->impl_;
+            const auto cached = cache.models.find(function.entry_address);
+            if (cached != cache.models.end()) {
+                cache.retained_model_bytes -= cached->second.retained_bytes;
+                cache.models.erase(cached);
+            }
+            const auto retained_bytes = saturated_add(
+                estimate_callback_model_bytes(*shared_model),
+                estimate_callback_binding_bytes(*binding));
+            const bool fits_entry_budget =
+                cache.models.size() < maximum_model_cache_entries;
+            const bool fits_byte_budget =
+                retained_bytes <= maximum_model_cache_bytes &&
+                retained_bytes <=
+                    maximum_model_cache_bytes - cache.retained_model_bytes;
+            if (fits_entry_budget && fits_byte_budget) {
+                cache.models.emplace(
+                    function.entry_address,
+                    StaticCallbackInventorySession::Impl::CachedModel{
+                        *binding, shared_model, model_limited_evaluations,
+                        retained_bytes});
+                cache.retained_model_bytes += retained_bytes;
+            } else {
+                ++model_cache_budget_skips;
+            }
         }
-        models.insert_or_assign(function.entry_address, std::move(model));
+        models.insert_or_assign(
+            function.entry_address,
+            make_analysis_state(std::move(shared_model)));
         ++model_cache_misses;
     }
     if (session != nullptr) {
         for (auto cached = session->impl_->models.begin();
              cached != session->impl_->models.end();) {
-            if (!current_model_entries.contains(cached->first))
+            if (!current_model_entries.contains(cached->first)) {
+                session->impl_->retained_model_bytes -=
+                    cached->second.retained_bytes;
                 cached = session->impl_->models.erase(cached);
-            else
+            } else {
                 ++cached;
+            }
         }
-        std::cerr << "KATANA_STATIC_CALLBACK_MODEL_CACHE hits="
-                  << model_cache_hits << " misses=" << model_cache_misses
-                  << " retained=" << session->impl_->models.size() << '\n';
     }
 
     // A receiver lane is allowed to become wide, but a lost receiver relation
@@ -2690,8 +2896,8 @@ GuardedCodeInventory analyze_static_callback_inventory(
     // owner/field instead of inviting a blind global budget increase.
     std::size_t receiver_loss_diagnostics = 0u;
     constexpr std::size_t maximum_receiver_loss_diagnostics = 12u;
-    for (const auto& [entry, model] : models) {
-        for (const auto& sink : model.field_sinks) {
+    for (const auto& [entry, state] : models) {
+        for (const auto& sink : state.model->field_sinks) {
             if (!sink.field.receiver_constants_truncated ||
                 receiver_loss_diagnostics >=
                     maximum_receiver_loss_diagnostics)
@@ -2706,7 +2912,7 @@ GuardedCodeInventory analyze_static_callback_inventory(
                       << '\n';
             ++receiver_loss_diagnostics;
         }
-        for (const auto& store : model.persistent_stores) {
+        for (const auto& store : state.model->persistent_stores) {
             if (!store.receiver.receiver_constants_truncated ||
                 receiver_loss_diagnostics >=
                     maximum_receiver_loss_diagnostics)
@@ -2731,21 +2937,25 @@ GuardedCodeInventory analyze_static_callback_inventory(
     using CallbackFieldShape = std::pair<std::int32_t, std::uint8_t>;
     std::map<CallbackFieldShape, std::vector<const CallbackFieldSink*>>
         field_sinks_by_shape;
-    for (const auto& [entry, model] : models) {
+    for (const auto& [entry, state] : models) {
         static_cast<void>(entry);
         candidate_values_truncated =
-            candidate_values_truncated || model.field_sinks_truncated ||
-            model.persistent_stores_truncated;
-        for (const auto& sink : model.field_sinks)
+            candidate_values_truncated ||
+            state.model->field_sinks_truncated ||
+            state.model->persistent_stores_truncated;
+        for (const auto& sink : state.model->field_sinks)
             field_sinks_by_shape[{sink.field.displacement,
                                   sink.field.width}]
                 .push_back(&sink);
     }
-    for (auto& [entry, model] : models) {
+    for (auto& [entry, state] : models) {
+        const auto& model = *state.model;
+        if (model.persistent_stores.empty()) continue;
+        ++model_cache_derived;
         for (const auto& store : model.persistent_stores) {
-            model.local_persistent_pointer_mask =
+            state.local_persistent_pointer_mask =
                 static_cast<std::uint8_t>(
-                    model.local_persistent_pointer_mask |
+                    state.local_persistent_pointer_mask |
                     store.source.input_mask);
             // R0-indexed stores use a separate caller-domain/address proof.
             // Treating their dynamic index as a record receiver and their
@@ -2772,7 +2982,7 @@ GuardedCodeInventory analyze_static_callback_inventory(
                                                           witness.receiver);
                     });
             if (locally_typed_callback) {
-                observe_persistent_store(model, image, store.source,
+                observe_persistent_store(state, image, store.source,
                                          store.instruction_address,
                                          store.width, true);
                 continue;
@@ -2797,7 +3007,7 @@ GuardedCodeInventory analyze_static_callback_inventory(
                                      possible_receiver;
                 if (!same_local_receiver && !same_exact_receiver) continue;
                 matched = true;
-                observe_persistent_store(model, image, store.source,
+                observe_persistent_store(state, image, store.source,
                                          store.instruction_address,
                                          store.width, true);
                 break;
@@ -2809,12 +3019,21 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 // identity-checked guarded roots, but cannot omit a callback
                 // merely because a record loop exceeded the exact receiver
                 // inventory.
-                observe_persistent_store(model, image, store.source,
+                observe_persistent_store(state, image, store.source,
                                          store.instruction_address,
                                          store.width, false);
                 ++receiver_may_alias_stores;
             }
         }
+    }
+    if (session != nullptr) {
+        std::cerr << "KATANA_STATIC_CALLBACK_MODEL_CACHE hits="
+                  << model_cache_hits << " misses=" << model_cache_misses
+                  << " retained=" << session->impl_->models.size()
+                  << " retained_bytes="
+                  << session->impl_->retained_model_bytes
+                  << " budget_skips=" << model_cache_budget_skips
+                  << " derived=" << model_cache_derived << '\n';
     }
 
     std::map<std::uint32_t, std::uint8_t> sink_masks;
@@ -2823,14 +3042,15 @@ GuardedCodeInventory analyze_static_callback_inventory(
         callers_by_callee;
     std::deque<std::uint32_t> pending;
     std::set<std::uint32_t> queued;
-    for (const auto& [entry, model] : models) {
-        sink_masks[entry] = model.local_sink_mask;
+    for (const auto& [entry, state] : models) {
+        sink_masks[entry] = state.local_sink_mask;
         persistent_pointer_masks[entry] =
-            model.local_persistent_pointer_mask;
-        if (model.local_sink_mask != 0u && queued.insert(entry).second)
+            state.local_persistent_pointer_mask;
+        if (state.local_sink_mask != 0u && queued.insert(entry).second)
             pending.push_back(entry);
-        for (std::size_t index = 0u; index < model.calls.size(); ++index)
-            callers_by_callee[model.calls[index].callee].push_back(
+        for (std::size_t index = 0u;
+             index < state.model->calls.size(); ++index)
+            callers_by_callee[state.model->calls[index].callee].push_back(
                 {entry, index});
     }
 
@@ -2859,10 +3079,11 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 for (const auto& [caller, call_index] : callers->second) {
                     const auto model = models.find(caller);
                     if (model == models.end() ||
-                        call_index >= model->second.calls.size())
+                        call_index >= model->second.model->calls.size())
                         continue;
                     std::uint8_t propagated = 0u;
-                    const auto& call = model->second.calls[call_index];
+                    const auto& call =
+                        model->second.model->calls[call_index];
                     for (std::size_t argument = 0u; argument < 4u;
                          ++argument) {
                         if ((mask & static_cast<std::uint8_t>(
@@ -2900,10 +3121,11 @@ GuardedCodeInventory analyze_static_callback_inventory(
         if (callers == callers_by_callee.end()) continue;
         for (const auto& [caller, call_index] : callers->second) {
             const auto model = models.find(caller);
-            if (model == models.end() || call_index >= model->second.calls.size())
+            if (model == models.end() ||
+                call_index >= model->second.model->calls.size())
                 continue;
             std::uint8_t propagated = 0u;
-            const auto& call = model->second.calls[call_index];
+            const auto& call = model->second.model->calls[call_index];
             for (std::size_t argument = 0u; argument < 4u; ++argument) {
                 if ((sink & static_cast<std::uint8_t>(1u << argument)) == 0u)
                     continue;
@@ -2933,10 +3155,10 @@ GuardedCodeInventory analyze_static_callback_inventory(
         std::map<std::uint32_t, const FunctionInfo*> functions_by_entry;
         for (const auto& function : functions)
             functions_by_entry.emplace(function.entry_address, &function);
-        for (const auto& [entry, model] : models) {
+        for (const auto& [entry, state] : models) {
             const auto function = functions_by_entry.find(entry);
             if (function == functions_by_entry.end()) continue;
-            for (const auto& call : model.calls) {
+            for (const auto& call : state.model->calls) {
                 const auto sink = sink_masks.find(call.callee);
                 if (sink == sink_masks.end()) continue;
                 for (std::uint8_t argument = 0u; argument < 4u;
@@ -3004,9 +3226,9 @@ GuardedCodeInventory analyze_static_callback_inventory(
                 callback_field_sink_contracts->end(),
                 structural.begin(), structural.end());
         }
-        for (const auto& [entry, model] : models) {
+        for (const auto& [entry, state] : models) {
             static_cast<void>(entry);
-            for (const auto& sink : model.field_sinks) {
+            for (const auto& sink : state.model->field_sinks) {
                 callback_field_sink_contracts->push_back(
                     {sink.function_address,
                      sink.call_instruction_address,
@@ -3075,8 +3297,8 @@ GuardedCodeInventory analyze_static_callback_inventory(
         merge_candidate(candidate);
     candidate_values_truncated =
         candidate_values_truncated || static_vectors.truncated;
-    for (const auto& [entry, model] : models) {
-        for (const auto& candidate : model.local_candidates)
+    for (const auto& [entry, state] : models) {
+        for (const auto& candidate : state.local_candidates)
             merge_candidate(candidate);
         // Some bootstrap registrars store code literals into a global vector
         // through an incoming selector. Admit those literals only when the
@@ -3085,7 +3307,7 @@ GuardedCodeInventory analyze_static_callback_inventory(
         // a complete finite argument domain. A plausible RAM address or an
         // alignment-only index is deliberately insufficient.
         for (const auto& [store_site, store] :
-             model.indexed_persistent_stores) {
+             state.model->indexed_persistent_stores) {
             static_cast<void>(store_site);
             if (!store.destination_identity_complete ||
                 !store.base.has_value() ||
@@ -3103,12 +3325,13 @@ GuardedCodeInventory analyze_static_callback_inventory(
             for (const auto& [caller, call_index] : callers->second) {
                 const auto owner = models.find(caller);
                 if (owner == models.end() ||
-                    call_index >= owner->second.calls.size() ||
+                    call_index >= owner->second.model->calls.size() ||
                     store.byte_offset->argument >= 4u) {
                     caller_domain_complete = false;
                     break;
                 }
-                const auto& call = owner->second.calls[call_index];
+                const auto& call =
+                    owner->second.model->calls[call_index];
                 const auto& argument =
                     call.arguments[store.byte_offset->argument];
                 if (!argument.constants_complete ||
@@ -3167,8 +3390,8 @@ GuardedCodeInventory analyze_static_callback_inventory(
         }
         candidate_values_truncated =
             candidate_values_truncated ||
-            model.local_candidates_truncated;
-        for (const auto& call : model.calls) {
+            state.local_candidates_truncated;
+        for (const auto& call : state.model->calls) {
             const auto sink = sink_masks.find(call.callee);
             if (sink == sink_masks.end()) continue;
             for (std::size_t argument = 0u; argument < 4u; ++argument) {
@@ -3217,15 +3440,17 @@ GuardedCodeInventory analyze_static_callback_inventory(
         raw_candidates > maximum_inventory_candidates ||
         candidates.size() > maximum_inventory_candidates;
     if (candidate_values_truncated) {
-        const auto count_models = [&](const auto selector) {
+        const auto count_base_models = [&](const auto selector) {
             return std::count_if(
                 models.begin(), models.end(),
-                [&](const auto& item) { return selector(item.second); });
+                [&](const auto& item) {
+                    return selector(*item.second.model);
+                });
         };
         std::size_t truncated_forwarded_arguments = 0u;
-        for (const auto& [entry, model] : models) {
+        for (const auto& [entry, state] : models) {
             static_cast<void>(entry);
-            for (const auto& call : model.calls)
+            for (const auto& call : state.model->calls)
                 truncated_forwarded_arguments += std::count_if(
                     call.arguments.begin(), call.arguments.end(),
                     [](const auto& argument) {
@@ -3235,17 +3460,19 @@ GuardedCodeInventory analyze_static_callback_inventory(
         std::cerr
             << "KATANA_STATIC_CALLBACK_INVENTORY_LOSS "
             << "field_sink_functions="
-            << count_models([](const auto& model) {
+            << count_base_models([](const auto& model) {
                    return model.field_sinks_truncated;
                })
             << " persistent_store_functions="
-            << count_models([](const auto& model) {
+            << count_base_models([](const auto& model) {
                    return model.persistent_stores_truncated;
                })
             << " local_candidate_functions="
-            << count_models([](const auto& model) {
-                   return model.local_candidates_truncated;
-               })
+            << std::count_if(
+                   models.begin(), models.end(),
+                   [](const auto& item) {
+                       return item.second.local_candidates_truncated;
+                   })
             << " forwarded_arguments="
             << truncated_forwarded_arguments
             << " receiver_may_alias_stores="

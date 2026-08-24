@@ -450,7 +450,8 @@ bool manifest_is_still_bound(const std::filesystem::path& root,
 std::optional<ArtifactFileBinding> atomic_write_file(
     const std::filesystem::path& root,
     const std::filesystem::path& relative,
-    const std::string_view content) {
+    const std::string_view content,
+    const std::string_view expected_sha256) {
     const auto safe_relative = validate_relative_path(relative);
     auto target = secure_artifact_path(root, safe_relative);
     std::filesystem::create_directories(target.parent_path());
@@ -476,11 +477,19 @@ std::optional<ArtifactFileBinding> atomic_write_file(
         if (!output) {
             throw std::runtime_error("Codegen-Projektdatei konnte nicht geschrieben werden.");
         }
-        const auto prepared = capture_file_binding(temporary);
-        if (!prepared || prepared->size != content.size()) {
+        // Bind the bytes that actually reached the temporary file, not only
+        // its path/inode metadata.  A same-size in-place mutation can retain
+        // the object token on both Windows and POSIX; stable hashing before
+        // rename closes that window while keeping unchanged manifest hits on
+        // the zero-I/O fast path.
+        const auto prepared_hash = hash_file_stably(
+            temporary, static_cast<std::uintmax_t>(content.size()));
+        if (!prepared_hash || prepared_hash->sha256 != expected_sha256) {
             throw std::runtime_error(
-                "Codegen-Projektdatei konnte vor der Publikation nicht gebunden werden.");
+                "Codegen-Projektdatei stimmt vor der Publikation nicht mit "
+                "dem autoritativen Inhalt ueberein.");
         }
+        const auto& prepared = prepared_hash->binding;
         target = secure_artifact_path(root, safe_relative);
         temporary = secure_artifact_path(root, temporary_relative);
 #ifdef _WIN32
@@ -498,14 +507,13 @@ std::optional<ArtifactFileBinding> atomic_write_file(
             throw std::system_error(rename_error,
                                     "Codegen-Projektdatei konnte nicht atomar ersetzt werden");
 #endif
-        // The bytes were hashed from the in-memory authoritative content
-        // before this call. Binding the same temp-file identity across the
-        // atomic rename excludes a racing same-size replacement without a
-        // second full read of every freshly emitted translation unit.
+        // The exact temporary bytes were authenticated above.  Binding the
+        // same object identity across the atomic rename then excludes a
+        // replacement between authentication and publication.
         const auto published = capture_file_binding(target);
-        if (!published || prepared->object_token.empty() ||
-            published->object_token != prepared->object_token ||
-            published->size != prepared->size)
+        if (!published || prepared.object_token.empty() ||
+            published->object_token != prepared.object_token ||
+            published->size != prepared.size)
             return std::nullopt;
         return published;
     } catch (...) {
@@ -555,7 +563,8 @@ ArtifactManifestEntry write_file(
                         *observed};
         } else {
             const auto published =
-                atomic_write_file(root, safe_relative, content);
+                atomic_write_file(root, safe_relative, content,
+                                  expected_sha256);
             if (published && published->size == content.size())
                 return {safe_relative,
                         published->size,
@@ -1050,9 +1059,13 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
         manifest_entries.push_back(std::move(outcome.manifest_entry));
     for (auto& entry : build_manifest_entries)
         manifest_entries.push_back(std::move(entry));
+    const auto manifest_content = artifact_manifest(manifest_entries);
+    const auto manifest_sha256 =
+        "sha256:" + katana::io::sha256_bytes(manifest_content);
     if (!atomic_write_file(root,
                            artifact_manifest_name,
-                           artifact_manifest(manifest_entries)))
+                           manifest_content,
+                           manifest_sha256))
         throw std::runtime_error(
             "Katana-Artefaktmanifest konnte nicht stabil publiziert werden.");
     write_progress.advance(1u);
