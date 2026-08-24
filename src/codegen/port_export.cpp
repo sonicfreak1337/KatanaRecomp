@@ -32586,6 +32586,7 @@ static PortExportResult export_dreamcast_port_project_impl(
     const auto partition_configuration_hash = katana::io::sha256_bytes(
         std::string("cpp-port-partition-v") +
         std::to_string(port_partition_emission_schema_version) + ':' +
+        std::to_string(katana::runtime::block_abi_version) + ':' +
         std::string(port_namespace) + ':' +
         std::to_string(product_entry_address) + ':' +
         std::to_string(options.partition_options.maximum_functions) + ':' +
@@ -32604,6 +32605,13 @@ static PortExportResult export_dreamcast_port_project_impl(
     // all AOT sources. Metadata keeps the complete definition identity.
     const auto partition_overrides_hash = katana::io::sha256_bytes(
         "katana-port-partition-linkage-reduction-v2");
+    const auto partition_codegen_implementation_identity =
+        katana::io::sha256_bytes(
+            std::string("katana-port-partition-implementation-v1:") +
+            options.codegen_implementation_identity + ':' +
+            std::string(
+                katana::build_contract::
+                    partition_codegen_component_identity));
     const auto metadata_manifest_hash = katana::io::sha256_bytes(
         options.target_name + ':' +
         std::to_string(port_project_contract_version));
@@ -32784,7 +32792,7 @@ static PortExportResult export_dreamcast_port_project_impl(
             (std::filesystem::path("partition") / translation_unit_name).generic_string();
         if (partition_cache) {
             cache_key = make_codegen_cache_key(
-                {std::string(prepared.project_identity),
+                {partition.content_sha256,
                  partition.content_sha256,
                  partition_emission_hash,
                  "cpp-port",
@@ -32795,9 +32803,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                  2u,
                  native_aot_emission_profile_version,
                  options.tool_version,
-                 std::string(
-                     katana::build_contract::
-                         partition_codegen_component_identity)});
+                 partition_codegen_implementation_identity});
             if (auto cached = partition_cache->load_integrity_bounded(
                     cache_key,
                     cache_artifact_name,

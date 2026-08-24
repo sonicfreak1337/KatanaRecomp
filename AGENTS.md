@@ -29,6 +29,11 @@ Task implementieren
   Sourceaenderungen wird der bestehende Buildbaum zuerst neu konfiguriert,
   damit ein dirty Entwicklungsbinary die untrusted Source-Identity einbettet.
   Erst der reviewte und erfolgreich gebaute Stand wird committed.
+- Der kanonische Windows-Build des dirty CLI-Targets laeuft ueber
+  `tools/build-katana-cli.ps1`. Der Wrapper importiert und validiert die
+  native x64-Visual-Studio-Umgebung, konfiguriert den vorgesehenen Ninja-
+  Releasebaum und baut `katana-recomp` mit dem expliziten Jobbudget. Ein
+  direktes `cmake --build` aus einer nicht validierten Shell ist unzulaessig.
 - Tasks werden standardmaessig direkt auf `main` bearbeitet, committed und
   gepusht. Neue Taskbranches, Pull Requests oder parallele Integrationszweige
   werden nur auf eine neue ausdrueckliche Nutzeranweisung angelegt.
