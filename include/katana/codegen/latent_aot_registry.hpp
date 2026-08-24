@@ -178,9 +178,11 @@ struct LatentAotDiscoveryOptions {
     // disc expose a broad asset family without retaining it in analysis RAM.
     std::size_t maximum_total_transform_source_bytes =
         256u * 1024u * 1024u;
-    // Separate cap for deterministically transformed module bytes. This keeps
-    // only admitted decoded code candidates bounded in analysis memory.
-    std::size_t maximum_total_transformed_bytes = 64u * 1024u * 1024u;
+    // Separate cap for deterministically transformed module bytes. Keep it
+    // aligned with the bounded transformed-source family so a broad set of
+    // identity-bound modules cannot consume the entire budget before
+    // authoritative discovery examines its remaining candidates.
+    std::size_t maximum_total_transformed_bytes = 256u * 1024u * 1024u;
     // Transformed entry-zero heuristics have an independent cardinality cap.
     // Complete embedded entry tables remain authoritative and use their own
     // fail-closed source-binding cap.  Keeping the two heuristic classes

@@ -57,7 +57,7 @@ constexpr std::size_t maximum_latent_aot_session_static_cache_bytes =
     static_cast<std::size_t>(512ull * 1024ull * 1024ull);
 constexpr std::size_t maximum_latent_aot_source_bindings = 1024u;
 constexpr std::uint64_t maximum_validated_latent_aot_total_module_bytes =
-    64ull * 1024ull * 1024ull;
+    256ull * 1024ull * 1024ull;
 constexpr std::uint64_t maximum_validated_latent_aot_total_source_bytes =
     256ull * 1024ull * 1024ull;
 constexpr std::uint32_t latent_aot_runtime_page_size = 4096u;
