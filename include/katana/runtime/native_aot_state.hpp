@@ -32,18 +32,36 @@ inline constexpr std::uint32_t native_aot_dispatch_depth_limit = 32u;
 namespace detail {
 inline thread_local std::uint32_t native_aot_call_depth = 0u;
 inline thread_local std::uint32_t native_aot_dispatch_depth = 0u;
+enum class NativeAotBlockInvocationKind : std::uint8_t {
+    Unspecified,
+    DirectCall,
+    RuntimeDispatch
+};
+inline thread_local NativeAotBlockInvocationKind
+    native_aot_block_invocation_kind =
+        NativeAotBlockInvocationKind::Unspecified;
 }
 
 class NativeAotCallDepthGuard final {
   public:
     NativeAotCallDepthGuard() noexcept
         : acquired_(detail::native_aot_call_depth <
-                    native_aot_call_depth_limit) {
-        if (acquired_) ++detail::native_aot_call_depth;
+                    native_aot_call_depth_limit),
+          saved_invocation_kind_(
+              detail::native_aot_block_invocation_kind) {
+        if (acquired_) {
+            ++detail::native_aot_call_depth;
+            detail::native_aot_block_invocation_kind =
+                detail::NativeAotBlockInvocationKind::DirectCall;
+        }
     }
 
     ~NativeAotCallDepthGuard() {
-        if (acquired_) --detail::native_aot_call_depth;
+        if (acquired_) {
+            detail::native_aot_block_invocation_kind =
+                saved_invocation_kind_;
+            --detail::native_aot_call_depth;
+        }
     }
 
     NativeAotCallDepthGuard(const NativeAotCallDepthGuard&) = delete;
@@ -55,18 +73,30 @@ class NativeAotCallDepthGuard final {
 
   private:
     bool acquired_ = false;
+    detail::NativeAotBlockInvocationKind saved_invocation_kind_ =
+        detail::NativeAotBlockInvocationKind::Unspecified;
 };
 
 class NativeAotDispatchDepthGuard final {
   public:
     NativeAotDispatchDepthGuard() noexcept
         : acquired_(detail::native_aot_dispatch_depth <
-                    native_aot_dispatch_depth_limit) {
-        if (acquired_) ++detail::native_aot_dispatch_depth;
+                    native_aot_dispatch_depth_limit),
+          saved_invocation_kind_(
+              detail::native_aot_block_invocation_kind) {
+        if (acquired_) {
+            ++detail::native_aot_dispatch_depth;
+            detail::native_aot_block_invocation_kind =
+                detail::NativeAotBlockInvocationKind::RuntimeDispatch;
+        }
     }
 
     ~NativeAotDispatchDepthGuard() noexcept {
-        if (acquired_) --detail::native_aot_dispatch_depth;
+        if (acquired_) {
+            detail::native_aot_block_invocation_kind =
+                saved_invocation_kind_;
+            --detail::native_aot_dispatch_depth;
+        }
     }
 
     NativeAotDispatchDepthGuard(const NativeAotDispatchDepthGuard&) = delete;
@@ -79,10 +109,17 @@ class NativeAotDispatchDepthGuard final {
 
   private:
     bool acquired_ = false;
+    detail::NativeAotBlockInvocationKind saved_invocation_kind_ =
+        detail::NativeAotBlockInvocationKind::Unspecified;
 };
 
 [[nodiscard]] inline bool native_aot_call_is_nested() noexcept {
     return detail::native_aot_call_depth != 0u;
+}
+
+[[nodiscard]] inline bool native_aot_block_invocation_is_direct() noexcept {
+    return detail::native_aot_block_invocation_kind ==
+           detail::NativeAotBlockInvocationKind::DirectCall;
 }
 
 class NativeAotCallExitStateFrame final {

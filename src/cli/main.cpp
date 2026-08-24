@@ -5605,15 +5605,34 @@ ActivePortPublishTransaction active_port_publish_transaction(
     transaction.token = token;
     transaction.owner_document =
         port_publish_owner_document(paths, token);
+    // Keep the staging root independent of the user-facing output-name length.
+    // Deep generated source paths are copied below this directory and can
+    // otherwise hit the legacy Windows MAX_PATH boundary even when every
+    // individual source and final output path is valid.  The complete output
+    // identity and token remain authenticated by the owner document; the
+    // bounded prefixes only name this private sibling directory.
     transaction.root =
-        std::filesystem::path(
-            paths.output.string() +
-            ".katana-publish-transaction." + token);
+        paths.output.parent_path() /
+        (".katana-publish-" + paths.output_identity.substr(0u, 16u) +
+         "-" + token.substr(0u, 16u));
     transaction.owner_marker = transaction.root / "owner";
     transaction.state = transaction.root / "state";
     transaction.journal_staging =
         std::filesystem::path(
             paths.journal.string() + ".new." + token);
+    transaction.stage = transaction.root / "stage";
+    transaction.backup = transaction.root / "backup";
+    return transaction;
+}
+
+ActivePortPublishTransaction legacy_port_publish_transaction(
+    const PortPublishOutputPaths& paths,
+    const std::string& token) {
+    auto transaction = active_port_publish_transaction(paths, token);
+    transaction.root = std::filesystem::path(
+        paths.journal.string() + "." + token);
+    transaction.owner_marker = transaction.root / "owner";
+    transaction.state = transaction.root / "state";
     transaction.stage = transaction.root / "stage";
     transaction.backup = transaction.root / "backup";
     return transaction;
@@ -5962,9 +5981,23 @@ load_owned_port_publish_transaction(
             "und bleibt unangetastet.");
     auto transaction =
         active_port_publish_transaction(paths, *token);
-    if (!safe_regular_port_directory_exists(
+    const auto current_root_exists =
+        safe_regular_port_directory_exists(
             transaction.root,
-            "Port-Publish-Transaktionsbaum")) {
+            "Port-Publish-Transaktionsbaum");
+    auto legacy_transaction =
+        legacy_port_publish_transaction(paths, *token);
+    const auto legacy_root_exists =
+        safe_regular_port_directory_exists(
+            legacy_transaction.root,
+            "Legacy-Port-Publish-Transaktionsbaum");
+    if (current_root_exists && legacy_root_exists)
+        throw std::runtime_error(
+            "Port-Publish-Journal besitzt neue und alte "
+            "Transaktionsbaeume; beide bleiben unangetastet.");
+    if (!current_root_exists && legacy_root_exists)
+        transaction = std::move(legacy_transaction);
+    if (!current_root_exists && !legacy_root_exists) {
         remove_owned_safe_port_file(
             paths.journal,
             transaction.owner_document,

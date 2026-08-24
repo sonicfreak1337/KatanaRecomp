@@ -4272,6 +4272,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                    identity_bound_immutable_range(
                        table.dispatch_address, 2u);
         };
+    bool signed_relative_baseline_reproof_pending =
+        root_only_session_reuse;
     for (;;) {
         if (analysis.fixpoint_iterations >=
             options.maximum_fixpoint_iterations) {
@@ -5145,20 +5147,20 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
 
         // A table may be boundary-downgraded while its seeded case blocks are
         // still being upgraded from decode-candidate to proven instruction.
-        // RecursiveAnalysisSnapshot reports that upgrade separately from its
-        // instruction delta, so the incremental CFA scan does not otherwise
-        // revisit the original dispatch component.  Re-open only the exact
+        // A restored recursive snapshot can already contain every cumulative
+        // target without reporting any of them in this iteration's delta.
+        // Recheck that retained baseline exactly once; later rounds stay
+        // delta-driven so incomplete tables are revisited only when one of
+        // their accepted targets becomes newly proven. Re-open only the exact
         // immutable, non-AOT table shape produced by the bounded signed16
-        // recognizer, and only after every accepted target is proven in the
-        // cumulative recursive index.  No address or ownership inference is
-        // performed here.
+        // recognizer. No address or ownership inference is performed.
         const auto newly_proven =
             recursive_snapshot.newly_proven_instruction_addresses();
-        if (!newly_proven.empty()) {
-            for (auto& [site, table] : jump_table_result_index) {
-                if (!eligible_signed_relative_table_reproof(table) ||
-                    table.evidence != ControlFlowEvidence::GuardedPartial)
-                    continue;
+        for (auto& [site, table] : jump_table_result_index) {
+            if (!eligible_signed_relative_table_reproof(table) ||
+                table.evidence != ControlFlowEvidence::GuardedPartial)
+                continue;
+            if (!signed_relative_baseline_reproof_pending) {
                 const auto affected = std::any_of(
                     table.entries.begin(), table.entries.end(),
                     [&](const auto& entry) {
@@ -5166,38 +5168,38 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                             newly_proven.begin(), newly_proven.end(),
                             entry.target);
                     });
-                if (!affected)
-                    continue;
-                ++analysis.jump_table_result_entries_visited;
-                ++analysis.decode_boundary_normalization_entries_visited;
-                const auto boundaries = std::all_of(
-                    table.entries.begin(), table.entries.end(),
-                    [&](const auto& entry) {
-                        return recursive_index.proven_instruction_addresses
-                            .contains(entry.target);
-                    });
-                if (!boundaries)
-                    continue;
-                // Preserve the authority class that established the table.
-                // Identity-bound declarations remain guarded even after the
-                // recursive boundary index proves every target; only native
-                // recognition may become an unconditional direct proof.
-                table.evidence =
-                    table.reason == "identity-bound-declared-table"
-                        ? ControlFlowEvidence::GuardedComplete
-                        : ControlFlowEvidence::ProvenComplete;
-                ++analysis.jump_table_result_entries_rebuilt;
-                mark_resolved_table_dispatch(
-                    resolution_result_index, table);
-                // The original boundary-downgraded seed publication carried
-                // weaker evidence. Re-run the bounded table seed lane so
-                // the recursive seed contract and persistent replay observe
-                // the same monotone proof upgrade as the resolution/journal.
-                pending_jump_table_seed_sources.insert(site);
-                pending_function_edge_sites.insert(site);
-                changed = true;
+                if (!affected) continue;
             }
+            ++analysis.jump_table_result_entries_visited;
+            ++analysis.decode_boundary_normalization_entries_visited;
+            const auto boundaries = std::all_of(
+                table.entries.begin(), table.entries.end(),
+                [&](const auto& entry) {
+                    return recursive_index.proven_instruction_addresses
+                        .contains(entry.target);
+                });
+            if (!boundaries)
+                continue;
+            // Preserve the authority class that established the table.
+            // Identity-bound declarations remain guarded even after the
+            // recursive boundary index proves every target; only native
+            // recognition may become an unconditional direct proof.
+            table.evidence =
+                table.reason == "identity-bound-declared-table"
+                    ? ControlFlowEvidence::GuardedComplete
+                    : ControlFlowEvidence::ProvenComplete;
+            ++analysis.jump_table_result_entries_rebuilt;
+            mark_resolved_table_dispatch(
+                resolution_result_index, table);
+            // The original boundary-downgraded seed publication carried
+            // weaker evidence. Re-run the bounded table seed lane so the
+            // recursive seed contract and persistent replay observe the same
+            // monotone proof upgrade as the resolution/journal.
+            pending_jump_table_seed_sources.insert(site);
+            pending_function_edge_sites.insert(site);
+            changed = true;
         }
+        signed_relative_baseline_reproof_pending = false;
         if (changed) {
             report_progress("seed-expansion");
             continue;

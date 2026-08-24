@@ -4208,12 +4208,12 @@ void emit_terminal(std::ostringstream& output,
             if (guarded_local_block_chaining && can_dispatch_nested_call) {
                 emit_register_flush_release(output, indent, registers);
                 emit_indent(output, indent);
-                output << "if (services != nullptr && "
-                          "!katana::runtime::native_aot_call_is_nested()) {\n";
+                output << "if (services != nullptr) {\n";
                 if (!external_instruction_observer &&
                     table_compatible_function_entries) {
                     emit_indent(output, indent + 1);
-                    output << "if (runtime_dispatch_detail::"
+                    output << "if (!katana::runtime::native_aot_call_is_nested() && "
+                              "runtime_dispatch_detail::"
                               "try_static_return_nop_callback(cpu, call_target)) {\n";
                     if (native_internal_block_labels &&
                         current_blocks.contains(return_address)) {
@@ -4272,6 +4272,9 @@ void emit_terminal(std::ostringstream& output,
                 output << "return;\n";
                 emit_indent(output, indent + 1);
                 output << "}\n";
+                emit_indent(output, indent + 1);
+                output << "throw std::runtime_error("
+                          "\"Native-AOT-Dispatch-Tiefenlimit erreicht.\");\n";
                 emit_indent(output, indent);
                 output << "}\n";
             }
@@ -5699,7 +5702,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         if (block_entry_metadata_mode == BlockEntryMetadataMode::Direct) {
             emitted_function
                 << "    }();\n"
-                << "    if (katana::runtime::native_aot_call_is_nested())\n"
+                << "    if (katana::runtime::native_aot_block_invocation_is_direct())\n"
                 << "        return {};\n"
                 << "    context.scheduler_cycle = services->scheduler_cycle();\n"
                 << "    auto kind = runtime_dispatch_detail::active_exit_kind;\n"

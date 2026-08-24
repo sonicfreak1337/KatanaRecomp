@@ -3798,7 +3798,7 @@ int run_test(const int argc, char* argv[]) {
                 generated_units.find("exception_active_on_entry") ==
                     std::string::npos &&
                 generated_units.find(
-                    "if (katana::runtime::native_aot_call_is_nested())\n"
+                    "if (katana::runtime::native_aot_block_invocation_is_direct())\n"
                     "        return {};") != std::string::npos &&
                 occurrences(runtime_dispatch_shards,
                             "BlockExit fn_8C010000_runtime_entry(") == 1u &&
