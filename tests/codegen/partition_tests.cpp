@@ -1,4 +1,6 @@
 #include "katana/codegen/partition.hpp"
+#include "katana/io/input_provenance.hpp"
+#include "katana/ir/serialize.hpp"
 
 #include <algorithm>
 #include <array>
@@ -59,6 +61,14 @@ int main() {
         for (const auto index : partition.function_indices) {
             first_entries.push_back(functions[index].entry_address);
         }
+        std::vector<katana::ir::Function> legacy_fragment;
+        legacy_fragment.reserve(partition.function_indices.size());
+        for (const auto index : partition.function_indices)
+            legacy_fragment.push_back(functions[index]);
+        require(
+            partition.content_sha256 == katana::io::sha256_bytes(
+                katana::ir::emit_ir_fragment_json(legacy_fragment, {})),
+            "Streaming-Partitionshash weicht vom kanonischen IR-Fragment ab.");
     }
 
     std::shuffle(functions.begin(), functions.end(), random);

@@ -1,6 +1,5 @@
 #include "katana/codegen/partition.hpp"
 
-#include "katana/io/input_provenance.hpp"
 #include "katana/ir/serialize.hpp"
 #include "katana/ir/verifier.hpp"
 
@@ -92,13 +91,16 @@ partition_translation_units(const std::span<const katana::ir::Function> function
     }
     katana::ir::require_valid_program(functions);
     for (auto& partition : result) {
-        std::vector<katana::ir::Function> partition_functions;
+        const auto partition_external_entries =
+            external_entries(functions, partition);
+        std::vector<const katana::ir::Function*> partition_functions;
         partition_functions.reserve(partition.function_indices.size());
         for (const auto function_index : partition.function_indices) {
-            partition_functions.push_back(functions[function_index]);
+            partition_functions.push_back(&functions[function_index]);
         }
-        partition.content_sha256 = katana::io::sha256_bytes(katana::ir::emit_ir_fragment_json(
-            partition_functions, external_entries(functions, partition)));
+        partition.content_sha256 =
+            katana::ir::emit_validated_ir_fragment_sha256(
+                partition_functions, partition_external_entries);
     }
     return result;
 }

@@ -1379,6 +1379,7 @@ class NativePortInputTrace final {
 
     void append(const NativePortInputSnapshot& snapshot) {
         if (replay_) return;
+        throw_if_journal_flush_failed();
         if (frames_.size() == maximum_frames_)
             fail_platform(NativePortPlatformFailure::ResourceLimit,
                           ERROR_BUFFER_OVERFLOW,
@@ -1392,24 +1393,19 @@ class NativePortInputTrace final {
                              journal_view_ + destination_offset,
                              encoded_frame_bytes),
                          snapshot);
-            std::atomic_thread_fence(std::memory_order_release);
-            static_assert(frame_count_offset % alignof(LONG64) == 0u);
-            InterlockedExchange64(
-                reinterpret_cast<volatile LONG64*>(journal_view_ +
-                                                    frame_count_offset),
-                static_cast<LONG64>(frames_.size()));
             if (frames_.size() % journal_flush_frame_interval == 0u) {
                 const auto committed_bytes =
                     journal_data_offset_ +
                     frames_.size() * encoded_frame_bytes;
-                if (FlushViewOfFile(journal_view_, committed_bytes) == FALSE ||
-                    !journal_file_ ||
-                    FlushFileBuffers(journal_file_.get()) == FALSE)
-                    fail_platform(NativePortPlatformFailure::InputBackend,
-                                  GetLastError(),
-                                  "input-record-journal-flush");
+                request_journal_flush(
+                    static_cast<std::uint64_t>(frames_.size()),
+                    committed_bytes);
             }
         }
+        // The asynchronous flusher records its first failure without ever
+        // throwing on the worker.  Re-check on the owner so a failed journal
+        // cannot be silently used for the next frame.
+        throw_if_journal_flush_failed();
     }
 
     [[nodiscard]] NativePortInputSnapshot next() {
@@ -1423,6 +1419,7 @@ class NativePortInputTrace final {
     void save_atomic(const std::filesystem::path& path) {
         if (replay_) return;
         close_live_journal();
+        throw_if_journal_flush_failed();
         const auto temporary = std::filesystem::path(path.native() +
                                                      std::filesystem::path(
                                                          L".tmp").native());
@@ -1629,21 +1626,210 @@ class NativePortInputTrace final {
         journal_mapping_ = std::move(mapping);
         journal_view_ = view;
         journal_data_offset_ = header_bytes + identity_.size();
+        start_journal_flusher();
     }
 
     void close_live_journal() noexcept {
         if (journal_view_ != nullptr) {
+            stop_journal_flusher();
             const auto committed_bytes =
                 journal_data_offset_ + frames_.size() * encoded_frame_bytes;
-            static_cast<void>(FlushViewOfFile(journal_view_, committed_bytes));
-            if (journal_file_)
-                static_cast<void>(FlushFileBuffers(journal_file_.get()));
+            // The worker is joined before the final owner-thread commit, so
+            // no flush can race the unmap/handle close.  Keep the old durable
+            // frame count while flushing the complete payload, then publish
+            // exactly the final count and flush the header.
+            if (flush_journal_payload(committed_bytes))
+                static_cast<void>(publish_journal_frame_count(
+                    static_cast<std::uint64_t>(frames_.size()),
+                    committed_bytes));
             static_cast<void>(UnmapViewOfFile(journal_view_));
             journal_view_ = nullptr;
         }
         journal_mapping_.reset();
         journal_file_.reset();
         journal_data_offset_ = 0u;
+    }
+
+    void start_journal_flusher() {
+        journal_flush_stop_.store(false, std::memory_order_relaxed);
+        {
+            std::scoped_lock lock(journal_flush_wait_mutex_);
+            journal_flush_requested_frames_ = 0u;
+            journal_flush_requested_bytes_ = 0u;
+        }
+        journal_flush_error_code_.store(ERROR_SUCCESS,
+                                        std::memory_order_relaxed);
+        try {
+            journal_flush_worker_ = std::thread([this]() noexcept {
+                journal_flush_loop();
+            });
+        } catch (...) {
+            // The mapped journal is still owned by this object, but no
+            // worker exists to join.  Restore the pre-open state before the
+            // constructor propagates the thread-creation failure.
+            static_cast<void>(UnmapViewOfFile(journal_view_));
+            journal_view_ = nullptr;
+            journal_mapping_.reset();
+            journal_file_.reset();
+            journal_data_offset_ = 0u;
+            throw;
+        }
+    }
+
+    void stop_journal_flusher() noexcept {
+        if (!journal_flush_worker_.joinable()) return;
+        {
+            std::scoped_lock lock(journal_flush_wait_mutex_);
+            journal_flush_stop_.store(true, std::memory_order_release);
+        }
+        journal_flush_wakeup_.notify_one();
+        journal_flush_worker_.join();
+    }
+
+    void request_journal_flush(const std::uint64_t frame_count,
+                               const std::size_t committed_bytes) noexcept {
+        {
+            // A single monotonic (frame-count, byte-prefix) target is the
+            // bounded queue: repeated requests collapse into the newest
+            // committed range and never allocate one work item per frame.
+            std::scoped_lock lock(journal_flush_wait_mutex_);
+            if (frame_count > journal_flush_requested_frames_) {
+                journal_flush_requested_frames_ = frame_count;
+                journal_flush_requested_bytes_ =
+                    static_cast<std::uint64_t>(committed_bytes);
+            }
+        }
+        journal_flush_wakeup_.notify_one();
+    }
+
+    [[nodiscard]] bool flush_journal_payload(
+        const std::uint64_t committed_bytes) noexcept {
+        if (journal_view_ == nullptr || !journal_file_) {
+            record_journal_flush_failure(ERROR_INVALID_HANDLE);
+            return false;
+        }
+        if (committed_bytes < journal_data_offset_) {
+            record_journal_flush_failure(ERROR_INVALID_DATA);
+            return false;
+        }
+        const auto payload_bytes =
+            committed_bytes - static_cast<std::uint64_t>(journal_data_offset_);
+        if (payload_bytes == 0u) return true;
+        if (committed_bytes >
+            static_cast<std::uint64_t>(std::numeric_limits<SIZE_T>::max())) {
+            record_journal_flush_failure(ERROR_ARITHMETIC_OVERFLOW);
+            return false;
+        }
+        if (FlushViewOfFile(
+                journal_view_ + journal_data_offset_,
+                static_cast<SIZE_T>(payload_bytes)) == FALSE) {
+            record_journal_flush_failure(GetLastError());
+            return false;
+        }
+        if (FlushFileBuffers(journal_file_.get()) == FALSE) {
+            record_journal_flush_failure(GetLastError());
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool publish_journal_frame_count(
+        const std::uint64_t frame_count,
+        const std::uint64_t committed_bytes) noexcept {
+        if (frame_count > maximum_frames_ ||
+            frame_count >
+                (std::numeric_limits<std::size_t>::max() -
+                 journal_data_offset_) /
+                    encoded_frame_bytes ||
+            committed_bytes !=
+                static_cast<std::uint64_t>(journal_data_offset_ +
+                                           frame_count * encoded_frame_bytes)) {
+            record_journal_flush_failure(ERROR_INVALID_DATA);
+            return false;
+        }
+        // Payload durability is established before this release publication;
+        // the header count is the journal's crash-consistency commit marker.
+        std::atomic_thread_fence(std::memory_order_release);
+        static_assert(frame_count_offset % alignof(LONG64) == 0u);
+        InterlockedExchange64(
+            reinterpret_cast<volatile LONG64*>(journal_view_ +
+                                                frame_count_offset),
+            static_cast<LONG64>(frame_count));
+        if (FlushViewOfFile(
+                journal_view_, static_cast<SIZE_T>(journal_data_offset_)) ==
+            FALSE) {
+            record_journal_flush_failure(GetLastError());
+            return false;
+        }
+        if (!journal_file_ || FlushFileBuffers(journal_file_.get()) == FALSE) {
+            record_journal_flush_failure(
+                journal_file_ ? GetLastError() : ERROR_INVALID_HANDLE);
+            return false;
+        }
+        return true;
+    }
+
+    void record_journal_flush_failure(const DWORD error) noexcept {
+        auto code = error;
+        if (code == ERROR_SUCCESS) code = ERROR_WRITE_FAULT;
+        auto expected = static_cast<DWORD>(ERROR_SUCCESS);
+        static_cast<void>(journal_flush_error_code_.compare_exchange_strong(
+            expected, code, std::memory_order_release,
+            std::memory_order_relaxed));
+    }
+
+    void throw_if_journal_flush_failed() const {
+        const auto error = journal_flush_error_code_.load(
+            std::memory_order_acquire);
+        if (error != ERROR_SUCCESS)
+            fail_platform(NativePortPlatformFailure::InputBackend,
+                          error,
+                          "input-record-journal-flush");
+    }
+
+    void journal_flush_loop() noexcept {
+        try {
+            std::uint64_t completed_frames = 0u;
+            std::uint64_t completed_bytes = 0u;
+            for (;;) {
+                std::unique_lock lock(journal_flush_wait_mutex_);
+                journal_flush_wakeup_.wait(lock, [this, completed_frames]() {
+                    return journal_flush_stop_.load(
+                               std::memory_order_acquire) ||
+                           journal_flush_error_code_.load(
+                               std::memory_order_acquire) != ERROR_SUCCESS ||
+                           journal_flush_requested_frames_ > completed_frames;
+                });
+                const auto stopping = journal_flush_stop_.load(
+                    std::memory_order_acquire);
+                const auto requested_frames = journal_flush_requested_frames_;
+                const auto requested_bytes = journal_flush_requested_bytes_;
+                lock.unlock();
+
+                if (journal_flush_error_code_.load(
+                        std::memory_order_acquire) != ERROR_SUCCESS)
+                    return;
+                if (requested_frames > completed_frames) {
+                    if (requested_bytes < completed_bytes ||
+                        !flush_journal_payload(requested_bytes) ||
+                        !publish_journal_frame_count(requested_frames,
+                                                     requested_bytes))
+                        return;
+                    completed_frames = requested_frames;
+                    completed_bytes = requested_bytes;
+                }
+                if (stopping) {
+                    std::scoped_lock drain_lock(journal_flush_wait_mutex_);
+                    if (completed_frames >= journal_flush_requested_frames_)
+                        return;
+                }
+            }
+        } catch (...) {
+            // Keep all worker failures on the fixed, owner-observed channel;
+            // an exception escaping a noexcept thread would terminate the
+            // process before the native-port contract can report it.
+            record_journal_flush_failure(ERROR_FUNCTION_FAILED);
+        }
     }
 
     static std::uint32_t read_u32(std::ifstream& input, const char* operation) {
@@ -1769,6 +1955,13 @@ class NativePortInputTrace final {
     bool replay_ = false;
     std::vector<NativePortInputSnapshot> frames_;
     std::size_t cursor_ = 0u;
+    std::thread journal_flush_worker_;
+    std::atomic<bool> journal_flush_stop_ = false;
+    std::uint64_t journal_flush_requested_frames_ = 0u;
+    std::uint64_t journal_flush_requested_bytes_ = 0u;
+    std::atomic<DWORD> journal_flush_error_code_ = ERROR_SUCCESS;
+    std::mutex journal_flush_wait_mutex_;
+    std::condition_variable journal_flush_wakeup_;
     UniqueHandle journal_file_;
     UniqueHandle journal_mapping_;
     std::byte* journal_view_ = nullptr;

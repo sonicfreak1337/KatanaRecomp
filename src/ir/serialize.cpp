@@ -1,12 +1,17 @@
 #include "katana/ir/serialize.hpp"
 
 #include "katana/io/json_report.hpp"
+#include "katana/io/input_provenance.hpp"
 #include "katana/ir/verifier.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <iomanip>
+#include <ostream>
 #include <sstream>
 #include <stdexcept>
+#include <streambuf>
 #include <vector>
 
 namespace katana::ir {
@@ -196,7 +201,7 @@ std::vector<const Instruction*> sorted_instructions(const BasicBlock& block) {
     return result;
 }
 
-void emit_text_names(std::ostringstream& output, const std::vector<std::string_view>& names) {
+void emit_text_names(std::ostream& output, const std::vector<std::string_view>& names) {
     output << '[';
     for (std::size_t index = 0u; index < names.size(); ++index) {
         if (index != 0u) output << ',';
@@ -205,7 +210,7 @@ void emit_text_names(std::ostringstream& output, const std::vector<std::string_v
     output << ']';
 }
 
-void emit_json_names(std::ostringstream& output, const std::vector<std::string_view>& names) {
+void emit_json_names(std::ostream& output, const std::vector<std::string_view>& names) {
     output << '[';
     for (std::size_t index = 0u; index < names.size(); ++index) {
         if (index != 0u) output << ',';
@@ -214,7 +219,7 @@ void emit_json_names(std::ostringstream& output, const std::vector<std::string_v
     output << ']';
 }
 
-void emit_text_addresses(std::ostringstream& output, const std::vector<std::uint32_t>& addresses) {
+void emit_text_addresses(std::ostream& output, const std::vector<std::uint32_t>& addresses) {
     output << '[';
     for (std::size_t index = 0u; index < addresses.size(); ++index) {
         if (index != 0u) output << ',';
@@ -223,7 +228,7 @@ void emit_text_addresses(std::ostringstream& output, const std::vector<std::uint
     output << ']';
 }
 
-void emit_json_addresses(std::ostringstream& output, const std::vector<std::uint32_t>& addresses) {
+void emit_json_addresses(std::ostream& output, const std::vector<std::uint32_t>& addresses) {
     output << '[';
     for (std::size_t index = 0u; index < addresses.size(); ++index) {
         if (index != 0u) output << ',';
@@ -250,7 +255,7 @@ const char* dynamic_target_class_name(const DynamicTargetClass value) noexcept {
     return "unresolved";
 }
 
-void emit_text_instruction(std::ostringstream& output, const Instruction& value) {
+void emit_text_instruction(std::ostream& output, const Instruction& value) {
     output << "    instruction " << hex32(value.source_address)
            << " opcode=" << hex16(value.original_opcode)
            << " original_operation=" << operation_name(value.original_operation)
@@ -302,7 +307,7 @@ void emit_text_instruction(std::ostringstream& output, const Instruction& value)
            << " privileged=" << boolean_name(value.is_privileged) << '\n';
 }
 
-void emit_json_instruction(std::ostringstream& output, const Instruction& value) {
+void emit_json_instruction(std::ostream& output, const Instruction& value) {
     output << '{' << "\"address\":\"" << hex32(value.source_address) << "\","
            << "\"opcode\":\"" << hex16(value.original_opcode) << "\","
            << "\"original_operation\":\"" << operation_name(value.original_operation) << "\","
@@ -372,6 +377,112 @@ void emit_json_instruction(std::ostringstream& output, const Instruction& value)
     output << "},\"privileged\":" << boolean_name(value.is_privileged) << '}';
 }
 
+class Sha256StreamBuffer final : public std::streambuf {
+  public:
+    Sha256StreamBuffer() {
+        setp(storage_.data(), storage_.data() + storage_.size());
+    }
+
+    [[nodiscard]] std::string finish() {
+        flush();
+        return accumulator_.finish();
+    }
+
+  protected:
+    int_type overflow(const int_type value) override {
+        flush();
+        if (!traits_type::eq_int_type(value, traits_type::eof())) {
+            const auto character = traits_type::to_char_type(value);
+            accumulator_.update(std::string_view(&character, 1u));
+        }
+        return traits_type::not_eof(value);
+    }
+
+    std::streamsize xsputn(const char* source,
+                           const std::streamsize count) override {
+        if (count <= 0) return 0;
+        const auto size = static_cast<std::size_t>(count);
+        if (size >= storage_.size()) {
+            flush();
+            accumulator_.update(std::string_view(source, size));
+            return count;
+        }
+        std::size_t copied = 0u;
+        while (copied < size) {
+            const auto available = static_cast<std::size_t>(epptr() - pptr());
+            if (available == 0u) {
+                flush();
+                continue;
+            }
+            const auto chunk = std::min(available, size - copied);
+            std::memcpy(pptr(), source + copied, chunk);
+            pbump(static_cast<int>(chunk));
+            copied += chunk;
+        }
+        return count;
+    }
+
+    int sync() override {
+        flush();
+        return 0;
+    }
+
+  private:
+    void flush() {
+        const auto count = static_cast<std::size_t>(pptr() - pbase());
+        if (count != 0u)
+            accumulator_.update(std::string_view(storage_.data(), count));
+        setp(storage_.data(), storage_.data() + storage_.size());
+    }
+
+    katana::io::Sha256Accumulator accumulator_;
+    std::array<char, 64u * 1024u> storage_{};
+};
+
+void emit_ir_fragment_json_to(
+    std::ostream& output,
+    const std::span<const Function* const> ordered_functions) {
+    output << "{\"schema\":\"katana-ir-v2\",\"functions\":[";
+    for (std::size_t function_index = 0u;
+         function_index < ordered_functions.size(); ++function_index) {
+        if (function_index != 0u) output << ',';
+        const auto& function = *ordered_functions[function_index];
+        output << "{\"entry_address\":\"" << hex32(function.entry_address)
+               << "\",\"direct_callees\":";
+        emit_json_addresses(output, sorted_values(function.direct_callees));
+        output << ",\"indirect_call_sites\":";
+        emit_json_addresses(output, sorted_values(function.indirect_call_sites));
+        output << ",\"blocks\":[";
+        const auto blocks = sorted_blocks(function);
+        for (std::size_t block_index = 0u; block_index < blocks.size();
+             ++block_index) {
+            if (block_index != 0u) output << ',';
+            const auto& block = *blocks[block_index];
+            output << "{\"start_address\":\"" << hex32(block.start_address)
+                   << "\",\"successors\":";
+            emit_json_addresses(output, sorted_values(block.successors));
+            output << ",\"guarded_case_ownership_targets\":";
+            emit_json_addresses(
+                output,
+                sorted_values(block.guarded_case_ownership_targets));
+            output << ",\"has_indirect_successor\":"
+                   << boolean_name(block.has_indirect_successor)
+                   << ",\"instructions\":[";
+            const auto instructions = sorted_instructions(block);
+            for (std::size_t instruction_index = 0u;
+                 instruction_index < instructions.size();
+                 ++instruction_index) {
+                if (instruction_index != 0u) output << ',';
+                emit_json_instruction(output, *instructions[instruction_index]);
+            }
+            output << "]}";
+        }
+        output << "]}";
+    }
+    output << "],\"report_version\":" << katana::io::json_report_version
+           << ",\"report_type\":\"ir\",\"status\":\"success\"}\n";
+}
+
 } // namespace
 
 std::string emit_ir_text(const std::span<const Function> functions) {
@@ -408,42 +519,43 @@ std::string emit_ir_fragment_json(const std::span<const Function> functions,
                                   const std::span<const std::uint32_t> external_function_entries) {
     const auto ordered_functions = sorted_functions(functions, external_function_entries);
     std::ostringstream output;
-    output << "{\"schema\":\"katana-ir-v2\",\"functions\":[";
-    for (std::size_t function_index = 0u; function_index < ordered_functions.size();
-         ++function_index) {
-        if (function_index != 0u) output << ',';
-        const auto& function = *ordered_functions[function_index];
-        output << "{\"entry_address\":\"" << hex32(function.entry_address)
-               << "\",\"direct_callees\":";
-        emit_json_addresses(output, sorted_values(function.direct_callees));
-        output << ",\"indirect_call_sites\":";
-        emit_json_addresses(output, sorted_values(function.indirect_call_sites));
-        output << ",\"blocks\":[";
-        const auto blocks = sorted_blocks(function);
-        for (std::size_t block_index = 0u; block_index < blocks.size(); ++block_index) {
-            if (block_index != 0u) output << ',';
-            const auto& block = *blocks[block_index];
-            output << "{\"start_address\":\"" << hex32(block.start_address) << "\",\"successors\":";
-            emit_json_addresses(output, sorted_values(block.successors));
-            output << ",\"guarded_case_ownership_targets\":";
-            emit_json_addresses(
-                output,
-                sorted_values(block.guarded_case_ownership_targets));
-            output << ",\"has_indirect_successor\":" << boolean_name(block.has_indirect_successor)
-                   << ",\"instructions\":[";
-            const auto instructions = sorted_instructions(block);
-            for (std::size_t instruction_index = 0u; instruction_index < instructions.size();
-                 ++instruction_index) {
-                if (instruction_index != 0u) output << ',';
-                emit_json_instruction(output, *instructions[instruction_index]);
-            }
-            output << "]}";
-        }
-        output << "]}";
-    }
-    output << "],\"report_version\":" << katana::io::json_report_version
-           << ",\"report_type\":\"ir\",\"status\":\"success\"}\n";
+    emit_ir_fragment_json_to(output, ordered_functions);
     return output.str();
+}
+
+std::string emit_validated_ir_fragment_sha256(
+    const std::span<const Function* const> functions,
+    const std::span<const std::uint32_t> external_function_entries) {
+    std::vector<const Function*> ordered_functions;
+    ordered_functions.reserve(functions.size());
+    for (const auto* const function : functions) {
+        if (function == nullptr)
+            throw std::invalid_argument(
+                "IR-Fragment-Hash erhielt einen leeren Funktionszeiger.");
+        ordered_functions.push_back(function);
+    }
+    std::sort(
+        ordered_functions.begin(), ordered_functions.end(),
+        [](const auto* const left, const auto* const right) {
+            return left->entry_address < right->entry_address;
+        });
+    for (std::size_t index = 1u; index < ordered_functions.size(); ++index) {
+        if (ordered_functions[index - 1u]->entry_address ==
+            ordered_functions[index]->entry_address)
+            throw std::invalid_argument(
+                "IR-Fragment-Hash besitzt doppelte Funktionseinstiege.");
+    }
+    // external_function_entries is deliberately part of the caller's
+    // already-verified selection contract. Its values affect validity, not
+    // the canonical fragment bytes, matching emit_ir_fragment_json().
+    static_cast<void>(external_function_entries);
+    Sha256StreamBuffer buffer;
+    std::ostream output(&buffer);
+    emit_ir_fragment_json_to(output, ordered_functions);
+    if (!output)
+        throw std::runtime_error(
+            "IR-Fragment-Streaminghash konnte nicht erzeugt werden.");
+    return buffer.finish();
 }
 
 } // namespace katana::ir
