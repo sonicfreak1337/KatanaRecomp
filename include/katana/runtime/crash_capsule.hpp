@@ -18,6 +18,8 @@ inline constexpr std::uint32_t crash_capsule_v3_contract_version = 3u;
 inline constexpr std::size_t crash_capsule_event_capacity = 64u;
 inline constexpr std::size_t crash_capsule_token_capacity = 512u;
 inline constexpr std::size_t crash_capsule_v2_line_capacity = 32768u;
+inline constexpr std::size_t crash_capsule_memory_window_capacity = 20u;
+inline constexpr std::size_t crash_capsule_memory_window_word_capacity = 16u;
 static_assert((crash_capsule_event_capacity &
                (crash_capsule_event_capacity - 1u)) == 0u);
 
@@ -59,6 +61,7 @@ enum CrashCapsuleV3Field : std::uint32_t {
     CrashCapsuleV3FieldInputTrace = 1u << 3u,
     CrashCapsuleV3FieldProductState = 1u << 4u,
     CrashCapsuleV3FieldPlatform = 1u << 5u,
+    CrashCapsuleV3FieldMemoryWindows = 1u << 6u,
 };
 
 enum CrashCapsuleTokenFlag : std::uint8_t {
@@ -247,6 +250,15 @@ struct CrashCapsuleV2Fields {
     }
 };
 
+struct CrashCapsuleMemoryWindow {
+    std::uint32_t guest_focus = 0u;
+    std::uint32_t guest_base = 0u;
+    std::uint32_t physical_base = 0u;
+    std::uint32_t source_mask = 0u;
+    std::uint32_t valid_word_mask = 0u;
+    std::array<std::uint32_t, crash_capsule_memory_window_word_capacity> words{};
+};
+
 // Additive v3 flight-recorder state. Hot paths write only fixed-width values;
 // text remains bounded and path-free. Contract-detail hashes cover only the
 // bounded, sanitized token so arbitrary exception text is never retained even
@@ -294,6 +306,9 @@ struct CrashCapsuleV3Fields {
     CrashCapsuleToken loaded_aot_identity;
     CrashCapsuleToken input_trace;
     CrashCapsuleToken input_identity;
+    std::array<CrashCapsuleMemoryWindow,
+               crash_capsule_memory_window_capacity> memory_windows{};
+    std::uint32_t memory_window_count = 0u;
 
     static constexpr std::uint64_t hash_text(
         const std::string_view value) noexcept {
@@ -406,6 +421,52 @@ struct CrashCapsuleV3Fields {
         input_polls = polls;
         input_connection_generation = connection_generation;
         present |= CrashCapsuleV3FieldPlatform;
+    }
+
+    void reset_memory_windows() noexcept {
+        for (auto& window : memory_windows) window = {};
+        memory_window_count = 0u;
+        present &= ~CrashCapsuleV3FieldMemoryWindows;
+    }
+
+    void note_memory_window(
+        const std::uint32_t guest_focus,
+        const std::uint32_t guest_base,
+        const std::uint32_t physical_base,
+        const std::uint32_t source_mask,
+        const std::uint32_t valid_word_mask,
+        const std::array<std::uint32_t,
+                         crash_capsule_memory_window_word_capacity>& words) noexcept {
+        if (source_mask == 0u || valid_word_mask == 0u) return;
+        const auto count = memory_window_count < memory_windows.size()
+            ? static_cast<std::size_t>(memory_window_count)
+            : memory_windows.size();
+        for (std::size_t index = 0u; index < count; ++index) {
+            auto& existing = memory_windows[index];
+            if (existing.guest_focus != guest_focus ||
+                existing.guest_base != guest_base ||
+                existing.physical_base != physical_base)
+                continue;
+            existing.source_mask |= source_mask;
+            for (std::size_t word = 0u; word < words.size(); ++word) {
+                const auto bit = 1u << word;
+                if ((valid_word_mask & bit) != 0u)
+                    existing.words[word] = words[word];
+            }
+            existing.valid_word_mask |= valid_word_mask;
+            present |= CrashCapsuleV3FieldMemoryWindows;
+            return;
+        }
+        if (count == memory_windows.size()) return;
+        auto& window = memory_windows[count];
+        window.guest_focus = guest_focus;
+        window.guest_base = guest_base;
+        window.physical_base = physical_base;
+        window.source_mask = source_mask;
+        window.valid_word_mask = valid_word_mask;
+        window.words = words;
+        memory_window_count = static_cast<std::uint32_t>(count + 1u);
+        present |= CrashCapsuleV3FieldMemoryWindows;
     }
 };
 
@@ -618,6 +679,23 @@ struct CrashCapsule {
         v3.note_platform(polls, connection_generation);
     }
 
+    void reset_v3_memory_windows() noexcept {
+        v3.reset_memory_windows();
+    }
+
+    void note_v3_memory_window(
+        const std::uint32_t guest_focus,
+        const std::uint32_t guest_base,
+        const std::uint32_t physical_base,
+        const std::uint32_t source_mask,
+        const std::uint32_t valid_word_mask,
+        const std::array<std::uint32_t,
+                         crash_capsule_memory_window_word_capacity>& words) noexcept {
+        v3.note_memory_window(
+            guest_focus, guest_base, physical_base, source_mask,
+            valid_word_mask, words);
+    }
+
   private:
     void push(const CrashCapsuleEvent event) noexcept {
         events[next_event] = event;
@@ -635,6 +713,8 @@ static_assert(std::is_standard_layout_v<CrashCapsuleV2Fields>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleV2Fields>);
 static_assert(std::is_standard_layout_v<CrashCapsuleV3Fields>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleV3Fields>);
+static_assert(std::is_standard_layout_v<CrashCapsuleMemoryWindow>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleMemoryWindow>);
 static_assert(std::is_standard_layout_v<CrashCapsuleSerializedLine>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleSerializedLine>);
 static_assert(std::is_standard_layout_v<CrashCapsule>);
@@ -820,6 +900,32 @@ serialize_crash_capsule_v3(const CrashCapsule& capsule) noexcept {
     for (std::size_t index = 0u; index < flight.gpr.size(); ++index) {
         if (index != 0u) writer.append_char(',');
         writer.append_integer(flight.gpr[index]);
+    }
+    writer.append("]");
+    crash_capsule_detail::append_field(
+        writer, "memory_window_count", flight.memory_window_count);
+    writer.append(",\"memory_windows\":[");
+    const auto memory_window_count =
+        flight.memory_window_count < flight.memory_windows.size()
+            ? static_cast<std::size_t>(flight.memory_window_count)
+            : flight.memory_windows.size();
+    for (std::size_t index = 0u; index < memory_window_count; ++index) {
+        const auto& window = flight.memory_windows[index];
+        writer.append(index == 0u ? "{" : ",{");
+        writer.append("\"guest_focus\":");
+        writer.append_integer(window.guest_focus);
+        crash_capsule_detail::append_field(writer, "guest_base", window.guest_base);
+        crash_capsule_detail::append_field(
+            writer, "physical_base", window.physical_base);
+        crash_capsule_detail::append_field(writer, "source_mask", window.source_mask);
+        crash_capsule_detail::append_field(
+            writer, "valid_word_mask", window.valid_word_mask);
+        writer.append(",\"words\":[");
+        for (std::size_t word = 0u; word < window.words.size(); ++word) {
+            if (word != 0u) writer.append_char(',');
+            writer.append_integer(window.words[word]);
+        }
+        writer.append("]}");
     }
     writer.append("]");
     crash_capsule_detail::append_field(writer, "sr", flight.sr);

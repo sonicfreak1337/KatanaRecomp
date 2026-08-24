@@ -6,8 +6,9 @@ portablen v1-Bericht um begrenzte PC/PR-/Register-,
 Modul-/Generations-, Materialisierungs-, Wait- und Dispatchdaten. Die
 Produkt-Catch-Verdrahtung verwendet dafuer feste, sanitizte Tokens. Ein
 kontrollierter Contract- oder Exceptiontext darf nur ueber den festen,
-pfadfreien v3-Diagnosepuffer laufen; Hostpfade, Retailbytes und
-Heap-/iostream-Nutzung bleiben im Crashpfad ausgeschlossen.
+pfadfreien v3-Diagnosepuffer laufen. Hostpfade und Heap-/iostream-Nutzung
+bleiben im Crashpfad ausgeschlossen; Gastbytes erscheinen ausschliesslich in
+den expliziten festen Direct-RAM-Fenstern des Runtime-ABI-122-Vertrags.
 
 Der versionierte Bericht `katana-crash-report` beschreibt einen kontrollierten
 Runtime-Abbruch ohne freien Hostfehlertext. Sein `stop_code` und alle Herkunfts-
@@ -34,9 +35,11 @@ ein fehlender Owner bevorzugt aus der zur aktuellen Exceptiongeneration
 gelatchten Fault-Metadaten und nur fuer aeltere Zustaende aus dem architektonischen
 SPC uebernommen.
 
-Der Bericht enthaelt bewusst keinen Runtime-Speicherdump und keine freie
-Exceptionnachricht. Symbol- und Source-Map-Werkzeuge koennen die numerischen
-Gastadressen nachtraeglich anreichern, ohne den Crashvertrag zu veraendern.
+Der portable v1-Bericht enthaelt bewusst keinen Runtime-Speicherdump und keine
+freie Exceptionnachricht. Symbol- und Source-Map-Werkzeuge koennen die
+numerischen Gastadressen nachtraeglich anreichern, ohne den v1-Crashvertrag zu
+veraendern. Die additive Produkt-CrashCapsule v3 kann davon getrennt die unten
+beschriebenen festen Direct-RAM-Fenster tragen.
 
 ## Produkt-CrashCapsule v3
 
@@ -50,8 +53,20 @@ v1-Grundvertrag additiv um bereits vorhandene, begrenzte Runtimefakten:
 - Runtime-/Source-Modulidentitaet samt Generation und Relocation;
 - letzter Materialisierungs-/Provideruebergang;
 - Wait-, Scheduler- und Schlafzustand;
+- hoechstens 20 feste Direct-RAM-Fenster mit je 16 Woertern um GPR, PC, PR,
+  GBR und VBR;
 - bis zu 64 bereits aufgezeichnete Block-, Hardware-, Scheduler- und
   Fehlerereignisse in chronologischer Reihenfolge.
+
+Jedes RAM-Fenster bindet Gastfokus, Gastbasis, kanonische physische Basis,
+eine Quellenmaske und eine Wortgueltigkeitsmaske. Quellenbits 0 bis 15 stehen
+fuer r0 bis r15, Bit 16 fuer PC, Bit 17 fuer PR, Bit 18 fuer GBR und Bit 19
+fuer VBR. Nur `try_read_direct_linear_u32` darf Woerter aufnehmen; ungemappte,
+MMIO- und Geraetebereiche bleiben ungueltig. Die kanonische Adressabbildung
+bewahrt den SH-4-On-Chip-RAM-Aperturbereich und verhindert dessen Alias auf
+gewoehnliches RAM. Die Erfassung erfolgt ausschliesslich nach einem bereits
+kontrollierten Produktfehler und fuegt dem normalen Produktpfad keine Reads
+hinzu. Es gibt weder einen variablen noch einen unbeschraenkten Speicherdump.
 
 Alle Tokens besitzen feste Puffer und akzeptieren nur pfadfreie, portable
 Zeichen. Der v3-Contract-Detailpuffer besitzt 511 Nutzbytes und akzeptiert
@@ -59,7 +74,9 @@ zusaetzlich die fuer bounded Adress-/Werttupel benoetigte portable
 Interpunktion. Anfuehrungszeichen, Pfadtrenner und Steuerzeichen werden
 fail-closed abgelehnt; Truncation und ungueltige Zeichen werden markiert, der
 Hash bindet weiterhin den vollstaendigen Eingabetext. Freie Hostpfade,
-Retailbytes, Dumps und erfundene Thread-/Task-IDs werden nicht uebernommen.
+unbeschraenkte Dumps und erfundene Thread-/Task-IDs werden nicht uebernommen;
+die explizit markierten festen RAM-Fenster bleiben der einzige begrenzte
+Speicherinhalt der v3-Zeile.
 
 Die v3-Serializerbausteine sind `noexcept`, besitzen feste
 Ausgabebudgets und traversieren im Crashpfad keine Ownershipgraphen. Der
