@@ -2615,16 +2615,22 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 ? image.resolve_segment_address(table_identity->address,
                                                 table_identity->size)
                 : std::nullopt;
-        constexpr auto dispatch_proof_width = sizeof(std::uint32_t);
+        constexpr std::uint32_t instruction_width = sizeof(std::uint16_t);
+        constexpr std::size_t dispatch_width =
+            static_cast<std::size_t>(instruction_width) * 2u;
         const auto resolved_dispatch = image.resolve_segment_address(
-            table.dispatch_address, dispatch_proof_width);
+            table.dispatch_address, dispatch_width);
         // The declaration correlates two independently bounded facts: the
-        // exact table bytes and the already committed dispatch instruction.
+        // exact table bytes and the already committed dispatch instruction
+        // plus its architectural delay slot.
         // Requiring one CodeIdentity to span both also requires every byte in
         // the unrelated gap and rejects valid layouts where code and its
         // literal table have deliberately separate identities.  The control-
         // flow analyzer still verifies the decoded dispatch kind and transfer
         // at the exact address before it can publish GuardedComplete evidence.
+        // Dispatch and delay may be authenticated by independent ranges from
+        // the same current image generation; find_immutable_range enforces
+        // that generation on each proof.
         declaration.identity_bound_complete =
             table.entry_count != 0u &&
             table_extent <= std::numeric_limits<std::size_t>::max() &&
@@ -2633,7 +2639,10 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                 *resolved_table_identity, table_identity->size) != nullptr &&
             resolved_dispatch.has_value() &&
             image.find_immutable_range(
-                *resolved_dispatch, dispatch_proof_width) != nullptr;
+                *resolved_dispatch, instruction_width) != nullptr &&
+            image.find_immutable_range(
+                *resolved_dispatch + instruction_width,
+                instruction_width) != nullptr;
         overrides.jump_tables.push_back(declaration);
     }
     return overrides;

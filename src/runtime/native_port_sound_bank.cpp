@@ -324,6 +324,11 @@ class NativePortSoundBankEngine::Impl final {
         std::uint8_t bank = 0u;
     };
 
+    struct PlayableProgram final {
+        ProgramBank* bank = nullptr;
+        const Program* program = nullptr;
+    };
+
     struct Event final {
         EventKind kind = EventKind::Note;
         std::uint64_t tick = 0u;
@@ -1710,34 +1715,7 @@ class NativePortSoundBankEngine::Impl final {
         const NativePortSoundCollectionHandle collection_handle,
         const NativePortSoundSequenceConfig& config) {
         require_owner_thread();
-        if (config.sequence_bank >= maximum_mlt_banks ||
-            config.program_bank >= maximum_mlt_banks ||
-            !valid_gain_pan(config.gain, config.pan) ||
-            !valid_playback_rate(config.playback_rate) ||
-            config.pitch_bend < -8192 || config.pitch_bend > 8191 ||
-            config.direct_level > 127u || config.effect_level > 127u)
-            fail_sound_bank(NativePortSoundBankFailure::InvalidSequence,
-                            "sequence-config");
-        const auto& collection = require_collection(collection_handle);
-        const auto& bank = collection.sequence_banks[config.sequence_bank];
-        if (!bank.has_value())
-            fail_sound_bank(NativePortSoundBankFailure::InvalidSequenceBank,
-                            "sequence-bank");
-        if (config.sequence >= bank->sequences.size() ||
-            !bank->sequences[config.sequence].has_value())
-            fail_sound_bank(NativePortSoundBankFailure::InvalidSequence,
-                            "sequence-index");
-        if (!collection.program_banks[config.program_bank].has_value())
-            fail_sound_bank(NativePortSoundBankFailure::InvalidProgramBank,
-                            "sequence-program-bank");
-
-        ActiveSequence active;
-        active.collection = collection_handle;
-        active.config = config;
-        active.tempo = bank->sequences[config.sequence]->initial_tempo;
-        for (auto& channel : active.channels)
-            channel.bank = config.program_bank;
-        return insert_sequence(std::move(active));
+        return insert_sequence(prepare_sequence(collection_handle, config));
     }
 
     void pause_sequence(const NativePortSoundSequenceHandle handle) {
@@ -2000,6 +1978,13 @@ class NativePortSoundBankEngine::Impl final {
             fail_sound_bank(NativePortSoundBankFailure::InvalidHandle,
                             "midi-note");
         auto& port = require_midi_port(handle);
+        auto& collection = require_collection(port.collection);
+        static_cast<void>(require_playable_program(
+            collection,
+            port.config.program_bank,
+            port.config.program,
+            note,
+            velocity));
         if (port.notes[note].has_value()) {
             note_off_if_live(*port.notes[note]);
             port.notes[note].reset();
@@ -2041,8 +2026,6 @@ class NativePortSoundBankEngine::Impl final {
         const bool enable_authored_loops) {
         require_owner_thread();
         auto& port = require_midi_port(handle);
-        if (port.sequence.has_value())
-            release_sequence_if_live(*port.sequence);
         NativePortSoundSequenceConfig config;
         config.sequence_bank = sequence_bank;
         config.program_bank = port.config.program_bank;
@@ -2054,7 +2037,14 @@ class NativePortSoundBankEngine::Impl final {
         config.direct_level = port.config.direct_level;
         config.effect_level = port.config.effect_level;
         config.enable_authored_loops = enable_authored_loops;
-        const auto result = play_sequence(port.collection, config);
+        // Validate and prepare the replacement before retiring the old
+        // sequence.  Insertion stays after retirement so a port can replace
+        // its own sequence even when the global active-sequence budget is
+        // otherwise full.
+        auto replacement = prepare_sequence(port.collection, config);
+        if (port.sequence.has_value())
+            release_sequence_if_live(*port.sequence);
+        const auto result = insert_sequence(std::move(replacement));
         port.sequence = result;
         return result;
     }
@@ -2286,6 +2276,39 @@ class NativePortSoundBankEngine::Impl final {
     }
 
   private:
+    [[nodiscard]] ActiveSequence prepare_sequence(
+        const NativePortSoundCollectionHandle collection_handle,
+        const NativePortSoundSequenceConfig& config) {
+        if (config.sequence_bank >= maximum_mlt_banks ||
+            config.program_bank >= maximum_mlt_banks ||
+            !valid_gain_pan(config.gain, config.pan) ||
+            !valid_playback_rate(config.playback_rate) ||
+            config.pitch_bend < -8192 || config.pitch_bend > 8191 ||
+            config.direct_level > 127u || config.effect_level > 127u)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidSequence,
+                            "sequence-config");
+        const auto& collection = require_collection(collection_handle);
+        const auto& bank = collection.sequence_banks[config.sequence_bank];
+        if (!bank.has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidSequenceBank,
+                            "sequence-bank");
+        if (config.sequence >= bank->sequences.size() ||
+            !bank->sequences[config.sequence].has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidSequence,
+                            "sequence-index");
+        if (!collection.program_banks[config.program_bank].has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidProgramBank,
+                            "sequence-program-bank");
+
+        ActiveSequence active;
+        active.collection = collection_handle;
+        active.config = config;
+        active.tempo = bank->sequences[config.sequence]->initial_tempo;
+        for (auto& channel : active.channels)
+            channel.bank = config.program_bank;
+        return active;
+    }
+
     [[nodiscard]] NativePortSoundSequenceHandle insert_sequence(
         ActiveSequence sequence) {
         std::size_t index = sequences_.size();
@@ -2600,15 +2623,10 @@ class NativePortSoundBankEngine::Impl final {
         const std::uint64_t release_tick,
         const std::uint64_t current_tick) {
         auto& collection = require_collection(collection_handle);
-        if (bank_index >= maximum_mlt_banks ||
-            !collection.program_banks[bank_index].has_value())
-            fail_sound_bank(NativePortSoundBankFailure::InvalidProgramBank,
-                            "note-program-bank");
-        auto& bank = *collection.program_banks[bank_index];
-        if (program_index >= bank.programs.size())
-            fail_sound_bank(NativePortSoundBankFailure::InvalidProgramBank,
-                            "note-program");
-        const auto& program = bank.programs[program_index];
+        const auto playable = require_playable_program(
+            collection, bank_index, program_index, note, velocity);
+        auto& bank = *playable.bank;
+        const auto& program = *playable.program;
         std::array<bool, 256u> drum_groups{};
         for (const auto& layer : program.layers)
             for (const auto& split : layer.splits)
@@ -2682,6 +2700,39 @@ class NativePortSoundBankEngine::Impl final {
             throw;
         }
         return created;
+    }
+
+    [[nodiscard]] PlayableProgram require_playable_program(
+        Collection& collection,
+        const std::uint8_t bank_index,
+        const std::uint8_t program_index,
+        const std::uint8_t note,
+        const std::uint8_t velocity) {
+        if (bank_index >= maximum_mlt_banks ||
+            !collection.program_banks[bank_index].has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidProgramBank,
+                            "note-program-bank");
+        auto& bank = *collection.program_banks[bank_index];
+        if (program_index >= bank.programs.size())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidProgramBank,
+                            "note-program");
+        const auto& program = bank.programs[program_index];
+        const auto playable = std::ranges::any_of(
+            program.layers, [&](const auto& layer) {
+                return std::ranges::any_of(
+                    layer.splits, [&](const auto& split) {
+                        return note >= split.start_note &&
+                               note <= split.end_note &&
+                               velocity >= split.velocity_low &&
+                               velocity <= split.velocity_high &&
+                               split.tone_offset != 0u &&
+                               split.loop_end != 0u;
+                    });
+            });
+        if (!playable)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidSample,
+                            "note-no-playable-split");
+        return {&bank, &program};
     }
 
     [[nodiscard]] std::shared_ptr<std::vector<std::int16_t>> decode_sample(
