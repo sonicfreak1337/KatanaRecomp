@@ -3172,6 +3172,8 @@ struct ControlFlowAnalysisSession::Impl final {
         guarded_native_entry_shapes;
     std::unique_ptr<detail::FunctionValueAnalysisSession>
         function_value_session;
+    std::unique_ptr<detail::StaticCallbackInventorySession>
+        static_callback_inventory_session;
     JumpTableSnapshotCache jump_table_cache;
     IncrementalCfaScanCache cfa_scan_cache;
     std::map<std::uint32_t, FunctionBoundary> function_boundary_index;
@@ -3222,6 +3224,8 @@ struct ControlFlowAnalysisSession::Impl final {
                     default_maximum_resolution_epoch_retained_bytes,
                 next_options.pre_reserved_function_value_ready_budget,
                 next_options.function_value_cache_memory_budget);
+        static_callback_inventory_session =
+            std::make_unique<detail::StaticCallbackInventorySession>();
         jump_table_cache = JumpTableSnapshotCache{};
         cfa_scan_cache.clear();
         function_boundary_index.clear();
@@ -5231,7 +5235,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     &final_static_callback_sinks,
                     &final_static_persistent_pointer_sinks,
                     &final_static_callback_field_sinks,
-                    &final_static_callback_record_tables);
+                    &final_static_callback_record_tables,
+                    session_state.static_callback_inventory_session.get());
             static_callback_contracts_materialized = true;
             auto& callback_candidates =
                 static_callback_inventory.stored_code_addresses;

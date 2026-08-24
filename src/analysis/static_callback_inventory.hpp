@@ -5,6 +5,7 @@
 
 #include <span>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace katana::analysis::detail {
@@ -19,6 +20,42 @@ using StaticCallbackFieldSinkContract =
     katana::analysis::StaticCallbackFieldSinkContract;
 using StaticCallbackRecordTableContract =
     katana::analysis::StaticCallbackRecordTableContract;
+
+// Retains only per-function semantic models whose complete CFG/input binding
+// is byte-for-byte unchanged.  The session is an analysis accelerator, never
+// authority: an image/proof binding change clears it and a missing or changed
+// function is evaluated cold before it can contribute callback inventory.
+class StaticCallbackInventorySession final {
+  public:
+    StaticCallbackInventorySession();
+    ~StaticCallbackInventorySession();
+    StaticCallbackInventorySession(StaticCallbackInventorySession&&) noexcept;
+    StaticCallbackInventorySession&
+    operator=(StaticCallbackInventorySession&&) noexcept;
+
+    StaticCallbackInventorySession(const StaticCallbackInventorySession&) =
+        delete;
+    StaticCallbackInventorySession& operator=(
+        const StaticCallbackInventorySession&) = delete;
+
+    void clear() noexcept;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+
+    friend GuardedCodeInventory analyze_static_callback_inventory(
+        const katana::io::ExecutableImage&,
+        std::span<const katana::sh4::DisassemblyLine>,
+        std::span<const FunctionCandidate>,
+        std::span<const std::uint32_t>,
+        std::span<const std::uint32_t>, GuardedNativeEntryShapeCache&,
+        std::vector<StaticCallbackSinkContract>*,
+        std::vector<StaticPersistentPointerSinkContract>*,
+        std::vector<StaticCallbackFieldSinkContract>*,
+        std::vector<StaticCallbackRecordTableContract>*,
+        StaticCallbackInventorySession*);
+};
 
 // Returns the sorted, unique record-field displacements which feed an
 // actually decoded indirect call/jump in the supplied image.  These are
@@ -48,6 +85,7 @@ discover_static_callback_field_offsets(
     std::vector<StaticCallbackFieldSinkContract>*
         callback_field_sink_contracts = nullptr,
     std::vector<StaticCallbackRecordTableContract>*
-        callback_record_table_contracts = nullptr);
+        callback_record_table_contracts = nullptr,
+    StaticCallbackInventorySession* session = nullptr);
 
 } // namespace katana::analysis::detail

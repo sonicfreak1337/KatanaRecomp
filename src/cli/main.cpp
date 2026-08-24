@@ -6251,6 +6251,91 @@ bool remove_new_failed_port_host_build_state(
     return true;
 }
 
+bool remove_relocated_port_host_build_state(
+    const std::filesystem::path& port_root,
+    const std::filesystem::path& build_root) {
+    const auto cache_path = build_root / "CMakeCache.txt";
+    if (!safe_regular_port_directory_exists(
+            build_root, "Inkrementeller Hostbuild-Cache") ||
+        !safe_regular_port_file_exists(
+            cache_path, "Inkrementeller Hostbuild-CMakeCache"))
+        return false;
+
+    const auto same_path = [](const std::filesystem::path& left,
+                              const std::filesystem::path& right) {
+        const auto normalized_left =
+            std::filesystem::absolute(left).lexically_normal().native();
+        const auto normalized_right =
+            std::filesystem::absolute(right).lexically_normal().native();
+#ifdef _WIN32
+        return CompareStringOrdinal(
+                   normalized_left.c_str(),
+                   static_cast<int>(normalized_left.size()),
+                   normalized_right.c_str(),
+                   static_cast<int>(normalized_right.size()),
+                   TRUE) == CSTR_EQUAL;
+#else
+        return normalized_left == normalized_right;
+#endif
+    };
+    bool reset_required = false;
+    try {
+        constexpr std::uintmax_t maximum_cmake_cache_bytes =
+            16u * 1024u * 1024u;
+        std::error_code size_error;
+        const auto cache_size =
+            std::filesystem::file_size(cache_path, size_error);
+        if (size_error || cache_size > maximum_cmake_cache_bytes) {
+            reset_required = true;
+        } else {
+            const auto cached_source =
+                cmake_cache_value(cache_path, "CMAKE_HOME_DIRECTORY");
+            const auto cached_build =
+                cmake_cache_value(cache_path, "CMAKE_CACHEFILE_DIR");
+            reset_required =
+                !cached_source || cached_source->empty() ||
+                !cached_build || cached_build->empty() ||
+                !same_path(*cached_source, port_root) ||
+                !same_path(*cached_build, build_root);
+        }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        // A malformed generated CMake cache is not reusable state. The exact
+        // build subtree is validated again below before it is removed.
+        reset_required = true;
+    }
+    if (!reset_required) return false;
+
+    const auto normalized_port =
+        std::filesystem::absolute(port_root).lexically_normal();
+    const auto normalized_build =
+        std::filesystem::absolute(build_root).lexically_normal();
+    const auto build_name = normalized_build.filename().generic_string();
+    if (normalized_build.parent_path() != normalized_port ||
+        build_name.size() <= 6u || !build_name.starts_with("build-"))
+        throw std::runtime_error(
+            "Relokierter Hostbuild besitzt keinen sicher abgeleiteten "
+            "Buildpfad.");
+    std::error_code canonical_error;
+    const auto resolved_port =
+        std::filesystem::canonical(normalized_port, canonical_error);
+    if (canonical_error)
+        throw std::runtime_error(
+            "Portwurzel fuer Hostbuild-Relokation konnte nicht aufgeloest "
+            "werden.");
+    const auto resolved_build =
+        std::filesystem::canonical(normalized_build, canonical_error);
+    if (canonical_error || resolved_build.parent_path() != resolved_port)
+        throw std::runtime_error(
+            "Hostbuild-Relokation wuerde den sicheren Portbuildpfad "
+            "verlassen.");
+    remove_safe_port_tree(
+        normalized_build,
+        "Relokierter inkrementeller Hostbuild-Cache");
+    return true;
+}
+
 #ifdef _WIN32
 void require_optimized_msvc_configuration(
     const std::filesystem::path& build_root,
@@ -12933,6 +13018,11 @@ int export_port_project(const std::filesystem::path& source_path,
             ("build-" + host_compiler + '-' + host_linker + '-' +
              build_profile + '-' + configuration_identity + '-' +
              port_runtime_profile + '-' + generator_identity);
+        if (remove_relocated_port_host_build_state(
+                report.output_root, build_path))
+            std::cerr
+                << "KATANA_PORT_HOST_CACHE_RESET stage=pre-configure "
+                   "reason=relocated-cmake-binding\n";
         const auto host_build_directory_existed_before_configure =
             safe_regular_port_directory_exists(
                 build_path, "Inkrementeller Hostbuild-Cache");

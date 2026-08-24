@@ -522,14 +522,14 @@ struct LatentAotDiscovery {
     std::size_t analysis_full_pipeline_runs = 0u;
 };
 
-// In-process state for one analyze-port discovery run.  The session owns only
-// the bounded source catalog and its source-byte-backed candidate work; it is
-// deliberately not a persistent cache and must be discarded at the end of a
-// run.  A later discovery call may reuse that catalog when all source,
-// placement, hint and budget inputs match exactly and the same immutable
-// DiscSource instance is supplied.  Cross-image contracts are supplied on
-// each call and therefore remain the invalidation boundary for candidate
-// analysis.
+// In-process state for one analyze-port discovery run.  The session owns the
+// bounded source catalog and source-byte-backed candidate work plus a
+// non-persistent cache of source-bound static candidate graphs. It must be
+// discarded at the end of a run. A later discovery call may reuse that catalog
+// and graph only when the exact source/placement/hint/static analyzer key
+// matches. Cross-image contracts remain call-local: monotonic additions are
+// re-resolved against the retained graph, while removals, identity changes or
+// a newly required CFA root take the closed cold path.
 class LatentAotDiscoverySession final {
   public:
     struct Impl;

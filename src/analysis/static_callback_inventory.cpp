@@ -242,6 +242,73 @@ struct CallbackFunctionModel final {
     bool persistent_stores_truncated = false;
 };
 
+struct CallbackModelLineBinding final {
+    std::uint32_t address = 0u;
+    std::uint16_t opcode = 0u;
+    bool is_delay_slot = false;
+    std::optional<std::uint32_t> target_address;
+
+    bool operator==(const CallbackModelLineBinding&) const = default;
+};
+
+struct CallbackModelBlockBinding final {
+    std::uint32_t start_address = 0u;
+    std::uint32_t end_address = 0u;
+    std::vector<std::uint32_t> successors;
+    bool has_indirect_successor = false;
+    std::vector<CallbackModelLineBinding> lines;
+
+    bool operator==(const CallbackModelBlockBinding&) const = default;
+};
+
+struct CallbackModelInputBinding final {
+    std::uint32_t entry_address = 0u;
+    std::uint32_t size = 0u;
+    std::vector<std::uint32_t> block_addresses;
+    std::vector<std::uint32_t> direct_callees;
+    std::vector<std::uint32_t> indirect_call_sites;
+    std::vector<std::uint32_t> shared_block_addresses;
+    std::vector<std::uint32_t> tail_jump_targets;
+    ControlFlowEvidence evidence = ControlFlowEvidence::ProvenComplete;
+    std::vector<CallbackModelBlockBinding> blocks;
+
+    bool operator==(const CallbackModelInputBinding&) const = default;
+};
+
+[[nodiscard]] std::optional<CallbackModelInputBinding>
+callback_model_input_binding(
+    const FunctionInfo& function,
+    const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks) {
+    CallbackModelInputBinding binding;
+    binding.entry_address = function.entry_address;
+    binding.size = function.size;
+    binding.block_addresses = function.block_addresses;
+    binding.direct_callees = function.direct_callees;
+    binding.indirect_call_sites = function.indirect_call_sites;
+    binding.shared_block_addresses = function.shared_block_addresses;
+    binding.tail_jump_targets = function.tail_jump_targets;
+    binding.evidence = function.evidence;
+    binding.blocks.reserve(function.block_addresses.size());
+    for (const auto address : function.block_addresses) {
+        const auto found = blocks.find(address);
+        if (found == blocks.end()) return std::nullopt;
+        const auto& block = *found->second;
+        CallbackModelBlockBinding block_binding;
+        block_binding.start_address = block.start_address;
+        block_binding.end_address = block.end_address;
+        block_binding.successors = block.successors;
+        block_binding.has_indirect_successor = block.has_indirect_successor;
+        block_binding.lines.reserve(block.lines.size());
+        for (const auto& line : block.lines) {
+            block_binding.lines.push_back({line.address, line.opcode,
+                                           line.is_delay_slot,
+                                           line.target_address});
+        }
+        binding.blocks.push_back(std::move(block_binding));
+    }
+    return binding;
+}
+
 [[nodiscard]] std::optional<std::uint32_t> executable_constant(
     const katana::io::ExecutableImage& image,
     std::uint32_t value);
@@ -2106,8 +2173,7 @@ void apply_instruction(CallbackFunctionModel& model,
 [[nodiscard]] std::vector<std::uint32_t> call_targets(
     const katana::io::ExecutableImage& image,
     const katana::sh4::DisassemblyLine& control,
-    const CallbackValue& branch_before_delay,
-    const std::set<std::uint32_t>& function_entries) {
+    const CallbackValue& branch_before_delay) {
     std::set<std::uint32_t> targets;
     if (control.target_address.has_value())
         targets.insert(*control.target_address);
@@ -2121,8 +2187,7 @@ void apply_instruction(CallbackFunctionModel& model,
     std::vector<std::uint32_t> result;
     for (const auto target : targets) {
         const auto resolved = executable_constant(image, target);
-        if (resolved.has_value() && function_entries.contains(*resolved))
-            result.push_back(*resolved);
+        if (resolved.has_value()) result.push_back(*resolved);
     }
     return result;
 }
@@ -2154,7 +2219,6 @@ void clobber_call_volatile_registers(CallbackState& state) {
     const katana::io::ExecutableImage& image,
     const FunctionInfo& function,
     const std::unordered_map<std::uint32_t, const BasicBlock*>& blocks,
-    const std::set<std::uint32_t>& function_entries,
     GuardedNativeEntryShapeCache& native_entry_shapes,
     std::size_t* const limited_evaluations) {
     CallbackFunctionModel model;
@@ -2237,8 +2301,7 @@ void clobber_call_volatile_registers(CallbackState& state) {
                         branch_before_delay =
                             state.registers[branch_register];
                 }
-                targets = call_targets(image, line, branch_before_delay,
-                                       function_entries);
+                targets = call_targets(image, line, branch_before_delay);
                 continue;
             }
             apply_instruction(model, state, image, line,
@@ -2386,6 +2449,57 @@ void canonicalize_candidate(StoredCodeAddressCandidate& candidate) {
 
 } // namespace
 
+struct StaticCallbackInventorySession::Impl final {
+    struct CachedModel final {
+        CallbackModelInputBinding binding;
+        CallbackFunctionModel model;
+        std::size_t limited_evaluations = 0u;
+    };
+
+    bool image_bound = false;
+    std::uint64_t image_identity = 0u;
+    std::uint64_t immutable_generation = 0u;
+    std::vector<katana::io::ImageImmutableRange> immutable_ranges;
+    std::map<std::uint32_t, CachedModel> models;
+
+    void bind(const katana::io::ExecutableImage& image) {
+        const auto ranges = image.immutable_ranges();
+        const bool same_image =
+            image_bound &&
+            image_identity == image.analysis_instance_identity() &&
+            immutable_generation == image.immutable_generation() &&
+            immutable_ranges.size() == ranges.size() &&
+            std::equal(immutable_ranges.begin(), immutable_ranges.end(),
+                       ranges.begin(), ranges.end());
+        if (!same_image) models.clear();
+        image_bound = true;
+        image_identity = image.analysis_instance_identity();
+        immutable_generation = image.immutable_generation();
+        immutable_ranges.assign(ranges.begin(), ranges.end());
+    }
+
+    void clear() noexcept {
+        image_bound = false;
+        image_identity = 0u;
+        immutable_generation = 0u;
+        immutable_ranges.clear();
+        models.clear();
+    }
+};
+
+StaticCallbackInventorySession::StaticCallbackInventorySession()
+    : impl_(std::make_unique<Impl>()) {}
+
+StaticCallbackInventorySession::~StaticCallbackInventorySession() = default;
+
+StaticCallbackInventorySession::StaticCallbackInventorySession(
+    StaticCallbackInventorySession&&) noexcept = default;
+
+StaticCallbackInventorySession& StaticCallbackInventorySession::operator=(
+    StaticCallbackInventorySession&&) noexcept = default;
+
+void StaticCallbackInventorySession::clear() noexcept { impl_->clear(); }
+
 std::vector<std::int32_t> discover_static_callback_field_offsets(
     const std::span<const katana::sh4::DisassemblyLine> lines) {
     const auto offsets = discover_callback_field_offsets(lines);
@@ -2406,7 +2520,8 @@ GuardedCodeInventory analyze_static_callback_inventory(
     std::vector<StaticCallbackFieldSinkContract>* const
         callback_field_sink_contracts,
     std::vector<StaticCallbackRecordTableContract>* const
-        callback_record_table_contracts) {
+        callback_record_table_contracts,
+    StaticCallbackInventorySession* const session) {
     if (callback_sink_contracts != nullptr)
         callback_sink_contracts->clear();
     if (persistent_pointer_sink_contracts != nullptr)
@@ -2515,21 +2630,58 @@ GuardedCodeInventory analyze_static_callback_inventory(
     block_index.reserve(blocks.size());
     for (const auto& block : blocks)
         block_index.emplace(block.start_address, &block);
-    std::set<std::uint32_t> function_entries;
-    for (const auto& function : functions)
-        function_entries.insert(function.entry_address);
-
     std::size_t limited_evaluations = 0u;
     bool candidate_values_truncated = false;
     bool forwarding_truncated = false;
     std::size_t receiver_may_alias_stores = 0u;
     std::map<std::uint32_t, CallbackFunctionModel> models;
+    std::size_t model_cache_hits = 0u;
+    std::size_t model_cache_misses = 0u;
+    std::set<std::uint32_t> current_model_entries;
+    if (session != nullptr) session->impl_->bind(image);
     for (const auto& function : functions) {
+        current_model_entries.insert(function.entry_address);
+        const auto binding = callback_model_input_binding(function,
+                                                          block_index);
+        if (session != nullptr && binding.has_value()) {
+            const auto cached = session->impl_->models.find(
+                function.entry_address);
+            if (cached != session->impl_->models.end() &&
+                cached->second.binding == *binding) {
+                limited_evaluations +=
+                    cached->second.limited_evaluations;
+                models.emplace(function.entry_address,
+                               cached->second.model);
+                ++model_cache_hits;
+                continue;
+            }
+        }
+
+        std::size_t model_limited_evaluations = 0u;
         auto model = build_function_model(image, function, block_index,
-                                          function_entries,
                                           native_entry_shapes,
-                                          &limited_evaluations);
+                                          &model_limited_evaluations);
+        limited_evaluations += model_limited_evaluations;
+        if (session != nullptr && binding.has_value()) {
+            session->impl_->models.insert_or_assign(
+                function.entry_address,
+                StaticCallbackInventorySession::Impl::CachedModel{
+                    *binding, model, model_limited_evaluations});
+        }
         models.insert_or_assign(function.entry_address, std::move(model));
+        ++model_cache_misses;
+    }
+    if (session != nullptr) {
+        for (auto cached = session->impl_->models.begin();
+             cached != session->impl_->models.end();) {
+            if (!current_model_entries.contains(cached->first))
+                cached = session->impl_->models.erase(cached);
+            else
+                ++cached;
+        }
+        std::cerr << "KATANA_STATIC_CALLBACK_MODEL_CACHE hits="
+                  << model_cache_hits << " misses=" << model_cache_misses
+                  << " retained=" << session->impl_->models.size() << '\n';
     }
 
     // A receiver lane is allowed to become wide, but a lost receiver relation

@@ -54,6 +54,7 @@
 #include <charconv>
 #include <chrono>
 #include <compare>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
@@ -93,6 +94,40 @@ void report_progress(const PortExportOptions& options, const std::string_view ph
     } catch (...) {
         options.progress.record_observation_loss();
     }
+}
+
+void report_deferred_latent_primary_root_seed_cache_failure(
+    const std::string_view stage,
+    const std::string_view reason) noexcept {
+    const auto write_token = [](const std::string_view token) noexcept {
+        constexpr std::size_t maximum_token_bytes = 48u;
+        const auto count = std::min(token.size(), maximum_token_bytes);
+        for (std::size_t index = 0u; index < count; ++index) {
+            const auto character =
+                static_cast<unsigned char>(token[index]);
+            const bool ascii_alphanumeric =
+                (character >= static_cast<unsigned char>('a') &&
+                 character <= static_cast<unsigned char>('z')) ||
+                (character >= static_cast<unsigned char>('A') &&
+                 character <= static_cast<unsigned char>('Z')) ||
+                (character >= static_cast<unsigned char>('0') &&
+                 character <= static_cast<unsigned char>('9'));
+            const char output =
+                ascii_alphanumeric || character == '-' || character == '_'
+                    ? static_cast<char>(character)
+                    : '_';
+            static_cast<void>(std::fputc(output, stderr));
+        }
+    };
+    static_cast<void>(std::fputs(
+        "KATANA_ANALYZE_PORT_ROOT_SEED_CACHE_PUBLISH_DIAGNOSTIC "
+        "stage=",
+        stderr));
+    write_token(stage);
+    static_cast<void>(std::fputs(" reason=", stderr));
+    write_token(reason);
+    static_cast<void>(std::fputc('\n', stderr));
+    static_cast<void>(std::fflush(stderr));
 }
 
 bool valid_target_name(const std::string_view value) noexcept {
@@ -34545,25 +34580,48 @@ publish_committed_native_disc_analysis_hints(
     if (!has_deferred_native_disc_analysis_hints(analyzed))
         return NativeDiscAnalysisHintPublicationResult::NotPending;
 
-    auto publication = std::move(
-        *analyzed.admitted_state
-             ->deferred_latent_primary_root_seed_publication);
-    analyzed.admitted_state
-        ->deferred_latent_primary_root_seed_publication.reset();
+    auto& deferred_publication =
+        analyzed.admitted_state
+            ->deferred_latent_primary_root_seed_publication;
+    const auto& publication = *deferred_publication;
+    const char* failure_stage = "cache-construct";
+    const auto missed = [&](const std::string_view reason) noexcept {
+        analyzed.latent_primary_root_seed_cache_publish_missed = true;
+        report_deferred_latent_primary_root_seed_cache_failure(
+            failure_stage,
+            reason);
+        return NativeDiscAnalysisHintPublicationResult::Missed;
+    };
     try {
         CodegenCache cache(publication.cache_root);
-        if (publication.validated_payload != publication.observed_payload) {
+        failure_stage = "cache-precondition";
+        const auto current_payload = cache.load_bounded(
+            publication.cache_key,
+            latent_primary_root_seed_artifact_name,
+            maximum_latent_primary_root_seed_cache_bytes);
+        const bool already_published =
+            current_payload.has_value() &&
+            *current_payload == publication.validated_payload;
+        if (!already_published &&
+            !publication.observed_payload.empty() &&
+            current_payload.has_value() &&
+            *current_payload != publication.observed_payload) {
+            return missed("observed-content-changed");
+        }
+        if (!already_published &&
+            publication.validated_payload != publication.observed_payload) {
             if (!publication.observed_payload.empty()) {
+                failure_stage = "cache-replace";
                 if (!cache.replace_bounded_if_matches(
                         publication.cache_key,
                         latent_primary_root_seed_artifact_name,
                         publication.observed_payload,
                         publication.validated_payload,
-                        maximum_latent_primary_root_seed_cache_bytes))
-                    throw std::runtime_error(
-                        "Latent-Primary-Root-Cache konnte den autoritativ "
-                        "gelesenen Seed nicht atomar ersetzen.");
+                        maximum_latent_primary_root_seed_cache_bytes)) {
+                    return missed("compare-and-replace-rejected");
+                }
             } else {
+                failure_stage = "cache-store";
                 cache.store_bounded(
                     publication.cache_key,
                     latent_primary_root_seed_artifact_name,
@@ -34571,12 +34629,37 @@ publish_committed_native_disc_analysis_hints(
                     maximum_latent_primary_root_seed_cache_bytes);
             }
         }
+        // CodegenCache's bounded mutation APIs verify their preconditions and
+        // publish atomically. Re-read the exact artifact before clearing the
+        // deferred state so a post-commit cache race never becomes a false
+        // publication success.
+        failure_stage = "cache-verify";
+        const auto verified_payload = cache.load_bounded(
+            publication.cache_key,
+            latent_primary_root_seed_artifact_name,
+            maximum_latent_primary_root_seed_cache_bytes);
+        if (!verified_payload.has_value() ||
+            *verified_payload != publication.validated_payload) {
+            return missed("post-publish-verify-rejected");
+        }
+        // Do not discard the retryable payload until both the bounded write
+        // and the exact read-back have succeeded.
+        deferred_publication.reset();
+        analyzed.latent_primary_root_seed_cache_published = true;
+        analyzed.latent_primary_root_seed_cache_publish_missed = false;
         return NativeDiscAnalysisHintPublicationResult::Published;
+    } catch (const std::bad_alloc&) {
+        return missed("allocation-failure");
+    } catch (const std::invalid_argument&) {
+        return missed("invalid-cache-contract");
+    } catch (const std::system_error&) {
+        return missed("filesystem-operation-failed");
+    } catch (const std::runtime_error&) {
+        return missed("cache-contract-rejected");
+    } catch (const std::exception&) {
+        return missed("cache-operation-failed");
     } catch (...) {
-        // The archive/World/ledger generation has already committed. A cache
-        // race, allocation failure or unsafe local cache tree can therefore
-        // only remove the optimization from the next run.
-        return NativeDiscAnalysisHintPublicationResult::Missed;
+        return missed("unknown-failure");
     }
 }
 
