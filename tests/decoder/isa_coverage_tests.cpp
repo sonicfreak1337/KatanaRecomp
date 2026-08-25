@@ -27,7 +27,8 @@ struct EvidenceFixture {
     std::string katana_commit{katana::build_contract::katana_git_commit};
     std::string corpus_commit{katana::sh4::external_evidence_contract::corpus_commit};
     std::string corpus_hash{katana::sh4::external_evidence_contract::corpus_manifest_sha256};
-    std::uint32_t runtime_abi = katana::build_contract::runtime_abi_version;
+    std::uint32_t runtime_abi =
+        katana::build_contract::aot_runtime_abi_version;
     std::uint32_t backend_abi = katana::build_contract::backend_interface_abi_version;
     std::string backend_profile{"external-conformance"};
     std::uint32_t backend_profile_version = katana::codegen::native_aot_emission_profile_version;

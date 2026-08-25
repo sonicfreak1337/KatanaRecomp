@@ -13,9 +13,12 @@ inline constexpr bool source_identity_trusted =
 inline constexpr std::string_view configured_compiler_launcher =
     "@KATANA_CONFIGURED_COMPILER_LAUNCHER@";
 
-// Compatibility aliases for tooling that consumes provenance and ABI values
-// together. Generated AOT code includes abi_contract.hpp directly.
+// The product runtime may evolve without changing the narrow ABI consumed by
+// generated AOT translation units. Keeping both domains explicit prevents a
+// product-only contract change from invalidating every cached AOT partition.
 inline constexpr std::uint32_t runtime_abi_version =
+    @KATANA_PRODUCT_RUNTIME_ABI_VERSION@u;
+inline constexpr std::uint32_t aot_runtime_abi_version =
     abi_contract::runtime_abi_version;
 inline constexpr std::uint32_t block_abi_version =
     abi_contract::block_abi_version;

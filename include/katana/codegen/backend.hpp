@@ -86,6 +86,10 @@ struct BackendRequest {
     std::span<const NativeAotBlockOwnerEntry> native_block_owner_entries;
     BackendRuntimeBinding runtime_binding =
         BackendRuntimeBinding::DiagnosticPlatformServices;
+    // Identity-bound indirect callsites selected by the product closure-probe
+    // plan. Only these callsites emit the one predictable pending-plan branch;
+    // every unrelated guest call remains byte-for-byte free of probe work.
+    std::span<const std::uint32_t> closure_probe_callsites;
 };
 
 struct BackendEmission {

@@ -54,7 +54,7 @@ function Resolve-KatanaContractVersions {
     }
     return [pscustomobject]@{
         runtime_abi = Get-StrictCMakePositiveInteger $content `
-            'KATANA_RUNTIME_ABI_VERSION' $sourcePath
+            'KATANA_PRODUCT_RUNTIME_ABI_VERSION' $sourcePath
         port_project = Get-StrictCMakePositiveInteger $content `
             'KATANA_PORT_PROJECT_CONTRACT_VERSION' $sourcePath
     }
@@ -484,7 +484,7 @@ $requiredPortContract = [int]$requiredContracts.port_project
 
 if ($SelfTest) {
     foreach ($variableName in @(
-        'KATANA_RUNTIME_ABI_VERSION',
+        'KATANA_PRODUCT_RUNTIME_ABI_VERSION',
         'KATANA_PORT_PROJECT_CONTRACT_VERSION'
     )) {
         foreach ($parserCase in @(

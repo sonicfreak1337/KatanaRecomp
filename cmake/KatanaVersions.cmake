@@ -6,10 +6,16 @@ endif()
 
 # Compatibility values are maintained here and emitted into the public SDK.
 # Increment the relevant value for every incompatible contract change.
-set(KATANA_RUNTIME_ABI_VERSION 124)
+# Generated AOT translation units consume the narrow ABI contract. Product
+# runtime/package changes that do not alter their visible structs or helpers
+# must not invalidate every cached partition.
+set(KATANA_AOT_RUNTIME_ABI_VERSION 124)
+set(KATANA_PRODUCT_RUNTIME_ABI_VERSION 125)
+# Compatibility input for the byte-stable abi_contract.hpp template.
+set(KATANA_RUNTIME_ABI_VERSION ${KATANA_AOT_RUNTIME_ABI_VERSION})
 set(KATANA_BLOCK_ABI_VERSION 5)
 set(KATANA_ANALYZER_ABI_VERSION 70)
 set(KATANA_PLATFORM_SERVICES_ABI_VERSION 14)
-set(KATANA_BACKEND_INTERFACE_ABI_VERSION 24)
+set(KATANA_BACKEND_INTERFACE_ABI_VERSION 25)
 set(KATANA_PORT_PROJECT_CONTRACT_VERSION 103)
 set(KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION 24)

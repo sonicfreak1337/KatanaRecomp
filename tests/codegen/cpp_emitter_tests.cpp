@@ -568,6 +568,65 @@ int main() {
                 runtime_only_json.find("\"dynamic_target_class\":\"runtime-only\"") !=
                     std::string::npos,
             "Runtime-only-Klasse erreicht IR-Text, JSON oder validierenden Dispatcher nicht.");
+
+    // A selected closure probe must observe the common successful return of
+    // both the static candidate-chain and RuntimeOnly fallback paths exactly
+    // once.  Every unselected partition remains free of probe state and
+    // branches. Runtime evidence is retained only after the exact SH-4 call
+    // continuation was restored.
+    auto runtime_candidate_program = indirect_call_program;
+    katana::ir::Instruction* runtime_candidate_call = nullptr;
+    for (auto& function : runtime_candidate_program)
+        for (auto& block : function.blocks)
+            for (auto& instruction : block.instructions)
+                if (instruction.source_address == 2u) {
+                    instruction.dynamic_target_class =
+                        katana::ir::DynamicTargetClass::RuntimeOnly;
+                    block.has_indirect_successor = true;
+                    runtime_candidate_call = &instruction;
+                }
+    require(runtime_candidate_call != nullptr &&
+                runtime_candidate_call->resolved_targets ==
+                    std::vector<std::uint32_t>{12u},
+            "Closure-Probe-Test verlor seinen statischen RuntimeOnly-Kandidaten.");
+    constexpr std::array<std::uint32_t, 1u> closure_probe_callsites{2u};
+    katana::codegen::BackendRequest closure_probe_request{
+        runtime_candidate_program, 0u};
+    closure_probe_request.external_function_linkage = true;
+    closure_probe_request.external_dynamic_dispatch = true;
+    closure_probe_request.closure_probe_callsites = closure_probe_callsites;
+    const auto closure_probe_emission =
+        katana::codegen::CppBackend{}.emit(closure_probe_request);
+    require(
+        closure_probe_emission.functions.find("case 0x0000000Cu:") !=
+                std::string::npos &&
+            closure_probe_emission.functions.find(
+                "runtime_only_call(cpu, call_target)") != std::string::npos &&
+            closure_probe_emission.functions.find(
+                "if (closure_probe_dispatch_pending &&") != std::string::npos &&
+            closure_probe_emission.functions.find(
+                "katana_exact_guarded_target_matches(cpu.pc, "
+                "katana::runtime::relocate_code_address(0x00000006u))") !=
+                std::string::npos &&
+            count_occurrences(
+                closure_probe_emission.functions,
+                "note_successful_closure_probe_dispatch(") == 1u,
+        "RuntimeOnly-Kandidat und Fallback teilen keinen exakt einmaligen, "
+        "fortsetzungsgebundenen Closure-Probe-Erfolgsweg.");
+    auto unselected_probe_request = closure_probe_request;
+    unselected_probe_request.closure_probe_callsites = {};
+    const auto unselected_probe_emission =
+        katana::codegen::CppBackend{}.emit(unselected_probe_request);
+    require(
+        unselected_probe_emission.declarations.find(
+            "closure_probe_dispatch_pending") == std::string::npos &&
+            unselected_probe_emission.functions.find(
+                "closure_probe_dispatch_pending") == std::string::npos &&
+            unselected_probe_emission.functions.find(
+                "note_successful_closure_probe_dispatch(") ==
+                std::string::npos,
+        "Nicht armierte CallRegister-Sites tragen Closure-Probe-Hotpathkosten.");
+
     const std::array guarded_native_call_targets{
         katana::codegen::GuardedNativeCallTarget{2u, 12u}};
     katana::codegen::BackendRequest guarded_native_request{dynamic_program, 0u};

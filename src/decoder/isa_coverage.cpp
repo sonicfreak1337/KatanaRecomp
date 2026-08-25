@@ -787,7 +787,8 @@ ExternalIsaEvidence parse_external_isa_evidence_json(const std::string_view docu
                "corpus-commit-mismatch");
     mark_stale(result.corpus_manifest_sha256 != external_evidence_contract::corpus_manifest_sha256,
                "corpus-manifest-mismatch");
-    mark_stale(result.runtime_abi != build_contract::runtime_abi_version, "runtime-abi-mismatch");
+    mark_stale(result.runtime_abi != build_contract::aot_runtime_abi_version,
+               "runtime-abi-mismatch");
     mark_stale(result.backend_abi != build_contract::backend_interface_abi_version,
                "backend-abi-mismatch");
     mark_stale(result.backend_profile !=

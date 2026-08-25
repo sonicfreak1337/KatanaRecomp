@@ -20,6 +20,11 @@ inline constexpr std::uint32_t crash_capsule_v3_contract_version = 3u;
 // this distinct from v3 lets strict consumers reject unknown keys instead of
 // silently accepting a structurally different line under the old contract.
 inline constexpr std::uint32_t crash_capsule_v4_contract_version = 4u;
+// Version 5 is an additive, bounded witness contract.  It carries the
+// provenance needed to review a runtime observation without treating that
+// observation as a static closure proof.  The recording structures below are
+// deliberately fixed-size PODs so they are safe on a fault path.
+inline constexpr std::uint32_t crash_capsule_v5_contract_version = 5u;
 inline constexpr std::size_t crash_capsule_event_capacity = 64u;
 inline constexpr std::size_t crash_capsule_token_capacity = 512u;
 inline constexpr std::size_t crash_capsule_v2_line_capacity = 32768u;
@@ -28,6 +33,16 @@ inline constexpr std::size_t crash_capsule_memory_window_capacity = 20u;
 inline constexpr std::size_t crash_capsule_memory_window_word_capacity = 16u;
 inline constexpr std::size_t crash_capsule_lookahead_capacity = 8u;
 inline constexpr std::size_t crash_capsule_module_lifecycle_capacity = 8u;
+inline constexpr std::size_t crash_capsule_v5_line_capacity = 131072u;
+inline constexpr std::size_t crash_capsule_closure_binding_capacity = 8u;
+inline constexpr std::size_t crash_capsule_closure_witness_capacity = 24u;
+inline constexpr std::size_t crash_capsule_pointer_provenance_capacity = 32u;
+inline constexpr std::size_t crash_capsule_closure_probe_plan_capacity = 8u;
+inline constexpr std::size_t crash_capsule_dispatch_witness_capacity = 16u;
+inline constexpr std::size_t crash_capsule_loaded_aot_digest_capacity = 8u;
+inline constexpr std::size_t crash_capsule_provider_transcript_capacity = 32u;
+inline constexpr std::size_t crash_capsule_stall_snapshot_capacity = 8u;
+inline constexpr std::size_t crash_capsule_guest_aot_callchain_capacity = 16u;
 static_assert((crash_capsule_event_capacity &
                (crash_capsule_event_capacity - 1u)) == 0u);
 
@@ -659,8 +674,451 @@ struct CrashCapsuleV3Fields {
     }
 };
 
+enum CrashCapsuleV5Field : std::uint64_t {
+    CrashCapsuleV5FieldNone = 0u,
+    CrashCapsuleV5FieldClosureBinding = 1ull << 0u,
+    CrashCapsuleV5FieldClosureWitness = 1ull << 1u,
+    CrashCapsuleV5FieldPointerProvenance = 1ull << 2u,
+    CrashCapsuleV5FieldProbePlan = 1ull << 3u,
+    CrashCapsuleV5FieldDispatchWitness = 1ull << 4u,
+    CrashCapsuleV5FieldLoadedAotDigest = 1ull << 5u,
+    CrashCapsuleV5FieldProviderTranscript = 1ull << 6u,
+    CrashCapsuleV5FieldStallSnapshot = 1ull << 7u,
+    CrashCapsuleV5FieldGuestAotCallchain = 1ull << 8u,
+};
+
+enum CrashCapsuleV5RecordingFlag : std::uint32_t {
+    CrashCapsuleV5RecordingFlagNone = 0u,
+    CrashCapsuleV5RecordingFlagClosureBindingDropped = 1u << 0u,
+    CrashCapsuleV5RecordingFlagClosureWitnessDropped = 1u << 1u,
+    CrashCapsuleV5RecordingFlagPointerProvenanceDropped = 1u << 2u,
+    CrashCapsuleV5RecordingFlagProbePlanDropped = 1u << 3u,
+    CrashCapsuleV5RecordingFlagDispatchWitnessDropped = 1u << 4u,
+    CrashCapsuleV5RecordingFlagLoadedAotDigestDropped = 1u << 5u,
+    CrashCapsuleV5RecordingFlagProviderTranscriptDropped = 1u << 6u,
+    CrashCapsuleV5RecordingFlagStallSnapshotDropped = 1u << 7u,
+    CrashCapsuleV5RecordingFlagGuestAotCallchainDropped = 1u << 8u,
+    CrashCapsuleV5RecordingFlagInvalid = 1u << 30u,
+    // This bit is set whenever a bounded ring had to discard an item.  A
+    // consumer must not use a v5 record with this bit as a complete witness.
+    CrashCapsuleV5RecordingFlagTruncated = 1u << 31u,
+};
+
+enum class CrashCapsuleV5WitnessKind : std::uint32_t {
+    Unknown = 0u,
+    StaticCallback = 1u,
+    IndirectDispatch = 2u,
+    JumpTable = 3u,
+    HardwareAccess = 4u,
+    LoadedAot = 5u,
+    MissingStaticEntry = 6u,
+    HostDeadline = 7u,
+};
+
+// Every address-like role is intentionally represented separately.  In
+// particular, a source address is never silently reused as a callsite or a
+// target, and a pointer observation is never an ownership assertion.
+struct CrashCapsuleClosureBinding final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t runtime_generation = 0u;
+    std::uint32_t analyzer = 0u;
+    std::uint32_t backend = 0u;
+    std::uint32_t mode = 0u;
+    std::uint32_t lba = 0u;
+    std::uint32_t bias = 0u;
+    std::uint32_t flags = 0u;
+    std::uint32_t status = 0u;
+    CrashCapsuleToken key;
+    CrashCapsuleToken content;
+    CrashCapsuleToken boot;
+    CrashCapsuleToken project;
+    CrashCapsuleToken analysis_contract;
+    CrashCapsuleToken image_analysis;
+    CrashCapsuleToken game_project;
+    CrashCapsuleToken native_port;
+    CrashCapsuleToken native_port_artifact;
+    CrashCapsuleToken analysis_impl;
+    CrashCapsuleToken analysis_cache_impl;
+    CrashCapsuleToken ir_product_impl;
+    CrashCapsuleToken codegen_impl;
+};
+
+struct CrashCapsuleClosureWitness final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t source_digest = 0u;
+    std::uint64_t target_digest = 0u;
+    std::uint64_t table_digest = 0u;
+    std::uint64_t pointer_value = 0u;
+    std::uint32_t kind = 0u;
+    std::uint32_t source = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t slot = 0u;
+    std::uint32_t pointer = 0u;
+    std::uint32_t pointer_present = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t alias = 0u;
+    std::uint32_t slot_present = 0u;
+    std::uint32_t continuation = 0u;
+    std::uint32_t flags = 0u;
+    std::uint32_t status = 0u;
+    std::uint32_t immutable = 0u;
+    std::uint32_t bounded = 0u;
+    std::uint32_t complete = 0u;
+    std::uint32_t runtime_observation = 0u;
+    std::uint32_t reproof_required = 1u;
+    CrashCapsuleToken source_identity;
+    CrashCapsuleToken target_identity;
+    CrashCapsuleToken table_identity;
+};
+
+struct CrashCapsulePointerProvenance final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t pointer_value = 0u;
+    std::uint64_t source_digest = 0u;
+    std::uint64_t target_digest = 0u;
+    std::uint32_t source = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t slot = 0u;
+    std::uint32_t pointer = 0u;
+    std::uint32_t pointer_present = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t alias = 0u;
+    std::uint32_t slot_present = 0u;
+    std::uint32_t flags = 0u;
+    std::uint32_t status = 0u;
+    CrashCapsuleToken source_identity;
+    CrashCapsuleToken target_identity;
+    CrashCapsuleToken pointer_identity;
+};
+
+struct CrashCapsuleClosureProbePlan final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint32_t kind = 0u;
+    std::uint32_t state = 0u;
+    std::uint32_t source = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t slot = 0u;
+    std::uint32_t pointer = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t alias = 0u;
+    std::uint32_t witness_limit = 0u;
+    std::uint32_t flags = 0u;
+    CrashCapsuleToken identity;
+};
+
+struct CrashCapsuleDispatchWitness final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t table_digest = 0u;
+    std::uint32_t kind = 0u;
+    std::uint32_t source = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t slot = 0u;
+    std::uint32_t pointer = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t alias = 0u;
+    std::uint32_t continuation = 0u;
+    std::uint32_t index = 0u;
+    std::uint32_t flags = 0u;
+    std::uint32_t status = 0u;
+    CrashCapsuleToken source_identity;
+    CrashCapsuleToken target_identity;
+    CrashCapsuleToken table_identity;
+};
+
+struct CrashCapsuleLoadedAotDigest final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t source_generation = 0u;
+    std::uint64_t module_digest = 0u;
+    std::uint64_t block_digest = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t source_start = 0u;
+    std::uint32_t source_offset = 0u;
+    std::uint32_t module_size = 0u;
+    std::uint32_t block_size = 0u;
+    std::uint32_t flags = 0u;
+    CrashCapsuleToken module_identity;
+    CrashCapsuleToken block_identity;
+};
+
+struct CrashCapsuleProviderTranscript final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t provider_digest = 0u;
+    std::uint64_t address = 0u;
+    std::uint64_t value = 0u;
+    std::uint64_t result = 0u;
+    std::uint64_t state = 0u;
+    std::uint32_t provider = 0u;
+    std::uint32_t region = 0u;
+    std::uint32_t operation = 0u;
+    std::uint32_t width = 0u;
+    std::uint32_t source = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t slot = 0u;
+    std::uint32_t pointer = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t alias = 0u;
+    std::uint32_t instruction_source_pc = 0u;
+    std::uint32_t instruction_runtime_pc = 0u;
+    std::uint32_t instruction_opcode = 0u;
+    std::uint32_t instruction_valid = 0u;
+    std::uint32_t flags = 0u;
+    CrashCapsuleToken provider_identity;
+    CrashCapsuleToken source_identity;
+    CrashCapsuleToken target_identity;
+};
+
+struct CrashCapsuleStallSnapshot final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t guest_cycle = 0u;
+    std::uint64_t frame = 0u;
+    std::uint64_t attempted = 0u;
+    std::uint64_t retired = 0u;
+    std::uint32_t pc = 0u;
+    std::uint32_t owner = 0u;
+    std::uint32_t reason = 0u;
+    std::uint32_t phase = 0u;
+    std::uint32_t controlled = 0u;
+    std::uint32_t flags = 0u;
+    std::array<std::uint32_t, 16u> gpr{};
+    std::uint32_t sr = 0u;
+    std::uint32_t gbr = 0u;
+    CrashCapsuleToken reason_identity;
+};
+
+struct CrashCapsuleGuestAotCall final {
+    std::uint64_t sequence = 0u;
+    std::uint64_t generation = 0u;
+    std::uint64_t module_digest = 0u;
+    std::uint32_t depth = 0u;
+    std::uint32_t caller = 0u;
+    std::uint32_t callsite = 0u;
+    std::uint32_t callee = 0u;
+    std::uint32_t continuation = 0u;
+    std::uint32_t source = 0u;
+    std::uint32_t target = 0u;
+    std::uint32_t flags = 0u;
+    CrashCapsuleToken module_identity;
+    CrashCapsuleToken caller_identity;
+    CrashCapsuleToken callee_identity;
+};
+
+using ClosureBinding = CrashCapsuleClosureBinding;
+using ClosureWitness = CrashCapsuleClosureWitness;
+using PointerProvenance = CrashCapsulePointerProvenance;
+using ClosureProbePlan = CrashCapsuleClosureProbePlan;
+using DispatchWitness = CrashCapsuleDispatchWitness;
+using LoadedAotDigest = CrashCapsuleLoadedAotDigest;
+using ProviderTranscript = CrashCapsuleProviderTranscript;
+using StallSnapshot = CrashCapsuleStallSnapshot;
+using GuestAotCall = CrashCapsuleGuestAotCall;
+
+struct CrashCapsuleV5Fields final {
+    std::uint64_t present = CrashCapsuleV5FieldNone;
+    std::uint32_t recording_flags = CrashCapsuleV5RecordingFlagNone;
+    std::uint32_t reserved = 0u;
+    std::array<CrashCapsuleClosureBinding,
+               crash_capsule_closure_binding_capacity> closure_bindings{};
+    std::array<CrashCapsuleClosureWitness,
+               crash_capsule_closure_witness_capacity> closure_witnesses{};
+    std::array<CrashCapsulePointerProvenance,
+               crash_capsule_pointer_provenance_capacity> pointer_provenance{};
+    std::array<CrashCapsuleClosureProbePlan,
+               crash_capsule_closure_probe_plan_capacity> closure_probe_plans{};
+    std::array<CrashCapsuleDispatchWitness,
+               crash_capsule_dispatch_witness_capacity> dispatch_witnesses{};
+    std::array<CrashCapsuleLoadedAotDigest,
+               crash_capsule_loaded_aot_digest_capacity> loaded_aot_digests{};
+    std::array<CrashCapsuleProviderTranscript,
+               crash_capsule_provider_transcript_capacity> provider_transcripts{};
+    std::array<CrashCapsuleStallSnapshot,
+               crash_capsule_stall_snapshot_capacity> stall_snapshots{};
+    std::array<CrashCapsuleGuestAotCall,
+               crash_capsule_guest_aot_callchain_capacity> guest_aot_callchain{};
+    std::uint32_t closure_binding_count = 0u;
+    std::uint32_t closure_binding_next = 0u;
+    std::uint64_t closure_binding_drops = 0u;
+    std::uint32_t closure_witness_count = 0u;
+    std::uint32_t closure_witness_next = 0u;
+    std::uint64_t closure_witness_drops = 0u;
+    std::uint32_t pointer_provenance_count = 0u;
+    std::uint32_t pointer_provenance_next = 0u;
+    std::uint64_t pointer_provenance_drops = 0u;
+    std::uint32_t closure_probe_plan_count = 0u;
+    std::uint32_t closure_probe_plan_next = 0u;
+    std::uint64_t closure_probe_plan_drops = 0u;
+    std::uint32_t dispatch_witness_count = 0u;
+    std::uint32_t dispatch_witness_next = 0u;
+    std::uint64_t dispatch_witness_drops = 0u;
+    std::uint32_t loaded_aot_digest_count = 0u;
+    std::uint32_t loaded_aot_digest_next = 0u;
+    std::uint64_t loaded_aot_digest_drops = 0u;
+    std::uint32_t provider_transcript_count = 0u;
+    std::uint32_t provider_transcript_next = 0u;
+    std::uint64_t provider_transcript_drops = 0u;
+    std::uint32_t stall_snapshot_count = 0u;
+    std::uint32_t stall_snapshot_next = 0u;
+    std::uint64_t stall_snapshot_drops = 0u;
+    std::uint32_t guest_aot_callchain_count = 0u;
+    std::uint32_t guest_aot_callchain_next = 0u;
+    std::uint64_t guest_aot_callchain_drops = 0u;
+
+    template <typename Record, std::size_t Capacity>
+    static void push_ring(
+        std::array<Record, Capacity>& ring,
+        std::uint32_t& count,
+        std::uint32_t& next,
+        std::uint64_t& drops,
+        std::uint32_t& recording_flags,
+        const std::uint32_t dropped_flag,
+        const std::uint64_t present_flag,
+        const Record& record,
+        std::uint64_t& present) noexcept {
+        const auto bounded_next = next < Capacity ? next : 0u;
+        if (next >= Capacity || count > Capacity)
+            recording_flags |= CrashCapsuleV5RecordingFlagInvalid;
+        ring[bounded_next] = record;
+        next = (bounded_next + 1u) % static_cast<std::uint32_t>(Capacity);
+        if (count < Capacity) {
+            ++count;
+        } else {
+            ++drops;
+            recording_flags |= dropped_flag | CrashCapsuleV5RecordingFlagTruncated;
+        }
+        present |= present_flag;
+    }
+
+    static bool token_invalid(const CrashCapsuleToken& token) noexcept {
+        // A truncated identity is no longer the exact identity supplied by
+        // the producer and therefore cannot remain positive v5 evidence.
+        return token.flag_bits() != CrashCapsuleTokenFlagNone;
+    }
+
+    void note_closure_binding(const CrashCapsuleClosureBinding& record) noexcept {
+        if (token_invalid(record.key) || token_invalid(record.content) ||
+            token_invalid(record.boot) || token_invalid(record.project) ||
+            token_invalid(record.analysis_contract) ||
+            token_invalid(record.image_analysis) || token_invalid(record.game_project) ||
+            token_invalid(record.native_port) || token_invalid(record.native_port_artifact) ||
+            token_invalid(record.analysis_impl) || token_invalid(record.analysis_cache_impl) ||
+            token_invalid(record.ir_product_impl) || token_invalid(record.codegen_impl))
+            mark_invalid();
+        push_ring(closure_bindings, closure_binding_count, closure_binding_next,
+                  closure_binding_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagClosureBindingDropped,
+                  CrashCapsuleV5FieldClosureBinding, record, present);
+    }
+    void note_closure_witness(const CrashCapsuleClosureWitness& record) noexcept {
+        if (token_invalid(record.source_identity) || token_invalid(record.target_identity) ||
+            token_invalid(record.table_identity))
+            mark_invalid();
+        push_ring(closure_witnesses, closure_witness_count, closure_witness_next,
+                  closure_witness_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagClosureWitnessDropped,
+                  CrashCapsuleV5FieldClosureWitness, record, present);
+    }
+    void note_pointer_provenance(const CrashCapsulePointerProvenance& record) noexcept {
+        if (token_invalid(record.source_identity) || token_invalid(record.target_identity) ||
+            token_invalid(record.pointer_identity))
+            mark_invalid();
+        push_ring(pointer_provenance, pointer_provenance_count, pointer_provenance_next,
+                  pointer_provenance_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagPointerProvenanceDropped,
+                  CrashCapsuleV5FieldPointerProvenance, record, present);
+    }
+    void note_closure_probe_plan(const CrashCapsuleClosureProbePlan& record) noexcept {
+        if (token_invalid(record.identity)) mark_invalid();
+        push_ring(closure_probe_plans, closure_probe_plan_count, closure_probe_plan_next,
+                  closure_probe_plan_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagProbePlanDropped,
+                  CrashCapsuleV5FieldProbePlan, record, present);
+    }
+    void note_dispatch_witness(const CrashCapsuleDispatchWitness& record) noexcept {
+        if (token_invalid(record.source_identity) || token_invalid(record.target_identity) ||
+            token_invalid(record.table_identity))
+            mark_invalid();
+        push_ring(dispatch_witnesses, dispatch_witness_count, dispatch_witness_next,
+                  dispatch_witness_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagDispatchWitnessDropped,
+                  CrashCapsuleV5FieldDispatchWitness, record, present);
+    }
+    void note_loaded_aot_digest(const CrashCapsuleLoadedAotDigest& record) noexcept {
+        if (token_invalid(record.module_identity) || token_invalid(record.block_identity))
+            mark_invalid();
+        push_ring(loaded_aot_digests, loaded_aot_digest_count, loaded_aot_digest_next,
+                  loaded_aot_digest_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagLoadedAotDigestDropped,
+                  CrashCapsuleV5FieldLoadedAotDigest, record, present);
+    }
+    void note_provider_transcript(const CrashCapsuleProviderTranscript& record) noexcept {
+        if (token_invalid(record.provider_identity) || token_invalid(record.source_identity) ||
+            token_invalid(record.target_identity))
+            mark_invalid();
+        push_ring(provider_transcripts, provider_transcript_count,
+                  provider_transcript_next, provider_transcript_drops,
+                  recording_flags,
+                  CrashCapsuleV5RecordingFlagProviderTranscriptDropped,
+                  CrashCapsuleV5FieldProviderTranscript, record, present);
+    }
+    void note_stall_snapshot(const CrashCapsuleStallSnapshot& record) noexcept {
+        if (token_invalid(record.reason_identity)) mark_invalid();
+        push_ring(stall_snapshots, stall_snapshot_count, stall_snapshot_next,
+                  stall_snapshot_drops, recording_flags,
+                  CrashCapsuleV5RecordingFlagStallSnapshotDropped,
+                  CrashCapsuleV5FieldStallSnapshot, record, present);
+    }
+    void note_guest_aot_call(const CrashCapsuleGuestAotCall& record) noexcept {
+        if (token_invalid(record.module_identity) || token_invalid(record.caller_identity) ||
+            token_invalid(record.callee_identity))
+            mark_invalid();
+        push_ring(guest_aot_callchain, guest_aot_callchain_count,
+                  guest_aot_callchain_next, guest_aot_callchain_drops,
+                  recording_flags,
+                  CrashCapsuleV5RecordingFlagGuestAotCallchainDropped,
+                  CrashCapsuleV5FieldGuestAotCallchain, record, present);
+    }
+
+    [[nodiscard]] bool truncated() const noexcept {
+        return (recording_flags & CrashCapsuleV5RecordingFlagTruncated) != 0u;
+    }
+
+    void mark_invalid() noexcept {
+        recording_flags |= CrashCapsuleV5RecordingFlagInvalid;
+    }
+
+    [[nodiscard]] bool invalid() const noexcept {
+        return (recording_flags & CrashCapsuleV5RecordingFlagInvalid) != 0u;
+    }
+
+    [[nodiscard]] std::uint64_t drop_count() const noexcept {
+        return closure_binding_drops + closure_witness_drops +
+               pointer_provenance_drops + closure_probe_plan_drops +
+               dispatch_witness_drops + loaded_aot_digest_drops +
+               provider_transcript_drops + stall_snapshot_drops +
+               guest_aot_callchain_drops;
+    }
+};
+
 struct CrashCapsuleSerializedLine {
     std::array<char, crash_capsule_v4_line_capacity> bytes{};
+    std::uint32_t size = 0u;
+    bool truncated = false;
+
+    [[nodiscard]] std::string_view view() const noexcept {
+        const auto bounded_size = size < bytes.size() ? size : bytes.size();
+        return std::string_view(bytes.data(), bounded_size);
+    }
+};
+
+struct CrashCapsuleV5SerializedLine {
+    std::array<char, crash_capsule_v5_line_capacity> bytes{};
     std::uint32_t size = 0u;
     bool truncated = false;
 
@@ -693,6 +1151,7 @@ struct CrashCapsule {
     std::array<CrashCapsuleEvent, crash_capsule_event_capacity> events{};
     CrashCapsuleV2Fields v2{};
     CrashCapsuleV3Fields v3{};
+    CrashCapsuleV5Fields v5{};
 
     void note_block(const std::uint32_t pc,
                     const std::uint32_t block,
@@ -921,6 +1380,52 @@ struct CrashCapsule {
             valid_word_mask, words);
     }
 
+    void note_v5_closure_binding(
+        const CrashCapsuleClosureBinding& record) noexcept {
+        v5.note_closure_binding(record);
+    }
+    void note_v5_closure_witness(
+        const CrashCapsuleClosureWitness& record) noexcept {
+        v5.note_closure_witness(record);
+    }
+    void note_v5_pointer_provenance(
+        const CrashCapsulePointerProvenance& record) noexcept {
+        v5.note_pointer_provenance(record);
+    }
+    void note_v5_closure_probe_plan(
+        const CrashCapsuleClosureProbePlan& record) noexcept {
+        v5.note_closure_probe_plan(record);
+    }
+    void note_v5_probe_plan(
+        const CrashCapsuleClosureProbePlan& record) noexcept {
+        note_v5_closure_probe_plan(record);
+    }
+    void note_v5_dispatch_witness(
+        const CrashCapsuleDispatchWitness& record) noexcept {
+        v5.note_dispatch_witness(record);
+    }
+    void note_v5_loaded_aot_digest(
+        const CrashCapsuleLoadedAotDigest& record) noexcept {
+        v5.note_loaded_aot_digest(record);
+    }
+    void note_v5_provider_transcript(
+        const CrashCapsuleProviderTranscript& record) noexcept {
+        v5.note_provider_transcript(record);
+    }
+    void note_v5_stall_snapshot(
+        const CrashCapsuleStallSnapshot& record) noexcept {
+        v5.note_stall_snapshot(record);
+    }
+    void note_v5_guest_aot_call(
+        const CrashCapsuleGuestAotCall& record) noexcept {
+        v5.note_guest_aot_call(record);
+    }
+    void note_v5_guest_aot_callchain(
+        const CrashCapsuleGuestAotCall& record) noexcept {
+        note_v5_guest_aot_call(record);
+    }
+    void note_v5_invalid() noexcept { v5.mark_invalid(); }
+
   private:
     void push(const CrashCapsuleEvent event) noexcept {
         events[next_event] = event;
@@ -944,15 +1449,38 @@ static_assert(std::is_standard_layout_v<CrashCapsuleLookahead>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleLookahead>);
 static_assert(std::is_standard_layout_v<CrashCapsuleRuntimeModuleLifecycle>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleRuntimeModuleLifecycle>);
+static_assert(std::is_standard_layout_v<CrashCapsuleClosureBinding>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleClosureBinding>);
+static_assert(std::is_standard_layout_v<CrashCapsuleClosureWitness>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleClosureWitness>);
+static_assert(std::is_standard_layout_v<CrashCapsulePointerProvenance>);
+static_assert(std::is_trivially_copyable_v<CrashCapsulePointerProvenance>);
+static_assert(std::is_standard_layout_v<CrashCapsuleClosureProbePlan>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleClosureProbePlan>);
+static_assert(std::is_standard_layout_v<CrashCapsuleDispatchWitness>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleDispatchWitness>);
+static_assert(std::is_standard_layout_v<CrashCapsuleLoadedAotDigest>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleLoadedAotDigest>);
+static_assert(std::is_standard_layout_v<CrashCapsuleProviderTranscript>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleProviderTranscript>);
+static_assert(std::is_standard_layout_v<CrashCapsuleStallSnapshot>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleStallSnapshot>);
+static_assert(std::is_standard_layout_v<CrashCapsuleGuestAotCall>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleGuestAotCall>);
+static_assert(std::is_standard_layout_v<CrashCapsuleV5Fields>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleV5Fields>);
 static_assert(std::is_standard_layout_v<CrashCapsuleSerializedLine>);
 static_assert(std::is_trivially_copyable_v<CrashCapsuleSerializedLine>);
+static_assert(std::is_standard_layout_v<CrashCapsuleV5SerializedLine>);
+static_assert(std::is_trivially_copyable_v<CrashCapsuleV5SerializedLine>);
 static_assert(std::is_standard_layout_v<CrashCapsule>);
 static_assert(std::is_trivially_copyable_v<CrashCapsule>);
 
 namespace crash_capsule_detail {
 
+template <typename Line>
 struct LineWriter final {
-    CrashCapsuleSerializedLine& line;
+    Line& line;
 
     void append(const std::string_view value) noexcept {
         if (line.truncated) return;
@@ -971,6 +1499,10 @@ struct LineWriter final {
             return;
         }
         line.bytes[line.size++] = value;
+    }
+
+    void append_boolean(const bool value) noexcept {
+        append(value ? "true" : "false");
     }
 
     template <typename Integer>
@@ -992,7 +1524,8 @@ struct LineWriter final {
     }
 };
 
-inline void append_field(LineWriter& writer,
+template <typename Line>
+inline void append_field(LineWriter<Line>& writer,
                          const std::string_view name,
                          const std::uint64_t value) noexcept {
     writer.append(",\"");
@@ -1001,13 +1534,25 @@ inline void append_field(LineWriter& writer,
     writer.append_integer(value);
 }
 
-inline void append_field(LineWriter& writer,
+template <typename Line>
+inline void append_first_field(LineWriter<Line>& writer,
+                               const std::string_view name,
+                               const std::uint64_t value) noexcept {
+    writer.append("\"");
+    writer.append(name);
+    writer.append("\":");
+    writer.append_integer(value);
+}
+
+template <typename Line>
+inline void append_field(LineWriter<Line>& writer,
                          const std::string_view name,
                          const std::uint32_t value) noexcept {
     append_field(writer, name, static_cast<std::uint64_t>(value));
 }
 
-inline void append_token_field(LineWriter& writer,
+template <typename Line>
+inline void append_token_field(LineWriter<Line>& writer,
                                const std::string_view name,
                                const CrashCapsuleToken& token) noexcept {
     writer.append(",\"");
@@ -1018,6 +1563,49 @@ inline void append_token_field(LineWriter& writer,
     writer.append(name);
     writer.append("_flags\":");
     writer.append_integer(static_cast<std::uint32_t>(token.flag_bits()));
+}
+
+template <typename Line>
+inline void append_v5_roles(LineWriter<Line>& writer,
+                            const std::uint32_t source,
+                            const std::uint32_t callsite,
+                            const std::uint32_t slot,
+                            const std::uint32_t pointer,
+                            const std::uint32_t target,
+                            const std::uint32_t alias,
+                            const std::uint32_t slot_present,
+                            const std::uint32_t pointer_present = 0u) noexcept {
+    append_field(writer, "source", source);
+    append_field(writer, "callsite", callsite);
+    append_field(writer, "slot", slot);
+    append_field(writer, "slot_present", slot_present);
+    append_field(writer, "pointer", pointer);
+    append_field(writer, "pointer_present", pointer_present);
+    append_field(writer, "target", target);
+    append_field(writer, "alias", alias);
+}
+
+template <typename Line, typename Record, std::size_t Capacity, typename Emit>
+inline void append_v5_ring(LineWriter<Line>& writer,
+                           const std::string_view name,
+                           const std::array<Record, Capacity>& ring,
+                           const std::uint32_t count,
+                           const std::uint32_t next,
+                           Emit&& emit) noexcept {
+    writer.append(",\"");
+    writer.append(name);
+    writer.append("\":[");
+    const auto bounded_count = count < Capacity ? static_cast<std::size_t>(count)
+                                                 : Capacity;
+    const auto bounded_next = next < Capacity ? static_cast<std::size_t>(next) : 0u;
+    const auto oldest = bounded_count < Capacity ? 0u : bounded_next;
+    for (std::size_t offset = 0u; offset < bounded_count; ++offset) {
+        const auto index = (oldest + offset) % Capacity;
+        writer.append(offset == 0u ? "{" : ",{");
+        emit(writer, ring[index]);
+        writer.append("}");
+    }
+    writer.append("]");
 }
 
 } // namespace crash_capsule_detail
@@ -1450,6 +2038,273 @@ serialize_crash_capsule_v4(const CrashCapsule& capsule) noexcept {
         capsule.v3.runtime_module_lifecycle_state);
     crash_capsule_detail::append_field(
         fallback, "lookahead_count", capsule.v3.lookahead_count);
+    fallback.append("}");
+    result.truncated = true;
+    return result;
+}
+
+[[nodiscard]] inline CrashCapsuleV5SerializedLine
+serialize_crash_capsule_v5(const CrashCapsule& capsule) noexcept {
+    CrashCapsuleV5SerializedLine result;
+    crash_capsule_detail::LineWriter writer{result};
+    const auto& v5 = capsule.v5;
+    writer.append("{\"schema\":\"katana-crash-capsule\",\"version\":");
+    writer.append_integer(crash_capsule_v5_contract_version);
+    crash_capsule_detail::append_field(writer, "present", v5.present);
+    crash_capsule_detail::append_field(writer, "recording_flags", v5.recording_flags);
+    writer.append(",\"invalid\":");
+    writer.append_boolean(v5.invalid());
+    writer.append(",\"truncated\":");
+    writer.append_boolean(v5.truncated());
+    crash_capsule_detail::append_field(writer, "drop_count", v5.drop_count());
+    crash_capsule_detail::append_field(writer, "v4_present", capsule.v2.present);
+    crash_capsule_detail::append_field(writer, "v3_present", capsule.v3.present);
+    crash_capsule_detail::append_field(writer, "contract_code", capsule.v2.contract_code);
+    crash_capsule_detail::append_field(writer, "guest_pc", capsule.v2.guest_pc);
+    crash_capsule_detail::append_field(writer, "pr", capsule.v2.pr);
+    crash_capsule_detail::append_field(writer, "first_error_code", capsule.first_error_code);
+    crash_capsule_detail::append_field(writer, "first_error_pc", capsule.first_error_pc);
+    crash_capsule_detail::append_field(writer, "first_error_target", capsule.first_error_target);
+
+    crash_capsule_detail::append_field(writer, "closure_binding_count", v5.closure_binding_count);
+    crash_capsule_detail::append_field(writer, "closure_binding_drops", v5.closure_binding_drops);
+    crash_capsule_detail::append_field(writer, "closure_witness_count", v5.closure_witness_count);
+    crash_capsule_detail::append_field(writer, "closure_witness_drops", v5.closure_witness_drops);
+    crash_capsule_detail::append_field(writer, "pointer_provenance_count", v5.pointer_provenance_count);
+    crash_capsule_detail::append_field(writer, "pointer_provenance_drops", v5.pointer_provenance_drops);
+    crash_capsule_detail::append_field(writer, "closure_probe_plan_count", v5.closure_probe_plan_count);
+    crash_capsule_detail::append_field(writer, "closure_probe_plan_drops", v5.closure_probe_plan_drops);
+    crash_capsule_detail::append_field(writer, "dispatch_witness_count", v5.dispatch_witness_count);
+    crash_capsule_detail::append_field(writer, "dispatch_witness_drops", v5.dispatch_witness_drops);
+    crash_capsule_detail::append_field(writer, "loaded_aot_digest_count", v5.loaded_aot_digest_count);
+    crash_capsule_detail::append_field(writer, "loaded_aot_digest_drops", v5.loaded_aot_digest_drops);
+    crash_capsule_detail::append_field(writer, "provider_transcript_count", v5.provider_transcript_count);
+    crash_capsule_detail::append_field(writer, "provider_transcript_drops", v5.provider_transcript_drops);
+    crash_capsule_detail::append_field(writer, "stall_snapshot_count", v5.stall_snapshot_count);
+    crash_capsule_detail::append_field(writer, "stall_snapshot_drops", v5.stall_snapshot_drops);
+    crash_capsule_detail::append_field(writer, "guest_aot_callchain_count", v5.guest_aot_callchain_count);
+    crash_capsule_detail::append_field(writer, "guest_aot_callchain_drops", v5.guest_aot_callchain_drops);
+
+    crash_capsule_detail::append_v5_ring(
+        writer, "closure_bindings", v5.closure_bindings, v5.closure_binding_count,
+        v5.closure_binding_next, [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "runtime_generation", item.runtime_generation);
+            crash_capsule_detail::append_field(out, "analyzer", item.analyzer);
+            crash_capsule_detail::append_field(out, "backend", item.backend);
+            crash_capsule_detail::append_field(out, "mode", item.mode);
+            crash_capsule_detail::append_field(out, "lba", item.lba);
+            crash_capsule_detail::append_field(out, "bias", item.bias);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_field(out, "status", item.status);
+            crash_capsule_detail::append_token_field(out, "key", item.key);
+            crash_capsule_detail::append_token_field(out, "content", item.content);
+            crash_capsule_detail::append_token_field(out, "boot", item.boot);
+            crash_capsule_detail::append_token_field(out, "project", item.project);
+            crash_capsule_detail::append_token_field(out, "analysis_contract", item.analysis_contract);
+            crash_capsule_detail::append_token_field(out, "image_analysis", item.image_analysis);
+            crash_capsule_detail::append_token_field(out, "game_project", item.game_project);
+            crash_capsule_detail::append_token_field(out, "native_port", item.native_port);
+            crash_capsule_detail::append_token_field(out, "native_port_artifact", item.native_port_artifact);
+            crash_capsule_detail::append_token_field(out, "analysis_impl", item.analysis_impl);
+            crash_capsule_detail::append_token_field(out, "analysis_cache_impl", item.analysis_cache_impl);
+            crash_capsule_detail::append_token_field(out, "ir_product_impl", item.ir_product_impl);
+            crash_capsule_detail::append_token_field(out, "codegen_impl", item.codegen_impl);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "closure_witnesses", v5.closure_witnesses, v5.closure_witness_count,
+        v5.closure_witness_next, [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "kind", item.kind);
+            crash_capsule_detail::append_v5_roles(out, item.source, item.callsite,
+                                                   item.slot, item.pointer, item.target,
+                                                   item.alias, item.slot_present,
+                                                   item.pointer_present);
+            crash_capsule_detail::append_field(out, "continuation", item.continuation);
+            crash_capsule_detail::append_field(out, "pointer_value", item.pointer_value);
+            crash_capsule_detail::append_field(out, "source_digest", item.source_digest);
+            crash_capsule_detail::append_field(out, "target_digest", item.target_digest);
+            crash_capsule_detail::append_field(out, "table_digest", item.table_digest);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_field(out, "status", item.status);
+            crash_capsule_detail::append_field(out, "immutable", item.immutable);
+            crash_capsule_detail::append_field(out, "bounded", item.bounded);
+            crash_capsule_detail::append_field(out, "complete", item.complete);
+            crash_capsule_detail::append_field(out, "runtime_observation", item.runtime_observation);
+            crash_capsule_detail::append_field(out, "reproof_required", item.reproof_required);
+            crash_capsule_detail::append_token_field(out, "source_identity", item.source_identity);
+            crash_capsule_detail::append_token_field(out, "target_identity", item.target_identity);
+            crash_capsule_detail::append_token_field(out, "table_identity", item.table_identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "pointer_provenance", v5.pointer_provenance,
+        v5.pointer_provenance_count, v5.pointer_provenance_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_v5_roles(out, item.source, item.callsite,
+                                                   item.slot, item.pointer, item.target,
+                                                   item.alias, item.slot_present,
+                                                   item.pointer_present);
+            crash_capsule_detail::append_field(out, "pointer_value", item.pointer_value);
+            crash_capsule_detail::append_field(out, "source_digest", item.source_digest);
+            crash_capsule_detail::append_field(out, "target_digest", item.target_digest);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_field(out, "status", item.status);
+            crash_capsule_detail::append_token_field(out, "source_identity", item.source_identity);
+            crash_capsule_detail::append_token_field(out, "target_identity", item.target_identity);
+            crash_capsule_detail::append_token_field(out, "pointer_identity", item.pointer_identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "closure_probe_plans", v5.closure_probe_plans,
+        v5.closure_probe_plan_count, v5.closure_probe_plan_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "kind", item.kind);
+            crash_capsule_detail::append_field(out, "state", item.state);
+            crash_capsule_detail::append_v5_roles(out, item.source, item.callsite,
+                                                   item.slot, item.pointer, item.target,
+                                                   item.alias, 0u);
+            crash_capsule_detail::append_field(out, "witness_limit", item.witness_limit);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_token_field(out, "identity", item.identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "dispatch_witnesses", v5.dispatch_witnesses,
+        v5.dispatch_witness_count, v5.dispatch_witness_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "kind", item.kind);
+            crash_capsule_detail::append_v5_roles(out, item.source, item.callsite,
+                                                   item.slot, item.pointer, item.target,
+                                                   item.alias, 0u);
+            crash_capsule_detail::append_field(out, "continuation", item.continuation);
+            crash_capsule_detail::append_field(out, "index", item.index);
+            crash_capsule_detail::append_field(out, "table_digest", item.table_digest);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_field(out, "status", item.status);
+            crash_capsule_detail::append_token_field(out, "source_identity", item.source_identity);
+            crash_capsule_detail::append_token_field(out, "target_identity", item.target_identity);
+            crash_capsule_detail::append_token_field(out, "table_identity", item.table_identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "loaded_aot_digests", v5.loaded_aot_digests,
+        v5.loaded_aot_digest_count, v5.loaded_aot_digest_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "source_generation", item.source_generation);
+            crash_capsule_detail::append_field(out, "target", item.target);
+            crash_capsule_detail::append_field(out, "runtime_start", item.runtime_start);
+            crash_capsule_detail::append_field(out, "source_start", item.source_start);
+            crash_capsule_detail::append_field(out, "source_offset", item.source_offset);
+            crash_capsule_detail::append_field(out, "module_size", item.module_size);
+            crash_capsule_detail::append_field(out, "block_size", item.block_size);
+            crash_capsule_detail::append_field(out, "module_digest", item.module_digest);
+            crash_capsule_detail::append_field(out, "block_digest", item.block_digest);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_token_field(out, "module_identity", item.module_identity);
+            crash_capsule_detail::append_token_field(out, "block_identity", item.block_identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "provider_transcripts", v5.provider_transcripts,
+        v5.provider_transcript_count, v5.provider_transcript_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "provider", item.provider);
+            crash_capsule_detail::append_field(out, "region", item.region);
+            crash_capsule_detail::append_field(out, "operation", item.operation);
+            crash_capsule_detail::append_field(out, "width", item.width);
+            crash_capsule_detail::append_field(out, "address", item.address);
+            crash_capsule_detail::append_field(out, "value", item.value);
+            crash_capsule_detail::append_field(out, "result", item.result);
+            crash_capsule_detail::append_field(out, "state", item.state);
+            crash_capsule_detail::append_v5_roles(out, item.source, item.callsite,
+                                                   item.slot, item.pointer, item.target,
+                                                   item.alias, 0u);
+            crash_capsule_detail::append_field(
+                out, "instruction_source_pc", item.instruction_source_pc);
+            crash_capsule_detail::append_field(
+                out, "instruction_runtime_pc", item.instruction_runtime_pc);
+            crash_capsule_detail::append_field(
+                out, "instruction_opcode", item.instruction_opcode);
+            crash_capsule_detail::append_field(
+                out, "instruction_valid", item.instruction_valid);
+            crash_capsule_detail::append_field(out, "provider_digest", item.provider_digest);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_token_field(out, "provider_identity", item.provider_identity);
+            crash_capsule_detail::append_token_field(out, "source_identity", item.source_identity);
+            crash_capsule_detail::append_token_field(out, "target_identity", item.target_identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "stall_snapshots", v5.stall_snapshots,
+        v5.stall_snapshot_count, v5.stall_snapshot_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "guest_cycle", item.guest_cycle);
+            crash_capsule_detail::append_field(out, "frame", item.frame);
+            crash_capsule_detail::append_field(out, "attempted", item.attempted);
+            crash_capsule_detail::append_field(out, "retired", item.retired);
+            crash_capsule_detail::append_field(out, "pc", item.pc);
+            crash_capsule_detail::append_field(out, "owner", item.owner);
+            crash_capsule_detail::append_field(out, "reason", item.reason);
+            crash_capsule_detail::append_field(out, "phase", item.phase);
+            crash_capsule_detail::append_field(out, "controlled", item.controlled);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_field(out, "sr", item.sr);
+            crash_capsule_detail::append_field(out, "gbr", item.gbr);
+            out.append(",\"gpr\":[");
+            for (std::size_t index = 0u; index < item.gpr.size(); ++index) {
+                if (index != 0u) out.append_char(',');
+                out.append_integer(item.gpr[index]);
+            }
+            out.append("]");
+            crash_capsule_detail::append_token_field(out, "reason_identity", item.reason_identity);
+        });
+    crash_capsule_detail::append_v5_ring(
+        writer, "guest_aot_callchain", v5.guest_aot_callchain,
+        v5.guest_aot_callchain_count, v5.guest_aot_callchain_next,
+        [](auto& out, const auto& item) {
+            crash_capsule_detail::append_first_field(out, "sequence", item.sequence);
+            crash_capsule_detail::append_field(out, "generation", item.generation);
+            crash_capsule_detail::append_field(out, "module_digest", item.module_digest);
+            crash_capsule_detail::append_field(out, "depth", item.depth);
+            crash_capsule_detail::append_field(out, "caller", item.caller);
+            crash_capsule_detail::append_field(out, "callsite", item.callsite);
+            crash_capsule_detail::append_field(out, "callee", item.callee);
+            crash_capsule_detail::append_field(out, "continuation", item.continuation);
+            crash_capsule_detail::append_field(out, "source", item.source);
+            crash_capsule_detail::append_field(out, "target", item.target);
+            crash_capsule_detail::append_field(out, "flags", item.flags);
+            crash_capsule_detail::append_token_field(out, "module_identity", item.module_identity);
+            crash_capsule_detail::append_token_field(out, "caller_identity", item.caller_identity);
+            crash_capsule_detail::append_token_field(out, "callee_identity", item.callee_identity);
+        });
+
+    writer.append("}");
+    if (!result.truncated) return result;
+
+    // A capsule must never publish a syntactically incomplete JSON object.
+    // Keep a small, valid v5 record and retain the drop/invalid state so a
+    // strict consumer cannot mistake the fallback for complete evidence.
+    result = {};
+    crash_capsule_detail::LineWriter fallback{result};
+    fallback.append("{\"schema\":\"katana-crash-capsule\",\"version\":");
+    fallback.append_integer(crash_capsule_v5_contract_version);
+    fallback.append(",\"invalid\":true,\"truncated\":true");
+    crash_capsule_detail::append_field(fallback, "recording_flags", v5.recording_flags);
+    crash_capsule_detail::append_field(fallback, "drop_count", v5.drop_count());
+    crash_capsule_detail::append_field(fallback, "contract_code", capsule.v2.contract_code);
+    crash_capsule_detail::append_field(fallback, "guest_pc", capsule.v2.guest_pc);
+    crash_capsule_detail::append_field(fallback, "pr", capsule.v2.pr);
+    crash_capsule_detail::append_field(fallback, "first_error_code", capsule.first_error_code);
+    crash_capsule_detail::append_field(fallback, "first_error_pc", capsule.first_error_pc);
+    crash_capsule_detail::append_field(fallback, "first_error_target", capsule.first_error_target);
     fallback.append("}");
     result.truncated = true;
     return result;

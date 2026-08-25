@@ -3,7 +3,11 @@
 #include "katana/runtime/native_port.hpp"
 #include "katana/runtime/runtime.hpp"
 
-static_assert(katana::runtime::abi_version == KATANA_EXPECTED_RUNTIME_ABI);
+static_assert(katana::build_contract::runtime_abi_version ==
+              KATANA_EXPECTED_RUNTIME_ABI);
+static_assert(katana::runtime::abi_version ==
+              katana::build_contract::aot_runtime_abi_version);
+static_assert(katana::runtime::abi_version == KATANA_EXPECTED_AOT_RUNTIME_ABI);
 static_assert(katana::build_contract::port_project_contract_version ==
               KATANA_EXPECTED_PORT_PROJECT_CONTRACT);
 static_assert(katana::runtime::native_port_profile_contract_version ==

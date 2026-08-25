@@ -68,6 +68,18 @@ if(NOT EXISTS "${generated_abi_contract}")
   message(FATAL_ERROR "Configure did not generate the stable ABI contract")
 endif()
 file(READ "${generated_abi_contract}" generated_abi_contract_text)
+include("${KATANA_SOURCE_ROOT}/cmake/KatanaVersions.cmake")
+set(expected_aot_runtime_contract
+    "runtime_abi_version = ${KATANA_AOT_RUNTIME_ABI_VERSION}u")
+string(FIND "${generated_abi_contract_text}"
+       "${expected_aot_runtime_contract}"
+       aot_runtime_contract_position)
+if(aot_runtime_contract_position EQUAL -1)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Stable AOT ABI contract did not retain its dedicated ABI: "
+    "${generated_abi_contract_text}")
+endif()
 if(generated_abi_contract_text MATCHES
    "katana_git_commit|source_identity_trusted|configured_compiler_launcher")
   file(REMOVE_RECURSE "${fixture}")
@@ -92,6 +104,23 @@ string(REPLACE "\r\n" "\n" normalized_contract_text
        "${generated_contract_text}")
 string(REPLACE "\r" "\n" normalized_contract_text
        "${normalized_contract_text}")
+set(expected_product_runtime_contract
+    "runtime_abi_version =\n    ${KATANA_PRODUCT_RUNTIME_ABI_VERSION}u")
+set(expected_aot_runtime_alias
+    "aot_runtime_abi_version =\n    abi_contract::runtime_abi_version")
+string(FIND "${normalized_contract_text}"
+       "${expected_product_runtime_contract}"
+       product_runtime_contract_position)
+string(FIND "${normalized_contract_text}"
+       "${expected_aot_runtime_alias}"
+       aot_runtime_alias_position)
+if(product_runtime_contract_position EQUAL -1 OR
+   aot_runtime_alias_position EQUAL -1)
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Build contract did not keep product and generated-AOT ABI domains separate: "
+    "${generated_contract_text}")
+endif()
 set(expected_launcher "${launcher}")
 string(REPLACE "\\" "\\\\" expected_launcher "${expected_launcher}")
 string(REPLACE "\"" "\\\"" expected_launcher "${expected_launcher}")

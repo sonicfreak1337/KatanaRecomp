@@ -104,6 +104,55 @@ int main() {
                            error.what());
     }
 
+    // Closure probes may retain a fixed runtime-image dispatch only at an
+    // exact generated block boundary of the currently active immutable
+    // generation. Merely landing inside the image or the block is not an
+    // identity proof, and retirement removes the entry immediately.
+    try {
+        constexpr std::uint32_t source_start = 0x80810000u;
+        constexpr std::uint32_t runtime_start = 0x8C910000u;
+        constexpr std::string_view identity =
+            "sha256:7af85194466a76bee16168ca8152d4560bd9bec17ade2525f267ed49a54f36a9";
+        const std::array<std::uint8_t, 4u> bytes{
+            0x09u, 0x00u, 0x0Bu, 0x00u};
+        const std::array blocks{
+            katana::runtime::NativePortLoadedAotBlockIdentityView{
+                0u, static_cast<std::uint32_t>(bytes.size()), identity}};
+        const std::array images{
+            katana::runtime::NativePortRuntimeImageView{
+                "closure-runtime-image", source_start, runtime_start,
+                static_cast<std::uint32_t>(bytes.size()), identity, blocks}};
+        katana::runtime::NativePortMemory memory;
+        auto& cpu = memory.cpu();
+        cpu.memory.write_bytes(
+            0x0C910000u, bytes, katana::runtime::CodeWriteSource::Copy);
+        katana::runtime::NativePortImmutableWriteGuard image_guard(
+            immutable_ranges);
+        katana::runtime::NativePortExecutableLifecycleLedger image_ledger(1u);
+        katana::runtime::NativePortRuntimeImageBindings bindings(
+            cpu, images, image_guard, image_ledger);
+        bindings.activate("closure-runtime-image");
+        const auto exact = bindings.active_entry_for_address(runtime_start);
+        require(exact.has_value() && exact->image_id == "closure-runtime-image" &&
+                    exact->image_sha256 == identity &&
+                    exact->block_sha256 == identity &&
+                    exact->source_start == source_start &&
+                    exact->runtime_start == runtime_start &&
+                    exact->source_offset == 0u &&
+                    exact->block_size == bytes.size() &&
+                    exact->lifecycle_generation != 0u,
+                "Aktives Runtime-Image verlor exakte Entry-/Blockidentitaet "
+                "oder Generation.");
+        require(!bindings.active_entry_for_address(runtime_start + 2u).has_value(),
+                "Runtime-Image-Midblock wurde als exakter Closure-Entry akzeptiert.");
+        require(bindings.deactivate_runtime_range(runtime_start, bytes.size()) == 1u &&
+                    !bindings.active_entry_for_address(runtime_start).has_value(),
+                "Retired Runtime-Image blieb als Closure-Entry aktiv.");
+    } catch (const std::exception& error) {
+        require(false, std::string("Runtime-Image-Entryidentitaet warf: ") +
+                           error.what());
+    }
+
     std::cout << "Native-Port-Executable-Lifecycle erfolgreich.\n";
     return EXIT_SUCCESS;
 }

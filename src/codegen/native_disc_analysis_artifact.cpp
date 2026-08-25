@@ -1,5 +1,6 @@
 #include "katana/codegen/native_disc_analysis_artifact.hpp"
 
+#include "katana/build_contract.hpp"
 #include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/io/input_provenance.hpp"
 
@@ -871,6 +872,8 @@ std::string native_disc_analysis_artifact_identity_key(
     // compares the explicit codegen identity; task/World-only edits therefore
     // must not evict the expensive analyzer closure.
     append_identity_key_value(material, identity.analyzer_abi);
+    append_identity_key_value(
+        material, katana::build_contract::aot_runtime_abi_version);
     append_identity_key_value(material, identity.backend_abi);
     append_identity_key_value(material, identity.analysis_mode);
     append_identity_key_value(material, identity.disc_volume_start_lba);

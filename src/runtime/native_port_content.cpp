@@ -638,6 +638,7 @@ std::uint64_t NativePortExecutableLifecycleLedger::release_noexcept(
 struct NativePortRuntimeImageBindings::Impl final {
     struct ActiveBinding final {
         std::size_t image_index = 0u;
+        std::uint64_t code_generation = 0u;
         std::uint64_t lifecycle_generation = 0u;
         std::unique_ptr<ScopedCodeAddressMapping> mapping;
     };
@@ -825,7 +826,8 @@ void NativePortRuntimeImageBindings::activate(
             ++registered;
         }
         impl_->active.push_back(
-            {image_index, lifecycle_generation, std::move(mapping)});
+            {image_index, impl_->immutable_guard.generation(),
+             lifecycle_generation, std::move(mapping)});
     } catch (...) {
         while (registered != 0u) {
             --registered;
@@ -961,6 +963,59 @@ bool NativePortRuntimeImageBindings::active(
         [&](const auto& active) {
             return impl_->images[active.image_index].image_id == image_id;
         });
+}
+
+std::optional<NativePortRuntimeImageActiveEntryView>
+NativePortRuntimeImageBindings::active_entry_for_address(
+    const std::uint32_t address) const {
+    const auto runtime_address =
+        canonical_native_port_runtime_alias(address);
+    const Impl::ActiveBinding* match = nullptr;
+    for (const auto& active : impl_->active) {
+        const auto& image = impl_->images[active.image_index];
+        const auto image_runtime_start =
+            canonical_native_port_runtime_alias(image.runtime_start);
+        if (runtime_address < image_runtime_start ||
+            static_cast<std::uint64_t>(runtime_address) >=
+                static_cast<std::uint64_t>(image_runtime_start) +
+                    image.byte_size)
+            continue;
+        if (match != nullptr)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "runtime-image-active-entry-ambiguous");
+        match = &active;
+    }
+    if (match == nullptr) return std::nullopt;
+    if (impl_->immutable_guard.write_detected() ||
+        match->code_generation != impl_->immutable_guard.generation())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "runtime-image-active-entry-code-generation");
+
+    const auto& image = impl_->images[match->image_index];
+    const auto image_runtime_start =
+        canonical_native_port_runtime_alias(image.runtime_start);
+    const auto offset = runtime_address - image_runtime_start;
+    const auto block = std::lower_bound(
+        image.block_identities.begin(), image.block_identities.end(),
+        offset, [](const auto& candidate, const std::uint32_t value) {
+            return candidate.source_offset < value;
+        });
+    if (block == image.block_identities.end() ||
+        block->source_offset != offset || block->byte_size == 0u)
+        return std::nullopt;
+
+    return NativePortRuntimeImageActiveEntryView{
+        image.image_id,
+        image.sha256,
+        block->sha256,
+        image.source_start,
+        image_runtime_start,
+        image.byte_size,
+        block->source_offset,
+        block->byte_size,
+        match->lifecycle_generation};
 }
 
 struct NativePortLoadedAotBinder::Impl final {

@@ -8,6 +8,7 @@
 #include "katana/analysis/jump_table_analysis.hpp"
 #include "katana/analysis/runtime_code_copy_analysis.hpp"
 #include "katana/analysis/symbol_names.hpp"
+#include "katana/build_contract.hpp"
 #include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/io/input_provenance.hpp"
 #include "katana/ir/lower.hpp"
@@ -1240,6 +1241,8 @@ std::string make_boot_analysis_cache_key(
     append_key_value(
         canonical, boot_analysis_cache_ir_schema_version);
     append_key_value(canonical, katana::analysis::abi_version);
+    append_key_value(
+        canonical, katana::build_contract::aot_runtime_abi_version);
     append_key_field(canonical, analysis_implementation_identity);
     append_key_field(canonical, semantic_contract_identity);
 

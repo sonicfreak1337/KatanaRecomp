@@ -9,6 +9,7 @@
 #include "katana/analysis/abi.hpp"
 #include "katana/analysis/code_address.hpp"
 #include "katana/analysis/parallel_work.hpp"
+#include "katana/build_contract.hpp"
 #include "katana/codegen/cache.hpp"
 #include "katana/codegen/latent_aot_analysis_cache.hpp"
 #include "katana/io/executable_image.hpp"
@@ -7401,6 +7402,7 @@ std::string candidate_epoch_cache_key(
         };
     append_field("katana-latent-persistent-function-analysis-epoch-key-v2");
     append_value(katana::analysis::abi_version);
+    append_value(katana::build_contract::aot_runtime_abi_version);
     append_field(options.analysis_implementation_identity);
     append_field(candidate.byte_identity);
     append_value(candidate.size);

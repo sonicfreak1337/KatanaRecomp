@@ -46,6 +46,7 @@
 #include "port_export_orchestration.hpp"
 #include "port_build_telemetry.hpp"
 #include "host_build_progress.hpp"
+#include "closure_witness_import.hpp"
 #include "../runtime/prs_decode.hpp"
 
 #include <algorithm>
@@ -8199,24 +8200,34 @@ std::vector<std::uint8_t> load_runtime_image_payload(
 
 constexpr std::size_t maximum_runtime_frontier_import_bytes =
     16u * 1024u * 1024u;
-constexpr std::size_t maximum_runtime_frontier_line_bytes = 16u * 1024u;
+constexpr std::size_t maximum_runtime_frontier_line_bytes = 64u * 1024u;
 constexpr std::size_t maximum_agent_session_ledger_bytes =
     4u * 1024u * 1024u;
 constexpr std::size_t maximum_agent_session_line_bytes = 8192u;
 
 struct RuntimeFrontierObservation final {
     std::string reason;
-    std::uint32_t pc = 0u;
-    std::uint32_t pr = 0u;
-    std::uint32_t runtime_target = 0u;
     std::uint32_t source_address = 0u;
+    std::string source_identity;
     std::uint32_t callsite = 0u;
-    std::uint32_t exit_kind = 0u;
-    std::uint32_t dispatch_site_class = 0u;
-    std::uint32_t active_instruction = 0u;
-    std::uint32_t active_block = 0u;
-    std::uint32_t active_block_size = 0u;
+    std::string callsite_identity;
+    bool pointer_address_present = false;
+    std::uint32_t pointer_address = 0u;
+    std::string pointer_identity;
     std::uint32_t pointer_value = 0u;
+    std::uint32_t target = 0u;
+    std::string target_identity;
+    std::uint32_t alias = 0u;
+    std::string alias_identity;
+    bool slot_present = false;
+    std::uint32_t slot_address = 0u;
+    std::string slot_identity;
+    std::uint64_t runtime_generation = 0u;
+    std::uint64_t drop_count = 0u;
+    bool truncated = false;
+    bool immutable = false;
+    bool bounded = false;
+    bool complete = false;
 };
 
 struct AgentIterationDelta final {
@@ -8465,28 +8476,72 @@ struct RuntimeFrontierImport final {
 
 RuntimeFrontierImport load_runtime_frontier_import(
     const std::filesystem::path& path) {
-    constexpr std::string_view binding_prefix{"KATANA_RUNTIME_FRONTIER_BINDING "};
-    constexpr std::string_view event_prefix{"KATANA_RUNTIME_FRONTIER "};
-    static constexpr std::array<std::string_view, 19u> binding_keys{
-        "version", "analysis_artifact_key", "content_identity",
-        "boot_byte_identity", "project_identity",
-        "analysis_contract_identity", "image_analysis_key",
-        "game_project_identity", "native_port_identity",
-        "native_port_artifact_identity",
-        "analysis_implementation_identity",
-        "analysis_cache_implementation_identity",
-        "ir_product_implementation_identity",
-        "codegen_implementation_identity", "analyzer_abi", "backend_abi",
-        "analysis_mode", "disc_volume_start_lba", "disc_extent_lba_bias"};
-    static constexpr std::array<std::string_view, 13u> event_keys{
-        "version", "reason", "pc", "pr", "runtime_target", "source_address",
-        "callsite", "exit_kind", "dispatch_site_class", "active_instruction",
-        "active_block", "active_block_size", "pointer_value"};
+    constexpr std::string_view event_prefix{"KATANA_CLOSURE_WITNESS "};
     const auto document = read_safe_small_port_file(
         path, maximum_runtime_frontier_import_bytes, "Runtime-Frontier-Log");
     RuntimeFrontierImport result;
     bool binding_seen = false;
-    bool event_seen = false;
+    const auto decimal_u64 = [](const std::string_view value,
+                                const std::string_view field) {
+        std::uint64_t parsed = 0u;
+        if (value.empty() || (value.size() > 1u && value.front() == '0'))
+            throw std::invalid_argument(
+                "Closure-Witness besitzt kein kanonisches Dezimalfeld " +
+                std::string(field) + '.');
+        const auto converted = std::from_chars(
+            value.data(), value.data() + value.size(), parsed, 10);
+        if (converted.ec != std::errc{} ||
+            converted.ptr != value.data() + value.size())
+            throw std::invalid_argument(
+                "Closure-Witness besitzt kein gueltiges Dezimalfeld " +
+                std::string(field) + '.');
+        return parsed;
+    };
+    const auto decimal_u32 = [&](const std::string_view value,
+                                 const std::string_view field) {
+        const auto parsed = decimal_u64(value, field);
+        if (parsed > std::numeric_limits<std::uint32_t>::max())
+            throw std::invalid_argument(
+                "Closure-Witness-u32-Feld laeuft ueber: " +
+                std::string(field) + '.');
+        return static_cast<std::uint32_t>(parsed);
+    };
+    const auto analysis_identity = [&](
+                                       const katana::cli::ClosureBinding& binding) {
+        katana::codegen::NativeDiscAnalysisArtifactIdentity identity;
+        identity.key = binding.analysis_artifact_key;
+        identity.content_identity = binding.content_identity;
+        identity.boot_byte_identity = binding.boot_byte_identity;
+        identity.project_identity = binding.project_identity;
+        identity.analysis_contract_identity =
+            binding.analysis_contract_identity;
+        identity.image_analysis_key = binding.image_analysis_key;
+        identity.game_project_identity = binding.game_project_identity;
+        identity.native_port_identity = binding.native_port_identity;
+        identity.native_port_artifact_identity =
+            binding.native_port_artifact_identity;
+        identity.analysis_implementation_identity =
+            binding.analysis_implementation_identity;
+        identity.analysis_cache_implementation_identity =
+            binding.analysis_cache_implementation_identity;
+        identity.ir_product_implementation_identity =
+            binding.ir_product_implementation_identity;
+        identity.codegen_implementation_identity =
+            binding.codegen_implementation_identity;
+        identity.analyzer_abi = decimal_u32(binding.analyzer_abi, "analyzer_abi");
+        identity.backend_abi = decimal_u32(binding.backend_abi, "backend_abi");
+        identity.analysis_mode = decimal_u32(binding.analysis_mode, "analysis_mode");
+        identity.disc_volume_start_lba = decimal_u32(
+            binding.disc_volume_start_lba, "disc_volume_start_lba");
+        identity.disc_extent_lba_bias = decimal_u32(
+            binding.disc_extent_lba_bias, "disc_extent_lba_bias");
+        if (katana::codegen::native_disc_analysis_artifact_identity_key(identity) !=
+            identity.key)
+            throw std::invalid_argument(
+                "Closure-Witness-Binding besitzt keinen kanonischen "
+                "Analyseartefaktschluessel.");
+        return identity;
+    };
     std::size_t cursor = 0u;
     while (cursor < document.size()) {
         const auto newline = document.find('\n', cursor);
@@ -8499,94 +8554,91 @@ RuntimeFrontierImport load_runtime_frontier_import(
         if (!line.empty() && line.back() == '\r') line.remove_suffix(1u);
         if (line.empty())
             throw std::invalid_argument("Runtime-Frontier besitzt eine leere Zeile.");
-        if (line.starts_with(binding_prefix)) {
-            if (binding_seen || event_seen)
-                throw std::invalid_argument("Runtime-Frontier-Binding steht nicht exakt am Anfang.");
-            StrictJsonObject object;
-            parse_strict_json_object(line.substr(binding_prefix.size()), object);
-            require_strict_json_keys(object, binding_keys);
-            if (strict_json_u32(object, "version") != 3u)
-                throw std::invalid_argument("Runtime-Frontier-Binding besitzt eine unbekannte Version.");
-            auto& identity = result.binding.identity;
-            identity.key = strict_json_identifier(
-                object, "analysis_artifact_key", 512u);
-            identity.content_identity = strict_json_identifier(
-                object, "content_identity", 512u);
-            identity.boot_byte_identity = strict_json_identifier(
-                object, "boot_byte_identity", 512u);
-            identity.project_identity = strict_json_identifier(
-                object, "project_identity", 512u);
-            identity.analysis_contract_identity = strict_json_identifier(
-                object, "analysis_contract_identity", 512u);
-            identity.image_analysis_key = strict_json_identifier(
-                object, "image_analysis_key", 512u);
-            identity.game_project_identity = strict_json_identifier(
-                object, "game_project_identity", 512u);
-            identity.native_port_identity = strict_json_identifier(
-                object, "native_port_identity", 512u);
-            identity.native_port_artifact_identity = strict_json_identifier(
-                object, "native_port_artifact_identity", 512u);
-            identity.analysis_implementation_identity = strict_json_identifier(
-                object, "analysis_implementation_identity", 512u);
-            identity.analysis_cache_implementation_identity =
-                strict_json_identifier(
-                    object, "analysis_cache_implementation_identity", 512u);
-            identity.ir_product_implementation_identity =
-                strict_json_identifier(
-                    object, "ir_product_implementation_identity", 512u);
-            identity.codegen_implementation_identity = strict_json_identifier(
-                object, "codegen_implementation_identity", 512u);
-            identity.analyzer_abi = strict_json_u32(object, "analyzer_abi");
-            identity.backend_abi = strict_json_u32(object, "backend_abi");
-            identity.analysis_mode = strict_json_u32(object, "analysis_mode");
-            identity.disc_volume_start_lba = strict_json_u32(
-                object, "disc_volume_start_lba");
-            identity.disc_extent_lba_bias = strict_json_u32(
-                object, "disc_extent_lba_bias");
-            if (katana::codegen::native_disc_analysis_artifact_identity_key(
-                    identity) != identity.key)
-                throw std::invalid_argument(
-                    "Runtime-Frontier-Binding besitzt keinen kanonischen "
-                    "Analyseartefaktschluessel.");
+        if (!line.starts_with(event_prefix))
+            throw std::invalid_argument(
+                "Runtime-Frontier besitzt eine unbekannte oder nicht-v5-gebundene Zeile.");
+        const auto imported = katana::cli::import_closure_witness_v5(
+            line.substr(event_prefix.size()));
+        if (!imported.parsed)
+            throw std::invalid_argument(
+                "Closure-Witness-v5 ist ungueltig: " + imported.error);
+        if (imported.document.invalid || imported.closure_admitted ||
+            !imported.reproof_required)
+            throw std::invalid_argument(
+                "Closure-Witness-v5 verletzt die fail-closed Importgrenze.");
+        const auto identity = analysis_identity(imported.document.binding);
+        if (!binding_seen) {
+            result.binding.identity = identity;
             binding_seen = true;
-            continue;
+        } else if (result.binding.identity != identity) {
+            throw std::invalid_argument(
+                "Closure-Witness-v5 mischt Analyseidentitaeten.");
         }
-        if (!line.starts_with(event_prefix) || !binding_seen)
-            throw std::invalid_argument("Runtime-Frontier besitzt eine unbekannte oder ungebundene Zeile.");
-        StrictJsonObject object;
-        parse_strict_json_object(line.substr(event_prefix.size()), object);
-        require_strict_json_keys(object, event_keys);
-        if (strict_json_u32(object, "version") != 1u)
-            throw std::invalid_argument("Runtime-Frontier besitzt kein gueltiges v1-Envelope.");
-        RuntimeFrontierObservation observation;
-        observation.reason = strict_json_identifier(object, "reason", 128u, true);
-        observation.pc = strict_json_u32(object, "pc");
-        observation.pr = strict_json_u32(object, "pr");
-        observation.runtime_target = strict_json_u32(object, "runtime_target");
-        observation.source_address = strict_json_u32(object, "source_address");
-        observation.callsite = strict_json_u32(object, "callsite");
-        observation.exit_kind = strict_json_u32(object, "exit_kind");
-        observation.dispatch_site_class = strict_json_u32(object, "dispatch_site_class");
-        observation.active_instruction = strict_json_u32(object, "active_instruction");
-        observation.active_block = strict_json_u32(object, "active_block");
-        observation.active_block_size = strict_json_u32(object, "active_block_size");
-        observation.pointer_value = strict_json_u32(object, "pointer_value");
-        if (observation.runtime_target == 0u || observation.source_address == 0u ||
-            observation.pointer_value != observation.runtime_target ||
-            (observation.active_block_size != 0u && observation.active_block == 0u))
-            throw std::invalid_argument("Runtime-Frontier verletzt seinen Ziel-/Pointervertrag.");
-        result.observations.push_back(std::move(observation));
-        event_seen = true;
-        if (result.observations.size() > katana::agent::materialization_world_max_frontier)
-            throw std::invalid_argument("Runtime-Frontier-Import ueberschreitet sein Eintragsbudget.");
+        const auto runtime_generation = decimal_u64(
+            imported.document.binding.runtime_generation,
+            "runtime_generation");
+        for (const auto& witness : imported.document.witnesses) {
+            if (!witness.flags.runtime_observation ||
+                !witness.flags.reproof_required)
+                throw std::invalid_argument(
+                    "Closure-Witness-v5 ist kein expliziter Runtimehinweis.");
+            RuntimeFrontierObservation observation;
+            observation.reason = witness.kind;
+            observation.source_address = decimal_u32(
+                witness.source.address, "source.address");
+            observation.source_identity = witness.source.identity;
+            observation.callsite = decimal_u32(
+                witness.callsite.address, "callsite.address");
+            observation.callsite_identity = witness.callsite.identity;
+            observation.pointer_address_present =
+                witness.pointer.address_present;
+            if (witness.pointer.address_present)
+                observation.pointer_address = decimal_u32(
+                    witness.pointer.address, "pointer.address");
+            observation.pointer_identity = witness.pointer.identity;
+            observation.pointer_value = decimal_u32(
+                witness.pointer.value, "pointer.value");
+            observation.target = decimal_u32(
+                witness.target.address, "target.address");
+            observation.target_identity = witness.target.identity;
+            observation.alias = decimal_u32(
+                witness.alias.address, "alias.address");
+            observation.alias_identity = witness.alias.identity;
+            observation.slot_present = witness.slot.slot_present;
+            if (witness.slot.slot_present)
+                observation.slot_address = decimal_u32(
+                    witness.slot.address, "slot.address");
+            observation.slot_identity = witness.slot.identity;
+            observation.runtime_generation = runtime_generation;
+            observation.drop_count = imported.document.drop_count;
+            observation.truncated = imported.document.truncated;
+            observation.immutable = witness.flags.immutable;
+            observation.bounded = witness.flags.bounded;
+            observation.complete = witness.flags.complete && imported.valid;
+            if (observation.target == 0u || observation.alias == 0u ||
+                observation.pointer_value != observation.alias)
+                throw std::invalid_argument(
+                    "Closure-Witness-v5 verletzt seinen Target-/Alias-/Pointervertrag.");
+            result.observations.push_back(std::move(observation));
+            if (result.observations.size() >
+                katana::agent::materialization_world_max_frontier)
+                throw std::invalid_argument(
+                    "Runtime-Frontier-Import ueberschreitet sein Eintragsbudget.");
+        }
     }
-    if (!binding_seen || !event_seen)
-        throw std::invalid_argument("Runtime-Frontier-Log besitzt keine vollstaendige v2-Bindung/v1-Evidence.");
+    if (!binding_seen || result.observations.empty())
+        throw std::invalid_argument(
+            "Runtime-Frontier-Log besitzt keine vollstaendige v5-Evidence.");
     const auto key = [](const RuntimeFrontierObservation& item) {
-        return std::tie(item.reason, item.source_address, item.callsite,
-                        item.runtime_target, item.pc, item.pr, item.exit_kind,
-                        item.dispatch_site_class, item.active_instruction,
-                        item.active_block, item.active_block_size, item.pointer_value);
+        return std::tie(
+            item.reason, item.source_address, item.source_identity,
+            item.callsite, item.callsite_identity,
+            item.pointer_address_present, item.pointer_address,
+            item.pointer_identity, item.pointer_value, item.target,
+            item.target_identity, item.alias, item.alias_identity,
+            item.slot_present, item.slot_address, item.slot_identity,
+            item.runtime_generation, item.drop_count, item.truncated,
+            item.immutable, item.bounded, item.complete);
     };
     std::sort(result.observations.begin(), result.observations.end(),
               [&](const auto& left, const auto& right) { return key(left) < key(right); });
@@ -8668,19 +8720,33 @@ RuntimeHintRecord runtime_hint_record(
     result.family = "runtime-frontier:" + item.reason;
     result.owner = "source-target:" + agent_hex_address(item.source_address);
     result.site = "callsite:" + agent_hex_address(item.callsite) +
-                  "|runtime-target:" + agent_hex_address(item.runtime_target);
+                  "|target:" + agent_hex_address(item.target) +
+                  "|alias:" + agent_hex_address(item.alias);
     std::ostringstream observation;
-    observation << "pc=" << agent_hex_address(item.pc)
-                << ";pr=" << agent_hex_address(item.pr)
-                << ";source=" << agent_hex_address(item.source_address)
-                << ";runtime=" << agent_hex_address(item.runtime_target)
+    observation << "source=" << agent_hex_address(item.source_address)
+                << ";source-identity=" << item.source_identity
                 << ";callsite=" << agent_hex_address(item.callsite)
-                << ";exit-kind=" << item.exit_kind
-                << ";site-class=" << item.dispatch_site_class
-                << ";active-instruction="
-                << agent_hex_address(item.active_instruction)
-                << ";active-block=" << agent_hex_address(item.active_block)
-                << ";active-block-size=" << item.active_block_size;
+                << ";callsite-identity=" << item.callsite_identity
+                << ";pointer-address-present="
+                << (item.pointer_address_present ? 1 : 0)
+                << ";pointer-address="
+                << agent_hex_address(item.pointer_address)
+                << ";pointer-identity=" << item.pointer_identity
+                << ";pointer-value=" << agent_hex_address(item.pointer_value)
+                << ";target=" << agent_hex_address(item.target)
+                << ";target-identity=" << item.target_identity
+                << ";alias=" << agent_hex_address(item.alias)
+                << ";alias-identity=" << item.alias_identity
+                << ";slot-present=" << (item.slot_present ? 1 : 0)
+                << ";slot-address=" << agent_hex_address(item.slot_address)
+                << ";slot-identity=" << item.slot_identity
+                << ";runtime-generation=" << item.runtime_generation
+                << ";drop-count=" << item.drop_count
+                << ";truncated=" << (item.truncated ? 1 : 0)
+                << ";immutable=" << (item.immutable ? 1 : 0)
+                << ";bounded=" << (item.bounded ? 1 : 0)
+                << ";complete=" << (item.complete ? 1 : 0)
+                << ";reproof-required=1";
     result.observation = observation.str();
     return result;
 }
@@ -13224,6 +13290,17 @@ int export_port_project(const std::filesystem::path& source_path,
                  katana::codegen::NativeDiscAnalysisHintPublicationResult::Missed)
             std::cout
                 << "KATANA_ANALYZE_PORT_ROOT_SEED_CACHE_PUBLISH_MISSED\n";
+        const auto prepared_admission_publication =
+            katana::codegen::publish_committed_native_disc_prepared_admission(
+                analyzed, analysis_options);
+        if (prepared_admission_publication ==
+            katana::codegen::NativeDiscAnalysisHintPublicationResult::Published)
+            std::cout
+                << "KATANA_ANALYZE_PORT_PREPARED_ADMISSION_CACHE_COMMITTED\n";
+        else if (prepared_admission_publication ==
+                 katana::codegen::NativeDiscAnalysisHintPublicationResult::Missed)
+            std::cout
+                << "KATANA_ANALYZE_PORT_PREPARED_ADMISSION_CACHE_PUBLISH_MISSED\n";
         std::cout << "KATANA_ANALYZE_PORT_COMPLETE "
                   << report_path.string() << '\n'
                   << std::flush;

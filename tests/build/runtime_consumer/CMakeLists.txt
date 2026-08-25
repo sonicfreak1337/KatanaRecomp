@@ -5,6 +5,11 @@ find_package(KatanaRecomp ${KATANA_EXPECTED_VERSION} EXACT CONFIG REQUIRED)
 if(NOT KatanaRecomp_RUNTIME_ABI_VERSION STREQUAL KATANA_EXPECTED_RUNTIME_ABI)
     message(FATAL_ERROR "unexpected runtime ABI ${KatanaRecomp_RUNTIME_ABI_VERSION}")
 endif()
+if(NOT KatanaRecomp_AOT_RUNTIME_ABI_VERSION STREQUAL
+   KATANA_EXPECTED_AOT_RUNTIME_ABI)
+    message(FATAL_ERROR
+        "unexpected AOT runtime ABI ${KatanaRecomp_AOT_RUNTIME_ABI_VERSION}")
+endif()
 if(NOT KatanaRecomp_PORT_PROJECT_CONTRACT_VERSION STREQUAL
    KATANA_EXPECTED_PORT_PROJECT_CONTRACT)
     message(FATAL_ERROR
@@ -21,6 +26,16 @@ endif()
 if(NOT TARGET KatanaRecomp::aot_runtime)
     message(FATAL_ERROR "runtime SDK is missing KatanaRecomp::aot_runtime")
 endif()
+get_target_property(
+    KatanaRecomp_IMPORTED_AOT_RUNTIME_ABI
+    KatanaRecomp::native_port_runtime
+    KATANA_AOT_RUNTIME_ABI_VERSION
+)
+if(NOT KatanaRecomp_IMPORTED_AOT_RUNTIME_ABI STREQUAL
+   KATANA_EXPECTED_AOT_RUNTIME_ABI)
+    message(FATAL_ERROR
+        "unexpected imported AOT runtime ABI ${KatanaRecomp_IMPORTED_AOT_RUNTIME_ABI}")
+endif()
 if(TARGET KatanaRecomp::runtime OR TARGET KatanaRecomp::runtime_core)
     message(FATAL_ERROR "runtime SDK exported the historical device runtime")
 endif()
@@ -35,6 +50,7 @@ target_compile_definitions(
     katana-runtime-consumer
     PRIVATE
         KATANA_EXPECTED_RUNTIME_ABI=${KATANA_EXPECTED_RUNTIME_ABI}
+        KATANA_EXPECTED_AOT_RUNTIME_ABI=${KATANA_EXPECTED_AOT_RUNTIME_ABI}
         KATANA_EXPECTED_PORT_PROJECT_CONTRACT=${KATANA_EXPECTED_PORT_PROJECT_CONTRACT}
         KATANA_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT=${KATANA_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT}
 )

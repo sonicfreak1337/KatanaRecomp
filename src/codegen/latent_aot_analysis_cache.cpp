@@ -1,5 +1,6 @@
 #include "katana/codegen/latent_aot_analysis_cache.hpp"
 
+#include "katana/build_contract.hpp"
 #include "katana/io/input_provenance.hpp"
 
 #include <algorithm>
@@ -944,6 +945,7 @@ std::string make_latent_aot_analysis_cache_key(
     canonical.u64(
         static_cast<std::uint64_t>(inputs.maximum_analysis_contexts));
     canonical.u32(inputs.analyzer_abi);
+    canonical.u32(katana::build_contract::aot_runtime_abi_version);
     canonical.text(inputs.analyzer_implementation_id);
     canonical.u32(inputs.ir_schema);
     canonical.u32(inputs.optimizer_schema);

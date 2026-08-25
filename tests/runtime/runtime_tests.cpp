@@ -1,3 +1,4 @@
+#include "katana/build_contract.hpp"
 #include "katana/runtime/runtime.hpp"
 
 #include <cstdlib>
@@ -18,6 +19,8 @@ void require(const bool condition, const std::string& message) {
 
 int main() {
     static_assert(katana::runtime::abi_version == 124u);
+    static_assert(katana::build_contract::aot_runtime_abi_version == 124u);
+    static_assert(katana::build_contract::runtime_abi_version == 125u);
 
     katana::runtime::Memory memory(16u);
     require(memory.size() == 16u, "Die Runtime-Speichergroesse ist falsch.");

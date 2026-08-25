@@ -379,6 +379,8 @@ set(
     "include/katana/analysis/hardware_audit.hpp"
     "include/katana/sh4/isa_coverage.hpp"
     "src/analysis/hardware_audit.cpp"
+    "src/cli/closure_witness_import.cpp"
+    "src/cli/closure_witness_import.hpp"
     "src/cli/main.cpp"
     "src/cli/port_export_orchestration.cpp"
     "src/cli/port_export_orchestration.hpp"
@@ -711,6 +713,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/block_table.hpp
     include/katana/runtime/cache_control.hpp
     include/katana/runtime/code_invalidation.hpp
+    include/katana/runtime/closure_witness.hpp
     include/katana/runtime/crash_capsule.hpp
     include/katana/runtime/crash_report.hpp
     include/katana/runtime/exception.hpp
@@ -947,14 +950,17 @@ function(katana_stamp_runtime_contract target)
         ${target}
         PROPERTIES
             KATANA_PROJECT_VERSION "${PROJECT_VERSION}"
-            KATANA_RUNTIME_ABI_VERSION "${KATANA_RUNTIME_ABI_VERSION}"
+            KATANA_RUNTIME_ABI_VERSION
+                "${KATANA_PRODUCT_RUNTIME_ABI_VERSION}"
+            KATANA_AOT_RUNTIME_ABI_VERSION
+                "${KATANA_AOT_RUNTIME_ABI_VERSION}"
             KATANA_BLOCK_ABI_VERSION "${KATANA_BLOCK_ABI_VERSION}"
             KATANA_PLATFORM_SERVICES_ABI_VERSION
                 "${KATANA_PLATFORM_SERVICES_ABI_VERSION}"
             KATANA_PORT_PROJECT_CONTRACT_VERSION
                 "${KATANA_PORT_PROJECT_CONTRACT_VERSION}"
             EXPORT_PROPERTIES
-                "KATANA_PROJECT_VERSION;KATANA_RUNTIME_ABI_VERSION;KATANA_BLOCK_ABI_VERSION;KATANA_PLATFORM_SERVICES_ABI_VERSION;KATANA_PORT_PROJECT_CONTRACT_VERSION"
+                "KATANA_PROJECT_VERSION;KATANA_RUNTIME_ABI_VERSION;KATANA_AOT_RUNTIME_ABI_VERSION;KATANA_BLOCK_ABI_VERSION;KATANA_PLATFORM_SERVICES_ABI_VERSION;KATANA_PORT_PROJECT_CONTRACT_VERSION"
     )
 endfunction()
 
@@ -1643,6 +1649,7 @@ katana_enable_warnings(katana-host-build-tool)
 
 add_executable(katana-recomp
     src/cli/main.cpp
+    src/cli/closure_witness_import.cpp
     src/cli/host_build_tool.cpp
     src/cli/host_build_progress.cpp
     src/cli/port_build_telemetry.cpp
@@ -1669,6 +1676,23 @@ target_compile_definitions(
 )
 
 katana_enable_warnings(katana-recomp)
+
+add_executable(
+    katana-closure-witness-import-tests
+    tests/cli/closure_witness_import_tests.cpp
+    src/cli/closure_witness_import.cpp
+)
+target_include_directories(
+    katana-closure-witness-import-tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+katana_enable_warnings(katana-closure-witness-import-tests)
+add_test(
+    NAME katana-closure-witness-import-tests
+    COMMAND katana-closure-witness-import-tests
+)
 
 set(KATANA_DESKTOP_GUI_AVAILABLE ${KATANA_BUILD_DESKTOP_GUI})
 if(KATANA_DESKTOP_GUI_AVAILABLE AND UNIX AND NOT APPLE)
@@ -5613,7 +5637,8 @@ add_test(
         -DKATANA_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DKATANA_CONFIG=$<CONFIG>
         -DKATANA_EXPECTED_VERSION=${PROJECT_VERSION}
-        -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_RUNTIME_ABI_VERSION}
+        -DKATANA_EXPECTED_RUNTIME_ABI=${KATANA_PRODUCT_RUNTIME_ABI_VERSION}
+        -DKATANA_EXPECTED_AOT_RUNTIME_ABI=${KATANA_AOT_RUNTIME_ABI_VERSION}
         -DKATANA_EXPECTED_ANALYZER_ABI=${KATANA_ANALYZER_ABI_VERSION}
         -DKATANA_EXPECTED_PORT_PROJECT_CONTRACT=${KATANA_PORT_PROJECT_CONTRACT_VERSION}
         -DKATANA_EXPECTED_NATIVE_PORT_PROFILE_CONTRACT=${KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION}

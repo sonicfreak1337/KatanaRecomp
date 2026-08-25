@@ -3247,6 +3247,27 @@ void emit_direct_call(std::ostringstream& output,
     }
 }
 
+void emit_successful_closure_probe_dispatch(
+    std::ostringstream& output,
+    const int indent,
+    const katana::ir::Instruction& instruction,
+    const bool closure_probe_callsite) {
+    if (!closure_probe_callsite) return;
+
+    emit_indent(output, indent);
+    output << "if (closure_probe_dispatch_pending &&\n";
+    emit_indent(output, indent + 1);
+    output << "katana_exact_guarded_target_matches(cpu.pc, "
+           << relocated_code_address(instruction.source_address + 4u)
+           << "))\n";
+    emit_indent(output, indent + 1);
+    output << "note_successful_closure_probe_dispatch("
+           << relocated_code_address(instruction.source_address)
+           << ", call_target, "
+           << relocated_code_address(instruction.source_address + 4u)
+           << ");\n";
+}
+
 std::optional<std::uint32_t> native_owner_for_target(
     const std::uint32_t target,
     const std::unordered_set<std::uint32_t>& known_functions,
@@ -3475,7 +3496,8 @@ void emit_terminal(std::ostringstream& output,
                    const bool table_compatible_function_entries,
                    const NativeRegisterEmission& registers,
                    const bool has_direct_ram_writes,
-                   const bool enable_direct_write_batch) {
+                   const bool enable_direct_write_batch,
+                   const bool closure_probe_callsite) {
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
@@ -4088,6 +4110,11 @@ void emit_terminal(std::ostringstream& output,
                         emit_indent(output, indent + 4);
                         output << "if (cpu.exception_generation != "
                                   "exception_generation_before_native_call) return;\n";
+                        emit_successful_closure_probe_dispatch(
+                            output,
+                            indent + 4,
+                            instruction,
+                            closure_probe_callsite);
                         if (native_internal_block_labels &&
                             current_blocks.contains(return_address)) {
                             emit_indent(output, indent + 4);
@@ -4120,6 +4147,11 @@ void emit_terminal(std::ostringstream& output,
                                katana::ir::DynamicTargetClass::ExactGuarded) {
                         output << "exact_guarded_call(cpu, call_target, "
                                << hex32(target) << ");\n";
+                        emit_successful_closure_probe_dispatch(
+                            output,
+                            indent + 2,
+                            instruction,
+                            closure_probe_callsite);
                     } else {
                         output << "return;\n";
                     }
@@ -4136,6 +4168,11 @@ void emit_terminal(std::ostringstream& output,
                     emit_indent(output, indent + 2);
                     output << "exact_guarded_call(cpu, call_target, "
                            << hex32(instruction.resolved_targets.front()) << ");\n";
+                    emit_successful_closure_probe_dispatch(
+                        output,
+                        indent + 2,
+                        instruction,
+                        closure_probe_callsite);
                 } else {
                     emit_indent(output, indent + 2);
                     output << "return;\n";
@@ -4175,6 +4212,11 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 2);
                 output << "if (cpu.exception_generation != "
                           "exception_generation_before_native_call) return;\n";
+                emit_successful_closure_probe_dispatch(
+                    output,
+                    indent + 2,
+                    instruction,
+                    closure_probe_callsite);
                 emit_indent(output, indent + 2);
                 output << "if (" << unrelocated_code_address("cpu.pc") << " == "
                        << hex32(return_address)
@@ -4216,6 +4258,11 @@ void emit_terminal(std::ostringstream& output,
                     output << "if (!katana::runtime::native_aot_call_is_nested() && "
                               "runtime_dispatch_detail::"
                               "try_static_return_nop_callback(cpu, call_target)) {\n";
+                    emit_successful_closure_probe_dispatch(
+                        output,
+                        indent + 2,
+                        instruction,
+                        closure_probe_callsite);
                     if (native_internal_block_labels &&
                         current_blocks.contains(return_address)) {
                         emit_indent(output, indent + 2);
@@ -4249,6 +4296,11 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 2);
                 output << dynamic_dispatch_name(instruction, true)
                        << "(cpu, call_target);\n";
+                emit_successful_closure_probe_dispatch(
+                    output,
+                    indent + 2,
+                    instruction,
+                    closure_probe_callsite);
                 if (native_internal_block_labels &&
                     current_blocks.contains(return_address)) {
                     emit_indent(output, indent + 2);
@@ -4351,6 +4403,9 @@ void emit_terminal(std::ostringstream& output,
             emit_indent(output, indent);
             output << "}\n";
         }
+
+        emit_successful_closure_probe_dispatch(
+            output, indent, instruction, closure_probe_callsite);
 
         emit_multi_block_completion(
             output, indent, single_block, false, registers);
@@ -4828,6 +4883,8 @@ void emit_block(std::ostringstream& output,
                 const NativeRegisterEmission& registers,
                 const bool has_direct_ram_writes,
                 const bool enable_direct_write_batch,
+                const std::unordered_set<std::uint32_t>&
+                    closure_probe_callsites,
                 const std::unordered_set<std::uint32_t>& native_resume_entries) {
     auto resume_entries = detail::native_aot_internal_resume_entries(block);
     resume_entries.erase(
@@ -5005,7 +5062,9 @@ void emit_block(std::ostringstream& output,
                       table_compatible_function_entries,
                       registers,
                       has_direct_ram_writes,
-                      enable_direct_write_batch);
+                      enable_direct_write_batch,
+                      closure_probe_callsites.contains(
+                          block.instructions[*control_index].source_address));
     } else if (block.successors.size() == 1u) {
         const auto successor = block.successors.front();
         emit_direct_write_batch_flush(
@@ -5222,6 +5281,42 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 "Ein nativer AOT-Block besitzt mehrere Owner-Entries.");
         }
     }
+    if (!request.closure_probe_callsites.empty() &&
+        !request.external_dynamic_dispatch)
+        throw std::invalid_argument(
+            "Closure-Probe-Callsites brauchen den externen Produktdispatcher.");
+    std::unordered_set<std::uint32_t> closure_probe_callsites;
+    closure_probe_callsites.reserve(request.closure_probe_callsites.size());
+    for (const auto callsite : request.closure_probe_callsites) {
+        if (callsite == 0u || !closure_probe_callsites.insert(callsite).second)
+            throw std::invalid_argument(
+                "Closure-Probe-Callsites muessen eindeutig und ungleich null sein.");
+    }
+    std::unordered_set<std::uint32_t> discovered_closure_probe_callsites;
+    discovered_closure_probe_callsites.reserve(closure_probe_callsites.size());
+    if (!closure_probe_callsites.empty()) {
+        for (const auto& function : functions) {
+            for (const auto& block : function.blocks) {
+                for (const auto& instruction : block.instructions) {
+                    if (!closure_probe_callsites.contains(
+                            instruction.source_address))
+                        continue;
+                    if (instruction.operation !=
+                        katana::ir::Operation::CallRegister)
+                        throw std::invalid_argument(
+                            "Closure-Probe-Callsite ist kein indirekter Call.");
+                    if (!discovered_closure_probe_callsites.insert(
+                            instruction.source_address).second)
+                        throw std::invalid_argument(
+                            "Closure-Probe-Callsite besitzt mehrere IR-Owner.");
+                }
+            }
+        }
+        if (discovered_closure_probe_callsites.size() !=
+            closure_probe_callsites.size())
+            throw std::invalid_argument(
+                "Closure-Probe-Callsite fehlt im emittierten IR.");
+    }
     const bool emits_post_instruction_safepoint =
         std::any_of(functions.begin(), functions.end(), [&](const auto& function) {
             return std::any_of(
@@ -5305,6 +5400,13 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "    return source(target) == source(allowed_target);\n"
                  << "}\n";
     if (request.external_dynamic_dispatch) {
+        if (!closure_probe_callsites.empty()) {
+            declarations
+                << "extern thread_local bool closure_probe_dispatch_pending;\n"
+                << "void note_successful_closure_probe_dispatch(\n"
+                << "    std::uint32_t callsite, std::uint32_t target,\n"
+                << "    std::uint32_t continuation) noexcept;\n";
+        }
         declarations << "void static_call(CpuState& cpu, std::uint32_t target);\n";
         if (block_entry_metadata_mode == BlockEntryMetadataMode::Routed) {
             declarations << "void note_block_entry(std::uint32_t address) noexcept;\n";
@@ -5679,6 +5781,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        registers,
                        has_direct_ram_writes,
                        enable_direct_write_batch,
+                       closure_probe_callsites,
                        native_resume_entries);
         }
 

@@ -373,6 +373,16 @@ analyze_native_disc_port(
 publish_committed_native_disc_analysis_hints(
     NativeDiscAnalysisResult& analyzed) noexcept;
 
+// Publishes the already admitted analysis state as the exact prepared
+// admission product consumed by a following product export. The caller must
+// invoke this only after the analysis archive, World and authority ledger
+// transaction has committed. Cache failures are intentionally reported as a
+// miss so they cannot invalidate the committed analysis generation.
+[[nodiscard]] NativeDiscAnalysisHintPublicationResult
+publish_committed_native_disc_prepared_admission(
+    NativeDiscAnalysisResult& analyzed,
+    const PortExportOptions& options) noexcept;
+
 // Computes only the stable, pre-analysis identity of the exact materialized
 // disc/options contract. It performs no CFA/FVA, admission, World generation
 // or completeness decision. A caller may compare it with an authenticated

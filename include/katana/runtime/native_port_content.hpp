@@ -174,6 +174,22 @@ struct NativePortRuntimeImageView final {
     std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
 };
 
+// Exact executable entry of one currently active fixed-address runtime image.
+// This view is returned only for a generated block boundary whose immutable
+// byte identity still belongs to the activation generation. Merely falling
+// inside an image range is never sufficient.
+struct NativePortRuntimeImageActiveEntryView final {
+    std::string_view image_id;
+    std::string_view image_sha256;
+    std::string_view block_sha256;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t image_size = 0u;
+    std::uint32_t source_offset = 0u;
+    std::uint32_t block_size = 0u;
+    std::uint64_t lifecycle_generation = 0u;
+};
+
 class NativePortRuntimeImageBindings final {
   public:
     NativePortRuntimeImageBindings(
@@ -204,6 +220,8 @@ class NativePortRuntimeImageBindings final {
         std::uint32_t runtime_start,
         std::size_t byte_size);
     [[nodiscard]] bool active(std::string_view image_id) const noexcept;
+    [[nodiscard]] std::optional<NativePortRuntimeImageActiveEntryView>
+    active_entry_for_address(std::uint32_t address) const;
 
   private:
     struct Impl;

@@ -1,3 +1,4 @@
+#include "katana/runtime/closure_witness.hpp"
 #include "katana/runtime/crash_capsule.hpp"
 #include "katana/runtime/memory.hpp"
 
@@ -379,6 +380,187 @@ int main() {
                 katana::runtime::CrashCapsuleV3Fields::hash_text(
                     std::string_view{}),
         "Crash-Capsule v3 behaelt oder hasht pfad-/logfaehige Contract-Details.");
+
+    // Crash-Capsule v5 keeps closure provenance typed and separate.  Runtime
+    // observations are bounded rings only; an overflow is explicitly
+    // fail-closed and never becomes a closure admission signal.
+    static katana::runtime::CrashCapsule v5_capsule;
+    katana::runtime::CrashCapsuleClosureBinding binding;
+    binding.sequence = 7u;
+    binding.runtime_generation = 11u;
+    binding.analyzer = 1u;
+    binding.backend = 2u;
+    binding.mode = 3u;
+    binding.lba = 4u;
+    binding.bias = 5u;
+    binding.key.assign("sha256:key-v5");
+    binding.content.assign("sha256:content-v5");
+    binding.boot.assign("sha256:boot-v5");
+    binding.project.assign("sha256:project-v5");
+    binding.analysis_contract.assign("sha256:analysis-contract-v5");
+    binding.image_analysis.assign("sha256:image-analysis-v5");
+    binding.game_project.assign("sha256:game-project-v5");
+    binding.native_port.assign("sha256:native-port-v5");
+    binding.native_port_artifact.assign("sha256:native-port-artifact-v5");
+    binding.analysis_impl.assign("sha256:analysis-impl-v5");
+    binding.analysis_cache_impl.assign("sha256:analysis-cache-impl-v5");
+    binding.ir_product_impl.assign("sha256:ir-product-impl-v5");
+    binding.codegen_impl.assign("sha256:codegen-impl-v5");
+    v5_capsule.note_v5_closure_binding(binding);
+
+    katana::runtime::CrashCapsuleClosureWitness witness;
+    witness.kind = static_cast<std::uint32_t>(
+        katana::runtime::CrashCapsuleV5WitnessKind::IndirectDispatch);
+    witness.source = 0x5000u;
+    witness.callsite = 0x5004u;
+    witness.slot = 0u;
+    witness.slot_present = 0u;
+    witness.pointer = 0x6000u;
+    witness.target = 0x7000u;
+    witness.alias = 0x8000u;
+    witness.source_identity.assign("sha256:witness-source");
+    witness.target_identity.assign("sha256:witness-target");
+    v5_capsule.note_v5_closure_witness(witness);
+    witness.sequence = 2u;
+    v5_capsule.note_v5_closure_witness(witness);
+
+    katana::runtime::CrashCapsulePointerProvenance pointer;
+    pointer.source = 0x9000u;
+    pointer.callsite = 0x9004u;
+    pointer.slot = 0u;
+    pointer.slot_present = 0u;
+    pointer.pointer = 0xA000u;
+    pointer.target = 0xB000u;
+    pointer.alias = 0xC000u;
+    pointer.pointer_value = 0x12345678u;
+    pointer.source_identity.assign("sha256:pointer-source");
+    pointer.target_identity.assign("sha256:pointer-target");
+    for (std::size_t index = 0u;
+         index < katana::runtime::crash_capsule_pointer_provenance_capacity + 1u;
+         ++index) {
+        pointer.sequence = static_cast<std::uint64_t>(index + 1u);
+        v5_capsule.note_v5_pointer_provenance(pointer);
+    }
+    require(v5_capsule.v5.closure_binding_count == 1u &&
+                v5_capsule.v5.closure_witness_count == 2u &&
+                v5_capsule.v5.pointer_provenance_count ==
+                    katana::runtime::crash_capsule_pointer_provenance_capacity &&
+                v5_capsule.v5.pointer_provenance_drops == 1u &&
+                v5_capsule.v5.truncated() &&
+                v5_capsule.v5.drop_count() == 1u,
+            "Crash-Capsule v5 bounded witness/provenance rings verlieren ihre"
+            " Drops- und Fail-Closed-Markierung.");
+
+    katana::runtime::CrashCapsuleProviderTranscript provider;
+    provider.sequence = 77u;
+    provider.operation = static_cast<std::uint32_t>(
+        katana::runtime::MemoryAccessOperation::Write);
+    provider.width = 4u;
+    provider.address = 0xFF000038u;
+    provider.instruction_source_pc = 0x1004u;
+    provider.instruction_runtime_pc = 0xA0001004u;
+    provider.instruction_opcode = 0x2402u;
+    provider.instruction_valid = 1u;
+    provider.provider_identity.assign("unresolved-provider");
+    provider.source_identity.assign("sha256:provider-source");
+    provider.target_identity.assign("sha256:provider-target");
+    v5_capsule.note_v5_provider_transcript(provider);
+
+    const auto crash_v5 = katana::runtime::serialize_crash_capsule_v5(v5_capsule);
+    const std::string crash_v5_json(
+        crash_v5.bytes.data(), crash_v5.bytes.data() + crash_v5.size);
+    require(crash_v5.size != 0u &&
+                crash_v5_json.find("\"version\":5") != std::string::npos &&
+                crash_v5_json.find("\"key\":\"sha256:key-v5\"") !=
+                    std::string::npos &&
+                crash_v5_json.find("\"image_analysis\":\"sha256:image-analysis-v5\"") !=
+                    std::string::npos &&
+                crash_v5_json.find("\"contract_identity\"") ==
+                    std::string::npos &&
+                crash_v5_json.find("\"analysis_contract\":\"sha256:analysis-contract-v5\"") !=
+                    std::string::npos &&
+                crash_v5_json.find("\"source\":20480") != std::string::npos &&
+                crash_v5_json.find("\"callsite\":20484") != std::string::npos &&
+                crash_v5_json.find("\"slot_present\":0") != std::string::npos &&
+                crash_v5_json.find("\"pointer\":24576") != std::string::npos &&
+                crash_v5_json.find("\"target\":28672") != std::string::npos &&
+                crash_v5_json.find("\"alias\":32768") != std::string::npos &&
+                crash_v5_json.find("\"instruction_source_pc\":4100") !=
+                    std::string::npos &&
+                crash_v5_json.find("\"instruction_runtime_pc\":2684358660") !=
+                    std::string::npos &&
+                crash_v5_json.find("\"instruction_opcode\":9218") !=
+                    std::string::npos &&
+                crash_v5_json.find("\"instruction_valid\":1") !=
+                    std::string::npos &&
+                crash_v5_json.find("{,") == std::string::npos &&
+                crash_v5_json.find("\"drop_count\":1") != std::string::npos &&
+                crash_v5_json.find("\"truncated\":true") != std::string::npos &&
+                crash_v5_json.back() == '}',
+            "Crash-Capsule v5 serialisiert getrennte Rollen, Identitaeten und"
+            " bounded fail-closed Drops nicht als gueltiges JSON.");
+
+    // Only explicitly selected, identity-bound probe candidates record a
+    // successful indirect dispatch.  The retained witness must survive a
+    // later unrelated terminal failure, while unarmed sites stay write-free.
+    static katana::runtime::CrashCapsule probe_capsule;
+    constexpr std::array probe_candidates{
+        katana::runtime::ClosureProbeEligibleSiteView{
+            0x1000u, 0x100u, 0x1010u, "sha256:owner-one"},
+        katana::runtime::ClosureProbeEligibleSiteView{
+            0x2000u, 0x100u, 0x2020u, "sha256:owner-two"}};
+    constexpr std::array selected_probe_sites{0x1010u};
+    katana::runtime::ClosureProbePlanState probe_state;
+    require(probe_state.configure(
+                probe_candidates, selected_probe_sites, &probe_capsule) &&
+                probe_state.has_pending() && probe_state.size() == 1u &&
+                probe_capsule.v5.closure_probe_plan_count == 0u,
+            "Ein gen0 Closure-Probe-Plan darf vor exakter Lifecycle-Bindung"
+            " keine positive Evidenz publizieren.");
+    require(!probe_state.note_successful_dispatch(
+                0x2020u, 0x3000u, 0xA0003000u, 0x2024u, 4u,
+                "sha256:unarmed-target", 8u, probe_capsule) &&
+                probe_capsule.v5.closure_witness_count == 0u &&
+                probe_capsule.v5.pointer_provenance_count == 0u &&
+                probe_capsule.v5.dispatch_witness_count == 0u,
+            "Eine nicht armierte Callsite erzeugt Closure-Witness-Hotpath-Arbeit.");
+    require(probe_state.note_successful_dispatch(
+                0x1010u, 0x3000u, 0xA0003000u, 0x1014u, 4u,
+                "sha256:armed-target", 9u, probe_capsule) &&
+                !probe_state.has_pending() &&
+                probe_capsule.v5.closure_witness_count == 1u &&
+                probe_capsule.v5.pointer_provenance_count == 1u &&
+                probe_capsule.v5.dispatch_witness_count == 1u &&
+                probe_capsule.v5.guest_aot_callchain_count == 1u &&
+                probe_capsule.v5.closure_probe_plan_count == 1u &&
+                probe_capsule.v5.closure_probe_plans[0].generation == 4u,
+            "Ein armierter erfolgreicher Dispatch wird nicht allocation-free behalten.");
+    require(!probe_state.note_successful_dispatch(
+                0x1010u, 0x4000u, 0xA0004000u, 0x1014u, 5u,
+                "sha256:second-target", 10u, probe_capsule) &&
+                probe_capsule.v5.closure_witness_count == 1u,
+            "Ein one-shot Closure-Probe schreibt nach Erfolg weiter in den Ring.");
+    katana::runtime::CrashCapsuleClosureWitness later_fault;
+    later_fault.sequence = 10u;
+    later_fault.kind = static_cast<std::uint32_t>(
+        katana::runtime::CrashCapsuleV5WitnessKind::HardwareAccess);
+    later_fault.source = 0x5000u;
+    later_fault.callsite = 0x5050u;
+    later_fault.target = 0x6000u;
+    later_fault.alias = 0xA0006000u;
+    later_fault.runtime_observation = 1u;
+    later_fault.reproof_required = 1u;
+    later_fault.source_identity.assign("sha256:fault-owner");
+    later_fault.target_identity.assign("sha256:fault-target");
+    probe_capsule.note_v5_closure_witness(later_fault);
+    require(probe_capsule.v5.closure_witness_count == 2u &&
+                probe_capsule.v5.closure_witnesses[0].callsite == 0x1010u &&
+                probe_capsule.v5.closure_witnesses[1].kind ==
+                    static_cast<std::uint32_t>(
+                        katana::runtime::CrashCapsuleV5WitnessKind::
+                            HardwareAccess),
+            "Ein spaeterer Hardware-Fault verdraengt den vorherigen erfolgreichen"
+            " Dispatch ohne Ringueberlauf.");
 
     require(throws<std::invalid_argument>([&observed_bus] {
                 static_cast<void>(observed_bus.add_watchpoint(0x00005000u,
