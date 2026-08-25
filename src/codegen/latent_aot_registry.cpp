@@ -2540,8 +2540,15 @@ std::vector<LatentAffineBlockInput> latent_affine_block_inputs(
     return inputs;
 }
 
-using LatentRecordReceiverState =
-    std::array<std::optional<std::uint32_t>, 16u>;
+struct LatentRecordReceiverState final {
+    std::array<std::optional<std::uint32_t>, 16u> receivers{};
+    // Exact copies of the four incoming SH-4 ABI arguments.  These aliases
+    // are not record evidence by themselves.  A bit becomes record evidence
+    // only after the matching value is passed to an independently proven
+    // persistent-pointer sink.
+    std::array<std::uint8_t, 16u> input_aliases{};
+    std::uint8_t published_input_aliases = 0u;
+};
 
 // Zero is not a valid normalized code address.  It is used only as an
 // address-less provenance marker for the canonical incoming r4 record
@@ -2551,29 +2558,45 @@ constexpr std::uint32_t latent_incoming_record_receiver_marker = 0u;
 
 struct LatentBlockRecordReceiverState final {
     bool reachable = false;
-    LatentRecordReceiverState registers{};
+    LatentRecordReceiverState state{};
 };
+
+[[nodiscard]] bool latent_record_receiver_is_proven(
+    const LatentRecordReceiverState& state,
+    const std::uint8_t reg) noexcept {
+    return reg < state.receivers.size() &&
+           (state.receivers[reg].has_value() ||
+            (state.input_aliases[reg] &
+             state.published_input_aliases) != 0u);
+}
 
 void apply_latent_record_receiver_data_instruction(
     const katana::ir::Instruction& instruction,
-    LatentRecordReceiverState& registers) noexcept {
+    LatentRecordReceiverState& state) noexcept {
     using katana::ir::Operation;
-    const auto previous = registers;
+    const auto previous = state;
     const auto use_def =
         katana::ir::instruction_register_use_def(instruction);
-    for (std::uint8_t index = 0u; index < registers.size(); ++index) {
-        if ((use_def.defs & katana::ir::gpr_register_bit(index)) != 0u)
-            registers[index].reset();
+    for (std::uint8_t index = 0u; index < state.receivers.size(); ++index) {
+        if ((use_def.defs & katana::ir::gpr_register_bit(index)) != 0u) {
+            state.receivers[index].reset();
+            state.input_aliases[index] = 0u;
+        }
     }
-    if (instruction.operation == Operation::MovRegister)
-        registers[instruction.destination_register] =
-            previous[instruction.source_register];
+    if (instruction.operation == Operation::MovRegister) {
+        state.receivers[instruction.destination_register] =
+            previous.receivers[instruction.source_register];
+        state.input_aliases[instruction.destination_register] =
+            previous.input_aliases[instruction.source_register];
+    }
 }
 
 void clear_latent_record_call_volatile_registers(
-    LatentRecordReceiverState& registers) noexcept {
-    for (std::uint8_t index = 0u; index <= 7u; ++index)
-        registers[index].reset();
+    LatentRecordReceiverState& state) noexcept {
+    for (std::uint8_t index = 0u; index <= 7u; ++index) {
+        state.receivers[index].reset();
+        state.input_aliases[index] = 0u;
+    }
 }
 
 std::optional<std::uint32_t> latent_external_call_target(
@@ -2592,6 +2615,40 @@ std::optional<std::uint32_t> latent_external_call_target(
     if (!raw.has_value() || !resolver.is_external(*raw))
         return std::nullopt;
     return latent_direct_code_address(*raw);
+}
+
+[[nodiscard]] std::uint8_t latent_external_persistent_pointer_sink_mask(
+    const katana::ir::Instruction& instruction,
+    const LatentRegisterLiteralState& literals,
+    const LatentCodeAddressResolver& resolver,
+    const std::span<const LatentAotExternalPersistentPointerSink>
+        persistent_pointer_sinks) noexcept {
+    const auto target =
+        latent_external_call_target(instruction, literals, resolver);
+    if (!target.has_value()) return 0u;
+    const auto sink = std::lower_bound(
+        persistent_pointer_sinks.begin(), persistent_pointer_sinks.end(),
+        *target,
+        [](const auto& candidate_sink, const std::uint32_t address) {
+            return candidate_sink.function_address < address;
+        });
+    if (sink == persistent_pointer_sinks.end() ||
+        sink->function_address != *target)
+        return 0u;
+    return sink->argument_mask;
+}
+
+void publish_latent_record_input_aliases(
+    LatentRecordReceiverState& state,
+    const std::uint8_t argument_mask) noexcept {
+    for (std::uint8_t argument = 0u; argument < 4u; ++argument) {
+        if ((argument_mask & static_cast<std::uint8_t>(1u << argument)) ==
+            0u)
+            continue;
+        state.published_input_aliases = static_cast<std::uint8_t>(
+            state.published_input_aliases |
+            state.input_aliases[4u + argument]);
+    }
 }
 
 std::optional<std::uint32_t> latent_local_call_target(
@@ -2645,7 +2702,9 @@ LatentBlockRecordReceiverTrace trace_latent_record_receivers(
     const katana::ir::BasicBlock& block,
     const LatentBlockLiteralTrace& literal_trace,
     const LatentCodeAddressResolver& resolver,
-    const LatentRecordReceiverState& input) {
+    const LatentRecordReceiverState& input,
+    const std::span<const LatentAotExternalPersistentPointerSink>
+        persistent_pointer_sinks) {
     using katana::ir::DelaySlotRole;
     using katana::ir::Operation;
 
@@ -2656,6 +2715,7 @@ LatentBlockRecordReceiverTrace trace_latent_record_receivers(
     std::optional<std::uint32_t> delayed_call_slot;
     std::optional<std::uint32_t> delayed_factory;
     std::optional<std::uint32_t> delayed_local_call;
+    std::uint8_t delayed_persistent_pointer_sink_mask = 0u;
 
     for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
         const auto& instruction = block.instructions[index];
@@ -2674,20 +2734,26 @@ LatentBlockRecordReceiverTrace trace_latent_record_receivers(
             delayed_call_slot.reset();
             delayed_factory.reset();
             delayed_local_call.reset();
+            delayed_persistent_pointer_sink_mask = 0u;
         }
 
         trace.before.push_back(state);
         apply_latent_record_receiver_data_instruction(instruction, state);
 
         if (expected_delay_slot) {
-            if (delayed_local_call.has_value() && state[4u].has_value())
+            publish_latent_record_input_aliases(
+                state, delayed_persistent_pointer_sink_mask);
+            if (delayed_local_call.has_value() &&
+                latent_record_receiver_is_proven(state, 4u))
                 trace.local_record_callees.push_back(*delayed_local_call);
             clear_latent_record_call_volatile_registers(state);
-            if (delayed_factory.has_value()) state[0u] = delayed_factory;
+            if (delayed_factory.has_value())
+                state.receivers[0u] = delayed_factory;
             delayed_call_index.reset();
             delayed_call_slot.reset();
             delayed_factory.reset();
             delayed_local_call.reset();
+            delayed_persistent_pointer_sink_mask = 0u;
         }
 
         const bool call = instruction.operation == Operation::Call ||
@@ -2700,17 +2766,26 @@ LatentBlockRecordReceiverTrace trace_latent_record_receivers(
             latent_external_call_target(instruction, literals, resolver);
         const auto local_call =
             latent_local_call_target(instruction, literals, resolver);
+        const auto persistent_pointer_sink_mask =
+            latent_external_persistent_pointer_sink_mask(
+                instruction, literals, resolver,
+                persistent_pointer_sinks);
         if (instruction.delay_slot.role == DelaySlotRole::Owner &&
             instruction.delay_slot.counterpart_address.has_value()) {
             delayed_call_index = index;
             delayed_call_slot = instruction.delay_slot.counterpart_address;
             delayed_factory = factory;
             delayed_local_call = local_call;
+            delayed_persistent_pointer_sink_mask =
+                persistent_pointer_sink_mask;
         } else {
-            if (local_call.has_value() && state[4u].has_value())
+            publish_latent_record_input_aliases(
+                state, persistent_pointer_sink_mask);
+            if (local_call.has_value() &&
+                latent_record_receiver_is_proven(state, 4u))
                 trace.local_record_callees.push_back(*local_call);
             clear_latent_record_call_volatile_registers(state);
-            if (factory.has_value()) state[0u] = factory;
+            if (factory.has_value()) state.receivers[0u] = factory;
         }
     }
     if (delayed_call_index.has_value())
@@ -2725,7 +2800,9 @@ latent_block_record_receiver_inputs(
     const katana::ir::Function& function,
     const LatentCodeAddressResolver& resolver,
     const std::span<const LatentBlockLiteralState> literal_inputs,
-    const bool incoming_record_receiver) {
+    const bool incoming_record_receiver,
+    const std::span<const LatentAotExternalPersistentPointerSink>
+        persistent_pointer_sinks) {
     std::vector<LatentBlockRecordReceiverState> inputs(
         function.blocks.size());
     std::map<std::uint32_t, std::size_t> block_indexes;
@@ -2734,6 +2811,9 @@ latent_block_record_receiver_inputs(
     const auto entry = block_indexes.find(function.entry_address);
     if (entry == block_indexes.end()) return inputs;
     inputs[entry->second].reachable = true;
+    for (std::uint8_t argument = 0u; argument < 4u; ++argument)
+        inputs[entry->second].state.input_aliases[4u + argument] =
+            static_cast<std::uint8_t>(1u << argument);
     // The canonical callback-record ABI passes the record receiver in the
     // first argument register r4.  Preserve that incoming receiver as a
     // provenance marker until a real register definition/call clobber kills
@@ -2742,7 +2822,7 @@ latent_block_record_receiver_inputs(
     // into callback records.  The marker carries no address and is consumed
     // only by the field-sink receiver predicate below.
     if (incoming_record_receiver)
-        inputs[entry->second].registers[4u] =
+        inputs[entry->second].state.receivers[4u] =
             latent_incoming_record_receiver_marker;
 
     std::deque<std::size_t> pending{entry->second};
@@ -2766,7 +2846,7 @@ latent_block_record_receiver_inputs(
                 : LatentRegisterLiteralState{});
         const auto receiver_trace = trace_latent_record_receivers(
             function.blocks[index], literal_trace, resolver,
-            inputs[index].registers);
+            inputs[index].state, persistent_pointer_sinks);
         for (const auto successor : function.blocks[index].successors) {
             const auto found = block_indexes.find(successor);
             if (found == block_indexes.end()) continue;
@@ -2774,17 +2854,34 @@ latent_block_record_receiver_inputs(
             bool changed = false;
             if (!destination.reachable) {
                 destination.reachable = true;
-                destination.registers = receiver_trace.continuation;
+                destination.state = receiver_trace.continuation;
                 changed = true;
             } else {
                 for (std::size_t reg = 0u;
-                     reg < receiver_trace.continuation.size(); ++reg) {
-                    if (destination.registers[reg].has_value() &&
-                        destination.registers[reg] !=
-                            receiver_trace.continuation[reg]) {
-                        destination.registers[reg].reset();
+                     reg < receiver_trace.continuation.receivers.size();
+                     ++reg) {
+                    if (destination.state.receivers[reg].has_value() &&
+                        destination.state.receivers[reg] !=
+                            receiver_trace.continuation.receivers[reg]) {
+                        destination.state.receivers[reg].reset();
                         changed = true;
                     }
+                    if (destination.state.input_aliases[reg] !=
+                        receiver_trace.continuation.input_aliases[reg]) {
+                        destination.state.input_aliases[reg] = 0u;
+                        changed = true;
+                    }
+                }
+                const auto shared_published_aliases =
+                    static_cast<std::uint8_t>(
+                        destination.state.published_input_aliases &
+                        receiver_trace.continuation
+                            .published_input_aliases);
+                if (shared_published_aliases !=
+                    destination.state.published_input_aliases) {
+                    destination.state.published_input_aliases =
+                        shared_published_aliases;
+                    changed = true;
                 }
             }
             if (changed && !queued[found->second]) {
@@ -2800,6 +2897,8 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
     const DiscFileCandidate& candidate,
     const std::span<const katana::ir::Function> program,
     const std::span<const std::uint32_t> external_code_targets,
+    const std::span<const LatentAotExternalPersistentPointerSink>
+        external_persistent_pointer_sinks,
     const std::span<const LatentAotExternalCallbackFieldSink>
         external_callback_field_sinks,
     const std::size_t maximum_entry_scan_instructions) {
@@ -2839,7 +2938,8 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
         const auto literal_inputs =
             latent_block_literal_inputs(candidate, *function->second);
         const auto receiver_inputs = latent_block_record_receiver_inputs(
-            candidate, *function->second, resolver, literal_inputs, true);
+            candidate, *function->second, resolver, literal_inputs, true,
+            external_persistent_pointer_sinks);
         for (std::size_t block_index = 0u;
              block_index < function->second->blocks.size(); ++block_index) {
             if (block_index >= receiver_inputs.size() ||
@@ -2853,7 +2953,8 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
                     : LatentRegisterLiteralState{});
             const auto receiver_trace = trace_latent_record_receivers(
                 function->second->blocks[block_index], literal_trace,
-                resolver, receiver_inputs[block_index].registers);
+                resolver, receiver_inputs[block_index].state,
+                external_persistent_pointer_sinks);
             for (const auto callee : receiver_trace.local_record_callees) {
                 if (!functions.contains(callee) ||
                     !incoming_record_functions.insert(callee).second)
@@ -2869,7 +2970,8 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
             latent_block_literal_inputs(candidate, function);
         const auto receiver_inputs = latent_block_record_receiver_inputs(
             candidate, function, resolver, literal_inputs,
-            incoming_record_functions.contains(function.entry_address));
+            incoming_record_functions.contains(function.entry_address),
+            external_persistent_pointer_sinks);
         for (std::size_t block_index = 0u;
              block_index < function.blocks.size(); ++block_index) {
             if (block_index >= receiver_inputs.size() ||
@@ -2884,7 +2986,8 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
                     : LatentRegisterLiteralState{});
             const auto receiver_trace = trace_latent_record_receivers(
                 block, literal_trace, resolver,
-                receiver_inputs[block_index].registers);
+                receiver_inputs[block_index].state,
+                external_persistent_pointer_sinks);
             for (std::size_t index = 0u; index < block.instructions.size();
                  ++index) {
                 const auto& store = block.instructions[index];
@@ -2895,10 +2998,10 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
                     index >= literal_trace.before.size() ||
                     index >= receiver_trace.before.size() ||
                     store.destination_register >=
-                        receiver_trace.before[index].size() ||
-                    !receiver_trace.before[index]
-                         [store.destination_register]
-                             .has_value())
+                        receiver_trace.before[index].receivers.size() ||
+                    !latent_record_receiver_is_proven(
+                        receiver_trace.before[index],
+                        store.destination_register))
                     continue;
                 auto raw = literal_trace.before[index]
                                                 [store.source_register];
@@ -6547,6 +6650,7 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
                     latent_record_callback_entry_offsets(
                         candidate, discovery_program,
                         options.external_code_targets,
+                        options.external_persistent_pointer_sinks,
                         options.external_callback_field_sinks,
                         options.maximum_entry_scan_instructions);
                 discovered_offsets.insert(
@@ -7046,6 +7150,7 @@ inspect_cached_static_candidate(
                            .local_entry_offsets);
         append_offsets(latent_record_callback_entry_offsets(
             candidate, state.program, options.external_code_targets,
+            options.external_persistent_pointer_sinks,
             options.external_callback_field_sinks,
             options.maximum_entry_scan_instructions));
         append_offsets(latent_mutual_record_table_callback_entry_offsets(

@@ -318,6 +318,57 @@ std::vector<std::uint8_t> direct_record_field_module(
     return bytes;
 }
 
+std::vector<std::uint8_t> published_record_field_module() {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    constexpr std::uint32_t persistent_pointer_sink = 0x8C030000u;
+    std::vector<std::uint8_t> bytes(0x340u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // The authoritative root calls a local producer with an ordinary r5
+    // value.  This deliberately kills the root's canonical incoming-r4
+    // record marker before the call, so only the publication proof below can
+    // establish the producer's receiver.
+    put_u16(0x00u, 0x6453u); // mov r5,r4
+    put_u16(0x02u, 0xB01Du); // bsr 0x40
+    put_u16(0x04u, 0x0009u); // nop (delay)
+    put_u16(0x06u, 0x000Bu); // rts
+    put_u16(0x08u, 0x0009u); // nop (delay)
+
+    // The producer preserves its input record in r12, publishes that exact
+    // alias as r5 to a separately proven persistent-pointer sink, then writes
+    // a local callback literal into the independently proven +16 field.
+    put_u16(0x40u, 0x6C43u); // mov r4,r12
+    put_u16(0x42u, 0xD30Fu); // mov.l @(0x80,pc),r3
+    put_u16(0x44u, 0x430Bu); // jsr @r3
+    put_u16(0x46u, 0x65C3u); // mov r12,r5 (delay)
+    put_u16(0x48u, 0xD20Eu); // mov.l @(0x84,pc),r2
+    put_u16(0x4Au, 0x1C24u); // mov.l r2,@(16,r12)
+    put_u16(0x4Cu, 0x000Bu); // rts
+    put_u16(0x4Eu, 0x0009u); // nop (delay)
+    put_u32(0x80u, persistent_pointer_sink);
+    put_u32(0x84u, runtime_base + 0x100u);
+
+    put_u16(0x100u, 0x000Bu); // callback: rts
+    put_u16(0x102u, 0x0009u); // delay slot
+
+    // Two exact aliases establish the preferred runtime base without a
+    // title-specific address or runtime observation.
+    put_u32(0x300u, runtime_base + 0x40u);
+    put_u32(0x304u, runtime_base + 0x100u);
+    return bytes;
+}
+
 std::vector<std::uint8_t> mutual_record_table_module(
     const std::size_t record_count = 3u,
     const bool constant_stride = true,
@@ -950,6 +1001,82 @@ int main() {
                     0x100u),
             "Ein lokales Literal ohne Record-Feld-Store wurde als Callback-"
             "Root akzeptiert.");
+
+        const std::array published_record_external_targets{
+            0x8C020000u, 0x8C030000u};
+        const std::array published_record_field_sinks{
+            katana::codegen::LatentAotExternalCallbackFieldSink{
+                0x8C020000u, 0x8C020006u, 0x8C020004u, 16, 4u, true}};
+        const std::array published_record_pointer_sinks{
+            katana::codegen::LatentAotExternalPersistentPointerSink{
+                0x8C030000u, 0x02u}};
+        katana::codegen::LatentAotDiscoveryOptions
+            published_record_options;
+        published_record_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        published_record_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        published_record_options.external_code_targets =
+            published_record_external_targets;
+        published_record_options.external_persistent_pointer_sinks =
+            published_record_pointer_sinks;
+        published_record_options.external_callback_field_sinks =
+            published_record_field_sinks;
+
+        const auto published_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                published_record_field_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                published_record_options);
+        require(
+            published_record_callback.admitted &&
+                std::binary_search(
+                    published_record_callback.final_entry_offsets.begin(),
+                    published_record_callback.final_entry_offsets.end(),
+                    0x100u) &&
+                std::binary_search(
+                    published_record_callback.emitted_block_offsets.begin(),
+                    published_record_callback.emitted_block_offsets.end(),
+                    0x100u),
+            "Publizierter Record-Alias verlor seinen identity-bound +16-"
+            "Callback-Root oder dessen Blockidentitaet.");
+
+        auto unpublished_record_options = published_record_options;
+        unpublished_record_options.external_persistent_pointer_sinks = {};
+        const auto unpublished_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                published_record_field_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                unpublished_record_options);
+        require(
+            unpublished_record_callback.admitted &&
+                !std::binary_search(
+                    unpublished_record_callback.final_entry_offsets.begin(),
+                    unpublished_record_callback.final_entry_offsets.end(),
+                    0x100u),
+            "Nicht publizierter Input-Alias wurde allein aus einer globalen "
+            "Callback-Feldform zum Root erhoben.");
+
+        const std::array wrong_published_record_pointer_sinks{
+            katana::codegen::LatentAotExternalPersistentPointerSink{
+                0x8C030000u, 0x04u}};
+        auto wrong_published_record_options = published_record_options;
+        wrong_published_record_options.external_persistent_pointer_sinks =
+            wrong_published_record_pointer_sinks;
+        const auto wrong_published_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                published_record_field_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                wrong_published_record_options);
+        require(
+            wrong_published_record_callback.admitted &&
+                !std::binary_search(
+                    wrong_published_record_callback.final_entry_offsets.begin(),
+                    wrong_published_record_callback.final_entry_offsets.end(),
+                    0x100u),
+            "Persistenter Sink fuer das falsche ABI-Argument publizierte "
+            "einen fremden Record-Alias.");
 
         const std::array mutual_record_external_targets{0x8C020000u};
         const std::array mutual_record_field_sinks{

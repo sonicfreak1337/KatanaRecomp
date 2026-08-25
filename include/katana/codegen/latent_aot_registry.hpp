@@ -107,9 +107,9 @@ struct LatentAotExternalCallbackSink final {
 
 // Identity-bound primary-image function which persists an incoming 32-bit
 // argument. This alone is not executable-pointer evidence. Latent discovery
-// may consume it only after proving that the argument is an affine local
-// record-table address and pairing the record shape with a separately proven
-// callback-field sink.
+// may consume it only after pairing the persisted value with either an affine
+// local record-table address or an exact input-alias record whose local code
+// literal is written through a separately proven callback-field shape.
 struct LatentAotExternalPersistentPointerSink final {
     std::uint32_t function_address = 0u;
     std::uint8_t argument_mask = 0u;
@@ -121,7 +121,9 @@ struct LatentAotExternalPersistentPointerSink final {
 // Identity-bound primary-image record walker which loads a callback from a
 // fixed-width field and invokes it indirectly. A latent module may pair this
 // shape only with an exact local code literal stored through a proven
-// constructor-return receiver or the canonical incoming r4 record receiver.
+// constructor-return receiver, the canonical incoming r4 record receiver, or
+// an exact input alias already published through a proven persistent-pointer
+// sink.
 // The result remains guarded inventory and never makes the walker's dynamic
 // target set complete.
 struct LatentAotExternalCallbackFieldSink final {
