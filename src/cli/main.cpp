@@ -11058,9 +11058,33 @@ struct CommittedAgentGeneration final {
     katana::agent::ExecutableMaterializationWorld world;
     std::string analysis_artifact_id;
     std::string analysis_archive;
+    std::string analysis_archive_sha256;
     std::string producer_identity;
     std::string analysis_session_contract_identity;
+    std::string cache_identity;
 };
+
+std::string committed_agent_generation_cache_identity(
+    const AgentSessionLedgerState& state) {
+    std::ostringstream identity;
+    append_port_export_cache_field(
+        identity, "katana-committed-analysis-generation-v1");
+    append_port_export_cache_field(identity, state.analysis_artifact_id);
+    append_port_export_cache_field(identity, state.producer_identity);
+    append_port_export_cache_field(
+        identity, state.analysis_session_contract_identity);
+    append_port_export_cache_field(
+        identity, state.materialization_world_sha256);
+    append_port_export_cache_field(
+        identity, state.materialization_world_json_sha256);
+    append_port_export_cache_field(
+        identity, state.analysis_report_sha256);
+    append_port_export_cache_field(
+        identity,
+        state.analysis_archive_sha256.value_or(
+            "no-analysis-archive-v1"));
+    return katana::io::sha256_bytes(identity.str());
+}
 
 CommittedAgentGeneration load_committed_agent_generation(
     const std::filesystem::path& output_root) {
@@ -11108,8 +11132,10 @@ CommittedAgentGeneration load_committed_agent_generation(
     }
     return {
         std::move(world), state.analysis_artifact_id, std::move(archive),
+        state.analysis_archive_sha256.value_or(std::string{}),
         state.producer_identity,
-        state.analysis_session_contract_identity};
+        state.analysis_session_contract_identity,
+        committed_agent_generation_cache_identity(state)};
 }
 
 void append_agent_session_ledger(
@@ -12102,27 +12128,6 @@ int export_port_project(const std::filesystem::path& source_path,
     const auto latent_aot_hint_identity =
         latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
                                        latent_aot_discovery_mode);
-    whole_export_cache_key = port_export_cache_key(
-        whole_export_source_kind,
-        whole_export_source_contract_version,
-        *verified_install_recipe,
-        whole_export_boot_file_name,
-        whole_export_entry_address,
-        target_name,
-        diagnostic_partial,
-        console_profile,
-        game_project_identity,
-        handoff_artifact_identity,
-        native_port_artifact_identity,
-        native_port_artifact_format_version_for_cache,
-        latent_aot_hint_identity,
-        analysis_mode_identity,
-        implementation_identities.whole_export);
-    // A committed analysis generation is an explicit input authority. Do not
-    // let an older whole-export cache bypass its ledger/archive validation;
-    // component codegen caches remain keyed and reusable below.
-    if (committed_analysis_generation.has_value())
-        whole_export_cache_key.reset();
     const auto workspace_key = port_export_workspace_key(
         whole_export_source_kind,
         *verified_install_recipe,
@@ -12332,6 +12337,34 @@ int export_port_project(const std::filesystem::path& source_path,
             << '\n'
             << std::flush;
     }
+    // The cache is considered only after the complete ledger, archive,
+    // World, current resume manifest and session contract have been
+    // validated above. The three generation fields keep a prior unbound
+    // whole-export state from satisfying a newly selected authority.
+    const auto analysis_generation_cache_binding =
+        committed_analysis_generation.has_value()
+            ? katana::cli::PortExportAnalysisGenerationCacheBinding{
+                  committed_analysis_generation->analysis_artifact_id,
+                  committed_analysis_generation->analysis_archive_sha256,
+                  committed_analysis_generation->cache_identity}
+            : katana::cli::PortExportAnalysisGenerationCacheBinding{};
+    whole_export_cache_key = port_export_cache_key(
+        whole_export_source_kind,
+        whole_export_source_contract_version,
+        *verified_install_recipe,
+        whole_export_boot_file_name,
+        whole_export_entry_address,
+        target_name,
+        diagnostic_partial,
+        console_profile,
+        game_project_identity,
+        handoff_artifact_identity,
+        native_port_artifact_identity,
+        native_port_artifact_format_version_for_cache,
+        latent_aot_hint_identity,
+        analysis_mode_identity,
+        implementation_identities.whole_export,
+        analysis_generation_cache_binding);
     if (analysis_only) {
         if (!verified_native_disc)
             throw std::logic_error(

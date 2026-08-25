@@ -220,7 +220,19 @@ std::string port_export_cache_key(
     const std::string_view latent_aot_entry_hint_identity,
     const std::string_view analysis_mode_identity,
     const std::string_view implementation_identity,
+    const PortExportAnalysisGenerationCacheBinding& analysis_generation,
     const katana::codegen::PartitionOptions& partition_options) {
+    const auto has_analysis_generation =
+        !analysis_generation.artifact_identity.empty() ||
+        !analysis_generation.archive_sha256.empty() ||
+        !analysis_generation.committed_generation_identity.empty();
+    if (has_analysis_generation &&
+        (analysis_generation.artifact_identity.empty() ||
+         analysis_generation.archive_sha256.empty() ||
+         analysis_generation.committed_generation_identity.empty()))
+        throw std::invalid_argument(
+            "Whole-Export-Cache braucht eine vollstaendige verifizierte "
+            "Analyse-Generationsbindung.");
     std::ostringstream identity;
     const auto append = [&identity](const auto& value) {
         std::ostringstream field;
@@ -247,6 +259,12 @@ std::string port_export_cache_key(
     append(native_port_artifact_format_version);
     append(latent_aot_entry_hint_identity);
     append(analysis_mode_identity);
+    append(has_analysis_generation
+               ? "verified-analysis-generation-v1"
+               : "no-analysis-generation-v1");
+    append(analysis_generation.artifact_identity);
+    append(analysis_generation.archive_sha256);
+    append(analysis_generation.committed_generation_identity);
     append(partition_options.maximum_functions);
     append(partition_options.maximum_instructions);
     append(implementation_identity);

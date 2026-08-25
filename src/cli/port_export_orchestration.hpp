@@ -9,8 +9,14 @@
 
 namespace katana::cli {
 
-inline constexpr std::uint32_t port_export_cache_version = 10u;
+inline constexpr std::uint32_t port_export_cache_version = 11u;
 inline constexpr std::uint32_t port_ir_contract_version = 3u;
+
+struct PortExportAnalysisGenerationCacheBinding final {
+    std::string_view artifact_identity;
+    std::string_view archive_sha256;
+    std::string_view committed_generation_identity;
+};
 
 struct PortExportImplementationIdentities final {
     std::string analysis;
@@ -49,6 +55,7 @@ port_export_implementation_identities(
     std::string_view latent_aot_entry_hint_identity,
     std::string_view analysis_mode_identity,
     std::string_view implementation_identity,
+    const PortExportAnalysisGenerationCacheBinding& analysis_generation = {},
     const katana::codegen::PartitionOptions& partition_options = {});
 
 } // namespace katana::cli

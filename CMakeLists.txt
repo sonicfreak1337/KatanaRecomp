@@ -2493,6 +2493,32 @@ add_test(
 )
 
 add_executable(
+    katana-port-export-orchestration-tests
+    tests/codegen/port_export_orchestration_tests.cpp
+    src/cli/port_export_orchestration.cpp
+)
+add_dependencies(
+    katana-port-export-orchestration-tests
+    katana-component-identities
+)
+target_include_directories(
+    katana-port-export-orchestration-tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+)
+target_link_libraries(
+    katana-port-export-orchestration-tests
+    PRIVATE
+        katana_core
+        katana_runtime
+)
+katana_enable_warnings(katana-port-export-orchestration-tests)
+add_test(
+    NAME katana-port-export-orchestration-tests
+    COMMAND katana-port-export-orchestration-tests
+)
+
+add_executable(
     katana-structured-control-flow-progress-tests
     tests/codegen/structured_control_flow_progress_tests.cpp
 )
