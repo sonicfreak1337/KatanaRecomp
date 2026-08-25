@@ -133,6 +133,7 @@ void reset_cpu(CpuState& cpu, const ResetState& state) noexcept {
     cpu.last_exception_instruction_pc = 0u;
     cpu.last_exception_instruction_physical_pc = 0u;
     cpu.last_exception_owner_pc = 0u;
+    cpu.last_memory_fault_provenance = {};
     cpu.last_exception_generation = 0u;
     cpu.sleeping = false;
     cpu.last_prefetch_address = 0u;

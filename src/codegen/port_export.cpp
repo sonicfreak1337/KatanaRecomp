@@ -149,6 +149,13 @@ bool valid_target_name(const std::string_view value) noexcept {
 constexpr std::string_view port_namespace = "katana_port_generated";
 constexpr std::size_t maximum_port_codegen_cache_artifact_bytes =
     64u * 1024u * 1024u;
+// Full product source maps can exceed the per-partition ceiling by a wide
+// margin.  They are deterministic metadata products and already pass through
+// the integrity-bound cache API, so retain a separate finite ceiling instead
+// of forcing every incremental export to rebuild them from millions of
+// address/source records.
+constexpr std::size_t maximum_port_metadata_cache_artifact_bytes =
+    512u * 1024u * 1024u;
 
 bool unsafe_port_path_link(
     const std::filesystem::path& path,
@@ -19635,20 +19642,53 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            return {HookAction::Abort, 0u, abort.error_code};\n"
               "        } catch (const katana::runtime::MemoryAccessError& error) {\n"
               "            const auto instruction = error.instruction();\n"
+              "            katana::runtime::record_memory_fault_provenance(\n"
+              "                cpu, error, instruction.runtime_pc != 0u\n"
+              "                    ? instruction.runtime_pc\n"
+              "                    : cpu.active_instruction_pc);\n"
+              "            const auto& memory_fault =\n"
+              "                cpu.last_memory_fault_provenance;\n"
+              "            const bool memory_fault_instruction_valid =\n"
+              "                memory_fault.valid &&\n"
+              "                memory_fault.instruction_valid;\n"
+              "            const auto instruction_source_pc =\n"
+              "                memory_fault_instruction_valid\n"
+              "                    ? runtime_dispatch_detail::normalized_source_address(\n"
+              "                          memory_fault.source_pc)\n"
+              "                    : runtime_dispatch_detail::normalized_source_address(\n"
+              "                          instruction.source_pc);\n"
+              "            const auto instruction_runtime_pc =\n"
+              "                memory_fault_instruction_valid\n"
+              "                    ? memory_fault.runtime_pc\n"
+              "                    : instruction.runtime_pc;\n"
               "            std::uint32_t instruction_opcode = 0u;\n"
-              "            const bool instruction_opcode_valid =\n"
-              "                instruction.valid && native_hardware_fault_opcode(\n"
-              "                    runtime_dispatch_detail::normalized_source_address(\n"
-              "                        instruction.source_pc),\n"
-              "                    instruction_opcode);\n"
+              "            bool instruction_opcode_valid = false;\n"
+              "            if (memory_fault_instruction_valid &&\n"
+              "                memory_fault.opcode_valid) {\n"
+              "                instruction_opcode = memory_fault.opcode;\n"
+              "                instruction_opcode_valid = true;\n"
+              "            }\n"
+              "            if (!instruction_opcode_valid)\n"
+              "                instruction_opcode_valid =\n"
+              "                    instruction_runtime_pc != 0u &&\n"
+              "                    native_hardware_fault_opcode(\n"
+              "                        instruction_source_pc, instruction_opcode);\n"
+              "            const auto operation =\n"
+              "                memory_fault.valid && memory_fault.access_valid\n"
+              "                    ? static_cast<std::uint32_t>(memory_fault.operation)\n"
+              "                    : static_cast<std::uint32_t>(error.operation());\n"
+              "            const auto width =\n"
+              "                memory_fault.valid && memory_fault.access_valid\n"
+              "                    ? static_cast<std::uint32_t>(memory_fault.width)\n"
+              "                    : static_cast<std::uint32_t>(error.width());\n"
               "            emit_runtime_frontier(\n"
               "                \"unresolved-hardware-access\",\n"
               "                static_cast<std::uint32_t>(error.address()),\n"
-              "                static_cast<std::uint32_t>(error.operation()),\n"
-              "                static_cast<std::uint32_t>(error.width()),\n"
-              "                instruction.source_pc, instruction.runtime_pc,\n"
-              "                instruction.valid ? 1u : 0u, instruction_opcode,\n"
+              "                operation, width, instruction_source_pc,\n"
+              "                instruction_runtime_pc,\n"
+              "                instruction_runtime_pc != 0u ? 1u : 0u, instruction_opcode,\n"
               "                instruction_opcode_valid ? 1u : 0u);\n"
+              "            cpu.last_memory_fault_provenance = {};\n"
               "            context.stop_reason =\n"
               "                katana::runtime::NativePortStopReason::\n"
               "                    UnresolvedHardwareAccess;\n"
@@ -19656,17 +19696,17 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            detail << \"native-memory-access:entry=0x\"\n"
               "                   << std::hex << source << \";address=0x\"\n"
               "                   << error.address() << \";site=0x\"\n"
-              "                   << instruction.source_pc\n"
+              "                   << instruction_source_pc\n"
               "                   << \";runtime-pc=0x\"\n"
-              "                   << instruction.runtime_pc << std::dec\n"
+              "                   << instruction_runtime_pc << std::dec\n"
               "                   << \";instruction-valid=\"\n"
-              "                   << (instruction.valid ? 1 : 0)\n"
+              "                   << (instruction_runtime_pc != 0u ? 1 : 0)\n"
               "                   << \";reason=\"\n"
               "                   << static_cast<unsigned>(error.reason())\n"
               "                   << \";operation=\"\n"
-              "                   << static_cast<unsigned>(error.operation())\n"
+              "                   << operation\n"
               "                   << \";width=\"\n"
-              "                   << static_cast<unsigned>(error.width());\n"
+              "                   << width;\n"
               "            throw katana::runtime::NativePortContractError(\n"
               "                katana::runtime::NativePortContractFailure::\n"
               "                    UnresolvedHardwareAccess,\n"
@@ -19687,24 +19727,54 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            const bool unresolved_memory =\n"
               "                native_unresolved_memory_exception(exception_cause);\n"
               "            if (unresolved_memory) {\n"
+              "                const auto& memory_fault =\n"
+              "                    cpu.last_memory_fault_provenance;\n"
+              "                const bool memory_fault_instruction_valid =\n"
+              "                    memory_fault.valid &&\n"
+              "                    memory_fault.instruction_valid &&\n"
+              "                    memory_fault.runtime_pc != 0u;\n"
               "                const auto instruction_runtime_pc =\n"
-              "                    cpu.last_exception_instruction_pc != 0u\n"
-              "                        ? cpu.last_exception_instruction_pc\n"
+              "                    memory_fault_instruction_valid\n"
+              "                        ? memory_fault.runtime_pc\n"
+              "                        : cpu.last_exception_instruction_pc != 0u\n"
+              "                            ? cpu.last_exception_instruction_pc\n"
               "                        : exit.exception_instruction_pc;\n"
               "                const auto instruction_source_pc =\n"
-              "                    runtime_dispatch_detail::\n"
-              "                        normalized_source_address(\n"
-              "                            instruction_runtime_pc);\n"
+              "                    memory_fault_instruction_valid &&\n"
+              "                            memory_fault.source_pc != 0u\n"
+              "                        ? runtime_dispatch_detail::\n"
+              "                              normalized_source_address(\n"
+              "                                  memory_fault.source_pc)\n"
+              "                        : runtime_dispatch_detail::\n"
+              "                              normalized_source_address(\n"
+              "                                  instruction_runtime_pc);\n"
               "                std::uint32_t instruction_opcode = 0u;\n"
-              "                const bool instruction_opcode_valid =\n"
-              "                    instruction_runtime_pc != 0u &&\n"
-              "                    native_hardware_fault_opcode(\n"
-              "                        instruction_source_pc,\n"
-              "                        instruction_opcode);\n"
+              "                bool instruction_opcode_valid = false;\n"
+              "                if (memory_fault_instruction_valid &&\n"
+              "                    memory_fault.opcode_valid) {\n"
+              "                    instruction_opcode = memory_fault.opcode;\n"
+              "                    instruction_opcode_valid = true;\n"
+              "                }\n"
+              "                if (!instruction_opcode_valid)\n"
+              "                    instruction_opcode_valid =\n"
+              "                        instruction_runtime_pc != 0u &&\n"
+              "                        native_hardware_fault_opcode(\n"
+              "                            instruction_source_pc,\n"
+              "                            instruction_opcode);\n"
               "                std::uint32_t operation = 0u;\n"
               "                std::uint32_t width = 0u;\n"
-              "                static_cast<void>(native_hardware_fault_access(\n"
-              "                    instruction_source_pc, operation, width));\n"
+              "                bool access_valid = false;\n"
+              "                if (memory_fault.valid &&\n"
+              "                    memory_fault.access_valid) {\n"
+              "                    operation = static_cast<std::uint32_t>(\n"
+              "                        memory_fault.operation);\n"
+              "                    width = static_cast<std::uint32_t>(\n"
+              "                        memory_fault.width);\n"
+              "                    access_valid = true;\n"
+              "                }\n"
+              "                if (!access_valid)\n"
+              "                    static_cast<void>(native_hardware_fault_access(\n"
+              "                        instruction_source_pc, operation, width));\n"
               "                emit_runtime_frontier(\n"
               "                    \"unresolved-hardware-access\", cpu.tea,\n"
               "                    operation, width, instruction_source_pc,\n"
@@ -36841,27 +36911,27 @@ static PortExportResult export_dreamcast_port_project_impl(
             partition_cache->load_integrity_bounded(
                 metadata_cache_key,
                 "source-map.json",
-                maximum_port_codegen_cache_artifact_bytes);
+                maximum_port_metadata_cache_artifact_bytes);
         auto cached_cfg_json =
             partition_cache->load_integrity_bounded(
                 metadata_cache_key,
                 "cfg.json",
-                maximum_port_codegen_cache_artifact_bytes);
+                maximum_port_metadata_cache_artifact_bytes);
         auto cached_cfg_dot =
             partition_cache->load_integrity_bounded(
                 metadata_cache_key,
                 "cfg.dot",
-                maximum_port_codegen_cache_artifact_bytes);
+                maximum_port_metadata_cache_artifact_bytes);
         auto cached_callgraph_json =
             partition_cache->load_integrity_bounded(
                 metadata_cache_key,
                 "callgraph.json",
-                maximum_port_codegen_cache_artifact_bytes);
+                maximum_port_metadata_cache_artifact_bytes);
         auto cached_callgraph_dot =
             partition_cache->load_integrity_bounded(
                 metadata_cache_key,
                 "callgraph.dot",
-                maximum_port_codegen_cache_artifact_bytes);
+                maximum_port_metadata_cache_artifact_bytes);
         if (cached_source_map && cached_cfg_json && cached_cfg_dot &&
             cached_callgraph_json && cached_callgraph_dot) {
             source_map_json = std::move(*cached_source_map);
@@ -36922,14 +36992,14 @@ static PortExportResult export_dreamcast_port_project_impl(
                 [&](const std::string_view artifact_name,
                     const std::string_view content) {
                     if (content.size() >
-                        maximum_port_codegen_cache_artifact_bytes)
+                        maximum_port_metadata_cache_artifact_bytes)
                         return;
                     try {
                         partition_cache->store_integrity_bounded(
                             metadata_cache_key,
                             artifact_name,
                             content,
-                            maximum_port_codegen_cache_artifact_bytes);
+                            maximum_port_metadata_cache_artifact_bytes);
                     } catch (const std::bad_alloc&) {
                         throw;
                     } catch (const std::exception&) {

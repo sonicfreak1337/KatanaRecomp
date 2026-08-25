@@ -71,6 +71,26 @@ void enter_memory_exception(CpuState& cpu,
                             std::uint32_t instruction_pc,
                             std::optional<std::uint32_t> delay_slot_owner = std::nullopt) noexcept;
 
+// AOT codegen uses this overload when the statically emitted instruction
+// opcode is available. The error supplies the live operation/width/address;
+// the opcode closes the deferred native-port diagnostic without relying on a
+// static hardware-table entry for an unresolved dynamic address.
+void enter_memory_exception_with_provenance(
+    CpuState& cpu,
+    const MemoryAccessError& error,
+    std::uint32_t instruction_pc,
+    std::uint32_t instruction_opcode,
+    std::optional<std::uint32_t> delay_slot_owner = std::nullopt) noexcept;
+
+// Capture an access handled by a native-port boundary rather than by the
+// architectural exception path. Missing instruction/opcode evidence remains
+// invalid and must stay fail-closed at the consumer.
+void record_memory_fault_provenance(
+    CpuState& cpu,
+    const MemoryAccessError& error,
+    std::uint32_t instruction_pc,
+    std::optional<std::uint32_t> instruction_opcode = std::nullopt) noexcept;
+
 void return_from_exception(CpuState& cpu) noexcept;
 
 void map_sh4_exception_event_registers(Memory& memory, CpuState& cpu);

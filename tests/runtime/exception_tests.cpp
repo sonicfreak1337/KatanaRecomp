@@ -305,6 +305,38 @@ int main() {
                 generation_wrap.last_exception_instruction_physical_pc == 0x0C090000u,
             "Exception-Generation laeuft auf den reservierten Nullwert ueber.");
 
+    CpuState provenance_cpu;
+    provenance_cpu.vbr = 0x8C000000u;
+    const MemoryAccessError dynamic_fault(
+        MemoryAccessErrorReason::DeviceRejected,
+        MemoryAccessOperation::Write,
+        0xA05F8050u,
+        MemoryAccessWidth::Word,
+        "dynamic-device",
+        GuestInstructionOrigin{0x8C120388u, 0xAC120388u, true});
+    enter_memory_exception_with_provenance(
+        provenance_cpu, dynamic_fault, 0xAC120388u, 0x2452u);
+    require(
+        provenance_cpu.last_memory_fault_provenance.valid &&
+            provenance_cpu.last_memory_fault_provenance.instruction_valid &&
+            provenance_cpu.last_memory_fault_provenance.opcode_valid &&
+            provenance_cpu.last_memory_fault_provenance.access_valid &&
+            provenance_cpu.last_memory_fault_provenance.source_pc == 0x8C120388u &&
+            provenance_cpu.last_memory_fault_provenance.runtime_pc == 0xAC120388u &&
+            provenance_cpu.last_memory_fault_provenance.address == 0xA05F8050u &&
+            provenance_cpu.last_memory_fault_provenance.opcode == 0x2452u &&
+            provenance_cpu.last_memory_fault_provenance.operation ==
+                MemoryAccessOperation::Write &&
+            provenance_cpu.last_memory_fault_provenance.width == MemoryAccessWidth::Word,
+        "Dynamische AOT-Memory-Provenienz verliert Source/Runtime-PC, Opcode oder Zugriffsschema.");
+    return_from_exception(provenance_cpu);
+    require(!provenance_cpu.last_memory_fault_provenance.valid,
+            "Memory-Provenienz bleibt nach RTE als stale Exception-Zustand erhalten.");
+    record_memory_fault_provenance(provenance_cpu, dynamic_fault, 0xAC120388u);
+    raise_illegal_instruction(provenance_cpu, 0x8C1203A0u);
+    require(!provenance_cpu.last_memory_fault_provenance.valid,
+            "Eine nachfolgende Nicht-Memory-Exception loescht den Fault-Provenienzrecord nicht.");
+
     map_sh4_exception_event_registers(cpu.memory, cpu);
     require(cpu.memory.read_u32(sh4_tra_address) == cpu.tra &&
                 cpu.memory.read_u32(sh4_expevt_address) == event_fpu_disabled &&

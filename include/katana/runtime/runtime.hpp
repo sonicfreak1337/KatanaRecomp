@@ -132,6 +132,23 @@ struct ResetState {
     std::uint32_t fpscr = 0u;
 };
 
+// Host-side provenance for the most recent failed guest memory access. This
+// transient record is separate from the architectural exception registers so
+// a deferred native-port diagnostic retains exact AOT source/runtime PCs and
+// access shape after the SH-4 cause has been normalized.
+struct MemoryFaultProvenance final {
+    bool valid = false;
+    bool instruction_valid = false;
+    bool opcode_valid = false;
+    bool access_valid = false;
+    std::uint32_t source_pc = 0u;
+    std::uint32_t runtime_pc = 0u;
+    std::uint32_t address = 0u;
+    std::uint32_t opcode = 0u;
+    MemoryAccessOperation operation = MemoryAccessOperation::Read;
+    MemoryAccessWidth width = MemoryAccessWidth::Byte;
+};
+
 struct CpuState {
     std::array<std::uint32_t, general_register_count> r{};
     std::array<std::uint32_t, banked_register_count> r_bank{};
@@ -175,6 +192,7 @@ struct CpuState {
     std::uint32_t last_exception_instruction_pc = 0u;
     std::uint32_t last_exception_instruction_physical_pc = 0u;
     std::uint32_t last_exception_owner_pc = 0u;
+    MemoryFaultProvenance last_memory_fault_provenance;
     std::uint64_t last_exception_generation = 0u;
     bool sleeping = false;
     std::uint32_t last_prefetch_address = 0u;

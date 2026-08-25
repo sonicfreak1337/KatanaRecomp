@@ -830,8 +830,10 @@ int main() {
                 delay_load_flush != std::string_view::npos &&
                 delay_load_attempt != std::string_view::npos &&
                 delay_load_flush < delay_load_attempt &&
-                delay_memory_source.find("enter_memory_exception(cpu, error, "
+                delay_memory_source.find(
+                    "enter_memory_exception_with_provenance(cpu, error, "
                                          "katana::runtime::relocate_code_address(0x8C020002u), "
+                                         "0x00006212u, "
                                          "katana::runtime::relocate_code_address(0x8C020000u));") !=
                     std::string::npos &&
                 delay_memory_source.find(
@@ -1750,8 +1752,8 @@ int main() {
                 std::string::npos &&
             cache_source.find("services->prefetch(cpu, guest_origin, cpu.r[3])") !=
                 std::string::npos &&
-            cache_source.find("enter_memory_exception(cpu, error, "
-                              "katana::runtime::relocate_code_address(0x0000400Au));") !=
+            cache_source.find("enter_memory_exception_with_provenance(cpu, error, "
+                              "katana::runtime::relocate_code_address(0x0000400Au), ") !=
                 std::string::npos,
         "Der C++-Emitter laesst LDTLB/cache instructions aus, verwechselt Register oder "
         "faengt PREF-MMU-Fehler nicht am SH-4-Exceptionpfad.");

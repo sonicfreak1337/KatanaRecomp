@@ -95,6 +95,32 @@ bool exception_updates_pteh(const ExceptionCause cause) noexcept {
     }
 }
 
+MemoryFaultProvenance make_memory_fault_provenance(
+    const MemoryAccessError& error,
+    const std::uint32_t instruction_pc,
+    const std::optional<std::uint32_t> instruction_opcode) noexcept {
+    const auto origin = error.instruction();
+    MemoryFaultProvenance provenance;
+    provenance.valid = true;
+    provenance.source_pc = origin.valid && origin.source_pc != 0u
+                               ? origin.source_pc
+                               : instruction_pc;
+    provenance.runtime_pc = origin.valid && origin.runtime_pc != 0u
+                                ? origin.runtime_pc
+                                : instruction_pc;
+    provenance.instruction_valid = provenance.source_pc != 0u &&
+                                    provenance.runtime_pc != 0u;
+    provenance.address = error.address();
+    provenance.operation = error.operation();
+    provenance.width = error.width();
+    provenance.access_valid = true;
+    if (instruction_opcode.has_value()) {
+        provenance.opcode = *instruction_opcode;
+        provenance.opcode_valid = *instruction_opcode != 0u;
+    }
+    return provenance;
+}
+
 } // namespace
 
 ExceptionMetadata exception_metadata(const ExceptionCause cause,
@@ -108,6 +134,7 @@ ExceptionMetadata exception_metadata(const ExceptionCause cause,
 }
 
 void request_manual_reset(CpuState& cpu, const ManualResetRequest& request) noexcept {
+    cpu.last_memory_fault_provenance = {};
     const auto generation = next_exception_generation(cpu.exception_generation);
     const auto attempted = cpu.attempted_guest_instructions;
     const auto retired = cpu.retired_guest_instructions;
@@ -157,6 +184,7 @@ void request_manual_reset(CpuState& cpu, const ManualResetRequest& request) noex
 }
 
 void enter_exception(CpuState& cpu, const ExceptionRequest& request) noexcept {
+    cpu.last_memory_fault_provenance = {};
     const auto metadata = exception_metadata(request.cause, request.event_code);
     const std::uint32_t saved_sr = cpu.read_sr();
     const auto instruction_pc =
@@ -251,10 +279,14 @@ void raise_fpu_disabled(CpuState& cpu,
     enter_exception(cpu, request);
 }
 
-void enter_memory_exception(CpuState& cpu,
-                            const MemoryAccessError& error,
-                            const std::uint32_t instruction_pc,
-                            const std::optional<std::uint32_t> delay_slot_owner) noexcept {
+void enter_memory_exception_impl(
+    CpuState& cpu,
+    const MemoryAccessError& error,
+    const std::uint32_t instruction_pc,
+    const std::optional<std::uint32_t> instruction_opcode,
+    const std::optional<std::uint32_t> delay_slot_owner) noexcept {
+    const auto provenance = make_memory_fault_provenance(
+        error, instruction_pc, instruction_opcode);
     const bool write = error.operation() == MemoryAccessOperation::Write;
     const bool in_delay_slot = delay_slot_owner.has_value();
     auto cause = write ? ExceptionCause::AddressErrorWrite : ExceptionCause::AddressErrorRead;
@@ -292,6 +324,7 @@ void enter_memory_exception(CpuState& cpu,
                                instruction_pc,
                                delay_slot_owner.value_or(instruction_pc),
                                in_delay_slot});
+        cpu.last_memory_fault_provenance = provenance;
         return;
     }
 
@@ -305,6 +338,34 @@ void enter_memory_exception(CpuState& cpu,
     request.instruction_pc = instruction_pc;
     request.delay_slot_owner_pc = delay_slot_owner;
     enter_exception(cpu, request);
+    cpu.last_memory_fault_provenance = provenance;
+}
+
+void enter_memory_exception(CpuState& cpu,
+                            const MemoryAccessError& error,
+                            const std::uint32_t instruction_pc,
+                            const std::optional<std::uint32_t> delay_slot_owner) noexcept {
+    enter_memory_exception_impl(
+        cpu, error, instruction_pc, std::nullopt, delay_slot_owner);
+}
+
+void enter_memory_exception_with_provenance(
+    CpuState& cpu,
+    const MemoryAccessError& error,
+    const std::uint32_t instruction_pc,
+    const std::uint32_t instruction_opcode,
+    const std::optional<std::uint32_t> delay_slot_owner) noexcept {
+    enter_memory_exception_impl(
+        cpu, error, instruction_pc, instruction_opcode, delay_slot_owner);
+}
+
+void record_memory_fault_provenance(
+    CpuState& cpu,
+    const MemoryAccessError& error,
+    const std::uint32_t instruction_pc,
+    const std::optional<std::uint32_t> instruction_opcode) noexcept {
+    cpu.last_memory_fault_provenance = make_memory_fault_provenance(
+        error, instruction_pc, instruction_opcode);
 }
 
 void return_from_exception(CpuState& cpu) noexcept {
@@ -315,6 +376,7 @@ void return_from_exception(CpuState& cpu) noexcept {
     cpu.trap_pending = false;
     cpu.last_exception_cause = ExceptionCause::None;
     cpu.exception_in_delay_slot = false;
+    cpu.last_memory_fault_provenance = {};
 }
 
 void map_sh4_exception_event_registers(Memory& memory, CpuState& cpu) {

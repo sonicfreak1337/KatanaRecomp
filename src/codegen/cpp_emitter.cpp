@@ -3144,8 +3144,9 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     emit_indent(output, indent + 1);
     output << "} catch (const katana::runtime::MemoryAccessError& error) {\n";
     emit_indent(output, indent + 2);
-    output << "enter_memory_exception(cpu, error, "
+    output << "enter_memory_exception_with_provenance(cpu, error, "
            << relocated_code_address(instruction.source_address);
+    output << ", " << hex32(instruction.original_opcode);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
         instruction.delay_slot.counterpart_address.has_value()) {
         output << ", " << relocated_code_address(*instruction.delay_slot.counterpart_address);

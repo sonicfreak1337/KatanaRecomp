@@ -39,7 +39,7 @@ struct NativeDiscAnalysisState;
 
 inline constexpr std::uint32_t port_project_contract_version =
     abi_contract::port_project_contract_version;
-inline constexpr std::uint32_t port_partition_emission_schema_version = 10u;
+inline constexpr std::uint32_t port_partition_emission_schema_version = 11u;
 inline constexpr std::uint32_t port_metadata_cache_schema_version = 12u;
 
 using PortExportProgressCallback =
