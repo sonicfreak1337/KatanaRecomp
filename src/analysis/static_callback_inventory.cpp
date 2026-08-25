@@ -57,9 +57,12 @@ struct ReceiverProgression final {
 
 struct CallbackRecordTableOrigin final {
     // Exact authenticated address of a mutable record-head table plus its
-    // caller-derived byte stride. Different PC literal cells may name the
+    // selector-derived byte stride. Different PC literal cells may name the
     // same table, so the pointee address (not the literal slot) is the family
-    // identity within one bound image generation.
+    // identity within one bound image generation. A selector may normalize a
+    // reserved value to one exact constant before it is scaled; that remains
+    // a record-table family proof, but not an exhaustive selector-domain
+    // proof.
     std::uint32_t table_address = 0u;
     std::uint32_t stride = 0u;
 
@@ -975,19 +978,32 @@ enum class ReceiverIntersection : std::uint8_t {
 [[nodiscard]] std::optional<CallbackRecordTableOrigin>
 exact_record_table_slot_origin(const CallbackValue& table,
                                const CallbackValue& index) {
+    std::optional<std::uint32_t> stride;
+    if (index.affine_input.has_value()) {
+        stride = index.affine_input->scale;
+    } else if (index.input_mask != 0u && !index.memory_derived_receiver &&
+               !index.may_be_stack) {
+        // A common task-list selector maps one reserved incoming mode to a
+        // fixed bucket before SHLL2. The control-flow join intentionally drops
+        // affine_input because the value is no longer a pure affine function,
+        // while input_mask plus guaranteed alignment still proves the exact
+        // table[index * stride] address family. This lane is consumed only to
+        // relate record publication to a later receiver load; it never claims
+        // a complete index domain or indirect target set.
+        stride = index.minimum_alignment;
+    }
     if (!table.pc_literal_identity.has_value() ||
         !table.constants_complete || table.constants_truncated ||
         table.constants.size() != 1u ||
         *table.constants.begin() != table.pc_literal_identity->value ||
-        !index.affine_input.has_value() ||
-        index.affine_input->scale < sizeof(std::uint32_t) ||
-        index.affine_input->scale >
-            maximum_static_code_pointer_table_stride ||
-        (index.affine_input->scale & 3u) != 0u)
+        !stride.has_value() ||
+        *stride < sizeof(std::uint32_t) ||
+        *stride > maximum_static_code_pointer_table_stride ||
+        (*stride & 3u) != 0u)
         return std::nullopt;
     return CallbackRecordTableOrigin{
         table.pc_literal_identity->value,
-        index.affine_input->scale};
+        *stride};
 }
 
 [[nodiscard]] bool add_bounded_receiver_constant(
@@ -2713,6 +2729,22 @@ void clobber_call_volatile_registers(CallbackState& state) {
                 if (branch.field_origins_truncated)
                     model.field_sinks_truncated = true;
                 for (const auto& field : branch.field_origins) {
+                    std::uint8_t exact_receiver_argument_mask = 0u;
+                    if (field.receiver_record_table_origin.has_value()) {
+                        for (std::uint8_t argument = 0u; argument < 4u;
+                             ++argument) {
+                            const auto& value =
+                                state.registers[4u + argument];
+                            if (value.record_table_member_origin ==
+                                field.receiver_record_table_origin) {
+                                exact_receiver_argument_mask =
+                                    static_cast<std::uint8_t>(
+                                        exact_receiver_argument_mask |
+                                        static_cast<std::uint8_t>(
+                                            1u << argument));
+                            }
+                        }
+                    }
                     const auto structural = std::find_if(
                         structural_field_sinks.begin(),
                         structural_field_sinks.end(),
@@ -2735,9 +2767,11 @@ void clobber_call_volatile_registers(CallbackState& state) {
                         field,
                         control->instruction.control_flow ==
                             katana::sh4::ControlFlowKind::IndirectCall,
-                        structural == structural_field_sinks.end()
-                            ? 0u
-                            : structural->receiver_argument_mask};
+                        static_cast<std::uint8_t>(
+                            exact_receiver_argument_mask |
+                            (structural == structural_field_sinks.end()
+                                 ? 0u
+                                 : structural->receiver_argument_mask))};
                     const auto existing = std::find_if(
                         model.field_sinks.begin(),
                         model.field_sinks.end(),
