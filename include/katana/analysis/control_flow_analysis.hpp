@@ -137,6 +137,10 @@ struct StaticCallbackSinkContract final {
     std::uint32_t function_address = 0u;
     // Bit 0..3 corresponds to the function's incoming r4..r7.
     std::uint8_t argument_mask = 0u;
+    // Subset of argument_mask whose callback is persisted into a field whose
+    // identity-bound consumer later invokes it with that same record in r4.
+    // This is ABI provenance only; it never completes an indirect target set.
+    std::uint8_t record_argument_mask = 0u;
 
     bool operator==(const StaticCallbackSinkContract&) const = default;
 };
@@ -162,6 +166,10 @@ struct StaticCallbackFieldSinkContract final {
     std::int32_t displacement = 0;
     std::uint8_t width = 0u;
     bool call = false;
+    // Bit 0..3 corresponds to the callback's outgoing r4..r7. A bit is set
+    // only when the register remains an exact alias of the field receiver
+    // through the indirect transfer's delay slot.
+    std::uint8_t receiver_argument_mask = 0u;
 
     bool operator==(const StaticCallbackFieldSinkContract&) const = default;
 };

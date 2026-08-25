@@ -2901,6 +2901,7 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
         external_persistent_pointer_sinks,
     const std::span<const LatentAotExternalCallbackFieldSink>
         external_callback_field_sinks,
+    const std::span<const std::uint32_t> additional_record_entry_offsets,
     const std::size_t maximum_entry_scan_instructions) {
     using katana::ir::Operation;
     if (external_callback_field_sinks.empty()) return {};
@@ -2925,6 +2926,18 @@ std::vector<std::uint32_t> latent_record_callback_entry_offsets(
     std::deque<std::uint32_t> pending_record_functions;
     for (const auto offset : candidate.entry_offsets) {
         const auto entry = candidate.source_address + offset;
+        if (!functions.contains(entry) ||
+            !incoming_record_functions.insert(entry).second)
+            continue;
+        pending_record_functions.push_back(entry);
+    }
+    for (const auto offset : additional_record_entry_offsets) {
+        if (offset > candidate.bytes.size()) continue;
+        const auto entry64 = static_cast<std::uint64_t>(
+                                 candidate.source_address) +
+                             offset;
+        if (entry64 > std::numeric_limits<std::uint32_t>::max()) continue;
+        const auto entry = static_cast<std::uint32_t>(entry64);
         if (!functions.contains(entry) ||
             !incoming_record_functions.insert(entry).second)
             continue;
@@ -4379,6 +4392,7 @@ std::vector<std::uint32_t> latent_runtime_alias_call_entry_offsets(
 
 struct LatentExternalCallbackResolution final {
     std::vector<std::uint32_t> local_entry_offsets;
+    std::vector<std::uint32_t> local_record_entry_offsets;
     std::vector<PreparedLatentAotCodePointerEvidence> external_evidence;
 };
 
@@ -4490,8 +4504,7 @@ LatentExternalCallbackResolution resolve_latent_external_callbacks(
                                          argument});
                                 continue;
                             }
-                            if (resolver.function_entries.contains(*target) ||
-                                (*target & 1u) != 0u ||
+                            if ((*target & 1u) != 0u ||
                                 *target < candidate.source_address)
                                 continue;
                             const auto offset =
@@ -4503,7 +4516,13 @@ LatentExternalCallbackResolution resolve_latent_external_callbacks(
                                     candidate, *target,
                                     maximum_entry_scan_instructions))
                                 continue;
-                            result.local_entry_offsets.push_back(offset);
+                            if ((sink->record_argument_mask &
+                                 static_cast<std::uint8_t>(1u << argument)) !=
+                                0u)
+                                result.local_record_entry_offsets.push_back(
+                                    offset);
+                            if (!resolver.function_entries.contains(*target))
+                                result.local_entry_offsets.push_back(offset);
                         }
                     };
                     inspect_callback_call();
@@ -4516,6 +4535,7 @@ LatentExternalCallbackResolution resolve_latent_external_callbacks(
         values.erase(std::unique(values.begin(), values.end()), values.end());
     };
     normalize(result.local_entry_offsets);
+    normalize(result.local_record_entry_offsets);
     std::sort(result.external_evidence.begin(),
               result.external_evidence.end(),
               [](const auto& left, const auto& right) {
@@ -5062,17 +5082,20 @@ bool callback_sink_mask_subset(const std::vector<T>& subset,
             (required.argument_mask & found->argument_mask) !=
                 required.argument_mask)
             return false;
+        if constexpr (requires { required.record_argument_mask; }) {
+            if ((required.record_argument_mask &
+                 found->record_argument_mask) !=
+                required.record_argument_mask)
+                return false;
+        }
     }
     return true;
 }
 
-bool resolver_contract_is_monotonic_superset(
-    const LatentAotResolverContract& previous,
-    const LatentAotResolverContract& current) {
-    const auto scalar_less = [](const auto left, const auto right) {
-        return left < right;
-    };
-    const auto field_less = [](const auto& left, const auto& right) {
+bool callback_field_sink_mask_subset(
+    const std::vector<LatentAotExternalCallbackFieldSink>& subset,
+    const std::vector<LatentAotExternalCallbackFieldSink>& superset) {
+    const auto less = [](const auto& left, const auto& right) {
         return std::tie(left.function_address,
                         left.call_instruction_address,
                         left.load_instruction_address,
@@ -5085,6 +5108,25 @@ bool resolver_contract_is_monotonic_superset(
                         right.displacement,
                         right.width,
                         right.call);
+    };
+    for (const auto& required : subset) {
+        const auto found = std::lower_bound(
+            superset.begin(), superset.end(), required, less);
+        if (found == superset.end() || less(required, *found) ||
+            less(*found, required) ||
+            (required.receiver_argument_mask &
+             found->receiver_argument_mask) !=
+                required.receiver_argument_mask)
+            return false;
+    }
+    return true;
+}
+
+bool resolver_contract_is_monotonic_superset(
+    const LatentAotResolverContract& previous,
+    const LatentAotResolverContract& current) {
+    const auto scalar_less = [](const auto left, const auto right) {
+        return left < right;
     };
     const auto table_less = [](const auto& left, const auto& right) {
         return std::tie(left.function_address,
@@ -5115,8 +5157,9 @@ bool resolver_contract_is_monotonic_superset(
            callback_sink_mask_subset(
                previous.external_persistent_pointer_sinks,
                current.external_persistent_pointer_sinks) &&
-           sorted_subset(previous.external_callback_field_sinks,
-                         current.external_callback_field_sinks, field_less) &&
+           callback_field_sink_mask_subset(
+               previous.external_callback_field_sinks,
+               current.external_callback_field_sinks) &&
            sorted_subset(previous.external_callback_record_tables,
                          current.external_callback_record_tables,
                          table_less);
@@ -6652,6 +6695,7 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
                         options.external_code_targets,
                         options.external_persistent_pointer_sinks,
                         options.external_callback_field_sinks,
+                        callback_resolution.local_record_entry_offsets,
                         options.maximum_entry_scan_instructions);
                 discovered_offsets.insert(
                     discovered_offsets.end(),
@@ -7135,12 +7179,13 @@ inspect_cached_static_candidate(
         append_offsets(latent_indexed_call_table_entry_offsets(
             candidate, state.program, options.external_code_targets,
             options.maximum_entry_scan_instructions));
-        append_offsets(resolve_latent_external_callbacks(
-                           candidate, state.program,
-                           options.external_code_targets,
-                           options.external_callback_sinks,
-                           options.maximum_entry_scan_instructions)
-                           .local_entry_offsets);
+        const auto callback_resolution =
+            resolve_latent_external_callbacks(
+                candidate, state.program,
+                options.external_code_targets,
+                options.external_callback_sinks,
+                options.maximum_entry_scan_instructions);
+        append_offsets(callback_resolution.local_entry_offsets);
         append_offsets(resolve_latent_external_callback_record_tables(
                            candidate, state.program,
                            options.external_code_targets,
@@ -7152,6 +7197,7 @@ inspect_cached_static_candidate(
             candidate, state.program, options.external_code_targets,
             options.external_persistent_pointer_sinks,
             options.external_callback_field_sinks,
+            callback_resolution.local_record_entry_offsets,
             options.maximum_entry_scan_instructions));
         append_offsets(latent_mutual_record_table_callback_entry_offsets(
             candidate, state.program, options.external_code_targets,
@@ -7302,7 +7348,8 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
                       << ';';
     for (const auto& sink : options.external_callback_sinks)
         external_contract << sink.function_address << ':'
-                          << +sink.argument_mask << ';';
+                          << +sink.argument_mask << ':'
+                          << +sink.record_argument_mask << ';';
     external_contract << 'p'
                       << options.external_persistent_pointer_sinks.size()
                       << ';';
@@ -7317,7 +7364,8 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
                           << sink.call_instruction_address << ':'
                           << sink.load_instruction_address << ':'
                           << sink.displacement << ':' << +sink.width << ':'
-                          << sink.call << ';';
+                          << sink.call << ':'
+                          << +sink.receiver_argument_mask << ';';
     if (!options.external_callback_record_tables.empty()) {
         external_contract << 'r'
                           << options.external_callback_record_tables.size()
@@ -7377,6 +7425,7 @@ std::string candidate_epoch_cache_key(
     for (const auto& sink : options.external_callback_sinks) {
         append_value(sink.function_address);
         append_value(sink.argument_mask);
+        append_value(sink.record_argument_mask);
     }
     append_value(options.external_persistent_pointer_sinks.size());
     for (const auto& sink : options.external_persistent_pointer_sinks) {
@@ -7391,6 +7440,7 @@ std::string candidate_epoch_cache_key(
         append_value(sink.displacement);
         append_value(sink.width);
         append_value(sink.call);
+        append_value(sink.receiver_argument_mask);
     }
     append_value(options.external_callback_record_tables.size());
     for (const auto& table : options.external_callback_record_tables) {
@@ -8265,6 +8315,9 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             [&](const auto& sink) {
                 return sink.argument_mask == 0u ||
                        (sink.argument_mask & 0xf0u) != 0u ||
+                       (sink.record_argument_mask & 0xf0u) != 0u ||
+                       (sink.record_argument_mask & sink.argument_mask) !=
+                           sink.record_argument_mask ||
                        !std::binary_search(
                            options.external_code_targets.begin(),
                            options.external_code_targets.end(),
@@ -8314,13 +8367,28 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             }) ||
         std::adjacent_find(
             options.external_callback_field_sinks.begin(),
-            options.external_callback_field_sinks.end()) !=
+            options.external_callback_field_sinks.end(),
+            [](const auto& left, const auto& right) {
+                return std::tie(left.function_address,
+                                left.call_instruction_address,
+                                left.load_instruction_address,
+                                left.displacement,
+                                left.width,
+                                left.call) ==
+                       std::tie(right.function_address,
+                                right.call_instruction_address,
+                                right.load_instruction_address,
+                                right.displacement,
+                                right.width,
+                                right.call);
+            }) !=
             options.external_callback_field_sinks.end() ||
         std::any_of(
             options.external_callback_field_sinks.begin(),
             options.external_callback_field_sinks.end(),
             [&](const auto& sink) {
                 return sink.width != 4u || sink.displacement < 0 ||
+                       (sink.receiver_argument_mask & 0xf0u) != 0u ||
                        (sink.displacement & 3) != 0 ||
                        (sink.function_address & 1u) != 0u ||
                        (sink.call_instruction_address & 1u) != 0u ||

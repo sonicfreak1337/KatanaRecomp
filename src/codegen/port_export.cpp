@@ -21977,18 +21977,24 @@ latent_aot_declared_external_callback_sinks(
             image, lines, functions, {}, non_root_entries, entry_shapes,
             &discovered, nullptr, &discovered_fields));
 
-    std::map<std::uint32_t, std::uint8_t> masks;
+    std::map<std::uint32_t, std::pair<std::uint8_t, std::uint8_t>> masks;
     for (const auto& sink : discovered) {
         const auto mapped = external_by_resolved_entry.find(
             sink.function_address);
         if (mapped == external_by_resolved_entry.end()) continue;
-        auto& mask = masks[mapped->second];
+        auto& [mask, record_mask] = masks[mapped->second];
         mask = static_cast<std::uint8_t>(mask | sink.argument_mask);
+        record_mask = static_cast<std::uint8_t>(
+            record_mask | sink.record_argument_mask);
     }
     std::vector<LatentAotExternalCallbackSink> result;
     result.reserve(masks.size());
-    for (const auto [address, mask] : masks) {
-        if (mask != 0u) result.push_back({address, mask});
+    for (const auto& [address, masks_for_address] : masks) {
+        const auto [mask, record_mask] = masks_for_address;
+        if (mask != 0u)
+            result.push_back(
+                {address, mask,
+                 static_cast<std::uint8_t>(record_mask & mask)});
     }
     if (callback_field_sinks != nullptr) {
         for (const auto& sink : discovered_fields) {
@@ -22015,7 +22021,8 @@ latent_aot_declared_external_callback_sinks(
                  static_cast<std::uint32_t>(load),
                  sink.displacement,
                  sink.width,
-                 sink.call});
+                 sink.call,
+                 sink.receiver_argument_mask});
         }
         std::sort(callback_field_sinks->begin(),
                   callback_field_sinks->end(),
@@ -22107,7 +22114,7 @@ latent_aot_analyzed_external_callback_sinks(
         discovered_record_tables = fallback_record_tables;
     }
 
-    std::map<std::uint32_t, std::uint8_t> masks;
+    std::map<std::uint32_t, std::pair<std::uint8_t, std::uint8_t>> masks;
     for (const auto& sink : discovered) {
         const auto external =
             latent_aot_external_code_address(sink.function_address);
@@ -22115,14 +22122,20 @@ latent_aot_analyzed_external_callback_sinks(
             !std::binary_search(external_code_targets.begin(),
                                 external_code_targets.end(), *external))
             continue;
-        auto& mask = masks[*external];
+        auto& [mask, record_mask] = masks[*external];
         mask = static_cast<std::uint8_t>(mask | sink.argument_mask);
+        record_mask = static_cast<std::uint8_t>(
+            record_mask | sink.record_argument_mask);
     }
 
     std::vector<LatentAotExternalCallbackSink> result;
     result.reserve(masks.size());
-    for (const auto [address, mask] : masks) {
-        if (mask != 0u) result.push_back({address, mask});
+    for (const auto& [address, masks_for_address] : masks) {
+        const auto [mask, record_mask] = masks_for_address;
+        if (mask != 0u)
+            result.push_back(
+                {address, mask,
+                 static_cast<std::uint8_t>(record_mask & mask)});
     }
     if (persistent_pointer_sinks != nullptr) {
         std::map<std::uint32_t, std::uint8_t> pointer_masks;
@@ -22159,7 +22172,7 @@ latent_aot_analyzed_external_callback_sinks(
                 continue;
             callback_field_sinks->push_back(
                 {*function, *call, *load, sink.displacement, sink.width,
-                 sink.call});
+                 sink.call, sink.receiver_argument_mask});
         }
         std::sort(callback_field_sinks->begin(),
                   callback_field_sinks->end(),
@@ -22499,18 +22512,26 @@ std::vector<LatentAotExternalCallbackSink>
 merge_latent_aot_external_callback_sinks(
     const std::span<const LatentAotExternalCallbackSink> declared,
     const std::span<const LatentAotExternalCallbackSink> analyzed) {
-    std::map<std::uint32_t, std::uint8_t> masks;
-    for (const auto& sink : declared)
-        masks[sink.function_address] = static_cast<std::uint8_t>(
-            masks[sink.function_address] | sink.argument_mask);
-    for (const auto& sink : analyzed)
-        masks[sink.function_address] = static_cast<std::uint8_t>(
-            masks[sink.function_address] | sink.argument_mask);
+    std::map<std::uint32_t, std::pair<std::uint8_t, std::uint8_t>> masks;
+    const auto merge = [&](const auto& sink) {
+        auto& [argument_mask, record_argument_mask] =
+            masks[sink.function_address];
+        argument_mask = static_cast<std::uint8_t>(
+            argument_mask | sink.argument_mask);
+        record_argument_mask = static_cast<std::uint8_t>(
+            record_argument_mask | sink.record_argument_mask);
+    };
+    for (const auto& sink : declared) merge(sink);
+    for (const auto& sink : analyzed) merge(sink);
 
     std::vector<LatentAotExternalCallbackSink> result;
     result.reserve(masks.size());
-    for (const auto [address, mask] : masks) {
-        if (mask != 0u) result.push_back({address, mask});
+    for (const auto& [address, masks_for_address] : masks) {
+        const auto [mask, record_mask] = masks_for_address;
+        if (mask != 0u)
+            result.push_back(
+                {address, mask,
+                 static_cast<std::uint8_t>(record_mask & mask)});
     }
     return result;
 }
@@ -22538,8 +22559,33 @@ merge_latent_aot_external_callback_field_sinks(
                                   right.width,
                                   right.call);
               });
-    result.erase(std::unique(result.begin(), result.end()), result.end());
-    return result;
+    std::vector<LatentAotExternalCallbackFieldSink> merged;
+    merged.reserve(result.size());
+    const auto same_shape = [](const auto& left, const auto& right) {
+        return std::tie(left.function_address,
+                        left.call_instruction_address,
+                        left.load_instruction_address,
+                        left.displacement,
+                        left.width,
+                        left.call) ==
+               std::tie(right.function_address,
+                        right.call_instruction_address,
+                        right.load_instruction_address,
+                        right.displacement,
+                        right.width,
+                        right.call);
+    };
+    for (const auto& sink : result) {
+        if (!merged.empty() && same_shape(merged.back(), sink)) {
+            merged.back().receiver_argument_mask =
+                static_cast<std::uint8_t>(
+                    merged.back().receiver_argument_mask |
+                    sink.receiver_argument_mask);
+        } else {
+            merged.push_back(sink);
+        }
+    }
+    return merged;
 }
 
 LatentAotDiscoveryOptions port_latent_aot_discovery_options(

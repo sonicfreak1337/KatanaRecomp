@@ -2497,6 +2497,96 @@ int main() {
                 dereferenced_callback_argument.static_callback_contracts_materialized,
             "Ein durch r4 adressierter Deskriptor wurde selbst als Callbackargument katalogisiert.");
 
+    const auto record_table_callback_image = [](const bool preserve_receiver) {
+        std::vector<std::uint8_t> bytes(0x140u, 0x09u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+
+        // Root both the constructor and consumer in one authenticated image.
+        put_u16(0x00u, 0xB00Eu); // bsr 0x20
+        put_u16(0x02u, 0x0009u); // nop (delay)
+        put_u16(0x04u, 0xB03Cu); // bsr 0x80
+        put_u16(0x06u, 0x0009u); // nop (delay)
+        put_u16(0x08u, 0x000Bu); // rts
+        put_u16(0x0Au, 0x0009u); // nop (delay)
+
+        // Constructor: incoming r5 is stored at record +16, while the same
+        // record (incoming r6) is published into table[r4].
+        put_u16(0x20u, 0x6E63u); // mov r6,r14
+        put_u16(0x22u, 0x1E54u); // mov.l r5,@(16,r14)
+        put_u16(0x24u, 0x6043u); // mov r4,r0
+        put_u16(0x26u, 0x4008u); // shll2 r0
+        put_u16(0x28u, 0xD306u); // mov.l @(24,pc),r3 -> 0x44
+        put_u16(0x2Au, 0x303Cu); // add r3,r0
+        put_u16(0x2Cu, 0x20E2u); // mov.l r14,@r0
+        put_u16(0x2Eu, 0x000Bu); // rts
+        put_u16(0x30u, 0x0009u); // nop (delay)
+        put_u32(0x44u, 0x00000100u);
+
+        // Consumer: load the record from the same exact table and invoke
+        // record->callback with the record preserved in outgoing r4.
+        put_u16(0x80u, 0xD007u); // mov.l @(28,pc),r0 -> 0xA0
+        put_u16(0x82u, 0x4408u); // shll2 r4
+        put_u16(0x84u, 0x044Eu); // mov.l @(r0,r4),r4
+        put_u16(0x86u, 0x5344u); // mov.l @(16,r4),r3
+        put_u16(0x88u, 0x430Bu); // jsr @r3
+        put_u16(0x8Au,
+                preserve_receiver ? 0x0009u : 0xE400u); // delay
+        put_u16(0x8Cu, 0x000Bu); // rts
+        put_u16(0x8Eu, 0x0009u); // nop (delay)
+        put_u32(0xA0u, 0x00000100u);
+
+        katana::io::ExecutableImage image;
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::EntryPointStraightLineQuiescent);
+        image.add_segment({".record-table-callback",
+                           0u,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-record-table-callback"});
+        image.add_entry_point(0u);
+        return image;
+    };
+    const auto record_table_callback =
+        katana::analysis::analyze_control_flow(
+            record_table_callback_image(true));
+    const auto record_table_constructor = std::find_if(
+        record_table_callback.static_callback_sinks.begin(),
+        record_table_callback.static_callback_sinks.end(),
+        [](const auto& sink) { return sink.function_address == 0x20u; });
+    require(record_table_constructor !=
+                record_table_callback.static_callback_sinks.end() &&
+                record_table_constructor->argument_mask == 0x02u &&
+                record_table_constructor->record_argument_mask == 0x02u,
+            "Eine exakt publizierte Record-Tabelle hat den Callback(record)-ABI-Vertrag verloren.");
+
+    const auto clobbered_record_table_callback =
+        katana::analysis::analyze_control_flow(
+            record_table_callback_image(false));
+    const auto clobbered_record_table_constructor = std::find_if(
+        clobbered_record_table_callback.static_callback_sinks.begin(),
+        clobbered_record_table_callback.static_callback_sinks.end(),
+        [](const auto& sink) { return sink.function_address == 0x20u; });
+    require(clobbered_record_table_constructor ==
+                clobbered_record_table_callback.static_callback_sinks.end() ||
+                clobbered_record_table_constructor->record_argument_mask == 0u,
+            "Ein im Delay-Slot ueberschriebener Record-Empfaenger wurde als Callback(record) akzeptiert.");
+
     const auto absolute_snapshot_image = [](const katana::io::ImageSourceKind source_kind,
                                             const katana::io::ImageLoadPhase load_phase,
                                             const katana::io::InitialSnapshotPolicy policy) {

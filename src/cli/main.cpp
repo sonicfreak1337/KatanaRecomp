@@ -979,7 +979,10 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
         for (const auto& sink : analysis.static_callback_sinks) {
             std::cout << "  function=0x" << std::hex << std::uppercase
                       << sink.function_address << " argument-mask=0x"
-                      << static_cast<unsigned>(sink.argument_mask) << std::dec
+                      << static_cast<unsigned>(sink.argument_mask)
+                      << " record-argument-mask=0x"
+                      << static_cast<unsigned>(sink.record_argument_mask)
+                      << std::dec
                       << '\n';
         }
         std::cout << "Persistent-Pointer-Sinks: "
@@ -999,7 +1002,10 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                       << sink.load_instruction_address << std::dec
                       << " displacement=" << sink.displacement
                       << " width=" << static_cast<unsigned>(sink.width)
-                      << " kind=" << (sink.call ? "call" : "jump") << '\n';
+                      << " kind=" << (sink.call ? "call" : "jump")
+                      << " receiver-argument-mask=0x" << std::hex
+                      << static_cast<unsigned>(sink.receiver_argument_mask)
+                      << std::dec << '\n';
         }
         std::cout << "Callback-Record-Tables: "
                   << analysis.static_callback_record_tables.size() << '\n';
@@ -1033,7 +1039,9 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
         const auto& sink = analysis.static_callback_sinks[index];
         std::cout << "{\"function_address\":" << sink.function_address
                   << ",\"argument_mask\":"
-                  << static_cast<unsigned>(sink.argument_mask) << '}';
+                  << static_cast<unsigned>(sink.argument_mask)
+                  << ",\"record_argument_mask\":"
+                  << static_cast<unsigned>(sink.record_argument_mask) << '}';
     }
     std::cout << "],\"persistent_pointer_sinks\":[";
     for (std::size_t index = 0u;
@@ -1057,6 +1065,8 @@ int audit_callback_contracts_manifest(const std::filesystem::path& path,
                   << ",\"displacement\":" << sink.displacement
                   << ",\"width\":" << static_cast<unsigned>(sink.width)
                   << ",\"call\":" << (sink.call ? "true" : "false")
+                  << ",\"receiver_argument_mask\":"
+                  << static_cast<unsigned>(sink.receiver_argument_mask)
                   << '}';
     }
     std::cout << "],\"callback_record_tables\":[";
@@ -1171,6 +1181,8 @@ int audit_latent_aot_module_cli(
                 sink.function_address) {
             merged_external_callback_sinks.back().argument_mask |=
                 sink.argument_mask;
+            merged_external_callback_sinks.back().record_argument_mask |=
+                sink.record_argument_mask;
         } else {
             merged_external_callback_sinks.push_back(sink);
         }

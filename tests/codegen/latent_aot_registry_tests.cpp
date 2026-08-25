@@ -369,6 +369,52 @@ std::vector<std::uint8_t> published_record_field_module() {
     return bytes;
 }
 
+std::vector<std::uint8_t> registered_record_callback_module() {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    constexpr std::uint32_t registrar = 0x8C040000u;
+    std::vector<std::uint8_t> bytes(0x340u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // The authoritative module root registers a local initializer as r6.
+    // The primary-image contract independently proves that this callback is
+    // later invoked with its persistent record in r4.
+    put_u16(0x00u, 0xD307u); // mov.l @(0x20,pc),r3
+    put_u16(0x02u, 0xD608u); // mov.l @(0x24,pc),r6
+    put_u16(0x04u, 0x430Bu); // jsr @r3
+    put_u16(0x06u, 0xE402u); // mov #2,r4 (delay)
+    put_u16(0x08u, 0x000Bu); // rts
+    put_u16(0x0Au, 0x0009u); // nop (delay)
+    put_u32(0x20u, registrar);
+    put_u32(0x24u, runtime_base + 0x40u);
+
+    // The initializer receives the record in r4, preserves it in r11 and
+    // publishes a second local callback through the proven +16 field.
+    put_u16(0x40u, 0x6B43u); // mov r4,r11
+    put_u16(0x42u, 0xD20Fu); // mov.l @(0x80,pc),r2
+    put_u16(0x44u, 0x1B24u); // mov.l r2,@(16,r11)
+    put_u16(0x46u, 0x000Bu); // rts
+    put_u16(0x48u, 0x0009u); // nop (delay)
+    put_u32(0x80u, runtime_base + 0x100u);
+
+    put_u16(0x100u, 0x000Bu); // second callback: rts
+    put_u16(0x102u, 0x0009u); // delay slot
+
+    put_u32(0x300u, runtime_base + 0x40u);
+    put_u32(0x304u, runtime_base + 0x100u);
+    return bytes;
+}
+
 std::vector<std::uint8_t> mutual_record_table_module(
     const std::size_t record_count = 3u,
     const bool constant_stride = true,
@@ -697,7 +743,8 @@ std::string analysis_cache_key_for_module(
     external_contract << 'c' << options.external_callback_sinks.size() << ';';
     for (const auto& sink : options.external_callback_sinks)
         external_contract << sink.function_address << ':'
-                          << +sink.argument_mask << ';';
+                          << +sink.argument_mask << ':'
+                          << +sink.record_argument_mask << ';';
     external_contract << 'p'
                       << options.external_persistent_pointer_sinks.size()
                       << ';';
@@ -711,7 +758,8 @@ std::string analysis_cache_key_for_module(
                           << sink.call_instruction_address << ':'
                           << sink.load_instruction_address << ':'
                           << sink.displacement << ':' << +sink.width << ':'
-                          << sink.call << ';';
+                          << sink.call << ':'
+                          << +sink.receiver_argument_mask << ';';
     if (!options.external_callback_record_tables.empty()) {
         external_contract << 'r'
                           << options.external_callback_record_tables.size()
@@ -1077,6 +1125,76 @@ int main() {
                     0x100u),
             "Persistenter Sink fuer das falsche ABI-Argument publizierte "
             "einen fremden Record-Alias.");
+
+        const std::array registered_record_external_targets{
+            0x8C020000u, 0x8C040000u};
+        const std::array registered_record_sinks{
+            katana::codegen::LatentAotExternalCallbackSink{
+                0x8C040000u, 0x04u, 0x04u}};
+        const std::array registered_record_field_sinks{
+            katana::codegen::LatentAotExternalCallbackFieldSink{
+                0x8C020000u, 0x8C020006u, 0x8C020004u,
+                16, 4u, true, 0x01u}};
+        katana::codegen::LatentAotDiscoveryOptions
+            registered_record_options;
+        registered_record_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        registered_record_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        registered_record_options.external_code_targets =
+            registered_record_external_targets;
+        registered_record_options.external_callback_sinks =
+            registered_record_sinks;
+        registered_record_options.external_callback_field_sinks =
+            registered_record_field_sinks;
+
+        const auto registered_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                registered_record_callback_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                registered_record_options);
+        require(
+            registered_record_callback.admitted &&
+                std::binary_search(
+                    registered_record_callback.final_entry_offsets.begin(),
+                    registered_record_callback.final_entry_offsets.end(),
+                    0x40u) &&
+                std::binary_search(
+                    registered_record_callback.final_entry_offsets.begin(),
+                    registered_record_callback.final_entry_offsets.end(),
+                    0x100u),
+            "Ein ueber einen persistenten Primary-Record registrierter "
+            "Initializer verlor seinen lokalen +16-Folgecallback.");
+
+        const std::array untyped_registered_record_sinks{
+            katana::codegen::LatentAotExternalCallbackSink{
+                0x8C040000u, 0x04u, 0x00u}};
+        auto untyped_registered_record_options =
+            registered_record_options;
+        untyped_registered_record_options.external_callback_sinks =
+            untyped_registered_record_sinks;
+        const auto untyped_registered_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                registered_record_callback_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                untyped_registered_record_options);
+        require(
+            untyped_registered_record_callback.admitted &&
+                std::binary_search(
+                    untyped_registered_record_callback.final_entry_offsets
+                        .begin(),
+                    untyped_registered_record_callback.final_entry_offsets
+                        .end(),
+                    0x40u) &&
+                !std::binary_search(
+                    untyped_registered_record_callback.final_entry_offsets
+                        .begin(),
+                    untyped_registered_record_callback.final_entry_offsets
+                        .end(),
+                    0x100u),
+            "Ein Callback-Sink ohne Record-ABI-Provenienz erfand einen "
+            "lokalen Folgecallback.");
 
         const std::array mutual_record_external_targets{0x8C020000u};
         const std::array mutual_record_field_sinks{

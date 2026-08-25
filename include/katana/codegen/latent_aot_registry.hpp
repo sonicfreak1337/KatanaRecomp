@@ -100,6 +100,9 @@ enum class LatentAotCompletenessPolicy : std::uint8_t {
 struct LatentAotExternalCallbackSink final {
     std::uint32_t function_address = 0u;
     std::uint8_t argument_mask = 0u;
+    // Subset of argument_mask proven to receive the persisted callback's
+    // record as incoming r4 when the primary-image consumer invokes it.
+    std::uint8_t record_argument_mask = 0u;
 
     [[nodiscard]] bool operator==(
         const LatentAotExternalCallbackSink&) const = default;
@@ -133,6 +136,7 @@ struct LatentAotExternalCallbackFieldSink final {
     std::int32_t displacement = 0;
     std::uint8_t width = 0u;
     bool call = false;
+    std::uint8_t receiver_argument_mask = 0u;
 
     [[nodiscard]] bool operator==(
         const LatentAotExternalCallbackFieldSink&) const = default;

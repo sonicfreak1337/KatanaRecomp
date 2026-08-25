@@ -989,11 +989,12 @@ void write_static_callback_sink(
     const katana::analysis::StaticCallbackSinkContract& value) {
     output.u32(value.function_address);
     output.u8(value.argument_mask);
+    output.u8(value.record_argument_mask);
 }
 
 [[nodiscard]] katana::analysis::StaticCallbackSinkContract
 read_static_callback_sink(Reader& input) {
-    return {input.u32(), input.u8()};
+    return {input.u32(), input.u8(), input.u8()};
 }
 
 void write_static_persistent_pointer_sink(
@@ -1017,6 +1018,7 @@ void write_static_callback_field_sink(
     output.u32(static_cast<std::uint32_t>(value.displacement));
     output.u8(value.width);
     output.boolean(value.call);
+    output.u8(value.receiver_argument_mask);
 }
 
 [[nodiscard]] katana::analysis::StaticCallbackFieldSinkContract
@@ -1028,6 +1030,7 @@ read_static_callback_field_sink(Reader& input) {
     value.displacement = static_cast<std::int32_t>(input.u32());
     value.width = input.u8();
     value.call = input.boolean();
+    value.receiver_argument_mask = input.u8();
     return value;
 }
 
