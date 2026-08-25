@@ -1096,6 +1096,7 @@ add_library(katana_port_export_tooling_objects OBJECT
     src/platform/phase6_gate.cpp
     src/codegen/latent_aot_registry.cpp
     src/codegen/native_disc_analysis_artifact.cpp
+    src/codegen/prepared_native_port_admission_artifact.cpp
     src/codegen/port_export.cpp
 )
 add_library(
@@ -2516,6 +2517,22 @@ katana_enable_warnings(katana-port-export-orchestration-tests)
 add_test(
     NAME katana-port-export-orchestration-tests
     COMMAND katana-port-export-orchestration-tests
+)
+
+add_executable(
+    katana-prepared-native-port-admission-artifact-tests
+    tests/codegen/prepared_native_port_admission_artifact_tests.cpp
+)
+target_link_libraries(
+    katana-prepared-native-port-admission-artifact-tests
+    PRIVATE
+        katana_core
+)
+katana_enable_warnings(
+    katana-prepared-native-port-admission-artifact-tests)
+add_test(
+    NAME katana-prepared-native-port-admission-artifact-tests
+    COMMAND katana-prepared-native-port-admission-artifact-tests
 )
 
 add_executable(

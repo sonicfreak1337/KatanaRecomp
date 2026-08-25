@@ -26,6 +26,7 @@
 #include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/naming.hpp"
 #include "katana/codegen/native_aot_profile.hpp"
+#include "katana/codegen/prepared_native_port_admission_artifact.hpp"
 #include "katana/codegen/project.hpp"
 #include "katana/codegen/source_map.hpp"
 #include "katana/io/input_output_error.hpp"
@@ -34,6 +35,7 @@
 #include "katana/ir/lower.hpp"
 #include "katana/ir/optimize.hpp"
 #include "katana/ir/register_liveness.hpp"
+#include "katana/ir/serialize.hpp"
 #include "katana/ir/verifier.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
 #include "katana/runtime/abi.hpp"
@@ -26823,6 +26825,1279 @@ struct NativeDiscAnalysisState {
     std::uint32_t product_entry_owner = 0u;
 };
 
+std::vector<katana::ir::Function>
+materialize_prepared_native_port_emitted_program(
+    const std::span<const katana::ir::Function> primary_program,
+    const LatentAotDiscovery& latent_aot) {
+    std::vector<katana::ir::Function> emitted_program(
+        primary_program.begin(), primary_program.end());
+    for (const auto& module : latent_aot.modules)
+        emitted_program.insert(
+            emitted_program.end(),
+            module.program.begin(),
+            module.program.end());
+
+    std::map<std::uint32_t, std::size_t> emitted_function_entry_counts;
+    for (const auto& function : emitted_program)
+        ++emitted_function_entry_counts[function.entry_address];
+    for (const auto& module : latent_aot.modules) {
+        for (const auto& transfer : module.external_transfers) {
+            if (emitted_function_entry_counts[transfer.target_address] != 1u)
+                throw std::runtime_error(
+                    "Latenter Cross-Image-Transfer besitzt keinen "
+                    "eindeutigen emittierten Primaerimage-Entry.");
+            const auto source_address =
+                module.source_address + transfer.source_offset;
+            std::size_t matches = 0u;
+            for (auto& function : emitted_program) {
+                if (function.entry_address < module.source_address ||
+                    static_cast<std::uint64_t>(function.entry_address) >=
+                        static_cast<std::uint64_t>(module.source_address) +
+                            module.byte_size)
+                    continue;
+                for (auto& block : function.blocks) {
+                    for (auto& instruction : block.instructions) {
+                        if (instruction.source_address != source_address)
+                            continue;
+                        const auto classification =
+                            classify_loaded_aot_external_transfer(
+                                transfer, instruction, block);
+                        if (classification ==
+                            LoadedAotExternalTransferClassification::Conflict)
+                            throw std::runtime_error(
+                                "Latenter Cross-Image-Transfer widerspricht "
+                                "dem isoliert validierten IR.");
+                        ++matches;
+                        if (classification ==
+                            LoadedAotExternalTransferClassification::
+                                AlreadyIdenticalResolved)
+                            continue;
+                        instruction.resolved_targets = {
+                            transfer.target_address};
+                        instruction.dynamic_target_class =
+                            katana::ir::DynamicTargetClass::GuardedComplete;
+                        block.has_indirect_successor = false;
+                        if (transfer.kind ==
+                            PreparedLatentAotExternalTransferKind::Call) {
+                            const auto insertion = std::lower_bound(
+                                function.direct_callees.begin(),
+                                function.direct_callees.end(),
+                                transfer.target_address);
+                            if (insertion == function.direct_callees.end() ||
+                                *insertion != transfer.target_address)
+                                function.direct_callees.insert(
+                                    insertion, transfer.target_address);
+                        }
+                    }
+                }
+            }
+            // A resume entry may retain an identity-equivalent view of the
+            // same instruction. Every occurrence receives the recovered edge.
+            if (matches == 0u)
+                throw std::runtime_error(
+                    "Latenter Cross-Image-Transfer besitzt keinen "
+                    "emittierten Quellbefehl.");
+        }
+    }
+    annotate_proven_linear_ram_accesses(emitted_program);
+    katana::ir::require_valid_program(emitted_program);
+    return emitted_program;
+}
+
+struct PreparedNativePortAdmissionProgramDigests final {
+    std::string emitted_program_digest;
+    std::vector<PreparedNativePortAdmissionFunctionDigest> functions;
+
+    [[nodiscard]] bool operator==(
+        const PreparedNativePortAdmissionProgramDigests&) const = default;
+};
+
+PreparedNativePortAdmissionProgramDigests
+prepared_native_port_admission_program_digests(
+    const std::span<const katana::ir::Function> program) {
+    katana::ir::require_valid_program(program);
+    std::vector<const katana::ir::Function*> functions;
+    functions.reserve(program.size());
+    for (const auto& function : program) functions.push_back(&function);
+    std::sort(functions.begin(), functions.end(), [](const auto* left,
+                                                     const auto* right) {
+        return left->entry_address < right->entry_address;
+    });
+
+    PreparedNativePortAdmissionProgramDigests result;
+    result.emitted_program_digest =
+        katana::ir::emit_validated_ir_fragment_sha256(functions, {});
+    result.functions.reserve(functions.size());
+    for (const auto* const function : functions) {
+        PreparedNativePortAdmissionFunctionDigest retained;
+        retained.function_entry = function->entry_address;
+        const std::array<const katana::ir::Function*, 1u> one_function{
+            function};
+        retained.digest =
+            katana::ir::emit_validated_ir_fragment_sha256(
+                one_function, {});
+        std::vector<const katana::ir::BasicBlock*> blocks;
+        blocks.reserve(function->blocks.size());
+        for (const auto& block : function->blocks) blocks.push_back(&block);
+        std::sort(blocks.begin(), blocks.end(), [](const auto* left,
+                                                   const auto* right) {
+            return left->start_address < right->start_address;
+        });
+        retained.blocks.reserve(blocks.size());
+        for (const auto* const block : blocks) {
+            NativePortIdentityMaterial material;
+            material.text(
+                "katana.prepared-native-port-admission-block-dependency");
+            material.u32(1u);
+            // The whole-function digest is deliberately retained in every
+            // block dependency. This P0 may conservatively invalidate sibling
+            // blocks, but it can never preserve a block across a changed
+            // function contract; narrower block-only hashing is P1.
+            material.text(retained.digest);
+            material.u32(block->start_address);
+            retained.blocks.push_back(
+                {block->start_address,
+                 katana::io::sha256_bytes(
+                     std::move(material).finish())});
+        }
+        result.functions.push_back(std::move(retained));
+    }
+    return result;
+}
+
+constexpr std::uint32_t prepared_native_port_admission_payload_schema = 1u;
+constexpr std::size_t maximum_native_port_admission_payload_items =
+    4u * 1024u * 1024u;
+constexpr std::size_t maximum_native_port_admission_payload_string_bytes =
+    64u * 1024u;
+constexpr std::size_t maximum_native_port_admission_payload_allocation_bytes =
+    1024u * 1024u * 1024u;
+// Every encoded element is charged as a worst-case node/object shell in
+// addition to its exact string bytes and every nested element. This is
+// intentionally much larger than map/set/vector nodes used by the payload so
+// allocator overhead cannot escape the global parser budget.
+constexpr std::size_t native_port_admission_collection_item_charge = 512u;
+
+class NativePortAdmissionPayloadWriter final {
+  public:
+    void u8(const std::uint8_t value) { append(&value, sizeof(value)); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    void u32(const std::uint32_t value) {
+        std::array<std::uint8_t, 4u> bytes{};
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            bytes[index] =
+                static_cast<std::uint8_t>(value >> (index * 8u));
+        append(bytes.data(), bytes.size());
+    }
+    void i32(const std::int32_t value) {
+        u32(static_cast<std::uint32_t>(value));
+    }
+    void u64(const std::uint64_t value) {
+        std::array<std::uint8_t, 8u> bytes{};
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            bytes[index] =
+                static_cast<std::uint8_t>(value >> (index * 8u));
+        append(bytes.data(), bytes.size());
+    }
+    void count(const std::size_t value) {
+        if (value > maximum_native_port_admission_payload_items)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-count");
+        u64(value);
+    }
+    void text(const std::string_view value) {
+        if (value.size() >
+                maximum_native_port_admission_payload_string_bytes ||
+            value.size() > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-string");
+        u32(static_cast<std::uint32_t>(value.size()));
+        append(value.data(), value.size());
+    }
+    void blob(const std::span<const std::uint8_t> value) {
+        u64(value.size());
+        append(value.data(), value.size());
+    }
+    template <typename Enum>
+    void enumeration(const Enum value) {
+        static_assert(std::is_enum_v<Enum>);
+        const auto raw = static_cast<std::underlying_type_t<Enum>>(value);
+        if constexpr (std::is_signed_v<decltype(raw)>) {
+            if (raw < 0 ||
+                static_cast<std::uint64_t>(raw) >
+                    std::numeric_limits<std::uint8_t>::max())
+                throw std::runtime_error(
+                    "prepared-native-port-admission-payload-enum");
+        } else if (static_cast<std::uint64_t>(raw) >
+                   std::numeric_limits<std::uint8_t>::max()) {
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-enum");
+        }
+        u8(static_cast<std::uint8_t>(raw));
+    }
+    void optional_u32(const std::optional<std::uint32_t> value) {
+        boolean(value.has_value());
+        if (value.has_value()) u32(*value);
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+
+  private:
+    void append(const void* const data, const std::size_t size) {
+        if (size == 0u) return;
+        if (size > maximum_prepared_native_port_admission_artifact_bytes -
+                       bytes_.size())
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-size");
+        const auto* first = static_cast<const std::uint8_t*>(data);
+        bytes_.insert(bytes_.end(), first, first + size);
+    }
+
+    std::vector<std::uint8_t> bytes_;
+};
+
+class NativePortAdmissionPayloadReader final {
+  public:
+    explicit NativePortAdmissionPayloadReader(
+        const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+
+    [[nodiscard]] std::uint8_t u8() { return take(1u)[0u]; }
+    [[nodiscard]] bool boolean() {
+        const auto value = u8();
+        if (value > 1u)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-bool");
+        return value != 0u;
+    }
+    [[nodiscard]] std::uint32_t u32() {
+        const auto bytes = take(4u);
+        std::uint32_t value = 0u;
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            value |= static_cast<std::uint32_t>(bytes[index]) <<
+                     (index * 8u);
+        return value;
+    }
+    [[nodiscard]] std::int32_t i32() {
+        return static_cast<std::int32_t>(u32());
+    }
+    [[nodiscard]] std::uint64_t u64() {
+        const auto bytes = take(8u);
+        std::uint64_t value = 0u;
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            value |= static_cast<std::uint64_t>(bytes[index]) <<
+                     (index * 8u);
+        return value;
+    }
+    [[nodiscard]] std::size_t count(
+        const std::size_t maximum =
+            maximum_native_port_admission_payload_items) {
+        const auto value = u64();
+        if (value > maximum || value > std::numeric_limits<std::size_t>::max())
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-count");
+        const auto result = static_cast<std::size_t>(value);
+        if (result >
+            maximum_native_port_admission_payload_allocation_bytes /
+                native_port_admission_collection_item_charge)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-allocation");
+        charge(
+            result * native_port_admission_collection_item_charge);
+        return result;
+    }
+    [[nodiscard]] std::string text() {
+        const auto size = u32();
+        if (size > maximum_native_port_admission_payload_string_bytes)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-string");
+        charge(size);
+        const auto bytes = take(size);
+        return std::string(
+            reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+    [[nodiscard]] std::span<const std::uint8_t> blob() {
+        const auto size = u64();
+        if (size > maximum_prepared_native_port_admission_artifact_bytes ||
+            size > std::numeric_limits<std::size_t>::max())
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-blob");
+        const auto retained_size = static_cast<std::size_t>(size);
+        charge(retained_size);
+        return take(retained_size);
+    }
+    template <typename Enum>
+    [[nodiscard]] Enum enumeration(const Enum maximum) {
+        static_assert(std::is_enum_v<Enum>);
+        const auto value = u8();
+        if (value > static_cast<std::uint8_t>(maximum))
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-enum");
+        return static_cast<Enum>(value);
+    }
+    [[nodiscard]] std::optional<std::uint32_t> optional_u32() {
+        if (!boolean()) return std::nullopt;
+        return u32();
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return cursor_ == bytes_.size();
+    }
+
+  private:
+    void charge(const std::size_t size) {
+        if (size >
+            maximum_native_port_admission_payload_allocation_bytes -
+                allocated_bytes_)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-allocation");
+        allocated_bytes_ += size;
+    }
+    [[nodiscard]] std::span<const std::uint8_t> take(
+        const std::size_t size) {
+        if (cursor_ > bytes_.size() || size > bytes_.size() - cursor_)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-truncated");
+        const auto result = bytes_.subspan(cursor_, size);
+        cursor_ += size;
+        return result;
+    }
+
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+    std::size_t allocated_bytes_ = 0u;
+};
+
+void write_admission_u32_vector(
+    NativePortAdmissionPayloadWriter& output,
+    const std::vector<std::uint32_t>& values) {
+    output.count(values.size());
+    for (const auto value : values) output.u32(value);
+}
+
+std::vector<std::uint32_t> read_admission_u32_vector(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::vector<std::uint32_t> result;
+    result.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index)
+        result.push_back(input.u32());
+    return result;
+}
+
+void write_admission_u32_set(
+    NativePortAdmissionPayloadWriter& output,
+    const std::set<std::uint32_t>& values) {
+    output.count(values.size());
+    for (const auto value : values) output.u32(value);
+}
+
+std::set<std::uint32_t> read_admission_u32_set(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::set<std::uint32_t> result;
+    for (std::size_t index = 0u; index < count; ++index) {
+        if (!result.insert(input.u32()).second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-duplicate-set");
+    }
+    return result;
+}
+
+void write_admission_u32_set_map(
+    NativePortAdmissionPayloadWriter& output,
+    const std::map<std::uint32_t, std::set<std::uint32_t>>& values) {
+    output.count(values.size());
+    for (const auto& [address, related] : values) {
+        output.u32(address);
+        write_admission_u32_set(output, related);
+    }
+}
+
+std::map<std::uint32_t, std::set<std::uint32_t>>
+read_admission_u32_set_map(NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::map<std::uint32_t, std::set<std::uint32_t>> result;
+    for (std::size_t index = 0u; index < count; ++index) {
+        const auto address = input.u32();
+        if (!result.emplace(address, read_admission_u32_set(input)).second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-duplicate-map");
+    }
+    return result;
+}
+
+void write_admission_u32_size_map(
+    NativePortAdmissionPayloadWriter& output,
+    const std::map<std::uint32_t, std::size_t>& values) {
+    output.count(values.size());
+    for (const auto& [address, value] : values) {
+        output.u32(address);
+        output.u64(value);
+    }
+}
+
+std::map<std::uint32_t, std::size_t> read_admission_u32_size_map(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::map<std::uint32_t, std::size_t> result;
+    for (std::size_t index = 0u; index < count; ++index) {
+        const auto address = input.u32();
+        const auto encoded = input.u64();
+        if (encoded > std::numeric_limits<std::size_t>::max() ||
+            !result.emplace(address, static_cast<std::size_t>(encoded)).second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-payload-size-map");
+    }
+    return result;
+}
+
+void write_native_port_incomplete_outgoing_evidence(
+    NativePortAdmissionPayloadWriter& output,
+    const NativePortIncompleteOutgoingEvidence& evidence) {
+    output.enumeration(evidence.kind);
+    output.optional_u32(evidence.instruction_address);
+    output.optional_u32(evidence.target_address);
+    output.enumeration(evidence.control_flow_evidence);
+    output.enumeration(evidence.origin_class);
+    output.enumeration(evidence.exact_guard_rejection_reason);
+    output.boolean(evidence.runtime_evidence_required);
+    output.boolean(evidence.target_is_materialized_function_entry);
+    output.boolean(evidence.target_is_recursive_function_entry);
+    output.boolean(evidence.target_is_guarded_entry);
+    output.boolean(evidence.target_is_entry_owned_by_source);
+    output.u32(evidence.target_block_entry_count);
+    output.u32(evidence.target_safe_resume_entry_count);
+    output.u32(evidence.target_instruction_owner_count);
+    output.u32(evidence.target_owner_count);
+    write_admission_u32_vector(output, evidence.target_owner_slice);
+}
+
+NativePortIncompleteOutgoingEvidence
+read_native_port_incomplete_outgoing_evidence(
+    NativePortAdmissionPayloadReader& input) {
+    NativePortIncompleteOutgoingEvidence evidence;
+    evidence.kind = input.enumeration(
+        NativePortIncompleteOutgoingKind::UnownedSeedTarget);
+    evidence.instruction_address = input.optional_u32();
+    evidence.target_address = input.optional_u32();
+    evidence.control_flow_evidence = input.enumeration(
+        katana::analysis::ControlFlowEvidence::Unresolved);
+    evidence.origin_class = input.enumeration(
+        katana::analysis::IndirectControlFlowOriginClass::RuntimePointer);
+    evidence.exact_guard_rejection_reason = input.enumeration(
+        katana::analysis::ExactGuardRejectionReason::ImageIdentityMismatch);
+    evidence.runtime_evidence_required = input.boolean();
+    evidence.target_is_materialized_function_entry = input.boolean();
+    evidence.target_is_recursive_function_entry = input.boolean();
+    evidence.target_is_guarded_entry = input.boolean();
+    evidence.target_is_entry_owned_by_source = input.boolean();
+    evidence.target_block_entry_count = input.u32();
+    evidence.target_safe_resume_entry_count = input.u32();
+    evidence.target_instruction_owner_count = input.u32();
+    evidence.target_owner_count = input.u32();
+    evidence.target_owner_slice = read_admission_u32_vector(input);
+    return evidence;
+}
+
+void write_native_port_program_index(
+    NativePortAdmissionPayloadWriter& output,
+    const NativePortProgramIndex& index) {
+    write_admission_u32_set_map(output, index.instruction_owners);
+
+    output.count(index.function_boundaries.size());
+    for (const auto& [entry, evidence] : index.function_boundaries) {
+        output.u32(entry);
+        write_admission_u32_set(
+            output, evidence.identity_bound_exact_sizes);
+        write_admission_u32_set(
+            output, evidence.closed_control_flow_sizes);
+        write_admission_u32_set(
+            output, evidence.guarded_owner_extent_sizes);
+    }
+
+    output.count(index.functions_by_entry.size());
+    for (const auto& [entry, functions] : index.functions_by_entry) {
+        output.u32(entry);
+        output.count(functions.size());
+    }
+
+    write_admission_u32_set_map(output, index.incoming_edge_sources);
+    write_admission_u32_set_map(
+        output, index.incoming_instruction_addresses);
+    write_admission_u32_size_map(output, index.block_entry_counts);
+    write_admission_u32_size_map(output, index.safe_resume_entry_counts);
+    write_admission_u32_set_map(output, index.entry_owners);
+    write_admission_u32_set_map(output, index.outgoing_function_entries);
+
+    output.count(index.external_entry_kinds.size());
+    for (const auto& [entry, kinds] : index.external_entry_kinds) {
+        output.u32(entry);
+        output.count(kinds.size());
+        for (const auto kind : kinds) output.enumeration(kind);
+    }
+
+    write_admission_u32_set(output, index.exact_external_entries);
+    write_admission_u32_set(output, index.external_function_roots);
+    write_admission_u32_set(
+        output, index.incomplete_outgoing_function_entries);
+
+    output.count(index.incomplete_outgoing_evidence.size());
+    for (const auto& [entry, evidence_set] :
+         index.incomplete_outgoing_evidence) {
+        output.u32(entry);
+        output.count(evidence_set.size());
+        for (const auto& evidence : evidence_set)
+            write_native_port_incomplete_outgoing_evidence(
+                output, evidence);
+    }
+
+    write_admission_u32_set(output, index.function_entries);
+    write_admission_u32_set(output, index.guarded_entries);
+    write_admission_u32_set(output, index.seed_entries);
+    output.boolean(index.external_root_ownership_complete);
+}
+
+NativePortProgramIndex read_native_port_program_index(
+    NativePortAdmissionPayloadReader& input,
+    const std::span<const katana::ir::Function> emitted_program) {
+    NativePortProgramIndex index;
+    index.instruction_owners = read_admission_u32_set_map(input);
+
+    const auto boundary_count = input.count();
+    for (std::size_t boundary_index = 0u;
+         boundary_index < boundary_count; ++boundary_index) {
+        const auto entry = input.u32();
+        NativePortFunctionBoundaryEvidence evidence;
+        evidence.identity_bound_exact_sizes =
+            read_admission_u32_set(input);
+        evidence.closed_control_flow_sizes =
+            read_admission_u32_set(input);
+        evidence.guarded_owner_extent_sizes =
+            read_admission_u32_set(input);
+        if (!index.function_boundaries.emplace(entry, std::move(evidence))
+                 .second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-duplicate-boundary");
+    }
+
+    std::map<std::uint32_t, std::size_t> expected_function_counts;
+    const auto function_entry_count = input.count();
+    for (std::size_t function_index = 0u;
+         function_index < function_entry_count; ++function_index) {
+        const auto entry = input.u32();
+        const auto count = input.count();
+        if (count == 0u ||
+            !expected_function_counts.emplace(entry, count).second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-function-index");
+    }
+    for (const auto& function : emitted_program)
+        index.functions_by_entry[function.entry_address].push_back(&function);
+    if (index.functions_by_entry.size() != expected_function_counts.size())
+        throw std::runtime_error(
+            "prepared-native-port-admission-function-index-mismatch");
+    for (const auto& [entry, count] : expected_function_counts) {
+        const auto found = index.functions_by_entry.find(entry);
+        if (found == index.functions_by_entry.end() ||
+            found->second.size() != count)
+            throw std::runtime_error(
+                "prepared-native-port-admission-function-index-mismatch");
+    }
+
+    index.incoming_edge_sources = read_admission_u32_set_map(input);
+    index.incoming_instruction_addresses =
+        read_admission_u32_set_map(input);
+    index.block_entry_counts = read_admission_u32_size_map(input);
+    index.safe_resume_entry_counts = read_admission_u32_size_map(input);
+    index.entry_owners = read_admission_u32_set_map(input);
+    index.outgoing_function_entries = read_admission_u32_set_map(input);
+
+    const auto external_kind_count = input.count();
+    for (std::size_t kind_index = 0u; kind_index < external_kind_count;
+         ++kind_index) {
+        const auto entry = input.u32();
+        const auto count = input.count();
+        std::set<NativePortExternalEntryKind> kinds;
+        for (std::size_t index_in_set = 0u; index_in_set < count;
+             ++index_in_set) {
+            if (!kinds
+                     .insert(input.enumeration(
+                         NativePortExternalEntryKind::
+                             PostBootstrapContinuation))
+                     .second)
+                throw std::runtime_error(
+                    "prepared-native-port-admission-external-kind");
+        }
+        if (kinds.empty() ||
+            !index.external_entry_kinds.emplace(entry, std::move(kinds))
+                 .second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-external-kind");
+    }
+
+    index.exact_external_entries = read_admission_u32_set(input);
+    index.external_function_roots = read_admission_u32_set(input);
+    index.incomplete_outgoing_function_entries =
+        read_admission_u32_set(input);
+
+    const auto incomplete_evidence_count = input.count();
+    for (std::size_t evidence_index = 0u;
+         evidence_index < incomplete_evidence_count; ++evidence_index) {
+        const auto entry = input.u32();
+        const auto count = input.count();
+        std::set<NativePortIncompleteOutgoingEvidence> evidence_set;
+        for (std::size_t index_in_set = 0u; index_in_set < count;
+             ++index_in_set) {
+            if (!evidence_set
+                     .insert(read_native_port_incomplete_outgoing_evidence(
+                         input))
+                     .second)
+                throw std::runtime_error(
+                    "prepared-native-port-admission-incomplete-evidence");
+        }
+        if (evidence_set.empty() ||
+            !index.incomplete_outgoing_evidence
+                 .emplace(entry, std::move(evidence_set))
+                 .second)
+            throw std::runtime_error(
+                "prepared-native-port-admission-incomplete-evidence");
+    }
+
+    index.function_entries = read_admission_u32_set(input);
+    index.guarded_entries = read_admission_u32_set(input);
+    index.seed_entries = read_admission_u32_set(input);
+    index.external_root_ownership_complete = input.boolean();
+    return index;
+}
+
+std::size_t read_native_port_admission_size(
+    NativePortAdmissionPayloadReader& input) {
+    const auto value = input.u64();
+    if (value > std::numeric_limits<std::size_t>::max())
+        throw std::runtime_error(
+            "prepared-native-port-admission-size-overflow");
+    return static_cast<std::size_t>(value);
+}
+
+void write_native_port_hardware_closure(
+    NativePortAdmissionPayloadWriter& output,
+    const NativePortHardwareClosure& closure) {
+    output.boolean(closure.definition_present);
+    output.boolean(closure.complete);
+    output.u64(closure.known_hardware_sites);
+    output.u64(closure.native_progress_wait_sites);
+    output.u64(closure.unknown_instruction_sites);
+    output.u64(closure.unresolved_memory_sites);
+    output.u64(closure.resolved_by_native_cpu_control);
+    output.u64(closure.replaced_by_hook);
+    output.u64(closure.provider_semantic_contracts);
+    output.u64(closure.provider_semantic_summaries);
+    output.u64(closure.provider_semantic_matches);
+    output.u64(closure.provider_semantic_misses);
+    output.u64(closure.provider_semantic_legacy_admissions);
+    output.enumeration(closure.provider_semantic_coverage);
+    output.u64(closure.eliminated_by_replacement_reachability);
+    output.u64(closure.guarded_native_memory);
+    output.boolean(closure.replacement_reachability_proven);
+    write_admission_u32_set(
+        output, closure.replacement_reachability_incomplete_frontier);
+    write_admission_u32_set(output, closure.native_cpu_control_sites);
+    write_admission_u32_set(output, closure.reachability_eliminated_sites);
+    output.count(closure.gaps.size());
+    for (const auto& gap : closure.gaps) {
+        output.u32(gap.instruction_address);
+        output.text(gap.reason);
+    }
+}
+
+NativePortHardwareClosure read_native_port_hardware_closure(
+    NativePortAdmissionPayloadReader& input) {
+    NativePortHardwareClosure closure;
+    closure.definition_present = input.boolean();
+    closure.complete = input.boolean();
+    closure.known_hardware_sites = read_native_port_admission_size(input);
+    closure.native_progress_wait_sites =
+        read_native_port_admission_size(input);
+    closure.unknown_instruction_sites =
+        read_native_port_admission_size(input);
+    closure.unresolved_memory_sites =
+        read_native_port_admission_size(input);
+    closure.resolved_by_native_cpu_control =
+        read_native_port_admission_size(input);
+    closure.replaced_by_hook = read_native_port_admission_size(input);
+    closure.provider_semantic_contracts =
+        read_native_port_admission_size(input);
+    closure.provider_semantic_summaries =
+        read_native_port_admission_size(input);
+    closure.provider_semantic_matches =
+        read_native_port_admission_size(input);
+    closure.provider_semantic_misses =
+        read_native_port_admission_size(input);
+    closure.provider_semantic_legacy_admissions =
+        read_native_port_admission_size(input);
+    closure.provider_semantic_coverage = input.enumeration(
+        katana::runtime::NativePortProviderSemanticCoverage::
+            RequiredForHardwareClosure);
+    closure.eliminated_by_replacement_reachability =
+        read_native_port_admission_size(input);
+    closure.guarded_native_memory =
+        read_native_port_admission_size(input);
+    closure.replacement_reachability_proven = input.boolean();
+    closure.replacement_reachability_incomplete_frontier =
+        read_admission_u32_set(input);
+    closure.native_cpu_control_sites = read_admission_u32_set(input);
+    closure.reachability_eliminated_sites =
+        read_admission_u32_set(input);
+    const auto gap_count = input.count();
+    closure.gaps.reserve(gap_count);
+    for (std::size_t gap_index = 0u; gap_index < gap_count; ++gap_index)
+        closure.gaps.push_back({input.u32(), input.text()});
+    return closure;
+}
+
+void write_runtime_wait_loop_descriptors(
+    NativePortAdmissionPayloadWriter& output,
+    const std::vector<katana::runtime::RuntimeWaitLoopDescriptor>& values) {
+    output.count(values.size());
+    for (const auto& value : values) {
+        output.u32(value.loop_header);
+        output.u32(value.loop_latch);
+        output.u32(value.read_site);
+        output.enumeration(value.evidence);
+    }
+}
+
+std::vector<katana::runtime::RuntimeWaitLoopDescriptor>
+read_runtime_wait_loop_descriptors(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::vector<katana::runtime::RuntimeWaitLoopDescriptor> result;
+    result.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        katana::runtime::RuntimeWaitLoopDescriptor value;
+        value.loop_header = input.u32();
+        value.loop_latch = input.u32();
+        value.read_site = input.u32();
+        value.evidence = input.enumeration(
+            katana::runtime::RuntimeWaitLoopEvidence::
+                ConservativeCandidate);
+        result.push_back(value);
+    }
+    return result;
+}
+
+void write_mmio_wait_loop_proofs(
+    NativePortAdmissionPayloadWriter& output,
+    const std::vector<MmioWaitLoopBatchProof>& values) {
+    output.count(values.size());
+    for (const auto& value : values) {
+        const auto& descriptor = value.descriptor;
+        output.u32(descriptor.loop_header);
+        output.u32(descriptor.read_site);
+        output.u32(descriptor.pointer_literal_address);
+        output.u32(descriptor.mmio_guest_address);
+        output.u32(descriptor.mmio_physical_address);
+        output.u32(descriptor.backedge_instruction_address);
+        output.u8(descriptor.pointer_register);
+        output.u8(descriptor.value_register);
+        output.u8(descriptor.mask_register);
+        output.u8(descriptor.round_instruction_count);
+        output.u32(descriptor.test_mask);
+        output.boolean(descriptor.pointer_from_register);
+        output.boolean(descriptor.branch_on_true);
+        output.u64(descriptor.round_guest_cycles);
+        output.u64(descriptor.pre_read_guest_cycles);
+        output.u8(descriptor.read_guest_cycles);
+        output.u8(descriptor.test_guest_cycles);
+        output.u8(descriptor.branch_guest_cycles);
+    }
+}
+
+std::vector<MmioWaitLoopBatchProof> read_mmio_wait_loop_proofs(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::vector<MmioWaitLoopBatchProof> result;
+    result.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        MmioWaitLoopBatchProof value;
+        auto& descriptor = value.descriptor;
+        descriptor.loop_header = input.u32();
+        descriptor.read_site = input.u32();
+        descriptor.pointer_literal_address = input.u32();
+        descriptor.mmio_guest_address = input.u32();
+        descriptor.mmio_physical_address = input.u32();
+        descriptor.backedge_instruction_address = input.u32();
+        descriptor.pointer_register = input.u8();
+        descriptor.value_register = input.u8();
+        descriptor.mask_register = input.u8();
+        descriptor.round_instruction_count = input.u8();
+        descriptor.test_mask = input.u32();
+        descriptor.pointer_from_register = input.boolean();
+        descriptor.branch_on_true = input.boolean();
+        descriptor.round_guest_cycles = input.u64();
+        descriptor.pre_read_guest_cycles = input.u64();
+        descriptor.read_guest_cycles = input.u8();
+        descriptor.test_guest_cycles = input.u8();
+        descriptor.branch_guest_cycles = input.u8();
+        result.push_back(value);
+    }
+    return result;
+}
+
+void write_composite_callback_proofs(
+    NativePortAdmissionPayloadWriter& output,
+    const std::vector<CompositeCallbackBatchProof>& values) {
+    output.count(values.size());
+    for (const auto& value : values) {
+        const auto& descriptor = value.descriptor;
+        output.enumeration(descriptor.kind);
+        output.u32(descriptor.call_block_address);
+        output.u32(descriptor.call_instruction_address);
+        output.u32(descriptor.continuation_address);
+        output.u32(descriptor.exit_address);
+        output.u32(descriptor.kernel_address);
+        output.u32(descriptor.kernel_body_address);
+        output.u32(descriptor.kernel_return_address);
+        output.u32(descriptor.source_load_instruction_address);
+        output.u32(descriptor.target_store_instruction_address);
+        output.u32(descriptor.outer_branch_instruction_address);
+        output.u32(descriptor.call_block_size);
+        output.u32(descriptor.continuation_size);
+        output.u32(descriptor.kernel_size);
+        output.u32(descriptor.kernel_body_size);
+        output.u32(descriptor.kernel_return_size);
+        output.u8(descriptor.callback_register);
+        output.u8(descriptor.destination_register);
+        output.u8(descriptor.count_register);
+        output.u8(descriptor.limit_register);
+        output.u8(descriptor.flag_base_register);
+        output.u8(descriptor.flag_value_register);
+        output.i32(descriptor.flag_displacement);
+        output.u32(descriptor.flag_expected_value);
+        output.u8(descriptor.current_round_instruction_count);
+        output.u8(descriptor.subsequent_round_instruction_count);
+        output.u64(descriptor.call_block_guest_cycles);
+        output.u64(descriptor.continuation_guest_cycles);
+        output.u64(descriptor.kernel_guest_cycles);
+        output.u64(descriptor.kernel_body_guest_cycles);
+        output.u64(descriptor.kernel_return_guest_cycles);
+        output.u64(descriptor.current_round_guest_cycles);
+        output.u64(descriptor.subsequent_round_guest_cycles);
+    }
+}
+
+std::vector<CompositeCallbackBatchProof> read_composite_callback_proofs(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::vector<CompositeCallbackBatchProof> result;
+    result.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        CompositeCallbackBatchProof value;
+        auto& descriptor = value.descriptor;
+        descriptor.kind = input.enumeration(
+            CompositeCallbackBatchProof::Kind::FlagPollEqualImmediate);
+        descriptor.call_block_address = input.u32();
+        descriptor.call_instruction_address = input.u32();
+        descriptor.continuation_address = input.u32();
+        descriptor.exit_address = input.u32();
+        descriptor.kernel_address = input.u32();
+        descriptor.kernel_body_address = input.u32();
+        descriptor.kernel_return_address = input.u32();
+        descriptor.source_load_instruction_address = input.u32();
+        descriptor.target_store_instruction_address = input.u32();
+        descriptor.outer_branch_instruction_address = input.u32();
+        descriptor.call_block_size = input.u32();
+        descriptor.continuation_size = input.u32();
+        descriptor.kernel_size = input.u32();
+        descriptor.kernel_body_size = input.u32();
+        descriptor.kernel_return_size = input.u32();
+        descriptor.callback_register = input.u8();
+        descriptor.destination_register = input.u8();
+        descriptor.count_register = input.u8();
+        descriptor.limit_register = input.u8();
+        descriptor.flag_base_register = input.u8();
+        descriptor.flag_value_register = input.u8();
+        descriptor.flag_displacement = input.i32();
+        descriptor.flag_expected_value = input.u32();
+        descriptor.current_round_instruction_count = input.u8();
+        descriptor.subsequent_round_instruction_count = input.u8();
+        descriptor.call_block_guest_cycles = input.u64();
+        descriptor.continuation_guest_cycles = input.u64();
+        descriptor.kernel_guest_cycles = input.u64();
+        descriptor.kernel_body_guest_cycles = input.u64();
+        descriptor.kernel_return_guest_cycles = input.u64();
+        descriptor.current_round_guest_cycles = input.u64();
+        descriptor.subsequent_round_guest_cycles = input.u64();
+        result.push_back(value);
+    }
+    return result;
+}
+
+void write_native_sdk_provider_candidates(
+    NativePortAdmissionPayloadWriter& output,
+    const std::vector<katana::analysis::NativeSdkProviderCandidate>& values) {
+    output.count(values.size());
+    for (const auto& value : values) {
+        output.enumeration(value.family);
+        output.u32(value.entry_address);
+        output.u32(value.covered_size);
+        output.text(value.code_identity);
+        output.enumeration(value.boundary_proof);
+        output.boolean(value.resource_reference.has_value());
+        if (value.resource_reference.has_value()) {
+            const auto& reference = *value.resource_reference;
+            output.enumeration(reference.kind);
+            output.u32(reference.owner_record_stride);
+            output.u32(reference.reference_field_offset);
+            output.u32(reference.descriptor_stride);
+            output.u32(reference.minimum_descriptor_bytes);
+            write_admission_u32_vector(
+                output, reference.observed_read_offsets);
+            write_admission_u32_vector(
+                output, reference.observed_write_offsets);
+            write_admission_u32_vector(output, reference.evidence_sites);
+        }
+        output.count(value.evidence.size());
+        for (const auto& evidence : value.evidence) output.text(evidence);
+    }
+}
+
+std::vector<katana::analysis::NativeSdkProviderCandidate>
+read_native_sdk_provider_candidates(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::vector<katana::analysis::NativeSdkProviderCandidate> result;
+    result.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        katana::analysis::NativeSdkProviderCandidate value;
+        value.family = input.enumeration(
+            katana::analysis::NativeSdkProviderFamily::SoundFrameService);
+        value.entry_address = input.u32();
+        value.covered_size = input.u32();
+        value.code_identity = input.text();
+        value.boundary_proof = input.enumeration(
+            katana::analysis::NativeSdkProviderBoundaryProof::
+                StructuralPrologueReturn);
+        if (input.boolean()) {
+            katana::analysis::NativeSdkResourceReferenceContract reference;
+            reference.kind = input.enumeration(
+                katana::analysis::NativeSdkResourceReferenceKind::
+                    GuestDescriptorPointer);
+            reference.owner_record_stride = input.u32();
+            reference.reference_field_offset = input.u32();
+            reference.descriptor_stride = input.u32();
+            reference.minimum_descriptor_bytes = input.u32();
+            reference.observed_read_offsets =
+                read_admission_u32_vector(input);
+            reference.observed_write_offsets =
+                read_admission_u32_vector(input);
+            reference.evidence_sites = read_admission_u32_vector(input);
+            value.resource_reference = std::move(reference);
+        }
+        const auto evidence_count = input.count();
+        value.evidence.reserve(evidence_count);
+        for (std::size_t evidence_index = 0u;
+             evidence_index < evidence_count; ++evidence_index)
+            value.evidence.push_back(input.text());
+        result.push_back(std::move(value));
+    }
+    return result;
+}
+
+void write_native_hook_proof_gaps(
+    NativePortAdmissionPayloadWriter& output,
+    const std::vector<NativePortHookProofGap>& values) {
+    output.count(values.size());
+    for (const auto& value : values) {
+        output.u32(value.guest_address);
+        output.u32(value.covered_size);
+        output.enumeration(value.kind);
+        output.text(value.symbol);
+        output.text(value.reason);
+    }
+}
+
+std::vector<NativePortHookProofGap> read_native_hook_proof_gaps(
+    NativePortAdmissionPayloadReader& input) {
+    const auto count = input.count();
+    std::vector<NativePortHookProofGap> result;
+    result.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index) {
+        NativePortHookProofGap value;
+        value.guest_address = input.u32();
+        value.covered_size = input.u32();
+        value.kind = input.enumeration(
+            katana::runtime::NativePortHookKind::Instruction);
+        value.symbol = input.text();
+        value.reason = input.text();
+        result.push_back(std::move(value));
+    }
+    return result;
+}
+
+const IrProgramCacheLimits& prepared_native_port_admission_ir_limits() {
+    static const IrProgramCacheLimits limits{
+        .maximum_payload_bytes =
+            maximum_prepared_native_port_admission_artifact_bytes,
+        .maximum_functions = 1u * 1024u * 1024u,
+        .maximum_blocks = 4u * 1024u * 1024u,
+        .maximum_instructions = 16u * 1024u * 1024u,
+        .maximum_successors = 32u * 1024u * 1024u,
+        .maximum_targets = 64u * 1024u * 1024u,
+        .maximum_callsites = 16u * 1024u * 1024u,
+        .maximum_parser_depth = 8u,
+        .maximum_allocation_bytes = 1024u * 1024u * 1024u,
+    };
+    return limits;
+}
+
+std::vector<std::uint8_t> serialize_prepared_native_port_admission_payload(
+    const NativeDiscAnalysisState& state,
+    const bool guarded_inventory_complete) {
+    NativePortAdmissionPayloadWriter output;
+    output.u32(prepared_native_port_admission_payload_schema);
+    const auto emitted_program_payload = serialize_ir_program_cache_payload(
+        state.emitted_program,
+        prepared_native_port_admission_ir_limits());
+    output.blob(emitted_program_payload);
+    output.u32(state.product_entry_address);
+    output.u32(state.product_entry_owner);
+    output.boolean(state.backend_admitted);
+    output.boolean(guarded_inventory_complete);
+    write_admission_u32_vector(
+        output, state.native_aot_resume_entries);
+    write_native_port_program_index(
+        output, state.native_port_program_index);
+    write_native_port_hardware_closure(
+        output, state.native_hardware_closure);
+    write_runtime_wait_loop_descriptors(
+        output, state.wait_loop_descriptors);
+    write_mmio_wait_loop_proofs(output, state.mmio_wait_loops);
+    write_composite_callback_proofs(
+        output, state.composite_callback_batches);
+    const std::set<std::uint32_t> architectural_boundaries(
+        state.composite_callback_architectural_boundaries.begin(),
+        state.composite_callback_architectural_boundaries.end());
+    write_admission_u32_set(output, architectural_boundaries);
+    write_native_sdk_provider_candidates(
+        output, state.native_sdk_provider_candidates);
+    write_native_hook_proof_gaps(output, state.native_hook_proof_gaps);
+    return std::move(output).finish();
+}
+
+struct RehydratedPreparedNativePortAdmission final {
+    std::shared_ptr<NativeDiscAnalysisState> state;
+    bool guarded_inventory_complete = false;
+};
+
+RehydratedPreparedNativePortAdmission
+parse_prepared_native_port_admission_payload(
+    const std::span<const std::uint8_t> payload) {
+    NativePortAdmissionPayloadReader input(payload);
+    if (input.u32() != prepared_native_port_admission_payload_schema)
+        throw std::runtime_error(
+            "prepared-native-port-admission-payload-schema");
+    auto state = std::make_shared<NativeDiscAnalysisState>();
+    state->emitted_program = parse_ir_program_cache_payload(
+        input.blob(), prepared_native_port_admission_ir_limits());
+    katana::ir::require_valid_program(state->emitted_program);
+    state->product_entry_address = input.u32();
+    state->product_entry_owner = input.u32();
+    state->backend_admitted = input.boolean();
+    const bool guarded_inventory_complete = input.boolean();
+    state->native_aot_resume_entries =
+        read_admission_u32_vector(input);
+    state->native_port_program_index = read_native_port_program_index(
+        input, state->emitted_program);
+    state->native_hardware_closure =
+        read_native_port_hardware_closure(input);
+    state->wait_loop_descriptors =
+        read_runtime_wait_loop_descriptors(input);
+    state->mmio_wait_loops = read_mmio_wait_loop_proofs(input);
+    state->composite_callback_batches =
+        read_composite_callback_proofs(input);
+    const auto architectural_boundaries = read_admission_u32_set(input);
+    state->composite_callback_architectural_boundaries.insert(
+        architectural_boundaries.begin(), architectural_boundaries.end());
+    state->native_sdk_provider_candidates =
+        read_native_sdk_provider_candidates(input);
+    state->native_hook_proof_gaps =
+        read_native_hook_proof_gaps(input);
+    if (!input.empty())
+        throw std::runtime_error(
+            "prepared-native-port-admission-payload-trailing-bytes");
+    return {std::move(state), guarded_inventory_complete};
+}
+
+std::string prepared_native_port_admission_implementation_identity(
+    const PortExportOptions& options) {
+    if (options.analysis_cache_implementation_identity.empty() ||
+        options.ir_product_implementation_identity.empty() ||
+        options.codegen_implementation_identity.empty())
+        return {};
+    NativePortIdentityMaterial material;
+    material.text("katana.prepared-native-port-admission-implementation");
+    material.u32(1u);
+    material.text(options.analysis_cache_implementation_identity);
+    material.text(options.ir_product_implementation_identity);
+    // This P0 uses the existing codegen component as a conservative superset
+    // of ProgramIndex, closure, wait/composite and provider implementation.
+    // It may over-invalidate on emitter-only edits but can never admit stale
+    // state; a narrower component split remains a downstream P1 concern.
+    material.text(options.codegen_implementation_identity);
+    material.u32(prepared_native_port_admission_payload_schema);
+    material.u32(latent_aot_analysis_ir_schema);
+    material.u32(port_project_contract_version);
+    material.u32(katana::build_contract::runtime_abi_version);
+    material.u32(katana::build_contract::block_abi_version);
+    material.u32(
+        katana::build_contract::native_port_profile_contract_version);
+    material.u32(katana::runtime::game_project_contract_version);
+    return katana::io::sha256_bytes(std::move(material).finish());
+}
+
+std::optional<PreparedNativePortAdmissionArtifactIdentity>
+prepared_native_port_admission_identity(
+    const NativeDiscAnalysisArtifact& analysis_artifact,
+    const std::span<const std::uint8_t> analysis_archive,
+    const PortExportOptions& options) {
+    if (analysis_artifact.identity.key.empty() || analysis_archive.empty() ||
+        options.game_project == nullptr ||
+        options.native_port_definition == nullptr ||
+        options.native_port_artifact_identity.empty())
+        return std::nullopt;
+    const auto admission_implementation =
+        prepared_native_port_admission_implementation_identity(options);
+    if (admission_implementation.empty()) return std::nullopt;
+
+    PreparedNativePortAdmissionArtifactIdentity identity;
+    identity.analysis_artifact_identity = analysis_artifact.identity.key;
+    identity.analysis_archive_sha256 = katana::io::sha256_bytes(
+        std::string_view(
+            reinterpret_cast<const char*>(analysis_archive.data()),
+            analysis_archive.size()));
+    identity.game_project_identity =
+        game_project_export_identity(*options.game_project);
+    identity.native_port_identity =
+        native_port_export_identity(options.native_port_definition);
+    identity.native_port_artifact_identity =
+        options.native_port_artifact_identity;
+    identity.admission_implementation_identity = admission_implementation;
+    identity.analyzer_abi = analysis_artifact.identity.analyzer_abi;
+    identity.backend_abi = analysis_artifact.identity.backend_abi;
+    identity.key =
+        prepared_native_port_admission_artifact_identity_key(identity);
+    return identity;
+}
+
+bool prepared_native_port_admission_matches_analysis_artifact(
+    const NativeDiscAnalysisState& state,
+    const bool guarded_inventory_complete,
+    const NativeDiscAnalysisArtifact& artifact) {
+    if (state.product_entry_address != artifact.product_entry_address ||
+        state.product_entry_owner != artifact.product_entry_owner ||
+        state.native_aot_resume_entries != artifact.native_resume_entries ||
+        state.backend_admitted != artifact.backend_admitted ||
+        guarded_inventory_complete != artifact.guarded_inventory_complete ||
+        state.native_hardware_closure.known_hardware_sites !=
+            artifact.known_hardware_sites ||
+        state.native_hardware_closure.gaps.size() !=
+            artifact.native_hardware_gaps ||
+        state.native_hardware_closure.complete !=
+            artifact.native_hardware_closure_complete ||
+        state.native_hardware_closure.replacement_reachability_proven !=
+            artifact.replacement_reachability_proven ||
+        state.native_sdk_provider_candidates.size() !=
+            artifact.sdk_provider_candidates)
+        return false;
+    if (!std::is_sorted(state.native_aot_resume_entries.begin(),
+                        state.native_aot_resume_entries.end()) ||
+        std::adjacent_find(
+            state.native_aot_resume_entries.begin(),
+            state.native_aot_resume_entries.end()) !=
+            state.native_aot_resume_entries.end())
+        return false;
+    const std::vector<std::uint32_t> frontier(
+        state.native_hardware_closure
+            .replacement_reachability_incomplete_frontier.begin(),
+        state.native_hardware_closure
+            .replacement_reachability_incomplete_frontier.end());
+    if (frontier !=
+        artifact.replacement_reachability_incomplete_frontier)
+        return false;
+    if (!std::equal(
+            state.native_hardware_closure.gaps.begin(),
+            state.native_hardware_closure.gaps.end(),
+            artifact.native_hardware_gap_details.begin(),
+            artifact.native_hardware_gap_details.end(),
+            [](const auto& current, const auto& stored) {
+                return current.instruction_address ==
+                           stored.instruction_address &&
+                       current.reason == stored.reason;
+            }))
+        return false;
+
+    std::unordered_set<std::uint32_t> expected_boundaries;
+    expected_boundaries.reserve(state.composite_callback_batches.size());
+    for (const auto& proof : state.composite_callback_batches)
+        expected_boundaries.insert(
+            proof.descriptor.continuation_address);
+    if (expected_boundaries !=
+        state.composite_callback_architectural_boundaries)
+        return false;
+
+    std::map<std::uint32_t, std::size_t> expected_function_counts;
+    for (const auto& function : state.emitted_program)
+        ++expected_function_counts[function.entry_address];
+    if (expected_function_counts.size() !=
+        state.native_port_program_index.functions_by_entry.size())
+        return false;
+    const auto* const begin = state.emitted_program.data();
+    const auto* const end = begin + state.emitted_program.size();
+    for (const auto& [entry, functions] :
+         state.native_port_program_index.functions_by_entry) {
+        const auto expected = expected_function_counts.find(entry);
+        if (expected == expected_function_counts.end() ||
+            expected->second != functions.size() || functions.empty())
+            return false;
+        for (const auto* function : functions) {
+            if (function < begin || function >= end ||
+                function->entry_address != entry)
+                return false;
+        }
+    }
+    return true;
+}
+
+PreparedNativePortAdmissionArtifact
+make_prepared_native_port_admission_artifact(
+    PreparedNativePortAdmissionArtifactIdentity identity,
+    const NativeDiscAnalysisState& state,
+    const bool guarded_inventory_complete) {
+    auto digests = prepared_native_port_admission_program_digests(
+        state.emitted_program);
+    PreparedNativePortAdmissionArtifact artifact;
+    artifact.identity = std::move(identity);
+    artifact.emitted_program_digest =
+        std::move(digests.emitted_program_digest);
+    artifact.function_digests = std::move(digests.functions);
+    artifact.admission_payload =
+        serialize_prepared_native_port_admission_payload(
+            state, guarded_inventory_complete);
+    return artifact;
+}
+
+bool prepared_native_port_admission_dependencies_match(
+    const PreparedNativePortAdmissionArtifact& artifact,
+    const NativeDiscAnalysisState& state) {
+    const auto current = prepared_native_port_admission_program_digests(
+        state.emitted_program);
+    return current.emitted_program_digest ==
+               artifact.emitted_program_digest &&
+           current.functions == artifact.function_digests;
+}
+
 [[nodiscard]] std::vector<katana::sh4::DisassemblyLine>
 rehydrate_analyzed_instruction_slice(
     const katana::io::ExecutableImage& image,
@@ -26894,6 +28169,416 @@ rehydrate_analyzed_instruction_slice(
              target_address});
     }
     return result;
+}
+
+// A prepared admission payload is an optimization artifact, not an
+// admission authority.  Its pointer-free IR and proof records are useful
+// only after the exact current analysis generation has been rebound.  Keep
+// this validator in the consumer path so a syntactically valid payload can
+// never bypass the same product predicates that created it.
+[[nodiscard]] std::optional<std::string>
+validate_prepared_native_port_admission_state(
+    const NativeDiscAnalysisState& state,
+    const bool guarded_inventory_complete,
+    const NativeDiscAnalysisArtifact& analysis_artifact,
+    const PreparedPortProgram& prepared,
+    const katana::analysis::DreamcastHardwareAudit& primary_hardware_audit,
+    const PortExportOptions& options) {
+    const auto reject = [](const std::string_view reason)
+        -> std::optional<std::string> { return std::string(reason); };
+
+    try {
+        const auto* const native_port = options.native_port_definition;
+        if (native_port == nullptr || options.game_project == nullptr)
+            return reject("definition-or-game-project-missing");
+        if (options.diagnostic_partial)
+            return reject("diagnostic-admission");
+        if (!state.backend_admitted || !guarded_inventory_complete)
+            return reject("backend-or-guarded-inventory");
+
+        katana::runtime::validate_native_port_definition(*native_port);
+        if (!state.native_hook_proof_gaps.empty())
+            return reject("native-hook-proof-gaps");
+
+        const auto& index = state.native_port_program_index;
+        if (!index.external_root_ownership_complete ||
+            index.external_function_roots.empty())
+            return reject("external-root-ownership");
+
+        if (state.emitted_program.empty())
+            return reject("emitted-program-empty");
+        katana::ir::require_valid_program(state.emitted_program);
+        require_guarded_aot_program_entries(
+            state.emitted_program,
+            prepared.analysis.guarded_aot_entries,
+            "prepared-native-port-admission-cache");
+        require_architectural_safepoint_program_entries(
+            state.emitted_program,
+            "prepared-native-port-admission-cache");
+
+        if (!std::is_sorted(state.native_aot_resume_entries.begin(),
+                            state.native_aot_resume_entries.end()) ||
+            std::adjacent_find(
+                state.native_aot_resume_entries.begin(),
+                state.native_aot_resume_entries.end()) !=
+                state.native_aot_resume_entries.end())
+            return reject("native-resume-order");
+        const auto boot_end = static_cast<std::uint64_t>(
+                                  prepared.boot_address) +
+                              prepared.boot_size;
+        if (boot_end > (static_cast<std::uint64_t>(
+                            std::numeric_limits<std::uint32_t>::max()) +
+                        1u))
+            return reject("boot-range-overflow");
+        for (const auto resume : state.native_aot_resume_entries) {
+            if ((resume & 1u) != 0u || resume < prepared.boot_address ||
+                static_cast<std::uint64_t>(resume) >= boot_end)
+                return reject("native-resume-range");
+            std::size_t matching_blocks = 0u;
+            for (const auto& function : state.emitted_program) {
+                for (const auto& block : function.blocks) {
+                    if (block.start_address == resume)
+                        return reject("native-resume-block-entry");
+                    const auto candidates =
+                        detail::native_aot_internal_resume_entries(block);
+                    if (!std::binary_search(
+                            candidates.begin(), candidates.end(), resume))
+                        continue;
+                    std::uint64_t block_end =
+                        static_cast<std::uint64_t>(block.start_address) + 2u;
+                    for (const auto& instruction : block.instructions)
+                        block_end = std::max(
+                            block_end,
+                            static_cast<std::uint64_t>(
+                                instruction.source_address) +
+                                2u);
+                    if (block.start_address < prepared.boot_address ||
+                        block_end > boot_end)
+                        return reject("native-resume-block-range");
+                    ++matching_blocks;
+                }
+            }
+            if (matching_blocks != 1u)
+                return reject("native-resume-owner");
+        }
+
+        // Rebuild only the ownership relations that are derivable from the
+        // materialized IR.  CFA/FVA edges remain in the authenticated
+        // payload, but every pointer-facing relation must agree with the IR
+        // before a hook or product root can consume it.
+        std::map<std::uint32_t, std::set<std::uint32_t>>
+            expected_instruction_owners;
+        std::map<std::uint32_t, std::size_t> expected_block_entry_counts;
+        std::map<std::uint32_t, std::size_t> expected_safe_resume_entry_counts;
+        std::map<std::uint32_t, std::set<std::uint32_t>> expected_entry_owners;
+        std::map<std::uint32_t, std::size_t> expected_function_counts;
+        std::set<std::uint32_t> expected_function_entries;
+        // NativePortProgramIndex::function_entries is deliberately the union
+        // of materialized IR functions and the current CFA's entry-only
+        // candidates.  The latter are used by boundary inference, so an
+        // emitted-only equality would reject valid candidate-backed IR.  The
+        // union is nevertheless exact: any extra entry in a rehydrated
+        // payload is stale and must not participate in root ownership.
+        for (const auto& candidate : prepared.analysis.recursive.functions)
+            expected_function_entries.insert(candidate.address);
+        for (const auto& function : state.emitted_program) {
+            ++expected_function_counts[function.entry_address];
+            expected_function_entries.insert(function.entry_address);
+            if (!index.function_entries.contains(function.entry_address))
+                return reject("program-index-function-entry");
+            for (const auto& block : function.blocks) {
+                ++expected_block_entry_counts[block.start_address];
+                expected_entry_owners[block.start_address].insert(
+                    function.entry_address);
+                for (const auto resume :
+                     detail::native_aot_internal_resume_entries(block)) {
+                    ++expected_safe_resume_entry_counts[resume];
+                    expected_entry_owners[resume].insert(
+                        function.entry_address);
+                }
+                for (const auto& instruction : block.instructions)
+                    expected_instruction_owners[instruction.source_address]
+                        .insert(function.entry_address);
+            }
+        }
+        if (index.function_entries != expected_function_entries)
+            return reject("program-index-stale-function-entry");
+        if (index.instruction_owners != expected_instruction_owners ||
+            index.block_entry_counts != expected_block_entry_counts ||
+            index.safe_resume_entry_counts !=
+                expected_safe_resume_entry_counts ||
+            index.entry_owners != expected_entry_owners)
+            return reject("program-index-ir-ownership");
+
+        const auto* const program_begin = state.emitted_program.data();
+        const auto* const program_end =
+            program_begin + state.emitted_program.size();
+        if (index.functions_by_entry.size() !=
+            expected_function_counts.size())
+            return reject("program-index-function-count");
+        for (const auto& [entry, functions] : index.functions_by_entry) {
+            const auto expected = expected_function_counts.find(entry);
+            if (expected == expected_function_counts.end() ||
+                expected->second != functions.size() || functions.empty())
+                return reject("program-index-function-map");
+            for (const auto* const function : functions) {
+                if (function == nullptr || function < program_begin ||
+                    function >= program_end ||
+                    function->entry_address != entry)
+                    return reject("program-index-function-pointer");
+            }
+        }
+        for (const auto& [entry, evidence] : index.function_boundaries) {
+            if (!index.function_entries.contains(entry) ||
+                (evidence.identity_bound_exact_sizes.empty() &&
+                 evidence.closed_control_flow_sizes.empty() &&
+                 evidence.guarded_owner_extent_sizes.empty()))
+                return reject("program-index-function-boundary");
+        }
+        for (const auto& [source, targets] :
+             index.outgoing_function_entries) {
+            if (!index.functions_by_entry.contains(source) ||
+                std::any_of(
+                    targets.begin(), targets.end(), [&](const auto target) {
+                        return !index.functions_by_entry.contains(target);
+                    }))
+                return reject("program-index-outgoing-owner");
+        }
+        if (std::set<std::uint32_t>(
+                index.incomplete_outgoing_function_entries.begin(),
+                index.incomplete_outgoing_function_entries.end()) !=
+            [&]() {
+                std::set<std::uint32_t> evidence_entries;
+                for (const auto& [entry, evidence] :
+                     index.incomplete_outgoing_evidence) {
+                    static_cast<void>(evidence);
+                    evidence_entries.insert(entry);
+                }
+                return evidence_entries;
+            }())
+            return reject("program-index-incomplete-evidence");
+        for (const auto& [entry, evidence] :
+             index.incomplete_outgoing_evidence) {
+            static_cast<void>(evidence);
+            if (!index.functions_by_entry.contains(entry))
+                return reject("program-index-incomplete-owner");
+        }
+
+        std::map<std::uint32_t, std::set<NativePortExternalEntryKind>>
+            expected_external_kinds;
+        for (const auto entry : prepared.image.entry_points())
+            expected_external_kinds[entry].insert(
+                NativePortExternalEntryKind::ProductImageRoot);
+        for (const auto entry : options.native_aot_resume_entries)
+            expected_external_kinds[entry].insert(
+                NativePortExternalEntryKind::NativeResumeContinuation);
+        for (const auto& continuation :
+             native_port->bootstrap.post_aot_continuations)
+            expected_external_kinds[continuation.resume_address].insert(
+                NativePortExternalEntryKind::PostBootstrapContinuation);
+        std::set<std::uint32_t> expected_external_entries;
+        for (const auto& [entry, kinds] : expected_external_kinds) {
+            static_cast<void>(kinds);
+            expected_external_entries.insert(entry);
+        }
+        if (index.external_entry_kinds != expected_external_kinds ||
+            index.exact_external_entries != expected_external_entries)
+            return reject("program-index-external-contract");
+        std::set<std::uint32_t> expected_external_roots;
+        for (const auto entry : expected_external_entries) {
+            std::set<std::uint32_t> owners;
+            // `function_entries` also carries entry-only CFA candidates.  An
+            // external product root is only owned when its exact IR function
+            // was materialized once; a candidate-only address must never
+            // manufacture a root by itself.
+            if (const auto found = index.functions_by_entry.find(entry);
+                found != index.functions_by_entry.end() &&
+                found->second.size() == 1u)
+                owners.insert(entry);
+            if (const auto found = index.entry_owners.find(entry);
+                found != index.entry_owners.end())
+                owners.insert(found->second.begin(), found->second.end());
+            if (const auto found = index.instruction_owners.find(entry);
+                found != index.instruction_owners.end())
+                owners.insert(found->second.begin(), found->second.end());
+            if (owners.size() != 1u)
+                return reject("program-index-external-owner");
+            expected_external_roots.insert(*owners.begin());
+        }
+        if (expected_external_roots != index.external_function_roots)
+            return reject("program-index-external-roots");
+
+        const auto product_entry = native_port->bootstrap.post_entry_point;
+        if (state.product_entry_address != product_entry)
+            return reject("product-entry-address");
+        const auto product_owners = index.entry_owners.find(product_entry);
+        if (product_owners == index.entry_owners.end() ||
+            product_owners->second.size() != 1u ||
+            !product_owners->second.contains(state.product_entry_owner))
+            return reject("product-entry-owner");
+
+        const auto source_image = prepared.pre_bootstrap_image != nullptr
+                                      ? *prepared.pre_bootstrap_image
+                                      : prepared.image;
+        for (const auto& image : native_port->images) {
+            const auto bytes = game_project_image_bytes(
+                source_image, image.guest_address, image.byte_size);
+            const auto identity =
+                "sha256:" + katana::io::sha256_bytes(std::string_view(
+                                  reinterpret_cast<const char*>(bytes.data()),
+                                  bytes.size()));
+            if (identity != image.byte_identity)
+                return reject("native-port-image-identity");
+        }
+
+        for (const auto& hook : native_port->hooks) {
+            if (hook.code_source ==
+                katana::runtime::NativePortHookCodeSource::StaticImage) {
+                const auto bytes = game_project_image_bytes(
+                    prepared.image, hook.guest_address, hook.covered_size);
+                const auto identity =
+                    "sha256:" + katana::io::sha256_bytes(std::string_view(
+                                      reinterpret_cast<const char*>(
+                                          bytes.data()),
+                                      bytes.size()));
+                if (identity != hook.code_identity)
+                    return reject("native-hook-image-identity");
+            } else if (!prove_native_port_hook_code_source(
+                            analysis_artifact.latent.modules, hook)
+                              .valid) {
+                return reject("native-hook-latent-identity");
+            }
+            if (!katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
+                continue;
+
+            const auto block_entries =
+                index.block_entry_counts.contains(hook.guest_address)
+                    ? index.block_entry_counts.at(hook.guest_address)
+                    : 0u;
+            const auto resume_entries =
+                index.safe_resume_entry_counts.contains(hook.guest_address)
+                    ? index.safe_resume_entry_counts.at(hook.guest_address)
+                    : 0u;
+            const bool replacing =
+                hook.original_policy ==
+                katana::runtime::NativePortHookOriginalPolicy::ReplacesOriginal;
+            if (replacing) {
+                const auto coverage = prove_native_port_hook_coverage(
+                    index, state.native_aot_resume_entries, hook,
+                    hook.guest_address);
+                if (!coverage.valid)
+                    return reject("native-hook-coverage");
+                if (hook.kind == katana::runtime::NativePortHookKind::Instruction &&
+                    !std::binary_search(
+                        state.native_aot_resume_entries.begin(),
+                        state.native_aot_resume_entries.end(),
+                        hook.guest_address))
+                    return reject("native-hook-resume-boundary");
+            } else if (!((block_entries == 1u && resume_entries == 0u) ||
+                         (block_entries == 0u && resume_entries == 1u))) {
+                return reject("native-hook-entry-ownership");
+            } else if (block_entries == 0u &&
+                       !std::binary_search(
+                           state.native_aot_resume_entries.begin(),
+                           state.native_aot_resume_entries.end(),
+                           hook.guest_address)) {
+                return reject("native-hook-resume-entry");
+            }
+        }
+
+        OwnerSemanticProofCache closure_proof_cache;
+        const auto expected_closure = evaluate_native_port_hardware_closure(
+            analysis_artifact.native_hardware_audit,
+            native_port,
+            true,
+            index,
+            state.native_aot_resume_entries,
+            analysis_artifact.latent.modules,
+            closure_proof_cache);
+        const auto encoded_equal = [](const auto& writer_function,
+                                      const auto& left,
+                                      const auto& right) {
+            NativePortAdmissionPayloadWriter left_output;
+            NativePortAdmissionPayloadWriter right_output;
+            writer_function(left_output, left);
+            writer_function(right_output, right);
+            return std::move(left_output).finish() ==
+                   std::move(right_output).finish();
+        };
+        if (!encoded_equal(write_native_port_hardware_closure,
+                           state.native_hardware_closure,
+                           expected_closure))
+            return reject("native-hardware-closure-replay");
+        if (!state.native_hardware_closure.definition_present ||
+            !state.native_hardware_closure.complete ||
+            !state.native_hardware_closure.gaps.empty() ||
+            !state.native_hardware_closure.replacement_reachability_proven ||
+            !state.native_hardware_closure
+                 .replacement_reachability_incomplete_frontier.empty() ||
+            state.native_hardware_closure.provider_semantic_misses != 0u ||
+            state.native_hardware_closure.provider_semantic_contracts !=
+                native_port->provider_semantic_contracts.size() ||
+            state.native_hardware_closure.provider_semantic_coverage !=
+                native_port->provider_semantic_coverage ||
+            state.native_hardware_closure.provider_semantic_matches >
+                state.native_hardware_closure.provider_semantic_summaries)
+            return reject("native-hardware-closure-contract");
+
+        const auto wait_loop_descriptors =
+            runtime_wait_loop_descriptors(primary_hardware_audit);
+        const auto mmio_wait_loops = mmio_wait_loop_batch_proofs(
+            state.emitted_program, primary_hardware_audit);
+        if (!encoded_equal(write_runtime_wait_loop_descriptors,
+                           state.wait_loop_descriptors,
+                           wait_loop_descriptors) ||
+            !encoded_equal(write_mmio_wait_loop_proofs,
+                           state.mmio_wait_loops,
+                           mmio_wait_loops))
+            return reject("wait-mmio-proof-replay");
+
+        const auto composite_callback_batches =
+            composite_callback_batch_proofs(
+                state.emitted_program,
+                prepared.analysis.indirect_control_flow,
+                prepared.analysis.recursive.functions);
+        if (!encoded_equal(write_composite_callback_proofs,
+                           state.composite_callback_batches,
+                           composite_callback_batches))
+            return reject("composite-proof-replay");
+        std::unordered_set<std::uint32_t> expected_composite_boundaries;
+        expected_composite_boundaries.reserve(
+            composite_callback_batches.size());
+        for (const auto& proof : composite_callback_batches)
+            expected_composite_boundaries.insert(
+                proof.descriptor.continuation_address);
+        if (expected_composite_boundaries !=
+            state.composite_callback_architectural_boundaries)
+            return reject("composite-boundary-replay");
+
+        std::vector<katana::sh4::DisassemblyLine>
+            rehydrated_analyzed_instructions;
+        const auto analyzed_instructions = [&]()
+            -> std::span<const katana::sh4::DisassemblyLine> {
+            if (!prepared.analysis.recursive.instructions.empty())
+                return prepared.analysis.recursive.instructions;
+            rehydrated_analyzed_instructions =
+                rehydrate_analyzed_instruction_slice(
+                    prepared.image, prepared.program);
+            return rehydrated_analyzed_instructions;
+        }();
+        const auto sdk_provider_candidates =
+            katana::analysis::discover_native_sdk_provider_candidates(
+                prepared.image, analyzed_instructions);
+        if (sdk_provider_candidates !=
+            state.native_sdk_provider_candidates)
+            return reject("sdk-provider-replay");
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception& error) {
+        return std::string("admission-validator:") + error.what();
+    }
+    return std::nullopt;
 }
 
 static std::shared_ptr<NativeDiscAnalysisState>
@@ -27422,76 +29107,9 @@ prepare_dreamcast_port_project_impl(
         katana::ProgressUnit::Steps,
         std::nullopt,
         "partition-preparation");
-    std::vector<katana::ir::Function> emitted_program(prepared.program.begin(),
-                                                      prepared.program.end());
-    for (const auto& module : latent_aot.modules)
-        emitted_program.insert(emitted_program.end(), module.program.begin(), module.program.end());
-    std::map<std::uint32_t, std::size_t> emitted_function_entry_counts;
-    for (const auto& function : emitted_program)
-        ++emitted_function_entry_counts[function.entry_address];
-    for (const auto& module : latent_aot.modules) {
-        for (const auto& transfer : module.external_transfers) {
-            if (emitted_function_entry_counts[transfer.target_address] != 1u)
-                throw std::runtime_error(
-                    "Latenter Cross-Image-Transfer besitzt keinen "
-                    "eindeutigen emittierten Primaerimage-Entry.");
-            const auto source_address =
-                module.source_address + transfer.source_offset;
-            std::size_t matches = 0u;
-            for (auto& function : emitted_program) {
-                if (function.entry_address < module.source_address ||
-                    static_cast<std::uint64_t>(function.entry_address) >=
-                        static_cast<std::uint64_t>(module.source_address) +
-                            module.byte_size)
-                    continue;
-                for (auto& block : function.blocks) {
-                    for (auto& instruction : block.instructions) {
-                        if (instruction.source_address != source_address)
-                            continue;
-                        const auto classification =
-                            classify_loaded_aot_external_transfer(
-                                transfer, instruction, block);
-                        if (classification ==
-                            LoadedAotExternalTransferClassification::Conflict)
-                            throw std::runtime_error(
-                                "Latenter Cross-Image-Transfer widerspricht "
-                                "dem isoliert validierten IR.");
-                        ++matches;
-                        if (classification ==
-                            LoadedAotExternalTransferClassification::
-                                AlreadyIdenticalResolved)
-                            continue;
-                        instruction.resolved_targets = {
-                            transfer.target_address};
-                        instruction.dynamic_target_class =
-                            katana::ir::DynamicTargetClass::GuardedComplete;
-                        block.has_indirect_successor = false;
-                        if (transfer.kind ==
-                            PreparedLatentAotExternalTransferKind::Call) {
-                            const auto insertion = std::lower_bound(
-                                function.direct_callees.begin(),
-                                function.direct_callees.end(),
-                                transfer.target_address);
-                            if (insertion == function.direct_callees.end() ||
-                                *insertion != transfer.target_address)
-                                function.direct_callees.insert(
-                                    insertion, transfer.target_address);
-                        }
-                    }
-                }
-            }
-            // A resume entry may retain its own IR view of the same exact
-            // source instruction.  Every occurrence is identity-equivalent
-            // and must receive the recovered edge; requiring one occurrence
-            // incorrectly rejects otherwise valid overlapping resume views.
-            if (matches == 0u)
-                throw std::runtime_error(
-                    "Latenter Cross-Image-Transfer besitzt keinen "
-                    "emittierten Quellbefehl.");
-        }
-    }
-    annotate_proven_linear_ram_accesses(emitted_program);
-    katana::ir::require_valid_program(emitted_program);
+    auto emitted_program =
+        materialize_prepared_native_port_emitted_program(
+            prepared.program, latent_aot);
     std::vector<std::uint32_t> explicit_native_aot_resume_entries(
         options.native_aot_resume_entries.begin(),
         options.native_aot_resume_entries.end());
@@ -27899,6 +29517,10 @@ prepare_dreamcast_port_project_impl(
 
 constexpr std::string_view native_disc_analysis_artifact_cache_name{
     "native-disc-analysis-v2.bin"};
+constexpr std::string_view prepared_native_port_admission_cache_directory{
+    "native-port-admission"};
+constexpr std::string_view prepared_native_port_admission_cache_name{
+    "prepared-native-port-admission-v1.bin"};
 
 std::vector<katana::io::InputProvenance> native_disc_input_provenance(
     const katana::platform::DreamcastDiscBoot& disc) {
@@ -32811,41 +34433,209 @@ try_reuse_native_disc_analysis_artifact(
         result.analysis_artifact_cache_hit = true;
         result.boot_analysis_cache_hit = true;
         result.boot_analysis_pipeline_runs = 0u;
-        // The combined hardware audit is analyzer output, not NativePort
-        // admission state. Its primary image/IR and every latent source have
-        // just been rebound above under the exact analyzer identity. Compact
-        // checkpoints intentionally omit the large analysis streams needed
-        // to reproduce the latent audit, so reuse this source-bound audit and
-        // recompute only the NativePort-dependent closure below.
-        result.admitted_state = prepare_dreamcast_port_project_impl(
-            {result.image,
-             result.analysis,
-             result.program,
-             result.inputs,
-             result.entry_address,
-             result.boot_address,
-             result.boot_size,
-             result.project_identity,
-             true,
-             true,
-             result.disc_volume_start_lba,
-             result.disc_extent_lba_bias,
-             false,
-             &result.hardware_audit,
-             &result.control_flow_graph,
-             &result.call_graph,
-             &result.pre_bootstrap_image},
-            options,
-            result.disc_source,
-            nullptr,
-            std::move(artifact.latent),
+        const PreparedPortProgram prepared_reuse{
+            result.image,
+            result.analysis,
+            result.program,
+            result.inputs,
+            result.entry_address,
+            result.boot_address,
+            result.boot_size,
+            result.project_identity,
             true,
-             result.latent_external_primary_roots,
-             &artifact.native_hardware_audit,
-             game_project_edges_revalidated != 0u
-                  ? nullptr
-                  : &artifact.native_port_program_index,
-             true);
+            true,
+            result.disc_volume_start_lba,
+            result.disc_extent_lba_bias,
+            false,
+            &result.hardware_audit,
+            &result.control_flow_graph,
+            &result.call_graph,
+            &result.pre_bootstrap_image};
+
+        // Only an unchanged, committed analysis generation may consume the
+        // persistent admission product. Agent/World materialization still
+        // needs the ephemeral owner-semantic cache, while every admission
+        // delta must execute the authoritative preparation path below.
+        const bool prepared_admission_cache_eligible =
+            product_generation_reuse_requested &&
+            !analysis_checkpoint_requested &&
+            !native_port_contract_changed &&
+            !game_project_admission_delta &&
+            game_project_edges_revalidated == 0u &&
+            !program_index_site_provenance_repaired;
+        std::optional<PreparedNativePortAdmissionArtifactIdentity>
+            prepared_admission_identity;
+        std::unique_ptr<CodegenCache> prepared_admission_cache;
+        std::optional<std::string> loaded_prepared_admission;
+        bool prepared_admission_cache_hit = false;
+        if (prepared_admission_cache_eligible) {
+            // This recomputes the key from the exact archive bytes which just
+            // passed identity, source, World/session and current-image
+            // validation above. The independently computed archive SHA is the
+            // current-generation dependency digest; payload program digests
+            // below additionally reject any inconsistent cached emission.
+            prepared_admission_identity =
+                prepared_native_port_admission_identity(
+                    artifact, stored_bytes, options);
+        }
+        if (prepared_admission_identity.has_value()) {
+            try {
+                ensure_safe_port_directory(
+                    options.analysis_cache_root,
+                    prepared_native_port_admission_cache_directory);
+                prepared_admission_cache = std::make_unique<CodegenCache>(
+                    options.analysis_cache_root /
+                    prepared_native_port_admission_cache_directory);
+                loaded_prepared_admission =
+                    prepared_admission_cache->load_bounded(
+                        prepared_admission_identity->key,
+                        prepared_native_port_admission_cache_name,
+                        maximum_prepared_native_port_admission_artifact_bytes);
+                if (loaded_prepared_admission.has_value()) {
+                    const auto bytes = std::span(
+                        reinterpret_cast<const std::uint8_t*>(
+                            loaded_prepared_admission->data()),
+                        loaded_prepared_admission->size());
+                    auto parsed_admission =
+                        parse_prepared_native_port_admission_artifact(
+                            prepared_admission_identity->key, bytes);
+                    std::string rejection_reason = parsed_admission.reason;
+                    if (parsed_admission.state ==
+                            PreparedNativePortAdmissionArtifactState::Hit &&
+                        parsed_admission.artifact.identity ==
+                            *prepared_admission_identity) {
+                        auto rehydrated =
+                            parse_prepared_native_port_admission_payload(
+                                parsed_admission.artifact.admission_payload);
+                        const bool current_guarded_inventory_complete =
+                            katana::analysis::guarded_aot_inventory_complete(
+                                result.analysis);
+                        if (rehydrated.guarded_inventory_complete !=
+                                current_guarded_inventory_complete) {
+                            rejection_reason = "guarded-inventory";
+                        } else if (!rehydrated.state->backend_admitted) {
+                            rejection_reason = "backend-not-admitted";
+                        } else if (
+                            !rehydrated.state->native_hardware_closure
+                                 .definition_present ||
+                            !rehydrated.state->native_hook_proof_gaps.empty() ||
+                            rehydrated.state->native_hardware_closure
+                                    .provider_semantic_contracts !=
+                                options.native_port_definition
+                                    ->provider_semantic_contracts.size() ||
+                            rehydrated.state->native_hardware_closure
+                                    .provider_semantic_coverage !=
+                                options.native_port_definition
+                                    ->provider_semantic_coverage) {
+                            rejection_reason = "native-port-contract";
+                        } else if (
+                            !prepared_native_port_admission_dependencies_match(
+                                parsed_admission.artifact,
+                                *rehydrated.state)) {
+                            rejection_reason = "program-digests";
+                        } else if (
+                            !prepared_native_port_admission_matches_analysis_artifact(
+                                *rehydrated.state,
+                                rehydrated.guarded_inventory_complete,
+                                artifact)) {
+                            rejection_reason = "analysis-artifact-contract";
+                        } else if (const auto validation_failure =
+                                       validate_prepared_native_port_admission_state(
+                                           *rehydrated.state,
+                                           rehydrated.guarded_inventory_complete,
+                                           artifact,
+                                           prepared_reuse,
+                                           result.hardware_audit,
+                                           options);
+                                   validation_failure.has_value()) {
+                            rejection_reason = *validation_failure;
+                        } else {
+                            rehydrated.state->disc_context.emplace(
+                                prepare_disc_export_context(
+                                    prepared_reuse, result.disc_source));
+                            rehydrated.state->latent_aot =
+                                std::move(artifact.latent);
+                            rehydrated.state->hardware_audit =
+                                result.hardware_audit;
+                            rehydrated.state->native_hardware_audit =
+                                std::move(artifact.native_hardware_audit);
+                            result.admitted_state =
+                                std::move(rehydrated.state);
+                            prepared_admission_cache_hit = true;
+                            report_progress(
+                                options,
+                                "prepared-native-port-admission-cache-hit");
+                        }
+                    } else if (parsed_admission.state ==
+                               PreparedNativePortAdmissionArtifactState::Hit) {
+                        rejection_reason = "identity-material";
+                    }
+                    if (!prepared_admission_cache_hit) {
+                        if (prepared_admission_cache->erase_bounded_if_matches(
+                                prepared_admission_identity->key,
+                                prepared_native_port_admission_cache_name,
+                                *loaded_prepared_admission,
+                                maximum_prepared_native_port_admission_artifact_bytes))
+                            loaded_prepared_admission.reset();
+                        report_progress(
+                            options,
+                            "prepared-native-port-admission-cache-rejected:" +
+                                rejection_reason);
+                    }
+                } else {
+                    report_progress(
+                        options,
+                        "prepared-native-port-admission-cache-miss");
+                }
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const std::exception&) {
+                if (prepared_admission_cache != nullptr &&
+                    loaded_prepared_admission.has_value()) {
+                    try {
+                        if (prepared_admission_cache
+                                ->erase_bounded_if_matches(
+                                    prepared_admission_identity->key,
+                                    prepared_native_port_admission_cache_name,
+                                    *loaded_prepared_admission,
+                                    maximum_prepared_native_port_admission_artifact_bytes))
+                            loaded_prepared_admission.reset();
+                    } catch (const std::bad_alloc&) {
+                        throw;
+                    } catch (const std::exception&) {
+                        // An unsafe or concurrently changed cache entry is
+                        // still never consumed. The full admission replay
+                        // below remains authoritative.
+                    }
+                }
+                prepared_admission_cache.reset();
+                report_progress(
+                    options,
+                    "prepared-native-port-admission-cache-unavailable");
+            }
+        }
+
+        if (!prepared_admission_cache_hit) {
+            // The combined hardware audit is analyzer output, not NativePort
+            // admission state. Its primary image/IR and every latent source
+            // have just been rebound above under the exact analyzer identity.
+            // A cache miss therefore replays the complete authoritative
+            // NativePort preparation and publishes only after every stored
+            // analysis summary has matched below.
+            result.admitted_state = prepare_dreamcast_port_project_impl(
+                prepared_reuse,
+                options,
+                result.disc_source,
+                nullptr,
+                std::move(artifact.latent),
+                true,
+                result.latent_external_primary_roots,
+                &artifact.native_hardware_audit,
+                game_project_edges_revalidated != 0u
+                    ? nullptr
+                    : &artifact.native_port_program_index,
+                true);
+        }
         populate_native_disc_analysis_summary(result);
         const auto& closure =
             result.admitted_state->native_hardware_closure;
@@ -32907,6 +34697,54 @@ try_reuse_native_disc_analysis_artifact(
                 return reject("admission-replay-hardware-gap-details");
             if (result.summary.backend_admitted != artifact.backend_admitted)
                 return reject("admission-replay-backend-admission");
+        }
+        if (!prepared_admission_cache_hit &&
+            prepared_admission_identity.has_value() &&
+            prepared_admission_cache != nullptr) {
+            try {
+                const auto prepared_admission =
+                    make_prepared_native_port_admission_artifact(
+                        *prepared_admission_identity,
+                        *result.admitted_state,
+                        result.summary.guarded_inventory_complete);
+                const auto serialized =
+                    serialize_prepared_native_port_admission_artifact(
+                        prepared_admission);
+                const auto content = std::string_view(
+                    reinterpret_cast<const char*>(serialized.data()),
+                    serialized.size());
+                bool published = false;
+                if (loaded_prepared_admission.has_value()) {
+                    published =
+                        prepared_admission_cache->replace_bounded_if_matches(
+                            prepared_admission_identity->key,
+                            prepared_native_port_admission_cache_name,
+                            *loaded_prepared_admission,
+                            content,
+                            maximum_prepared_native_port_admission_artifact_bytes);
+                } else {
+                    prepared_admission_cache->store_bounded(
+                        prepared_admission_identity->key,
+                        prepared_native_port_admission_cache_name,
+                        content,
+                        maximum_prepared_native_port_admission_artifact_bytes);
+                    published = true;
+                }
+                report_progress(
+                    options,
+                    published
+                        ? "prepared-native-port-admission-cache-populated"
+                        : "prepared-native-port-admission-cache-publish-raced");
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const std::exception&) {
+                // The fully replayed admission remains authoritative. A
+                // cache race, size limit or unsafe local namespace may only
+                // remove the optimization from a later product export.
+                report_progress(
+                    options,
+                    "prepared-native-port-admission-cache-publish-missed");
+            }
         }
         if (native_port_contract_changed ||
             game_project_admission_delta ||
