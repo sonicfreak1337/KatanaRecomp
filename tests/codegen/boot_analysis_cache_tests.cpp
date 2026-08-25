@@ -90,6 +90,21 @@ katana::codegen::PreparedBootAnalysisArtifact make_artifact(
     analysis.guarded_code_inventory_candidates = 1u;
     analysis.guarded_code_inventory_budget = 1'024u;
 
+    katana::analysis::JumpTableAnalysis cached_table;
+    cached_table.dispatch_address = image_base;
+    cached_table.table_address = image_base;
+    cached_table.requested_entries = 1u;
+    cached_table.resolved = true;
+    cached_table.aot_candidates_only = true;
+    cached_table.evidence =
+        katana::analysis::ControlFlowEvidence::GuardedPartial;
+    cached_table.authority =
+        katana::analysis::JumpTableAuthority::SnapshotCandidate;
+    cached_table.entries.push_back(
+        {0u, image_base, image_base, true, "synthetic-codec-target"});
+    cached_table.reason = "synthetic-codec-authority";
+    analysis.jump_tables.push_back(std::move(cached_table));
+
     auto program = katana::ir::lower_program(analysis);
     katana::codegen::PreparedBootAnalysisArtifact artifact;
     artifact.control_flow_graph =
@@ -136,6 +151,12 @@ int main() {
             require(
                 canonical_parsed.state ==
                         katana::codegen::BootAnalysisCacheState::Hit &&
+                    canonical_parsed.artifact.analysis.jump_tables.size() ==
+                        1u &&
+                    canonical_parsed.artifact.analysis.jump_tables.front()
+                            .authority ==
+                        katana::analysis::JumpTableAuthority::
+                            SnapshotCandidate &&
                     !canonical_parsed.artifact.analysis
                          .guarded_code_inventory_walk
                          .inventory_tail_target_unresolved &&
@@ -175,6 +196,29 @@ int main() {
                 katana::codegen::BootAnalysisCacheState::Miss,
             "Ein Bootcache des vorherigen Schemas wurde nicht als Miss "
             "behandelt.");
+
+        const auto checkpoint =
+            katana::codegen::serialize_boot_analysis_checkpoint(
+                key, artifact);
+        auto previous_checkpoint_schema = checkpoint;
+        const auto stale_checkpoint_schema =
+            katana::codegen::boot_analysis_checkpoint_schema_version - 1u;
+        require(
+            previous_checkpoint_schema.size() >= schema_offset + 4u,
+            "Bootcheckpoint-Testartefakt besitzt keinen vollstaendigen "
+            "Header.");
+        for (std::size_t index = 0u; index < 4u; ++index) {
+            previous_checkpoint_schema[schema_offset + index] =
+                static_cast<std::uint8_t>(
+                    stale_checkpoint_schema >> (index * 8u));
+        }
+        require(
+            katana::codegen::parse_boot_analysis_checkpoint(
+                key, previous_checkpoint_schema)
+                    .state ==
+                katana::codegen::BootAnalysisCacheState::Miss,
+            "Ein Bootcheckpoint des vorherigen Schemas wurde nicht als "
+            "Miss behandelt.");
 
         // Simulate a checksum-consistent subset forgery. All retained
         // instructions still match the current bytes, so byte rebinding alone

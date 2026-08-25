@@ -870,6 +870,14 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         auto& slot = resolve_texture(handle);
         if (image_texture_ == handle) image_texture_ = {};
+        const auto* const destroyed_view = slot.view.Get();
+        if (bound_shader_resource_valid_ &&
+            bound_shader_resource_ == destroyed_view) {
+            ID3D11ShaderResourceView* no_view = nullptr;
+            context_->PSSetShaderResources(0u, 1u, &no_view);
+            bound_shader_resource_ = nullptr;
+            bound_shader_resource_valid_ = false;
+        }
         texture_bytes_ -= slot.byte_size;
         if (live_textures_ != 0u) --live_textures_;
         slot.texture.Reset();
@@ -1342,13 +1350,16 @@ class NativePortGraphicsDevice::Impl final {
         }
         auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
                                     : white_view_.Get();
-        context_->PSSetShaderResources(0u, 1u, &view);
+        if (!bound_shader_resource_valid_ ||
+            bound_shader_resource_ != view) {
+            context_->PSSetShaderResources(0u, 1u, &view);
+            bound_shader_resource_ = view;
+            bound_shader_resource_valid_ = true;
+        }
         if (index_count == 0u)
             context_->Draw(vertex_count, 0u);
         else
             context_->DrawIndexed(index_count, 0u, 0);
-        ID3D11ShaderResourceView* no_view = nullptr;
-        context_->PSSetShaderResources(0u, 1u, &no_view);
         saturating_increment(snapshot_.draw_calls);
         if (mesh_slot != nullptr)
             saturating_increment(snapshot_.persistent_mesh_draw_calls);
@@ -2591,6 +2602,7 @@ class NativePortGraphicsDevice::Impl final {
         bound_vertex_buffer_valid_ = false;
         bound_index_buffer_valid_ = false;
         bound_sampler_valid_ = false;
+        bound_shader_resource_valid_ = false;
         draw_pipeline_bound_ = false;
     }
 
@@ -2951,6 +2963,7 @@ class NativePortGraphicsDevice::Impl final {
     ID3D11SamplerState* bound_sampler_ = nullptr;
     ID3D11Buffer* bound_vertex_buffer_ = nullptr;
     ID3D11Buffer* bound_index_buffer_ = nullptr;
+    ID3D11ShaderResourceView* bound_shader_resource_ = nullptr;
     UINT bound_vertex_buffer_offset_ = 0u;
     UINT bound_index_buffer_offset_ = 0u;
     D3D11_PRIMITIVE_TOPOLOGY bound_topology_ =
@@ -2962,6 +2975,7 @@ class NativePortGraphicsDevice::Impl final {
     bool bound_sampler_valid_ = false;
     bool bound_vertex_buffer_valid_ = false;
     bool bound_index_buffer_valid_ = false;
+    bool bound_shader_resource_valid_ = false;
     bool bound_topology_valid_ = false;
     bool draw_pipeline_bound_ = false;
     std::vector<NativePortVertex> prepared_vertices_;

@@ -1,4 +1,5 @@
 #include "katana/analysis/jump_table_analysis.hpp"
+#include "katana/analysis/authenticated_range_proof.hpp"
 #include "katana/analysis/code_address.hpp"
 #include "katana/analysis/value_analysis.hpp"
 #include "katana/io/binary_reader.hpp"
@@ -30,7 +31,13 @@ bool immutable_table_source(
     // as a physically read-only segment. Runtime-memory ranges cannot acquire
     // this proof because ExecutableImage rejects them at insertion time.
     return !segment.permissions.writable ||
-           image.find_immutable_range(table_address, byte_count) != nullptr;
+           authenticate_image_range(
+               image,
+               table_address,
+               byte_count,
+               AuthenticatedRangeAddressPolicy::Exact,
+               AuthenticatedRangePermission::Readable)
+               .has_value();
 }
 
 std::string snapshot_key(const katana::io::ExecutableImage& image,
@@ -592,6 +599,7 @@ JumpTableAnalysis analyze_jump_table(const katana::io::ExecutableImage& image,
         analysis.resolved = analysis.resolved && entry.accepted;
     }
     if (analysis.resolved) {
+        analysis.authority = JumpTableAuthority::NativeImmutableBounded;
         analysis.reason = "bounded-table";
     } else if (analysis.reason.empty()) {
         analysis.reason = "table-entry-rejected";
@@ -685,10 +693,13 @@ JumpTableAnalysis analyze_relative_jump_table_impl(const katana::io::ExecutableI
         analysis.resolved = analysis.resolved && entry.accepted;
     if (analysis.resolved) {
         if (initial_snapshot_candidates) {
+            analysis.authority = JumpTableAuthority::SnapshotCandidate;
             analysis.aot_candidates_only = true;
             analysis.evidence = ControlFlowEvidence::GuardedPartial;
             analysis.reason = "snapshot-signed-relative16-candidates";
         } else {
+            analysis.authority =
+                JumpTableAuthority::NativeImmutableBounded;
             analysis.reason = "bounded-signed-relative-table";
         }
     } else if (analysis.reason.empty()) {
@@ -844,11 +855,14 @@ JumpTableAnalysis analyze_declared_jump_table(
                             });
     if (analysis.resolved) {
         if (writable_snapshot_source) {
+            analysis.authority = JumpTableAuthority::SnapshotCandidate;
             analysis.aot_candidates_only = true;
             analysis.evidence = ControlFlowEvidence::GuardedPartial;
             analysis.reason =
                 "identity-bound-declared-snapshot-candidates";
         } else {
+            analysis.authority =
+                JumpTableAuthority::IdentityBoundDeclared;
             analysis.reason = "identity-bound-declared-table";
         }
     }
@@ -981,6 +995,7 @@ detail::analyze_snapshot_pointer_candidates(
     analysis.table_address = *resolved_table;
     analysis.dispatch_kind = dispatch_kind;
     analysis.encoding = JumpTableEncoding::Absolute32;
+    analysis.authority = JumpTableAuthority::SnapshotCandidate;
     analysis.aot_candidates_only = true;
     analysis.evidence = ControlFlowEvidence::GuardedPartial;
     analysis.entries.reserve(scan_limit);
@@ -1140,6 +1155,7 @@ recognize_snapshot_absolute_jump_table_candidates_impl(
                 ? JumpTableDispatchKind::Call
                 : JumpTableDispatchKind::Jump;
         singleton.encoding = JumpTableEncoding::Absolute32;
+        singleton.authority = JumpTableAuthority::SnapshotCandidate;
         singleton.resolved = true;
         singleton.aot_candidates_only = true;
         singleton.evidence = ControlFlowEvidence::GuardedPartial;

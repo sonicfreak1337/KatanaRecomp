@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace katana::analysis {
@@ -26,6 +27,27 @@ struct CodeAddressValidation {
         return status == CodeAddressStatus::Valid;
     }
 };
+
+// Positive proof that one SH-4 instruction word is the architectural delay
+// slot owned by the immediately preceding instruction word.  This primitive
+// deliberately proves only physical ownership.  It does not authorize the
+// slot as an independent function/root entry; callers must retain their own
+// normal-entry provenance policy for that separate context.
+struct Sh4PhysicalDelaySlotProof {
+    std::uint32_t entry_address = 0u;
+    std::uint32_t owner_address = 0u;
+};
+
+[[nodiscard]] std::optional<Sh4PhysicalDelaySlotProof>
+prove_sh4_physical_delay_slot(const katana::io::ExecutableImage& image,
+                              std::uint32_t address) noexcept;
+
+// Equivalent proof for an already authenticated contiguous byte extent.  The
+// extent base is the source/runtime address represented by bytes[0].
+[[nodiscard]] std::optional<Sh4PhysicalDelaySlotProof>
+prove_sh4_physical_delay_slot(std::span<const std::uint8_t> bytes,
+                              std::uint32_t extent_address,
+                              std::uint32_t address) noexcept;
 
 [[nodiscard]] CodeAddressValidation
 validate_decode_candidate(const katana::io::ExecutableImage& image,

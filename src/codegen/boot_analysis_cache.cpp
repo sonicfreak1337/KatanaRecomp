@@ -549,6 +549,7 @@ void write_jump_table(
     output.size(value.requested_entries);
     output.enumeration(value.dispatch_kind);
     output.enumeration(value.encoding);
+    output.enumeration(value.authority);
     output.boolean(value.resolved);
     output.boolean(value.aot_candidates_only);
     output.boolean(value.candidate_scan_truncated);
@@ -582,6 +583,9 @@ read_jump_table(Reader& input) {
     value.encoding = input.enumeration(
         katana::analysis::JumpTableEncoding::Absolute32,
         katana::analysis::JumpTableEncoding::SignedRelative32);
+    value.authority = input.enumeration(
+        katana::analysis::JumpTableAuthority::Unresolved,
+        katana::analysis::JumpTableAuthority::SnapshotCandidate);
     value.resolved = input.boolean();
     value.aot_candidates_only = input.boolean();
     value.candidate_scan_truncated = input.boolean();

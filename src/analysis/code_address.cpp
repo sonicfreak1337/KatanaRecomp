@@ -1,9 +1,79 @@
 #include "katana/analysis/code_address.hpp"
 
+#include "katana/io/binary_reader.hpp"
+#include "katana/sh4/decoder.hpp"
+
 #include <algorithm>
 #include <cstdint>
 
 namespace katana::analysis {
+
+namespace {
+
+std::optional<Sh4PhysicalDelaySlotProof>
+prove_sh4_physical_delay_slot_in_extent(
+    const std::span<const std::uint8_t> bytes,
+    const std::uint32_t extent_address,
+    const std::uint32_t address) noexcept {
+    if ((extent_address & 1u) != 0u || (address & 1u) != 0u ||
+        address < extent_address)
+        return std::nullopt;
+    const auto entry_offset = static_cast<std::uint64_t>(address) -
+                              extent_address;
+    if (entry_offset < sizeof(std::uint16_t) ||
+        entry_offset + sizeof(std::uint16_t) > bytes.size())
+        return std::nullopt;
+    const auto owner_offset = static_cast<std::size_t>(
+        entry_offset - sizeof(std::uint16_t));
+    const auto owner = katana::sh4::decode(
+        katana::io::read_u16_le(bytes, owner_offset));
+    if (!owner.is_known() || !owner.has_delay_slot) return std::nullopt;
+    return Sh4PhysicalDelaySlotProof{
+        address,
+        static_cast<std::uint32_t>(address - sizeof(std::uint16_t))};
+}
+
+} // namespace
+
+std::optional<Sh4PhysicalDelaySlotProof>
+prove_sh4_physical_delay_slot(
+    const katana::io::ExecutableImage& image,
+    const std::uint32_t address) noexcept {
+    const auto entry = validate_decode_candidate(
+        image, address, sizeof(std::uint16_t));
+    if (!entry.valid() || entry.segment == nullptr ||
+        entry.resolved_address < sizeof(std::uint16_t))
+        return std::nullopt;
+    const auto owner_address = static_cast<std::uint32_t>(
+        entry.resolved_address - sizeof(std::uint16_t));
+    // Numerically adjacent words from distinct mapped segments/generations do
+    // not form one architectural owner/slot pair.  The entry was already
+    // canonicalized above; do not resolve its preceding source word through a
+    // second, potentially unrelated runtime alias.
+    if (!entry.segment->contains(owner_address, sizeof(std::uint16_t)))
+        return std::nullopt;
+    const auto owner_offset = entry.segment->byte_offset(owner_address);
+    if (!owner_offset.has_value() ||
+        *owner_offset > entry.segment->bytes.size() ||
+        entry.segment->bytes.size() - *owner_offset <
+            sizeof(std::uint16_t))
+        return std::nullopt;
+    const auto decoded = katana::sh4::decode(
+        katana::io::read_u16_le(entry.segment->bytes, *owner_offset));
+    if (!decoded.is_known() || !decoded.has_delay_slot)
+        return std::nullopt;
+    return Sh4PhysicalDelaySlotProof{
+        entry.resolved_address, owner_address};
+}
+
+std::optional<Sh4PhysicalDelaySlotProof>
+prove_sh4_physical_delay_slot(
+    const std::span<const std::uint8_t> bytes,
+    const std::uint32_t extent_address,
+    const std::uint32_t address) noexcept {
+    return prove_sh4_physical_delay_slot_in_extent(
+        bytes, extent_address, address);
+}
 
 CodeAddressValidation validate_decode_candidate(const katana::io::ExecutableImage& image,
                                                 const std::uint32_t address,

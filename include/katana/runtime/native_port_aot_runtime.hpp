@@ -148,6 +148,7 @@ class NativePortAotServices final {
     NativePortStaticEntryQuery static_entry_query_ = nullptr;
     NativePortImmutableWriteGuard* immutable_guard_ = nullptr;
     std::uint64_t guest_sequence_ = 0u;
+    std::uint64_t host_boundary_cycles_remaining_ = 0u;
     std::uint64_t write_observer_generation_ = 0u;
     std::optional<NativePortStopReason> boundary_;
     bool write_observer_bound_ = false;

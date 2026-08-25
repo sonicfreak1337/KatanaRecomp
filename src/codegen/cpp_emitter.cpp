@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <numeric>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -5158,47 +5159,36 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
     std::unordered_set<std::uint32_t> architectural_boundary_entries(
         request.architectural_boundary_entries.begin(),
         request.architectural_boundary_entries.end());
-    std::unordered_set<std::uint32_t> native_resume_entries;
-    native_resume_entries.reserve(architectural_boundary_entries.size());
+    const auto emitted_block_count = std::accumulate(
+        functions.begin(),
+        functions.end(),
+        std::size_t{0u},
+        [](const std::size_t count, const auto& function) {
+            return count + function.blocks.size();
+        });
+    std::unordered_set<std::uint32_t> emitted_block_entries;
+    std::unordered_set<std::uint32_t> emitted_internal_resume_entries;
+    emitted_block_entries.reserve(emitted_block_count);
+    for (const auto& function : functions) {
+        for (const auto& block : function.blocks) {
+            emitted_block_entries.insert(block.start_address);
+            const auto resumes =
+                detail::native_aot_internal_resume_entries(block);
+            emitted_internal_resume_entries.insert(
+                resumes.begin(), resumes.end());
+        }
+    }
     for (const auto boundary : architectural_boundary_entries) {
-        const auto block_entry = std::any_of(
-            functions.begin(), functions.end(), [&](const auto& function) {
-                return std::any_of(
-                    function.blocks.begin(),
-                    function.blocks.end(),
-                    [&](const auto& block) {
-                        return block.start_address == boundary;
-                    });
-            });
-        const auto resume_entry = std::any_of(
-            functions.begin(), functions.end(), [&](const auto& function) {
-                return std::any_of(
-                    function.blocks.begin(),
-                    function.blocks.end(),
-                    [&](const auto& block) {
-                        const auto candidates =
-                            detail::native_aot_internal_resume_entries(block);
-                        return std::binary_search(candidates.begin(),
-                                                  candidates.end(),
-                                                  boundary);
-                    });
-            });
+        const auto block_entry = emitted_block_entries.contains(boundary);
+        const auto resume_entry =
+            emitted_internal_resume_entries.contains(boundary);
         if (!known_functions.contains(boundary) && !block_entry &&
             !resume_entry)
             throw std::invalid_argument(
                 "Architekturgrenze besitzt keinen emittierten AOT-Entry.");
-        if (!known_functions.contains(boundary) && !block_entry &&
-            resume_entry)
-            native_resume_entries.insert(boundary);
         known_functions.erase(boundary);
     }
-    for (const auto& function : functions) {
-        for (const auto& block : function.blocks) {
-            for (const auto resume :
-                 detail::native_aot_internal_resume_entries(block))
-                native_resume_entries.insert(resume);
-        }
-    }
+    auto native_resume_entries = std::move(emitted_internal_resume_entries);
     std::unordered_map<std::uint32_t, std::uint32_t> guarded_native_call_targets;
     guarded_native_call_targets.reserve(request.guarded_native_call_targets.size());
     for (const auto& candidate : request.guarded_native_call_targets) {

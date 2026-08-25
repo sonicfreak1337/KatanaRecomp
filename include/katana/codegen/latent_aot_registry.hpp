@@ -17,6 +17,18 @@
 
 namespace katana::codegen {
 
+// Discovery production and checkpoint replay validate the same bounded
+// aggregate. Keep these limits shared so a producer cannot serialize a valid
+// discovery that the export-time source revalidator later rejects.
+inline constexpr std::size_t maximum_prepared_latent_aot_source_bindings =
+    1024u;
+inline constexpr std::uint64_t
+    maximum_prepared_latent_aot_total_module_bytes =
+        256ull * 1024ull * 1024ull;
+inline constexpr std::uint64_t
+    maximum_prepared_latent_aot_total_source_bytes =
+        256ull * 1024ull * 1024ull;
+
 // Native internal resume entries are separate authenticated dispatch entries,
 // but they are not separate IR blocks. Keep their transport budget aligned
 // with the exporter/runtime template contract instead of reusing the smaller
@@ -47,14 +59,18 @@ inline constexpr std::uint64_t
 // the decoded bytes. The optional source_address pins the page-aligned
 // analysis address for products whose native hook ABI already binds that
 // canonical latent range. Zero retains deterministic automatic placement.
-// Neither the offset nor the pinned address is inferred from mutable runtime
-// memory.
+// proven_runtime_base is a separate, optional loader-proven runtime placement
+// for the exact transformed module identity. It is analysis evidence only:
+// it neither changes the synthetic source placement nor creates a runtime
+// mapping. Zero leaves the existing bounded pointer-cluster inference in
+// charge. Neither address is inferred from mutable runtime memory.
 struct LatentAotEntryHint {
     std::string byte_identity;
     std::uint64_t disc_byte_offset = 0u;
     std::uint32_t byte_size = 0u;
     std::uint32_t module_relative_offset = 0u;
     std::uint32_t source_address = 0u;
+    std::uint32_t proven_runtime_base = 0u;
 
     [[nodiscard]] bool operator==(const LatentAotEntryHint&) const = default;
 };
@@ -105,8 +121,9 @@ struct LatentAotExternalPersistentPointerSink final {
 // Identity-bound primary-image record walker which loads a callback from a
 // fixed-width field and invokes it indirectly. A latent module may pair this
 // shape only with an exact local code literal stored through a proven
-// constructor-return receiver. The result remains guarded inventory and
-// never makes the walker's dynamic target set complete.
+// constructor-return receiver or the canonical incoming r4 record receiver.
+// The result remains guarded inventory and never makes the walker's dynamic
+// target set complete.
 struct LatentAotExternalCallbackFieldSink final {
     std::uint32_t function_address = 0u;
     std::uint32_t call_instruction_address = 0u;
@@ -362,6 +379,50 @@ struct PreparedLatentAotExternalTransfer {
         const PreparedLatentAotExternalTransfer&) const = default;
 };
 
+enum class LoadedAotExternalTransferClassification : std::uint8_t {
+    UnresolvedExactSite,
+    AlreadyIdenticalResolved,
+    Conflict,
+};
+
+// Discovery and export must interpret the isolated module IR identically.
+// An empty exact site may receive the independently authenticated cross-image
+// edge. A complete singleton edge to the same target is retained as evidence
+// without rewriting its IR. Every other shape is a conflicting authority.
+[[nodiscard]] inline LoadedAotExternalTransferClassification
+classify_loaded_aot_external_transfer(
+    const PreparedLatentAotExternalTransfer& transfer,
+    const katana::ir::Instruction& instruction,
+    const katana::ir::BasicBlock& block) noexcept {
+    const auto expected_operation =
+        transfer.kind == PreparedLatentAotExternalTransferKind::Call
+            ? katana::ir::Operation::CallRegister
+            : katana::ir::Operation::JumpRegister;
+    if (instruction.operation != expected_operation ||
+        instruction.branch_register_relative)
+        return LoadedAotExternalTransferClassification::Conflict;
+
+    if (instruction.resolved_targets.empty()) {
+        return block.has_indirect_successor
+                   ? LoadedAotExternalTransferClassification::
+                         UnresolvedExactSite
+                   : LoadedAotExternalTransferClassification::Conflict;
+    }
+
+    const bool complete_target_class =
+        instruction.dynamic_target_class ==
+            katana::ir::DynamicTargetClass::GuardedComplete ||
+        instruction.dynamic_target_class ==
+            katana::ir::DynamicTargetClass::ExactGuarded;
+    if (instruction.resolved_targets.size() == 1u &&
+        instruction.resolved_targets.front() == transfer.target_address &&
+        complete_target_class && !block.has_indirect_successor)
+        return LoadedAotExternalTransferClassification::
+            AlreadyIdenticalResolved;
+
+    return LoadedAotExternalTransferClassification::Conflict;
+}
+
 enum class PreparedLatentAotCodePointerEvidenceKind : std::uint8_t {
     // An aligned module cell points at an independently declared resident
     // code entry. The cell alone never discovers a new entry.
@@ -520,7 +581,8 @@ struct LatentAotDiscovery {
     std::size_t analysis_cache_stores = 0u;
     // Number of candidates that entered the complete CFA/FVA/lowering
     // pipeline. Every positive candidate does so; only a current-byte
-    // source-shape-derived negative rejection may bypass it.
+    // source-shape-derived negative rejection or an exact in-session terminal
+    // candidate-value-inventory rejection may bypass it.
     std::size_t analysis_full_pipeline_runs = 0u;
 };
 

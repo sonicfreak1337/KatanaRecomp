@@ -278,6 +278,8 @@ class PlatformServices {
 commit_pending_guest_cycles(CpuState& cpu,
                             PlatformServices& services,
                             const std::size_t event_budget) {
+    if (event_budget == 0u)
+        throw std::invalid_argument("platform-services-event-budget-zero");
     const auto pending = cpu.pending_guest_cycles;
     if (pending == 0u) {
         return {services.scheduler_cycle(), 0u, false, false};

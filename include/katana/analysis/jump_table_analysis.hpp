@@ -31,6 +31,16 @@ enum class JumpTableEncoding {
     SignedRelative32
 };
 
+// Describes the authority which admitted the table layout and target set.
+// Diagnostics remain free-form text, but proof consumers must never infer
+// completeness or mutability from JumpTableAnalysis::reason.
+enum class JumpTableAuthority : std::uint8_t {
+    Unresolved,
+    NativeImmutableBounded,
+    IdentityBoundDeclared,
+    SnapshotCandidate
+};
+
 struct JumpTableAnalysis {
     std::uint32_t dispatch_address = 0u;
     std::uint32_t table_address = 0u;
@@ -38,6 +48,7 @@ struct JumpTableAnalysis {
     std::size_t requested_entries = 0u;
     JumpTableDispatchKind dispatch_kind = JumpTableDispatchKind::Jump;
     JumpTableEncoding encoding = JumpTableEncoding::Absolute32;
+    JumpTableAuthority authority = JumpTableAuthority::Unresolved;
     bool resolved = false;
     bool aot_candidates_only = false;
     bool candidate_scan_truncated = false;

@@ -1,8 +1,10 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 
+#include "katana/analysis/authenticated_range_proof.hpp"
 #include "katana/analysis/code_address.hpp"
 #include "katana/analysis/parallel_work.hpp"
 #include "katana/io/input_provenance.hpp"
+#include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction.hpp"
 #include "guarded_native_entry_shape.hpp"
 #include "jump_table_analysis_internal.hpp"
@@ -1183,6 +1185,82 @@ const katana::sh4::DisassemblyLine* find_instruction(const RecursiveAnalysisResu
                                                                                  : nullptr;
 }
 
+const FunctionCandidate* find_function_candidate(
+    const RecursiveAnalysisResult& result,
+    const std::uint32_t address) {
+    const auto iterator = std::lower_bound(
+        result.functions.begin(),
+        result.functions.end(),
+        address,
+        [](const auto& function, const std::uint32_t candidate) {
+            return function.address < candidate;
+        });
+    return iterator != result.functions.end() &&
+                   iterator->address == address
+               ? &*iterator
+               : nullptr;
+}
+
+[[nodiscard]] bool has_independent_normal_entry_evidence(
+    const RecursiveAnalysisResult& result,
+    const std::span<const std::uint32_t> non_root_function_entry_hints,
+    const std::uint32_t address) {
+    // GameProject function-entry hints are deliberately non-root metadata:
+    // they cannot create reachability, but they do authenticate the normal
+    // invocation context of an entry that a separate guarded flow discovered.
+    if (std::binary_search(non_root_function_entry_hints.begin(),
+                           non_root_function_entry_hints.end(),
+                           address))
+        return true;
+
+    const auto* candidate = find_function_candidate(result, address);
+    if (candidate == nullptr) return false;
+
+    // An exact boundary is an explicit normal-entry contract even when the
+    // same physical word is also reached as another transfer's delay slot.
+    if (candidate->size != 0u) return true;
+
+    return std::any_of(
+        candidate->origins.begin(),
+        candidate->origins.end(),
+        [&](const FunctionOrigin origin) {
+            switch (origin) {
+            case FunctionOrigin::EntryPoint:
+            case FunctionOrigin::DirectCall:
+            case FunctionOrigin::JumpTableCall:
+            case FunctionOrigin::Symbol:
+                return true;
+            case FunctionOrigin::IndirectCall:
+                return control_flow_evidence_complete(
+                    candidate->evidence);
+            case FunctionOrigin::UserOverride:
+                return candidate->evidence ==
+                       ControlFlowEvidence::ForcedOverride;
+            case FunctionOrigin::GuardedSnapshot:
+            case FunctionOrigin::RuntimeCopy:
+            case FunctionOrigin::UserHint:
+            case FunctionOrigin::StoredCodeAddress:
+                return false;
+            }
+            return false;
+        });
+}
+
+[[nodiscard]] std::optional<ControlFlowEvidence>
+jump_table_complete_evidence(
+    const JumpTableAuthority authority) noexcept {
+    switch (authority) {
+    case JumpTableAuthority::NativeImmutableBounded:
+        return ControlFlowEvidence::ProvenComplete;
+    case JumpTableAuthority::IdentityBoundDeclared:
+        return ControlFlowEvidence::GuardedComplete;
+    case JumpTableAuthority::Unresolved:
+    case JumpTableAuthority::SnapshotCandidate:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 void mark_resolved_table_dispatch(std::vector<IndirectControlFlowResolution>& resolutions,
                                   const JumpTableAnalysis& table) {
     const auto resolution =
@@ -1536,28 +1614,13 @@ StaticCodePointerSet resolve_static_code_pointer_set(
         return result;
     }
 
-    const auto immutable_image_proof =
-        [&](const std::uint32_t address,
-            const bool require_executable,
-            const std::size_t width)
-        -> const katana::io::ImageImmutableRange* {
-        const auto* segment = image.find_segment(address, width);
-        if (segment == nullptr || !segment->permissions.readable ||
-            segment->source_kind ==
-                katana::io::ImageSourceKind::RuntimeMemory ||
-            (require_executable && !segment->permissions.executable))
-            return nullptr;
-        return image.find_immutable_range(address, width);
-    };
-    const auto same_authenticated_view =
-        [](const katana::io::ImageImmutableRange* left,
-           const katana::io::ImageImmutableRange* right) {
-        return left != nullptr && right != nullptr &&
-               left->generation == right->generation;
-    };
-    const auto* const dispatch_proof =
-        immutable_image_proof(dispatch_address, true, 2u);
-    if (dispatch_proof == nullptr) {
+    const auto dispatch_proof = authenticate_image_range(
+        image,
+        dispatch_address,
+        2u,
+        AuthenticatedRangeAddressPolicy::Exact,
+        AuthenticatedRangePermission::Executable);
+    if (!dispatch_proof.has_value()) {
         result.exact_target_rejection_reason =
             ExactGuardRejectionReason::DispatchImmutableProofMissing;
         return result;
@@ -1573,9 +1636,13 @@ StaticCodePointerSet resolve_static_code_pointer_set(
                 ExactGuardRejectionReason::ConflictingTargets;
             return result;
         }
-        const auto* const writer_proof =
-            immutable_image_proof(writer_address, true, 2u);
-        if (writer_proof == nullptr) {
+        const auto writer_proof = authenticate_image_range(
+            image,
+            writer_address,
+            2u,
+            AuthenticatedRangeAddressPolicy::Exact,
+            AuthenticatedRangePermission::Executable);
+        if (!writer_proof.has_value()) {
             result.exact_target_rejection_reason =
                 ExactGuardRejectionReason::WriterImmutableProofMissing;
             return result;
@@ -1599,19 +1666,20 @@ StaticCodePointerSet resolve_static_code_pointer_set(
         }
         const auto literal_address = static_cast<std::uint32_t>(
             base + static_cast<std::uint64_t>(displacement));
-        const auto resolved_literal =
-            image.resolve_segment_address(literal_address, 4u);
-        const auto* const literal_proof =
-            resolved_literal.has_value()
-                ? immutable_image_proof(*resolved_literal, false, 4u)
-                : nullptr;
-        if (!resolved_literal.has_value() || literal_proof == nullptr) {
+        const auto literal_proof = authenticate_image_range(
+            image,
+            literal_address,
+            4u,
+            AuthenticatedRangeAddressPolicy::ResolveAlias,
+            AuthenticatedRangePermission::Readable);
+        if (!literal_proof.has_value()) {
             result.exact_target_rejection_reason =
                 ExactGuardRejectionReason::LiteralImmutableProofMissing;
             return result;
         }
 
-        const auto candidate = image.read_u32_le(*resolved_literal);
+        const auto candidate = image.read_u32_le(
+            literal_proof->authenticated_address);
         const auto validation = validate_decode_candidate(image, candidate);
         if (!validation.valid()) {
             result.exact_target_rejection_reason =
@@ -1636,16 +1704,23 @@ StaticCodePointerSet resolve_static_code_pointer_set(
                 ExactGuardRejectionReason::UnknownTargetOpcode;
             return result;
         }
-        const auto* const target_proof =
-            immutable_image_proof(validation.resolved_address, true, 2u);
-        if (target_proof == nullptr) {
+        const auto target_proof = authenticate_image_range(
+            image,
+            validation.resolved_address,
+            2u,
+            AuthenticatedRangeAddressPolicy::Exact,
+            AuthenticatedRangePermission::Executable);
+        if (!target_proof.has_value()) {
             result.exact_target_rejection_reason =
                 ExactGuardRejectionReason::TargetImmutableProofMissing;
             return result;
         }
-        if (!same_authenticated_view(dispatch_proof, writer_proof) ||
-            !same_authenticated_view(dispatch_proof, literal_proof) ||
-            !same_authenticated_view(dispatch_proof, target_proof)) {
+        if (!same_authenticated_range_generation(
+                *dispatch_proof, *writer_proof) ||
+            !same_authenticated_range_generation(
+                *dispatch_proof, *literal_proof) ||
+            !same_authenticated_range_generation(
+                *dispatch_proof, *target_proof)) {
             result.exact_target_rejection_reason =
                 ExactGuardRejectionReason::ImageIdentityMismatch;
             return result;
@@ -1777,19 +1852,6 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
         if (!validation.valid()) return result;
         result.target = validation.resolved_address;
         result.complete = true;
-        const auto immutable_image_proof =
-            [&](const std::uint32_t address,
-                const bool require_executable,
-                const std::size_t width)
-            -> const katana::io::ImageImmutableRange* {
-            const auto* segment = image.find_segment(address, width);
-            if (segment == nullptr || !segment->permissions.readable ||
-                segment->source_kind ==
-                    katana::io::ImageSourceKind::RuntimeMemory ||
-                (require_executable && !segment->permissions.executable))
-                return nullptr;
-            return image.find_immutable_range(address, width);
-        };
         const auto* const target_segment = image.find_segment(
             validation.resolved_address, 2u);
         bool target_opcode_known = false;
@@ -1809,50 +1871,67 @@ StaticCodePointerChain resolve_static_code_pointer_chain(
         // immutable bytes in this same ExecutableImage; otherwise a mutable
         // intermediate register writer could redirect the chain between the
         // static analysis and the guarded runtime edge.
-        const auto* const dispatch_proof =
-            immutable_image_proof(dispatch_address, true, 2u);
-        const auto* const writer_proof =
-            immutable_image_proof(writer->address, true, 2u);
-        const auto* const target_proof =
-            immutable_image_proof(validation.resolved_address, true, 2u);
-        const bool immutable_dispatch = dispatch_proof != nullptr;
-        const bool immutable_writer = writer_proof != nullptr;
-        const bool immutable_target = target_proof != nullptr;
+        const auto dispatch_proof = authenticate_image_range(
+            image,
+            dispatch_address,
+            2u,
+            AuthenticatedRangeAddressPolicy::Exact,
+            AuthenticatedRangePermission::Executable);
+        const auto writer_proof = authenticate_image_range(
+            image,
+            writer->address,
+            2u,
+            AuthenticatedRangeAddressPolicy::Exact,
+            AuthenticatedRangePermission::Executable);
+        const auto target_proof = authenticate_image_range(
+            image,
+            validation.resolved_address,
+            2u,
+            AuthenticatedRangeAddressPolicy::Exact,
+            AuthenticatedRangePermission::Executable);
+        const bool immutable_dispatch = dispatch_proof.has_value();
+        const bool immutable_writer = writer_proof.has_value();
+        const bool immutable_target = target_proof.has_value();
         bool immutable_literal = immutable_writer;
-        const katana::io::ImageImmutableRange* literal_proof =
-            writer_proof;
+        auto literal_proof = writer_proof;
         if (writer->instruction.kind == K::MovLongLoadPcRelative) {
             const auto literal_address =
                 ((writer->address + 4u) & ~3u) +
                 static_cast<std::uint32_t>(writer->instruction.displacement);
-            const auto resolved_literal = image.resolve_segment_address(literal_address, 4u);
-            literal_proof = resolved_literal.has_value()
-                                ? immutable_image_proof(*resolved_literal, false, 4u)
-                                : nullptr;
-            immutable_literal = literal_proof != nullptr;
+            literal_proof = authenticate_image_range(
+                image,
+                literal_address,
+                4u,
+                AuthenticatedRangeAddressPolicy::ResolveAlias,
+                AuthenticatedRangePermission::Readable);
+            immutable_literal = literal_proof.has_value();
         }
-        const auto same_authenticated_view =
-            [](const katana::io::ImageImmutableRange* left,
-               const katana::io::ImageImmutableRange* right) {
-                return left != nullptr && right != nullptr &&
-                       left->generation == right->generation;
-            };
         bool immutable_definition_sites = !result.definition_sites.empty();
-        bool same_image = dispatch_proof != nullptr;
+        bool same_image = dispatch_proof.has_value();
         for (const auto definition : result.definition_sites) {
-            const auto* const proof =
-                immutable_image_proof(definition, true, 2u);
-            if (proof == nullptr) {
+            const auto proof = authenticate_image_range(
+                image,
+                definition,
+                2u,
+                AuthenticatedRangeAddressPolicy::Exact,
+                AuthenticatedRangePermission::Executable);
+            if (!proof.has_value()) {
                 immutable_definition_sites = false;
                 continue;
             }
-            same_image =
-                same_image && same_authenticated_view(dispatch_proof, proof);
+            same_image = same_image &&
+                         same_authenticated_range_generation(
+                             *dispatch_proof, *proof);
         }
-        same_image = same_image &&
-                     same_authenticated_view(dispatch_proof, writer_proof) &&
-                     same_authenticated_view(dispatch_proof, literal_proof) &&
-                     same_authenticated_view(dispatch_proof, target_proof);
+        same_image =
+            same_image && writer_proof.has_value() &&
+            literal_proof.has_value() && target_proof.has_value() &&
+            same_authenticated_range_generation(
+                *dispatch_proof, *writer_proof) &&
+            same_authenticated_range_generation(
+                *dispatch_proof, *literal_proof) &&
+            same_authenticated_range_generation(
+                *dispatch_proof, *target_proof);
         result.exact_target_guard =
             target_opcode_known &&
             (!result.preceding_call ||
@@ -2701,7 +2780,9 @@ guarded_aot_code_address_rejection_reason(
 GuardedAotEntryCollection
 collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
                             const ControlFlowAnalysisResult& analysis,
-                            const GuardedCodeInventory& guarded_code_inventory) {
+                            const GuardedCodeInventory& guarded_code_inventory,
+                            const std::span<const std::uint32_t>
+                                non_root_function_entry_hints) {
     std::map<std::uint32_t, GuardedAotEntry> entries;
     std::map<std::pair<std::uint32_t, GuardedAotEntryRejectionReason>,
              GuardedAotEntryRejection>
@@ -2745,7 +2826,20 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
                            InstructionNotAnalyzed);
                 return;
             }
-            if (line->is_delay_slot) {
+            const auto physical_delay_slot_owner =
+                prove_sh4_physical_delay_slot(image, resolved).has_value();
+            // One SH-4 word may legitimately have two contexts: a transfer's
+            // delay slot and an independently callable normal entry.  A
+            // candidate-only pointer does not prove the latter; an exact
+            // boundary, symbol, entry point or statically authenticated call
+            // target does.  Keep a purely contextual delay-slot decode
+            // rejected even when metadata names the address.
+            if (line->is_delay_slot ||
+                (physical_delay_slot_owner &&
+                 !has_independent_normal_entry_evidence(
+                     analysis.recursive,
+                     non_root_function_entry_hints,
+                     resolved))) {
                 reject(resolved,
                        GuardedAotEntryRejectionReason::DelaySlotEntry);
                 return;
@@ -4250,27 +4344,70 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         }
         return changed;
     };
-    const auto identity_bound_immutable_range =
-        [&](const std::uint32_t address, const std::size_t size) {
-            const auto* segment = image.find_segment(address, size);
-            if (segment == nullptr || !segment->permissions.readable)
-                return false;
-            return !segment->permissions.writable ||
-                   image.find_immutable_range(address, size) != nullptr;
+    const auto authenticated_range =
+        [&image](const std::uint32_t address,
+                 const std::size_t size,
+                 const AuthenticatedRangePermission permission) {
+            return authenticate_image_range(
+                image,
+                address,
+                size,
+                AuthenticatedRangeAddressPolicy::Exact,
+                permission);
         };
     const auto eligible_signed_relative_table_reproof =
         [&](const JumpTableAnalysis& table) {
             if (!table.resolved || table.aot_candidates_only ||
                 table.encoding != JumpTableEncoding::SignedRelative16 ||
-                (table.reason != "bounded-signed-relative-table" &&
-                 table.reason != "identity-bound-declared-table") ||
+                (table.authority !=
+                     JumpTableAuthority::NativeImmutableBounded &&
+                 table.authority !=
+                     JumpTableAuthority::IdentityBoundDeclared) ||
                 table.entries.empty())
                 return false;
             const auto byte_count = table.entries.size() * 2u;
-            return identity_bound_immutable_range(
-                       table.table_address, byte_count) &&
-                   identity_bound_immutable_range(
-                       table.dispatch_address, 2u);
+            if (table.authority ==
+                JumpTableAuthority::NativeImmutableBounded) {
+                const auto* const table_segment = image.find_segment(
+                    table.table_address, byte_count);
+                const auto* const dispatch_segment = image.find_segment(
+                    table.dispatch_address, 2u);
+                const auto immutable_without_identity = [](
+                    const katana::io::ImageSegment* const segment) {
+                    return segment != nullptr &&
+                           segment->permissions.readable &&
+                           !segment->permissions.writable;
+                };
+                const auto table_proof = authenticated_range(
+                    table.table_address,
+                    byte_count,
+                    AuthenticatedRangePermission::Readable);
+                const auto dispatch_proof = authenticated_range(
+                    table.dispatch_address,
+                    2u,
+                    AuthenticatedRangePermission::Executable);
+                if ((!immutable_without_identity(table_segment) &&
+                     !table_proof.has_value()) ||
+                    (!immutable_without_identity(dispatch_segment) &&
+                     !dispatch_proof.has_value()))
+                    return false;
+                return !table_proof.has_value() ||
+                       !dispatch_proof.has_value() ||
+                       same_authenticated_range_generation(
+                           *table_proof, *dispatch_proof);
+            }
+            const auto table_proof = authenticated_range(
+                table.table_address,
+                byte_count,
+                AuthenticatedRangePermission::Readable);
+            const auto dispatch_proof = authenticated_range(
+                table.dispatch_address,
+                2u,
+                AuthenticatedRangePermission::Executable);
+            return table_proof.has_value() &&
+                   dispatch_proof.has_value() &&
+                   same_authenticated_range_generation(
+                       *table_proof, *dispatch_proof);
         };
     bool signed_relative_baseline_reproof_pending =
         root_only_session_reuse;
@@ -4648,17 +4785,18 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             }
             if (!recognition->jump_table.has_value()) continue;
             auto table = *recognition->jump_table;
-            if (table.evidence == ControlFlowEvidence::Unresolved)
+            if (table.evidence == ControlFlowEvidence::Unresolved) {
                 // Preserve the authority class which established the table.
                 // A natively recognized immutable table is a direct proof;
                 // an externally declared table remains guarded even after
                 // every target has become a proven recursive boundary. Both
                 // are complete, but collapsing the latter to ProvenComplete
                 // would erase its identity-bound declaration provenance.
-                table.evidence =
-                    table.reason == "identity-bound-declared-table"
-                        ? ControlFlowEvidence::GuardedComplete
-                        : ControlFlowEvidence::ProvenComplete;
+                if (const auto evidence = jump_table_complete_evidence(
+                        table.authority);
+                    evidence.has_value())
+                    table.evidence = *evidence;
+            }
             jump_table_result_index.insert_or_assign(site,
                                                      std::move(table));
             ++analysis.jump_table_result_entries_rebuilt;
@@ -4920,6 +5058,45 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         ? &*native_recognition
                                ->snapshot_absolute_producer
                         : nullptr;
+                const auto table_width =
+                    encoding == JumpTableEncoding::SignedRelative16
+                        ? 2u
+                        : 4u;
+                const auto table_extent64 =
+                    jump_table.requested_entries == 0u
+                        ? 0u
+                        : static_cast<std::uint64_t>(
+                              jump_table.requested_entries - 1u) *
+                                  table.entry_stride +
+                              table_width;
+                const auto table_proof =
+                    table_extent64 != 0u &&
+                            table_extent64 <=
+                                std::numeric_limits<std::size_t>::max()
+                        ? authenticated_range(
+                              jump_table.table_address,
+                              static_cast<std::size_t>(table_extent64),
+                              AuthenticatedRangePermission::Readable)
+                        : std::nullopt;
+                const auto dispatch_proof = authenticated_range(
+                    jump_table.dispatch_address,
+                    sizeof(std::uint16_t),
+                    AuthenticatedRangePermission::Executable);
+                bool jump_table_generation_bound =
+                    table_proof.has_value() &&
+                    dispatch_proof.has_value() &&
+                    same_authenticated_range_generation(
+                        *dispatch_proof, *table_proof);
+                // The authenticated table bytes are the identity-bound
+                // producer of the complete target set. Requiring a separate
+                // CodeIdentity range for every decoded landing instruction
+                // conflates edge provenance with target ownership and turns
+                // otherwise exact tables back into ForcedOverride evidence.
+                // Each entry is already accepted only after executable-image
+                // decoding; unique target ownership/materialization is proved
+                // independently by the program-index admission layer. Any
+                // later image-byte mutation invalidates the shared immutable
+                // generation, including this table/dispatch proof.
                 const bool native_full_table_match =
                     native_table != nullptr && native_table->resolved &&
                     !native_table->candidate_scan_truncated &&
@@ -4972,7 +5149,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         });
                 const bool native_entries_match =
                     native_full_table_match || native_fixed_entry_match;
-                bool native_producer_identity_bound = native_entries_match;
+                bool native_producer_identity_bound =
+                    native_entries_match && jump_table_generation_bound;
                 if (encoding == JumpTableEncoding::Absolute32) {
                     native_producer_identity_bound =
                         native_producer_identity_bound &&
@@ -4980,20 +5158,31 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     if (native_producer_identity_bound) {
                         const auto& producer =
                             *native_producer;
+                        const auto literal_proof =
+                            producer.literal_address != 0u
+                                ? authenticated_range(
+                                      producer.literal_address,
+                                      sizeof(std::uint32_t),
+                                      AuthenticatedRangePermission::Readable)
+                                : std::nullopt;
                         native_producer_identity_bound =
-                            producer.literal_address != 0u &&
+                            literal_proof.has_value() &&
                             !producer.instruction_addresses.empty() &&
-                            identity_bound_immutable_range(
-                                producer.literal_address,
-                                sizeof(std::uint32_t)) &&
-                            std::all_of(
-                                producer.instruction_addresses.begin(),
-                                producer.instruction_addresses.end(),
-                                [&](const auto address) {
-                                    return identity_bound_immutable_range(
-                                        address,
-                                        sizeof(std::uint16_t));
-                                });
+                            same_authenticated_range_generation(
+                                *dispatch_proof, *literal_proof);
+                        for (const auto address :
+                             producer.instruction_addresses) {
+                            const auto instruction_proof =
+                                authenticated_range(
+                                    address,
+                                    sizeof(std::uint16_t),
+                                    AuthenticatedRangePermission::Executable);
+                            native_producer_identity_bound =
+                                native_producer_identity_bound &&
+                                instruction_proof.has_value() &&
+                                same_authenticated_range_generation(
+                                    *dispatch_proof, *instruction_proof);
+                        }
                     }
                 }
                 jump_table.evidence =
@@ -5180,14 +5369,15 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                 });
             if (!boundaries)
                 continue;
+            const auto completion_evidence =
+                jump_table_complete_evidence(table.authority);
+            if (!completion_evidence.has_value())
+                continue;
             // Preserve the authority class that established the table.
             // Identity-bound declarations remain guarded even after the
             // recursive boundary index proves every target; only native
             // recognition may become an unconditional direct proof.
-            table.evidence =
-                table.reason == "identity-bound-declared-table"
-                    ? ControlFlowEvidence::GuardedComplete
-                    : ControlFlowEvidence::ProvenComplete;
+            table.evidence = *completion_evidence;
             ++analysis.jump_table_result_entries_rebuilt;
             mark_resolved_table_dispatch(
                 resolution_result_index, table);
@@ -6342,7 +6532,10 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
     analysis.result_index_materialized_items += terminal_result_index_items;
     report_progress("fixpoint-complete");
     auto guarded_aot_entries = collect_guarded_aot_entries(
-        image, analysis, final_guarded_code_inventory);
+        image,
+        analysis,
+        final_guarded_code_inventory,
+        non_root_function_entry_hints);
     analysis.guarded_aot_entries =
         std::move(guarded_aot_entries.entries);
     analysis.guarded_aot_entry_rejections =

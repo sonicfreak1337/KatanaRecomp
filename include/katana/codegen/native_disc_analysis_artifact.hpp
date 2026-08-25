@@ -13,6 +13,8 @@
 
 namespace katana::codegen {
 
+// Schema 9 retains typed jump-table authority in the embedded Primary
+// checkpoint; older artifacts are rejected before payload decoding.
 // Schema 8 binds the optimized Primary/Latent IR retained by this monolithic
 // checkpoint to its product optimizer independently from lowering/CFA caches.
 // Schema 8 additionally retains the bounded, source-authenticated PC-relative
@@ -21,7 +23,7 @@ namespace katana::codegen {
 // checkpoint envelope. It also removes downstream codegen implementation
 // churn from the canonical analysis lookup key; current product admission is
 // always replayed and validated before any result is consumed.
-inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 8u;
+inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 9u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
     256u * 1024u * 1024u;

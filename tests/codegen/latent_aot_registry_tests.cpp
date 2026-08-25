@@ -206,6 +206,158 @@ std::vector<std::uint8_t> local_descriptor_module(
     return bytes;
 }
 
+std::vector<std::uint8_t> unrelated_record_field_module(
+    const bool complete_callback) {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(complete_callback ? 0xA10u : 0x140u,
+                                    0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // An unrelated external factory returns a receiver in r0. The module
+    // stores a local pointer at receiver+44, which deliberately shares only
+    // the field displacement of an external callback consumer.
+    put_u16(0x00u, 0xD307u); // mov.l @(0x20,pc),r3
+    put_u16(0x02u, 0x430Bu); // jsr @r3
+    put_u16(0x04u, 0x0009u); // nop (delay)
+    put_u16(0x06u, 0x6B03u); // mov r0,r11
+    put_u16(0x08u, 0xD306u); // mov.l @(0x24,pc),r3
+    put_u16(0x0Au, 0x1B3Bu); // mov.l r3,@(44,r11)
+    put_u16(0x0Cu, 0x000Bu); // rts
+    put_u16(0x0Eu, 0x0009u); // nop (delay)
+    put_u32(0x20u, 0x8C018120u);
+    put_u32(0x24u, runtime_base + 0x100u);
+
+    if (!complete_callback) {
+        // The negative shape starts with a plausible BSR+delay pair but its
+        // call continuation is data. The old early-control-flow probe accepted
+        // it.
+        put_u16(0x100u, 0xB00Eu); // bsr 0x120
+        put_u16(0x102u, 0x0009u); // nop (delay)
+        put_u16(0x104u, 0xFFFFu); // invalid continuation
+        put_u16(0x106u, 0x0009u);
+        put_u16(0x120u, 0x000Bu);
+        put_u16(0x122u, 0x0009u);
+    } else {
+        // A complete callback wrapper may tail-transfer into a large shared
+        // body. The wrapper proof must validate the tail entry without
+        // charging the shared body's full extent to its 1024-instruction
+        // budget. The full CFA still owns and validates that body after the
+        // wrapper is admitted.
+        put_u16(0x100u, 0xA07Eu); // bra 0x200
+        put_u16(0x102u, 0x0009u); // nop (delay)
+        put_u16(0x1F0u, 0x000Bu); // short conditional exit
+        put_u16(0x1F2u, 0x0009u); // nop (delay)
+        put_u16(0x200u, 0x89F6u); // bt 0x1F0
+        for (std::size_t offset = 0x202u; offset < 0xA04u;
+             offset += 2u)
+            put_u16(offset, 0x0009u); // bounded shared body
+        put_u16(0xA04u, 0x000Bu);
+        put_u16(0xA06u, 0x0009u);
+    }
+    return bytes;
+}
+
+std::vector<std::uint8_t> direct_record_field_module(
+    const bool complete_callback,
+    const std::uint8_t receiver_register = 4u) {
+    require(receiver_register >= 4u && receiver_register <= 7u,
+            "Direkte Record-Fixture erhielt einen ungueltigen ABI-Receiver.");
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(0x340u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // Entry -> direct producer.  The producer receives the callback record in
+    // the canonical incoming ABI argument; no external factory return is
+    // involved.
+    put_u16(0x00u, 0xB01Eu); // bsr 0x40
+    put_u16(0x02u, 0x0009u); // nop (delay)
+    put_u16(0x04u, 0x000Bu); // rts
+    put_u16(0x06u, 0x0009u); // nop (delay)
+
+    put_u16(0x40u, 0xD307u); // mov.l @(0x60,pc),r3
+    // mov.l r3,@(16,rN) is the callback-record field store.  Production
+    // admission only seeds canonical r4; r5..r7 exercise the negative lane.
+    const auto store_opcode = static_cast<std::uint16_t>(
+        0x1000u | (static_cast<std::uint16_t>(receiver_register) << 8u) |
+        (3u << 4u) | 4u);
+    put_u16(0x42u, complete_callback ? store_opcode : 0x0009u);
+    put_u16(0x44u, 0x000Bu); // rts
+    put_u16(0x46u, 0x0009u); // nop (delay)
+    put_u32(0x60u, runtime_base + 0x100u);
+
+    // A valid local callback entry has an early architectural terminator.
+    put_u16(0x100u, 0x000Bu); // rts
+    put_u16(0x102u, 0x0009u); // nop (delay)
+
+    // Two distinct runtime aliases establish the module load base without a
+    // title-specific address or a runtime fallback.
+    put_u32(0x300u, runtime_base + 0x40u);
+    put_u32(0x304u, runtime_base + 0x100u);
+    return bytes;
+}
+
+std::vector<std::uint8_t> mutual_record_table_module(
+    const std::size_t record_count = 3u,
+    const bool constant_stride = true,
+    const bool matching_backreference = true) {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(0x400u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0x000Bu); // authoritative root: rts
+    put_u16(0x02u, 0x0009u); // delay slot
+
+    // The missing callback identifies its record family in its bounded entry
+    // prefix. At 0x100, D207 reads the literal at 0x120.
+    put_u16(0x100u, 0xD207u); // mov.l @(28,pc),r2
+    put_u16(0x102u, 0x000Bu); // rts
+    put_u16(0x104u, 0x0009u); // delay slot
+    put_u32(0x120u,
+            runtime_base + (matching_backreference ? 0x200u : 0x204u));
+
+    constexpr std::array record_bases{0x200u, 0x228u, 0x250u};
+    for (std::size_t index = 0u;
+         index < std::min(record_count, record_bases.size()); ++index) {
+        auto base = record_bases[index];
+        if (!constant_stride && index == 2u) base += 4u;
+        put_u32(base + 0x10u, runtime_base + 0x100u);
+    }
+    return bytes;
+}
+
 std::string byte_identity(const std::vector<std::uint8_t>& bytes) {
     return "sha256:" + katana::io::sha256_bytes(std::string_view(
                            reinterpret_cast<const char*>(bytes.data()),
@@ -680,6 +832,215 @@ int main() {
                 !has_dispatch_entry(local_descriptor_single_target, 0x120u),
             "Ein einzelnes Descriptorziel wurde trotz Mindestfamilie als "
             "Callbacktabelle akzeptiert.");
+
+        const std::array unrelated_record_external_targets{
+            0x8C018120u, 0x8C020000u};
+        const std::array unrelated_record_field_sinks{
+            katana::codegen::LatentAotExternalCallbackFieldSink{
+                0x8C020000u, 0x8C020006u, 0x8C020004u, 44, 4u, true}};
+        const std::array unrelated_record_roots{0u};
+        katana::codegen::LatentAotDiscoveryOptions
+            unrelated_record_options;
+        unrelated_record_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        unrelated_record_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        unrelated_record_options.external_code_targets =
+            unrelated_record_external_targets;
+        unrelated_record_options.external_callback_field_sinks =
+            unrelated_record_field_sinks;
+
+        const auto unrelated_record_data =
+            katana::codegen::audit_latent_aot_module(
+                unrelated_record_field_module(false), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                unrelated_record_options);
+        require(
+            unrelated_record_data.admitted &&
+                !std::binary_search(
+                    unrelated_record_data.final_entry_offsets.begin(),
+                    unrelated_record_data.final_entry_offsets.end(),
+                    0x100u),
+            "Globale Callback-Feldverschiebung erhob BSR-aehnliche Daten "
+            "aus einem fremden Factory-Record zum Code-Root.");
+
+        const auto unrelated_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                unrelated_record_field_module(true), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                unrelated_record_options);
+        require(
+            unrelated_record_callback.admitted &&
+                std::binary_search(
+                    unrelated_record_callback.final_entry_offsets.begin(),
+                    unrelated_record_callback.final_entry_offsets.end(),
+                    0x100u),
+            "Vollstaendig lokal decodierbarer Callback verlor seine "
+            "heuristische Root-Evidence.");
+
+        const std::array direct_record_external_targets{
+            0x8C018120u, 0x8C020000u};
+        const std::array direct_record_field_sinks{
+            katana::codegen::LatentAotExternalCallbackFieldSink{
+                0x8C020000u, 0x8C020006u, 0x8C020004u, 16, 4u, true}};
+        katana::codegen::LatentAotDiscoveryOptions direct_record_options;
+        direct_record_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        direct_record_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        direct_record_options.external_code_targets =
+            direct_record_external_targets;
+        direct_record_options.external_callback_field_sinks =
+            direct_record_field_sinks;
+
+        const auto direct_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                direct_record_field_module(true), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                direct_record_options);
+        require(
+            direct_record_callback.admitted &&
+                std::binary_search(
+                    direct_record_callback.final_entry_offsets.begin(),
+                    direct_record_callback.final_entry_offsets.end(),
+                    0x100u),
+            "Direkter r4-Record-Receiver verlor die lokale Callback-Root-"
+            "Evidence.");
+
+        const auto direct_record_without_sink =
+            katana::codegen::audit_latent_aot_module(
+                direct_record_field_module(true), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                unrelated_record_options);
+        require(
+            direct_record_without_sink.admitted &&
+                !std::binary_search(
+                    direct_record_without_sink.final_entry_offsets.begin(),
+                    direct_record_without_sink.final_entry_offsets.end(),
+                    0x100u),
+            "Direkter r4-Store wurde ohne StaticCallbackFieldSinkContract "
+            "als Callback-Root akzeptiert.");
+
+        const auto direct_record_wrong_receiver =
+            katana::codegen::audit_latent_aot_module(
+                direct_record_field_module(true, 5u), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                direct_record_options);
+        require(
+            direct_record_wrong_receiver.admitted &&
+                !std::binary_search(
+                    direct_record_wrong_receiver.final_entry_offsets.begin(),
+                    direct_record_wrong_receiver.final_entry_offsets.end(),
+                    0x100u),
+            "Nichtkanonischer r5-Record-Receiver wurde als Callback-Root "
+            "akzeptiert.");
+
+        const auto direct_record_without_store =
+            katana::codegen::audit_latent_aot_module(
+                direct_record_field_module(false), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                direct_record_options);
+        require(
+            direct_record_without_store.admitted &&
+                !std::binary_search(
+                    direct_record_without_store.final_entry_offsets.begin(),
+                    direct_record_without_store.final_entry_offsets.end(),
+                    0x100u),
+            "Ein lokales Literal ohne Record-Feld-Store wurde als Callback-"
+            "Root akzeptiert.");
+
+        const std::array mutual_record_external_targets{0x8C020000u};
+        const std::array mutual_record_field_sinks{
+            katana::codegen::LatentAotExternalCallbackFieldSink{
+                0x8C020000u, 0x8C020006u, 0x8C020004u, 16, 4u, true}};
+        katana::codegen::LatentAotDiscoveryOptions mutual_record_options;
+        mutual_record_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        mutual_record_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        mutual_record_options.external_code_targets =
+            mutual_record_external_targets;
+        mutual_record_options.external_callback_field_sinks =
+            mutual_record_field_sinks;
+
+        const auto mutual_record_callback =
+            katana::codegen::audit_latent_aot_module(
+                mutual_record_table_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                mutual_record_options);
+        require(
+            mutual_record_callback.admitted &&
+                std::binary_search(
+                    mutual_record_callback.final_entry_offsets.begin(),
+                    mutual_record_callback.final_entry_offsets.end(),
+                    0x100u),
+            "Mutual-Record-Tabelle verlor ihren dreifach stride- und "
+            "Rueckreferenz-bewiesenen Callback-Root.");
+
+        const auto mutual_record_two_records =
+            katana::codegen::audit_latent_aot_module(
+                mutual_record_table_module(2u), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                mutual_record_options);
+        require(
+            mutual_record_two_records.admitted &&
+                !std::binary_search(
+                    mutual_record_two_records.final_entry_offsets.begin(),
+                    mutual_record_two_records.final_entry_offsets.end(),
+                    0x100u),
+            "Nur zwei Record-Zellen wurden als statische Callback-Familie "
+            "promotet.");
+
+        const auto mutual_record_broken_stride =
+            katana::codegen::audit_latent_aot_module(
+                mutual_record_table_module(3u, false), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                mutual_record_options);
+        require(
+            mutual_record_broken_stride.admitted &&
+                !std::binary_search(
+                    mutual_record_broken_stride.final_entry_offsets.begin(),
+                    mutual_record_broken_stride.final_entry_offsets.end(),
+                    0x100u),
+            "Nichtkonstante Record-Schritte wurden als Callback-Tabelle "
+            "promotet.");
+
+        const auto mutual_record_without_backreference =
+            katana::codegen::audit_latent_aot_module(
+                mutual_record_table_module(3u, true, false), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                mutual_record_options);
+        require(
+            mutual_record_without_backreference.admitted &&
+                !std::binary_search(
+                    mutual_record_without_backreference.final_entry_offsets.begin(),
+                    mutual_record_without_backreference.final_entry_offsets.end(),
+                    0x100u),
+            "Record-Pointer ohne Callback-Rueckreferenz wurde als Root "
+            "promotet.");
+
+        auto wrong_mutual_record_options = mutual_record_options;
+        const std::array wrong_mutual_record_field_sinks{
+            katana::codegen::LatentAotExternalCallbackFieldSink{
+                0x8C020000u, 0x8C020006u, 0x8C020004u, 20, 4u, true}};
+        wrong_mutual_record_options.external_callback_field_sinks =
+            wrong_mutual_record_field_sinks;
+        const auto mutual_record_wrong_field =
+            katana::codegen::audit_latent_aot_module(
+                mutual_record_table_module(), 0x88000000u,
+                unrelated_record_roots, 0x8C900000u,
+                wrong_mutual_record_options);
+        require(
+            mutual_record_wrong_field.admitted &&
+                !std::binary_search(
+                    mutual_record_wrong_field.final_entry_offsets.begin(),
+                    mutual_record_wrong_field.final_entry_offsets.end(),
+                    0x100u),
+            "Falsche Callback-Feldform nutzte eine fremde Record-Basis als "
+            "Mutual-Root.");
 
         const auto repeated =
             katana::codegen::discover_latent_aot_modules(source, 0u, 0u);
@@ -1214,6 +1575,83 @@ int main() {
                 automatic_module->source_address == 0x88000000u,
             "Exakt gebundene Modulbasis verschob einen ungebundenen "
             "Nachbarkandidaten oder verlor ihre identity-bound Adresse.");
+
+        const std::array runtime_bound_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(hinted_cap_bytes),
+                22u * sector_size,
+                static_cast<std::uint32_t>(hinted_cap_bytes.size()),
+                0u,
+                0u,
+                0x8CB80000u}};
+        const auto runtime_bound =
+            katana::codegen::discover_latent_aot_modules(
+                cap_source,
+                0u,
+                0u,
+                {},
+                exact_only_options,
+                {},
+                runtime_bound_hint);
+        require(
+            runtime_bound.modules.size() == 1u &&
+                runtime_bound.modules.front().source_address ==
+                    0x88000000u,
+            "Loader-bewiesene Runtime-Basis veraenderte die unabhaengige "
+            "synthetische Analyseplatzierung oder verlor die Modulbindung.");
+
+        rejected = false;
+        auto invalid_runtime_base_hint = runtime_bound_hint.front();
+        invalid_runtime_base_hint.proven_runtime_base = 0x8D000000u;
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    cap_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_only_options,
+                    {},
+                    std::span{&invalid_runtime_base_hint, 1u}));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-runtime-base-invalid";
+        }
+        require(
+            rejected,
+            "Loader-bewiesene Runtime-Basis ausserhalb des gebundenen "
+            "Runtime-Fensters wurde akzeptiert.");
+
+        rejected = false;
+        const std::array conflicting_runtime_base_hints{
+            runtime_bound_hint.front(),
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(hinted_cap_bytes),
+                22u * sector_size,
+                static_cast<std::uint32_t>(hinted_cap_bytes.size()),
+                2u,
+                0u,
+                0x8CB90000u}};
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    cap_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_only_options,
+                    {},
+                    conflicting_runtime_base_hints));
+        } catch (const std::runtime_error& error) {
+            rejected =
+                std::string_view{error.what()} ==
+                "latent-aot-entry-hint-runtime-base-conflict";
+        }
+        require(
+            rejected,
+            "Widerspruechliche identity-bound Runtime-Basen wurden nicht "
+            "fail-closed abgelehnt.");
 
         rejected = false;
         const std::array pinned_collision{

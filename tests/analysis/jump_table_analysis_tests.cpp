@@ -50,7 +50,10 @@ int main() {
          {0x00u, 0x10u, 0x00u, 0x00u, 0x04u, 0x10u, 0x00u, 0x00u, 0x01u, 0x10u, 0x00u, 0x00u}});
 
     const auto resolved = katana::analysis::analyze_jump_table(image, 0x1010u, 0x2000u, 2u);
-    require(resolved.resolved && resolved.entries.size() == 2u,
+    require(resolved.resolved && resolved.entries.size() == 2u &&
+                resolved.authority ==
+                    katana::analysis::JumpTableAuthority::
+                        NativeImmutableBounded,
             "Gueltige Tabelle wurde nicht aufgeloest.");
     require(resolved.entries[0].target == 0x1000u && resolved.entries[1].target == 0x1004u,
             "Absolute Tabellenziele wurden falsch gelesen.");
@@ -196,6 +199,8 @@ int main() {
         absolute_pointer_run, absolute_lines, 3u);
     require(absolute.has_value() && absolute->resolved &&
                 absolute->aot_candidates_only &&
+                absolute->authority ==
+                    katana::analysis::JumpTableAuthority::SnapshotCandidate &&
                 absolute->evidence == katana::analysis::ControlFlowEvidence::GuardedPartial &&
                 absolute->entries.size() == 2u &&
                 absolute->entries[0].target == 0xA0001030u &&
@@ -259,6 +264,8 @@ int main() {
         displaced_pointer_run, displaced_lines, 7u);
     require(displaced.has_value() && displaced->resolved &&
                 displaced->aot_candidates_only &&
+                displaced->authority ==
+                    katana::analysis::JumpTableAuthority::SnapshotCandidate &&
                 displaced->dispatch_address == 0x300Eu &&
                 displaced->table_address == 0x304Cu &&
                 displaced->dispatch_kind ==
@@ -312,6 +319,8 @@ int main() {
         katana::analysis::recognize_snapshot_absolute_jump_table_candidates(
             displaced_pointer_run, mismatched_branch_lines, 7u);
     require(mismatched_branch.has_value() && mismatched_branch->resolved &&
+                mismatched_branch->authority ==
+                    katana::analysis::JumpTableAuthority::SnapshotCandidate &&
                 mismatched_branch->entries.size() == 1u &&
                 mismatched_branch->entries.front().target == 0x3040u &&
                 mismatched_branch->reason ==
@@ -561,9 +570,29 @@ int main() {
                            0xFFu}});
     const auto signed_entries =
         katana::analysis::analyze_relative_jump_table(relative, 0x20u, 0x100u, 0x20u, 2u);
-    require(signed_entries.resolved && signed_entries.entries[0].target == 0x1Cu &&
+    require(signed_entries.resolved &&
+                signed_entries.authority ==
+                    katana::analysis::JumpTableAuthority::
+                        NativeImmutableBounded &&
+                signed_entries.entries[0].target == 0x1Cu &&
                 signed_entries.entries[1].target == 0x20u,
             "Negative MOV.W-Tabelleneintraege wurden nicht vorzeichenerweitert.");
+    const auto declared_signed_entries =
+        katana::analysis::analyze_declared_jump_table(
+            relative,
+            0x20u,
+            0x100u,
+            0x20u,
+            2u,
+            2u,
+            katana::analysis::JumpTableEncoding::SignedRelative16);
+    require(
+        declared_signed_entries.resolved &&
+            declared_signed_entries.authority ==
+                katana::analysis::JumpTableAuthority::IdentityBoundDeclared &&
+            declared_signed_entries.reason ==
+                "identity-bound-declared-table",
+        "Identity-bound deklarierte Tabelle verlor ihre typisierte Autoritaet.");
     const auto conflicting =
         katana::analysis::analyze_relative_jump_table(relative, 0x20u, 0x104u, 0x20u, 2u);
     require(!conflicting.resolved && conflicting.entries.size() == 2u &&
@@ -595,6 +624,9 @@ int main() {
     const auto bt_table =
         katana::analysis::recognize_bounded_relative_jump_table(relative, bt_lines, 7u);
     require(bt_table.has_value() && bt_table->resolved && !bt_table->aot_candidates_only &&
+                bt_table->authority ==
+                    katana::analysis::JumpTableAuthority::
+                        NativeImmutableBounded &&
                 bt_table->evidence == katana::analysis::ControlFlowEvidence::Unresolved &&
                 bt_table->reason == "bounded-signed-relative-table" &&
                 bt_table->entries.size() == 2u,
@@ -687,6 +719,8 @@ int main() {
             snapshot_relative, bt_lines, 7u);
     require(snapshot_relative_table.has_value() && snapshot_relative_table->resolved &&
                 snapshot_relative_table->aot_candidates_only &&
+                snapshot_relative_table->authority ==
+                    katana::analysis::JumpTableAuthority::SnapshotCandidate &&
                 snapshot_relative_table->evidence ==
                     katana::analysis::ControlFlowEvidence::GuardedPartial &&
                 snapshot_relative_table->encoding ==

@@ -1,5 +1,6 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
+#include "katana/analysis/code_address.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/verifier.hpp"
 
@@ -817,6 +818,94 @@ int main() {
                 nullptr,
         "Ein gespeicherter Codepointer promovierte einen physischen "
         "Delay Slot ohne unabhaengigen Normal-Entry-Beweis.");
+
+    auto dual_context_image = code_image(
+        {0x2Bu, 0x41u, // jmp @r1
+         0x09u, 0x00u, // delay-slot nop
+         0x09u, 0x00u, 0x09u, 0x00u,
+         0x09u, 0x00u, 0x09u, 0x00u,
+         0x09u, 0x00u, 0x09u, 0x00u,
+         0x0Bu, 0x00u, // physical owner: rts
+         0x09u, 0x00u, // candidate and physical delay slot
+         0x0Bu, 0x00u, // candidate normal continuation: rts
+         0x09u, 0x00u}); // delay-slot nop
+    const auto image_delay_slot =
+        katana::analysis::prove_sh4_physical_delay_slot(
+            dual_context_image, 0x12u);
+    const auto byte_delay_slot =
+        katana::analysis::prove_sh4_physical_delay_slot(
+            dual_context_image.segments().front().bytes, 0u, 0x12u);
+    require(
+        image_delay_slot.has_value() &&
+            image_delay_slot->owner_address == 0x10u &&
+            byte_delay_slot.has_value() &&
+            byte_delay_slot->owner_address == 0x10u &&
+            !katana::analysis::prove_sh4_physical_delay_slot(
+                 dual_context_image, 0x14u).has_value(),
+        "Die zentrale SH-4-Delay-Slot-Proof-Primitive erkannte die "
+        "physische Owner/Slot-Beziehung nicht exakt.");
+
+    katana::io::ExecutableImage split_delay_slot_image;
+    split_delay_slot_image.add_segment(
+        {".owner", 0x10u, 0u, 2u,
+         katana::io::SegmentKind::Code, {true, false, true},
+         {0x0Bu, 0x00u}});
+    split_delay_slot_image.add_segment(
+        {".entry", 0x12u, 2u, 4u,
+         katana::io::SegmentKind::Code, {true, false, true},
+         {0x09u, 0x00u, 0x0Bu, 0x00u}});
+    require(
+        !katana::analysis::prove_sh4_physical_delay_slot(
+             split_delay_slot_image, 0x12u).has_value(),
+        "Numerisch benachbarte Woerter aus getrennten Segmenten wurden "
+        "als SH-4-Owner/Delay-Slot-Paar akzeptiert.");
+    katana::analysis::AnalysisOverrides dual_context_hint;
+    dual_context_hint.mode =
+        katana::analysis::AnalysisDirectiveMode::Hint;
+    dual_context_hint.source_path = "dual-context-hint.txt";
+    dual_context_hint.jumps.push_back({0u, 0x12u, 1u});
+    const auto candidate_only_dual_context =
+        katana::analysis::analyze_control_flow(
+            dual_context_image, &dual_context_hint);
+    const auto* candidate_only_rejection =
+        find_guarded_aot_entry_rejection(
+            candidate_only_dual_context, 0x12u);
+    require(
+        find_guarded_aot_entry(
+            candidate_only_dual_context, 0x12u) == nullptr &&
+            candidate_only_rejection != nullptr &&
+            candidate_only_rejection->reason ==
+                katana::analysis::GuardedAotEntryRejectionReason::
+                    DelaySlotEntry,
+        "Ein Candidate-only-Hint promotierte einen physischen Delay Slot "
+        "ohne unabhaengigen Normal-Entry-Beweis.");
+
+    dual_context_hint.function_entry_hints.push_back(
+        {0x12u, 2u});
+    const auto dual_context_callback =
+        katana::analysis::analyze_control_flow(
+            dual_context_image, &dual_context_hint);
+    const auto* dual_context_entry =
+        find_guarded_aot_entry(dual_context_callback, 0x12u);
+    const auto* dual_context_rejection =
+        find_guarded_aot_entry_rejection(
+            dual_context_callback, 0x12u);
+    require(
+        find_function(dual_context_callback, 0x12u) == nullptr &&
+            dual_context_entry != nullptr &&
+            dual_context_rejection == nullptr,
+        "Ein Non-Root-Normal-Entry wurde nicht als Guarded-AOT-Kontext "
+        "zugelassen oder faelschlich zur Funktion erhoben: function=" +
+            std::to_string(
+                find_function(dual_context_callback, 0x12u) != nullptr) +
+            " instruction=" +
+            std::to_string(has_instruction(dual_context_callback, 0x12u)) +
+            " entry=" + std::to_string(dual_context_entry != nullptr) +
+            " rejection=" +
+            (dual_context_rejection != nullptr
+                 ? katana::analysis::guarded_aot_entry_rejection_reason_name(
+                       dual_context_rejection->reason)
+                 : "none"));
 
     const auto caller_bounded_indexed_literal_image = [](
         const bool complete_second_caller,
@@ -2697,6 +2786,8 @@ int main() {
     require(relative_table_analysis != relative_table.jump_tables.end() &&
                 relative_table_analysis->resolved &&
                 relative_table_analysis->aot_candidates_only &&
+                relative_table_analysis->authority ==
+                    katana::analysis::JumpTableAuthority::SnapshotCandidate &&
                 relative_table_analysis->encoding ==
                     katana::analysis::JumpTableEncoding::SignedRelative16 &&
                 relative_table_analysis->evidence ==
@@ -3211,6 +3302,78 @@ int main() {
                     std::vector<std::uint32_t>{8u, 12u} &&
                 katana::ir::verify_program(table_jump_ir).empty(),
             "Jump-Table-Ziele erreichen CFG oder Lowering nicht konsistent.");
+
+    // Product post-bootstrap images are writable as a coarse segment. The
+    // table plus BRAF/delay pair receive exact CodeIdentity ranges, while the
+    // decoded case blocks are owned/materialized independently. Requiring an
+    // extra immutable range for every landing instruction regresses this
+    // exact table to ForcedOverride even though its complete target set is
+    // already authenticated by the table bytes.
+    katana::io::ExecutableImage identity_bound_braf_image;
+    identity_bound_braf_image.add_segment(
+        {".post-bootstrap",
+         0u,
+         0u,
+         0x28u,
+         katana::io::SegmentKind::Mixed,
+         {true, true, true},
+         {0x02u, 0xE1u, // mov #2,r1
+          0x12u, 0x30u, // cmp/hs r1,r0
+          0x01u, 0x8Bu, // bf 0x0A
+          0x0Bu, 0xA0u, // bra 0x20 (bounded fallback)
+          0x09u, 0x00u, // nop (delay)
+          0x00u, 0x40u, // shll r0
+          0x03u, 0x61u, // mov r0,r1
+          0x02u, 0xC7u, // mova 0x18,r0
+          0x1Du, 0x00u, // mov.w @(r0,r1),r0
+          0x23u, 0x00u, // braf r0
+          0x09u, 0x00u, // nop (delay)
+          0x09u, 0x00u, // padding
+          0x0Au, 0x00u, // table[0] -> 0x20 (base 0x16)
+          0x0Eu, 0x00u, // table[1] -> 0x24
+          0x09u, 0x00u, 0x09u, 0x00u,
+          0x0Bu, 0x00u, 0x09u, 0x00u, // 0x20: rts / nop
+          0x0Bu, 0x00u, 0x09u, 0x00u}}); // 0x24: rts / nop
+    identity_bound_braf_image.add_entry_point(0u);
+    identity_bound_braf_image.add_immutable_range(
+        {0x12u, 4u, "synthetic-braf-dispatch-v1", 0u});
+    identity_bound_braf_image.add_immutable_range(
+        {0x18u, 4u, "synthetic-braf-table-v1", 0u});
+    katana::analysis::AnalysisOverrides identity_bound_braf_override;
+    identity_bound_braf_override.source_path =
+        "identity-bound-braf-table.txt";
+    katana::analysis::JumpTableOverride identity_bound_braf_table{
+        0x12u,
+        0x18u,
+        2u,
+        1u,
+        sizeof(std::uint16_t),
+        0x16u,
+        katana::analysis::JumpTableOverrideEncoding::SignedRelative16,
+        katana::analysis::JumpTableOverrideTransfer::Jump};
+    identity_bound_braf_table.identity_bound_complete = true;
+    identity_bound_braf_override.jump_tables.push_back(
+        identity_bound_braf_table);
+    const auto identity_bound_braf =
+        katana::analysis::analyze_control_flow(
+            identity_bound_braf_image, &identity_bound_braf_override);
+    const auto identity_bound_braf_resolution = std::find_if(
+        identity_bound_braf.indirect_control_flow.begin(),
+        identity_bound_braf.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == 0x12u;
+        });
+    require(
+        identity_bound_braf_resolution !=
+                identity_bound_braf.indirect_control_flow.end() &&
+            identity_bound_braf_resolution->status ==
+                katana::analysis::ResolutionStatus::Resolved &&
+            identity_bound_braf_resolution->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedComplete &&
+            identity_bound_braf_resolution->targets ==
+                std::vector<std::uint32_t>{0x20u, 0x24u},
+        "Eine exakt gebundene BRAF-Tabelle verlangte zusaetzliche "
+        "CodeIdentity-Ranges fuer bereits validierte Zielbloecke.");
 
     auto partial_table_image = table_jump_image;
     partial_table_image.write_u32_le(0x104u, 0x200u);

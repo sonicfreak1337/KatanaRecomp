@@ -368,7 +368,19 @@ NativePortCycleCommit NativePortAotServices::consume_guest_cycles(
                            guest_sequence_)
         throw std::overflow_error("native-port-guest-sequence-overflow");
     guest_sequence_ += guest_cycles;
-    refresh_host_boundary();
+    // Host lifecycle/deadline polling is a completed-safepoint sampling budget,
+    // not part of guest-cycle accounting. Keep the exact guest sequence and
+    // poll no less often than every boundary_budget cycles measured between
+    // completed safepoints. A single large block can cross the budget before
+    // its first legal safepoint; it still polls once at completion.
+    if (host_boundary_cycles_remaining_ == 0u ||
+        host_boundary_cycles_remaining_ > boundary_budget ||
+        guest_cycles >= host_boundary_cycles_remaining_) {
+        refresh_host_boundary();
+        host_boundary_cycles_remaining_ = boundary_budget;
+    } else {
+        host_boundary_cycles_remaining_ -= guest_cycles;
+    }
     return {guest_sequence_, boundary_.has_value() ? 1u : 0u, false, false};
 }
 
@@ -502,6 +514,8 @@ NativePortCycleCommit commit_pending_guest_cycles(
     CpuState& cpu,
     NativePortAotServices& services,
     const std::size_t boundary_budget) {
+    if (boundary_budget == 0u)
+        throw std::invalid_argument("native-port-boundary-budget-zero");
     const auto pending = cpu.pending_guest_cycles;
     if (pending == 0u)
         return {services.scheduler_cycle(), 0u, false, false};

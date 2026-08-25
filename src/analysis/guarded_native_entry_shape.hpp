@@ -100,8 +100,8 @@ class GuardedNativeEntryShapeCache {
         // independent, explicit normal-entry contract may authorize that
         // dual-context shape; callers handle that stronger evidence before
         // consulting this cache.
-        if (canonical_address_is_physical_delay_slot(
-                canonical_address)) {
+        if (prove_sh4_physical_delay_slot(
+                *image_, canonical_address).has_value()) {
             const auto result = remember(
                 canonical_address,
                 GuardedNativeEntryShapeStatus::StructurallyInvalid);
@@ -125,8 +125,8 @@ class GuardedNativeEntryShapeCache {
         bind(*image_);
         const auto validation = validate_decode_candidate(*image_, address);
         return validation.valid() &&
-               canonical_address_is_physical_delay_slot(
-                   validation.resolved_address);
+               prove_sh4_physical_delay_slot(
+                   *image_, validation.resolved_address).has_value();
     }
 
     [[nodiscard]] const GuardedNativeEntryShapeStatistics&
@@ -193,26 +193,6 @@ class GuardedNativeEntryShapeCache {
             return {GuardedNativeEntryShapeStatus::StructurallyInvalid,
                     std::nullopt};
         return {GuardedNativeEntryShapeStatus::Valid, instruction};
-    }
-
-    [[nodiscard]] bool
-    canonical_address_is_physical_delay_slot(
-        const std::uint32_t canonical_address) const {
-        if (canonical_address < 2u) return false;
-        const auto previous =
-            validate_decode_candidate(*image_, canonical_address - 2u);
-        if (!previous.valid() || previous.segment == nullptr ||
-            previous.resolved_address + 2u != canonical_address)
-            return false;
-        const auto offset =
-            previous.segment->byte_offset(previous.resolved_address);
-        if (!offset.has_value() ||
-            *offset > previous.segment->bytes.size() ||
-            previous.segment->bytes.size() - *offset < 2u)
-            return false;
-        return katana::sh4::decode(katana::io::read_u16_le(
-                                      previous.segment->bytes, *offset))
-            .has_delay_slot;
     }
 
     [[nodiscard]] GuardedNativeEntryShapeStatus

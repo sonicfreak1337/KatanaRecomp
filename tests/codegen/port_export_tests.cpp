@@ -1590,19 +1590,24 @@ int run_test(const int argc, char* argv[]) {
     require(
         !analysis_cache_warm.boot_analysis_cache_hit &&
             analysis_cache_warm.boot_analysis_pipeline_runs == 1u &&
-            analysis_cache_warm.codegen_cache_misses != 0u &&
+            analysis_cache_warm.codegen_cache_hits ==
+                analysis_cache_warm.partitions &&
+            analysis_cache_warm.codegen_cache_misses == 0u &&
             std::find(
                 analysis_cache_warm.checkpoints.begin(),
                 analysis_cache_warm.checkpoints.end(),
                 "analysis-ir-positive-cache-disabled") !=
                 analysis_cache_warm.checkpoints.end(),
-        "Warmer Export konsumierte einen positiven Bootcache oder liess "
-        "Codegen faelschlich treffen. hit=" +
+        "Warmer Export konsumierte einen positiven Bootcache oder verwarf "
+        "den komponentengebundenen Partition-Cache. hit=" +
             std::to_string(
                 analysis_cache_warm.boot_analysis_cache_hit) +
             " runs=" +
             std::to_string(
                 analysis_cache_warm.boot_analysis_pipeline_runs) +
+            " codegen_hits=" +
+            std::to_string(
+                analysis_cache_warm.codegen_cache_hits) +
             " codegen_misses=" +
             std::to_string(
                 analysis_cache_warm.codegen_cache_misses));
@@ -5403,11 +5408,12 @@ int run_test(const int argc, char* argv[]) {
             metadata_cache_analysis_change);
     require(
         !implementation_change.metadata_cache_hit &&
-            implementation_change.codegen_cache_hits == 0u &&
-            implementation_change.codegen_cache_misses ==
-                implementation_change.partitions,
-        "Andere Exporterimplementierung uebernimmt stale Partition- oder "
-        "Metadata-Artefakte aus dem inneren Cache.");
+            implementation_change.codegen_cache_hits ==
+                implementation_change.partitions &&
+            implementation_change.codegen_cache_misses == 0u,
+        "Breite Exporteridentitaet invalidiert nicht den exakt "
+        "komponentengebundenen Partition-Cache oder uebernimmt stale "
+        "Metadata-Artefakte.");
 
     auto runtime_only_analysis = guarded_analysis;
     auto& runtime_only_resolution = runtime_only_analysis.indirect_control_flow.front();

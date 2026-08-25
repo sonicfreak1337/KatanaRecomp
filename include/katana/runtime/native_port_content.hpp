@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -62,6 +63,25 @@ struct NativePortLoadedAotBlockIdentityView {
     std::string_view sha256;
 };
 
+enum class NativePortLoadedAotSourceTransform : std::uint8_t {
+    Identity,
+    SegaPrs,
+};
+
+// Exact source provenance retained from the export-time latent-AOT hint. It
+// lets a title loader bind an authenticated encoded extent to the generated
+// decoded module without copying title paths or addresses into the runtime.
+// A zero runtime_start means that no loader placement was proven and is never
+// eligible for automatic PRS staging.
+struct NativePortLoadedAotSourceBindingView final {
+    NativePortLoadedAotSourceTransform transform =
+        NativePortLoadedAotSourceTransform::Identity;
+    std::string_view sha256;
+    std::uint64_t disc_byte_offset = 0u;
+    std::uint32_t byte_size = 0u;
+    std::uint32_t runtime_start = 0u;
+};
+
 struct NativePortLoadedAotModuleView {
     std::uint32_t source_start = 0u;
     std::uint32_t byte_size = 0u;
@@ -70,6 +90,7 @@ struct NativePortLoadedAotModuleView {
     // in that case the binder requires every emitted AOT block identity to
     // remain exact before installing the mapping.
     std::string_view sha256;
+    std::span<const NativePortLoadedAotSourceBindingView> source_bindings;
     std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
 };
 
@@ -83,6 +104,22 @@ struct NativePortLoadedAotModuleActivation final {
     std::uint32_t source_start = 0u;
     std::uint32_t runtime_start = 0u;
     std::uint32_t byte_size = 0u;
+};
+
+// Identity of one currently active loaded-AOT module. This view is suitable
+// for title-owned data-lifecycle bindings inside that module; it does not
+// authorize a code entry or expose mutable module bytes.
+struct NativePortLoadedAotActiveModuleView final {
+    std::string_view sha256;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t byte_size = 0u;
+    std::uint64_t lifecycle_generation = 0u;
+};
+
+struct NativePortExecutableRange final {
+    std::uint32_t runtime_start = 0u;
+    std::size_t byte_size = 0u;
 };
 
 // One context-owned range ledger arbitrates every executable title mapping,
@@ -160,6 +197,9 @@ class NativePortRuntimeImageBindings final {
     void validate_deactivate_runtime_range(
         std::uint32_t runtime_start,
         std::size_t byte_size) const;
+    [[nodiscard]] NativePortExecutableRange expand_deactivate_runtime_range(
+        std::uint32_t runtime_start,
+        std::size_t byte_size) const;
     [[nodiscard]] std::size_t deactivate_runtime_range(
         std::uint32_t runtime_start,
         std::size_t byte_size);
@@ -190,12 +230,28 @@ class NativePortLoadedAotBinder final {
     // Returns true only when target belongs to an already active mapping.
     // An exact block-identity mismatch is a typed AOT-contract failure.
     [[nodiscard]] bool validate_bound_entry(std::uint32_t target) const;
+    // Returns the unique active module containing address after validating
+    // that its executable blocks still belong to the current immutable-code
+    // generation. The address may point at code or module-owned data.
+    [[nodiscard]] std::optional<NativePortLoadedAotActiveModuleView>
+    active_module_for_address(std::uint32_t address) const;
     // Records one exact loader-selected module at its destination. The module
     // remains non-executable until bind_entry verifies its current bytes and
     // an exact emitted block at the requested entry. Returns the independent,
     // monotone overlay-lifecycle generation assigned to this activation.
     [[nodiscard]] std::uint64_t stage_runtime_module(
         const NativePortLoadedAotModuleActivation& activation);
+    // Resolves one exact, export-authenticated Sega PRS disc extent to its
+    // generated decoded module and loader-proven runtime placement. No match
+    // is an ordinary non-executable PRS asset; ambiguity fails closed.
+    [[nodiscard]] std::optional<NativePortLoadedAotModuleActivation>
+    resolve_prs_module_source(
+        std::string_view encoded_sha256,
+        std::uint64_t disc_byte_offset,
+        std::size_t encoded_byte_size) const;
+    [[nodiscard]] std::uint32_t resolve_module_source_start(
+        std::string_view sha256,
+        std::size_t byte_size) const;
     // Installs one unambiguous exact executable-closure mapping for target.
     // False means no analyzed module matches; ambiguous, malformed, or stale
     // generated-code state fails closed.
@@ -205,6 +261,9 @@ class NativePortLoadedAotBinder final {
     // executing or returning into that module fail closed. Returns the
     // number retired.
     void validate_deactivate_runtime_range(
+        std::uint32_t runtime_start,
+        std::size_t byte_size) const;
+    [[nodiscard]] NativePortExecutableRange expand_deactivate_runtime_range(
         std::uint32_t runtime_start,
         std::size_t byte_size) const;
     [[nodiscard]] std::size_t deactivate_runtime_range(
@@ -227,6 +286,16 @@ struct NativePortExecutableRetirement final {
 // decodes or recompiles guest instructions at runtime.
 [[nodiscard]] NativePortExecutableRetirement
 deactivate_native_port_executable_range(
+    NativePortContext& context,
+    std::uint32_t runtime_start,
+    std::size_t byte_size);
+
+// Explicit loader replacement transaction. The requested write range is
+// expanded to the exact active executable lifetimes it overlaps, then both
+// owner domains are validated before either is retired. Arbitrary partial
+// retirement remains rejected by deactivate_native_port_executable_range.
+[[nodiscard]] NativePortExecutableRetirement
+deactivate_native_port_executable_overlaps(
     NativePortContext& context,
     std::uint32_t runtime_start,
     std::size_t byte_size);
