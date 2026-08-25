@@ -7,7 +7,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_audio_contract_version = 3u;
+inline constexpr std::uint32_t native_port_audio_contract_version = 4u;
 
 struct NativePortAudioFormat final {
     std::uint32_t sample_rate = 44'100u;
@@ -35,6 +35,9 @@ struct NativePortAudioSnapshot final {
     std::uint64_t submitted_frames = 0u;
     std::uint64_t completed_frames = 0u;
     std::uint64_t queued_frames = 0u;
+    // Monotone host-device cursor sampled by refresh_playback_position().
+    // Unlike completed_frames this advances inside a still-owned WAVEHDR.
+    std::uint64_t playback_position_frames = 0u;
     std::uint64_t playback_position_queries = 0u;
     std::uint32_t error_code = 0u;
 };

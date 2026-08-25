@@ -14,7 +14,7 @@ namespace katana::runtime {
 
 class NativePortSoundBankEngine;
 
-inline constexpr std::uint32_t native_port_audio_engine_contract_version = 4u;
+inline constexpr std::uint32_t native_port_audio_engine_contract_version = 5u;
 
 enum class NativePortAudioEngineFailure : std::uint8_t {
     None,
@@ -146,6 +146,11 @@ struct NativePortAudioEngineSnapshot final {
     std::uint64_t submitted_feed_frames = 0u;
     std::uint64_t mixed_output_frames = 0u;
     std::uint64_t submitted_output_frames = 0u;
+    // Optional signal diagnostics. These remain zero unless the generic
+    // KATANA_NATIVE_AUDIO_SIGNAL_DIAGNOSTICS toggle is enabled at startup.
+    std::uint64_t submitted_nonzero_samples = 0u;
+    std::uint64_t submitted_clipped_samples = 0u;
+    std::uint32_t submitted_peak_sample = 0u;
     std::uint32_t active_voices = 0u;
     std::uint32_t playing_voices = 0u;
     std::uint32_t failed_voices = 0u;

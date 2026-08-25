@@ -300,6 +300,7 @@ class NativePortAudioStream::Impl final {
                 submitted_frames_,
                 completed_frames_,
                 queued_frames_,
+                played_frames_,
                 playback_position_queries_,
                 error_code_};
     }

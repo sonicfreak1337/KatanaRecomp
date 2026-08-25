@@ -4,9 +4,11 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -17,6 +19,15 @@ namespace {
 constexpr std::uint32_t maximum_native_audio_voices = 4'096u;
 constexpr std::uint32_t maximum_mix_block_frames = 16'384u;
 constexpr std::uint32_t maximum_decoder_reads_per_pump = 1'048'576u;
+
+[[nodiscard]] bool native_audio_signal_diagnostics_enabled() noexcept {
+    static const bool enabled = [] {
+        const auto* configured =
+            std::getenv("KATANA_NATIVE_AUDIO_SIGNAL_DIAGNOSTICS");
+        return configured != nullptr && std::string_view(configured) == "1";
+    }();
+    return enabled;
+}
 
 [[noreturn]] void fail_audio_engine(
     const NativePortAudioEngineFailure failure,
@@ -667,6 +678,14 @@ class NativePortAudioEngine::Impl final {
             }
             pending_contributions_.clear();
             saturating_add(submitted_output_frames_, mixed_frames);
+            if (native_audio_signal_diagnostics_enabled()) {
+                saturating_add(submitted_nonzero_samples_,
+                               pending_nonzero_samples_);
+                saturating_add(submitted_clipped_samples_,
+                               pending_clipped_samples_);
+                submitted_peak_sample_ = std::max(
+                    submitted_peak_sample_, pending_peak_sample_);
+            }
             output_snapshot = output_->snapshot();
         }
     }
@@ -699,6 +718,9 @@ class NativePortAudioEngine::Impl final {
         result.submitted_feed_frames = submitted_feed_frames_;
         result.mixed_output_frames = mixed_output_frames_;
         result.submitted_output_frames = submitted_output_frames_;
+        result.submitted_nonzero_samples = submitted_nonzero_samples_;
+        result.submitted_clipped_samples = submitted_clipped_samples_;
+        result.submitted_peak_sample = submitted_peak_sample_;
         result.output_paused = output_paused_;
         result.output = output_->snapshot();
         for (const auto& slot : slots_) {
@@ -1203,13 +1225,35 @@ class NativePortAudioEngine::Impl final {
                 voice.state = NativePortAudioVoiceState::Completed;
         }
 
-        for (std::size_t sample = 0u; sample < sample_count; ++sample) {
-            const auto rounded = std::llround(mix_accumulation_[sample]);
-            const auto clamped = std::clamp<std::int64_t>(
-                rounded,
-                std::numeric_limits<std::int16_t>::min(),
-                std::numeric_limits<std::int16_t>::max());
-            mixed_samples_[sample] = static_cast<std::int16_t>(clamped);
+        if (!native_audio_signal_diagnostics_enabled()) {
+            for (std::size_t sample = 0u; sample < sample_count; ++sample) {
+                const auto rounded = std::llround(mix_accumulation_[sample]);
+                const auto clamped = std::clamp<std::int64_t>(
+                    rounded,
+                    std::numeric_limits<std::int16_t>::min(),
+                    std::numeric_limits<std::int16_t>::max());
+                mixed_samples_[sample] = static_cast<std::int16_t>(clamped);
+            }
+        } else {
+            pending_nonzero_samples_ = 0u;
+            pending_clipped_samples_ = 0u;
+            pending_peak_sample_ = 0u;
+            for (std::size_t sample = 0u; sample < sample_count; ++sample) {
+                const auto rounded = std::llround(mix_accumulation_[sample]);
+                const auto clamped = std::clamp<std::int64_t>(
+                    rounded,
+                    std::numeric_limits<std::int16_t>::min(),
+                    std::numeric_limits<std::int16_t>::max());
+                const auto mixed = static_cast<std::int16_t>(clamped);
+                mixed_samples_[sample] = mixed;
+                pending_nonzero_samples_ += mixed != 0 ? 1u : 0u;
+                pending_clipped_samples_ += rounded != clamped ? 1u : 0u;
+                const auto signed_sample = static_cast<std::int32_t>(mixed);
+                const auto magnitude = static_cast<std::uint32_t>(
+                    signed_sample < 0 ? -signed_sample : signed_sample);
+                pending_peak_sample_ =
+                    std::max(pending_peak_sample_, magnitude);
+            }
         }
         saturating_add(mixed_output_frames_, frames);
         return frames;
@@ -1231,6 +1275,12 @@ class NativePortAudioEngine::Impl final {
     std::uint64_t submitted_feed_frames_ = 0u;
     std::uint64_t mixed_output_frames_ = 0u;
     std::uint64_t submitted_output_frames_ = 0u;
+    std::uint64_t submitted_nonzero_samples_ = 0u;
+    std::uint64_t submitted_clipped_samples_ = 0u;
+    std::uint64_t pending_nonzero_samples_ = 0u;
+    std::uint64_t pending_clipped_samples_ = 0u;
+    std::uint32_t submitted_peak_sample_ = 0u;
+    std::uint32_t pending_peak_sample_ = 0u;
     bool output_paused_ = false;
 };
 
