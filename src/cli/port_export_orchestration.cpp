@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -39,7 +41,318 @@ bool valid_cache_digest(const std::string_view value) noexcept {
                });
 }
 
+const katana::codegen::NativeDiscProgramIndexAdjacency* adjacency(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        values,
+    const std::uint32_t address) {
+    const auto found = std::lower_bound(
+        values.begin(), values.end(), address,
+        [](const auto& value, const std::uint32_t candidate) {
+            return value.address < candidate;
+        });
+    if (found == values.end() || found->address != address) return nullptr;
+    return &*found;
+}
+
+bool adjacency_contains(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        values,
+    const std::uint32_t address,
+    const std::uint32_t related_address) {
+    const auto* found = adjacency(values, address);
+    return found != nullptr &&
+           std::binary_search(
+               found->related_addresses.begin(),
+               found->related_addresses.end(),
+               related_address);
+}
+
+struct LatentFunctionLocation final {
+    const AgentLatentModuleAuthority* module = nullptr;
+    const AgentLatentFunctionAuthority* function = nullptr;
+};
+
+const AgentLatentFunctionAuthority* unique_module_function(
+    const AgentLatentModuleAuthority& module,
+    const std::uint32_t entry_address) {
+    const AgentLatentFunctionAuthority* result = nullptr;
+    for (const auto& function : module.functions) {
+        if (function.entry_address != entry_address) continue;
+        if (result != nullptr) return nullptr;
+        result = &function;
+    }
+    return result;
+}
+
+LatentFunctionLocation unique_latent_function(
+    const std::vector<AgentLatentModuleAuthority>& modules,
+    const std::uint32_t entry_address) {
+    LatentFunctionLocation result;
+    for (const auto& module : modules) {
+        for (const auto& function : module.functions) {
+            if (function.entry_address != entry_address) continue;
+            if (result.function != nullptr) return {};
+            result = {&module, &function};
+        }
+    }
+    return result;
+}
+
+const AgentLatentModuleAuthority* exact_candidate_module(
+    const AgentLatentModuleAuthority& baseline,
+    const std::vector<AgentLatentModuleAuthority>& candidates) {
+    const AgentLatentModuleAuthority* result = nullptr;
+    for (const auto& candidate : candidates) {
+        if (candidate.id != baseline.id ||
+            candidate.byte_identity != baseline.byte_identity ||
+            candidate.byte_size != baseline.byte_size ||
+            candidate.source_address != baseline.source_address ||
+            !std::includes(
+                candidate.entry_offsets.begin(),
+                candidate.entry_offsets.end(),
+                baseline.entry_offsets.begin(),
+                baseline.entry_offsets.end()) ||
+            !std::includes(
+                candidate.instruction_addresses.begin(),
+                candidate.instruction_addresses.end(),
+                baseline.instruction_addresses.begin(),
+                baseline.instruction_addresses.end()) ||
+            !std::all_of(
+                baseline.source_bindings.begin(),
+                baseline.source_bindings.end(),
+                [&](const auto& binding) {
+                    return std::find(
+                               candidate.source_bindings.begin(),
+                               candidate.source_bindings.end(),
+                               binding) != candidate.source_bindings.end();
+                }))
+            continue;
+        if (result != nullptr) return nullptr;
+        result = &candidate;
+    }
+    return result;
+}
+
+struct LatentIncomingOwnerRefinement final {
+    std::uint32_t old_owner = 0u;
+    std::uint32_t new_owner = 0u;
+};
+
+std::optional<LatentIncomingOwnerRefinement>
+latent_incoming_owner_refinement(
+    const std::uint32_t target,
+    const std::uint32_t baseline_source,
+    const katana::codegen::NativeDiscProgramIndexAdjacency&
+        candidate_sources,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_outgoing,
+    const std::vector<AgentLatentModuleAuthority>& baseline_modules,
+    const std::vector<AgentLatentModuleAuthority>& candidate_modules,
+    const bool require_candidate_incoming_source) {
+    const auto baseline =
+        unique_latent_function(baseline_modules, baseline_source);
+    if (baseline.module == nullptr || baseline.function == nullptr)
+        return std::nullopt;
+    const auto* candidate_module =
+        exact_candidate_module(*baseline.module, candidate_modules);
+    if (candidate_module == nullptr) return std::nullopt;
+
+    const auto target_edges = [&](const AgentLatentFunctionAuthority& function) {
+        std::vector<AgentLatentFunctionAuthority::Edge> result;
+        std::copy_if(
+            function.edges.begin(),
+            function.edges.end(),
+            std::back_inserter(result),
+            [&](const auto& edge) { return edge.target_address == target; });
+        return result;
+    };
+    const auto baseline_edges = target_edges(*baseline.function);
+    if (baseline_edges.empty() ||
+        !std::all_of(
+            baseline_edges.begin(), baseline_edges.end(),
+            [&](const auto& edge) {
+                return std::binary_search(
+                    baseline.function->instruction_addresses.begin(),
+                    baseline.function->instruction_addresses.end(),
+                    edge.source_address);
+            }))
+        return std::nullopt;
+
+    // The filtered outgoing index is the stronger ownership view.  If it
+    // retains the exact owner/target relation, a loss in the earlier coarse
+    // incoming map is only an overlapping-function attribution change.
+    if (const auto* retained_function = unique_module_function(
+            *candidate_module, baseline_source);
+        retained_function != nullptr &&
+        adjacency_contains(candidate_outgoing, baseline_source, target)) {
+        const auto retained_edges = target_edges(*retained_function);
+        if (std::includes(
+                retained_edges.begin(), retained_edges.end(),
+                baseline_edges.begin(), baseline_edges.end()) &&
+            std::all_of(
+                baseline_edges.begin(), baseline_edges.end(),
+                [&](const auto& edge) {
+                    return std::binary_search(
+                        retained_function->instruction_addresses.begin(),
+                        retained_function->instruction_addresses.end(),
+                        edge.source_address);
+                }))
+            return LatentIncomingOwnerRefinement{
+                baseline_source, baseline_source};
+    }
+
+    const bool internal_target =
+        std::find(
+            baseline.function->instruction_addresses.begin(),
+            baseline.function->instruction_addresses.end(),
+            target) != baseline.function->instruction_addresses.end();
+    if (internal_target &&
+        std::find(
+            candidate_module->instruction_addresses.begin(),
+            candidate_module->instruction_addresses.end(),
+            target) == candidate_module->instruction_addresses.end())
+        return std::nullopt;
+
+    std::optional<std::uint32_t> refined_owner;
+    for (const auto& candidate_function_authority :
+         candidate_module->functions) {
+        const auto candidate_source =
+            candidate_function_authority.entry_address;
+        if (require_candidate_incoming_source &&
+            !std::binary_search(
+                candidate_sources.related_addresses.begin(),
+                candidate_sources.related_addresses.end(),
+                candidate_source))
+            continue;
+        if (std::find(
+                baseline.function->instruction_addresses.begin(),
+                baseline.function->instruction_addresses.end(),
+                candidate_source) ==
+            baseline.function->instruction_addresses.end())
+            continue;
+        const auto* candidate_function = unique_module_function(
+            *candidate_module, candidate_source);
+        if (candidate_function == nullptr) continue;
+        const auto candidate_edges = target_edges(*candidate_function);
+        if (!std::includes(
+                candidate_edges.begin(), candidate_edges.end(),
+                baseline_edges.begin(), baseline_edges.end()))
+            continue;
+        if (!std::all_of(
+                baseline_edges.begin(), baseline_edges.end(),
+                [&](const auto& edge) {
+                    return std::binary_search(
+                        candidate_function->instruction_addresses.begin(),
+                        candidate_function->instruction_addresses.end(),
+                        edge.source_address);
+                }))
+            continue;
+        if (!internal_target &&
+            !adjacency_contains(
+                candidate_outgoing, candidate_source, target))
+            continue;
+        if (refined_owner.has_value() &&
+            *refined_owner != candidate_source)
+            return std::nullopt;
+        refined_owner = candidate_source;
+    }
+    if (!refined_owner.has_value()) return std::nullopt;
+    return LatentIncomingOwnerRefinement{
+        baseline_source, *refined_owner};
+}
+
 } // namespace
+
+bool agent_program_index_incoming_authority_preserved(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        required_incoming,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_incoming,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        required_outgoing,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_outgoing,
+    const std::vector<AgentLatentModuleAuthority>& baseline_modules,
+    const std::vector<AgentLatentModuleAuthority>& candidate_modules,
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>>&
+        exact_entry_remaps) {
+    for (const auto& required : required_incoming) {
+        const auto* found = adjacency(candidate_incoming, required.address);
+        if (found == nullptr) return false;
+        for (const auto required_source : required.related_addresses) {
+            const auto remap = std::find_if(
+                exact_entry_remaps.begin(), exact_entry_remaps.end(),
+                [&](const auto& candidate) {
+                    return candidate.first == required_source;
+                });
+            const auto mapped_source = remap == exact_entry_remaps.end()
+                ? required_source
+                : remap->second;
+            const bool incoming_retained = std::binary_search(
+                    found->related_addresses.begin(),
+                    found->related_addresses.end(), mapped_source);
+            if (incoming_retained) {
+                if (mapped_source != required_source ||
+                    adjacency_contains(
+                        candidate_outgoing,
+                        required_source,
+                        required.address) ||
+                    !adjacency_contains(
+                        required_outgoing,
+                        required_source,
+                        required.address))
+                    continue;
+                const auto refinement = latent_incoming_owner_refinement(
+                    required.address,
+                    required_source,
+                    *found,
+                    candidate_outgoing,
+                    baseline_modules,
+                    candidate_modules,
+                    false);
+                if (!refinement.has_value() ||
+                    refinement->new_owner == refinement->old_owner)
+                    return false;
+                continue;
+            }
+            if (mapped_source != required_source)
+                return false;
+            const auto refinement = latent_incoming_owner_refinement(
+                required.address,
+                required_source,
+                *found,
+                candidate_outgoing,
+                baseline_modules,
+                candidate_modules,
+                true);
+            if (!refinement.has_value()) return false;
+        }
+    }
+    return true;
+}
+
+bool agent_latent_outgoing_owner_refinement_preserved(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_outgoing,
+    const std::uint32_t old_owner,
+    const std::uint32_t target,
+    const std::vector<AgentLatentModuleAuthority>& baseline_modules,
+    const std::vector<AgentLatentModuleAuthority>& candidate_modules) {
+    const katana::codegen::NativeDiscProgramIndexAdjacency unused_sources{
+        target, {}};
+    const auto refinement = latent_incoming_owner_refinement(
+        target,
+        old_owner,
+        unused_sources,
+        candidate_outgoing,
+        baseline_modules,
+        candidate_modules,
+        false);
+    return refinement.has_value() &&
+           refinement->new_owner != refinement->old_owner &&
+           adjacency_contains(
+               candidate_outgoing, refinement->new_owner, target);
+}
 
 std::string port_export_recipe_identity(
     const katana::runtime::DiscInstallRecipe& recipe) {

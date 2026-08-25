@@ -9190,17 +9190,6 @@ std::string agent_analysis_session_contract_identity(
     return katana::io::sha256_bytes(material.str());
 }
 
-struct AgentAnalysisModuleAuthority final {
-    std::string id;
-    std::string byte_identity;
-    std::uint32_t byte_size = 0u;
-    std::uint32_t source_address = 0u;
-    std::vector<katana::codegen::PreparedLatentAotSourceBinding>
-        source_bindings;
-    std::vector<std::uint32_t> entry_offsets;
-    std::vector<std::uint32_t> instruction_addresses;
-};
-
 using AgentPrimaryInstructionAuthority = katana::ir::Instruction;
 
 struct AgentPrimaryBlockAuthority final {
@@ -9242,7 +9231,7 @@ struct AgentAnalysisAuthorityBaseline final {
     std::vector<std::uint32_t> primary_instruction_addresses;
     std::vector<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>>
         primary_call_edges;
-    std::vector<AgentAnalysisModuleAuthority> modules;
+    std::vector<katana::cli::AgentLatentModuleAuthority> modules;
     katana::codegen::NativeDiscProgramIndexCheckpoint program_index;
     bool guarded_inventory_complete = false;
     bool native_hardware_closure_complete = false;
@@ -9261,6 +9250,98 @@ std::vector<std::uint32_t> latent_module_instruction_addresses(
     addresses.erase(
         std::unique(addresses.begin(), addresses.end()), addresses.end());
     return addresses;
+}
+
+std::vector<katana::cli::AgentLatentFunctionAuthority>
+latent_module_function_authorities(
+    const katana::codegen::PreparedLatentAotModule& module,
+    const std::vector<std::uint32_t>& retained_entries) {
+    std::vector<katana::cli::AgentLatentFunctionAuthority> result;
+    result.reserve(std::min(module.program.size(), retained_entries.size()));
+    for (const auto& function : module.program) {
+        if (!std::binary_search(
+                retained_entries.begin(), retained_entries.end(),
+                function.entry_address))
+            continue;
+        katana::cli::AgentLatentFunctionAuthority authority;
+        authority.entry_address = function.entry_address;
+        for (const auto& block : function.blocks)
+            for (const auto& instruction : block.instructions) {
+                authority.instruction_addresses.push_back(
+                    instruction.source_address);
+                if (instruction.target_address.has_value())
+                    authority.edges.push_back({
+                        instruction.source_address,
+                        *instruction.target_address});
+                for (const auto target : instruction.resolved_targets)
+                    authority.edges.push_back({
+                        instruction.source_address, target});
+            }
+        for (const auto& block : function.blocks) {
+            if (block.instructions.empty()) continue;
+            const auto* control = &block.instructions.back();
+            if (control->delay_slot.role ==
+                    katana::ir::DelaySlotRole::Slot &&
+                block.instructions.size() >= 2u)
+                control = &block.instructions[block.instructions.size() - 2u];
+            for (const auto successor : block.successors)
+                authority.edges.push_back({
+                    control->source_address, successor});
+        }
+        std::sort(
+            authority.instruction_addresses.begin(),
+            authority.instruction_addresses.end());
+        authority.instruction_addresses.erase(
+            std::unique(
+                authority.instruction_addresses.begin(),
+                authority.instruction_addresses.end()),
+            authority.instruction_addresses.end());
+        std::sort(authority.edges.begin(), authority.edges.end());
+        authority.edges.erase(
+            std::unique(authority.edges.begin(), authority.edges.end()),
+            authority.edges.end());
+        result.push_back(std::move(authority));
+    }
+    for (const auto& transfer : module.external_transfers) {
+        const auto site64 = static_cast<std::uint64_t>(module.source_address) +
+            transfer.source_offset;
+        if (site64 > std::numeric_limits<std::uint32_t>::max()) continue;
+        const auto site = static_cast<std::uint32_t>(site64);
+        for (auto& function : result) {
+            if (!std::binary_search(
+                    function.instruction_addresses.begin(),
+                    function.instruction_addresses.end(), site))
+                continue;
+            function.edges.push_back({site, transfer.target_address});
+        }
+    }
+    for (auto& function : result) {
+        std::sort(function.edges.begin(), function.edges.end());
+        function.edges.erase(
+            std::unique(function.edges.begin(), function.edges.end()),
+            function.edges.end());
+    }
+    std::sort(
+        result.begin(), result.end(),
+        [](const auto& left, const auto& right) {
+            return left.entry_address < right.entry_address;
+        });
+    return result;
+}
+
+katana::cli::AgentLatentModuleAuthority latent_module_authority(
+    const katana::codegen::PreparedLatentAotModule& module,
+    const std::vector<std::uint32_t>& retained_function_entries) {
+    return {
+        module.id,
+        module.byte_identity,
+        module.byte_size,
+        module.source_address,
+        module.source_bindings,
+        module.entry_offsets,
+        latent_module_instruction_addresses(module),
+        latent_module_function_authorities(
+            module, retained_function_entries)};
 }
 
 AgentAnalysisAuthorityBaseline capture_agent_analysis_authority(
@@ -9455,16 +9536,17 @@ AgentAnalysisAuthorityBaseline capture_agent_analysis_authority(
                     result.primary_call_edges.end()),
         result.primary_call_edges.end());
     result.modules.reserve(artifact.latent.modules.size());
-    for (const auto& module : artifact.latent.modules) {
-        result.modules.push_back({
-            module.id,
-            module.byte_identity,
-            module.byte_size,
-            module.source_address,
-            module.source_bindings,
-            module.entry_offsets,
-            latent_module_instruction_addresses(module)});
-    }
+    std::vector<std::uint32_t> retained_latent_function_entries;
+    for (const auto& incoming :
+         artifact.native_port_program_index.incoming_edge_sources)
+        retained_latent_function_entries.insert(
+            retained_latent_function_entries.end(),
+            incoming.related_addresses.begin(),
+            incoming.related_addresses.end());
+    canonicalize_addresses(retained_latent_function_entries);
+    for (const auto& module : artifact.latent.modules)
+        result.modules.push_back(latent_module_authority(
+            module, retained_latent_function_entries));
     result.guarded_inventory_complete = artifact.guarded_inventory_complete;
     result.native_hardware_closure_complete =
         artifact.native_hardware_closure_complete;
@@ -10235,28 +10317,6 @@ closed_replacement_owner_target_losses(
     return losses;
 }
 
-bool program_index_adjacency_subset_with_related_remap(
-    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
-        required,
-    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
-        candidate,
-    const std::vector<AgentCompleteJumpTableFunctionDemotion>& demotions) {
-    for (const auto& entry : required) {
-        const auto* found = program_index_adjacency(candidate, entry.address);
-        if (found == nullptr) return false;
-        for (const auto related_address : entry.related_addresses) {
-            const auto mapped = remap_complete_jump_table_function_entry(
-                demotions, related_address);
-            if (!std::binary_search(
-                    found->related_addresses.begin(),
-                    found->related_addresses.end(),
-                    mapped))
-                return false;
-        }
-    }
-    return true;
-}
-
 bool program_index_outgoing_subset_with_closed_losses(
     const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
         required,
@@ -10264,7 +10324,11 @@ bool program_index_outgoing_subset_with_closed_losses(
         candidate,
     const std::vector<std::pair<std::uint32_t, std::uint32_t>>&
         closed_owner_target_losses,
-    const std::vector<AgentCompleteJumpTableFunctionDemotion>& demotions) {
+    const std::vector<AgentCompleteJumpTableFunctionDemotion>& demotions,
+    const std::vector<katana::cli::AgentLatentModuleAuthority>&
+        baseline_modules,
+    const std::vector<katana::cli::AgentLatentModuleAuthority>&
+        candidate_modules) {
     for (const auto& outgoing : required) {
         for (const auto target : outgoing.related_addresses) {
             const auto mapped_owner =
@@ -10275,6 +10339,16 @@ bool program_index_outgoing_subset_with_closed_losses(
                     demotions, target);
             if (program_index_adjacency_contains(
                     candidate, mapped_owner, mapped_target))
+                continue;
+            if (mapped_owner == outgoing.address &&
+                mapped_target == target &&
+                katana::cli::
+                    agent_latent_outgoing_owner_refinement_preserved(
+                        candidate,
+                        outgoing.address,
+                        target,
+                        baseline_modules,
+                        candidate_modules))
                 continue;
             if (!std::binary_search(
                     closed_owner_target_losses.begin(),
@@ -10399,16 +10473,17 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
     }
 
     for (const auto& required : baseline.modules) {
-        const auto found = std::find_if(
-            candidate.latent.modules.begin(),
-            candidate.latent.modules.end(),
-            [&](const auto& module) {
-                return module.id == required.id &&
-                       module.byte_identity == required.byte_identity &&
-                       module.byte_size == required.byte_size &&
-                       module.source_address == required.source_address;
-            });
-        if (found == candidate.latent.modules.end() ||
+        const katana::codegen::PreparedLatentAotModule* found = nullptr;
+        for (const auto& module : candidate.latent.modules) {
+            if (module.id != required.id ||
+                module.byte_identity != required.byte_identity ||
+                module.byte_size != required.byte_size ||
+                module.source_address != required.source_address)
+                continue;
+            if (found != nullptr) return "latent-materialization-lost";
+            found = &module;
+        }
+        if (found == nullptr ||
             !std::all_of(
                 required.source_bindings.begin(),
                 required.source_bindings.end(),
@@ -10464,10 +10539,126 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
     if (unexplained_incomplete_losses !=
         non_demotion_resolved_owners)
         return "native-program-index-frontier-lost";
-    if (!program_index_adjacency_subset_with_related_remap(
+    std::vector<std::pair<std::uint32_t, std::uint32_t>>
+        exact_entry_remaps;
+    exact_entry_remaps.reserve(complete_table_function_demotions->size());
+    for (const auto& demotion : *complete_table_function_demotions)
+        exact_entry_remaps.emplace_back(demotion.entry, demotion.owner);
+    std::vector<katana::cli::AgentLatentModuleAuthority>
+        candidate_module_authority;
+    candidate_module_authority.reserve(candidate.latent.modules.size());
+    std::vector<std::uint32_t> candidate_authority_function_entries;
+    for (const auto& required :
+         baseline.program_index.incoming_edge_sources) {
+        const auto* found = program_index_adjacency(
+            candidate.native_port_program_index.incoming_edge_sources,
+            required.address);
+        if (found == nullptr) continue;
+        for (const auto source : required.related_addresses) {
+            const bool incoming_retained = std::binary_search(
+                    found->related_addresses.begin(),
+                    found->related_addresses.end(), source);
+            const bool filtered_outgoing_owner_changed =
+                incoming_retained &&
+                program_index_adjacency_contains(
+                    baseline.program_index.outgoing_function_entries,
+                    source,
+                    required.address) &&
+                !program_index_adjacency_contains(
+                    candidate.native_port_program_index
+                        .outgoing_function_entries,
+                    source,
+                    required.address);
+            if (incoming_retained && !filtered_outgoing_owner_changed)
+                continue;
+            candidate_authority_function_entries.push_back(source);
+            candidate_authority_function_entries.insert(
+                candidate_authority_function_entries.end(),
+                found->related_addresses.begin(),
+                found->related_addresses.end());
+            if (!filtered_outgoing_owner_changed) continue;
+            for (const auto& baseline_module : baseline.modules) {
+                for (const auto& baseline_function :
+                     baseline_module.functions) {
+                    if (baseline_function.entry_address != source)
+                        continue;
+                    for (const auto& candidate_outgoing :
+                         candidate.native_port_program_index
+                             .outgoing_function_entries) {
+                        if (!std::binary_search(
+                                baseline_function.instruction_addresses.begin(),
+                                baseline_function.instruction_addresses.end(),
+                                candidate_outgoing.address) ||
+                            !std::binary_search(
+                                candidate_outgoing.related_addresses.begin(),
+                                candidate_outgoing.related_addresses.end(),
+                                required.address))
+                            continue;
+                        candidate_authority_function_entries.push_back(
+                            candidate_outgoing.address);
+                    }
+                }
+            }
+        }
+    }
+    // Also retain target-specific candidate owners for every lost latent
+    // outgoing relation.  A function split is admissible only when the exact
+    // old edge site and target both survive in one identity-bound new owner.
+    for (const auto& required :
+         baseline.program_index.outgoing_function_entries) {
+        for (const auto target : required.related_addresses) {
+            if (program_index_adjacency_contains(
+                    candidate.native_port_program_index
+                        .outgoing_function_entries,
+                    required.address,
+                    target))
+                continue;
+            for (const auto& baseline_module : baseline.modules) {
+                for (const auto& baseline_function :
+                     baseline_module.functions) {
+                    if (baseline_function.entry_address != required.address)
+                        continue;
+                    candidate_authority_function_entries.push_back(
+                        required.address);
+                    for (const auto& candidate_outgoing :
+                         candidate.native_port_program_index
+                             .outgoing_function_entries) {
+                        if (!std::binary_search(
+                                baseline_function.instruction_addresses.begin(),
+                                baseline_function.instruction_addresses.end(),
+                                candidate_outgoing.address) ||
+                            !std::binary_search(
+                                candidate_outgoing.related_addresses.begin(),
+                                candidate_outgoing.related_addresses.end(),
+                                target))
+                            continue;
+                        candidate_authority_function_entries.push_back(
+                            candidate_outgoing.address);
+                    }
+                }
+            }
+        }
+    }
+    std::sort(
+        candidate_authority_function_entries.begin(),
+        candidate_authority_function_entries.end());
+    candidate_authority_function_entries.erase(
+        std::unique(
+            candidate_authority_function_entries.begin(),
+            candidate_authority_function_entries.end()),
+        candidate_authority_function_entries.end());
+    for (const auto& module : candidate.latent.modules)
+        candidate_module_authority.push_back(
+            latent_module_authority(
+                module, candidate_authority_function_entries));
+    if (!katana::cli::agent_program_index_incoming_authority_preserved(
             baseline.program_index.incoming_edge_sources,
             candidate.native_port_program_index.incoming_edge_sources,
-            *complete_table_function_demotions))
+            baseline.program_index.outgoing_function_entries,
+            candidate.native_port_program_index.outgoing_function_entries,
+            baseline.modules,
+            candidate_module_authority,
+            exact_entry_remaps))
         return "native-program-index-incoming-edges-lost";
     const auto closed_owner_target_losses =
         closed_replacement_owner_target_losses(
@@ -10481,7 +10672,9 @@ std::optional<std::string_view> agent_analysis_authority_rejection(
             candidate.native_port_program_index
                 .outgoing_function_entries,
             *closed_owner_target_losses,
-            *complete_table_function_demotions))
+            *complete_table_function_demotions,
+            baseline.modules,
+            candidate_module_authority))
         return "native-program-index-outgoing-edges-lost";
     if (!sorted_authority_subset(
             baseline.program_index.seed_entries,

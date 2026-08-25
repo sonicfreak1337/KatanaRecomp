@@ -1,11 +1,15 @@
 #pragma once
 
 #include "katana/codegen/partition.hpp"
+#include "katana/codegen/latent_aot_registry.hpp"
+#include "katana/codegen/native_disc_analysis_artifact.hpp"
 #include "katana/runtime/disc_install.hpp"
 
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace katana::cli {
 
@@ -25,6 +29,61 @@ struct PortExportImplementationIdentities final {
     std::string codegen;
     std::string whole_export;
 };
+
+// Compact, in-memory authority retained while a refreshed analysis generation
+// is evaluated.  It is deliberately not an artifact format: exact module
+// identity and the old per-function instruction membership are only needed to
+// distinguish a sound latent owner refinement from a lost graph edge.
+struct AgentLatentFunctionAuthority final {
+    std::uint32_t entry_address = 0u;
+    std::vector<std::uint32_t> instruction_addresses;
+    struct Edge final {
+        std::uint32_t source_address = 0u;
+        std::uint32_t target_address = 0u;
+
+        [[nodiscard]] bool operator==(const Edge&) const = default;
+        [[nodiscard]] bool operator<(const Edge& other) const noexcept {
+            return source_address < other.source_address ||
+                   (source_address == other.source_address &&
+                    target_address < other.target_address);
+        }
+    };
+    std::vector<Edge> edges;
+};
+
+struct AgentLatentModuleAuthority final {
+    std::string id;
+    std::string byte_identity;
+    std::uint32_t byte_size = 0u;
+    std::uint32_t source_address = 0u;
+    std::vector<katana::codegen::PreparedLatentAotSourceBinding>
+        source_bindings;
+    std::vector<std::uint32_t> entry_offsets;
+    std::vector<std::uint32_t> instruction_addresses;
+    std::vector<AgentLatentFunctionAuthority> functions;
+};
+
+[[nodiscard]] bool agent_program_index_incoming_authority_preserved(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        required_incoming,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_incoming,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        required_outgoing,
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_outgoing,
+    const std::vector<AgentLatentModuleAuthority>& baseline_modules,
+    const std::vector<AgentLatentModuleAuthority>& candidate_modules,
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>>&
+        exact_entry_remaps = {});
+
+[[nodiscard]] bool agent_latent_outgoing_owner_refinement_preserved(
+    const std::vector<katana::codegen::NativeDiscProgramIndexAdjacency>&
+        candidate_outgoing,
+    std::uint32_t old_owner,
+    std::uint32_t target,
+    const std::vector<AgentLatentModuleAuthority>& baseline_modules,
+    const std::vector<AgentLatentModuleAuthority>& candidate_modules);
 
 [[nodiscard]] std::string port_export_recipe_identity(
     const katana::runtime::DiscInstallRecipe& recipe);
