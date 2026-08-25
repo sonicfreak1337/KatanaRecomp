@@ -28004,65 +28004,127 @@ std::vector<katana::ir::Function>
 materialize_prepared_native_port_emitted_program(
     const std::span<const katana::ir::Function> primary_program,
     const LatentAotDiscovery& latent_aot) {
-    std::vector<katana::ir::Function> emitted_program(
-        primary_program.begin(), primary_program.end());
+    std::size_t emitted_function_count = primary_program.size();
+    std::size_t external_transfer_count = 0u;
+    for (const auto& module : latent_aot.modules) {
+        if (module.program.size() >
+            std::numeric_limits<std::size_t>::max() -
+                emitted_function_count)
+            throw std::length_error(
+                "Latentes AOT-Programm ueberschreitet die Hostgroesse.");
+        emitted_function_count += module.program.size();
+        if (module.external_transfers.size() >
+            std::numeric_limits<std::size_t>::max() -
+                external_transfer_count)
+            throw std::length_error(
+                "Latente Cross-Image-Transferliste ueberschreitet die "
+                "Hostgroesse.");
+        external_transfer_count += module.external_transfers.size();
+    }
+
+    std::vector<katana::ir::Function> emitted_program;
+    emitted_program.reserve(emitted_function_count);
+    emitted_program.insert(
+        emitted_program.end(), primary_program.begin(), primary_program.end());
     for (const auto& module : latent_aot.modules)
         emitted_program.insert(
             emitted_program.end(),
             module.program.begin(),
             module.program.end());
 
-    std::map<std::uint32_t, std::size_t> emitted_function_entry_counts;
+    std::unordered_map<std::uint32_t, std::size_t>
+        emitted_function_entry_counts;
+    emitted_function_entry_counts.reserve(emitted_program.size());
     for (const auto& function : emitted_program)
         ++emitted_function_entry_counts[function.entry_address];
+
+    std::unordered_set<std::uint32_t> external_transfer_source_addresses;
+    external_transfer_source_addresses.reserve(external_transfer_count);
     for (const auto& module : latent_aot.modules) {
         for (const auto& transfer : module.external_transfers) {
-            if (emitted_function_entry_counts[transfer.target_address] != 1u)
+            const auto target_count = emitted_function_entry_counts.find(
+                transfer.target_address);
+            if (target_count == emitted_function_entry_counts.end() ||
+                target_count->second != 1u)
                 throw std::runtime_error(
                     "Latenter Cross-Image-Transfer besitzt keinen "
                     "eindeutigen emittierten Primaerimage-Entry.");
+            external_transfer_source_addresses.insert(
+                module.source_address + transfer.source_offset);
+        }
+    }
+
+    struct EmittedTransferInstruction final {
+        katana::ir::Function* function = nullptr;
+        katana::ir::BasicBlock* block = nullptr;
+        katana::ir::Instruction* instruction = nullptr;
+    };
+    std::unordered_map<
+        std::uint32_t,
+        std::vector<EmittedTransferInstruction>>
+        emitted_transfer_instructions;
+    emitted_transfer_instructions.reserve(
+        external_transfer_source_addresses.size());
+    for (auto& function : emitted_program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (!external_transfer_source_addresses.contains(
+                        instruction.source_address))
+                    continue;
+                emitted_transfer_instructions[instruction.source_address]
+                    .push_back({&function, &block, &instruction});
+            }
+        }
+    }
+
+    for (const auto& module : latent_aot.modules) {
+        const auto module_end =
+            static_cast<std::uint64_t>(module.source_address) +
+            module.byte_size;
+        for (const auto& transfer : module.external_transfers) {
             const auto source_address =
                 module.source_address + transfer.source_offset;
             std::size_t matches = 0u;
-            for (auto& function : emitted_program) {
-                if (function.entry_address < module.source_address ||
-                    static_cast<std::uint64_t>(function.entry_address) >=
-                        static_cast<std::uint64_t>(module.source_address) +
-                            module.byte_size)
-                    continue;
-                for (auto& block : function.blocks) {
-                    for (auto& instruction : block.instructions) {
-                        if (instruction.source_address != source_address)
-                            continue;
-                        const auto classification =
-                            classify_loaded_aot_external_transfer(
-                                transfer, instruction, block);
-                        if (classification ==
-                            LoadedAotExternalTransferClassification::Conflict)
-                            throw std::runtime_error(
-                                "Latenter Cross-Image-Transfer widerspricht "
-                                "dem isoliert validierten IR.");
-                        ++matches;
-                        if (classification ==
-                            LoadedAotExternalTransferClassification::
-                                AlreadyIdenticalResolved)
-                            continue;
-                        instruction.resolved_targets = {
-                            transfer.target_address};
-                        instruction.dynamic_target_class =
-                            katana::ir::DynamicTargetClass::GuardedComplete;
-                        block.has_indirect_successor = false;
-                        if (transfer.kind ==
-                            PreparedLatentAotExternalTransferKind::Call) {
-                            const auto insertion = std::lower_bound(
-                                function.direct_callees.begin(),
-                                function.direct_callees.end(),
-                                transfer.target_address);
-                            if (insertion == function.direct_callees.end() ||
-                                *insertion != transfer.target_address)
-                                function.direct_callees.insert(
-                                    insertion, transfer.target_address);
-                        }
+            const auto retained_instructions =
+                emitted_transfer_instructions.find(source_address);
+            if (retained_instructions !=
+                emitted_transfer_instructions.end()) {
+                for (const auto& retained : retained_instructions->second) {
+                    auto& function = *retained.function;
+                    auto& block = *retained.block;
+                    auto& instruction = *retained.instruction;
+                    if (function.entry_address < module.source_address ||
+                        static_cast<std::uint64_t>(
+                            function.entry_address) >= module_end)
+                        continue;
+                    const auto classification =
+                        classify_loaded_aot_external_transfer(
+                            transfer, instruction, block);
+                    if (classification ==
+                        LoadedAotExternalTransferClassification::Conflict)
+                        throw std::runtime_error(
+                            "Latenter Cross-Image-Transfer widerspricht "
+                            "dem isoliert validierten IR.");
+                    ++matches;
+                    if (classification ==
+                        LoadedAotExternalTransferClassification::
+                            AlreadyIdenticalResolved)
+                        continue;
+                    instruction.resolved_targets = {
+                        transfer.target_address};
+                    instruction.dynamic_target_class =
+                        katana::ir::DynamicTargetClass::GuardedComplete;
+                    block.has_indirect_successor = false;
+                    if (transfer.kind ==
+                        PreparedLatentAotExternalTransferKind::Call) {
+                        const auto insertion = std::lower_bound(
+                            function.direct_callees.begin(),
+                            function.direct_callees.end(),
+                            transfer.target_address);
+                        if (insertion == function.direct_callees.end() ||
+                            *insertion != transfer.target_address)
+                            function.direct_callees.insert(
+                                insertion, transfer.target_address);
                     }
                 }
             }
@@ -30291,9 +30353,15 @@ prepare_dreamcast_port_project_impl(
         katana::ProgressUnit::Steps,
         std::nullopt,
         "partition-preparation");
+    report_progress(
+        options,
+        "game-project-validation:emitted-program-materialization");
     auto emitted_program =
         materialize_prepared_native_port_emitted_program(
             prepared.program, latent_aot);
+    report_progress(
+        options,
+        "game-project-validation:native-resume-validation");
     std::vector<std::uint32_t> explicit_native_aot_resume_entries(
         options.native_aot_resume_entries.begin(),
         options.native_aot_resume_entries.end());
