@@ -1,5 +1,6 @@
 #include "port_export_orchestration.hpp"
 
+#include "katana/build_contract.hpp"
 #include "katana/component_identity.hpp"
 #include "katana/codegen/backend.hpp"
 #include "katana/codegen/cache.hpp"

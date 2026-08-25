@@ -72,8 +72,10 @@ file(COPY "${source_root}/third_party/skyemu" DESTINATION
     "${diagnostic_sdk_root}/third_party")
 file(COPY "${source_root}/THIRD_PARTY_NOTICES.md" DESTINATION
     "${diagnostic_sdk_root}")
-file(COPY "${source_root}/include/katana/build_contract.hpp.in" DESTINATION
-    "${diagnostic_sdk_root}/include/katana")
+file(COPY
+    "${source_root}/include/katana/abi_contract.hpp.in"
+    "${source_root}/include/katana/build_contract.hpp.in"
+    DESTINATION "${diagnostic_sdk_root}/include/katana")
 file(COPY "${source_root}/include/katana/progress.hpp" DESTINATION
     "${diagnostic_sdk_root}/include/katana")
 file(COPY "${source_root}/src/progress.cpp" DESTINATION
@@ -109,6 +111,7 @@ file(WRITE "${diagnostic_sdk_root}/CMakeLists.txt"
 "  add_compile_options(/FS)\n"
 "endif()\n"
 "file(MAKE_DIRECTORY \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana\")\n"
+"configure_file(\"\${CMAKE_CURRENT_SOURCE_DIR}/include/katana/abi_contract.hpp.in\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/abi_contract.hpp\" @ONLY)\n"
 "configure_file(\"\${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in\" \"\${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp\" @ONLY)\n"
 "file(GLOB runtime_core_sources CONFIGURE_DEPENDS \"\${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/*.cpp\")\n"
 "set(runtime_diagnostic_sources\n"

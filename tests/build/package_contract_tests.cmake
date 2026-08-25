@@ -29,6 +29,7 @@ endif()
 
 if(NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/abi.hpp" OR
    NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/runtime/native_port.hpp" OR
+   NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/abi_contract.hpp" OR
    NOT EXISTS "${KATANA_INSTALL_DIR}/include/katana/build_contract.hpp")
     message(FATAL_ERROR "runtime-sdk is missing public product headers")
 endif()

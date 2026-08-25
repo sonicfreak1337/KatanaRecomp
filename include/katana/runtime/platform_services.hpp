@@ -1,6 +1,6 @@
 #pragma once
 
-#include "katana/build_contract.hpp"
+#include "katana/abi_contract.hpp"
 #include "katana/runtime/runtime.hpp"
 #include "katana/runtime/scheduler.hpp"
 
@@ -24,7 +24,7 @@ class RuntimeBlockTable;
 struct BlockVariantKey;
 
 inline constexpr std::uint32_t platform_services_abi_version =
-    build_contract::platform_services_abi_version;
+    abi_contract::platform_services_abi_version;
 inline constexpr std::uint64_t base_guest_cycles_per_instruction = 1u;
 inline constexpr std::size_t guest_cycle_flush_event_budget = 1024u;
 

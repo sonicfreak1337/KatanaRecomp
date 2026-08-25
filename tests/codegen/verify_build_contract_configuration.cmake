@@ -57,10 +57,36 @@ endif()
 
 set(generated_contract
     "${fixture}/generated/include/katana/build_contract.hpp")
+set(generated_abi_contract
+    "${fixture}/generated/include/katana/abi_contract.hpp")
 if(NOT EXISTS "${generated_contract}")
   file(REMOVE_RECURSE "${fixture}")
   message(FATAL_ERROR "Configure did not generate the build contract")
 endif()
+if(NOT EXISTS "${generated_abi_contract}")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR "Configure did not generate the stable ABI contract")
+endif()
+file(READ "${generated_abi_contract}" generated_abi_contract_text)
+if(generated_abi_contract_text MATCHES
+   "katana_git_commit|source_identity_trusted|configured_compiler_launcher")
+  file(REMOVE_RECURSE "${fixture}")
+  message(FATAL_ERROR
+    "Stable ABI contract acquired build provenance and would invalidate AOT objects")
+endif()
+foreach(aot_contract_header IN ITEMS
+        "include/katana/runtime/abi.hpp"
+        "include/katana/runtime/block_abi.hpp"
+        "include/katana/runtime/native_port.hpp")
+  file(READ "${KATANA_SOURCE_ROOT}/${aot_contract_header}"
+       aot_contract_header_text)
+  if(aot_contract_header_text MATCHES "katana/build_contract.hpp")
+    file(REMOVE_RECURSE "${fixture}")
+    message(FATAL_ERROR
+      "AOT contract header still imports commit-sensitive provenance: "
+      "${aot_contract_header}")
+  endif()
+endforeach()
 file(READ "${generated_contract}" generated_contract_text)
 string(REPLACE "\r\n" "\n" normalized_contract_text
        "${generated_contract_text}")

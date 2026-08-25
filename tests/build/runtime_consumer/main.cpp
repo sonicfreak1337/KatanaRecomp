@@ -1,3 +1,4 @@
+#include "katana/build_contract.hpp"
 #include "katana/runtime/abi.hpp"
 #include "katana/runtime/native_port.hpp"
 #include "katana/runtime/runtime.hpp"

@@ -1,0 +1,23 @@
+#pragma once
+
+#include <cstdint>
+
+// Stable compile-time contract consumed by generated AOT translation units.
+// Build provenance (Git commit, source trust and compiler launcher) deliberately
+// lives in build_contract.hpp so a provenance-only change cannot invalidate
+// every generated object.
+namespace katana::abi_contract {
+
+inline constexpr std::uint32_t runtime_abi_version = @KATANA_RUNTIME_ABI_VERSION@u;
+inline constexpr std::uint32_t block_abi_version = @KATANA_BLOCK_ABI_VERSION@u;
+inline constexpr std::uint32_t analyzer_abi_version = @KATANA_ANALYZER_ABI_VERSION@u;
+inline constexpr std::uint32_t platform_services_abi_version =
+    @KATANA_PLATFORM_SERVICES_ABI_VERSION@u;
+inline constexpr std::uint32_t backend_interface_abi_version =
+    @KATANA_BACKEND_INTERFACE_ABI_VERSION@u;
+inline constexpr std::uint32_t port_project_contract_version =
+    @KATANA_PORT_PROJECT_CONTRACT_VERSION@u;
+inline constexpr std::uint32_t native_port_profile_contract_version =
+    @KATANA_NATIVE_PORT_PROFILE_CONTRACT_VERSION@u;
+
+} // namespace katana::abi_contract

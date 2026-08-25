@@ -1,6 +1,6 @@
 #pragma once
 
-#include "katana/build_contract.hpp"
+#include "katana/abi_contract.hpp"
 #include "katana/runtime/native_port_semantics.hpp"
 
 #include <cstddef>
@@ -22,7 +22,7 @@ class NativePortRuntimeImageBindings;
 class NativePortLoadedAotBinder;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
-    build_contract::native_port_profile_contract_version;
+    abi_contract::native_port_profile_contract_version;
 inline constexpr std::uint32_t native_port_definition_contract_version = 12u;
 
 struct NativePortLinkContract final {

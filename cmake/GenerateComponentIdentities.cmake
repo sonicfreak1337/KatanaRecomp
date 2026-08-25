@@ -82,6 +82,12 @@ function(katana_expand_component_dependency_closure
                    "${KATANA_COMPONENT_IDENTITY_ROOT}/include/katana/build_contract.hpp.in")
                 list(APPEND katana_component_pending
                      "include/katana/build_contract.hpp.in")
+            elseif(katana_component_include_path STREQUAL
+                   "katana/abi_contract.hpp" AND
+                   EXISTS
+                   "${KATANA_COMPONENT_IDENTITY_ROOT}/include/katana/abi_contract.hpp.in")
+                list(APPEND katana_component_pending
+                     "include/katana/abi_contract.hpp.in")
             endif()
         endforeach()
 

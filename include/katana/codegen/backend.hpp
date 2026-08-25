@@ -1,6 +1,6 @@
 #pragma once
 
-#include "katana/build_contract.hpp"
+#include "katana/abi_contract.hpp"
 #include "katana/ir/ir.hpp"
 #include "katana/runtime/abi.hpp"
 
@@ -13,7 +13,7 @@
 namespace katana::codegen {
 
 inline constexpr std::uint32_t backend_interface_abi_version =
-    build_contract::backend_interface_abi_version;
+    abi_contract::backend_interface_abi_version;
 
 enum class BackendCapability : std::uint64_t {
     StructuredSections = 1ull << 0u,

@@ -1,4 +1,5 @@
 #include "katana/agent/materialization_world.hpp"
+#include "katana/build_contract.hpp"
 #include "katana/analysis/analysis_overrides.hpp"
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/control_flow_analysis.hpp"

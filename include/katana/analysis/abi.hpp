@@ -1,6 +1,6 @@
 #pragma once
 
-#include "katana/build_contract.hpp"
+#include "katana/abi_contract.hpp"
 
 #include <cstdint>
 
@@ -10,7 +10,7 @@
 
 namespace katana::analysis {
 
-inline constexpr std::uint32_t abi_version = build_contract::analyzer_abi_version;
+inline constexpr std::uint32_t abi_version = abi_contract::analyzer_abi_version;
 
 static_assert(KATANA_ANALYZER_ABI_VERSION == abi_version,
               "Incompatible Katana analyzer ABI");

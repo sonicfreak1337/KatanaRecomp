@@ -1,4 +1,5 @@
 #include "katana/analysis/function_value_analysis.hpp"
+#include "katana/build_contract.hpp"
 
 static_assert(katana::analysis::abi_version == KATANA_EXPECTED_ANALYZER_ABI);
 static_assert(katana::build_contract::analyzer_abi_version ==

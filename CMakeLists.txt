@@ -346,6 +346,7 @@ list(
     KATANA_CODEGEN_IDENTITY_INPUTS
     "VERSION"
     "cmake/KatanaVersions.cmake"
+    "include/katana/abi_contract.hpp.in"
     "include/katana/build_contract.hpp.in"
     "include/katana/runtime/aot_runtime_abi.hpp"
     "include/katana/runtime/block_abi.hpp"
@@ -483,6 +484,11 @@ add_custom_target(
     DEPENDS "${KATANA_COMPONENT_IDENTITY_STAMP}"
 )
 
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/abi_contract.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/abi_contract.hpp
+    @ONLY
+)
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/katana/build_contract.hpp.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
@@ -5638,7 +5644,9 @@ install(
     COMPONENT runtime-sdk
 )
 install(
-    FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/abi_contract.hpp
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
     COMPONENT runtime-sdk
 )
@@ -5663,7 +5671,9 @@ install(
         PATTERN "testing/*" EXCLUDE
 )
 install(
-    FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/abi_contract.hpp
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include/katana/build_contract.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/katana
     COMPONENT analyzer-sdk
 )

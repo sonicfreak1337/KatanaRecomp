@@ -1,6 +1,6 @@
 #pragma once
 
-#include "katana/build_contract.hpp"
+#include "katana/abi_contract.hpp"
 #include "katana/runtime/runtime.hpp"
 
 #include <cstddef>
@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t block_abi_version = build_contract::block_abi_version;
+inline constexpr std::uint32_t block_abi_version = abi_contract::block_abi_version;
 
 struct BlockAddress {
     std::uint32_t virtual_address = 0u;

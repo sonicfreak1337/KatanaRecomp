@@ -3,7 +3,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/graph_export.hpp"
 #include "katana/analysis/hardware_audit.hpp"
-#include "katana/build_contract.hpp"
+#include "katana/abi_contract.hpp"
 #include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/native_disc_analysis_artifact.hpp"
 #include "katana/codegen/partition.hpp"
@@ -38,7 +38,7 @@ namespace katana::codegen {
 struct NativeDiscAnalysisState;
 
 inline constexpr std::uint32_t port_project_contract_version =
-    build_contract::port_project_contract_version;
+    abi_contract::port_project_contract_version;
 inline constexpr std::uint32_t port_partition_emission_schema_version = 10u;
 inline constexpr std::uint32_t port_metadata_cache_schema_version = 12u;
 
