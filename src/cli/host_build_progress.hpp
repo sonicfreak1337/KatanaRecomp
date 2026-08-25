@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host_build_tool.hpp"
 #include "katana/progress.hpp"
 
 #include <cstddef>
@@ -13,12 +14,6 @@
 #include <string_view>
 
 namespace katana::cli {
-
-enum class HostBuildToolKind : std::uint8_t {
-    Compile,
-    Archive,
-    Link,
-};
 
 struct HostBuildProgressPlan final {
     std::optional<std::uint64_t> translation_units;
@@ -90,17 +85,5 @@ class HostBuildProgressObserver final {
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
-
-// Internal compiler/linker launcher entry. `tool` is either the real compiler
-// or a pre-existing cache launcher; arguments are passed without shell
-// reconstruction. A successful return is published as a committed event.
-[[nodiscard]] int run_host_build_tool_launcher(
-    HostBuildToolKind kind,
-    const std::filesystem::path& event_root,
-    std::string tool,
-    std::span<const char* const> arguments) noexcept;
-
-[[nodiscard]] std::string_view host_build_tool_kind_name(
-    HostBuildToolKind kind) noexcept;
 
 } // namespace katana::cli

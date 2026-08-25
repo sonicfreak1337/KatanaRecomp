@@ -389,6 +389,23 @@ void later_poll_observes_new_event(
     require(reporter.seal_and_flush(), "Mehrfachscan-Fortschritt ist unvollstaendig.");
 }
 
+void telemetry_failure_does_not_mask_tool_result(
+    const std::filesystem::path& self) {
+    TemporaryDirectory temporary;
+    const auto absent_event_root = temporary.path() / "absent";
+    const auto self_text = self.string();
+    const std::vector<const char*> arguments{
+        "--host-tool-success", "unit.cpp"};
+    require(
+        katana::cli::run_host_build_tool_launcher(
+            katana::cli::HostBuildToolKind::Compile,
+            absent_event_root,
+            self_text,
+            arguments) == 0,
+        "Optionale Hostbuild-Telemetrie maskierte einen erfolgreichen "
+        "Compilerlauf.");
+}
+
 } // namespace
 
 int main(const int argc, char* argv[]) {
@@ -406,6 +423,7 @@ int main(const int argc, char* argv[]) {
         started_to_terminal_rename_is_retried();
         partial_started_document_is_retried();
         later_poll_observes_new_event(self);
+        telemetry_failure_does_not_mask_tool_result(self);
         std::cout << "Hostbuild-Fortschrittsvertrag erfolgreich.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

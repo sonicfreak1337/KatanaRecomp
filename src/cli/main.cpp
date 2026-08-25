@@ -2718,6 +2718,32 @@ current_process_executable_path() {
     return canonical;
 }
 
+[[nodiscard]] std::filesystem::path
+host_build_tool_executable_path() {
+    auto helper = current_process_executable_path().parent_path() /
+#ifdef _WIN32
+                  "katana-host-build-tool.exe";
+#else
+                  "katana-host-build-tool";
+#endif
+    std::error_code canonical_error;
+    helper = std::filesystem::canonical(helper, canonical_error);
+    std::error_code status_error;
+    const auto status =
+        std::filesystem::symlink_status(helper, status_error);
+    if (canonical_error || status_error ||
+        !std::filesystem::is_regular_file(status) ||
+        std::filesystem::is_symlink(status)
+#ifdef _WIN32
+        || !regular_reparse_free_windows_path(helper)
+#endif
+    )
+        throw std::runtime_error(
+            "Der kleine Katana-Hostbuild-Launcher fehlt oder besitzt "
+            "keine sichere Dateiidentitaet.");
+    return helper;
+}
+
 struct SupervisedHostCommandResult final {
     int exit_code = 1;
     bool exit_code_available = false;
@@ -4814,10 +4840,10 @@ struct WindowsHostToolWrappers final {
 [[nodiscard]] WindowsHostToolWrappers
 prepare_windows_host_tool_wrappers(
     const std::filesystem::path& port_root,
-    const std::filesystem::path& directory) {
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source) {
     ensure_safe_port_directory_chain(
         port_root, directory, "Windows-Hosttool-Wrapper");
-    const auto source = current_process_executable_path();
     const auto source_identity =
         katana::io::capture_input_provenance(
             "host-tool-wrapper-source", source);
@@ -4875,10 +4901,10 @@ prepare_windows_host_tool_wrappers(
 [[nodiscard]] std::filesystem::path
 prepare_posix_host_archive_wrapper(
     const std::filesystem::path& port_root,
-    const std::filesystem::path& directory) {
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source) {
     ensure_safe_port_directory_chain(
         port_root, directory, "POSIX-Hostarchive-Wrapper");
-    const auto source = current_process_executable_path();
     const auto target = directory / "katana-host-archive-wrapper";
     require_safe_replaceable_port_file(
         port_root, target, "POSIX-Hostarchive-Wrapper");
@@ -5206,10 +5232,14 @@ struct CompilerCacheBinding final {
         });
     return filename == "katana-recomp" ||
            filename == "katana-recomp.exe" ||
+           filename == "katana-host-build-tool" ||
+           filename == "katana-host-build-tool.exe" ||
            filename == "katana-host-cl-wrapper" ||
            filename == "katana-host-cl-wrapper.exe" ||
            filename == "katana-host-link-wrapper" ||
-           filename == "katana-host-link-wrapper.exe";
+           filename == "katana-host-link-wrapper.exe" ||
+           filename == "katana-host-archive-wrapper" ||
+           filename == "katana-host-archive-wrapper.exe";
 }
 
 [[nodiscard]] bool compiler_cache_would_recurse(
@@ -13346,8 +13376,8 @@ int export_port_project(const std::filesystem::path& source_path,
             "Inkrementeller Hostbuild-Cache");
         reset_host_build_event_root(
             report.output_root, host_build_event_root);
-        const auto katana_cli_path =
-            current_process_executable_path();
+        const auto host_build_tool_path =
+            host_build_tool_executable_path();
         const auto require_launcher_component = [](
             const std::string_view value,
             const std::string_view description) {
@@ -13358,37 +13388,41 @@ int export_port_project(const std::filesystem::path& source_path,
                     std::string(description) +
                     " ist nicht sicher als CMake-Launcher bindbar.");
         };
-        const auto cli_component = katana_cli_path.generic_string();
+        const auto tool_component =
+            host_build_tool_path.generic_string();
         const auto event_component =
             host_build_event_root.generic_string();
         require_launcher_component(
-            cli_component, "Katana-Hostbuild-Launcher");
+            tool_component, "Katana-Hostbuild-Launcher");
         require_launcher_component(
             event_component, "Hostbuild-Ereignisverzeichnis");
         if (compiler_launcher)
             require_launcher_component(
                 *compiler_launcher, "Compiler-Cache-Launcher");
-        // Keep the Ninja command graph invariant when a compiler cache is
-        // enabled, disabled or moved. The launcher resolves
-        // KATANA_COMPILER_CACHE from the build process environment at
-        // execution time; embedding the cache executable in every compile
-        // edge would itself force a full rebuild when cache policy changes.
+        // Keep the Ninja graph invariant when compiler-cache policy changes.
+        // The small launcher resolves the already validated cache executable
+        // from the supervised build environment instead of starting the full
+        // Katana CLI for every translation unit.
         const auto instrumented_compiler_launcher =
-            cli_component + ";__host-build-tool;" +
-            event_component + ";compile;--direct";
+            tool_component + ';' + event_component +
+            ";compile;--compiler-cache";
         const auto instrumented_linker_launcher =
-            cli_component + ";__host-build-tool;" +
-            event_component + ";link;--direct";
+            tool_component + ';' + event_component +
+            ";link;--direct";
 #ifdef _WIN32
         const auto windows_host_tool_wrappers =
             prepare_windows_host_tool_wrappers(
-                report.output_root, host_build_tool_root);
+                report.output_root,
+                host_build_tool_root,
+                host_build_tool_path);
         const auto archive_launcher_path =
             windows_host_tool_wrappers.archiver;
 #else
         const auto archive_launcher_path =
             prepare_posix_host_archive_wrapper(
-                report.output_root, host_build_tool_root);
+                report.output_root,
+                host_build_tool_root,
+                host_build_tool_path);
 #endif
         auto configure = std::string("cmake -S ") + shell_quote(report.output_root) + " -B " +
                          shell_quote(build_path);
@@ -13818,7 +13852,12 @@ int export_port_project(const std::filesystem::path& source_path,
 #ifdef _WIN32
         auto windows_host_build_environment =
             "set \"KATANA_HOST_BUILD_EVENT_ROOT=" +
-            host_build_event_root.string() + "\" && ";
+            host_build_event_root.string() +
+            "\" && set \"KATANA_HOST_BUILD_COMPILER_CACHE=\" && ";
+        if (compiler_launcher)
+            windows_host_build_environment +=
+                "set \"KATANA_HOST_BUILD_COMPILER_CACHE=" +
+                *compiler_launcher + "\" && ";
         if (compiler_cache_binding &&
             compiler_cache_binding->managed_storage &&
             !configured_environment_value("SCCACHE_DIR")) {
@@ -13855,7 +13894,10 @@ int export_port_project(const std::filesystem::path& source_path,
 #else
             normalized_host_command(
                 "KATANA_HOST_BUILD_EVENT_ROOT=" +
-                shell_quote(host_build_event_root) + ' ' + build);
+                shell_quote(host_build_event_root) +
+                " KATANA_HOST_BUILD_COMPILER_CACHE=" +
+                shell_quote(compiler_launcher.value_or("")) +
+                ' ' + build);
 #endif
         const auto build_runtime =
             configured_port_host_command_runtime("host-build");
@@ -13874,9 +13916,7 @@ int export_port_project(const std::filesystem::path& source_path,
 #else
                     , std::nullopt
 #endif
-                    , [&host_build_progress] {
-                          host_build_progress.poll();
-                      });
+                    , [] {});
         } catch (...) {
             host_build_progress.fail();
             throw;
@@ -13938,10 +13978,9 @@ int export_port_project(const std::filesystem::path& source_path,
                 built_executable_identity.size &&
             previous_executable_identity->sha256 ==
                 built_executable_identity.sha256;
-        // The successful, instrumented target build is authoritative for
-        // graph edges which did not admit a real tool invocation. The
-        // observer derives their exact count atomically from its strict final
-        // scan, so a late terminal event cannot race a caller-side snapshot.
+        // The supervised target build, quiescent process tree, bound output,
+        // and native identity marker are product authority. Tool-event files
+        // provide only a final best-effort progress inventory.
         const auto host_build_completion_proof =
             katana::cli::HostBuildCompletionProof{
                 true,
@@ -13951,10 +13990,9 @@ int export_port_project(const std::filesystem::path& source_path,
                 unchanged_existing_artifact};
         if (!host_build_progress.finish_success(
                 host_build_completion_proof))
-            throw katana::cli::Error(
-                katana::cli::ExitCode::BuildFailure,
-                "Hostbuild-Werkzeugfortschritt ist unvollstaendig oder "
-                "widerspruechlich.");
+            std::cerr
+                << "KATANA_PORT_HOST_TELEMETRY_INCOMPLETE "
+                   "build_authority=supervised-process-and-bound-artifact\n";
         auto packaging_progress =
             port_progress.begin(
                 katana::ProgressOperation::Packaging,

@@ -1633,13 +1633,25 @@ add_custom_command(
 )
 set_source_files_properties(${KATANA_DIFFERENTIAL_GENERATED_CPP} PROPERTIES GENERATED TRUE)
 
+add_executable(
+    katana-host-build-tool
+    src/cli/host_build_tool_main.cpp
+    src/cli/host_build_tool.cpp
+)
+katana_enable_warnings(katana-host-build-tool)
+
 add_executable(katana-recomp
     src/cli/main.cpp
+    src/cli/host_build_tool.cpp
     src/cli/host_build_progress.cpp
     src/cli/port_build_telemetry.cpp
     src/cli/port_export_orchestration.cpp
 )
-add_dependencies(katana-recomp katana-component-identities)
+add_dependencies(
+    katana-recomp
+    katana-component-identities
+    katana-host-build-tool
+)
 
 target_link_libraries(
     katana-recomp
@@ -2461,6 +2473,7 @@ add_test(
 add_executable(
     katana-host-build-progress-tests
     tests/codegen/host_build_progress_tests.cpp
+    src/cli/host_build_tool.cpp
     src/cli/host_build_progress.cpp
 )
 target_include_directories(
@@ -5634,7 +5647,7 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(
-    TARGETS katana-recomp
+    TARGETS katana-recomp katana-host-build-tool
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT tools
 )
