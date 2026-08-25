@@ -24727,6 +24727,28 @@ NativePortProgramIndex build_native_port_program_index(
     const katana::runtime::NativePortDefinition* const native_port,
     const std::span<const NativePortExternalEntry> external_entries) {
     NativePortProgramIndex index;
+    // Building instruction_owners directly as a tree performs one logarithmic
+    // map insertion plus a small set allocation for every materialized IR
+    // instruction. Large title programs contain many overlapping function
+    // views, so that path dominated incremental product export even though the
+    // final relation is immutable. Accumulate the flat relation, canonicalize
+    // it once, and construct the ordered public index with insertion hints.
+    // The resulting map/set values are byte-for-byte equivalent to the old
+    // path and retain the ordered range queries used by hook admission.
+    std::size_t instruction_owner_relation_size = 0u;
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            if (instruction_owner_relation_size >
+                std::numeric_limits<std::size_t>::max() -
+                    block.instructions.size())
+                throw std::length_error(
+                    "native-port-program-index-instruction-owner-overflow");
+            instruction_owner_relation_size += block.instructions.size();
+        }
+    }
+    std::vector<std::pair<std::uint32_t, std::uint32_t>>
+        instruction_owner_relation;
+    instruction_owner_relation.reserve(instruction_owner_relation_size);
     const auto complete_materialized_indirect_targets =
         complete_materialized_indirect_site_targets(analysis, program);
     // Preserve the analyzer's typed dynamic-site classification at the
@@ -24805,8 +24827,8 @@ NativePortProgramIndex build_native_port_program_index(
                 index.incoming_edge_sources[successor].insert(
                     function.entry_address);
             for (const auto& instruction : block.instructions)
-                index.instruction_owners[instruction.source_address].insert(
-                    function.entry_address);
+                instruction_owner_relation.emplace_back(
+                    instruction.source_address, function.entry_address);
             for (const auto& instruction : block.instructions) {
                 // Final IR resolved_targets are authoritative executable
                 // graph edges only after the non-residual IR and the complete
@@ -24822,6 +24844,28 @@ NativePortProgramIndex build_native_port_program_index(
                 }
             }
         }
+    }
+    std::sort(instruction_owner_relation.begin(),
+              instruction_owner_relation.end());
+    instruction_owner_relation.erase(
+        std::unique(instruction_owner_relation.begin(),
+                    instruction_owner_relation.end()),
+        instruction_owner_relation.end());
+    auto instruction_owner_hint = index.instruction_owners.end();
+    for (auto first = instruction_owner_relation.begin();
+         first != instruction_owner_relation.end();) {
+        const auto address = first->first;
+        const auto last = std::find_if(
+            first,
+            instruction_owner_relation.end(),
+            [address](const auto& value) { return value.first != address; });
+        std::set<std::uint32_t> owners;
+        auto owner_hint = owners.end();
+        for (auto owner = first; owner != last; ++owner)
+            owner_hint = owners.emplace_hint(owner_hint, owner->second);
+        instruction_owner_hint = index.instruction_owners.emplace_hint(
+            instruction_owner_hint, address, std::move(owners));
+        first = last;
     }
     for (const auto& [entry, functions] : index.functions_by_entry) {
         if (functions.size() != 1u) continue;
