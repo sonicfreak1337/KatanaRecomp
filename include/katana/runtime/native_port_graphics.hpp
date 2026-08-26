@@ -12,7 +12,10 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 12u;
+// The texture provenance record carries the decoded-payload identity used by
+// the cheap graphics diagnostics.  Keep this ABI version in lockstep with
+// that public record so older producers cannot silently omit the identity.
+inline constexpr std::uint32_t native_port_graphics_contract_version = 13u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -162,17 +165,29 @@ struct NativePortTextureHandle final {
                                      NativePortTextureHandle) = default;
 };
 
+using NativePortTexturePayloadSha256 = std::array<std::uint8_t, 32u>;
+
 // Bounded diagnostic provenance for a host texture.  The graphics core never
 // interprets this as a lookup key: resource admission remains the owner's
 // responsibility.  It exists so a captured draw can be tied back to an exact
 // content object without exposing a guest address or retaining a string.
 struct NativePortTextureProvenance final {
     std::array<std::uint8_t, 32u> content_sha256{};
+    // SHA-256 of a versioned canonical stream containing the source formats,
+    // archive ordinal, decoded extents/mip chain and RGBA8 top/mip pixels.
+    // It is computed once while an asset is decoded/materialized; draw paths
+    // only copy or integer-mix this already-stored value.
+    NativePortTexturePayloadSha256 decoded_rgba8_sha256{};
     std::uint64_t generation = 0u;
     std::uint32_t archive_ordinal = 0u;
     std::uint32_t global_index = 0u;
+    std::uint8_t source_pixel_format = 0u;
+    std::uint8_t source_data_format = 0u;
+    NativePortExtent decoded_extent;
+    std::uint32_t decoded_mip_levels = 0u;
     bool content_identity_bound = false;
     bool global_index_bound = false;
+    bool decoded_payload_identity_bound = false;
 };
 
 struct NativePortTextureConfig final {

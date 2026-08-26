@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 HEADER = struct.Struct("<8sIIIIQQQQQ")
-RECORD = struct.Struct("<17Q32s8I8B")
-MAGIC = b"KATGFXB1"
+RECORD = struct.Struct("<17Q32s32s11I10B2x")
+MAGIC = b"KATGFXB2"
 
 MODES = {0: "off", 1: "digest", 2: "breadcrumbs", 3: "armed-capture"}
 ORIGINS = {
@@ -73,7 +73,7 @@ def main() -> int:
         raise SystemExit("breadcrumb file is shorter than its header")
     header = HEADER.unpack_from(data)
     magic, schema, header_size, record_size, mode, capacity, count, first, drops, digest = header
-    if magic != MAGIC or schema != 1:
+    if magic != MAGIC or schema != 2:
         raise SystemExit("unsupported breadcrumb magic or schema")
     if header_size != HEADER.size or record_size != RECORD.size:
         raise SystemExit("breadcrumb ABI size does not match decoder")
@@ -88,7 +88,7 @@ def main() -> int:
         emit(
             output,
             {
-                "schema": "katana-native-graphics-breadcrumbs-v1",
+                "schema": "katana-native-graphics-breadcrumbs-v2",
                 "record": "header",
                 "mode": MODES.get(mode, mode),
                 "capacity": capacity,
@@ -104,8 +104,9 @@ def main() -> int:
             offset += record_size
             words = values[:17]
             content_sha = values[17]
-            integers = values[18:26]
-            enums = values[26:34]
+            decoded_payload_sha = values[18]
+            integers = values[19:30]
+            enums = values[30:40]
             (
                 frame,
                 draw,
@@ -134,10 +135,24 @@ def main() -> int:
                 primitive_index,
                 submission_order,
                 flags,
+                texture_width,
+                texture_height,
+                texture_mip_levels,
             ) = integers
-            batch_semantic, draw_class, logical_use, origin, intent, resolver, writer, _ = enums
+            (
+                texture_source_pixel_format,
+                texture_source_data_format,
+                batch_semantic,
+                draw_class,
+                logical_use,
+                origin,
+                intent,
+                resolver,
+                writer,
+                _,
+            ) = enums
             record = {
-                "schema": "katana-native-graphics-breadcrumb-v1",
+                "schema": "katana-native-graphics-breadcrumb-v2",
                 "record": ordinal,
                 "frame": frame,
                 "draw": draw,
@@ -176,6 +191,20 @@ def main() -> int:
                     "archive_ordinal": archive_ordinal,
                     "global_index": global_index if flags & (1 << 11) else None,
                     "content_sha256": content_sha.hex() if flags & (1 << 10) else None,
+                    "decoded_rgba8_sha256": (
+                        decoded_payload_sha.hex() if flags & (1 << 14) else None
+                    ),
+                    "source_pixel_format": (
+                        texture_source_pixel_format if flags & (1 << 14) else None
+                    ),
+                    "source_data_format": (
+                        texture_source_data_format if flags & (1 << 14) else None
+                    ),
+                    "width": texture_width if flags & (1 << 14) else None,
+                    "height": texture_height if flags & (1 << 14) else None,
+                    "mip_levels": (
+                        texture_mip_levels if flags & (1 << 14) else None
+                    ),
                 },
                 "geometry_available": bool(flags & 1),
                 "rejected": bool(flags & 2),

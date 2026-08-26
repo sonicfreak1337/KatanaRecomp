@@ -29,6 +29,8 @@
 #include <wrl/client.h>
 
 #include <array>
+#else
+#include <unistd.h>
 #endif
 
 namespace katana::runtime {
@@ -48,6 +50,14 @@ constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
     digest ^= value + 0x9E3779B97F4A7C15ull + (digest << 6u) +
         (digest >> 2u);
     return std::rotl(digest, 27) * 0x94D049BB133111EBull;
+}
+
+[[nodiscard]] std::uint64_t graphics_diagnostic_process_id() noexcept {
+#ifdef _WIN32
+    return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
 }
 
 [[nodiscard]] bool background_test_mode_requested() noexcept {
@@ -804,6 +814,9 @@ void release_frame_pacing_timer_resolution(
     const bool zero_content_identity = std::ranges::all_of(
         config.provenance.content_sha256,
         [](const std::uint8_t byte) { return byte == 0u; });
+    const bool zero_decoded_payload_identity = std::ranges::all_of(
+        config.provenance.decoded_rgba8_sha256,
+        [](const std::uint8_t byte) { return byte == 0u; });
     if (config.provenance.content_identity_bound
             ? config.provenance.generation == 0u || zero_content_identity
             : config.provenance.generation != 0u ||
@@ -821,6 +834,19 @@ void release_frame_pacing_timer_resolution(
             NativePortGraphicsFailure::InvalidResource,
             0u,
             "texture-global-index");
+    if (config.provenance.decoded_payload_identity_bound
+            ? zero_decoded_payload_identity ||
+                  config.provenance.decoded_extent != config.extent ||
+                  config.provenance.decoded_mip_levels != config.mip_levels
+            : !zero_decoded_payload_identity ||
+                  config.provenance.source_pixel_format != 0u ||
+                  config.provenance.source_data_format != 0u ||
+                  config.provenance.decoded_extent != NativePortExtent{} ||
+                  config.provenance.decoded_mip_levels != 0u)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidResource,
+            0u,
+            "texture-decoded-payload-provenance");
     std::uint64_t result = 0u;
     for (std::uint32_t level = 0u; level < config.mip_levels; ++level) {
         const auto extent = texture_mip_extent(config.extent, level);
@@ -995,6 +1021,7 @@ class NativePortGraphicsDevice::Impl final {
         std::uint64_t resolved_asset_identity = 0u;
         std::uint64_t texture_generation = 0u;
         std::array<std::uint8_t, 32u> texture_content_sha256{};
+        NativePortTexturePayloadSha256 texture_decoded_rgba8_sha256{};
         std::uint32_t texture_archive_ordinal = 0u;
         std::uint32_t texture_global_index = 0u;
         std::uint32_t texture_list_index = 0u;
@@ -1003,6 +1030,11 @@ class NativePortGraphicsDevice::Impl final {
         std::uint32_t primitive_index = 0u;
         std::uint32_t submission_order = 0u;
         std::uint32_t flags = 0u;
+        std::uint32_t texture_width = 0u;
+        std::uint32_t texture_height = 0u;
+        std::uint32_t texture_mip_levels = 0u;
+        std::uint8_t texture_source_pixel_format = 0u;
+        std::uint8_t texture_source_data_format = 0u;
         std::uint8_t batch_semantic = 0u;
         std::uint8_t draw_class = 0u;
         std::uint8_t logical_use = 0u;
@@ -1011,11 +1043,12 @@ class NativePortGraphicsDevice::Impl final {
         std::uint8_t resolver = 0u;
         std::uint8_t last_writer = 0u;
         std::uint8_t reserved = 0u;
+        std::uint8_t reserved_2 = 0u;
     };
 
     struct GraphicsBreadcrumbFileHeader final {
-        std::array<char, 8u> magic{'K', 'A', 'T', 'G', 'F', 'X', 'B', '1'};
-        std::uint32_t schema_version = 1u;
+        std::array<char, 8u> magic{'K', 'A', 'T', 'G', 'F', 'X', 'B', '2'};
+        std::uint32_t schema_version = 2u;
         std::uint32_t header_size = sizeof(GraphicsBreadcrumbFileHeader);
         std::uint32_t record_size = sizeof(GraphicsBreadcrumbRecord);
         std::uint32_t mode = 0u;
@@ -1026,7 +1059,7 @@ class NativePortGraphicsDevice::Impl final {
         std::uint64_t final_digest = 0u;
     };
 
-    static_assert(sizeof(GraphicsBreadcrumbRecord) == 208u);
+    static_assert(sizeof(GraphicsBreadcrumbRecord) == 256u);
     static_assert(sizeof(GraphicsBreadcrumbFileHeader) == 64u);
 
     struct MeshSlot final {
@@ -1889,6 +1922,7 @@ class NativePortGraphicsDevice::Impl final {
         snapshot_.occluded = false;
         capture_completed_frame(snapshot_.presented_frames + 1u);
         saturating_increment(snapshot_.presented_frames);
+        maybe_checkpoint_graphics_breadcrumbs();
     }
 
   public:
@@ -3472,6 +3506,17 @@ class NativePortGraphicsDevice::Impl final {
                 static_cast<std::uint32_t>(error.value()),
                 "graphics-diagnostics-directory");
 
+        const auto breadcrumb_filename =
+            std::filesystem::path(L"graphics-breadcrumbs-v2.bin");
+        graphics_breadcrumb_output_path_ =
+            graphics_diagnostic_directory_ / breadcrumb_filename;
+        auto breadcrumb_temporary_filename = breadcrumb_filename;
+        breadcrumb_temporary_filename +=
+            L".tmp-" +
+            std::to_wstring(graphics_diagnostic_process_id());
+        graphics_breadcrumb_temporary_path_ =
+            graphics_diagnostic_directory_ / breadcrumb_temporary_filename;
+
         constexpr std::uint64_t maximum_breadcrumb_capacity = 262'144u;
         const auto capacity = environment_unsigned(
             L"KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_CAPACITY",
@@ -3562,6 +3607,9 @@ class NativePortGraphicsDevice::Impl final {
             record_flags |= 1u << 11u;
         if (binding.texture_list_epoch_bound) record_flags |= 1u << 12u;
         if (diagnostics.enabled) record_flags |= 1u << 13u;
+        if (texture != nullptr &&
+            texture->config.provenance.decoded_payload_identity_bound)
+            record_flags |= 1u << 14u;
         auto digest = graphics_digest_;
         auto frame_digest = graphics_frame_digest_;
         const auto mix = [&](const std::uint64_t value) {
@@ -3607,6 +3655,25 @@ class NativePortGraphicsDevice::Impl final {
                     texture->config.provenance.content_sha256.data() + offset,
                     sizeof(word));
                 mix(word);
+            }
+            if (texture->config.provenance.decoded_payload_identity_bound) {
+                mix(texture->config.provenance.source_pixel_format);
+                mix(texture->config.provenance.source_data_format);
+                mix(texture->config.provenance.decoded_extent.width);
+                mix(texture->config.provenance.decoded_extent.height);
+                mix(texture->config.provenance.decoded_mip_levels);
+                for (std::size_t offset = 0u;
+                     offset < texture->config.provenance
+                                   .decoded_rgba8_sha256.size();
+                     offset += sizeof(std::uint64_t)) {
+                    std::uint64_t word = 0u;
+                    std::memcpy(
+                        &word,
+                        texture->config.provenance.decoded_rgba8_sha256.data() +
+                            offset,
+                        sizeof(word));
+                    mix(word);
+                }
             }
         }
         mix(geometry_available ? 1u : 0u);
@@ -3665,8 +3732,15 @@ class NativePortGraphicsDevice::Impl final {
             const auto& provenance = texture->config.provenance;
             record.texture_generation = provenance.generation;
             record.texture_content_sha256 = provenance.content_sha256;
+            record.texture_decoded_rgba8_sha256 =
+                provenance.decoded_rgba8_sha256;
             record.texture_archive_ordinal = provenance.archive_ordinal;
             record.texture_global_index = provenance.global_index;
+            record.texture_width = provenance.decoded_extent.width;
+            record.texture_height = provenance.decoded_extent.height;
+            record.texture_mip_levels = provenance.decoded_mip_levels;
+            record.texture_source_pixel_format = provenance.source_pixel_format;
+            record.texture_source_data_format = provenance.source_data_format;
         }
 
         const auto capacity = graphics_breadcrumbs_.size();
@@ -3682,6 +3756,89 @@ class NativePortGraphicsDevice::Impl final {
             saturating_increment(snapshot_.diagnostic_drops);
         }
         graphics_breadcrumbs_[destination] = record;
+        graphics_breadcrumbs_dirty_ = true;
+    }
+
+    [[nodiscard]] bool write_graphics_breadcrumb_snapshot() noexcept {
+        if (graphics_breadcrumb_output_path_.empty() ||
+            graphics_breadcrumb_temporary_path_.empty())
+            return false;
+        try {
+            std::ofstream output(
+                graphics_breadcrumb_temporary_path_,
+                std::ios::binary | std::ios::trunc);
+            if (!output) return false;
+            GraphicsBreadcrumbFileHeader header{};
+            header.mode = static_cast<std::uint32_t>(graphics_diagnostic_mode_);
+            header.capacity = graphics_breadcrumbs_.size();
+            header.record_count = graphics_breadcrumb_count_;
+            header.first_record = graphics_breadcrumb_first_;
+            header.dropped_records = snapshot_.diagnostic_drops;
+            header.final_digest = graphics_digest_;
+            output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+            for (std::size_t index = 0u; index < graphics_breadcrumb_count_;
+                 ++index) {
+                const auto source = (graphics_breadcrumb_first_ + index) %
+                    graphics_breadcrumbs_.size();
+                output.write(
+                    reinterpret_cast<const char*>(&graphics_breadcrumbs_[source]),
+                    sizeof(GraphicsBreadcrumbRecord));
+                if (!output) return false;
+            }
+            output.flush();
+            if (!output) return false;
+            output.close();
+            if (!output) return false;
+#ifdef _WIN32
+            return MoveFileExW(
+                       graphics_breadcrumb_temporary_path_.c_str(),
+                       graphics_breadcrumb_output_path_.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) !=
+                   FALSE;
+#else
+            std::error_code error;
+            std::filesystem::rename(
+                graphics_breadcrumb_temporary_path_,
+                graphics_breadcrumb_output_path_,
+                error);
+            return !error;
+#endif
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void maybe_checkpoint_graphics_breadcrumbs() noexcept {
+        if ((graphics_diagnostic_mode_ !=
+                 NativePortGraphicsDiagnosticMode::Breadcrumbs &&
+             graphics_diagnostic_mode_ !=
+                 NativePortGraphicsDiagnosticMode::ArmedCapture) ||
+            !graphics_breadcrumbs_dirty_ || graphics_breadcrumb_count_ == 0u)
+            return;
+
+        constexpr std::uint64_t checkpoint_frame_interval = 32u;
+        constexpr std::uint64_t checkpoint_draw_interval = 4'096u;
+        const auto frame_due =
+            !graphics_breadcrumb_checkpoint_written_ ||
+            (snapshot_.presented_frames >=
+                 graphics_breadcrumb_last_checkpoint_frame_ &&
+             snapshot_.presented_frames -
+                     graphics_breadcrumb_last_checkpoint_frame_ >=
+                 checkpoint_frame_interval);
+        const auto draw_due =
+            !graphics_breadcrumb_checkpoint_written_ ||
+            (snapshot_.diagnostic_draws >=
+                 graphics_breadcrumb_last_checkpoint_draw_ &&
+             snapshot_.diagnostic_draws -
+                     graphics_breadcrumb_last_checkpoint_draw_ >=
+                 checkpoint_draw_interval);
+        if (!frame_due && !draw_due) return;
+        if (!write_graphics_breadcrumb_snapshot()) return;
+        graphics_breadcrumbs_dirty_ = false;
+        graphics_breadcrumb_checkpoint_written_ = true;
+        graphics_breadcrumb_last_checkpoint_frame_ =
+            snapshot_.presented_frames;
+        graphics_breadcrumb_last_checkpoint_draw_ = snapshot_.diagnostic_draws;
     }
 
     void flush_graphics_breadcrumbs() noexcept {
@@ -3690,27 +3847,12 @@ class NativePortGraphicsDevice::Impl final {
             graphics_diagnostic_mode_ !=
                 NativePortGraphicsDiagnosticMode::ArmedCapture)
             return;
-        const auto output_path = graphics_diagnostic_directory_ /
-            L"graphics-breadcrumbs-v1.bin";
-        std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
-        if (!output) return;
-        GraphicsBreadcrumbFileHeader header{};
-        header.mode = static_cast<std::uint32_t>(graphics_diagnostic_mode_);
-        header.capacity = graphics_breadcrumbs_.size();
-        header.record_count = graphics_breadcrumb_count_;
-        header.first_record = graphics_breadcrumb_first_;
-        header.dropped_records = snapshot_.diagnostic_drops;
-        header.final_digest = graphics_digest_;
-        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
-        for (std::size_t index = 0u; index < graphics_breadcrumb_count_;
-             ++index) {
-            const auto source = (graphics_breadcrumb_first_ + index) %
-                graphics_breadcrumbs_.size();
-            output.write(
-                reinterpret_cast<const char*>(&graphics_breadcrumbs_[source]),
-                sizeof(GraphicsBreadcrumbRecord));
-            if (!output) return;
-        }
+        if (!write_graphics_breadcrumb_snapshot()) return;
+        graphics_breadcrumbs_dirty_ = false;
+        graphics_breadcrumb_checkpoint_written_ = true;
+        graphics_breadcrumb_last_checkpoint_frame_ =
+            snapshot_.presented_frames;
+        graphics_breadcrumb_last_checkpoint_draw_ = snapshot_.diagnostic_draws;
     }
 
     [[nodiscard]] bool should_capture_frame(
@@ -4130,6 +4272,12 @@ class NativePortGraphicsDevice::Impl final {
                << ",\"last_writer\":"
                << static_cast<unsigned>(
                       packet.diagnostics.texture_binding.last_writer)
+               << ",\"material_identity_bound\":"
+               << (packet.diagnostics.material_identity_bound ? "true"
+                                                               : "false")
+               << ",\"texture_list_index_bound\":"
+               << (packet.diagnostics.texture_list_index_bound ? "true"
+                                                                : "false")
                << '}'
                << ",\"geometry_available\":"
                << (geometry_available ? "true" : "false")
@@ -4214,18 +4362,6 @@ class NativePortGraphicsDevice::Impl final {
         write_array(packet.transform.values);
         output << ",\"normal_transform\":";
         write_array(packet.normal_transform.values);
-        output << ",\"diagnostics\":{\"logical_use\":"
-               << static_cast<unsigned>(packet.diagnostics.logical_use)
-               << ",\"material_identity_bound\":"
-               << (packet.diagnostics.material_identity_bound ? "true"
-                                                               : "false")
-               << ",\"material_identity\":"
-               << packet.diagnostics.material_identity
-               << ",\"texture_list_index_bound\":"
-               << (packet.diagnostics.texture_list_index_bound ? "true"
-                                                                : "false")
-               << ",\"texture_list_index\":"
-               << packet.diagnostics.texture_list_index << '}';
         output << ",\"state\":{\"cull\":"
                << static_cast<unsigned>(packet.rasterizer.cull)
                << ",\"front_ccw\":"
@@ -4362,6 +4498,32 @@ class NativePortGraphicsDevice::Impl final {
                        << std::setfill('0');
                 for (const auto byte :
                      texture.config.provenance.content_sha256)
+                    output << std::setw(2)
+                           << static_cast<unsigned>(byte);
+                output << std::dec << std::setfill(' ') << '\"';
+            }
+            output << ",\"decoded_payload_identity_bound\":"
+                   << (texture.config.provenance
+                               .decoded_payload_identity_bound
+                           ? "true"
+                           : "false")
+                   << ",\"source_pixel_format\":"
+                   << static_cast<unsigned>(
+                          texture.config.provenance.source_pixel_format)
+                   << ",\"source_data_format\":"
+                   << static_cast<unsigned>(
+                          texture.config.provenance.source_data_format)
+                   << ",\"decoded_width\":"
+                   << texture.config.provenance.decoded_extent.width
+                   << ",\"decoded_height\":"
+                   << texture.config.provenance.decoded_extent.height
+                   << ",\"decoded_mip_levels\":"
+                   << texture.config.provenance.decoded_mip_levels;
+            if (texture.config.provenance.decoded_payload_identity_bound) {
+                output << ",\"decoded_rgba8_sha256\":\"" << std::hex
+                       << std::setfill('0');
+                for (const auto byte : texture.config.provenance
+                                          .decoded_rgba8_sha256)
                     output << std::setw(2)
                            << static_cast<unsigned>(byte);
                 output << std::dec << std::setfill(' ') << '\"';
@@ -4660,10 +4822,14 @@ class NativePortGraphicsDevice::Impl final {
     std::filesystem::path capture_directory_;
     std::filesystem::path drawstream_directory_;
     std::filesystem::path graphics_diagnostic_directory_;
+    std::filesystem::path graphics_breadcrumb_output_path_;
+    std::filesystem::path graphics_breadcrumb_temporary_path_;
     std::vector<std::uint8_t> capture_pixels_;
     std::vector<GraphicsBreadcrumbRecord> graphics_breadcrumbs_;
     std::size_t graphics_breadcrumb_first_ = 0u;
     std::size_t graphics_breadcrumb_count_ = 0u;
+    std::uint64_t graphics_breadcrumb_last_checkpoint_frame_ = 0u;
+    std::uint64_t graphics_breadcrumb_last_checkpoint_draw_ = 0u;
     std::uint64_t graphics_digest_ = graphics_digest_seed;
     std::uint64_t graphics_frame_digest_ = graphics_digest_seed;
     NativePortGraphicsDiagnosticMode graphics_diagnostic_mode_ =
@@ -4681,6 +4847,8 @@ class NativePortGraphicsDevice::Impl final {
     std::uint64_t drawstream_gpu_draws_this_frame_ = 0u;
     bool drawstream_truncation_reported_ = false;
     bool drawstream_enabled_ = false;
+    bool graphics_breadcrumbs_dirty_ = false;
+    bool graphics_breadcrumb_checkpoint_written_ = false;
     std::uint64_t texture_bytes_ = 0u;
     std::uint64_t mesh_bytes_ = 0u;
     std::uint32_t live_textures_ = 0u;

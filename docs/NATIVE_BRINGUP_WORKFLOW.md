@@ -181,6 +181,11 @@ laufenden Wert im `NativePortGraphicsSnapshot`. `Breadcrumbs` und
 wird optional mit `KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_CAPACITY` begrenzt.
 Breadcrumbs enthalten ausschliesslich numerische Origin-, Intent-, Modell-,
 Material-, Texlist-, Resolver-, Epoch-, Last-Writer- und Resource-Provenienz.
+Materialisierte Texturen tragen zusaetzlich eine einmalig beim Decode/Upload
+berechnete SHA-256-Identitaet des versionierten RGBA8-Top-Level-und-Mip-
+Payloads sowie Source-Format, Extent, Mip-Anzahl und Archivordinal. Diese
+Identitaet wird im Breadcrumb nur kopiert bzw. in den bestehenden Integer-
+Digest gemischt; es gibt weder Hashing noch Datei-I/O im Draw-Hotpath.
 Der Ring wartet bei Ueberlauf nicht, sondern ueberschreibt den aeltesten Record
 und zaehlt den Drop.
 
@@ -193,8 +198,8 @@ Verzeichnis. Der Binaerring wird nach dem Lauf offline dekodiert:
 
 ```powershell
 python tools/decode-native-graphics-breadcrumbs.py `
-  <diagnostics>\graphics-breadcrumbs-v1.bin `
-  --output <diagnostics>\graphics-breadcrumbs-v1.jsonl
+  <diagnostics>\graphics-breadcrumbs-v2.bin `
+  --output <diagnostics>\graphics-breadcrumbs-v2.jsonl
 ```
 
 Der stille Sechs-Routen-Runner kann denselben Modus pro Zyklus direkt und

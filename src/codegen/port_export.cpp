@@ -25344,8 +25344,15 @@ NativePortProgramIndex build_native_port_program_index(
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port,
     const std::span<const NativePortExternalEntry> external_entries,
-    const NativeAotResumeCache& resume_cache) {
+    const NativeAotResumeCache& resume_cache,
+    const bool materialize_checkpointed_relations) {
     NativePortProgramIndex index;
+    // A resumed analysis generation carries these five ordered relations in
+    // its validated ProgramIndex checkpoint. The current IR still rebuilds
+    // ownership, boundaries and typed incomplete-edge detail below, and the
+    // caller rehydrates and validates the authoritative relations before any
+    // consumer observes the index. Avoid allocating the same large tree/set
+    // graph merely to overwrite it after this function returns.
     // Building instruction_owners directly as a tree performs one logarithmic
     // map insertion plus a small set allocation for every materialized IR
     // instruction. Large title programs contain many overlapping function
@@ -25370,7 +25377,9 @@ NativePortProgramIndex build_native_port_program_index(
         instruction_owner_relation;
     instruction_owner_relation.reserve(instruction_owner_relation_size);
     const auto complete_materialized_indirect_targets =
-        complete_materialized_indirect_site_targets(analysis, program);
+        materialize_checkpointed_relations
+            ? complete_materialized_indirect_site_targets(analysis, program)
+            : std::set<std::pair<std::uint32_t, std::uint32_t>>{};
     // Preserve the analyzer's typed dynamic-site classification at the
     // ProgramIndex boundary. A residual edge sourced by an explicit
     // RuntimeOnly callback/parameter/stack/mutable-memory contract is not a
@@ -25413,27 +25422,35 @@ NativePortProgramIndex build_native_port_program_index(
     }
     for (const auto& entry : analysis.guarded_aot_entries) {
         index.guarded_entries.insert(entry.guest_address);
-        index.incoming_instruction_addresses[entry.guest_address].insert(
-            entry.source_sites.begin(), entry.source_sites.end());
+        if (materialize_checkpointed_relations)
+            index.incoming_instruction_addresses[entry.guest_address].insert(
+                entry.source_sites.begin(), entry.source_sites.end());
     }
     for (const auto& seed : analysis.seed_facts) {
-        index.seed_entries.insert(seed.target_address);
-        for (const auto& cause : seed.causes) {
-            if (cause.source_address.has_value())
-                index.incoming_instruction_addresses[seed.target_address]
-                    .insert(*cause.source_address);
+        if (materialize_checkpointed_relations) {
+            index.seed_entries.insert(seed.target_address);
+            for (const auto& cause : seed.causes) {
+                if (cause.source_address.has_value())
+                    index.incoming_instruction_addresses[seed.target_address]
+                        .insert(*cause.source_address);
+            }
         }
     }
-    for (const auto& contextual : analysis.recursive.contextual_instructions)
-        index.incoming_instruction_addresses[contextual.line.address].insert(
-            contextual.incoming_address);
+    if (materialize_checkpointed_relations) {
+        for (const auto& contextual :
+             analysis.recursive.contextual_instructions)
+            index.incoming_instruction_addresses[contextual.line.address]
+                .insert(contextual.incoming_address);
+    }
 
     for (const auto& function : program) {
         index.function_entries.insert(function.entry_address);
         index.functions_by_entry[function.entry_address].push_back(&function);
-        for (const auto callee : function.direct_callees)
-            index.incoming_edge_sources[callee].insert(
-                function.entry_address);
+        if (materialize_checkpointed_relations) {
+            for (const auto callee : function.direct_callees)
+                index.incoming_edge_sources[callee].insert(
+                    function.entry_address);
+        }
         for (const auto& block : function.blocks) {
             ++index.block_entry_counts[block.start_address];
             index.entry_owners[block.start_address].insert(
@@ -25444,24 +25461,28 @@ NativePortProgramIndex build_native_port_program_index(
                 index.entry_owners[resume].insert(function.entry_address);
             }
             ++resume_block_ordinal;
-            for (const auto successor : block.successors)
-                index.incoming_edge_sources[successor].insert(
-                    function.entry_address);
+            if (materialize_checkpointed_relations) {
+                for (const auto successor : block.successors)
+                    index.incoming_edge_sources[successor].insert(
+                        function.entry_address);
+            }
             for (const auto& instruction : block.instructions)
                 instruction_owner_relation.emplace_back(
                     instruction.source_address, function.entry_address);
-            for (const auto& instruction : block.instructions) {
-                // Final IR resolved_targets are authoritative executable
-                // graph edges only after the non-residual IR and the complete
-                // bounded-table proof agree on the exact target set. Preserve
-                // those sites even when no parallel
-                // ResolvedControlFlowEdge is serialized.
-                for (const auto target : instruction.resolved_targets) {
-                    if (!complete_materialized_indirect_targets.contains(
-                            {instruction.source_address, target}))
-                        continue;
-                    index.incoming_instruction_addresses[target].insert(
-                        instruction.source_address);
+            if (materialize_checkpointed_relations) {
+                for (const auto& instruction : block.instructions) {
+                    // Final IR resolved_targets are authoritative executable
+                    // graph edges only after the non-residual IR and the
+                    // complete bounded-table proof agree on the exact target
+                    // set. Preserve those sites even when no parallel
+                    // ResolvedControlFlowEdge is serialized.
+                    for (const auto target : instruction.resolved_targets) {
+                        if (!complete_materialized_indirect_targets.contains(
+                                {instruction.source_address, target}))
+                            continue;
+                        index.incoming_instruction_addresses[target].insert(
+                            instruction.source_address);
+                    }
                 }
             }
         }
@@ -25509,28 +25530,34 @@ NativePortProgramIndex build_native_port_program_index(
         // discard the concrete instruction-site provenance that made the
         // target externally reachable.  Whole-owner replacement admission
         // consumes this relation to reject foreign interior entries.
-        if (!edge.analysis_candidate_carrier &&
+        if (materialize_checkpointed_relations &&
+            !edge.analysis_candidate_carrier &&
             katana::analysis::control_flow_evidence_complete(
                 katana::analysis::resolved_edge_evidence(edge)))
             index.incoming_instruction_addresses[edge.target_address].insert(
                 edge.instruction_address);
-        const auto owners =
-            index.instruction_owners.find(edge.instruction_address);
-        if (owners == index.instruction_owners.end()) continue;
-        for (const auto owner : owners->second)
-            index.incoming_edge_sources[edge.target_address].insert(owner);
+        if (materialize_checkpointed_relations) {
+            const auto owners =
+                index.instruction_owners.find(edge.instruction_address);
+            if (owners == index.instruction_owners.end()) continue;
+            for (const auto owner : owners->second)
+                index.incoming_edge_sources[edge.target_address].insert(owner);
+        }
     }
     for (const auto& continuation : analysis.static_return_continuations) {
-        if (katana::analysis::control_flow_evidence_complete(
+        if (materialize_checkpointed_relations &&
+            katana::analysis::control_flow_evidence_complete(
                 continuation.evidence))
             index.incoming_instruction_addresses[continuation.target_address]
                 .insert(continuation.instruction_address);
-        const auto owners =
-            index.instruction_owners.find(continuation.instruction_address);
-        if (owners == index.instruction_owners.end()) continue;
-        for (const auto owner : owners->second)
-            index.incoming_edge_sources[continuation.target_address].insert(
-                owner);
+        if (materialize_checkpointed_relations) {
+            const auto owners = index.instruction_owners.find(
+                continuation.instruction_address);
+            if (owners == index.instruction_owners.end()) continue;
+            for (const auto owner : owners->second)
+                index.incoming_edge_sources[continuation.target_address]
+                    .insert(owner);
+        }
     }
     if (game_project != nullptr) {
         // Game-project boundaries are identity-bound metadata, not product
@@ -25763,8 +25790,9 @@ NativePortProgramIndex build_native_port_program_index(
                         {*instruction_address, target_address});
                 if (projected !=
                     identity_bound_table_target_owners.end()) {
-                    index.outgoing_function_entries[source_entry].insert(
-                        projected->second);
+                    if (materialize_checkpointed_relations)
+                        index.outgoing_function_entries[source_entry].insert(
+                            projected->second);
                     return true;
                 }
             }
@@ -25776,8 +25804,9 @@ NativePortProgramIndex build_native_port_program_index(
                     index.functions_by_entry.find(target_address);
                 functions != index.functions_by_entry.end() &&
                 functions->second.size() == 1u) {
-                index.outgoing_function_entries[source_entry].insert(
-                    target_address);
+                if (materialize_checkpointed_relations)
+                    index.outgoing_function_entries[source_entry].insert(
+                        target_address);
                 return true;
             }
             // A proven jump into a block/resume entry already materialized by
@@ -25794,8 +25823,9 @@ NativePortProgramIndex build_native_port_program_index(
                     // prior ProgramIndex generations. It is reachability-
                     // neutral, but preserving it makes local-block closure a
                     // monotone refinement of the persisted positive graph.
-                    index.outgoing_function_entries[source_entry].insert(
-                        source_entry);
+                    if (materialize_checkpointed_relations)
+                        index.outgoing_function_entries[source_entry].insert(
+                            source_entry);
                     return true;
                 }
             }
@@ -25811,8 +25841,9 @@ NativePortProgramIndex build_native_port_program_index(
                 target_owners.insert(owners->second.begin(),
                                      owners->second.end());
             if (target_owners.size() == 1u) {
-                index.outgoing_function_entries[source_entry].insert(
-                    *target_owners.begin());
+                if (materialize_checkpointed_relations)
+                    index.outgoing_function_entries[source_entry].insert(
+                        *target_owners.begin());
                 return true;
             }
             return false;
@@ -25822,7 +25853,9 @@ NativePortProgramIndex build_native_port_program_index(
             const NativePortIncompleteOutgoingKind kind,
             const std::optional<std::uint32_t> instruction_address,
             const std::optional<std::uint32_t> target_address) {
-            index.incomplete_outgoing_function_entries.insert(source_entry);
+            if (materialize_checkpointed_relations)
+                index.incomplete_outgoing_function_entries.insert(
+                    source_entry);
             NativePortIncompleteOutgoingEvidence detail{
                 kind, instruction_address, target_address};
             if (instruction_address.has_value()) {
@@ -31871,7 +31904,8 @@ prepare_dreamcast_port_project_impl(
         options.game_project,
         options.native_port_definition,
         native_product_external_entries,
-        native_aot_resume_cache);
+        native_aot_resume_cache,
+        precomputed_program_index == nullptr);
     if (precomputed_program_index != nullptr)
         rehydrate_native_disc_program_index_checkpoint(
             native_port_program_index, *precomputed_program_index);

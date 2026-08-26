@@ -93,6 +93,11 @@ struct NativePortDecodedTextureAsset final {
     // width/2 down to 1x1 and is empty for non-mipmapped source formats.
     std::vector<std::uint8_t> rgba8;
     std::vector<NativePortDecodedTextureMipLevel> lower_mip_levels;
+    // Bound after the complete decoded top-level/mip chain is available.  A
+    // materializer may reuse this identity for the GPU resource and cheap
+    // breadcrumbs without hashing again on a draw.
+    NativePortTexturePayloadSha256 decoded_rgba8_sha256{};
+    bool decoded_payload_identity_bound = false;
 };
 
 // One source-authored texture payload after its containing archive has been
@@ -252,6 +257,8 @@ struct NativePortMaterializedTextureAsset final {
     NativePortTextureHandle texture;
     NativePortExtent extent;
     std::uint32_t mip_levels = 1u;
+    NativePortTexturePayloadSha256 decoded_rgba8_sha256{};
+    bool decoded_payload_identity_bound = false;
 };
 
 // Semantic source-layout projection for an SDK-owned guest texture

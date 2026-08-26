@@ -6,6 +6,7 @@
 #include "prs_decode.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <exception>
@@ -225,6 +226,207 @@ void validate_dimensions(const NativePortExtent extent,
                NativePortTextureAssetDataFormat::VectorQuantizedMipmaps ||
            format == NativePortTextureAssetDataFormat::
                          SmallVectorQuantizedMipmaps;
+}
+
+// The native-port runtime is intentionally linkable without the historical
+// diagnostic/core runtime.  Keep this fixed-size SHA-256 accumulator local to
+// the texture asset TU instead of introducing a cross-runtime dependency just
+// for the one-time materialization identity.
+class TexturePayloadSha256Accumulator final {
+  public:
+    void update(const std::string_view bytes) noexcept {
+        const auto* cursor = reinterpret_cast<const std::uint8_t*>(
+            bytes.data());
+        auto remaining = bytes.size();
+        if (buffer_size_ != 0u) {
+            const auto copied =
+                std::min(buffer_.size() - buffer_size_, remaining);
+            std::memcpy(buffer_.data() + buffer_size_, cursor, copied);
+            buffer_size_ += copied;
+            cursor += copied;
+            remaining -= copied;
+            if (buffer_size_ == buffer_.size()) {
+                transform(buffer_.data());
+                buffer_size_ = 0u;
+            }
+        }
+        while (remaining >= buffer_.size()) {
+            transform(cursor);
+            cursor += buffer_.size();
+            remaining -= buffer_.size();
+        }
+        if (remaining != 0u) {
+            std::memcpy(buffer_.data(), cursor, remaining);
+            buffer_size_ = remaining;
+        }
+        total_bytes_ += static_cast<std::uint64_t>(bytes.size());
+    }
+
+    [[nodiscard]] NativePortTexturePayloadSha256 finish() noexcept {
+        buffer_[buffer_size_++] = 0x80u;
+        if (buffer_size_ > 56u) {
+            std::fill(buffer_.begin() + static_cast<std::ptrdiff_t>(
+                          buffer_size_),
+                      buffer_.end(), std::uint8_t{0u});
+            transform(buffer_.data());
+            buffer_size_ = 0u;
+        }
+        std::fill(buffer_.begin() + static_cast<std::ptrdiff_t>(buffer_size_),
+                  buffer_.begin() + 56, std::uint8_t{0u});
+        const auto bit_count = total_bytes_ * 8u;
+        for (std::size_t index = 0u; index < sizeof(bit_count); ++index)
+            buffer_[63u - index] = static_cast<std::uint8_t>(
+                bit_count >> (index * 8u));
+        transform(buffer_.data());
+
+        NativePortTexturePayloadSha256 digest{};
+        for (std::size_t word = 0u; word < state_.size(); ++word) {
+            for (std::size_t byte = 0u; byte < sizeof(std::uint32_t);
+                 ++byte)
+                digest[word * sizeof(std::uint32_t) + byte] =
+                    static_cast<std::uint8_t>(
+                        state_[word] >> (24u - byte * 8u));
+        }
+        return digest;
+    }
+
+  private:
+    void transform(const std::uint8_t* const block) noexcept {
+        std::array<std::uint32_t, 64u> words{};
+        for (std::size_t index = 0u; index < 16u; ++index) {
+            const auto offset = index * 4u;
+            words[index] =
+                (static_cast<std::uint32_t>(block[offset]) << 24u) |
+                (static_cast<std::uint32_t>(block[offset + 1u]) << 16u) |
+                (static_cast<std::uint32_t>(block[offset + 2u]) << 8u) |
+                static_cast<std::uint32_t>(block[offset + 3u]);
+        }
+        for (std::size_t index = 16u; index < words.size(); ++index) {
+            const auto s0 = std::rotr(words[index - 15u], 7) ^
+                            std::rotr(words[index - 15u], 18) ^
+                            (words[index - 15u] >> 3u);
+            const auto s1 = std::rotr(words[index - 2u], 17) ^
+                            std::rotr(words[index - 2u], 19) ^
+                            (words[index - 2u] >> 10u);
+            words[index] = words[index - 16u] + s0 + words[index - 7u] + s1;
+        }
+
+        auto a = state_[0];
+        auto b = state_[1];
+        auto c = state_[2];
+        auto d = state_[3];
+        auto e = state_[4];
+        auto f = state_[5];
+        auto g = state_[6];
+        auto h = state_[7];
+        for (std::size_t index = 0u; index < words.size(); ++index) {
+            const auto sigma1 = std::rotr(e, 6) ^ std::rotr(e, 11) ^
+                                std::rotr(e, 25);
+            const auto choice = (e & f) ^ (~e & g);
+            const auto first = h + sigma1 + choice + round_constants[index] +
+                               words[index];
+            const auto sigma0 = std::rotr(a, 2) ^ std::rotr(a, 13) ^
+                                std::rotr(a, 22);
+            const auto majority = (a & b) ^ (a & c) ^ (b & c);
+            const auto second = sigma0 + majority;
+            h = g;
+            g = f;
+            f = e;
+            e = d + first;
+            d = c;
+            c = b;
+            b = a;
+            a = first + second;
+        }
+        state_[0] += a;
+        state_[1] += b;
+        state_[2] += c;
+        state_[3] += d;
+        state_[4] += e;
+        state_[5] += f;
+        state_[6] += g;
+        state_[7] += h;
+    }
+
+    static constexpr std::array<std::uint32_t, 64u> round_constants{
+        0x428A2F98u, 0x71374491u, 0xB5C0FBCFu, 0xE9B5DBA5u,
+        0x3956C25Bu, 0x59F111F1u, 0x923F82A4u, 0xAB1C5ED5u,
+        0xD807AA98u, 0x12835B01u, 0x243185BEu, 0x550C7DC3u,
+        0x72BE5D74u, 0x80DEB1FEu, 0x9BDC06A7u, 0xC19BF174u,
+        0xE49B69C1u, 0xEFBE4786u, 0x0FC19DC6u, 0x240CA1CCu,
+        0x2DE92C6Fu, 0x4A7484AAu, 0x5CB0A9DCu, 0x76F988DAu,
+        0x983E5152u, 0xA831C66Du, 0xB00327C8u, 0xBF597FC7u,
+        0xC6E00BF3u, 0xD5A79147u, 0x06CA6351u, 0x14292967u,
+        0x27B70A85u, 0x2E1B2138u, 0x4D2C6DFCu, 0x53380D13u,
+        0x650A7354u, 0x766A0ABBu, 0x81C2C92Eu, 0x92722C85u,
+        0xA2BFE8A1u, 0xA81A664Bu, 0xC24B8B70u, 0xC76C51A3u,
+        0xD192E819u, 0xD6990624u, 0xF40E3585u, 0x106AA070u,
+        0x19A4C116u, 0x1E376C08u, 0x2748774Cu, 0x34B0BCB5u,
+        0x391C0CB3u, 0x4ED8AA4Au, 0x5B9CCA4Fu, 0x682E6FF3u,
+        0x748F82EEu, 0x78A5636Fu, 0x84C87814u, 0x8CC70208u,
+        0x90BEFFFAu, 0xA4506CEBu, 0xBEF9A3F7u, 0xC67178F2u};
+
+    std::array<std::uint32_t, 8u> state_{
+        0x6A09E667u, 0xBB67AE85u, 0x3C6EF372u, 0xA54FF53Au,
+        0x510E527Fu, 0x9B05688Cu, 0x1F83D9ABu, 0x5BE0CD19u};
+    std::array<std::uint8_t, 64u> buffer_{};
+    std::size_t buffer_size_ = 0u;
+    std::uint64_t total_bytes_ = 0u;
+};
+
+[[nodiscard]] NativePortTexturePayloadSha256
+decoded_texture_payload_sha256(const NativePortDecodedTextureAsset& texture) {
+    // This is deliberately a byte-canonical stream instead of a hash of a
+    // C++ object representation.  The metadata distinguishes otherwise equal
+    // pixels from different source formats, extents, or archive positions;
+    // the RGBA8 bytes are exactly the payload sent to the host texture.
+    TexturePayloadSha256Accumulator accumulator;
+    constexpr std::string_view identity_domain =
+        "katana-native-texture-rgba8-v1";
+    accumulator.update(identity_domain);
+
+    const auto update_u32 = [&accumulator](const std::uint32_t value) {
+        std::array<char, 4u> bytes{};
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            bytes[index] = static_cast<char>(value >> (index * 8u));
+        accumulator.update(std::string_view(bytes.data(), bytes.size()));
+    };
+    const auto update_u64 = [&accumulator](const std::uint64_t value) {
+        std::array<char, 8u> bytes{};
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            bytes[index] = static_cast<char>(value >> (index * 8u));
+        accumulator.update(std::string_view(bytes.data(), bytes.size()));
+    };
+    const auto update_pixels = [&accumulator](
+                                const std::vector<std::uint8_t>& pixels) {
+        if (!pixels.empty())
+            accumulator.update(std::string_view(
+                reinterpret_cast<const char*>(pixels.data()), pixels.size()));
+    };
+
+    update_u32(static_cast<std::uint32_t>(texture.source_pixel_format));
+    update_u32(static_cast<std::uint32_t>(texture.source_data_format));
+    update_u32(texture.archive_ordinal);
+    update_u32(texture.extent.width);
+    update_u32(texture.extent.height);
+    update_u32(static_cast<std::uint32_t>(texture.lower_mip_levels.size()));
+    update_u64(static_cast<std::uint64_t>(texture.rgba8.size()));
+    update_pixels(texture.rgba8);
+    for (const auto& level : texture.lower_mip_levels) {
+        update_u32(level.extent.width);
+        update_u32(level.extent.height);
+        update_u64(static_cast<std::uint64_t>(level.rgba8.size()));
+        update_pixels(level.rgba8);
+    }
+
+    return accumulator.finish();
+}
+
+void bind_decoded_texture_payload_identity(
+    NativePortDecodedTextureAsset& texture) {
+    if (texture.decoded_payload_identity_bound) return;
+    texture.decoded_rgba8_sha256 = decoded_texture_payload_sha256(texture);
+    texture.decoded_payload_identity_bound = true;
 }
 
 [[nodiscard]] bool is_small_vector_quantized(
@@ -939,6 +1141,7 @@ void decode_pixels(const std::span<const std::uint8_t> source,
                     if (dimension == 1u) break;
                 }
             }
+            bind_decoded_texture_payload_identity(texture);
             textures.push_back(std::move(texture));
         }
         chunk_offset = chunk_end;
@@ -1028,6 +1231,7 @@ void decode_pixels(const std::span<const std::uint8_t> source,
         pixel_format, data_format, limits);
     texture.global_index = global_index;
     texture.archive_ordinal = 0u;
+    bind_decoded_texture_payload_identity(texture);
     return texture;
 }
 
@@ -1226,6 +1430,10 @@ class NativePortTextureRegistry::Impl final {
             registry_fail(NativePortTextureRegistryFailure::TokenExhausted,
                           0u, "token-exhausted");
 
+        const auto decoded_payload_sha256 =
+            texture.decoded_payload_identity_bound
+                ? texture.decoded_rgba8_sha256
+                : decoded_texture_payload_sha256(texture);
         NativePortTextureConfig config;
         config.extent = texture.extent;
         config.format = NativePortTextureFormat::Rgba8Unorm;
@@ -1237,6 +1445,14 @@ class NativePortTextureRegistry::Impl final {
         config.provenance.content_identity_bound = true;
         config.provenance.global_index = identity.global_index.value_or(0u);
         config.provenance.global_index_bound = identity.global_index.has_value();
+        config.provenance.decoded_rgba8_sha256 = decoded_payload_sha256;
+        config.provenance.source_pixel_format = static_cast<std::uint8_t>(
+            texture.source_pixel_format);
+        config.provenance.source_data_format = static_cast<std::uint8_t>(
+            texture.source_data_format);
+        config.provenance.decoded_extent = texture.extent;
+        config.provenance.decoded_mip_levels = config.mip_levels;
+        config.provenance.decoded_payload_identity_bound = true;
         std::vector<NativePortImageView> images;
         images.reserve(config.mip_levels);
         images.push_back(NativePortImageView{
@@ -1794,8 +2010,10 @@ NativePortDecodedTextureAsset decode_native_port_texture_surface(
     const NativePortTextureAssetLimits& limits) {
     return translate_resource_failures(
         [&] {
-            return decode_surface_impl(source, extent, pixel_format,
-                                       data_format, limits);
+            auto texture = decode_surface_impl(source, extent, pixel_format,
+                                               data_format, limits);
+            bind_decoded_texture_payload_identity(texture);
+            return texture;
         },
         "surface-allocation");
 }
@@ -1803,7 +2021,7 @@ NativePortDecodedTextureAsset decode_native_port_texture_surface(
 namespace {
 
 [[nodiscard]] NativePortMaterializedTextureArchive materialize_decoded_textures(
-    const std::span<const NativePortDecodedTextureAsset> decoded,
+    const std::span<NativePortDecodedTextureAsset> decoded,
     const std::string_view content_byte_identity,
     NativePortTextureRegistry& registry,
     const std::uint64_t generation) {
@@ -1825,7 +2043,8 @@ namespace {
 
     archive.entries.reserve(decoded.size());
     try {
-        for (const auto& texture : decoded) {
+        for (auto& texture : decoded) {
+            bind_decoded_texture_payload_identity(texture);
             NativePortTextureAssetIdentity identity;
             identity.generation = generation;
             identity.global_index = texture.global_index;
@@ -1845,7 +2064,9 @@ namespace {
                 {},
                 texture.extent,
                 static_cast<std::uint32_t>(
-                    texture.lower_mip_levels.size() + 1u)};
+                    texture.lower_mip_levels.size() + 1u),
+                texture.decoded_rgba8_sha256,
+                texture.decoded_payload_identity_bound};
             const auto acquired = registry.acquire(identity, texture);
             materialized.guest_token = acquired.guest_token;
             materialized.texture = acquired.texture;
@@ -1892,10 +2113,11 @@ materialize_native_port_prs_pvm_texture_archive(
     return translate_resource_failures([&] {
         validate_materialization_binding(source, content_byte_identity,
                                          generation, limits);
-        const auto decoded = decode_native_port_prs_pvm_texture_archive(
+        auto decoded = decode_native_port_prs_pvm_texture_archive(
             source, limits);
         return materialize_decoded_textures(
-            decoded, content_byte_identity, registry, generation);
+            std::span<NativePortDecodedTextureAsset>(decoded),
+            content_byte_identity, registry, generation);
     }, "materialize-prs-pvm");
 }
 
@@ -1932,10 +2154,10 @@ NativePortMaterializedTextureArchive materialize_native_port_pvr_texture(
     return translate_resource_failures([&] {
         validate_materialization_binding(source, content_byte_identity,
                                          generation, limits);
-        const auto decoded = decode_native_port_pvr_texture(source, limits);
+        auto decoded = decode_native_port_pvr_texture(source, limits);
         return materialize_decoded_textures(
-            std::span(&decoded, 1u), content_byte_identity, registry,
-            generation);
+            std::span<NativePortDecodedTextureAsset>(&decoded, 1u),
+            content_byte_identity, registry, generation);
     }, "materialize-pvr");
 }
 
