@@ -3493,7 +3493,13 @@ DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     output.color = input.color;
     output.secondary_color = input.secondary_color;
     output.fog_coordinate = input.fog_coordinate;
-    output.depth_coordinate = input.depth_coordinate;
+    // Pixel-stage SV_Position.w is not a portable source for the original
+    // clip-space W. Carry 1/W explicitly as a noperspective value so native
+    // homogeneous geometry and pretransformed UI share the same reciprocal
+    // depth domain on every backend.
+    output.depth_coordinate = (pipeline_flags.x & 0x10000u) != 0u
+        ? rcp(max(output.position.w, 1.0e-20))
+        : input.depth_coordinate;
     output.reciprocal_texcoord =
         output.texcoord * input.depth_coordinate;
     return output;
@@ -3545,11 +3551,7 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
     const bool screen_space_reciprocal =
         (flags & 0x20u) != 0u && !homogeneous_reciprocal_clip;
-    const float reciprocal_coordinate = max(
-        homogeneous_reciprocal_clip
-            ? input.position.w
-            : input.depth_coordinate,
-        0.0);
+    const float reciprocal_coordinate = max(input.depth_coordinate, 0.0);
     const bool vertex_color_enabled = (flags & 0x01u) != 0u;
     const bool secondary_color_enabled = (flags & 0x02u) != 0u;
     const bool lighting_enabled = (flags & 0x04u) != 0u;

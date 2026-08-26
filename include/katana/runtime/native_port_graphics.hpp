@@ -267,9 +267,11 @@ enum class NativePortDepthCoordinateMode : std::uint8_t {
     ReciprocalPositive,
     // The draw transform produces a genuine homogeneous clip-space position
     // whose W is positive view depth and whose Z encodes the native near
-    // plane. The pixel stage derives reciprocal depth from SV_Position.w.
-    // This lets host GPUs clip object geometry before rasterization without
-    // forcing an adapter to reproduce a guest renderer's CPU clipper.
+    // plane. The vertex stage derives reciprocal depth from clip W and passes
+    // it explicitly without perspective interpolation. This avoids relying on
+    // API-specific pixel-stage SV_Position.w semantics while still letting
+    // host GPUs clip object geometry before rasterization, without forcing an
+    // adapter to reproduce a guest renderer's CPU clipper.
     ReciprocalPositiveHomogeneousClip,
 };
 
