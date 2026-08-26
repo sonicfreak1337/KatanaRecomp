@@ -113,6 +113,19 @@ struct NativeDiscHardwareGapArtifact final {
 [[nodiscard]] std::string native_disc_analysis_artifact_identity_key(
     const NativeDiscAnalysisArtifactIdentity& identity);
 
+// Converts an exact internal raw analysis key to the prefixed identity used
+// by NativeBringup and native AOT-pack boundaries. No prefix stripping or
+// other permissive normalization is performed.
+[[nodiscard]] std::string
+native_disc_analysis_artifact_bringup_identity_key(
+    std::string_view raw_identity_key);
+
+// Recomputes the internal key and converts it to the prefixed NativeBringup
+// form. A mismatched stored key is rejected before crossing that boundary.
+[[nodiscard]] std::string
+native_disc_analysis_artifact_bringup_identity_key(
+    const NativeDiscAnalysisArtifactIdentity& identity);
+
 // Portable, pointer-free output of the authoritative NativeDisc analysis
 // prefix. Derived lookup maps and admission indices are rebuilt after parse;
 // no process-local arena, shared_ptr or unordered-container state survives.

@@ -55,18 +55,32 @@ zu werden.
 
 - versioniertes, identity-bound Native-Bring-up-Allowlist-Artefakt;
 - sicherer Bring-up-Dispatch ausschliesslich ueber aktive versiegelte
-  Static-AOT-Bloecke, ohne rohe Hostfunktionszeiger oder Tabellenmutation;
+  residente `primary`-Static-AOT-Bloecke, ohne rohe Hostfunktionszeiger oder
+  Tabellenmutation;
 - stabile Trennung von AOT-Pack und Runtime-/Adapterbuild;
-- Witness Store und Evidence Promotion Report als Offline-Evidencepfad;
-- Replay-/Crash-Signaturen und First-Divergence statt terminaler
-  Crashvermutung;
+- kleiner begrenzter Dispatch-Observation-Puffer sowie erzeugter Promotion-
+  und executable-Allowlist-Report;
 - private, exakt byte- und funktionsgebundene Disassembly-Evidence fuer
   titelbezogene Ziele; generische Regeln nur bei address-agnostischem Muster.
 
+Noch nicht als vollstaendiger Unterbau implementiert sind:
+
+- ModuleInstance-/Lifecycle-Bindung fuer PRS-, Overlay- und Loaded-AOT-
+  Bring-up-Dispatch; solche Records bleiben in v1 nicht executable;
+- ein persistierbarer Runtime-Witness-Ring mit Replay-, Build-, Provider-,
+  Last-Writer- und Callstack-Korrelation;
+- Provider-level Deterministic Replay, das aufgezeichnete Hostantworten und
+  Completion-Reihenfolgen wieder einspeist;
+- automatische First-Divergence-Lokalisierung und Evidence-Promotion. Der
+  vorhandene Replaypfad verifiziert Ereignisstrom und finalen State-Hash,
+  ersetzt diese Funktionen aber noch nicht.
+
 ## Naechste Gates
 
-1. Den privaten Pack mit den aktuell belegten exakten Targets neu erzeugen.
-2. Den stillen Replaygurt gegen denselben Pack ausfuehren und den ersten
+1. Den privaten residenten Pack mit den aktuell belegten exakten Targets neu
+   erzeugen; Overlay-/Loaded-AOT-Faelle bleiben bis zur ModuleInstance-
+   Bindung fail-closed.
+2. Den Replaygurt gegen denselben Pack ausfuehren und den ersten
    neuen Stop beziehungsweise die erste Divergenz klassifizieren.
 3. Runtime-/Adapterfixes in der kleinen Schleife wiederholen; Analyse nur bei
    nachgewiesener AOT-Luecke.

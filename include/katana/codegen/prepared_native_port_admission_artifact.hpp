@@ -23,6 +23,7 @@ inline constexpr std::size_t
 // were source- and ledger-validated by the caller.
 struct PreparedNativePortAdmissionArtifactIdentity final {
     std::string key;
+    // Internal raw NativeDisc analysis cache identity.
     std::string analysis_artifact_identity;
     std::string analysis_archive_sha256;
     std::string game_project_identity;

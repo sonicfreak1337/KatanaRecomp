@@ -17219,6 +17219,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         native_bringup_dispatch_entries) {
     const bool native_bringup =
         execution_profile == NativePortExecutionProfile::NativeBringup;
+    const auto native_bringup_analysis_identity =
+        runtime_frontier_binding != nullptr
+            ? native_disc_analysis_artifact_bringup_identity_key(
+                  *runtime_frontier_binding)
+            : std::string{};
     if (execution_profile != NativePortExecutionProfile::StrictProduct &&
         !native_bringup)
         throw std::invalid_argument(
@@ -18414,7 +18419,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    native_bringup_authoring_artifact_identity)
             << ", " << katana::io::quote_json(game_project->project_id)
             << ", " << katana::io::quote_json(game_project->project_version)
-            << ", " << katana::io::quote_json(runtime_frontier_binding->key)
+            << ", " << katana::io::quote_json(
+                   native_bringup_analysis_identity)
             << ", " << katana::io::quote_json(native_aot_pack_identity)
             << ", " << native_aot_pack_generation << "ull},\n"
             << "    std::span<const katana::runtime::"
@@ -27804,7 +27810,9 @@ revalidate_native_bringup_authoring(
     katana::runtime::validate_native_bringup_authoring_definition(authoring);
     if (authoring.project_id != game_project->project_id ||
         authoring.project_version != game_project->project_version ||
-        authoring.analysis_identity != analysis_identity->key ||
+        authoring.analysis_identity !=
+            native_disc_analysis_artifact_bringup_identity_key(
+                *analysis_identity) ||
         authoring.aot_pack_identity != pack.identity ||
         authoring.aot_pack_generation != pack.generation)
         throw std::invalid_argument(
@@ -38359,6 +38367,14 @@ static PortExportResult export_dreamcast_port_project_impl(
     provenance.backend_name = "cpp";
     provenance.backend_abi = backend_interface_abi_version;
     provenance.inputs.assign(prepared.inputs.begin(), prepared.inputs.end());
+    const bool native_bringup_dispatch =
+        options.native_execution_profile ==
+        NativePortExecutionProfile::NativeBringup;
+    const std::string_view dispatch_aot_pack_identity =
+        native_bringup_dispatch ? std::string_view(aot_pack.identity)
+                                : std::string_view{};
+    const auto dispatch_aot_pack_generation =
+        native_bringup_dispatch ? aot_pack.generation : 0u;
 
     artifacts.push_back(
         {"include/katana_port.hpp",
@@ -38381,8 +38397,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                                         runtime_frontier_binding,
                                         options.native_execution_profile,
                                         options.native_bringup_artifact_identity,
-                                        aot_pack.identity,
-                                        aot_pack.generation,
+                                        dispatch_aot_pack_identity,
+                                        dispatch_aot_pack_generation,
                                         native_bringup_dispatch_entries)
                                   : runtime_dispatch_artifacts(
                                         entry_namespace,
@@ -38420,7 +38436,8 @@ static PortExportResult export_dreamcast_port_project_impl(
             {"metadata/native-aot-pack.json",
              native_aot_pack_manifest_json(
                  aot_pack,
-                 runtime_frontier_binding->key,
+                 native_disc_analysis_artifact_bringup_identity_key(
+                     *runtime_frontier_binding),
                  *options.game_project)});
     }
     if (options.native_execution_profile ==

@@ -51,6 +51,14 @@ Source-Owner, terminalen Source-Block, Callsite samt Delay-Slot, Transferart,
 Fortsetzung, Target-Block, beide Owner, exakte Codeidentitaeten sowie Image-,
 Modul- und Generationsidentitaeten.
 
+Die executable v1-Implementierung ist absichtlich enger als das allgemeine
+Artefaktformat: Source und Target muessen beide dem unveraenderlichen
+`primary`-Image und seiner Bootidentitaet angehoeren. PRS-, Overlay-,
+RuntimeImage- und Loaded-AOT-Records werden exportseitig abgelehnt, bis der
+Runtime-Request eine aktive ModuleInstance-Identitaet samt Lifecycle-
+Generation gegen den jeweiligen Binder validieren kann. Die globale
+AOT-Packgeneration darf diese Modulinstanzpruefung nicht ersetzen.
+
 Das kanonische private Binaerartefakt wird deterministisch erzeugt mit:
 
 ```text
@@ -185,7 +193,8 @@ Bedingungen vor der ersten Zustandsaenderung gelten:
 
 1. Ziel und Site sind fuer genau diesen AOT-Pack in der Bring-up-Allowlist.
 2. Das Ziel ist ein exakter Blockanfang in der versiegelten Blocktabelle.
-3. Image/Modul, aktive Generation und Codeidentitaet stimmen.
+3. In v1 gehoeren Source und Target zum residenten `primary`-Image; seine
+   Bootidentitaet, Packgeneration und Codeidentitaeten stimmen.
 4. Das Handle ist aktiv, generationgesichert und weiterhin dispatchbar.
 5. Blockvariante, ABI, Aliasnormalisierung und Fortsetzung sind gueltig.
 
@@ -197,17 +206,28 @@ weder ein Vollstaendigkeitsbeweis fuer die Zielmenge noch eine stille
 Promotion. `Observed`, `Unresolved` und ein blosses `RuntimeContract` werden
 nicht in diese Allowlist uebernommen. Der strikte Export konsultiert sie nie.
 
+Der v1-Schluessel aus Transferart, Callsite und Target ist nur innerhalb
+dieser residenten, exportseitig versiegelten Sicht gueltig. Bevor dynamische
+Module zugelassen werden, muss der Schluessel zusaetzlich die aktive Source-
+und Target-ModuleInstance samt Lifecycle-Generation binden.
+
 Die Allowlist enthaelt keine rohen Hostfunktionszeiger und darf die
 Blocktabelle weder erweitern noch mutieren. Ein Miss endet sofort als
-`UnknownCompiledTarget` mit Site, Ziel, Modul, Generation und
-Artefaktidentitaeten. Es gibt keinen Materializer-, Interpreter-, JIT-,
-No-op- oder Default-Fallback.
+`UnknownCompiledTarget` beziehungsweise typisierter Identity-/Generation-
+Miss. Es gibt keinen Materializer-, Interpreter-, JIT-, No-op- oder
+Default-Fallback.
 
 Ein Bring-up-Hit bedeutet nur: sicher vorkompilierter Code wurde ausgefuehrt,
 obwohl sein Vollstaendigkeitsbeweis noch fehlt. Er erzeugt einen Witness und
 keine automatische Promotion.
 
-## Runtime Witness Store
+## Zielvertrag fuer den Runtime Witness Store
+
+Der vollstaendige Store dieses Abschnitts ist noch nicht implementiert. Der
+aktuelle Runtime-Unterbau besitzt nur einen kleinen, deduplizierenden Puffer
+fuer 16 verschiedene Dispatch-Hit-/Miss-Signaturen und einen Offline-JSON-
+Serializer. Er ist eine sichere Dispatchdiagnose, aber weder der geplante
+persistierbare Witness-Ring noch ein Repro-Bundle.
 
 Ein Witness ist klein, deterministisch serialisierbar und mindestens an
 folgende Felder gebunden:
@@ -226,7 +246,12 @@ Witnesses liegen ausserhalb des Hot Paths in einem begrenzten Store. Der
 Lauf schreibt kompakte feste Events oder Digests; umfangreiche
 Zusammenfuehrung, Symbolisierung und JSON-Ausgabe erfolgen offline.
 
-## Evidence Promotion Report
+## Evidence Promotion
+
+Implementiert ist ein deterministischer Exportreport, der authorierte
+Records und ihre erneute Execution-Safety-Zulassung ausweist. Die folgende
+vollstaendige Witness-Korrelation und automatische Taskableitung ist noch
+Zielzustand, nicht bereits eine Promotion-Engine.
 
 Der Promotion-Lauf korreliert einen Witness mit der statischen Welt und gibt
 mindestens aus:
@@ -244,7 +269,14 @@ mindestens aus:
 Promotion bleibt eine explizite, reviewte Aenderung. Kein Runtime-Witness
 wird beim Import still zu `Proven` oder `RuntimeContract`.
 
-## Replay und First-Divergence
+## Zielvertrag fuer Replay und First-Divergence
+
+Der vorhandene deterministische System-Replaypfad kann einen Ereignisstrom
+und einen finalen Guest-State-Hash gegen eine Aufzeichnung verifizieren. Er
+speist Host-/Providerantworten, Async-Completion-Reihenfolgen und
+Modul-Lifecycle noch nicht allgemein wieder ein und besitzt noch keine
+automatische Checkpoint-Bisektion. Die folgenden Anforderungen beschreiben
+den noch zu implementierenden Provider-Replay- und First-Divergence-Pfad.
 
 Das Replay bindet alle titelbeobachtbaren nichtdeterministischen Hostresultate,
 insbesondere Eingabe mit Framegrenzen, Titelzeit, Providerantworten,

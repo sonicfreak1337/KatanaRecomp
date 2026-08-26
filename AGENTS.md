@@ -117,16 +117,16 @@ Task implementieren
 - Der reale Sonic-Adventure-PAL-Port ist projektweit der massgebliche Produkt-
   und Integrationstest: echter Export, normale Discinstallation, normaler
   Programmlauf und echter sichtbarer Fortschritt.
-- Neue gezielte Unit- oder Regressionstests sind zulaessig, wenn sie einen
-  realen Sonic-Produktpfad oder einen dafuer unmittelbar erforderlichen
-  generischen Vertrag absichern. Sie bleiben eng auf die reproduzierbare
-  Sonic-Regression begrenzt und ersetzen niemals den Sonic-Produktnachweis.
+- Regulaere Tasks fuegen keine neuen Unit-/Regressionstestquellen,
+  Testtargets, Testmatrizen oder synthetischen Ersatzgates hinzu. Eine
+  Ausnahme braucht eine ausdrueckliche Nutzeranweisung fuer genau den
+  benannten Test. Der reale Sonic-Produktpfad bleibt der
+  Integrationsnachweis.
 - Breite Testmatrizen, synthetische Stresslaeufe, allgemeine Testprojekte,
   Ersatzgates oder Konformitaetssuiten ohne unmittelbaren Sonic-Bezug werden
   weiterhin weder gebaut noch gefordert.
-- Reviews duerfen einen neuen Test nur dann als Abschlussbedingung verlangen,
-  wenn die konkrete Sonic-relevante Regression damit gezielt und dauerhaft
-  abgesichert wird. Gefixt wird weiterhin anhand der Quellpfadreviews;
+- Reviews duerfen ohne diese ausdrueckliche Ausnahme keinen neuen Test als
+  Abschlussbedingung verlangen. Gefixt wird anhand der Quellpfadreviews;
   integriert getestet wird mit Sonic.
 - Vorhandene Tests duerfen auf gebrochene Erwartungen, falsche Testzahlen,
   widerspruechliche Semantik oder bereits vorhandene Fehler geprueft und bei

@@ -843,6 +843,19 @@ void append_identity_key_value(std::string& material,
 
 } // namespace
 
+namespace {
+
+[[nodiscard]] bool valid_raw_sha256_identity(
+    const std::string_view value) noexcept {
+    return value.size() == 64u &&
+           std::all_of(value.begin(), value.end(), [](const char character) {
+               return (character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f');
+           });
+}
+
+} // namespace
+
 std::string native_disc_analysis_artifact_identity_key(
     const NativeDiscAnalysisArtifactIdentity& identity) {
     std::string material;
@@ -879,6 +892,23 @@ std::string native_disc_analysis_artifact_identity_key(
     append_identity_key_value(material, identity.disc_volume_start_lba);
     append_identity_key_value(material, identity.disc_extent_lba_bias);
     return katana::io::sha256_bytes(material);
+}
+
+std::string native_disc_analysis_artifact_bringup_identity_key(
+    const std::string_view raw_identity_key) {
+    if (!valid_raw_sha256_identity(raw_identity_key))
+        throw std::invalid_argument(
+            "NativeDisc-Analyseidentitaet ist kein exakter raw SHA-256-Key.");
+    return "sha256:" + std::string(raw_identity_key);
+}
+
+std::string native_disc_analysis_artifact_bringup_identity_key(
+    const NativeDiscAnalysisArtifactIdentity& identity) {
+    const auto expected = native_disc_analysis_artifact_identity_key(identity);
+    if (identity.key != expected)
+        throw std::invalid_argument(
+            "NativeDisc-Analyseidentitaet besitzt keinen exakten internen Key.");
+    return native_disc_analysis_artifact_bringup_identity_key(expected);
 }
 
 bool native_disc_analysis_artifact_checkpointable(
