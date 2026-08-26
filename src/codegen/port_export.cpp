@@ -18344,6 +18344,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             << "u> native_bringup_dispatch_entries{{\n";
         for (const auto& entry : native_bringup_dispatch_entries) {
             const auto& evidence = entry.admission;
+            const auto source_physical =
+                katana::runtime::canonical_physical_address(
+                    entry.source.address);
+            const auto target_physical =
+                katana::runtime::canonical_physical_address(
+                    entry.target.address);
             output
                 << "    {{"
                 << evidence.contract_version
@@ -18394,15 +18400,13 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 << katana::io::quote_json(
                        evidence.runtime_contract_identity)
                 << "}, {{0x" << symbol(entry.source.address)
-                << "u, katana::runtime::canonical_physical_address(0x"
-                << symbol(entry.source.address) << "u)}, "
+                << "u, 0x" << symbol(source_physical) << "u}, "
                 << entry.source.size
                 << "u, katana::runtime::BlockEndKind::"
                 << end_kind_name(entry.source.end_kind) << ", "
                 << katana::io::quote_json(entry.source.code_identity)
                 << "}, {{0x" << symbol(entry.target.address)
-                << "u, katana::runtime::canonical_physical_address(0x"
-                << symbol(entry.target.address) << "u)}, "
+                << "u, 0x" << symbol(target_physical) << "u}, "
                 << entry.target.size
                 << "u, katana::runtime::BlockEndKind::"
                 << end_kind_name(entry.target.end_kind) << ", "
@@ -18429,14 +18433,16 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                "NativeBringupDispatchStaticAotBinding, "
             << native_bringup_static_blocks.size()
             << "u> native_bringup_static_blocks{{\n";
-        for (const auto& block : native_bringup_static_blocks)
+        for (const auto& block : native_bringup_static_blocks) {
+            const auto physical =
+                katana::runtime::canonical_physical_address(block.address);
             output
                 << "    {{0x" << symbol(block.address)
-                << "u, katana::runtime::canonical_physical_address(0x"
-                << symbol(block.address) << "u)}, " << block.size
+                << "u, 0x" << symbol(physical) << "u}, " << block.size
                 << "u, katana::runtime::BlockEndKind::"
                 << end_kind_name(block.end_kind) << ", "
                 << katana::io::quote_json(block.code_identity) << "},\n";
+        }
         output << "}};\n";
     }
     output <<
@@ -20273,6 +20279,16 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                "    if (!call && continuation != 0u)\n"
                "        throw std::runtime_error(\n"
                "            \"native-bringup-transfer-state\");\n"
+               "    bool guarded_callsite = false;\n"
+               "    for (const auto& entry :\n"
+               "         active_native_bringup_context->pack.allowlist) {\n"
+               "        if (entry.admission.transfer_kind == transfer_kind &&\n"
+               "            entry.admission.callsite == source_callsite) {\n"
+               "            guarded_callsite = true;\n"
+               "            break;\n"
+               "        }\n"
+               "    }\n"
+               "    if (!guarded_callsite) return;\n"
                "    katana::runtime::\n"
                "        NativeBringupDispatchPreflightRequest request;\n"
                "    request.transfer_kind = transfer_kind;\n"
@@ -20774,10 +20790,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                       "        katana::runtime::"
                       "make_native_bringup_dispatch_context(\n"
                       "            native_bringup_table,\n"
-                      "            runtime_dispatch_detail::"
-                      "native_bringup_dispatch_pack,\n"
-                      "            runtime_dispatch_detail::"
-                      "native_bringup_runtime_generation,\n"
+                     "            native_bringup_dispatch_pack,\n"
+                      "            native_bringup_runtime_generation,\n"
                       "            native_bringup_observations);\n"
                    : "")
            <<
@@ -27625,6 +27639,37 @@ struct RevalidatedNativeBringupTarget final {
     }
 }
 
+[[nodiscard]] bool native_bringup_candidate_source_is_exact_single_block_owner(
+    const katana::runtime::NativeBringupTargetEvidence& evidence,
+    const katana::ir::Function& function) {
+    if (evidence.stage !=
+            katana::runtime::NativeBringupEvidenceStage::Candidate ||
+        evidence.source_owner != evidence.source_block ||
+        evidence.source_owner_size != evidence.source_block_size ||
+        function.entry_address != evidence.source_owner ||
+        function.blocks.size() != 1u)
+        return false;
+    const auto& block = function.blocks.front();
+    return block.start_address == evidence.source_owner &&
+           exact_ir_block_size(block) == evidence.source_owner_size;
+}
+
+[[nodiscard]] bool native_bringup_boundary_evidence_conflicts(
+    const NativePortProgramIndex& index,
+    const std::uint32_t entry,
+    const std::uint32_t expected_size) {
+    const auto found = index.function_boundaries.find(entry);
+    if (found == index.function_boundaries.end()) return false;
+    const auto conflicts = [expected_size](const auto& sizes) {
+        return std::ranges::any_of(sizes, [expected_size](const auto size) {
+            return size != expected_size;
+        });
+    };
+    return conflicts(found->second.identity_bound_exact_sizes) ||
+           conflicts(found->second.closed_control_flow_sizes) ||
+           conflicts(found->second.guarded_owner_extent_sizes);
+}
+
 [[nodiscard]] NativeBringupDispatchEmission
 revalidate_native_bringup_execution_target(
     const katana::runtime::NativeBringupTargetEvidence& evidence,
@@ -27649,17 +27694,48 @@ revalidate_native_bringup_execution_target(
             "Native bring-up execution target is not bound to this resident "
             "AOT-pack generation.");
 
+    const auto source_functions = index.functions_by_entry.find(
+        evidence.source_owner);
+    const auto target_functions = index.functions_by_entry.find(
+        evidence.target_owner);
+    if (source_functions == index.functions_by_entry.end() ||
+        target_functions == index.functions_by_entry.end() ||
+        source_functions->second.size() != 1u ||
+        target_functions->second.size() != 1u ||
+        source_functions->second.front() == nullptr ||
+        target_functions->second.front() == nullptr)
+        throw std::invalid_argument(
+            "Native bring-up execution target lost unique IR ownership.");
+    const auto& source_function = *source_functions->second.front();
+    const auto& target_function = *target_functions->second.front();
+
     const auto source_boundary =
         native_port_function_boundary(index, evidence.source_owner);
     const auto target_boundary =
         native_port_function_boundary(index, evidence.target_owner);
-    if (!source_boundary.has_value() || !target_boundary.has_value() ||
-        !native_port_boundary_is_identity_bound(source_boundary->proof) ||
+    if (!target_boundary.has_value() ||
         !native_port_boundary_is_identity_bound(target_boundary->proof) ||
-        source_boundary->size != evidence.source_owner_size ||
         target_boundary->size != evidence.target_owner_size)
         throw std::invalid_argument(
-            "Native bring-up execution target lost an exact owner boundary.");
+            "Native bring-up execution target lost its exact owner boundary.");
+    const bool source_boundary_is_identity_bound =
+        source_boundary.has_value() &&
+        native_port_boundary_is_identity_bound(source_boundary->proof) &&
+        source_boundary->size == evidence.source_owner_size;
+    // Candidate execution does not close the static frontier.  It may use a
+    // sealed disassembly extent for the source only when the current emitted
+    // IR independently revalidates that extent as one complete, contiguous
+    // block.  Proven evidence still requires the ordinary identity-bound
+    // ProgramIndex boundary, and any contradictory boundary evidence rejects.
+    const bool source_boundary_is_exact_candidate =
+        !native_bringup_boundary_evidence_conflicts(
+            index, evidence.source_owner, evidence.source_owner_size) &&
+        native_bringup_candidate_source_is_exact_single_block_owner(
+            evidence, source_function);
+    if (!source_boundary_is_identity_bound &&
+        !source_boundary_is_exact_candidate)
+        throw std::invalid_argument(
+            "Native bring-up execution source lost its exact owner boundary.");
 
     const auto source_identity = native_port_function_code_identity(
         image, latent_modules, evidence.source_owner,
@@ -27691,21 +27767,6 @@ revalidate_native_bringup_execution_target(
         throw std::invalid_argument(
             "Native bring-up execution callsite or target block bytes changed.");
 
-    const auto source_functions = index.functions_by_entry.find(
-        evidence.source_owner);
-    const auto target_functions = index.functions_by_entry.find(
-        evidence.target_owner);
-    if (source_functions == index.functions_by_entry.end() ||
-        target_functions == index.functions_by_entry.end() ||
-        source_functions->second.size() != 1u ||
-        target_functions->second.size() != 1u ||
-        source_functions->second.front() == nullptr ||
-        target_functions->second.front() == nullptr)
-        throw std::invalid_argument(
-            "Native bring-up execution target lost unique IR ownership.");
-
-    const auto& source_function = *source_functions->second.front();
-    const auto& target_function = *target_functions->second.front();
     const katana::ir::Instruction* call = nullptr;
     const katana::ir::Instruction* delay = nullptr;
     const katana::ir::BasicBlock* source_block = nullptr;
@@ -27811,16 +27872,28 @@ revalidate_native_bringup_authoring(
 
     const auto& authoring = *options.native_bringup_authoring;
     katana::runtime::validate_native_bringup_authoring_definition(authoring);
+    const auto expected_analysis_identity =
+        native_disc_analysis_artifact_bringup_identity_key(
+            *analysis_identity);
     if (authoring.project_id != game_project->project_id ||
         authoring.project_version != game_project->project_version ||
-        authoring.analysis_identity !=
-            native_disc_analysis_artifact_bringup_identity_key(
-                *analysis_identity) ||
+        authoring.analysis_identity != expected_analysis_identity ||
         authoring.aot_pack_identity != pack.identity ||
-        authoring.aot_pack_generation != pack.generation)
-        throw std::invalid_argument(
-            "NativeBringup authoring does not match project, analysis, or "
-            "the complete AOT pack.");
+        authoring.aot_pack_generation != pack.generation) {
+        std::ostringstream detail;
+        detail << "NativeBringup authoring does not match project, analysis, "
+                  "or the complete AOT pack. authoring-project="
+               << authoring.project_id << '@' << authoring.project_version
+               << " current-project=" << game_project->project_id << '@'
+               << game_project->project_version
+               << " authoring-analysis=" << authoring.analysis_identity
+               << " current-analysis=" << expected_analysis_identity
+               << " authoring-pack=" << authoring.aot_pack_identity << '@'
+               << authoring.aot_pack_generation
+               << " current-pack=" << pack.identity << '@'
+               << pack.generation;
+        throw std::invalid_argument(detail.str());
+    }
 
     std::vector<RevalidatedNativeBringupTarget> result;
     result.reserve(authoring.targets.size());
@@ -37658,6 +37731,22 @@ static PortExportResult export_dreamcast_port_project_impl(
     }
     for (const auto callsite : ambiguous_guarded_native_callsites)
         guarded_native_call_targets.erase(callsite);
+    const auto partition_pack_configuration_hash = katana::io::sha256_bytes(
+        std::string("cpp-port-partition-v") +
+        std::to_string(port_partition_emission_schema_version) + ':' +
+        std::to_string(katana::runtime::block_abi_version) + ':' +
+        std::string(port_namespace) + ':' +
+        std::to_string(product_entry_address) + ':' +
+        std::to_string(options.partition_options.maximum_functions) + ':' +
+        std::to_string(options.partition_options.maximum_instructions) + ':' +
+        std::to_string(native_aot_emission_profile_version) + ':' +
+        std::to_string(options.diagnostic_partial) + ':' +
+        std::to_string(native_port_definition != nullptr) + ':' +
+        options.console_profile);
+    // NativeBringup inserts a product-ineligible preflight before unresolved
+    // register transfers.  That instrumentation must invalidate generated
+    // host source, but it does not change the sealed guest/AOT-pack identity
+    // against which authoring evidence was collected.
     const auto partition_configuration_hash = katana::io::sha256_bytes(
         std::string("cpp-port-partition-v") +
         std::to_string(port_partition_emission_schema_version) + ':' +
@@ -37669,6 +37758,9 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::to_string(native_aot_emission_profile_version) + ':' +
         std::to_string(options.diagnostic_partial) + ':' +
         std::to_string(native_port_definition != nullptr) + ':' +
+        std::to_string(
+            options.native_execution_profile ==
+            NativePortExecutionProfile::NativeBringup) + ':' +
         options.console_profile);
     const auto partition_manifest_hash = katana::io::sha256_bytes(
         std::string("katana-port-partition-manifest-v2:") +
@@ -38074,7 +38166,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         latent_aot.modules,
         product_entry_address,
         product_entry_owner,
-        partition_configuration_hash,
+        partition_pack_configuration_hash,
         partition_codegen_implementation_identity,
         aot_linkage_identity,
         prepared.project_identity,

@@ -12406,17 +12406,19 @@ int export_port_project(const std::filesystem::path& source_path,
                 *native_bringup_allowlist_path);
         const auto& allowlist =
             verified_native_bringup_authoring->definition();
+        // Authoring is sealed against the GameProject/AOT universe.  The
+        // NativePort has its own independently versioned adapter/provider
+        // contract; binding the single authoring version to both domains
+        // would reject every intentional NativePort-only revision.
         if (!verified_native_port || !resolved_game_project.has_value() ||
             allowlist.project_id !=
                 verified_native_port->definition().project_id ||
-            allowlist.project_version !=
-                verified_native_port->definition().project_version ||
             allowlist.project_id != resolved_game_project->project_id ||
             allowlist.project_version !=
                 resolved_game_project->project_version)
             throw std::invalid_argument(
                 "Native-Bring-up-Allowlist gehoert nicht zum aktuellen "
-                "GameProject/NativePort-Projekt oder dessen Version.");
+                "GameProject samt Version oder NativePort-Projekt.");
     }
     const auto implementation_identities =
         port_export_implementation_identities(
@@ -12692,7 +12694,9 @@ int export_port_project(const std::filesystem::path& source_path,
         if (verified_native_bringup_authoring &&
             verified_native_bringup_authoring->definition()
                     .analysis_identity !=
-                committed_analysis_generation->analysis_artifact_id)
+                katana::codegen::
+                    native_disc_analysis_artifact_bringup_identity_key(
+                        committed_analysis_generation->analysis_artifact_id))
             throw std::invalid_argument(
                 "Native-Bring-up-Allowlist und --analysis-generation "
                 "besitzen unterschiedliche Analyseidentitaeten.");
