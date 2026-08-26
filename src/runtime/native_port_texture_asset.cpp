@@ -1231,6 +1231,12 @@ class NativePortTextureRegistry::Impl final {
         config.format = NativePortTextureFormat::Rgba8Unorm;
         config.mip_levels = static_cast<std::uint32_t>(
             texture.lower_mip_levels.size() + 1u);
+        config.provenance.content_sha256 = identity.content_sha256;
+        config.provenance.generation = identity.generation;
+        config.provenance.archive_ordinal = identity.archive_ordinal;
+        config.provenance.content_identity_bound = true;
+        config.provenance.global_index = identity.global_index.value_or(0u);
+        config.provenance.global_index_bound = identity.global_index.has_value();
         std::vector<NativePortImageView> images;
         images.reserve(config.mip_levels);
         images.push_back(NativePortImageView{

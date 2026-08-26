@@ -175,6 +175,30 @@ template <std::size_t Size>
            draw_class == NativePortDrawClass::Overlay;
 }
 
+[[nodiscard]] bool valid_draw_batch_class(
+    const NativePortDrawBatchClass batch) noexcept {
+    return batch == NativePortDrawBatchClass::Scene3D ||
+           batch == NativePortDrawBatchClass::GameOverlay ||
+           batch == NativePortDrawBatchClass::UiOverlay ||
+           batch == NativePortDrawBatchClass::FontOverlay;
+}
+
+[[nodiscard]] bool valid_translucency_policy(
+    const NativePortTranslucencyPolicy policy) noexcept {
+    return policy == NativePortTranslucencyPolicy::NotApplicable ||
+           policy == NativePortTranslucencyPolicy::AuthoredUnsorted ||
+           policy == NativePortTranslucencyPolicy::StableDepthSorted;
+}
+
+[[nodiscard]] bool valid_draw_logical_use(
+    const NativePortDrawLogicalUse use) noexcept {
+    return use == NativePortDrawLogicalUse::Unspecified ||
+           use == NativePortDrawLogicalUse::SceneMaterial ||
+           use == NativePortDrawLogicalUse::Interface ||
+           use == NativePortDrawLogicalUse::Font ||
+           use == NativePortDrawLogicalUse::Presentation;
+}
+
 [[nodiscard]] bool valid_interpolation(
     const NativePortInterpolationMode interpolation) noexcept {
     return interpolation ==
@@ -454,15 +478,42 @@ template <std::size_t Size>
     using AlphaMode = NativePortAlphaTestState::Mode;
     const bool quantized_punch =
         packet.alpha_test.mode == AlphaMode::Quantized8BitForceOpaque;
-    if (packet.draw_class != NativePortDrawClass::PunchThrough)
-        return !quantized_punch;
-    return quantized_punch && packet.alpha_test.enabled &&
-           packet.alpha_test.compare ==
-               NativePortCompareOperation::GreaterEqual &&
-           packet.depth.test_enabled && packet.depth.write_enabled &&
-           packet.depth.compare ==
-               NativePortCompareOperation::GreaterEqual &&
-           reciprocal_depth_mode(packet.depth_mapping.mode);
+    switch (packet.draw_class) {
+    case NativePortDrawClass::Opaque:
+        return !quantized_punch &&
+               packet.translucency ==
+                   NativePortTranslucencyPolicy::NotApplicable;
+    case NativePortDrawClass::PunchThrough:
+        return quantized_punch && packet.alpha_test.enabled &&
+               packet.alpha_test.compare ==
+                   NativePortCompareOperation::GreaterEqual &&
+               packet.depth.test_enabled && packet.depth.write_enabled &&
+               packet.depth.compare ==
+                   NativePortCompareOperation::GreaterEqual &&
+               reciprocal_depth_mode(packet.depth_mapping.mode) &&
+               packet.translucency ==
+                   NativePortTranslucencyPolicy::NotApplicable;
+    case NativePortDrawClass::Translucent:
+        if (quantized_punch || !packet.blend.enabled ||
+            packet.translucency ==
+                NativePortTranslucencyPolicy::NotApplicable)
+            return false;
+        if (packet.translucency ==
+            NativePortTranslucencyPolicy::StableDepthSorted)
+            return packet.depth.test_enabled &&
+                   !packet.depth.write_enabled &&
+                   packet.depth.compare ==
+                       NativePortCompareOperation::GreaterEqual &&
+                   reciprocal_depth_mode(packet.depth_mapping.mode);
+        return true;
+    case NativePortDrawClass::Overlay:
+        return !quantized_punch && !packet.depth.test_enabled &&
+               !packet.depth.write_enabled &&
+               packet.translucency ==
+                   NativePortTranslucencyPolicy::NotApplicable &&
+               packet.batch.semantic != NativePortDrawBatchClass::Scene3D;
+    }
+    return false;
 }
 
 void validate_graphics_config(const NativePortGraphicsConfig& config) {
@@ -636,6 +687,26 @@ void release_frame_pacing_timer_resolution(
         (config.dynamic && config.mip_levels != 1u))
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::InvalidResource, 0u, "texture-extent");
+    const bool zero_content_identity = std::ranges::all_of(
+        config.provenance.content_sha256,
+        [](const std::uint8_t byte) { return byte == 0u; });
+    if (config.provenance.content_identity_bound
+            ? config.provenance.generation == 0u || zero_content_identity
+            : config.provenance.generation != 0u ||
+                  config.provenance.archive_ordinal != 0u ||
+                  !zero_content_identity ||
+                  config.provenance.global_index_bound ||
+                  config.provenance.global_index != 0u)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidResource,
+            0u,
+            "texture-provenance");
+    if (config.provenance.global_index_bound == false &&
+        config.provenance.global_index != 0u)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidResource,
+            0u,
+            "texture-global-index");
     std::uint64_t result = 0u;
     for (std::uint32_t level = 0u; level < config.mip_levels; ++level) {
         const auto extent = texture_mip_extent(config.extent, level);
@@ -779,6 +850,16 @@ class NativePortGraphicsDevice::Impl final {
             -std::numeric_limits<float>::infinity();
         float position_w_min = std::numeric_limits<float>::infinity();
         float position_w_max = -std::numeric_limits<float>::infinity();
+    };
+
+    struct GeometryPreprocessStats final {
+        std::size_t input_vertices = 0u;
+        std::size_t input_indices = 0u;
+        std::size_t input_triangles = 0u;
+        std::size_t output_vertices = 0u;
+        std::size_t output_triangles = 0u;
+        std::size_t rejected_triangles = 0u;
+        bool applied = false;
     };
 
     struct MeshSlot final {
@@ -1060,17 +1141,18 @@ class NativePortGraphicsDevice::Impl final {
             mesh.small_triangle_area_threshold;
         preprocessing.small_triangle_area_space =
             NativePortTriangleAreaSpace::Submitted;
-        preprocess_geometry(vertices,
-                            indices,
-                            topology,
-                            preprocessing,
-                            NativePortMatrix4x4{},
-                            NativePortVertexSpace::ObjectHomogeneous,
-                            persistent_vertex_limit,
-                            prepared,
-                            NativePortGraphicsFailure::InvalidResource,
-                            "mesh-triangle-preprocess-topology",
-                            "mesh-triangle-preprocess-budget");
+        static_cast<void>(preprocess_geometry(
+            vertices,
+            indices,
+            topology,
+            preprocessing,
+            NativePortMatrix4x4{},
+            NativePortVertexSpace::ObjectHomogeneous,
+            persistent_vertex_limit,
+            prepared,
+            NativePortGraphicsFailure::InvalidResource,
+            "mesh-triangle-preprocess-topology",
+            "mesh-triangle-preprocess-budget"));
 
         const auto capabilities = validate_geometry(
             vertices,
@@ -1205,6 +1287,16 @@ class NativePortGraphicsDevice::Impl final {
         index_buffer_discarded_ = false;
         invalidate_draw_state_shadow();
         frame_depth_buffer_ = frame.depth_buffer;
+        frame_batch_active_ = false;
+        frame_batch_identity_ = 0u;
+        frame_batch_semantic_ = NativePortDrawBatchClass::Scene3D;
+        frame_batch_viewport_ = NativePortViewportTarget::Game;
+        frame_batch_vertex_space_ = NativePortVertexSpace::ObjectHomogeneous;
+        frame_batch_interpolation_ =
+            NativePortInterpolationMode::PerspectiveCorrect;
+        frame_batch_depth_mode_ = NativePortDepthCoordinateMode::ClipSpace;
+        frame_batch_phase_ = NativePortDrawClass::Opaque;
+        frame_batch_submission_order_ = 0u;
         frame_open_ = true;
         saturating_increment(snapshot_.begun_frames);
     }
@@ -1217,14 +1309,19 @@ class NativePortGraphicsDevice::Impl final {
                                     ? &resolve_mesh(packet.mesh)
                                     : nullptr;
         validate_draw(packet, mesh_slot);
+        validate_draw_batch_sequence(packet);
 
         auto vertices = packet.vertices;
         auto indices = packet.indices;
         auto topology = packet.topology;
+        GeometryPreprocessStats preprocess_stats;
         if (mesh_slot != nullptr) {
             topology = mesh_slot->gpu_topology;
             require_geometry_capabilities(packet, mesh_slot->capabilities);
         } else {
+            const auto source_vertices = vertices;
+            const auto source_indices = indices;
+            const auto source_topology = topology;
             auto capabilities = validate_geometry(
                 vertices,
                 indices,
@@ -1240,19 +1337,33 @@ class NativePortGraphicsDevice::Impl final {
                 packet.rasterizer.shading ==
                     NativePortShadingMode::FlatLastVertex ||
                 packet.rasterizer.small_triangle_area_threshold > 0.0f;
-            preprocess_geometry(vertices,
-                                indices,
-                                topology,
-                                packet.rasterizer,
-                                packet.transform,
-                                packet.vertex_space,
-                                config_.maximum_transient_vertices,
-                                prepared_vertices_,
-                                NativePortGraphicsFailure::InvalidDraw,
-                                "draw-triangle-preprocess-topology",
-                                "draw-triangle-preprocess-budget");
+            preprocess_stats = preprocess_geometry(
+                vertices,
+                indices,
+                topology,
+                packet.rasterizer,
+                packet.transform,
+                packet.vertex_space,
+                config_.maximum_transient_vertices,
+                prepared_vertices_,
+                NativePortGraphicsFailure::InvalidDraw,
+                "draw-triangle-preprocess-topology",
+                "draw-triangle-preprocess-budget");
             if (vertices.empty()) {
-                saturating_increment(snapshot_.draw_calls);
+                const auto current_layout = layout();
+                const auto viewport_rect =
+                    packet.viewport == NativePortViewportTarget::Ui
+                        ? current_layout.ui_viewport
+                        : current_layout.game_viewport;
+                capture_drawstream(packet,
+                                   source_vertices,
+                                   source_indices,
+                                   source_topology,
+                                   viewport_rect,
+                                   nullptr,
+                                   &preprocess_stats,
+                                   false,
+                                   "preprocessed-empty");
                 return;
             }
             if (preprocessing_required) {
@@ -1423,7 +1534,10 @@ class NativePortGraphicsDevice::Impl final {
                            indices,
                            topology,
                            viewport_rect,
-                           mesh_slot);
+                           mesh_slot,
+                           mesh_slot == nullptr ? &preprocess_stats : nullptr,
+                           true,
+                           nullptr);
         set_viewport(viewport_rect);
 
         auto* const blend = resolve_blend_state(packet.blend);
@@ -1678,6 +1792,13 @@ class NativePortGraphicsDevice::Impl final {
         packet.indices = indices;
         packet.texture = image_texture_;
         packet.viewport = viewport;
+        packet.draw_class = NativePortDrawClass::Overlay;
+        packet.batch.identity = 1u;
+        packet.batch.semantic =
+            viewport == NativePortViewportTarget::Ui
+                ? NativePortDrawBatchClass::UiOverlay
+                : NativePortDrawBatchClass::GameOverlay;
+        packet.batch.submission_order = 0u;
         packet.depth.test_enabled = false;
         packet.depth.write_enabled = false;
         packet.rasterizer.cull = NativePortCullMode::None;
@@ -2504,6 +2625,14 @@ class NativePortGraphicsDevice::Impl final {
         if (!valid_viewport_target(packet.viewport) ||
             !valid_vertex_space(packet.vertex_space) ||
             !valid_draw_class(packet.draw_class) ||
+            !valid_draw_batch_class(packet.batch.semantic) ||
+            packet.batch.identity == 0u ||
+            !valid_translucency_policy(packet.translucency) ||
+            !valid_draw_logical_use(packet.diagnostics.logical_use) ||
+            (packet.diagnostics.material_identity_bound !=
+             (packet.diagnostics.material_identity != 0u)) ||
+            (!packet.diagnostics.texture_list_index_bound &&
+             packet.diagnostics.texture_list_index != 0u) ||
             !valid_interpolation(packet.interpolation) ||
             !valid_topology(packet.topology) ||
             !valid_blend(packet.blend) || !valid_depth(packet.depth) ||
@@ -2548,7 +2677,74 @@ class NativePortGraphicsDevice::Impl final {
         if (packet.texture) static_cast<void>(resolve_texture(packet.texture));
     }
 
-    void preprocess_geometry(
+    void validate_draw_batch_sequence(const NativePortDrawPacket& packet) {
+        const auto semantic_rank =
+            static_cast<std::uint8_t>(packet.batch.semantic);
+        const auto phase_rank = static_cast<std::uint8_t>(packet.draw_class);
+        const bool semantic_viewport_compatible =
+            packet.batch.semantic == NativePortDrawBatchClass::Scene3D ||
+            (packet.batch.semantic == NativePortDrawBatchClass::GameOverlay &&
+             packet.viewport == NativePortViewportTarget::Game) ||
+            ((packet.batch.semantic == NativePortDrawBatchClass::UiOverlay ||
+              packet.batch.semantic == NativePortDrawBatchClass::FontOverlay) &&
+             packet.viewport == NativePortViewportTarget::Ui);
+        if (!semantic_viewport_compatible)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-batch-contract");
+
+        if (!frame_batch_active_) {
+            frame_batch_active_ = true;
+            frame_batch_identity_ = packet.batch.identity;
+            frame_batch_semantic_ = packet.batch.semantic;
+            frame_batch_viewport_ = packet.viewport;
+            frame_batch_vertex_space_ = packet.vertex_space;
+            frame_batch_interpolation_ = packet.interpolation;
+            frame_batch_depth_mode_ = packet.depth_mapping.mode;
+            frame_batch_phase_ = packet.draw_class;
+            frame_batch_submission_order_ = packet.batch.submission_order;
+            return;
+        }
+
+        if (packet.batch.identity != frame_batch_identity_) {
+            if (semantic_rank <=
+                static_cast<std::uint8_t>(frame_batch_semantic_))
+                fail(NativePortGraphicsFailure::InvalidDraw,
+                     0u,
+                     "draw-batch-order");
+            frame_batch_identity_ = packet.batch.identity;
+            frame_batch_semantic_ = packet.batch.semantic;
+            frame_batch_viewport_ = packet.viewport;
+            frame_batch_vertex_space_ = packet.vertex_space;
+            frame_batch_interpolation_ = packet.interpolation;
+            frame_batch_depth_mode_ = packet.depth_mapping.mode;
+            frame_batch_phase_ = packet.draw_class;
+            frame_batch_submission_order_ = packet.batch.submission_order;
+            return;
+        }
+
+        if (packet.batch.semantic != frame_batch_semantic_ ||
+            packet.viewport != frame_batch_viewport_ ||
+            packet.vertex_space != frame_batch_vertex_space_ ||
+            packet.interpolation != frame_batch_interpolation_ ||
+            packet.depth_mapping.mode != frame_batch_depth_mode_)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-batch-contract");
+        const auto previous_phase_rank =
+            static_cast<std::uint8_t>(frame_batch_phase_);
+        if (phase_rank < previous_phase_rank ||
+            (phase_rank == previous_phase_rank &&
+             packet.batch.submission_order <=
+                 frame_batch_submission_order_))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-phase-order");
+        frame_batch_phase_ = packet.draw_class;
+        frame_batch_submission_order_ = packet.batch.submission_order;
+    }
+
+    [[nodiscard]] GeometryPreprocessStats preprocess_geometry(
         std::span<const NativePortVertex>& vertices,
         std::span<const std::uint32_t>& indices,
         NativePortPrimitiveTopology& topology,
@@ -2560,19 +2756,31 @@ class NativePortGraphicsDevice::Impl final {
         const NativePortGraphicsFailure topology_failure,
         const char* const topology_operation,
         const char* const budget_operation) {
+        GeometryPreprocessStats stats;
+        stats.input_vertices = vertices.size();
+        stats.input_indices = indices.size();
+        const auto element_count =
+            indices.empty() ? vertices.size() : indices.size();
+        if (topology == NativePortPrimitiveTopology::TriangleList) {
+            stats.input_triangles = element_count / 3u;
+        } else if (topology == NativePortPrimitiveTopology::TriangleStrip &&
+                   element_count >= 3u) {
+            stats.input_triangles = element_count - 2u;
+        }
         const bool preprocess_triangles =
             rasterizer.shading == NativePortShadingMode::FlatLastVertex ||
             rasterizer.small_triangle_area_threshold > 0.0f;
-        if (!preprocess_triangles) return;
+        if (!preprocess_triangles) {
+            stats.output_vertices = vertices.size();
+            stats.output_triangles = stats.input_triangles;
+            return stats;
+        }
+        stats.applied = true;
         if (topology != NativePortPrimitiveTopology::TriangleList &&
             topology != NativePortPrimitiveTopology::TriangleStrip)
             fail(topology_failure, 0u, topology_operation);
-        const auto element_count =
-            indices.empty() ? vertices.size() : indices.size();
-        const auto triangle_count =
-            topology == NativePortPrimitiveTopology::TriangleList
-                ? element_count / 3u
-                : element_count - 2u;
+        const auto triangle_count = stats.input_triangles;
+        stats.input_triangles = triangle_count;
         if (triangle_count > maximum_output_vertices / 3u)
             fail(NativePortGraphicsFailure::ResourceLimit,
                  0u,
@@ -2649,8 +2857,10 @@ class NativePortGraphicsDevice::Impl final {
                         (area_b[1u] - area_a[1u]) *
                             (area_c[0u] - area_a[0u]);
                     if (std::abs(determinant) <
-                        rasterizer.small_triangle_area_threshold)
+                        rasterizer.small_triangle_area_threshold) {
+                        ++stats.rejected_triangles;
                         return;
+                    }
                 }
                 if (rasterizer.shading ==
                     NativePortShadingMode::FlatLastVertex) {
@@ -2687,6 +2897,9 @@ class NativePortGraphicsDevice::Impl final {
         vertices = destination;
         indices = {};
         topology = NativePortPrimitiveTopology::TriangleList;
+        stats.output_vertices = destination.size();
+        stats.output_triangles = destination.size() / 3u;
+        return stats;
     }
 
     [[nodiscard]] ComPtr<ID3D11Buffer> create_immutable_buffer(
@@ -3050,6 +3263,7 @@ class NativePortGraphicsDevice::Impl final {
         drawstream_output_.clear();
         drawstream_frame_ = frame;
         drawstream_draws_this_frame_ = 0u;
+        drawstream_gpu_draws_this_frame_ = 0u;
         drawstream_truncation_reported_ = false;
         if (!should_capture_drawstream_frame(frame)) return;
         const auto output_path = capture_directory_ /
@@ -3069,7 +3283,10 @@ class NativePortGraphicsDevice::Impl final {
         const std::span<const std::uint32_t> indices,
         const NativePortPrimitiveTopology topology,
         const NativePortPixelRect viewport,
-        const MeshSlot* const mesh_slot) {
+        const MeshSlot* const mesh_slot,
+        const GeometryPreprocessStats* const preprocessing,
+        const bool geometry_available,
+        const char* const rejection_reason) {
         if (!drawstream_enabled_) return;
         const auto frame = snapshot_.presented_frames + 1u;
         begin_drawstream_frame(frame);
@@ -3078,7 +3295,7 @@ class NativePortGraphicsDevice::Impl final {
             drawstream_maximum_draws_per_frame_) {
             if (!drawstream_truncation_reported_) {
                 drawstream_output_
-                    << "{\"schema\":\"katana-native-drawstream-v1\","
+                    << "{\"schema\":\"katana-native-drawstream-v2\","
                        "\"frame\":"
                     << frame
                     << ",\"truncated\":true,\"reason\":"
@@ -3374,12 +3591,26 @@ class NativePortGraphicsDevice::Impl final {
         const auto index_count = mesh_slot != nullptr
             ? mesh_slot->index_count
             : indices.size();
-        output << "{\"schema\":\"katana-native-draw-v1\",\"frame\":"
-               << frame << ",\"draw\":" << drawstream_draws_this_frame_
+        output << "{\"schema\":\"katana-native-draw-v2\",\"frame\":"
+               << frame << ",\"record\":" << drawstream_draws_this_frame_
+               << ",\"draw\":";
+        if (geometry_available)
+            output << drawstream_gpu_draws_this_frame_;
+        else
+            output << "null";
+        output << ",\"diagnostic_only\":"
+               << (geometry_available ? "false" : "true")
                << ",\"vertex_space\":"
                << static_cast<unsigned>(packet.vertex_space)
                << ",\"draw_class\":"
                << static_cast<unsigned>(packet.draw_class)
+               << ",\"batch_identity\":" << packet.batch.identity
+               << ",\"batch_semantic\":"
+               << static_cast<unsigned>(packet.batch.semantic)
+               << ",\"submission_order\":"
+               << packet.batch.submission_order
+               << ",\"translucency_policy\":"
+               << static_cast<unsigned>(packet.translucency)
                << ",\"interpolation\":"
                << static_cast<unsigned>(packet.interpolation)
                << ",\"viewport_target\":"
@@ -3392,7 +3623,7 @@ class NativePortGraphicsDevice::Impl final {
                << ",\"mesh\":" << packet.mesh.value
                << ",\"texture\":" << packet.texture.value
                << ",\"geometry_available\":"
-               << (!vertices.empty() ? "true" : "false")
+               << (geometry_available ? "true" : "false")
                << ",\"geometry_truncated\":"
                << (geometry_truncated ? "true" : "false")
                << ",\"invalid_clip_positions\":"
@@ -3404,6 +3635,30 @@ class NativePortGraphicsDevice::Impl final {
                << ",\"winding_degenerate\":" << winding_degenerate
                << ",\"winding_unprojectable\":"
                << winding_unprojectable;
+        if (rejection_reason != nullptr)
+            output << ",\"reason\":\"" << rejection_reason << '\"';
+        if (preprocessing != nullptr) {
+            output << ",\"preprocessing\":{\"applied\":"
+                   << (preprocessing->applied ? "true" : "false")
+                   << ",\"input_vertices\":"
+                   << preprocessing->input_vertices
+                   << ",\"input_indices\":"
+                   << preprocessing->input_indices
+                   << ",\"input_triangles\":"
+                   << preprocessing->input_triangles
+                   << ",\"output_vertices\":"
+                   << preprocessing->output_vertices
+                   << ",\"output_triangles\":"
+                   << preprocessing->output_triangles
+                   << ",\"rejected_triangles\":"
+                   << preprocessing->rejected_triangles
+                   << ",\"threshold\":"
+                   << packet.rasterizer.small_triangle_area_threshold
+                   << ",\"area_space\":"
+                   << static_cast<unsigned>(
+                          packet.rasterizer.small_triangle_area_space)
+                   << '}';
+        }
         if (bounds_initialized) {
             output << ",\"submitted_min\":";
             write_array(submitted_min);
@@ -3450,6 +3705,18 @@ class NativePortGraphicsDevice::Impl final {
         write_array(packet.transform.values);
         output << ",\"normal_transform\":";
         write_array(packet.normal_transform.values);
+        output << ",\"diagnostics\":{\"logical_use\":"
+               << static_cast<unsigned>(packet.diagnostics.logical_use)
+               << ",\"material_identity_bound\":"
+               << (packet.diagnostics.material_identity_bound ? "true"
+                                                               : "false")
+               << ",\"material_identity\":"
+               << packet.diagnostics.material_identity
+               << ",\"texture_list_index_bound\":"
+               << (packet.diagnostics.texture_list_index_bound ? "true"
+                                                                : "false")
+               << ",\"texture_list_index\":"
+               << packet.diagnostics.texture_list_index << '}';
         output << ",\"state\":{\"cull\":"
                << static_cast<unsigned>(packet.rasterizer.cull)
                << ",\"front_ccw\":"
@@ -3566,13 +3833,38 @@ class NativePortGraphicsDevice::Impl final {
                    << ",\"height\":" << texture.config.extent.height
                    << ",\"mips\":" << texture.config.mip_levels
                    << ",\"dynamic\":"
-                   << (texture.config.dynamic ? "true" : "false") << '}';
+                   << (texture.config.dynamic ? "true" : "false")
+                   << ",\"content_identity_bound\":"
+                   << (texture.config.provenance.content_identity_bound
+                           ? "true"
+                           : "false")
+                   << ",\"generation\":"
+                   << texture.config.provenance.generation
+                   << ",\"archive_ordinal\":"
+                   << texture.config.provenance.archive_ordinal
+                   << ",\"global_index_bound\":"
+                   << (texture.config.provenance.global_index_bound
+                           ? "true"
+                           : "false")
+                   << ",\"global_index\":"
+                   << texture.config.provenance.global_index;
+            if (texture.config.provenance.content_identity_bound) {
+                output << ",\"content_sha256\":\"" << std::hex
+                       << std::setfill('0');
+                for (const auto byte :
+                     texture.config.provenance.content_sha256)
+                    output << std::setw(2)
+                           << static_cast<unsigned>(byte);
+                output << std::dec << std::setfill(' ') << '\"';
+            }
+            output << '}';
         }
         output << "}\n";
         if (!output)
             fail(NativePortGraphicsFailure::ResourceCreation,
                  1u,
                  "graphics-drawstream-write");
+        if (geometry_available) ++drawstream_gpu_draws_this_frame_;
         ++drawstream_draws_this_frame_;
     }
 
@@ -3830,6 +4122,20 @@ class NativePortGraphicsDevice::Impl final {
     bool bound_shader_resource_valid_ = false;
     bool bound_topology_valid_ = false;
     bool draw_pipeline_bound_ = false;
+    bool frame_batch_active_ = false;
+    std::uint64_t frame_batch_identity_ = 0u;
+    NativePortDrawBatchClass frame_batch_semantic_ =
+        NativePortDrawBatchClass::Scene3D;
+    NativePortViewportTarget frame_batch_viewport_ =
+        NativePortViewportTarget::Game;
+    NativePortVertexSpace frame_batch_vertex_space_ =
+        NativePortVertexSpace::ObjectHomogeneous;
+    NativePortInterpolationMode frame_batch_interpolation_ =
+        NativePortInterpolationMode::PerspectiveCorrect;
+    NativePortDepthCoordinateMode frame_batch_depth_mode_ =
+        NativePortDepthCoordinateMode::ClipSpace;
+    NativePortDrawClass frame_batch_phase_ = NativePortDrawClass::Opaque;
+    std::uint32_t frame_batch_submission_order_ = 0u;
     std::vector<NativePortVertex> prepared_vertices_;
     std::vector<BlendStateSlot> blend_states_;
     std::vector<DepthStateSlot> depth_states_;
@@ -3854,6 +4160,7 @@ class NativePortGraphicsDevice::Impl final {
     std::uint64_t drawstream_end_frame_ = 0u;
     std::uint64_t drawstream_maximum_draws_per_frame_ = 0u;
     std::uint64_t drawstream_draws_this_frame_ = 0u;
+    std::uint64_t drawstream_gpu_draws_this_frame_ = 0u;
     bool drawstream_truncation_reported_ = false;
     bool drawstream_enabled_ = false;
     std::uint64_t texture_bytes_ = 0u;

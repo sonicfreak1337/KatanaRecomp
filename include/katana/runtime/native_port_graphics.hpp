@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 10u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 11u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -162,6 +162,19 @@ struct NativePortTextureHandle final {
                                      NativePortTextureHandle) = default;
 };
 
+// Bounded diagnostic provenance for a host texture.  The graphics core never
+// interprets this as a lookup key: resource admission remains the owner's
+// responsibility.  It exists so a captured draw can be tied back to an exact
+// content object without exposing a guest address or retaining a string.
+struct NativePortTextureProvenance final {
+    std::array<std::uint8_t, 32u> content_sha256{};
+    std::uint64_t generation = 0u;
+    std::uint32_t archive_ordinal = 0u;
+    std::uint32_t global_index = 0u;
+    bool content_identity_bound = false;
+    bool global_index_bound = false;
+};
+
 struct NativePortTextureConfig final {
     NativePortExtent extent;
     NativePortTextureFormat format = NativePortTextureFormat::Rgba8Unorm;
@@ -170,6 +183,7 @@ struct NativePortTextureConfig final {
     std::uint32_t mip_levels = 1u;
     bool shader_resource = true;
     bool dynamic = false;
+    NativePortTextureProvenance provenance;
 };
 
 struct NativePortImageView final {
@@ -282,6 +296,55 @@ enum class NativePortDrawClass : std::uint8_t {
     PunchThrough,
     Translucent,
     Overlay,
+};
+
+// One frame contains at most one batch for each semantic layer, in this
+// order.  List phases are ordered independently inside a batch.  This keeps
+// the renderer address-agnostic while making otherwise implicit UI/scene
+// composition part of the native packet contract.
+enum class NativePortDrawBatchClass : std::uint8_t {
+    Scene3D,
+    GameOverlay,
+    UiOverlay,
+    FontOverlay,
+};
+
+enum class NativePortTranslucencyPolicy : std::uint8_t {
+    NotApplicable,
+    // Preserve the owner's authored order and explicit depth state.
+    AuthoredUnsorted,
+    // The adapter has already produced stable depth order.  The host color
+    // pass therefore uses GEQUAL against opaque/punch depth without writing.
+    StableDepthSorted,
+};
+
+struct NativePortDrawBatch final {
+    // Non-zero and stable for all draws in this semantic batch.
+    std::uint64_t identity = 0u;
+    // Strictly increasing within one draw class in the batch.  It preserves
+    // ties without requiring the graphics device to guess submission order.
+    std::uint32_t submission_order = 0u;
+    NativePortDrawBatchClass semantic = NativePortDrawBatchClass::Scene3D;
+};
+
+enum class NativePortDrawLogicalUse : std::uint8_t {
+    Unspecified,
+    SceneMaterial,
+    Interface,
+    Font,
+    Presentation,
+};
+
+// Numeric, bounded capture metadata only.  These values never participate in
+// graphics admission or resource lookup and therefore cannot turn a title
+// address into a public-core identity.
+struct NativePortDrawDiagnostics final {
+    std::uint64_t material_identity = 0u;
+    std::uint32_t texture_list_index = 0u;
+    NativePortDrawLogicalUse logical_use =
+        NativePortDrawLogicalUse::Unspecified;
+    bool material_identity_bound = false;
+    bool texture_list_index_bound = false;
 };
 
 enum class NativePortInterpolationMode : std::uint8_t {
@@ -569,6 +632,10 @@ struct NativePortDrawPacket final {
     NativePortVertexSpace vertex_space =
         NativePortVertexSpace::ObjectHomogeneous;
     NativePortDrawClass draw_class = NativePortDrawClass::Opaque;
+    NativePortDrawBatch batch;
+    NativePortTranslucencyPolicy translucency =
+        NativePortTranslucencyPolicy::NotApplicable;
+    NativePortDrawDiagnostics diagnostics;
     NativePortInterpolationMode interpolation =
         NativePortInterpolationMode::PerspectiveCorrect;
     NativePortMatrix4x4 transform;

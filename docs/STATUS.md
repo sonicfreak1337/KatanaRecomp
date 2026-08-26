@@ -53,8 +53,9 @@ Artefakt-SHA-256 bindet; unmittelbar vor Prozessstart werden alle Identitaeten
 erneut geprueft und als Run-Eingabemanifest gespeichert. Eine veraltete oder
 waehrend des Preflights veraenderte Datei beendet den Lauf vor der Analyse.
 
-Source-Vertragsstand: Runtime-ABI `120`, Analyzer-ABI `66`, Backend-
-Interface-ABI `24`, Portprojektvertrag `103`, Native-Port-Profil `24`.
+Source-Vertragsstand: Product-Runtime-ABI `127`, AOT-Runtime-ABI `125`,
+Analyzer-ABI `70`, Backend-Interface-ABI `25`, Portprojektvertrag `103`,
+Native-Port-Profil `24` und Native-Graphics-Vertrag `11`.
 Der aktuelle Native-Port-Vertrag verwendet `NativePortDefinition` `12`,
 `NativePortArtifact` `14`, Provider-Semantikvertrag `v3` und Hardware-Closure
 `v8`. Die neue

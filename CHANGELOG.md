@@ -4,6 +4,15 @@
 
 ### Geaendert
 
+- Native-Graphics-Vertrag 11 macht Frame-Batches und die feste
+  Opaque/PunchThrough/Translucent/Overlay-Phasierung explizit, validiert
+  Batch-Viewport-/Projektionsinvarianten fail-closed und zeichnet auch durch
+  bounded Triangle-Preprocessing vollstaendig verworfene Submissions auf.
+  Drawstream v2 bindet Texture-Content-SHA, Archivordinal, optionalen GBIX,
+  Material- und logische Nutzungsidentitaet. Der inkompatible Packet- und
+  Diagnosevertrag hebt die Product-Runtime-ABI auf 127; die byte-stabile
+  AOT-Runtime-ABI bleibt 125.
+
 - Provider-Semantikvertrag 3 korrigiert den auditierten SH-4-Store-Queue-
   `PREF` auf seine beobachtbare 32-Byte-Transaktion. Runtimevalidator und
   Analyzer-Aequivalenz verwenden nun dieselbe oeffentliche Breitenkonstante;

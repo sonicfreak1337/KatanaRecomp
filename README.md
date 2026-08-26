@@ -26,9 +26,10 @@ Schnittstelle auf native Hostimplementierungen gebunden.
 Der vollstaendige verbindliche Vertrag und die neue Taskreihenfolge stehen in
 [`docs/NATIVE_PORT_PRODUCT_CONTRACT.md`](docs/NATIVE_PORT_PRODUCT_CONTRACT.md).
 
-Aktueller Architekturstand dieses Meilensteins: Runtime-ABI 122, Block-ABI 5,
-PlatformServices-ABI 14,
-Analyzer-ABI 66, Function-Analysis-Epoch-Schema 36, lokales
+Aktueller Architekturstand dieses Meilensteins: Product-Runtime-ABI 127,
+AOT-Runtime-ABI 125, Block-ABI 5, PlatformServices-ABI 14,
+Analyzer-ABI 70, Backend-Interface-ABI 25, Native-Graphics-Vertrag 11,
+Function-Analysis-Epoch-Schema 36, lokales
 In-Process-Evaluation-Cache-Schema 17, Application-Contract 8,
 Portprojektvertrag 103, Native-Port-Profilvertrag 24 sowie PVR-State-Contract 3.
 Aktuelles Native-AOT-Emissionsprofil: `40`, AOT-Partitionsschema: `10`.
@@ -84,7 +85,8 @@ Hardware-Closure. CrashCapsule v2, Forward-/Reverse-Depth und
 generationgebundene statische GPU-Meshes sind als bounded Runtimebausteine
 vorbereitet; die generierte Produkt-Catch-Verdrahtung wird erst nach dem
 Analyzer-Gate als produktiv bestaetigt. Diese Vertraege gehoeren zum
-Source-Stand Runtime-ABI 122 / Analyzer-ABI 66; historische Exportzahlen
+Source-Stand Product-Runtime-ABI 127 / AOT-Runtime-ABI 125 /
+Analyzer-ABI 70; historische Exportzahlen
 darunter bleiben als solche gekennzeichnet.
 
 Der aktuelle Kaltpfad verschiebt IR-Lowering, Audit und Graphmaterialisierung
