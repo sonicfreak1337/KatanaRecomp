@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 8u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 10u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -257,6 +257,43 @@ struct NativePortDepthState final {
                            const NativePortDepthState&) = default;
 };
 
+// The coordinate space of NativePortVertex::position is part of the draw
+// contract.  Adapters must not rely on a particular transform/depth-mode
+// combination to imply whether vertices are local, already projected, or
+// already homogeneous clip coordinates.
+enum class NativePortVertexSpace : std::uint8_t {
+    // position.xyz is local/object geometry.  The draw transform produces
+    // homogeneous clip coordinates from float4(position, 1).
+    ObjectHomogeneous,
+    // position.xy is an already transformed logical raster coordinate and
+    // depth_coordinate is a positive reciprocal depth.  The draw transform
+    // performs viewport normalization only.
+    PvrScreenReciprocal,
+    // position.xyz plus position_w is already a homogeneous clip position.
+    // The draw transform must be identity and is not applied by the shader.
+    ClipHomogeneous,
+};
+
+// Semantic submission classes remain native renderer state.  They let title
+// adapters preserve fixed-function list ownership and its special contracts
+// without exposing a guest command stream or device protocol.
+enum class NativePortDrawClass : std::uint8_t {
+    Opaque,
+    PunchThrough,
+    Translucent,
+    Overlay,
+};
+
+enum class NativePortInterpolationMode : std::uint8_t {
+    // Ordinary GPU perspective-correct interpolation for homogeneous object
+    // or clip geometry.
+    PerspectiveCorrect,
+    // Screen-space fixed-function Gouraud interpolation: attributes are
+    // weighted by positive reciprocal depth and divided by the interpolated
+    // reciprocal depth in the pixel stage.
+    PvrScreenGouraud,
+};
+
 enum class NativePortDepthCoordinateMode : std::uint8_t {
     // Vertex position is ordinary homogeneous clip-space depth.
     ClipSpace,
@@ -444,10 +481,30 @@ struct NativePortFogState final {
     std::array<float, native_port_fog_table_entries> lookup_table{};
 };
 
+// Fixed-function color clamping is an explicit RGBA stage.  It is applied
+// after texture/offset composition and before ordinary fog, matching the
+// authored renderer contract instead of relying on render-target saturation.
+struct NativePortColorClampState final {
+    std::array<float, 4u> minimum{0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<float, 4u> maximum{1.0f, 1.0f, 1.0f, 1.0f};
+    bool enabled = false;
+};
+
 struct NativePortAlphaTestState final {
+    enum class Mode : std::uint8_t {
+        // Compare the continuous shader alpha against reference.
+        FloatingPoint,
+        // Fixed-function punch-through coverage: quantize alpha to 8 bits,
+        // compare GreaterEqual against reference_8bit, and force surviving
+        // output alpha to one.
+        Quantized8BitForceOpaque,
+    };
+
     NativePortCompareOperation compare = NativePortCompareOperation::Always;
     float reference = 0.0f;
     bool enabled = false;
+    Mode mode = Mode::FloatingPoint;
+    std::uint8_t reference_8bit = 0u;
 };
 
 struct NativePortVertex final {
@@ -464,6 +521,9 @@ struct NativePortVertex final {
     // Used only by ReciprocalPositive depth mapping. Kept separate from fog
     // so either semantic can be enabled independently.
     float depth_coordinate = 0.0f;
+    // Used only by ClipHomogeneous.  It is deliberately separate and trailing
+    // so existing object/screen-space aggregate initialization keeps W=1.
+    float position_w = 1.0f;
 };
 
 struct NativePortMeshHandle final {
@@ -506,6 +566,11 @@ struct NativePortDrawPacket final {
     // submitted-space small-triangle threshold must match the immutable mesh
     // creation contract; all remaining state stays dynamic per draw.
     NativePortMeshHandle mesh;
+    NativePortVertexSpace vertex_space =
+        NativePortVertexSpace::ObjectHomogeneous;
+    NativePortDrawClass draw_class = NativePortDrawClass::Opaque;
+    NativePortInterpolationMode interpolation =
+        NativePortInterpolationMode::PerspectiveCorrect;
     NativePortMatrix4x4 transform;
     NativePortMatrix4x4 normal_transform;
     NativePortTextureHandle texture;
@@ -520,6 +585,7 @@ struct NativePortDrawPacket final {
     NativePortMaterialState material;
     NativePortLightingState lighting;
     NativePortFogState fog;
+    NativePortColorClampState color_clamp;
     NativePortAlphaTestState alpha_test;
 };
 

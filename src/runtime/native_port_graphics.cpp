@@ -8,6 +8,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <string>
 #include <thread>
@@ -157,6 +158,29 @@ template <std::size_t Size>
     const NativePortDepthState& depth) noexcept {
     return valid_compare(depth.compare) &&
            (!depth.write_enabled || depth.test_enabled);
+}
+
+[[nodiscard]] bool valid_vertex_space(
+    const NativePortVertexSpace space) noexcept {
+    return space == NativePortVertexSpace::ObjectHomogeneous ||
+           space == NativePortVertexSpace::PvrScreenReciprocal ||
+           space == NativePortVertexSpace::ClipHomogeneous;
+}
+
+[[nodiscard]] bool valid_draw_class(
+    const NativePortDrawClass draw_class) noexcept {
+    return draw_class == NativePortDrawClass::Opaque ||
+           draw_class == NativePortDrawClass::PunchThrough ||
+           draw_class == NativePortDrawClass::Translucent ||
+           draw_class == NativePortDrawClass::Overlay;
+}
+
+[[nodiscard]] bool valid_interpolation(
+    const NativePortInterpolationMode interpolation) noexcept {
+    return interpolation ==
+               NativePortInterpolationMode::PerspectiveCorrect ||
+           interpolation ==
+               NativePortInterpolationMode::PvrScreenGouraud;
 }
 
 [[nodiscard]] bool valid_depth_mapping(
@@ -353,11 +377,92 @@ template <std::size_t Size>
         [](const float value) { return value >= 0.0f && value <= 1.0f; });
 }
 
+[[nodiscard]] bool valid_color_clamp(
+    const NativePortColorClampState& color_clamp) noexcept {
+    if (!finite_array(color_clamp.minimum) ||
+        !finite_array(color_clamp.maximum))
+        return false;
+    for (std::size_t component = 0u;
+         component < color_clamp.minimum.size(); ++component) {
+        if (color_clamp.minimum[component] < 0.0f ||
+            color_clamp.maximum[component] > 1.0f ||
+            color_clamp.minimum[component] > color_clamp.maximum[component])
+            return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool valid_alpha_test(
     const NativePortAlphaTestState& alpha_test) noexcept {
-    return valid_compare(alpha_test.compare) &&
-           std::isfinite(alpha_test.reference) &&
-           alpha_test.reference >= 0.0f && alpha_test.reference <= 1.0f;
+    using Mode = NativePortAlphaTestState::Mode;
+    if (!valid_compare(alpha_test.compare) ||
+        !std::isfinite(alpha_test.reference) ||
+        alpha_test.reference < 0.0f || alpha_test.reference > 1.0f ||
+        (alpha_test.mode != Mode::FloatingPoint &&
+         alpha_test.mode != Mode::Quantized8BitForceOpaque))
+        return false;
+    if (alpha_test.mode == Mode::Quantized8BitForceOpaque) {
+        const float canonical_reference =
+            static_cast<float>(alpha_test.reference_8bit) / 255.0f;
+        return alpha_test.enabled &&
+               alpha_test.compare ==
+                   NativePortCompareOperation::GreaterEqual &&
+               alpha_test.reference == canonical_reference;
+    }
+    return alpha_test.reference_8bit == 0u;
+}
+
+[[nodiscard]] bool identity_transform(
+    const NativePortMatrix4x4& transform) noexcept {
+    static constexpr std::array<float, 16u> identity{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f};
+    return transform.values == identity;
+}
+
+[[nodiscard]] bool compatible_vertex_contract(
+    const NativePortDrawPacket& packet) noexcept {
+    switch (packet.vertex_space) {
+    case NativePortVertexSpace::ObjectHomogeneous:
+        return packet.depth_mapping.mode !=
+                   NativePortDepthCoordinateMode::ReciprocalPositive &&
+               packet.interpolation ==
+                   NativePortInterpolationMode::PerspectiveCorrect &&
+               packet.rasterizer.depth_clip_enabled;
+    case NativePortVertexSpace::PvrScreenReciprocal:
+        return packet.depth_mapping.mode ==
+                   NativePortDepthCoordinateMode::ReciprocalPositive &&
+               packet.interpolation ==
+                   NativePortInterpolationMode::PvrScreenGouraud &&
+               packet.rasterizer.small_triangle_area_space ==
+                   NativePortTriangleAreaSpace::Submitted &&
+               !packet.rasterizer.depth_clip_enabled;
+    case NativePortVertexSpace::ClipHomogeneous:
+        return packet.depth_mapping.mode !=
+                   NativePortDepthCoordinateMode::ReciprocalPositive &&
+               packet.interpolation ==
+                   NativePortInterpolationMode::PerspectiveCorrect &&
+               identity_transform(packet.transform);
+    }
+    return false;
+}
+
+[[nodiscard]] bool compatible_draw_class_contract(
+    const NativePortDrawPacket& packet) noexcept {
+    using AlphaMode = NativePortAlphaTestState::Mode;
+    const bool quantized_punch =
+        packet.alpha_test.mode == AlphaMode::Quantized8BitForceOpaque;
+    if (packet.draw_class != NativePortDrawClass::PunchThrough)
+        return !quantized_punch;
+    return quantized_punch && packet.alpha_test.enabled &&
+           packet.alpha_test.compare ==
+               NativePortCompareOperation::GreaterEqual &&
+           packet.depth.test_enabled && packet.depth.write_enabled &&
+           packet.depth.compare ==
+               NativePortCompareOperation::GreaterEqual &&
+           reciprocal_depth_mode(packet.depth_mapping.mode);
 }
 
 void validate_graphics_config(const NativePortGraphicsConfig& config) {
@@ -624,8 +729,13 @@ constexpr std::uint32_t draw_flag_primary_alpha = 1u << 6u;
 constexpr std::uint32_t draw_flag_texture_alpha = 1u << 7u;
 constexpr std::uint32_t draw_texture_combine_shift = 8u;
 constexpr std::uint32_t draw_alpha_test_enabled = 1u << 8u;
+constexpr std::uint32_t draw_alpha_test_quantized_8bit = 1u << 9u;
+constexpr std::uint32_t draw_alpha_test_reference_shift = 16u;
 constexpr std::uint32_t draw_flag_homogeneous_reciprocal_clip = 1u << 16u;
 constexpr std::uint32_t draw_flag_texture_present = 1u << 17u;
+constexpr std::uint32_t draw_flag_pvr_screen_gouraud = 1u << 18u;
+constexpr std::uint32_t draw_flag_clip_homogeneous = 1u << 19u;
+constexpr std::uint32_t draw_flag_color_clamp = 1u << 20u;
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
 [[nodiscard]] std::wstring utf8_to_wide(std::string_view value);
@@ -653,6 +763,22 @@ class NativePortGraphicsDevice::Impl final {
         bool positive_depth_coordinates = true;
         bool nonnegative_fog_coordinates = true;
         bool nonzero_normals = true;
+        bool unit_position_w = true;
+        bool positive_position_w = true;
+        std::array<float, 3u> position_min{
+            std::numeric_limits<float>::infinity(),
+            std::numeric_limits<float>::infinity(),
+            std::numeric_limits<float>::infinity()};
+        std::array<float, 3u> position_max{
+            -std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity()};
+        float depth_coordinate_min =
+            std::numeric_limits<float>::infinity();
+        float depth_coordinate_max =
+            -std::numeric_limits<float>::infinity();
+        float position_w_min = std::numeric_limits<float>::infinity();
+        float position_w_max = -std::numeric_limits<float>::infinity();
     };
 
     struct MeshSlot final {
@@ -939,6 +1065,7 @@ class NativePortGraphicsDevice::Impl final {
                             topology,
                             preprocessing,
                             NativePortMatrix4x4{},
+                            NativePortVertexSpace::ObjectHomogeneous,
                             persistent_vertex_limit,
                             prepared,
                             NativePortGraphicsFailure::InvalidResource,
@@ -1118,6 +1245,7 @@ class NativePortGraphicsDevice::Impl final {
                                 topology,
                                 packet.rasterizer,
                                 packet.transform,
+                                packet.vertex_space,
                                 config_.maximum_transient_vertices,
                                 prepared_vertices_,
                                 NativePortGraphicsFailure::InvalidDraw,
@@ -1182,6 +1310,8 @@ class NativePortGraphicsDevice::Impl final {
         constants.material_emission = packet.material.emission;
         constants.scene_ambient = packet.lighting.ambient;
         constants.fog_color = packet.fog.color;
+        constants.color_clamp_minimum = packet.color_clamp.minimum;
+        constants.color_clamp_maximum = packet.color_clamp.maximum;
         if ((packet.fog.mode == NativePortFogMode::LookupTable ||
              packet.fog.mode == NativePortFogMode::LookupTablePrimary) &&
             (!fog_lookup_table_valid_ ||
@@ -1237,15 +1367,34 @@ class NativePortGraphicsDevice::Impl final {
             material_flags |= draw_flag_texture_alpha;
         if (packet.texture)
             material_flags |= draw_flag_texture_present;
+        if (packet.interpolation ==
+            NativePortInterpolationMode::PvrScreenGouraud)
+            material_flags |= draw_flag_pvr_screen_gouraud;
+        if (packet.vertex_space ==
+            NativePortVertexSpace::ClipHomogeneous)
+            material_flags |= draw_flag_clip_homogeneous;
+        if (packet.color_clamp.enabled)
+            material_flags |= draw_flag_color_clamp;
         material_flags |=
             static_cast<std::uint32_t>(packet.material.texture_combine)
             << draw_texture_combine_shift;
+        auto alpha_test_flags =
+            static_cast<std::uint32_t>(packet.alpha_test.compare);
+        if (packet.alpha_test.enabled)
+            alpha_test_flags |= draw_alpha_test_enabled;
+        if (packet.alpha_test.mode ==
+            NativePortAlphaTestState::Mode::Quantized8BitForceOpaque) {
+            alpha_test_flags |= draw_alpha_test_quantized_8bit;
+            alpha_test_flags |=
+                static_cast<std::uint32_t>(
+                    packet.alpha_test.reference_8bit)
+                << draw_alpha_test_reference_shift;
+        }
         constants.pipeline_flags = {
             material_flags,
             packet.lighting.light_count,
             static_cast<std::uint32_t>(packet.fog.mode),
-            static_cast<std::uint32_t>(packet.alpha_test.compare) |
-                (packet.alpha_test.enabled ? draw_alpha_test_enabled : 0u)};
+            alpha_test_flags};
         for (std::size_t index = 0u;
              index < packet.lighting.light_count; ++index) {
             const auto& light = packet.lighting.lights[index];
@@ -1269,6 +1418,12 @@ class NativePortGraphicsDevice::Impl final {
             packet.viewport == NativePortViewportTarget::Ui
                 ? current_layout.ui_viewport
                 : current_layout.game_viewport;
+        capture_drawstream(packet,
+                           vertices,
+                           indices,
+                           topology,
+                           viewport_rect,
+                           mesh_slot);
         set_viewport(viewport_rect);
 
         auto* const blend = resolve_blend_state(packet.blend);
@@ -1551,6 +1706,8 @@ class NativePortGraphicsDevice::Impl final {
         std::array<float, 4u> material_emission{};
         std::array<float, 4u> scene_ambient{};
         std::array<float, 4u> fog_color{};
+        std::array<float, 4u> color_clamp_minimum{};
+        std::array<float, 4u> color_clamp_maximum{};
         std::array<std::array<float, 4u>,
                    native_port_maximum_directional_lights> light_directions{};
         std::array<std::array<float, 4u>,
@@ -1813,7 +1970,7 @@ class NativePortGraphicsDevice::Impl final {
                   composite_pixel_shader_.GetAddressOf()),
               "composite-pixel-shader");
 
-        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 7u> elements{
+        constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 8u> elements{
             D3D11_INPUT_ELEMENT_DESC{
                 "POSITION", 0u, DXGI_FORMAT_R32G32B32_FLOAT, 0u,
                 static_cast<UINT>(offsetof(NativePortVertex, position)),
@@ -1841,6 +1998,10 @@ class NativePortGraphicsDevice::Impl final {
             D3D11_INPUT_ELEMENT_DESC{
                 "TEXCOORD", 2u, DXGI_FORMAT_R32_FLOAT, 0u,
                 static_cast<UINT>(offsetof(NativePortVertex, depth_coordinate)),
+                D3D11_INPUT_PER_VERTEX_DATA, 0u},
+            D3D11_INPUT_ELEMENT_DESC{
+                "POSITION", 1u, DXGI_FORMAT_R32_FLOAT, 0u,
+                static_cast<UINT>(offsetof(NativePortVertex, position_w)),
                 D3D11_INPUT_PER_VERTEX_DATA, 0u},
         };
         check(device_->CreateInputLayout(
@@ -2183,7 +2344,8 @@ class NativePortGraphicsDevice::Impl final {
                 !finite_array(vertex.color) || !finite_array(vertex.normal) ||
                 !finite_array(vertex.secondary_color) ||
                 !std::isfinite(vertex.fog_coordinate) ||
-                !std::isfinite(vertex.depth_coordinate))
+                !std::isfinite(vertex.depth_coordinate) ||
+                !std::isfinite(vertex.position_w))
                 fail(failure, 0u, vertex_operation);
             capabilities.positive_depth_coordinates =
                 capabilities.positive_depth_coordinates &&
@@ -2198,6 +2360,26 @@ class NativePortGraphicsDevice::Impl final {
             capabilities.nonzero_normals =
                 capabilities.nonzero_normals &&
                 std::isfinite(length_squared) && length_squared > 0.0f;
+            capabilities.unit_position_w =
+                capabilities.unit_position_w && vertex.position_w == 1.0f;
+            capabilities.positive_position_w =
+                capabilities.positive_position_w && vertex.position_w > 0.0f;
+            for (std::size_t component = 0u; component < 3u; ++component) {
+                capabilities.position_min[component] = std::min(
+                    capabilities.position_min[component],
+                    vertex.position[component]);
+                capabilities.position_max[component] = std::max(
+                    capabilities.position_max[component],
+                    vertex.position[component]);
+            }
+            capabilities.depth_coordinate_min = std::min(
+                capabilities.depth_coordinate_min, vertex.depth_coordinate);
+            capabilities.depth_coordinate_max = std::max(
+                capabilities.depth_coordinate_max, vertex.depth_coordinate);
+            capabilities.position_w_min = std::min(
+                capabilities.position_w_min, vertex.position_w);
+            capabilities.position_w_max = std::max(
+                capabilities.position_w_max, vertex.position_w);
         }
 
         const auto element_count =
@@ -2221,6 +2403,30 @@ class NativePortGraphicsDevice::Impl final {
         return capabilities;
     }
 
+    [[nodiscard]] static std::array<double, 2u> transformed_w_range(
+        const NativePortDrawPacket& packet,
+        const GeometryCapabilities& capabilities) noexcept {
+        if (packet.vertex_space == NativePortVertexSpace::ClipHomogeneous)
+            return {capabilities.position_w_min,
+                    capabilities.position_w_max};
+        double minimum = packet.transform.values[15u];
+        double maximum = minimum;
+        for (std::size_t component = 0u; component < 3u; ++component) {
+            const double coefficient =
+                packet.transform.values[component * 4u + 3u];
+            const double lower = capabilities.position_min[component];
+            const double upper = capabilities.position_max[component];
+            if (coefficient >= 0.0) {
+                minimum += coefficient * lower;
+                maximum += coefficient * upper;
+            } else {
+                minimum += coefficient * upper;
+                maximum += coefficient * lower;
+            }
+        }
+        return {minimum, maximum};
+    }
+
     void require_geometry_capabilities(
         const NativePortDrawPacket& packet,
         const GeometryCapabilities& capabilities) {
@@ -2229,9 +2435,10 @@ class NativePortGraphicsDevice::Impl final {
                  NativePortDepthCoordinateMode::
                      ReciprocalPositiveHomogeneousClip &&
              !capabilities.nonnegative_fog_coordinates) ||
-            (packet.depth_mapping.mode ==
-                 NativePortDepthCoordinateMode::ReciprocalPositive &&
-             (packet.depth.test_enabled || packet.texture) &&
+            ((packet.vertex_space ==
+                  NativePortVertexSpace::PvrScreenReciprocal ||
+              packet.depth_mapping.mode ==
+                  NativePortDepthCoordinateMode::ReciprocalPositive) &&
              !capabilities.positive_depth_coordinates))
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
@@ -2241,11 +2448,63 @@ class NativePortGraphicsDevice::Impl final {
                  NativePortTextureCoordinateSource::NormalSphere) &&
             !capabilities.nonzero_normals)
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-normal");
+        if ((packet.vertex_space ==
+                 NativePortVertexSpace::ClipHomogeneous &&
+             !capabilities.positive_position_w) ||
+            (packet.vertex_space !=
+                 NativePortVertexSpace::ClipHomogeneous &&
+             !capabilities.unit_position_w))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-position-w");
+
+        const auto clip_w = transformed_w_range(packet, capabilities);
+        const bool requires_positive_clip_w =
+            packet.vertex_space == NativePortVertexSpace::PvrScreenReciprocal ||
+            packet.depth_mapping.mode ==
+                NativePortDepthCoordinateMode::
+                    ReciprocalPositiveHomogeneousClip;
+        if (requires_positive_clip_w &&
+            (!std::isfinite(clip_w[0]) || !std::isfinite(clip_w[1]) ||
+             clip_w[0] <= 0.0 || clip_w[1] < clip_w[0]))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-positive-clip-w");
+
+        if (reciprocal_depth_mode(packet.depth_mapping.mode)) {
+            double minimum_reciprocal =
+                capabilities.depth_coordinate_min;
+            double maximum_reciprocal =
+                capabilities.depth_coordinate_max;
+            if (packet.depth_mapping.mode ==
+                NativePortDepthCoordinateMode::
+                    ReciprocalPositiveHomogeneousClip) {
+                minimum_reciprocal = 1.0 / clip_w[1];
+                maximum_reciprocal = 1.0 / clip_w[0];
+            }
+            const auto map_depth = [&](const double reciprocal) {
+                return std::log2(
+                           1.0 + packet.depth_mapping.reciprocal_scale *
+                                     reciprocal) /
+                       packet.depth_mapping.logarithm_divisor;
+            };
+            const double minimum_depth = map_depth(minimum_reciprocal);
+            const double maximum_depth = map_depth(maximum_reciprocal);
+            if (!std::isfinite(minimum_depth) ||
+                !std::isfinite(maximum_depth) || minimum_depth < 0.0 ||
+                maximum_depth > 1.0 || maximum_depth < minimum_depth)
+                fail(NativePortGraphicsFailure::InvalidDraw,
+                     0u,
+                     "draw-reciprocal-depth-range");
+        }
     }
 
     void validate_draw(const NativePortDrawPacket& packet,
                        const MeshSlot* const mesh_slot) {
         if (!valid_viewport_target(packet.viewport) ||
+            !valid_vertex_space(packet.vertex_space) ||
+            !valid_draw_class(packet.draw_class) ||
+            !valid_interpolation(packet.interpolation) ||
             !valid_topology(packet.topology) ||
             !valid_blend(packet.blend) || !valid_depth(packet.depth) ||
             !valid_depth_mapping(packet.depth_mapping) ||
@@ -2253,10 +2512,19 @@ class NativePortGraphicsDevice::Impl final {
             !valid_sampler(packet.sampler) ||
             !valid_material(packet.material) ||
             !valid_lighting(packet.lighting) || !valid_fog(packet.fog) ||
+            !valid_color_clamp(packet.color_clamp) ||
             !valid_alpha_test(packet.alpha_test) ||
             !finite_array(packet.transform.values) ||
             !finite_array(packet.normal_transform.values))
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-layout");
+        if (!compatible_vertex_contract(packet))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-vertex-space-contract");
+        if (!compatible_draw_class_contract(packet))
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-class-contract");
         if (!compatible_depth_contract(
                 frame_depth_buffer_, packet.depth, packet.depth_mapping))
             fail(NativePortGraphicsFailure::InvalidDraw,
@@ -2286,6 +2554,7 @@ class NativePortGraphicsDevice::Impl final {
         NativePortPrimitiveTopology& topology,
         const NativePortRasterizerState& rasterizer,
         const NativePortMatrix4x4& transform,
+        const NativePortVertexSpace vertex_space,
         const std::size_t maximum_output_vertices,
         std::vector<NativePortVertex>& destination,
         const NativePortGraphicsFailure topology_failure,
@@ -2323,14 +2592,21 @@ class NativePortGraphicsDevice::Impl final {
                     return true;
                 }
 
-                std::array<double, 4u> clip{};
                 const std::array<double, 4u> source{
                     vertex.position[0], vertex.position[1],
-                    vertex.position[2], 1.0};
-                for (std::size_t column = 0u; column < 4u; ++column) {
-                    for (std::size_t row = 0u; row < 4u; ++row) {
-                        clip[column] +=
-                            source[row] * transform.values[row * 4u + column];
+                    vertex.position[2], vertex.position_w};
+                std::array<double, 4u> clip{};
+                if (vertex_space ==
+                    NativePortVertexSpace::ClipHomogeneous) {
+                    clip = source;
+                } else {
+                    auto object_source = source;
+                    object_source[3u] = 1.0;
+                    for (std::size_t column = 0u; column < 4u; ++column) {
+                        for (std::size_t row = 0u; row < 4u; ++row) {
+                            clip[column] += object_source[row] *
+                                transform.values[row * 4u + column];
+                        }
                     }
                 }
                 if (!std::ranges::all_of(
@@ -2684,9 +2960,23 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     void initialize_frame_capture() {
+        const auto drawstream = environment_value(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_DRAWSTREAM");
+        if (!drawstream.empty() && drawstream != L"0" && drawstream != L"1")
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-drawstream-enabled");
         const auto directory = environment_value(
             L"KATANA_NATIVE_GRAPHICS_CAPTURE_DIRECTORY");
-        if (directory.empty()) return;
+        if (directory.empty()) {
+            if (drawstream == L"1")
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidConfig,
+                    1u,
+                    "graphics-drawstream-directory");
+            return;
+        }
         capture_directory_ = std::filesystem::path(directory);
         capture_start_frame_ = environment_unsigned(
             L"KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME",
@@ -2715,6 +3005,29 @@ class NativePortGraphicsDevice::Impl final {
                 static_cast<std::uint32_t>(error.value()),
                 "graphics-capture-directory");
         capture_enabled_ = true;
+        if (drawstream == L"1") {
+            constexpr std::uint64_t maximum_drawstream_frame_span = 3u;
+            const auto maximum_bounded_end =
+                capture_start_frame_ >
+                        std::numeric_limits<std::uint64_t>::max() -
+                            (maximum_drawstream_frame_span - 1u)
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : capture_start_frame_ +
+                          maximum_drawstream_frame_span - 1u;
+            drawstream_end_frame_ = std::min(
+                capture_end_frame_, maximum_bounded_end);
+            drawstream_maximum_draws_per_frame_ = environment_unsigned(
+                L"KATANA_NATIVE_GRAPHICS_CAPTURE_DRAWSTREAM_MAX_DRAWS",
+                1'024u,
+                "graphics-drawstream-maximum-draws");
+            if (drawstream_maximum_draws_per_frame_ == 0u ||
+                drawstream_maximum_draws_per_frame_ > 16'384u)
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidConfig,
+                    1u,
+                    "graphics-drawstream-maximum-draws");
+            drawstream_enabled_ = true;
+        }
     }
 
     [[nodiscard]] bool should_capture_frame(
@@ -2722,6 +3035,545 @@ class NativePortGraphicsDevice::Impl final {
         return capture_enabled_ && frame >= capture_start_frame_ &&
                frame <= capture_end_frame_ &&
                (frame - capture_start_frame_) % capture_interval_ == 0u;
+    }
+
+    [[nodiscard]] bool should_capture_drawstream_frame(
+        const std::uint64_t frame) const noexcept {
+        return drawstream_enabled_ && frame >= capture_start_frame_ &&
+               frame <= drawstream_end_frame_ &&
+               (frame - capture_start_frame_) % capture_interval_ == 0u;
+    }
+
+    void begin_drawstream_frame(const std::uint64_t frame) {
+        if (drawstream_frame_ == frame) return;
+        if (drawstream_output_.is_open()) drawstream_output_.close();
+        drawstream_output_.clear();
+        drawstream_frame_ = frame;
+        drawstream_draws_this_frame_ = 0u;
+        drawstream_truncation_reported_ = false;
+        if (!should_capture_drawstream_frame(frame)) return;
+        const auto output_path = capture_directory_ /
+            (L"drawstream-frame-" + std::to_wstring(frame) + L".jsonl");
+        drawstream_output_.open(
+            output_path, std::ios::binary | std::ios::trunc);
+        if (!drawstream_output_)
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 1u,
+                 "graphics-drawstream-open");
+        drawstream_output_ << std::setprecision(9);
+    }
+
+    void capture_drawstream(
+        const NativePortDrawPacket& packet,
+        const std::span<const NativePortVertex> vertices,
+        const std::span<const std::uint32_t> indices,
+        const NativePortPrimitiveTopology topology,
+        const NativePortPixelRect viewport,
+        const MeshSlot* const mesh_slot) {
+        if (!drawstream_enabled_) return;
+        const auto frame = snapshot_.presented_frames + 1u;
+        begin_drawstream_frame(frame);
+        if (!drawstream_output_.is_open()) return;
+        if (drawstream_draws_this_frame_ >=
+            drawstream_maximum_draws_per_frame_) {
+            if (!drawstream_truncation_reported_) {
+                drawstream_output_
+                    << "{\"schema\":\"katana-native-drawstream-v1\","
+                       "\"frame\":"
+                    << frame
+                    << ",\"truncated\":true,\"reason\":"
+                       "\"draw-budget\"}\n";
+                drawstream_truncation_reported_ = true;
+            }
+            return;
+        }
+
+        constexpr std::size_t maximum_vertices_examined = 8'192u;
+        constexpr std::size_t maximum_elements_examined = 24'576u;
+        const auto examined_vertices =
+            std::min(vertices.size(), maximum_vertices_examined);
+        bool geometry_truncated = vertices.size() > examined_vertices;
+
+        const auto clip_position = [&](const NativePortVertex& vertex) {
+            std::array<double, 4u> result{};
+            const std::array<double, 4u> source{
+                vertex.position[0], vertex.position[1], vertex.position[2],
+                packet.vertex_space == NativePortVertexSpace::ClipHomogeneous
+                    ? vertex.position_w
+                    : 1.0};
+            if (packet.vertex_space == NativePortVertexSpace::ClipHomogeneous)
+                return source;
+            for (std::size_t column = 0u; column < 4u; ++column) {
+                for (std::size_t row = 0u; row < 4u; ++row)
+                    result[column] += source[row] *
+                        packet.transform.values[row * 4u + column];
+            }
+            return result;
+        };
+
+        std::array<double, 4u> submitted_min{};
+        std::array<double, 4u> submitted_max{};
+        std::array<double, 4u> clip_min{};
+        std::array<double, 4u> clip_max{};
+        std::array<double, 2u> ndc_min{};
+        std::array<double, 2u> ndc_max{};
+        std::array<double, 2u> pixel_min{};
+        std::array<double, 2u> pixel_max{};
+        std::array<double, 2u> uv_min{};
+        std::array<double, 2u> uv_max{};
+        std::array<double, 2u> depth_range{};
+        std::array<double, 2u> alpha_range{};
+        std::array<double, 4u> color_min{};
+        std::array<double, 4u> color_max{};
+        std::array<double, 4u> secondary_min{};
+        std::array<double, 4u> secondary_max{};
+        std::array<double, 3u> normal_min{};
+        std::array<double, 3u> normal_max{};
+        bool bounds_initialized = false;
+        bool projected_bounds_initialized = false;
+        std::size_t invalid_clip_positions = 0u;
+        std::size_t positive_clip_w = 0u;
+        std::size_t nonpositive_clip_w = 0u;
+        for (std::size_t index = 0u; index < examined_vertices; ++index) {
+            const auto& vertex = vertices[index];
+            const auto clip = clip_position(vertex);
+            const std::array<double, 4u> submitted{
+                vertex.position[0], vertex.position[1], vertex.position[2],
+                vertex.position_w};
+            const std::array<double, 2u> uv{
+                vertex.texture_coordinate[0], vertex.texture_coordinate[1]};
+            if (!bounds_initialized) {
+                submitted_min = submitted_max = submitted;
+                clip_min = clip_max = clip;
+                uv_min = uv_max = uv;
+                depth_range = {vertex.depth_coordinate,
+                               vertex.depth_coordinate};
+                alpha_range = {vertex.color[3u], vertex.color[3u]};
+                for (std::size_t component = 0u; component < 4u;
+                     ++component) {
+                    color_min[component] = color_max[component] =
+                        vertex.color[component];
+                    secondary_min[component] = secondary_max[component] =
+                        vertex.secondary_color[component];
+                }
+                for (std::size_t component = 0u; component < 3u;
+                     ++component)
+                    normal_min[component] = normal_max[component] =
+                        vertex.normal[component];
+                bounds_initialized = true;
+            } else {
+                for (std::size_t component = 0u; component < 4u; ++component) {
+                    submitted_min[component] = std::min(
+                        submitted_min[component], submitted[component]);
+                    submitted_max[component] = std::max(
+                        submitted_max[component], submitted[component]);
+                    clip_min[component] =
+                        std::min(clip_min[component], clip[component]);
+                    clip_max[component] =
+                        std::max(clip_max[component], clip[component]);
+                }
+                for (std::size_t component = 0u; component < 2u; ++component) {
+                    uv_min[component] =
+                        std::min(uv_min[component], uv[component]);
+                    uv_max[component] =
+                        std::max(uv_max[component], uv[component]);
+                }
+                depth_range[0u] = std::min(
+                    depth_range[0u],
+                    static_cast<double>(vertex.depth_coordinate));
+                depth_range[1u] = std::max(
+                    depth_range[1u],
+                    static_cast<double>(vertex.depth_coordinate));
+                alpha_range[0u] = std::min(
+                    alpha_range[0u],
+                    static_cast<double>(vertex.color[3u]));
+                alpha_range[1u] = std::max(
+                    alpha_range[1u],
+                    static_cast<double>(vertex.color[3u]));
+                for (std::size_t component = 0u; component < 4u;
+                     ++component) {
+                    color_min[component] = std::min(
+                        color_min[component],
+                        static_cast<double>(vertex.color[component]));
+                    color_max[component] = std::max(
+                        color_max[component],
+                        static_cast<double>(vertex.color[component]));
+                    secondary_min[component] = std::min(
+                        secondary_min[component],
+                        static_cast<double>(
+                            vertex.secondary_color[component]));
+                    secondary_max[component] = std::max(
+                        secondary_max[component],
+                        static_cast<double>(
+                            vertex.secondary_color[component]));
+                }
+                for (std::size_t component = 0u; component < 3u;
+                     ++component) {
+                    normal_min[component] = std::min(
+                        normal_min[component],
+                        static_cast<double>(vertex.normal[component]));
+                    normal_max[component] = std::max(
+                        normal_max[component],
+                        static_cast<double>(vertex.normal[component]));
+                }
+            }
+            if (!std::ranges::all_of(
+                    clip, [](const double value) {
+                        return std::isfinite(value);
+                    }) || clip[3u] == 0.0) {
+                ++invalid_clip_positions;
+                continue;
+            }
+            if (clip[3u] > 0.0)
+                ++positive_clip_w;
+            else
+                ++nonpositive_clip_w;
+            const std::array<double, 2u> ndc{
+                clip[0u] / clip[3u], clip[1u] / clip[3u]};
+            const std::array<double, 2u> pixel{
+                viewport.x + (ndc[0u] + 1.0) * 0.5 * viewport.width,
+                viewport.y + (1.0 - ndc[1u]) * 0.5 * viewport.height};
+            if (!projected_bounds_initialized) {
+                ndc_min = ndc_max = ndc;
+                pixel_min = pixel_max = pixel;
+                projected_bounds_initialized = true;
+            } else {
+                for (std::size_t component = 0u; component < 2u; ++component) {
+                    ndc_min[component] =
+                        std::min(ndc_min[component], ndc[component]);
+                    ndc_max[component] =
+                        std::max(ndc_max[component], ndc[component]);
+                    pixel_min[component] =
+                        std::min(pixel_min[component], pixel[component]);
+                    pixel_max[component] =
+                        std::max(pixel_max[component], pixel[component]);
+                }
+            }
+        }
+
+        std::size_t winding_positive = 0u;
+        std::size_t winding_negative = 0u;
+        std::size_t winding_degenerate = 0u;
+        std::size_t winding_unprojectable = 0u;
+        const auto source_element_count =
+            indices.empty() ? vertices.size() : indices.size();
+        const auto examined_elements =
+            std::min(source_element_count, maximum_elements_examined);
+        geometry_truncated = geometry_truncated ||
+                             source_element_count > examined_elements;
+        const auto source_index = [&](const std::size_t element) {
+            return indices.empty() ? static_cast<std::uint32_t>(element)
+                                   : indices[element];
+        };
+        const auto projected_xy = [&](const std::uint32_t index,
+                                      std::array<double, 2u>& result) {
+            if (index >= examined_vertices) return false;
+            const auto clip = clip_position(vertices[index]);
+            if (!std::ranges::all_of(
+                    clip, [](const double value) {
+                        return std::isfinite(value);
+                    }) || clip[3u] == 0.0)
+                return false;
+            result = {clip[0u] / clip[3u], clip[1u] / clip[3u]};
+            return std::ranges::all_of(
+                result, [](const double value) {
+                    return std::isfinite(value);
+                });
+        };
+        const auto classify_triangle = [&](const std::size_t first,
+                                           const std::size_t second,
+                                           const std::size_t third) {
+            std::array<double, 2u> a{};
+            std::array<double, 2u> b{};
+            std::array<double, 2u> c{};
+            if (!projected_xy(source_index(first), a) ||
+                !projected_xy(source_index(second), b) ||
+                !projected_xy(source_index(third), c)) {
+                ++winding_unprojectable;
+                return;
+            }
+            const auto determinant =
+                (b[0u] - a[0u]) * (c[1u] - a[1u]) -
+                (b[1u] - a[1u]) * (c[0u] - a[0u]);
+            if (determinant > 1.0e-12)
+                ++winding_positive;
+            else if (determinant < -1.0e-12)
+                ++winding_negative;
+            else
+                ++winding_degenerate;
+        };
+        if (topology == NativePortPrimitiveTopology::TriangleList) {
+            for (std::size_t element = 0u; element + 2u < examined_elements;
+                 element += 3u)
+                classify_triangle(element, element + 1u, element + 2u);
+        } else if (topology == NativePortPrimitiveTopology::TriangleStrip) {
+            for (std::size_t element = 0u; element + 2u < examined_elements;
+                 ++element) {
+                if ((element & 1u) == 0u)
+                    classify_triangle(element, element + 1u, element + 2u);
+                else
+                    classify_triangle(element + 1u, element, element + 2u);
+            }
+        }
+
+        const auto determinant3 = [&] {
+            const auto& m = packet.transform.values;
+            return static_cast<double>(m[0u]) *
+                       (static_cast<double>(m[5u]) * m[10u] -
+                        static_cast<double>(m[6u]) * m[9u]) -
+                   static_cast<double>(m[1u]) *
+                       (static_cast<double>(m[4u]) * m[10u] -
+                        static_cast<double>(m[6u]) * m[8u]) +
+                   static_cast<double>(m[2u]) *
+                       (static_cast<double>(m[4u]) * m[9u] -
+                        static_cast<double>(m[5u]) * m[8u]);
+        }();
+        const auto determinant4 = [&] {
+            std::array<std::array<double, 4u>, 4u> matrix{};
+            for (std::size_t row = 0u; row < 4u; ++row)
+                for (std::size_t column = 0u; column < 4u; ++column)
+                    matrix[row][column] =
+                        packet.transform.values[row * 4u + column];
+            double determinant = 1.0;
+            for (std::size_t pivot = 0u; pivot < 4u; ++pivot) {
+                auto selected = pivot;
+                for (std::size_t row = pivot + 1u; row < 4u; ++row)
+                    if (std::abs(matrix[row][pivot]) >
+                        std::abs(matrix[selected][pivot]))
+                        selected = row;
+                if (matrix[selected][pivot] == 0.0) return 0.0;
+                if (selected != pivot) {
+                    std::swap(matrix[selected], matrix[pivot]);
+                    determinant = -determinant;
+                }
+                const auto divisor = matrix[pivot][pivot];
+                determinant *= divisor;
+                for (std::size_t row = pivot + 1u; row < 4u; ++row) {
+                    const auto factor = matrix[row][pivot] / divisor;
+                    for (std::size_t column = pivot + 1u; column < 4u;
+                         ++column)
+                        matrix[row][column] -=
+                            factor * matrix[pivot][column];
+                }
+            }
+            return determinant;
+        }();
+
+        auto& output = drawstream_output_;
+        const auto write_array = [&output](const auto& values) {
+            output << '[';
+            for (std::size_t index = 0u; index < values.size(); ++index) {
+                if (index != 0u) output << ',';
+                output << values[index];
+            }
+            output << ']';
+        };
+        const auto vertex_count = mesh_slot != nullptr
+            ? mesh_slot->vertex_count
+            : vertices.size();
+        const auto index_count = mesh_slot != nullptr
+            ? mesh_slot->index_count
+            : indices.size();
+        output << "{\"schema\":\"katana-native-draw-v1\",\"frame\":"
+               << frame << ",\"draw\":" << drawstream_draws_this_frame_
+               << ",\"vertex_space\":"
+               << static_cast<unsigned>(packet.vertex_space)
+               << ",\"draw_class\":"
+               << static_cast<unsigned>(packet.draw_class)
+               << ",\"interpolation\":"
+               << static_cast<unsigned>(packet.interpolation)
+               << ",\"viewport_target\":"
+               << static_cast<unsigned>(packet.viewport)
+               << ",\"viewport\":[" << viewport.x << ',' << viewport.y
+               << ',' << viewport.width << ',' << viewport.height << ']'
+               << ",\"topology\":" << static_cast<unsigned>(topology)
+               << ",\"vertices\":" << vertex_count
+               << ",\"indices\":" << index_count
+               << ",\"mesh\":" << packet.mesh.value
+               << ",\"texture\":" << packet.texture.value
+               << ",\"geometry_available\":"
+               << (!vertices.empty() ? "true" : "false")
+               << ",\"geometry_truncated\":"
+               << (geometry_truncated ? "true" : "false")
+               << ",\"invalid_clip_positions\":"
+               << invalid_clip_positions
+               << ",\"positive_clip_w\":" << positive_clip_w
+               << ",\"nonpositive_clip_w\":" << nonpositive_clip_w
+               << ",\"winding_positive\":" << winding_positive
+               << ",\"winding_negative\":" << winding_negative
+               << ",\"winding_degenerate\":" << winding_degenerate
+               << ",\"winding_unprojectable\":"
+               << winding_unprojectable;
+        if (bounds_initialized) {
+            output << ",\"submitted_min\":";
+            write_array(submitted_min);
+            output << ",\"submitted_max\":";
+            write_array(submitted_max);
+            output << ",\"clip_min\":";
+            write_array(clip_min);
+            output << ",\"clip_max\":";
+            write_array(clip_max);
+            output << ",\"uv_min\":";
+            write_array(uv_min);
+            output << ",\"uv_max\":";
+            write_array(uv_max);
+            output << ",\"depth_range\":";
+            write_array(depth_range);
+            output << ",\"vertex_alpha_range\":";
+            write_array(alpha_range);
+            output << ",\"vertex_color_min\":";
+            write_array(color_min);
+            output << ",\"vertex_color_max\":";
+            write_array(color_max);
+            output << ",\"secondary_color_min\":";
+            write_array(secondary_min);
+            output << ",\"secondary_color_max\":";
+            write_array(secondary_max);
+            output << ",\"normal_min\":";
+            write_array(normal_min);
+            output << ",\"normal_max\":";
+            write_array(normal_max);
+        }
+        if (projected_bounds_initialized) {
+            output << ",\"ndc_min\":";
+            write_array(ndc_min);
+            output << ",\"ndc_max\":";
+            write_array(ndc_max);
+            output << ",\"pixel_min\":";
+            write_array(pixel_min);
+            output << ",\"pixel_max\":";
+            write_array(pixel_max);
+        }
+        output << ",\"transform_determinant3\":" << determinant3
+               << ",\"transform_determinant4\":" << determinant4
+               << ",\"transform\":";
+        write_array(packet.transform.values);
+        output << ",\"normal_transform\":";
+        write_array(packet.normal_transform.values);
+        output << ",\"state\":{\"cull\":"
+               << static_cast<unsigned>(packet.rasterizer.cull)
+               << ",\"front_ccw\":"
+               << (packet.rasterizer.front_counter_clockwise ? "true"
+                                                              : "false")
+               << ",\"depth_clip\":"
+               << (packet.rasterizer.depth_clip_enabled ? "true" : "false")
+               << ",\"depth_test\":"
+               << (packet.depth.test_enabled ? "true" : "false")
+               << ",\"depth_write\":"
+               << (packet.depth.write_enabled ? "true" : "false")
+               << ",\"depth_compare\":"
+               << static_cast<unsigned>(packet.depth.compare)
+               << ",\"depth_mapping\":"
+               << static_cast<unsigned>(packet.depth_mapping.mode)
+               << ",\"blend\":"
+               << (packet.blend.enabled ? "true" : "false")
+               << ",\"blend_source\":"
+               << static_cast<unsigned>(packet.blend.source_color)
+               << ",\"blend_destination\":"
+               << static_cast<unsigned>(packet.blend.destination_color)
+               << ",\"blend_source_alpha\":"
+               << static_cast<unsigned>(packet.blend.source_alpha)
+               << ",\"blend_destination_alpha\":"
+               << static_cast<unsigned>(packet.blend.destination_alpha)
+               << ",\"blend_color_operation\":"
+               << static_cast<unsigned>(packet.blend.color_operation)
+               << ",\"blend_alpha_operation\":"
+               << static_cast<unsigned>(packet.blend.alpha_operation)
+               << ",\"texture_combine\":"
+               << static_cast<unsigned>(packet.material.texture_combine)
+               << ",\"alpha_test\":"
+               << (packet.alpha_test.enabled ? "true" : "false")
+               << ",\"alpha_mode\":"
+               << static_cast<unsigned>(packet.alpha_test.mode)
+               << ",\"alpha_compare\":"
+               << static_cast<unsigned>(packet.alpha_test.compare)
+               << ",\"alpha_reference\":"
+               << packet.alpha_test.reference
+               << ",\"alpha_reference_8bit\":"
+               << static_cast<unsigned>(packet.alpha_test.reference_8bit)
+               << "}";
+        output << ",\"material\":{\"diffuse\":";
+        write_array(packet.material.diffuse);
+        output << ",\"ambient\":";
+        write_array(packet.material.ambient);
+        output << ",\"specular\":";
+        write_array(packet.material.specular);
+        output << ",\"emission\":";
+        write_array(packet.material.emission);
+        output << ",\"specular_power\":"
+               << packet.material.specular_power
+               << ",\"texture_coordinates\":"
+               << static_cast<unsigned>(packet.material.texture_coordinates)
+               << ",\"use_vertex_color\":"
+               << (packet.material.use_vertex_color ? "true" : "false")
+               << ",\"use_primary_alpha\":"
+               << (packet.material.use_primary_alpha ? "true" : "false")
+               << ",\"use_texture_alpha\":"
+               << (packet.material.use_texture_alpha ? "true" : "false")
+               << ",\"use_secondary_color\":"
+               << (packet.material.use_secondary_color ? "true" : "false")
+               << ",\"lighting_enabled\":"
+               << (packet.material.lighting_enabled ? "true" : "false")
+               << ",\"specular_enabled\":"
+               << (packet.material.specular_enabled ? "true" : "false")
+               << "}";
+        output << ",\"lighting\":{\"ambient\":";
+        write_array(packet.lighting.ambient);
+        output << ",\"light_count\":" << packet.lighting.light_count
+               << ",\"lights\":[";
+        for (std::size_t index = 0u; index < packet.lighting.light_count;
+             ++index) {
+            if (index != 0u) output << ',';
+            output << "{\"direction\":";
+            write_array(packet.lighting.lights[index].direction);
+            output << ",\"color\":";
+            write_array(packet.lighting.lights[index].color);
+            output << '}';
+        }
+        output << "]}";
+        output << ",\"fog\":{\"mode\":"
+               << static_cast<unsigned>(packet.fog.mode)
+               << ",\"color\":";
+        write_array(packet.fog.color);
+        output << ",\"start\":" << packet.fog.start
+               << ",\"end\":" << packet.fog.end
+               << ",\"density\":" << packet.fog.density << "}";
+        output << ",\"color_clamp\":{\"enabled\":"
+               << (packet.color_clamp.enabled ? "true" : "false")
+               << ",\"minimum\":";
+        write_array(packet.color_clamp.minimum);
+        output << ",\"maximum\":";
+        write_array(packet.color_clamp.maximum);
+        output << "}";
+        output << ",\"sampler\":{\"filter\":"
+               << static_cast<unsigned>(packet.sampler.filter)
+               << ",\"address_u\":"
+               << static_cast<unsigned>(packet.sampler.address_u)
+               << ",\"address_v\":"
+               << static_cast<unsigned>(packet.sampler.address_v)
+               << ",\"address_w\":"
+               << static_cast<unsigned>(packet.sampler.address_w)
+               << ",\"mip_lod_bias\":" << packet.sampler.mip_lod_bias
+               << ",\"minimum_lod\":" << packet.sampler.minimum_lod
+               << ",\"maximum_lod\":" << packet.sampler.maximum_lod
+               << ",\"maximum_anisotropy\":"
+               << packet.sampler.maximum_anisotropy << "}";
+        if (packet.texture) {
+            const auto& texture = resolve_texture(packet.texture);
+            output << ",\"texture_state\":{\"format\":"
+                   << static_cast<unsigned>(texture.config.format)
+                   << ",\"width\":" << texture.config.extent.width
+                   << ",\"height\":" << texture.config.extent.height
+                   << ",\"mips\":" << texture.config.mip_levels
+                   << ",\"dynamic\":"
+                   << (texture.config.dynamic ? "true" : "false") << '}';
+        }
+        output << "}\n";
+        if (!output)
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 1u,
+                 "graphics-drawstream-write");
+        ++drawstream_draws_this_frame_;
     }
 
     void capture_completed_frame(const std::uint64_t frame) {
@@ -2997,6 +3849,13 @@ class NativePortGraphicsDevice::Impl final {
         std::numeric_limits<std::uint64_t>::max();
     std::uint64_t capture_interval_ = 60u;
     bool capture_enabled_ = false;
+    std::ofstream drawstream_output_;
+    std::uint64_t drawstream_frame_ = 0u;
+    std::uint64_t drawstream_end_frame_ = 0u;
+    std::uint64_t drawstream_maximum_draws_per_frame_ = 0u;
+    std::uint64_t drawstream_draws_this_frame_ = 0u;
+    bool drawstream_truncation_reported_ = false;
+    bool drawstream_enabled_ = false;
     std::uint64_t texture_bytes_ = 0u;
     std::uint64_t mesh_bytes_ = 0u;
     std::uint32_t live_textures_ = 0u;
@@ -3445,6 +4304,8 @@ cbuffer DrawConstants : register(b0) {
     float4 material_emission;
     float4 scene_ambient;
     float4 fog_color;
+    float4 color_clamp_minimum;
+    float4 color_clamp_maximum;
     float4 light_directions[4];
     float4 light_colors[4];
     float4 fog_parameters;
@@ -3459,6 +4320,7 @@ cbuffer FogTableConstants : register(b1) {
 
 struct DrawVertexInput {
     float3 position : POSITION;
+    float position_w : POSITION1;
     float2 texcoord : TEXCOORD0;
     float4 color : COLOR0;
     float3 normal : NORMAL0;
@@ -3470,17 +4332,26 @@ struct DrawVertexInput {
 struct DrawVertexOutput {
     float4 position : SV_Position;
     float2 texcoord : TEXCOORD0;
-    noperspective float4 color : COLOR0;
+    float4 color : COLOR0;
     float3 normal : NORMAL0;
-    noperspective float4 secondary_color : COLOR1;
-    noperspective float fog_coordinate : TEXCOORD1;
+    float4 secondary_color : COLOR1;
+    float fog_coordinate : TEXCOORD1;
     noperspective float depth_coordinate : TEXCOORD2;
     noperspective float2 reciprocal_texcoord : TEXCOORD3;
+    noperspective float4 pvr_screen_color : TEXCOORD4;
+    noperspective float4 pvr_screen_secondary_color : TEXCOORD5;
+    noperspective float pvr_screen_fog_coordinate : TEXCOORD6;
 };
 
 DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     DrawVertexOutput output;
-    output.position = mul(float4(input.position, 1.0), draw_transform);
+    const bool clip_homogeneous =
+        (pipeline_flags.x & 0x80000u) != 0u;
+    const float4 source_position = float4(
+        input.position, clip_homogeneous ? input.position_w : 1.0);
+    output.position = clip_homogeneous
+        ? source_position
+        : mul(source_position, draw_transform);
     if ((pipeline_flags.x & 0x20u) != 0u &&
         (pipeline_flags.x & 0x10000u) == 0u)
         output.position.z = 0.0;
@@ -3498,10 +4369,16 @@ DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     // homogeneous geometry and pretransformed UI share the same reciprocal
     // depth domain on every backend.
     output.depth_coordinate = (pipeline_flags.x & 0x10000u) != 0u
-        ? rcp(max(output.position.w, 1.0e-20))
+        ? rcp(output.position.w)
         : input.depth_coordinate;
     output.reciprocal_texcoord =
         output.texcoord * input.depth_coordinate;
+    const float pvr_screen_weight = input.depth_coordinate;
+    output.pvr_screen_color = input.color * pvr_screen_weight;
+    output.pvr_screen_secondary_color =
+        input.secondary_color * pvr_screen_weight;
+    output.pvr_screen_fog_coordinate =
+        input.fog_coordinate * pvr_screen_weight;
     return output;
 }
 
@@ -3551,7 +4428,18 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
     const bool screen_space_reciprocal =
         (flags & 0x20u) != 0u && !homogeneous_reciprocal_clip;
-    const float reciprocal_coordinate = max(input.depth_coordinate, 0.0);
+    const float reciprocal_coordinate = input.depth_coordinate;
+    const bool pvr_screen_gouraud = (flags & 0x40000u) != 0u;
+    const float pvr_screen_weight = input.depth_coordinate;
+    const float4 interpolated_color = pvr_screen_gouraud
+        ? input.pvr_screen_color / pvr_screen_weight
+        : input.color;
+    const float4 interpolated_secondary_color = pvr_screen_gouraud
+        ? input.pvr_screen_secondary_color / pvr_screen_weight
+        : input.secondary_color;
+    const float interpolated_fog_coordinate = pvr_screen_gouraud
+        ? input.pvr_screen_fog_coordinate / pvr_screen_weight
+        : input.fog_coordinate;
     const bool vertex_color_enabled = (flags & 0x01u) != 0u;
     const bool secondary_color_enabled = (flags & 0x02u) != 0u;
     const bool lighting_enabled = (flags & 0x04u) != 0u;
@@ -3584,14 +4472,14 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
         primary.rgb = material_diffuse.rgb * diffuse_light;
         post_color += specular_light;
     }
-    if (vertex_color_enabled) primary *= input.color;
+    if (vertex_color_enabled) primary *= interpolated_color;
     if (!primary_alpha_enabled) primary.a = 1.0;
 
     if (pipeline_flags.z == 6u) {
         const float primary_fog = lookup_table_fog(
             homogeneous_reciprocal_clip
                 ? reciprocal_coordinate
-                : input.fog_coordinate,
+                : interpolated_fog_coordinate,
             fog_parameters.z);
         primary = float4(fog_color.rgb, primary_fog);
     }
@@ -3620,43 +4508,54 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     }
     result.rgb += post_color;
     if (secondary_color_enabled)
-        result.rgb = saturate(result.rgb + input.secondary_color.rgb);
-
-    const uint alpha_test = pipeline_flags.w;
-    if ((alpha_test & 0x100u) != 0u &&
-        !alpha_test_passes(result.a, alpha_test & 0xffu,
-                           material_parameters.y))
-        discard;
+        result.rgb += interpolated_secondary_color.rgb;
+    if ((flags & 0x100000u) != 0u)
+        result = clamp(result, color_clamp_minimum, color_clamp_maximum);
 
     float fog_amount = 0.0;
     if (pipeline_flags.z == 1u) {
-        fog_amount = saturate(input.fog_coordinate);
+        fog_amount = saturate(interpolated_fog_coordinate);
     } else if (pipeline_flags.z == 2u) {
         fog_amount = saturate(
-            (input.fog_coordinate - fog_parameters.x) /
+            (interpolated_fog_coordinate - fog_parameters.x) /
             (fog_parameters.y - fog_parameters.x));
     } else if (pipeline_flags.z == 3u) {
         fog_amount = saturate(
-            1.0 - exp(-fog_parameters.z * input.fog_coordinate));
+            1.0 - exp(-fog_parameters.z * interpolated_fog_coordinate));
     } else if (pipeline_flags.z == 4u) {
         const float fog_distance =
-            fog_parameters.z * input.fog_coordinate;
+            fog_parameters.z * interpolated_fog_coordinate;
         fog_amount = saturate(1.0 - exp(-(fog_distance * fog_distance)));
     } else if (pipeline_flags.z == 5u) {
         fog_amount = lookup_table_fog(
             homogeneous_reciprocal_clip
                 ? reciprocal_coordinate
-                : input.fog_coordinate,
+                : interpolated_fog_coordinate,
             fog_parameters.z);
     }
     result.rgb = lerp(result.rgb, fog_color.rgb, fog_amount);
+
+    const uint alpha_test = pipeline_flags.w;
+    if ((alpha_test & 0x100u) != 0u) {
+        if ((alpha_test & 0x200u) != 0u) {
+            const float alpha_8bit = round(result.a * 255.0);
+            const float reference_8bit =
+                (float)((alpha_test >> 16u) & 0xffu);
+            if (alpha_8bit < reference_8bit) discard;
+            result.a = 1.0;
+        } else if (!alpha_test_passes(
+                       result.a, alpha_test & 0xffu,
+                       material_parameters.y)) {
+            discard;
+        }
+    }
     DrawPixelOutput output;
     output.color = result;
     output.depth = input.position.z;
     if ((flags & 0x20u) != 0u) {
-        output.depth = saturate(
+        output.depth =
             log2(1.0 + depth_parameters.x * reciprocal_coordinate) /
-            depth_parameters.y);
+            depth_parameters.y;
     }
     return output;
 }
