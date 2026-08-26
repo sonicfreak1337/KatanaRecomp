@@ -12,7 +12,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_graphics_contract_version = 11u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 12u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -335,16 +335,93 @@ enum class NativePortDrawLogicalUse : std::uint8_t {
     Presentation,
 };
 
+// Optional, bounded causal metadata for graphics bring-up.  Adapters expose
+// opaque identities rather than guest addresses; the renderer records these
+// values but never uses them for admission or resource lookup.
+enum class NativePortDrawOriginKind : std::uint8_t {
+    Unspecified,
+    Immediate,
+    ModelMesh,
+    Sprite,
+    Font,
+    Movie,
+    Presentation,
+};
+
+enum class NativePortDrawIntent : std::uint8_t {
+    Unspecified,
+    SceneObject,
+    Shadow,
+    Interface,
+    Font,
+    Movie,
+    Presentation,
+};
+
+enum class NativePortTextureResolverKind : std::uint8_t {
+    Unspecified,
+    NativeDescriptor,
+    DynamicSurface,
+    CachedArchive,
+    ExactArchiveNames,
+    ExactArchiveLayouts,
+    PartialArchive,
+    Checkpoint,
+    RegisteredTexture,
+    IdentityBoundOverride,
+};
+
+enum class NativePortTextureBindingWriterKind : std::uint8_t {
+    Unspecified,
+    TextureListBind,
+    TextureNumberSelect,
+    RegisteredTextureSelect,
+    IdentityBoundOverride,
+};
+
+struct NativePortTextureBindingDiagnostics final {
+    // Opaque adapter-local identities.  They are intentionally not lookup
+    // keys and must not encode a public title address contract.
+    std::uint64_t texture_list_identity = 0u;
+    std::uint64_t texture_list_epoch = 0u;
+    std::uint64_t last_writer_identity = 0u;
+    std::uint64_t last_writer_sequence = 0u;
+    std::uint64_t expected_asset_identity = 0u;
+    std::uint64_t resolved_asset_identity = 0u;
+    std::uint32_t texture_list_count = 0u;
+    NativePortTextureResolverKind resolver =
+        NativePortTextureResolverKind::Unspecified;
+    NativePortTextureBindingWriterKind last_writer =
+        NativePortTextureBindingWriterKind::Unspecified;
+    bool texture_list_bound = false;
+    bool texture_list_epoch_bound = false;
+    bool last_writer_bound = false;
+    bool expected_asset_bound = false;
+    bool resolved_asset_bound = false;
+};
+
 // Numeric, bounded capture metadata only.  These values never participate in
 // graphics admission or resource lookup and therefore cannot turn a title
 // address into a public-core identity.
 struct NativePortDrawDiagnostics final {
     std::uint64_t material_identity = 0u;
+    std::uint64_t origin_identity = 0u;
+    std::uint64_t model_identity = 0u;
     std::uint32_t texture_list_index = 0u;
+    std::uint32_t mesh_index = 0u;
+    std::uint32_t primitive_index = 0u;
     NativePortDrawLogicalUse logical_use =
         NativePortDrawLogicalUse::Unspecified;
+    NativePortDrawOriginKind origin = NativePortDrawOriginKind::Unspecified;
+    NativePortDrawIntent intent = NativePortDrawIntent::Unspecified;
+    NativePortTextureBindingDiagnostics texture_binding;
+    bool enabled = false;
     bool material_identity_bound = false;
+    bool origin_identity_bound = false;
+    bool model_identity_bound = false;
     bool texture_list_index_bound = false;
+    bool mesh_index_bound = false;
+    bool primitive_index_bound = false;
 };
 
 enum class NativePortInterpolationMode : std::uint8_t {
@@ -663,6 +740,13 @@ struct NativePortFrameConfig final {
         NativePortDepthBufferConvention::Forward;
 };
 
+enum class NativePortGraphicsDiagnosticMode : std::uint8_t {
+    Off,
+    Digest,
+    Breadcrumbs,
+    ArmedCapture,
+};
+
 struct NativePortGraphicsSnapshot final {
     std::uint64_t begun_frames = 0u;
     std::uint64_t presented_frames = 0u;
@@ -674,9 +758,14 @@ struct NativePortGraphicsSnapshot final {
     std::uint64_t persistent_mesh_draw_calls = 0u;
     std::uint64_t swap_chain_resizes = 0u;
     std::uint64_t persistent_mesh_bytes = 0u;
+    std::uint64_t diagnostic_digest = 0u;
+    std::uint64_t diagnostic_draws = 0u;
+    std::uint64_t diagnostic_drops = 0u;
     std::uint32_t live_textures = 0u;
     std::uint32_t live_meshes = 0u;
     std::uint32_t platform_error_code = 0u;
+    NativePortGraphicsDiagnosticMode diagnostic_mode =
+        NativePortGraphicsDiagnosticMode::Off;
     bool hardware_accelerated = false;
     bool frame_open = false;
     bool occluded = false;

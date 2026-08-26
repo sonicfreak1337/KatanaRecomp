@@ -170,9 +170,19 @@ Task implementieren
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
 - Jeder Bring-up-Zyklus enthaelt genau eine kleine, reviewbare echte
-  Performanceverbesserung im ohnehin betroffenen Produktpfad. Sie darf weder
-  Proof-Gates lockern noch einen Zusatzbuild oder eine reine Messrunde
-  erzwingen; beobachtet wird sie im ohnehin notwendigen Build und Replay.
+  Performanceverbesserung. Sie darf im Runtime-, Analyzer-, Export-, Codegen-
+  oder Buildpfad liegen und soll die inkrementelle Schleife langfristig auf
+  Sekunden statt Minuten bringen. Sie darf weder Proof-Gates lockern noch
+  einen Zusatzbuild oder eine reine Messrunde erzwingen; beobachtet wird sie
+  im ohnehin notwendigen Build und Replay.
+- Grafikdiagnostik ist standardmaessig `Off`. `Digest` darf nur feste
+  Integer-Mixes ausfuehren; `Breadcrumbs` schreibt vorallokierte numerische
+  Records ohne Hotpath-I/O; `ArmedCapture` ist auf ein kurzes Frameintervall
+  begrenzt. Strings, JSON, Screenshots, Payload-Hashes, zweite
+  Geometriepassagen und synchroner GPU-Readback gehoeren nicht in den
+  permanenten Draw-Hotpath. Binding-Provenienz (Texlist, Resolver, Epoch,
+  Last Writer) und Resource-Provenienz (Content-SHA, Generation, Archivslot)
+  bleiben getrennt und werden erst offline menschenlesbar dekodiert.
 
 ## Unveraenderte Produktgrenzen
 

@@ -145,6 +145,13 @@ Tasks entstehen aus der ersten reproduzierbaren Divergenz, einem exakten
 Contract-Stop oder einem Witness, nicht automatisch aus der gesamten offenen
 Analyzer-Frontier.
 
+Jeder Zyklus liefert ausserdem genau eine kleine, isoliert reviewbare
+Performanceverbesserung. Der Engpass darf in Runtime, Analyzer, Export,
+Codegen oder Build liegen; bevorzugt wird jeweils der teuerste Pfad, den der
+ohnehin notwendige Zyklus real ausfuehrt. Dafuer gibt es keinen Zusatzbuild
+und keine reine Messrunde. Proof-Gates und Fail-closed-Semantik bleiben
+unveraendert; die Wirkung wird im regulaeren End-to-End-Lauf mitbeobachtet.
+
 Replays sind stille, unsichtbare, native Produktlaeufe. Redundante Szenarien,
 die denselben frueheren Checkpoint langsamer erreichen, gehoeren nicht in den
 Standardgurt. Die Suite misst mindestens:
@@ -154,6 +161,62 @@ Standardgurt. Die Suite misst mindestens:
 - neue oder bekannte Crash-/Stop-Signatur;
 - Laufzeit sowie die Identitaeten aller verwendeten Artefakte;
 - ob eine AOT-Luecke die Rueckkehr in die grosse Schleife erzwingt.
+
+### Billige Grafikdiagnostik
+
+Der Renderer startet immer im Modus `Off`. Fuer die schrittweise Eingrenzung
+einer Grafikabweichung stehen vier explizite Modi zur Verfuegung:
+
+```text
+KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_MODE=off
+KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_MODE=digest
+KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_MODE=breadcrumbs
+KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_MODE=armed-capture
+```
+
+`Digest` fuehrt pro Draw nur feste Integer-Mixes aus und publiziert den
+laufenden Wert im `NativePortGraphicsSnapshot`. `Breadcrumbs` und
+`ArmedCapture` benoetigen
+`KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_DIRECTORY`; ihre vorallokierte Ringgroesse
+wird optional mit `KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_CAPACITY` begrenzt.
+Breadcrumbs enthalten ausschliesslich numerische Origin-, Intent-, Modell-,
+Material-, Texlist-, Resolver-, Epoch-, Last-Writer- und Resource-Provenienz.
+Der Ring wartet bei Ueberlauf nicht, sondern ueberschreibt den aeltesten Record
+und zaehlt den Drop.
+
+Nur `ArmedCapture` aktiviert zusaetzlich den vorhandenen schweren Drawstream
+fuer maximal drei ausgewaehlte Frames. Start, Ende, Intervall und Drawbudget
+werden mit den bestehenden `KATANA_NATIVE_GRAPHICS_CAPTURE_*`-Variablen
+gesetzt. Das allein aktiviert keine Screenshots und keinen GPU-Readback; der
+alte Screenshotpfad benoetigt weiterhin explizit sein eigenes Capture-
+Verzeichnis. Der Binaerring wird nach dem Lauf offline dekodiert:
+
+```powershell
+python tools/decode-native-graphics-breadcrumbs.py `
+  <diagnostics>\graphics-breadcrumbs-v1.bin `
+  --output <diagnostics>\graphics-breadcrumbs-v1.jsonl
+```
+
+Der stille Sechs-Routen-Runner kann denselben Modus pro Zyklus direkt und
+pro Route getrennt aktivieren, ohne Fenster, Audioausgabe oder Screenshots:
+
+```powershell
+private\logs\run-background-replays.ps1 `
+  -Exe <port>\game.exe `
+  -Revision rNNN `
+  -GraphicsDiagnosticsMode breadcrumbs `
+  -GraphicsDiagnosticsCapacity 32768
+```
+
+`off` bleibt der Default. `armed-capture` gilt als schwere Telemetrie und
+wird nur fuer einen eng begrenzten, vorher begruendeten Drawstream-Lauf
+verwendet; fuer die regulaere Replay-Matrix genuegen `digest` oder
+`breadcrumbs`.
+
+Die Texture-Binding-Provenienz des Titeladapters und die vom Renderer
+validierte Texture-Resource-Provenienz sind absichtlich getrennt. Ein Runtime-
+Handle oder ein beobachteter Texlist-Index darf dadurch weder eine
+Archive-Identitaet erfinden noch ein statisches Proof-Gate schliessen.
 
 ## Evidence-Zustandsmodell
 

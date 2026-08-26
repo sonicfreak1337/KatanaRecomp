@@ -40,6 +40,15 @@ constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
 constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
 constexpr std::uint32_t minimum_dynamic_vertex_buffer_bytes = 1u << 20u;
 constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
+constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
+
+[[nodiscard]] constexpr std::uint64_t mix_graphics_digest(
+    std::uint64_t digest,
+    const std::uint64_t value) noexcept {
+    digest ^= value + 0x9E3779B97F4A7C15ull + (digest << 6u) +
+        (digest >> 2u);
+    return std::rotl(digest, 27) * 0x94D049BB133111EBull;
+}
 
 [[nodiscard]] bool background_test_mode_requested() noexcept {
     static const bool requested = [] {
@@ -206,6 +215,102 @@ template <std::size_t Size>
            use == NativePortDrawLogicalUse::Interface ||
            use == NativePortDrawLogicalUse::Font ||
            use == NativePortDrawLogicalUse::Presentation;
+}
+
+[[nodiscard]] bool valid_draw_origin_kind(
+    const NativePortDrawOriginKind origin) noexcept {
+    return origin == NativePortDrawOriginKind::Unspecified ||
+           origin == NativePortDrawOriginKind::Immediate ||
+           origin == NativePortDrawOriginKind::ModelMesh ||
+           origin == NativePortDrawOriginKind::Sprite ||
+           origin == NativePortDrawOriginKind::Font ||
+           origin == NativePortDrawOriginKind::Movie ||
+           origin == NativePortDrawOriginKind::Presentation;
+}
+
+[[nodiscard]] bool valid_draw_intent(
+    const NativePortDrawIntent intent) noexcept {
+    return intent == NativePortDrawIntent::Unspecified ||
+           intent == NativePortDrawIntent::SceneObject ||
+           intent == NativePortDrawIntent::Shadow ||
+           intent == NativePortDrawIntent::Interface ||
+           intent == NativePortDrawIntent::Font ||
+           intent == NativePortDrawIntent::Movie ||
+           intent == NativePortDrawIntent::Presentation;
+}
+
+[[nodiscard]] bool valid_texture_resolver_kind(
+    const NativePortTextureResolverKind resolver) noexcept {
+    return resolver == NativePortTextureResolverKind::Unspecified ||
+           resolver == NativePortTextureResolverKind::NativeDescriptor ||
+           resolver == NativePortTextureResolverKind::DynamicSurface ||
+           resolver == NativePortTextureResolverKind::CachedArchive ||
+           resolver == NativePortTextureResolverKind::ExactArchiveNames ||
+           resolver == NativePortTextureResolverKind::ExactArchiveLayouts ||
+           resolver == NativePortTextureResolverKind::PartialArchive ||
+           resolver == NativePortTextureResolverKind::Checkpoint ||
+           resolver == NativePortTextureResolverKind::RegisteredTexture ||
+           resolver == NativePortTextureResolverKind::IdentityBoundOverride;
+}
+
+[[nodiscard]] bool valid_texture_writer_kind(
+    const NativePortTextureBindingWriterKind writer) noexcept {
+    return writer == NativePortTextureBindingWriterKind::Unspecified ||
+           writer == NativePortTextureBindingWriterKind::TextureListBind ||
+           writer ==
+               NativePortTextureBindingWriterKind::TextureNumberSelect ||
+           writer ==
+               NativePortTextureBindingWriterKind::RegisteredTextureSelect ||
+           writer ==
+               NativePortTextureBindingWriterKind::IdentityBoundOverride;
+}
+
+[[nodiscard]] bool valid_draw_diagnostics(
+    const NativePortDrawDiagnostics& diagnostics) noexcept {
+    if (!diagnostics.enabled) return true;
+    const auto& binding = diagnostics.texture_binding;
+    if (!valid_draw_logical_use(diagnostics.logical_use) ||
+        !valid_draw_origin_kind(diagnostics.origin) ||
+        !valid_draw_intent(diagnostics.intent) ||
+        !valid_texture_resolver_kind(binding.resolver) ||
+        !valid_texture_writer_kind(binding.last_writer) ||
+        diagnostics.material_identity_bound !=
+            (diagnostics.material_identity != 0u) ||
+        diagnostics.origin_identity_bound !=
+            (diagnostics.origin_identity != 0u) ||
+        diagnostics.model_identity_bound !=
+            (diagnostics.model_identity != 0u) ||
+        (!diagnostics.texture_list_index_bound &&
+         diagnostics.texture_list_index != 0u) ||
+        (!diagnostics.mesh_index_bound && diagnostics.mesh_index != 0u) ||
+        (!diagnostics.primitive_index_bound &&
+         diagnostics.primitive_index != 0u) ||
+        binding.last_writer_bound !=
+            (binding.last_writer_identity != 0u &&
+             binding.last_writer_sequence != 0u &&
+             binding.last_writer !=
+                 NativePortTextureBindingWriterKind::Unspecified) ||
+        binding.expected_asset_bound !=
+            (binding.expected_asset_identity != 0u) ||
+        binding.resolved_asset_bound !=
+            (binding.resolved_asset_identity != 0u))
+        return false;
+    if (!binding.texture_list_bound &&
+        (binding.texture_list_identity != 0u ||
+         binding.texture_list_count != 0u))
+        return false;
+    if (binding.texture_list_bound &&
+        (binding.texture_list_identity == 0u ||
+         binding.texture_list_count == 0u))
+        return false;
+    if (binding.texture_list_epoch_bound !=
+        (binding.texture_list_bound && binding.texture_list_epoch != 0u))
+        return false;
+    if (binding.texture_list_bound &&
+        diagnostics.texture_list_index_bound &&
+        diagnostics.texture_list_index >= binding.texture_list_count)
+        return false;
+    return true;
 }
 
 [[nodiscard]] bool valid_interpolation(
@@ -871,6 +976,59 @@ class NativePortGraphicsDevice::Impl final {
         bool applied = false;
     };
 
+    struct GraphicsBreadcrumbRecord final {
+        std::uint64_t frame = 0u;
+        std::uint64_t draw = 0u;
+        std::uint64_t batch_identity = 0u;
+        std::uint64_t global_digest = 0u;
+        std::uint64_t frame_digest = 0u;
+        std::uint64_t layer_digest = 0u;
+        std::uint64_t material_identity = 0u;
+        std::uint64_t origin_identity = 0u;
+        std::uint64_t model_identity = 0u;
+        std::uint64_t texture_handle = 0u;
+        std::uint64_t texture_list_identity = 0u;
+        std::uint64_t texture_list_epoch = 0u;
+        std::uint64_t last_writer_identity = 0u;
+        std::uint64_t last_writer_sequence = 0u;
+        std::uint64_t expected_asset_identity = 0u;
+        std::uint64_t resolved_asset_identity = 0u;
+        std::uint64_t texture_generation = 0u;
+        std::array<std::uint8_t, 32u> texture_content_sha256{};
+        std::uint32_t texture_archive_ordinal = 0u;
+        std::uint32_t texture_global_index = 0u;
+        std::uint32_t texture_list_index = 0u;
+        std::uint32_t texture_list_count = 0u;
+        std::uint32_t mesh_index = 0u;
+        std::uint32_t primitive_index = 0u;
+        std::uint32_t submission_order = 0u;
+        std::uint32_t flags = 0u;
+        std::uint8_t batch_semantic = 0u;
+        std::uint8_t draw_class = 0u;
+        std::uint8_t logical_use = 0u;
+        std::uint8_t origin = 0u;
+        std::uint8_t intent = 0u;
+        std::uint8_t resolver = 0u;
+        std::uint8_t last_writer = 0u;
+        std::uint8_t reserved = 0u;
+    };
+
+    struct GraphicsBreadcrumbFileHeader final {
+        std::array<char, 8u> magic{'K', 'A', 'T', 'G', 'F', 'X', 'B', '1'};
+        std::uint32_t schema_version = 1u;
+        std::uint32_t header_size = sizeof(GraphicsBreadcrumbFileHeader);
+        std::uint32_t record_size = sizeof(GraphicsBreadcrumbRecord);
+        std::uint32_t mode = 0u;
+        std::uint64_t capacity = 0u;
+        std::uint64_t record_count = 0u;
+        std::uint64_t first_record = 0u;
+        std::uint64_t dropped_records = 0u;
+        std::uint64_t final_digest = 0u;
+    };
+
+    static_assert(sizeof(GraphicsBreadcrumbRecord) == 208u);
+    static_assert(sizeof(GraphicsBreadcrumbFileHeader) == 64u);
+
     struct MeshSlot final {
         ComPtr<ID3D11Buffer> vertex_buffer;
         ComPtr<ID3D11Buffer> index_buffer;
@@ -896,6 +1054,7 @@ class NativePortGraphicsDevice::Impl final {
         config_.title = title_storage_;
         validate_graphics_config(config_);
         initialize_frame_capture();
+        initialize_graphics_diagnostics();
         create_window();
         try {
             create_device();
@@ -911,6 +1070,7 @@ class NativePortGraphicsDevice::Impl final {
 
     ~Impl() noexcept {
         if (std::this_thread::get_id() != owner_thread_) std::terminate();
+        flush_graphics_breadcrumbs();
         if (context_) {
             context_->ClearState();
             context_->Flush();
@@ -1310,6 +1470,8 @@ class NativePortGraphicsDevice::Impl final {
         frame_batch_depth_mode_ = NativePortDepthCoordinateMode::ClipSpace;
         frame_batch_phase_ = NativePortDrawClass::Opaque;
         frame_batch_submission_order_ = 0u;
+        graphics_frame_digest_ = graphics_digest_seed ^
+            (snapshot_.presented_frames + 1u);
         frame_open_ = true;
         saturating_increment(snapshot_.begun_frames);
     }
@@ -1322,6 +1484,9 @@ class NativePortGraphicsDevice::Impl final {
                                     ? &resolve_mesh(packet.mesh)
                                     : nullptr;
         validate_draw(packet, mesh_slot);
+        const auto* const texture_slot = packet.texture
+            ? &resolve_texture(packet.texture)
+            : nullptr;
         validate_draw_batch_sequence(packet);
 
         auto vertices = packet.vertices;
@@ -1368,11 +1533,14 @@ class NativePortGraphicsDevice::Impl final {
                     packet.viewport == NativePortViewportTarget::Ui
                         ? current_layout.ui_viewport
                         : current_layout.game_viewport;
+                record_graphics_diagnostic(
+                    packet, texture_slot, false, true);
                 capture_drawstream(packet,
                                    source_vertices,
                                    source_indices,
                                    source_topology,
                                    viewport_rect,
+                                   texture_slot,
                                    nullptr,
                                    &preprocess_stats,
                                    false,
@@ -1542,11 +1710,13 @@ class NativePortGraphicsDevice::Impl final {
             packet.viewport == NativePortViewportTarget::Ui
                 ? current_layout.ui_viewport
                 : current_layout.game_viewport;
+        record_graphics_diagnostic(packet, texture_slot, true, false);
         capture_drawstream(packet,
                            vertices,
                            indices,
                            topology,
                            viewport_rect,
+                           texture_slot,
                            mesh_slot,
                            mesh_slot == nullptr ? &preprocess_stats : nullptr,
                            true,
@@ -1630,8 +1800,8 @@ class NativePortGraphicsDevice::Impl final {
             bound_sampler_ = sampler;
             bound_sampler_valid_ = true;
         }
-        auto* view = packet.texture ? resolve_texture(packet.texture).view.Get()
-                                    : white_view_.Get();
+        auto* view = texture_slot != nullptr ? texture_slot->view.Get()
+                                             : white_view_.Get();
         if (!bound_shader_resource_valid_ ||
             bound_shader_resource_ != view) {
             context_->PSSetShaderResources(0u, 1u, &view);
@@ -2644,11 +2814,7 @@ class NativePortGraphicsDevice::Impl final {
             !valid_draw_batch_class(packet.batch.semantic) ||
             packet.batch.identity == 0u ||
             !valid_translucency_policy(packet.translucency) ||
-            !valid_draw_logical_use(packet.diagnostics.logical_use) ||
-            (packet.diagnostics.material_identity_bound !=
-             (packet.diagnostics.material_identity != 0u)) ||
-            (!packet.diagnostics.texture_list_index_bound &&
-             packet.diagnostics.texture_list_index != 0u) ||
+            !valid_draw_diagnostics(packet.diagnostics) ||
             !valid_interpolation(packet.interpolation) ||
             !valid_topology(packet.topology) ||
             !valid_blend(packet.blend) || !valid_depth(packet.depth) ||
@@ -2690,7 +2856,6 @@ class NativePortGraphicsDevice::Impl final {
                      0u,
                      "draw-mesh-contract");
         }
-        if (packet.texture) static_cast<void>(resolve_texture(packet.texture));
     }
 
     void validate_draw_batch_sequence(const NativePortDrawPacket& packet) {
@@ -3255,7 +3420,296 @@ class NativePortGraphicsDevice::Impl final {
                     NativePortGraphicsFailure::InvalidConfig,
                     1u,
                     "graphics-drawstream-maximum-draws");
+            drawstream_directory_ = capture_directory_;
             drawstream_enabled_ = true;
+        }
+    }
+
+    void initialize_graphics_diagnostics() {
+        const auto requested = environment_value(
+            L"KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_MODE");
+        if (requested.empty() || requested == L"off") {
+            graphics_diagnostic_mode_ = NativePortGraphicsDiagnosticMode::Off;
+            snapshot_.diagnostic_mode = graphics_diagnostic_mode_;
+            return;
+        }
+        if (requested == L"digest")
+            graphics_diagnostic_mode_ =
+                NativePortGraphicsDiagnosticMode::Digest;
+        else if (requested == L"breadcrumbs")
+            graphics_diagnostic_mode_ =
+                NativePortGraphicsDiagnosticMode::Breadcrumbs;
+        else if (requested == L"armed-capture")
+            graphics_diagnostic_mode_ =
+                NativePortGraphicsDiagnosticMode::ArmedCapture;
+        else
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-diagnostics-mode");
+
+        snapshot_.diagnostic_mode = graphics_diagnostic_mode_;
+        graphics_digest_ = graphics_digest_seed;
+        snapshot_.diagnostic_digest = graphics_digest_;
+        if (graphics_diagnostic_mode_ ==
+            NativePortGraphicsDiagnosticMode::Digest)
+            return;
+
+        const auto directory = environment_value(
+            L"KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_DIRECTORY");
+        if (directory.empty())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-diagnostics-directory");
+        graphics_diagnostic_directory_ = std::filesystem::path(directory);
+        std::error_code error;
+        std::filesystem::create_directories(
+            graphics_diagnostic_directory_, error);
+        if (error)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::ResourceCreation,
+                static_cast<std::uint32_t>(error.value()),
+                "graphics-diagnostics-directory");
+
+        constexpr std::uint64_t maximum_breadcrumb_capacity = 262'144u;
+        const auto capacity = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_DIAGNOSTICS_CAPACITY",
+            32'768u,
+            "graphics-diagnostics-capacity");
+        if (capacity == 0u || capacity > maximum_breadcrumb_capacity)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-diagnostics-capacity");
+        graphics_breadcrumbs_.resize(static_cast<std::size_t>(capacity));
+
+        if (graphics_diagnostic_mode_ !=
+            NativePortGraphicsDiagnosticMode::ArmedCapture)
+            return;
+
+        capture_start_frame_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME",
+            1u,
+            "graphics-capture-start");
+        capture_end_frame_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME",
+            std::numeric_limits<std::uint64_t>::max(),
+            "graphics-capture-end");
+        capture_interval_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL",
+            60u,
+            "graphics-capture-interval");
+        if (capture_start_frame_ == 0u || capture_interval_ == 0u ||
+            capture_interval_ > 1'000'000u ||
+            capture_end_frame_ < capture_start_frame_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-capture-range");
+        constexpr std::uint64_t maximum_drawstream_frame_span = 3u;
+        const auto maximum_bounded_end =
+            capture_start_frame_ >
+                    std::numeric_limits<std::uint64_t>::max() -
+                        (maximum_drawstream_frame_span - 1u)
+                ? std::numeric_limits<std::uint64_t>::max()
+                : capture_start_frame_ + maximum_drawstream_frame_span - 1u;
+        drawstream_end_frame_ =
+            std::min(capture_end_frame_, maximum_bounded_end);
+        drawstream_maximum_draws_per_frame_ = environment_unsigned(
+            L"KATANA_NATIVE_GRAPHICS_CAPTURE_DRAWSTREAM_MAX_DRAWS",
+            1'024u,
+            "graphics-drawstream-maximum-draws");
+        if (drawstream_maximum_draws_per_frame_ == 0u ||
+            drawstream_maximum_draws_per_frame_ > 16'384u)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig,
+                1u,
+                "graphics-drawstream-maximum-draws");
+        drawstream_directory_ = graphics_diagnostic_directory_;
+        drawstream_enabled_ = true;
+    }
+
+    void record_graphics_diagnostic(
+        const NativePortDrawPacket& packet,
+        const TextureSlot* const texture,
+        const bool geometry_available,
+        const bool rejected) noexcept {
+        if (graphics_diagnostic_mode_ ==
+            NativePortGraphicsDiagnosticMode::Off)
+            return;
+
+        const auto frame = snapshot_.begun_frames;
+        const auto draw = snapshot_.diagnostic_draws + 1u;
+        const auto& diagnostics = packet.diagnostics;
+        const auto& binding = diagnostics.texture_binding;
+        std::uint32_t record_flags = 0u;
+        if (geometry_available) record_flags |= 1u << 0u;
+        if (rejected) record_flags |= 1u << 1u;
+        if (diagnostics.material_identity_bound) record_flags |= 1u << 2u;
+        if (diagnostics.origin_identity_bound) record_flags |= 1u << 3u;
+        if (diagnostics.model_identity_bound) record_flags |= 1u << 4u;
+        if (diagnostics.texture_list_index_bound) record_flags |= 1u << 5u;
+        if (binding.texture_list_bound) record_flags |= 1u << 6u;
+        if (binding.last_writer_bound) record_flags |= 1u << 7u;
+        if (binding.expected_asset_bound) record_flags |= 1u << 8u;
+        if (binding.resolved_asset_bound) record_flags |= 1u << 9u;
+        if (texture != nullptr &&
+            texture->config.provenance.content_identity_bound)
+            record_flags |= 1u << 10u;
+        if (texture != nullptr &&
+            texture->config.provenance.global_index_bound)
+            record_flags |= 1u << 11u;
+        if (binding.texture_list_epoch_bound) record_flags |= 1u << 12u;
+        if (diagnostics.enabled) record_flags |= 1u << 13u;
+        auto digest = graphics_digest_;
+        auto frame_digest = graphics_frame_digest_;
+        const auto mix = [&](const std::uint64_t value) {
+            digest = mix_graphics_digest(digest, value);
+            frame_digest = mix_graphics_digest(frame_digest, value);
+        };
+        mix(frame);
+        mix(draw);
+        mix(packet.batch.identity);
+        mix(packet.batch.submission_order);
+        mix(static_cast<std::uint64_t>(packet.batch.semantic));
+        mix(static_cast<std::uint64_t>(packet.draw_class));
+        mix(packet.texture.value);
+        mix(diagnostics.material_identity);
+        mix(diagnostics.origin_identity);
+        mix(diagnostics.model_identity);
+        mix(diagnostics.texture_list_index);
+        mix(diagnostics.mesh_index);
+        mix(diagnostics.primitive_index);
+        mix(static_cast<std::uint64_t>(diagnostics.logical_use));
+        mix(static_cast<std::uint64_t>(diagnostics.origin));
+        mix(static_cast<std::uint64_t>(diagnostics.intent));
+        mix(binding.texture_list_identity);
+        mix(binding.texture_list_epoch);
+        mix(binding.texture_list_count);
+        mix(binding.last_writer_identity);
+        mix(binding.last_writer_sequence);
+        mix(binding.expected_asset_identity);
+        mix(binding.resolved_asset_identity);
+        mix(static_cast<std::uint64_t>(binding.resolver));
+        mix(static_cast<std::uint64_t>(binding.last_writer));
+        mix(record_flags);
+        if (texture != nullptr) {
+            mix(texture->config.provenance.generation);
+            mix(texture->config.provenance.archive_ordinal);
+            mix(texture->config.provenance.global_index);
+            for (std::size_t offset = 0u;
+                 offset < texture->config.provenance.content_sha256.size();
+                 offset += sizeof(std::uint64_t)) {
+                std::uint64_t word = 0u;
+                std::memcpy(
+                    &word,
+                    texture->config.provenance.content_sha256.data() + offset,
+                    sizeof(word));
+                mix(word);
+            }
+        }
+        mix(geometry_available ? 1u : 0u);
+        mix(rejected ? 1u : 0u);
+        graphics_digest_ = digest;
+        graphics_frame_digest_ = frame_digest;
+        snapshot_.diagnostic_digest = digest;
+        saturating_increment(snapshot_.diagnostic_draws);
+
+        if (graphics_diagnostic_mode_ ==
+            NativePortGraphicsDiagnosticMode::Digest)
+            return;
+
+        auto layer_digest = mix_graphics_digest(
+            graphics_digest_seed, packet.batch.identity);
+        layer_digest = mix_graphics_digest(
+            layer_digest, static_cast<std::uint64_t>(packet.batch.semantic));
+        layer_digest = mix_graphics_digest(
+            layer_digest, packet.diagnostics.origin_identity);
+        layer_digest = mix_graphics_digest(
+            layer_digest,
+            packet.diagnostics.texture_binding.texture_list_identity);
+
+        GraphicsBreadcrumbRecord record{};
+        record.frame = frame;
+        record.draw = draw;
+        record.batch_identity = packet.batch.identity;
+        record.global_digest = digest;
+        record.frame_digest = frame_digest;
+        record.layer_digest = layer_digest;
+        record.material_identity = diagnostics.material_identity;
+        record.origin_identity = diagnostics.origin_identity;
+        record.model_identity = diagnostics.model_identity;
+        record.texture_handle = packet.texture.value;
+        record.texture_list_identity = binding.texture_list_identity;
+        record.texture_list_epoch = binding.texture_list_epoch;
+        record.last_writer_identity = binding.last_writer_identity;
+        record.last_writer_sequence = binding.last_writer_sequence;
+        record.expected_asset_identity = binding.expected_asset_identity;
+        record.resolved_asset_identity = binding.resolved_asset_identity;
+        record.texture_list_index = diagnostics.texture_list_index;
+        record.texture_list_count = binding.texture_list_count;
+        record.mesh_index = diagnostics.mesh_index;
+        record.primitive_index = diagnostics.primitive_index;
+        record.submission_order = packet.batch.submission_order;
+        record.batch_semantic = static_cast<std::uint8_t>(packet.batch.semantic);
+        record.draw_class = static_cast<std::uint8_t>(packet.draw_class);
+        record.logical_use =
+            static_cast<std::uint8_t>(diagnostics.logical_use);
+        record.origin = static_cast<std::uint8_t>(diagnostics.origin);
+        record.intent = static_cast<std::uint8_t>(diagnostics.intent);
+        record.resolver = static_cast<std::uint8_t>(binding.resolver);
+        record.last_writer = static_cast<std::uint8_t>(binding.last_writer);
+        record.flags = record_flags;
+        if (texture != nullptr) {
+            const auto& provenance = texture->config.provenance;
+            record.texture_generation = provenance.generation;
+            record.texture_content_sha256 = provenance.content_sha256;
+            record.texture_archive_ordinal = provenance.archive_ordinal;
+            record.texture_global_index = provenance.global_index;
+        }
+
+        const auto capacity = graphics_breadcrumbs_.size();
+        std::size_t destination = 0u;
+        if (graphics_breadcrumb_count_ < capacity) {
+            destination = (graphics_breadcrumb_first_ +
+                           graphics_breadcrumb_count_) % capacity;
+            ++graphics_breadcrumb_count_;
+        } else {
+            destination = graphics_breadcrumb_first_;
+            graphics_breadcrumb_first_ =
+                (graphics_breadcrumb_first_ + 1u) % capacity;
+            saturating_increment(snapshot_.diagnostic_drops);
+        }
+        graphics_breadcrumbs_[destination] = record;
+    }
+
+    void flush_graphics_breadcrumbs() noexcept {
+        if (graphics_diagnostic_mode_ !=
+                NativePortGraphicsDiagnosticMode::Breadcrumbs &&
+            graphics_diagnostic_mode_ !=
+                NativePortGraphicsDiagnosticMode::ArmedCapture)
+            return;
+        const auto output_path = graphics_diagnostic_directory_ /
+            L"graphics-breadcrumbs-v1.bin";
+        std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
+        if (!output) return;
+        GraphicsBreadcrumbFileHeader header{};
+        header.mode = static_cast<std::uint32_t>(graphics_diagnostic_mode_);
+        header.capacity = graphics_breadcrumbs_.size();
+        header.record_count = graphics_breadcrumb_count_;
+        header.first_record = graphics_breadcrumb_first_;
+        header.dropped_records = snapshot_.diagnostic_drops;
+        header.final_digest = graphics_digest_;
+        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        for (std::size_t index = 0u; index < graphics_breadcrumb_count_;
+             ++index) {
+            const auto source = (graphics_breadcrumb_first_ + index) %
+                graphics_breadcrumbs_.size();
+            output.write(
+                reinterpret_cast<const char*>(&graphics_breadcrumbs_[source]),
+                sizeof(GraphicsBreadcrumbRecord));
+            if (!output) return;
         }
     }
 
@@ -3282,7 +3736,7 @@ class NativePortGraphicsDevice::Impl final {
         drawstream_gpu_draws_this_frame_ = 0u;
         drawstream_truncation_reported_ = false;
         if (!should_capture_drawstream_frame(frame)) return;
-        const auto output_path = capture_directory_ /
+        const auto output_path = drawstream_directory_ /
             (L"drawstream-frame-" + std::to_wstring(frame) + L".jsonl");
         drawstream_output_.open(
             output_path, std::ios::binary | std::ios::trunc);
@@ -3299,6 +3753,7 @@ class NativePortGraphicsDevice::Impl final {
         const std::span<const std::uint32_t> indices,
         const NativePortPrimitiveTopology topology,
         const NativePortPixelRect viewport,
+        const TextureSlot* const texture_slot,
         const MeshSlot* const mesh_slot,
         const GeometryPreprocessStats* const preprocessing,
         const bool geometry_available,
@@ -3638,6 +4093,44 @@ class NativePortGraphicsDevice::Impl final {
                << ",\"indices\":" << index_count
                << ",\"mesh\":" << packet.mesh.value
                << ",\"texture\":" << packet.texture.value
+               << ",\"diagnostics\":{\"material_identity\":"
+               << packet.diagnostics.material_identity
+               << ",\"origin_identity\":"
+               << packet.diagnostics.origin_identity
+               << ",\"model_identity\":"
+               << packet.diagnostics.model_identity
+               << ",\"texture_list_index\":"
+               << packet.diagnostics.texture_list_index
+               << ",\"mesh_index\":" << packet.diagnostics.mesh_index
+               << ",\"primitive_index\":"
+               << packet.diagnostics.primitive_index
+               << ",\"logical_use\":"
+               << static_cast<unsigned>(packet.diagnostics.logical_use)
+               << ",\"origin\":"
+               << static_cast<unsigned>(packet.diagnostics.origin)
+               << ",\"intent\":"
+               << static_cast<unsigned>(packet.diagnostics.intent)
+               << ",\"texture_list_identity\":"
+               << packet.diagnostics.texture_binding.texture_list_identity
+               << ",\"texture_list_epoch\":"
+               << packet.diagnostics.texture_binding.texture_list_epoch
+               << ",\"texture_list_count\":"
+               << packet.diagnostics.texture_binding.texture_list_count
+               << ",\"last_writer_identity\":"
+               << packet.diagnostics.texture_binding.last_writer_identity
+               << ",\"last_writer_sequence\":"
+               << packet.diagnostics.texture_binding.last_writer_sequence
+               << ",\"expected_asset_identity\":"
+               << packet.diagnostics.texture_binding.expected_asset_identity
+               << ",\"resolved_asset_identity\":"
+               << packet.diagnostics.texture_binding.resolved_asset_identity
+               << ",\"resolver\":"
+               << static_cast<unsigned>(
+                      packet.diagnostics.texture_binding.resolver)
+               << ",\"last_writer\":"
+               << static_cast<unsigned>(
+                      packet.diagnostics.texture_binding.last_writer)
+               << '}'
                << ",\"geometry_available\":"
                << (geometry_available ? "true" : "false")
                << ",\"geometry_truncated\":"
@@ -3841,8 +4334,8 @@ class NativePortGraphicsDevice::Impl final {
                << ",\"maximum_lod\":" << packet.sampler.maximum_lod
                << ",\"maximum_anisotropy\":"
                << packet.sampler.maximum_anisotropy << "}";
-        if (packet.texture) {
-            const auto& texture = resolve_texture(packet.texture);
+        if (texture_slot != nullptr) {
+            const auto& texture = *texture_slot;
             output << ",\"texture_state\":{\"format\":"
                    << static_cast<unsigned>(texture.config.format)
                    << ",\"width\":" << texture.config.extent.width
@@ -4165,7 +4658,16 @@ class NativePortGraphicsDevice::Impl final {
     std::vector<MeshSlot> mesh_slots_;
     std::vector<std::uint32_t> free_mesh_slots_;
     std::filesystem::path capture_directory_;
+    std::filesystem::path drawstream_directory_;
+    std::filesystem::path graphics_diagnostic_directory_;
     std::vector<std::uint8_t> capture_pixels_;
+    std::vector<GraphicsBreadcrumbRecord> graphics_breadcrumbs_;
+    std::size_t graphics_breadcrumb_first_ = 0u;
+    std::size_t graphics_breadcrumb_count_ = 0u;
+    std::uint64_t graphics_digest_ = graphics_digest_seed;
+    std::uint64_t graphics_frame_digest_ = graphics_digest_seed;
+    NativePortGraphicsDiagnosticMode graphics_diagnostic_mode_ =
+        NativePortGraphicsDiagnosticMode::Off;
     std::uint64_t capture_start_frame_ = 1u;
     std::uint64_t capture_end_frame_ =
         std::numeric_limits<std::uint64_t>::max();
