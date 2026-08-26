@@ -30361,6 +30361,62 @@ prepare_dreamcast_port_project_impl(
             prepared.program, latent_aot);
     report_progress(
         options,
+        "game-project-validation:native-resume-index");
+    // Resume and executable-hook admission query the same emitted entry
+    // ownership facts. Build them once: rescanning every block and rebuilding
+    // its internal resume set for every declared entry made this validation
+    // quadratic in large native projects without strengthening the proof.
+    struct NativeAotInternalResumeOwner final {
+        std::uint32_t block_start_address = 0u;
+        std::uint64_t block_end_address = 0u;
+    };
+    std::size_t emitted_block_count = 0u;
+    for (const auto& function : emitted_program) {
+        if (function.blocks.size() >
+            std::numeric_limits<std::size_t>::max() - emitted_block_count)
+            throw std::length_error(
+                "Emittiertes Programm besitzt zu viele IR-Bloecke.");
+        emitted_block_count += function.blocks.size();
+    }
+    std::unordered_map<std::uint32_t, std::size_t>
+        emitted_block_entry_counts;
+    std::unordered_map<
+        std::uint32_t,
+        std::vector<NativeAotInternalResumeOwner>>
+        emitted_internal_resume_owners;
+    emitted_block_entry_counts.reserve(emitted_block_count);
+    emitted_internal_resume_owners.reserve(emitted_block_count);
+    for (const auto& function : emitted_program) {
+        for (const auto& block : function.blocks) {
+            ++emitted_block_entry_counts[block.start_address];
+            auto block_end =
+                static_cast<std::uint64_t>(block.start_address) + 2u;
+            for (const auto& instruction : block.instructions)
+                block_end = std::max(
+                    block_end,
+                    static_cast<std::uint64_t>(instruction.source_address) +
+                        2u);
+            const auto candidates =
+                detail::native_aot_internal_resume_entries(block);
+            for (const auto candidate : candidates)
+                emitted_internal_resume_owners[candidate].push_back(
+                    {block.start_address, block_end});
+        }
+    }
+    const auto emitted_block_entry_count =
+        [&](const std::uint32_t address) -> std::size_t {
+        const auto found = emitted_block_entry_counts.find(address);
+        return found != emitted_block_entry_counts.end() ? found->second : 0u;
+    };
+    const auto emitted_internal_resume_owner_count =
+        [&](const std::uint32_t address) -> std::size_t {
+        const auto found = emitted_internal_resume_owners.find(address);
+        return found != emitted_internal_resume_owners.end()
+                   ? found->second.size()
+                   : 0u;
+    };
+    report_progress(
+        options,
         "game-project-validation:native-resume-validation");
     std::vector<std::uint32_t> explicit_native_aot_resume_entries(
         options.native_aot_resume_entries.begin(),
@@ -30383,30 +30439,19 @@ prepare_dreamcast_port_project_impl(
             static_cast<std::uint64_t>(resume) >= boot_end)
             throw std::invalid_argument(
                 "Nativer AOT-Resume-Entry liegt ausserhalb des unveraenderlichen Bootimages.");
-        std::size_t matching_blocks = 0u;
-        for (const auto& function : emitted_program) {
-            for (const auto& block : function.blocks) {
-                if (block.start_address == resume)
+        if (emitted_block_entry_count(resume) != 0u)
+            throw std::invalid_argument(
+                "Nativer AOT-Resume-Entry ist bereits ein regulaerer Blockentry.");
+        const auto owners = emitted_internal_resume_owners.find(resume);
+        if (owners != emitted_internal_resume_owners.end()) {
+            for (const auto& owner : owners->second) {
+                if (owner.block_start_address < prepared.boot_address ||
+                    owner.block_end_address > boot_end)
                     throw std::invalid_argument(
-                        "Nativer AOT-Resume-Entry ist bereits ein regulaerer Blockentry.");
-                const auto candidates =
-                    detail::native_aot_internal_resume_entries(block);
-                if (std::binary_search(candidates.begin(), candidates.end(), resume)) {
-                    auto block_end =
-                        static_cast<std::uint64_t>(block.start_address) + 2u;
-                    for (const auto& instruction : block.instructions)
-                        block_end = std::max(
-                            block_end,
-                            static_cast<std::uint64_t>(instruction.source_address) + 2u);
-                    if (block.start_address < prepared.boot_address ||
-                        block_end > boot_end)
-                        throw std::invalid_argument(
-                            "Nativer AOT-Resume-Block verlaesst das unveraenderliche Bootimage.");
-                    ++matching_blocks;
-                }
+                        "Nativer AOT-Resume-Block verlaesst das unveraenderliche Bootimage.");
             }
         }
-        if (matching_blocks != 1u)
+        if (emitted_internal_resume_owner_count(resume) != 1u)
             throw std::invalid_argument(
                 "Nativer AOT-Resume-Entry besitzt keinen eindeutigen sicheren IR-Owner.");
     }
@@ -30468,22 +30513,10 @@ prepare_dreamcast_port_project_impl(
                 hook.original_policy ==
                     katana::runtime::NativePortHookOriginalPolicy::
                         ReplacesOriginal) {
-                std::size_t block_entries = 0u;
-                std::size_t resume_entries = 0u;
-                for (const auto& function : emitted_program) {
-                    for (const auto& block : function.blocks) {
-                        block_entries +=
-                            block.start_address == hook.guest_address ? 1u : 0u;
-                        const auto candidates =
-                            detail::native_aot_internal_resume_entries(block);
-                        resume_entries +=
-                            std::binary_search(
-                                candidates.begin(), candidates.end(),
-                                hook.guest_address)
-                                ? 1u
-                                : 0u;
-                    }
-                }
+                const auto block_entries =
+                    emitted_block_entry_count(hook.guest_address);
+                const auto resume_entries =
+                    emitted_internal_resume_owner_count(hook.guest_address);
                 if (block_entries != 1u || resume_entries != 0u) {
                     if (retain_native_hook_proof_gap(
                             hook,
@@ -30500,22 +30533,10 @@ prepare_dreamcast_port_project_impl(
                 native_aot_resume_entries.push_back(hook.guest_address);
                 continue;
             }
-            std::size_t block_entries = 0u;
-            std::size_t resume_entries = 0u;
-            for (const auto& function : emitted_program) {
-                for (const auto& block : function.blocks) {
-                    block_entries +=
-                        block.start_address == hook.guest_address ? 1u : 0u;
-                    const auto candidates =
-                        detail::native_aot_internal_resume_entries(block);
-                    resume_entries +=
-                        std::binary_search(
-                            candidates.begin(), candidates.end(),
-                            hook.guest_address)
-                            ? 1u
-                            : 0u;
-                }
-            }
+            const auto block_entries =
+                emitted_block_entry_count(hook.guest_address);
+            const auto resume_entries =
+                emitted_internal_resume_owner_count(hook.guest_address);
             if (block_entries == 1u && resume_entries == 0u)
                 continue;
             if (block_entries != 0u || resume_entries != 1u) {
@@ -30538,14 +30559,7 @@ prepare_dreamcast_port_project_impl(
     for (const auto& module : latent_aot.modules) {
         for (const auto offset : module.entry_offsets) {
             const auto source_entry = module.source_address + offset;
-            const auto emitted = std::any_of(
-                emitted_program.begin(), emitted_program.end(), [&](const auto& function) {
-                    return std::any_of(
-                        function.blocks.begin(), function.blocks.end(), [&](const auto& block) {
-                            return block.start_address == source_entry;
-                        });
-                });
-            if (!emitted)
+            if (emitted_block_entry_count(source_entry) == 0u)
                 throw std::runtime_error("latent-aot-entry-native-block-missing");
         }
     }
