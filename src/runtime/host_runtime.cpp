@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -25,6 +27,14 @@
 
 namespace katana::runtime {
 namespace {
+
+[[nodiscard]] bool background_test_mode_requested() noexcept {
+    static const bool requested = [] {
+        const auto* const value = std::getenv("KATANA_PORT_BACKGROUND_TEST");
+        return value != nullptr && std::string_view(value) == "1";
+    }();
+    return requested;
+}
 
 void validate_audio(const std::span<const std::int16_t> samples, const std::uint32_t sample_rate) {
     if (samples.empty() || (samples.size() & 1u) != 0u || sample_rate == 0u) {
@@ -243,6 +253,8 @@ class Win32AudioOutput final : public HostAudioOutput {
         reap();
         auto block = std::make_unique<Block>();
         block->samples.assign(samples.begin(), samples.end());
+        if (background_test_mode_requested())
+            std::ranges::fill(block->samples, 0);
         block->header.lpData = reinterpret_cast<LPSTR>(block->samples.data());
         block->header.dwBufferLength = static_cast<DWORD>(samples.size_bytes());
         if (waveOutPrepareHeader(device_, &block->header, sizeof(block->header)) !=

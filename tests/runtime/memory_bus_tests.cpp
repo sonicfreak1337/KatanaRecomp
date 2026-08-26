@@ -209,6 +209,70 @@ int main(const int argc, const char* const* argv) {
             "Geloeschter GuestWriteObserver hinterlaesst einen unsicheren Batch-Vertrag.");
 
     {
+        constexpr std::uint32_t physical_base = 0x0C000000u;
+        constexpr std::uint32_t p1_alias = 0x8C000000u;
+        constexpr std::uint32_t p2_alias = 0xAC000000u;
+        Memory alias_transactions(0u);
+        const auto backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        alias_transactions.map_region(
+            "physical-only-transaction", physical_base, backing);
+
+        const std::array<std::uint8_t, 4u> rejected_bytes{
+            0x10u, 0x20u, 0x30u, 0x40u};
+        require(!alias_transactions.commit_linear_transaction_bytes(
+                    p1_alias + 0x10u, rejected_bytes) &&
+                    backing->read_u32(0x10u) == 0u,
+                "Nicht autorisierter P1-Alias umgeht die physische RAM-Map.");
+
+        alias_transactions.bind_direct_linear_alias_window(
+            physical_base, 4096u, *backing);
+        std::vector<katana::runtime::GuestWriteEvent> events;
+        alias_transactions.set_guest_write_observer(
+            [&](const auto& event) noexcept { events.push_back(event); },
+            GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+
+        const std::array<std::uint8_t, 4u> output_bytes{
+            0x11u, 0x22u, 0x33u, 0x44u};
+        const std::array<std::uint8_t, 2u> status_bytes{0x55u, 0x66u};
+        const std::array<katana::runtime::LinearMemoryTransactionWrite, 2u>
+            writes{{
+                {p1_alias + 0x20u, output_bytes},
+                {p2_alias + 0x30u, status_bytes},
+            }};
+        require(alias_transactions.commit_linear_transaction_batch(writes) &&
+                    backing->read_u32(0x20u) == 0x44332211u &&
+                    backing->read_u16(0x30u) == 0x6655u &&
+                    events.size() == 2u &&
+                    events[0u].address == physical_base + 0x20u &&
+                    events[1u].address == physical_base + 0x30u,
+                "Autorisiertes P1-RAM-Batch wird nicht atomar auf die "
+                "physische Native-Port-Map projiziert.");
+
+        events.clear();
+        const std::array<std::uint8_t, 4u> prepared_bytes{
+            0xAAu, 0xBBu, 0xCCu, 0xDDu};
+        const katana::runtime::LinearMemoryTransactionWrite prepared_write{
+            p1_alias + 0x40u, prepared_bytes};
+        auto prepared = alias_transactions.prepare_linear_transaction_batch(
+            std::span<const katana::runtime::LinearMemoryTransactionWrite>(
+                &prepared_write, 1u));
+        require(prepared && backing->read_u32(0x40u) == 0u &&
+                    prepared->guest_write_events().size() == 1u &&
+                    prepared->guest_write_events()[0u].address ==
+                        physical_base + 0x40u,
+                "Vorbereiteter P1-RAM-Commit verliert Aliasautoritaet oder "
+                "wird vorzeitig sichtbar.");
+        alias_transactions.commit_prepared_linear_transaction_batch(
+            std::move(*prepared));
+        require(backing->read_u32(0x40u) == 0xDDCCBBAAu &&
+                    events.size() == 1u &&
+                    events[0u].address == physical_base + 0x40u,
+                "Vorbereiteter P1-RAM-Commit publiziert keine kanonische "
+                "atomare Transaktion.");
+    }
+
+    {
         constexpr std::uint32_t base = 0x0C000000u;
         Memory direct(0u);
         const auto backing =

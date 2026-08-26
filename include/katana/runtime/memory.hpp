@@ -1049,6 +1049,13 @@ class Memory {
     [[nodiscard]] bool direct_linear_offset(std::uint32_t physical_address,
                                             std::size_t width,
                                             std::uint32_t& offset) const noexcept;
+    // Native ports map the physical RAM window only, while title-owned hooks
+    // naturally retain P1/P2 guest pointers.  A bound direct-linear window is
+    // the authority that permits those aliases to be reduced to the mapped
+    // physical address for an otherwise ordinary linear transaction.
+    [[nodiscard]] std::uint32_t linear_transaction_address(
+        std::uint32_t address,
+        std::size_t size) const noexcept;
     void require_alignment(std::uint32_t address,
                            MemoryAccessWidth width,
                            MemoryAccessOperation operation) const;

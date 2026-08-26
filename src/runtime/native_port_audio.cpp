@@ -1,11 +1,13 @@
 #include "katana/runtime/native_port_audio.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -26,6 +28,14 @@ namespace {
 constexpr std::uint32_t maximum_audio_queue_budget_frames = 192'000u * 60u;
 constexpr std::size_t native_audio_block_pool_size = 16u;
 constexpr std::uint32_t native_audio_pooled_block_frames = 16'384u;
+
+[[nodiscard]] bool background_test_mode_requested() noexcept {
+    static const bool requested = [] {
+        const auto* const value = std::getenv("KATANA_PORT_BACKGROUND_TEST");
+        return value != nullptr && std::string_view(value) == "1";
+    }();
+    return requested;
+}
 
 void validate_config(const NativePortAudioConfig& config) {
     if (config.format.sample_rate < 8'000u || config.format.sample_rate > 192'000u ||
@@ -127,6 +137,8 @@ class NativePortAudioStream::Impl final {
             pending.block->header.lpData =
                 reinterpret_cast<LPSTR>(pending.block->samples.data());
         }
+        if (background_test_mode_requested())
+            std::fill_n(pending.block->samples.begin(), samples.size(), 0);
         pending.block->frames = static_cast<std::uint32_t>(frames);
         const auto buffer_bytes = static_cast<DWORD>(samples.size_bytes());
         if (pending.block->prepared &&

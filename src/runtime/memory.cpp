@@ -781,6 +781,38 @@ bool Memory::direct_linear_offset(const std::uint32_t physical_address,
     return width <= direct_linear_backing_->size() - offset;
 }
 
+std::uint32_t Memory::linear_transaction_address(
+    const std::uint32_t address,
+    const std::size_t size) const noexcept {
+    const auto starts_in_mapped_region = [&](const std::uint32_t candidate) {
+        if (indexed_region(candidate, 1u, false) != nullptr) return true;
+        return std::any_of(
+            regions_.begin(), regions_.end(), [&](const MappedRegion& mapped) {
+                const auto begin =
+                    static_cast<std::uint64_t>(mapped.info.base_address);
+                const auto end = begin + mapped.info.size;
+                return candidate >= begin && candidate < end;
+            });
+    };
+
+    // Preserve every explicitly mapped address, including a mapped P1/P2
+    // alias.  Canonicalization is only a fallback for the physical-only
+    // NativePortMemory layout and therefore cannot bypass a partial or
+    // read-only explicit mapping.
+    if (size == 0u || starts_in_mapped_region(address) ||
+        (address & 0xC0000000u) != 0x80000000u ||
+        direct_linear_backing_ == nullptr || direct_linear_bytes_ == nullptr)
+        return address;
+
+    const auto physical = address & 0x1FFFFFFFu;
+    if (physical < direct_linear_physical_base_) return address;
+    const auto relative = physical - direct_linear_physical_base_;
+    if (relative >= direct_linear_physical_span_ ||
+        size > direct_linear_physical_span_ - relative)
+        return address;
+    return physical;
+}
+
 bool Memory::try_read_direct_linear_u8(const std::uint32_t physical_address,
                                        std::uint8_t& value) const noexcept {
     std::uint32_t offset = 0u;
@@ -1714,7 +1746,9 @@ Memory::prepare_linear_transaction_batch(
             if (write.bytes.size() >
                 address_space_size - static_cast<std::uint64_t>(write.address))
                 return std::nullopt;
-            const auto& mapped = resolve(write.address,
+            const auto address = linear_transaction_address(
+                write.address, write.bytes.size());
+            const auto& mapped = resolve(address,
                                          MemoryAccessWidth::Byte,
                                          MemoryAccessOperation::Write,
                                          false);
@@ -1722,20 +1756,20 @@ Memory::prepare_linear_transaction_batch(
                 static_cast<std::uint64_t>(mapped.info.base_address) +
                 mapped.info.size;
             const auto write_end =
-                static_cast<std::uint64_t>(write.address) + write.bytes.size();
+                static_cast<std::uint64_t>(address) + write.bytes.size();
             if (write_end > mapped_end ||
                 mapped.info.access != MemoryRegionAccess::ReadWrite ||
                 mapped.linear == nullptr)
                 return std::nullopt;
             const auto offset = static_cast<std::size_t>(
-                region_offset(mapped.info, write.address));
+                region_offset(mapped.info, address));
             const auto backing = mapped.linear->bytes();
             if (offset > backing.size() ||
                 write.bytes.size() > backing.size() - offset)
                 return std::nullopt;
 
             PreparedLinearTransactionBatch::Data::Write item;
-            item.address = write.address;
+            item.address = address;
             item.bytes.assign(write.bytes.begin(), write.bytes.end());
             item.device = mapped.device;
             item.linear = mapped.linear;
@@ -1842,8 +1876,10 @@ bool Memory::commit_linear_transaction_batch(
                 address_space_size -
                     static_cast<std::uint64_t>(write.address))
                 return false;
+            const auto address = linear_transaction_address(
+                write.address, write.bytes.size());
             const auto& mapped = resolve(
-                write.address,
+                address,
                 MemoryAccessWidth::Byte,
                 MemoryAccessOperation::Write,
                 false);
@@ -1852,21 +1888,21 @@ bool Memory::commit_linear_transaction_batch(
                     mapped.info.base_address) +
                 mapped.info.size;
             const auto write_end =
-                static_cast<std::uint64_t>(write.address) +
+                static_cast<std::uint64_t>(address) +
                 write.bytes.size();
             if (write_end > mapped_end ||
                 mapped.info.access != MemoryRegionAccess::ReadWrite ||
                 mapped.linear == nullptr)
                 return false;
             const auto offset = static_cast<std::size_t>(
-                region_offset(mapped.info, write.address));
+                region_offset(mapped.info, address));
             const auto backing = mapped.linear->bytes();
             if (offset > backing.size() ||
                 write.bytes.size() > backing.size() - offset)
                 return false;
 
             PreparedWrite item;
-            item.address = write.address;
+            item.address = address;
             item.bytes.assign(
                 write.bytes.begin(), write.bytes.end());
             item.device = mapped.device;

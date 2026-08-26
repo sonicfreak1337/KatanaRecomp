@@ -4,6 +4,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -39,6 +40,14 @@ constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
 constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
 constexpr std::uint32_t minimum_dynamic_vertex_buffer_bytes = 1u << 20u;
 constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
+
+[[nodiscard]] bool background_test_mode_requested() noexcept {
+    static const bool requested = [] {
+        const auto* const value = std::getenv("KATANA_PORT_BACKGROUND_TEST");
+        return value != nullptr && std::string_view(value) == "1";
+    }();
+    return requested;
+}
 
 [[nodiscard]] std::string copy_validated_graphics_title(
     const std::string_view title) {
@@ -913,6 +922,10 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         if (window_ == nullptr)
             fail(NativePortGraphicsFailure::WindowCreation, 0u, "window-closed");
+        if (background_test_mode_requested()) {
+            ShowWindow(window_, SW_HIDE);
+            return;
+        }
         ShowWindow(window_, SW_SHOWNORMAL);
         if (IsWindowVisible(window_) == FALSE)
             ShowWindow(window_, SW_SHOWNORMAL);
@@ -2530,20 +2543,23 @@ class NativePortGraphicsDevice::Impl final {
         if (packet.vertex_space == NativePortVertexSpace::ClipHomogeneous)
             return {capabilities.position_w_min,
                     capabilities.position_w_max};
-        double minimum = packet.transform.values[15u];
-        double maximum = minimum;
-        for (std::size_t component = 0u; component < 3u; ++component) {
-            const double coefficient =
-                packet.transform.values[component * 4u + 3u];
-            const double lower = capabilities.position_min[component];
-            const double upper = capabilities.position_max[component];
-            if (coefficient >= 0.0) {
-                minimum += coefficient * lower;
-                maximum += coefficient * upper;
-            } else {
-                minimum += coefficient * upper;
-                maximum += coefficient * lower;
-            }
+        // W is linear in one submitted vertex, but the independent XYZ bounds
+        // above are not: combining each component's extremum constructs box
+        // corners which need not belong to any vertex.  That conservative box
+        // can cross W=0 for a rotated, already near-clipped triangle even when
+        // every actual vertex has positive W.  Evaluate the submitted vertices
+        // themselves so this remains an exact draw contract rather than a
+        // correlation-destroying AABB rejection.
+        double minimum = std::numeric_limits<double>::infinity();
+        double maximum = -std::numeric_limits<double>::infinity();
+        for (const auto& vertex : packet.vertices) {
+            double transformed = packet.transform.values[15u];
+            for (std::size_t component = 0u; component < 3u; ++component)
+                transformed +=
+                    static_cast<double>(vertex.position[component]) *
+                    packet.transform.values[component * 4u + 3u];
+            minimum = std::min(minimum, transformed);
+            maximum = std::max(maximum, transformed);
         }
         return {minimum, maximum};
     }
