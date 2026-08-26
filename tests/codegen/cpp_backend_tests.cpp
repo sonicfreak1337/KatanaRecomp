@@ -260,6 +260,7 @@ int main() {
         runtime_only_program.front().entry_address;
     indirect_options.runtime_binding =
         katana::codegen::BackendRuntimeBinding::NativePort;
+    indirect_options.native_bringup_dispatch_validation = true;
     const auto runtime_only_request =
         katana::codegen::make_native_aot_backend_request(
             NativeAotEmissionProfile::Product,
@@ -289,6 +290,27 @@ int main() {
         "RuntimeOnly-Candidate-Call umgeht den billigen versiegelten "
         "NativeBringup-Preflight oder mutiert CPU-/Cycle-/PR-Zustand vor "
         "der Autorisierung.");
+
+    auto strict_indirect_options = indirect_options;
+    strict_indirect_options.native_bringup_dispatch_validation = false;
+    const auto strict_runtime_only_request =
+        katana::codegen::make_native_aot_backend_request(
+            NativeAotEmissionProfile::Product,
+            runtime_only_program,
+            runtime_only_program.front().entry_address,
+            strict_indirect_options);
+    const auto strict_runtime_only_emission =
+        katana::codegen::emit_cpp_port_translation_unit(
+            strict_runtime_only_request);
+    const auto strict_runtime_only_text =
+        strict_runtime_only_emission.joined_text();
+    require(
+        strict_runtime_only_text.find(
+            "native_bringup_dispatch_pending") == std::string::npos &&
+            strict_runtime_only_text.find(
+                "preflight_native_bringup_indirect_dispatch") ==
+                std::string::npos,
+        "StrictProduct traegt NativeBringup-Symbole oder Hotpath-Overhead.");
 
     const auto guarded_complete_program = make_indirect_call_program(
         katana::ir::DynamicTargetClass::GuardedComplete);

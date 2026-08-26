@@ -11,7 +11,7 @@
 
 namespace katana::codegen {
 
-inline constexpr std::uint32_t native_aot_emission_profile_version = 43u;
+inline constexpr std::uint32_t native_aot_emission_profile_version = 44u;
 
 enum class NativeAotEmissionProfile : std::uint8_t { Product, ExternalConformance };
 
@@ -31,6 +31,7 @@ struct NativeAotBackendRequestOptions {
     bool emit_run_functions = true;
     std::optional<std::uint32_t> metadata_entry_address;
     bool external_instruction_observer = false;
+    bool native_bringup_dispatch_validation = false;
     BackendRuntimeBinding runtime_binding =
         BackendRuntimeBinding::DiagnosticPlatformServices;
 };

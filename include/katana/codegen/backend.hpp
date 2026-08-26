@@ -72,6 +72,9 @@ struct BackendRequest {
     std::optional<std::uint32_t> metadata_entry_address;
     bool single_block_execution = false;
     bool external_dynamic_dispatch = false;
+    // Emit the sealed NativeBringup preflight only for a NativeBringup
+    // product. StrictProduct must not carry its symbols or hot-path branch.
+    bool native_bringup_dispatch_validation = false;
     bool guarded_local_block_chaining = false;
     bool external_instruction_observer = false;
     std::span<const GuardedNativeCallTarget> guarded_native_call_targets;

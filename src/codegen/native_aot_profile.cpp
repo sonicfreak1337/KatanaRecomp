@@ -91,6 +91,12 @@ make_native_aot_backend_request(const NativeAotEmissionProfile profile,
         throw std::invalid_argument(
             "Externe Instruktionsbeobachtung ist nur im Konformitaetsprofil erlaubt.");
     }
+    if (options.native_bringup_dispatch_validation &&
+        (profile != NativeAotEmissionProfile::Product ||
+         options.runtime_binding != BackendRuntimeBinding::NativePort)) {
+        throw std::invalid_argument(
+            "NativeBringup-Dispatchvalidierung braucht das native Produktprofil.");
+    }
 
     const auto& contract = native_aot_emission_contract(profile);
     BackendRequest request{functions, entry_address};
@@ -100,6 +106,8 @@ make_native_aot_backend_request(const NativeAotEmissionProfile profile,
     request.metadata_entry_address = options.metadata_entry_address;
     request.single_block_execution = contract.single_block_execution;
     request.external_dynamic_dispatch = contract.external_dynamic_dispatch;
+    request.native_bringup_dispatch_validation =
+        options.native_bringup_dispatch_validation;
     request.guarded_local_block_chaining = contract.guarded_local_block_chaining;
     request.external_instruction_observer = options.external_instruction_observer;
     request.conservative_register_localization =

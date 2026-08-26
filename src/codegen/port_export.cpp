@@ -18781,8 +18781,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "}\n"
               "} // namespace runtime_dispatch_detail\n\n";
 
-    output << "thread_local bool closure_probe_dispatch_pending = false;\n"
-              "namespace {\n"
+    output << "thread_local bool closure_probe_dispatch_pending = false;\n";
+    if (native_bringup)
+        output << "thread_local bool native_bringup_dispatch_pending = false;\n";
+    output << "namespace {\n"
               "constexpr std::array<katana::runtime::"
               "ClosureProbeEligibleSiteView, "
            << closure_probe_sites.size()
@@ -18893,8 +18895,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "thread_local std::uint64_t closure_probe_last_generation = 0u;\n"
               "thread_local std::string_view closure_probe_last_owner_identity;\n"
               "thread_local katana::runtime::NativePortContext* "
-              "active_native_context = nullptr;\n"
-              "thread_local bool native_bringup_dispatch_pending = false;\n";
+              "active_native_context = nullptr;\n";
     if (native_bringup)
         output
             << "thread_local katana::runtime::RuntimeBlockTable* "
@@ -19854,7 +19855,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    ? "        active_native_bringup_table = &native_bringup_table;\n"
                      "        active_native_bringup_context = &native_bringup_context;\n"
                      "        native_bringup_dispatch_pending = true;\n"
-                   : "        native_bringup_dispatch_pending = false;\n")
+                   : "")
            <<
               "        configure_native_closure_probe_plan(context);\n"
               "    }\n"
@@ -20246,7 +20247,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "}\n";
     if (native_bringup) {
         output
-            << "void preflight_native_bringup_indirect_dispatch(\n"
+            << "void preflight_native_bringup_indirect_dispatch_impl(\n"
                "        const std::uint32_t source_block,\n"
                "        const std::uint32_t callsite,\n"
                "        const std::uint32_t target,\n"
@@ -20289,15 +20290,6 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                "            *active_native_bringup_table,\n"
                "            *active_native_bringup_context, request));\n"
                "}\n";
-    } else {
-        output
-            << "void preflight_native_bringup_indirect_dispatch(\n"
-               "        std::uint32_t, std::uint32_t, std::uint32_t,\n"
-               "        std::uint32_t, bool) {\n"
-               "    if (native_bringup_dispatch_pending)\n"
-               "        throw std::runtime_error(\n"
-               "            \"native-bringup-disabled-in-strict-product\");\n"
-               "}\n";
     }
     output << "void dispatch_call(katana::runtime::CpuState& cpu,\n"
               "                   const std::uint32_t target) {\n"
@@ -20315,8 +20307,19 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        fail_missing_entry(target);\n"
               "    cpu.pc = target;\n"
               "}\n"
-              "} // namespace\n\n"
-              "void note_successful_closure_probe_dispatch(\n"
+              "} // namespace\n\n";
+    if (native_bringup)
+        output
+            << "void preflight_native_bringup_indirect_dispatch(\n"
+               "        const std::uint32_t source_block,\n"
+               "        const std::uint32_t callsite,\n"
+               "        const std::uint32_t target,\n"
+               "        const std::uint32_t continuation,\n"
+               "        const bool call) {\n"
+               "    preflight_native_bringup_indirect_dispatch_impl(\n"
+               "        source_block, callsite, target, continuation, call);\n"
+               "}\n";
+    output << "void note_successful_closure_probe_dispatch(\n"
               "        const std::uint32_t callsite,\n"
               "        const std::uint32_t target,\n"
               "        const std::uint32_t continuation) noexcept {\n"
@@ -37907,6 +37910,9 @@ static PortExportResult export_dreamcast_port_project_impl(
                     !options.diagnostic_partial
                 ? BackendRuntimeBinding::NativePort
                 : BackendRuntimeBinding::DiagnosticPlatformServices;
+        request_options.native_bringup_dispatch_validation =
+            options.native_execution_profile ==
+            NativePortExecutionProfile::NativeBringup;
         auto request = make_native_aot_backend_request(NativeAotEmissionProfile::Product,
                                                        functions,
                                                        functions.front().entry_address,

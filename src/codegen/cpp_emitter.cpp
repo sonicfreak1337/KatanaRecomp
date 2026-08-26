@@ -3358,8 +3358,10 @@ void emit_native_bringup_dispatch_preflight(
     const katana::ir::BasicBlock& block,
     const katana::ir::Instruction& instruction,
     const std::string_view target,
-    const bool table_compatible_function_entries) {
-    if (!table_compatible_function_entries ||
+    const bool table_compatible_function_entries,
+    const bool native_bringup_dispatch_validation) {
+    if (!native_bringup_dispatch_validation ||
+        !table_compatible_function_entries ||
         !requires_native_bringup_dispatch_validation(instruction))
         return;
     const bool call =
@@ -3539,6 +3541,7 @@ void emit_terminal(std::ostringstream& output,
                    const bool uses_proven_linear_ram,
                    const bool external_instruction_observer,
                    const bool table_compatible_function_entries,
+                   const bool native_bringup_dispatch_validation,
                    const NativeRegisterEmission& registers,
                    const bool has_direct_ram_writes,
                    const bool enable_direct_write_batch,
@@ -3579,7 +3582,8 @@ void emit_terminal(std::ostringstream& output,
             block,
             instruction,
             target_name,
-            table_compatible_function_entries);
+            table_compatible_function_entries,
+            native_bringup_dispatch_validation);
     }
 
     emit_indent(output, indent);
@@ -4936,6 +4940,7 @@ void emit_block(std::ostringstream& output,
                 const bool uses_proven_linear_ram,
                 const BlockEntryMetadataMode block_entry_metadata_mode,
                 const bool external_instruction_observer,
+                const bool native_bringup_dispatch_validation,
                 const NativeRegisterEmission& registers,
                 const bool has_direct_ram_writes,
                 const bool enable_direct_write_batch,
@@ -5116,6 +5121,7 @@ void emit_block(std::ostringstream& output,
                       uses_proven_linear_ram,
                       external_instruction_observer,
                       table_compatible_function_entries,
+                      native_bringup_dispatch_validation,
                       registers,
                       has_direct_ram_writes,
                       enable_direct_write_batch,
@@ -5456,12 +5462,14 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "    return source(target) == source(allowed_target);\n"
                  << "}\n";
     if (request.external_dynamic_dispatch) {
-        declarations
-            << "extern thread_local bool native_bringup_dispatch_pending;\n"
-            << "void preflight_native_bringup_indirect_dispatch(\n"
-            << "    std::uint32_t source_block, std::uint32_t callsite,\n"
-            << "    std::uint32_t target, std::uint32_t continuation,\n"
-            << "    bool call);\n";
+        if (request.native_bringup_dispatch_validation) {
+            declarations
+                << "extern thread_local bool native_bringup_dispatch_pending;\n"
+                << "void preflight_native_bringup_indirect_dispatch(\n"
+                << "    std::uint32_t source_block, std::uint32_t callsite,\n"
+                << "    std::uint32_t target, std::uint32_t continuation,\n"
+                << "    bool call);\n";
+        }
         if (!closure_probe_callsites.empty()) {
             declarations
                 << "extern thread_local bool closure_probe_dispatch_pending;\n"
@@ -5840,6 +5848,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        uses_direct_linear_ram_accesses,
                        effective_block_entry_metadata_mode,
                        request.external_instruction_observer,
+                       request.native_bringup_dispatch_validation,
                        registers,
                        has_direct_ram_writes,
                        enable_direct_write_batch,
