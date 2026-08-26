@@ -154,6 +154,21 @@ namespace katana::codegen::detail {
 native_aot_internal_resume_entries(const katana::ir::BasicBlock& block) {
     std::vector<std::uint32_t> entries;
     entries.reserve(block.instructions.size());
+
+    const auto strictly_increasing_addresses =
+        std::adjacent_find(
+            block.instructions.begin(),
+            block.instructions.end(),
+            [](const auto& left, const auto& right) {
+                return left.source_address >= right.source_address;
+            }) == block.instructions.end();
+
+    // Validated IR stores a block in strictly ascending address order. Walk
+    // that order once instead of searching the complete block again for every
+    // possible resume. Keep the original all-instruction search as an exact
+    // fallback for malformed/pre-validation input so this optimization cannot
+    // hide the diagnostics that reject it later.
+    std::size_t local_instruction_index = 0u;
     for (const auto& instruction : block.instructions) {
         if (!native_aot_may_return_at_instruction_fallthrough(instruction) ||
             instruction.source_address >
@@ -161,14 +176,28 @@ native_aot_internal_resume_entries(const katana::ir::BasicBlock& block) {
             continue;
         const auto resume = instruction.source_address + 2u;
         if (resume == block.start_address) continue;
-        const auto is_local_instruction =
-            std::any_of(block.instructions.begin(),
-                        block.instructions.end(),
-                        [&](const auto& candidate) {
-                            return candidate.source_address == resume &&
-                                   candidate.delay_slot.role !=
-                                       katana::ir::DelaySlotRole::Slot;
-                        });
+        bool is_local_instruction = false;
+        if (strictly_increasing_addresses) {
+            while (local_instruction_index < block.instructions.size() &&
+                   block.instructions[local_instruction_index].source_address <
+                       resume)
+                ++local_instruction_index;
+            is_local_instruction =
+                local_instruction_index < block.instructions.size() &&
+                block.instructions[local_instruction_index].source_address ==
+                    resume &&
+                block.instructions[local_instruction_index].delay_slot.role !=
+                    katana::ir::DelaySlotRole::Slot;
+        } else {
+            is_local_instruction =
+                std::any_of(block.instructions.begin(),
+                            block.instructions.end(),
+                            [&](const auto& candidate) {
+                                return candidate.source_address == resume &&
+                                       candidate.delay_slot.role !=
+                                           katana::ir::DelaySlotRole::Slot;
+                            });
+        }
         if (is_local_instruction) entries.push_back(resume);
     }
     std::sort(entries.begin(), entries.end());

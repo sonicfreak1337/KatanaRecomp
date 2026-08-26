@@ -13680,8 +13680,9 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                      guarded_cycle_flush_chainable});
             };
             append_dispatch_entry(block.start_address);
-            for (const auto resume :
-                 detail::native_aot_internal_resume_entries(block)) {
+            const auto internal_resumes =
+                detail::native_aot_internal_resume_entries(block);
+            for (const auto resume : internal_resumes) {
                 if (!dispatch_entry_addresses.contains(resume))
                     append_dispatch_entry(resume);
             }
@@ -13689,8 +13690,7 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 block.start_address >= boot_address &&
                 static_cast<std::uint64_t>(end) <= boot_end;
             if (immutable_boot_block) {
-                for (const auto resume :
-                     detail::native_aot_internal_resume_entries(block)) {
+                for (const auto resume : internal_resumes) {
                     if (!requested_resume_entries.contains(resume)) continue;
                     emitted_resume_entries.insert(resume);
                 }
@@ -24470,6 +24470,81 @@ std::string_view native_port_incomplete_outgoing_kind_name(
     return "unknown";
 }
 
+struct NativeAotResumeCache final {
+    struct BlockSlice final {
+        std::uint32_t block_start_address = 0u;
+        std::uint64_t block_end_address = 0u;
+        std::size_t instruction_count = 0u;
+        std::size_t begin = 0u;
+        std::size_t count = 0u;
+    };
+
+    std::vector<std::uint32_t> entries;
+    std::vector<BlockSlice> blocks;
+};
+
+NativeAotResumeCache build_native_aot_resume_cache(
+    const std::span<const katana::ir::Function> program) {
+    NativeAotResumeCache cache;
+    std::size_t block_count = 0u;
+    for (const auto& function : program) {
+        if (function.blocks.size() >
+            std::numeric_limits<std::size_t>::max() - block_count)
+            throw std::length_error(
+                "Native-AOT-Resume-Cache besitzt zu viele IR-Bloecke.");
+        block_count += function.blocks.size();
+    }
+    cache.blocks.reserve(block_count);
+
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            auto entries = detail::native_aot_internal_resume_entries(block);
+            auto block_end =
+                static_cast<std::uint64_t>(block.start_address) + 2u;
+            for (const auto& instruction : block.instructions)
+                block_end = std::max(
+                    block_end,
+                    static_cast<std::uint64_t>(
+                        instruction.source_address) +
+                        2u);
+            if (entries.size() >
+                std::numeric_limits<std::size_t>::max() -
+                    cache.entries.size())
+                throw std::length_error(
+                    "Native-AOT-Resume-Cache besitzt zu viele Entries.");
+            cache.blocks.push_back(
+                {block.start_address,
+                 block_end,
+                 block.instructions.size(),
+                 cache.entries.size(),
+                 entries.size()});
+            cache.entries.insert(
+                cache.entries.end(), entries.begin(), entries.end());
+        }
+    }
+    return cache;
+}
+
+std::span<const std::uint32_t> native_aot_cached_resume_entries(
+    const NativeAotResumeCache& cache,
+    const std::size_t block_ordinal,
+    const katana::ir::BasicBlock& block) {
+    if (block_ordinal >= cache.blocks.size())
+        throw std::invalid_argument(
+            "Native-AOT-Resume-Cache endet vor dem emittierten Programm.");
+    const auto& slice = cache.blocks[block_ordinal];
+    if (slice.block_start_address != block.start_address ||
+        slice.instruction_count != block.instructions.size())
+        throw std::invalid_argument(
+            "Native-AOT-Resume-Cache stimmt nicht mit dem IR-Block ueberein.");
+    if (slice.begin > cache.entries.size() ||
+        slice.count > cache.entries.size() - slice.begin)
+        throw std::invalid_argument(
+            "Native-AOT-Resume-Cache besitzt einen ungueltigen Blockbereich.");
+    return std::span<const std::uint32_t>(cache.entries).subspan(
+        slice.begin, slice.count);
+}
+
 struct NativePortProgramIndex final {
     std::map<std::uint32_t, std::set<std::uint32_t>> instruction_owners;
     std::map<std::uint32_t, NativePortFunctionBoundaryEvidence>
@@ -24795,7 +24870,8 @@ NativePortProgramIndex build_native_port_program_index(
     const katana::analysis::ControlFlowAnalysisResult& analysis,
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port,
-    const std::span<const NativePortExternalEntry> external_entries) {
+    const std::span<const NativePortExternalEntry> external_entries,
+    const NativeAotResumeCache& resume_cache) {
     NativePortProgramIndex index;
     // Building instruction_owners directly as a tree performs one logarithmic
     // map insertion plus a small set allocation for every materialized IR
@@ -24806,6 +24882,7 @@ NativePortProgramIndex build_native_port_program_index(
     // The resulting map/set values are byte-for-byte equivalent to the old
     // path and retain the ordered range queries used by hook admission.
     std::size_t instruction_owner_relation_size = 0u;
+    std::size_t resume_block_ordinal = 0u;
     for (const auto& function : program) {
         for (const auto& block : function.blocks) {
             if (instruction_owner_relation_size >
@@ -24888,11 +24965,12 @@ NativePortProgramIndex build_native_port_program_index(
             ++index.block_entry_counts[block.start_address];
             index.entry_owners[block.start_address].insert(
                 function.entry_address);
-            for (const auto resume :
-                 detail::native_aot_internal_resume_entries(block)) {
+            for (const auto resume : native_aot_cached_resume_entries(
+                     resume_cache, resume_block_ordinal, block)) {
                 ++index.safe_resume_entry_counts[resume];
                 index.entry_owners[resume].insert(function.entry_address);
             }
+            ++resume_block_ordinal;
             for (const auto successor : block.successors)
                 index.incoming_edge_sources[successor].insert(
                     function.entry_address);
@@ -24915,6 +24993,9 @@ NativePortProgramIndex build_native_port_program_index(
             }
         }
     }
+    if (resume_block_ordinal != resume_cache.blocks.size())
+        throw std::invalid_argument(
+            "Native-AOT-Resume-Cache enthaelt zusaetzliche IR-Bloecke.");
     std::sort(instruction_owner_relation.begin(),
               instruction_owner_relation.end());
     instruction_owner_relation.erase(
@@ -25357,6 +25438,7 @@ NativePortProgramIndex build_native_port_program_index(
         }
         return control->source_address;
     };
+    resume_block_ordinal = 0u;
     for (const auto& function : program) {
         // Membership dominates this loop and the addresses are never emitted
         // from the temporary container, so preserve deterministic output while
@@ -25374,9 +25456,10 @@ NativePortProgramIndex build_native_port_program_index(
         local_addresses.reserve(local_address_capacity);
         for (const auto& block : function.blocks) {
             local_addresses.insert(block.start_address);
-            for (const auto resume :
-                 detail::native_aot_internal_resume_entries(block))
+            for (const auto resume : native_aot_cached_resume_entries(
+                     resume_cache, resume_block_ordinal, block))
                 local_addresses.insert(resume);
+            ++resume_block_ordinal;
             for (const auto& instruction : block.instructions)
                 local_addresses.insert(instruction.source_address);
         }
@@ -25455,6 +25538,9 @@ NativePortProgramIndex build_native_port_program_index(
                     block_control_address(block), std::nullopt);
         }
     }
+    if (resume_block_ordinal != resume_cache.blocks.size())
+        throw std::invalid_argument(
+            "Native-AOT-Resume-Cache enthaelt zusaetzliche IR-Bloecke.");
     for (const auto& edge : analysis.resolved_edges) {
         const auto sources =
             index.instruction_owners.find(edge.instruction_address);
@@ -29476,36 +29562,38 @@ validate_prepared_native_port_admission_state(
                             std::numeric_limits<std::uint32_t>::max()) +
                         1u))
             return reject("boot-range-overflow");
+
+        const auto admission_resume_cache =
+            build_native_aot_resume_cache(state.emitted_program);
+        std::unordered_set<std::uint32_t> emitted_block_entries;
+        emitted_block_entries.reserve(admission_resume_cache.blocks.size());
+        std::unordered_map<
+            std::uint32_t,
+            std::vector<std::pair<std::uint32_t, std::uint64_t>>>
+            emitted_resume_owners;
+        emitted_resume_owners.reserve(admission_resume_cache.entries.size());
+        for (const auto& block : admission_resume_cache.blocks) {
+            emitted_block_entries.insert(block.block_start_address);
+            const auto entries =
+                std::span<const std::uint32_t>(admission_resume_cache.entries)
+                    .subspan(block.begin, block.count);
+            for (const auto resume : entries)
+                emitted_resume_owners[resume].push_back(
+                    {block.block_start_address, block.block_end_address});
+        }
         for (const auto resume : state.native_aot_resume_entries) {
             if ((resume & 1u) != 0u || resume < prepared.boot_address ||
                 static_cast<std::uint64_t>(resume) >= boot_end)
                 return reject("native-resume-range");
-            std::size_t matching_blocks = 0u;
-            for (const auto& function : state.emitted_program) {
-                for (const auto& block : function.blocks) {
-                    if (block.start_address == resume)
-                        return reject("native-resume-block-entry");
-                    const auto candidates =
-                        detail::native_aot_internal_resume_entries(block);
-                    if (!std::binary_search(
-                            candidates.begin(), candidates.end(), resume))
-                        continue;
-                    std::uint64_t block_end =
-                        static_cast<std::uint64_t>(block.start_address) + 2u;
-                    for (const auto& instruction : block.instructions)
-                        block_end = std::max(
-                            block_end,
-                            static_cast<std::uint64_t>(
-                                instruction.source_address) +
-                                2u);
-                    if (block.start_address < prepared.boot_address ||
-                        block_end > boot_end)
-                        return reject("native-resume-block-range");
-                    ++matching_blocks;
-                }
-            }
-            if (matching_blocks != 1u)
+            if (emitted_block_entries.contains(resume))
+                return reject("native-resume-block-entry");
+            const auto owners = emitted_resume_owners.find(resume);
+            if (owners == emitted_resume_owners.end() ||
+                owners->second.size() != 1u)
                 return reject("native-resume-owner");
+            const auto [block_start, block_end] = owners->second.front();
+            if (block_start < prepared.boot_address || block_end > boot_end)
+                return reject("native-resume-block-range");
         }
 
         // Rebuild only the ownership relations that are derivable from the
@@ -29527,6 +29615,7 @@ validate_prepared_native_port_admission_state(
         // payload is stale and must not participate in root ownership.
         for (const auto& candidate : prepared.analysis.recursive.functions)
             expected_function_entries.insert(candidate.address);
+        std::size_t resume_block_ordinal = 0u;
         for (const auto& function : state.emitted_program) {
             ++expected_function_counts[function.entry_address];
             expected_function_entries.insert(function.entry_address);
@@ -29536,17 +29625,22 @@ validate_prepared_native_port_admission_state(
                 ++expected_block_entry_counts[block.start_address];
                 expected_entry_owners[block.start_address].insert(
                     function.entry_address);
-                for (const auto resume :
-                     detail::native_aot_internal_resume_entries(block)) {
+                for (const auto resume : native_aot_cached_resume_entries(
+                         admission_resume_cache,
+                         resume_block_ordinal,
+                         block)) {
                     ++expected_safe_resume_entry_counts[resume];
                     expected_entry_owners[resume].insert(
                         function.entry_address);
                 }
+                ++resume_block_ordinal;
                 for (const auto& instruction : block.instructions)
                     expected_instruction_owners[instruction.source_address]
                         .insert(function.entry_address);
             }
         }
+        if (resume_block_ordinal != admission_resume_cache.blocks.size())
+            return reject("native-resume-cache-block-count");
         if (index.function_entries != expected_function_entries)
             return reject("program-index-stale-function-entry");
         if (index.instruction_owners != expected_instruction_owners ||
@@ -30361,6 +30455,11 @@ prepare_dreamcast_port_project_impl(
             prepared.program, latent_aot);
     report_progress(
         options,
+        "game-project-validation:program-index-resume-cache");
+    const auto native_aot_resume_cache =
+        build_native_aot_resume_cache(emitted_program);
+    report_progress(
+        options,
         "game-project-validation:native-resume-index");
     // Resume and executable-hook admission query the same emitted entry
     // ownership facts. Build them once: rescanning every block and rebuilding
@@ -30370,39 +30469,32 @@ prepare_dreamcast_port_project_impl(
         std::uint32_t block_start_address = 0u;
         std::uint64_t block_end_address = 0u;
     };
-    std::size_t emitted_block_count = 0u;
-    for (const auto& function : emitted_program) {
-        if (function.blocks.size() >
-            std::numeric_limits<std::size_t>::max() - emitted_block_count)
-            throw std::length_error(
-                "Emittiertes Programm besitzt zu viele IR-Bloecke.");
-        emitted_block_count += function.blocks.size();
-    }
     std::unordered_map<std::uint32_t, std::size_t>
         emitted_block_entry_counts;
     std::unordered_map<
         std::uint32_t,
         std::vector<NativeAotInternalResumeOwner>>
         emitted_internal_resume_owners;
-    emitted_block_entry_counts.reserve(emitted_block_count);
-    emitted_internal_resume_owners.reserve(emitted_block_count);
+    emitted_block_entry_counts.reserve(native_aot_resume_cache.blocks.size());
+    emitted_internal_resume_owners.reserve(
+        native_aot_resume_cache.blocks.size());
+    std::size_t resume_block_ordinal = 0u;
     for (const auto& function : emitted_program) {
         for (const auto& block : function.blocks) {
             ++emitted_block_entry_counts[block.start_address];
-            auto block_end =
-                static_cast<std::uint64_t>(block.start_address) + 2u;
-            for (const auto& instruction : block.instructions)
-                block_end = std::max(
-                    block_end,
-                    static_cast<std::uint64_t>(instruction.source_address) +
-                        2u);
-            const auto candidates =
-                detail::native_aot_internal_resume_entries(block);
+            const auto candidates = native_aot_cached_resume_entries(
+                native_aot_resume_cache, resume_block_ordinal, block);
+            const auto& cached_block =
+                native_aot_resume_cache.blocks[resume_block_ordinal];
             for (const auto candidate : candidates)
                 emitted_internal_resume_owners[candidate].push_back(
-                    {block.start_address, block_end});
+                    {block.start_address, cached_block.block_end_address});
+            ++resume_block_ordinal;
         }
     }
+    if (resume_block_ordinal != native_aot_resume_cache.blocks.size())
+        throw std::invalid_argument(
+            "Native-AOT-Resume-Cache enthaelt zusaetzliche IR-Bloecke.");
     const auto emitted_block_entry_count =
         [&](const std::uint32_t address) -> std::size_t {
         const auto found = emitted_block_entry_counts.find(address);
@@ -30620,7 +30712,8 @@ prepare_dreamcast_port_project_impl(
         prepared.analysis,
         options.game_project,
         options.native_port_definition,
-        native_product_external_entries);
+        native_product_external_entries,
+        native_aot_resume_cache);
     if (precomputed_program_index != nullptr)
         rehydrate_native_disc_program_index_checkpoint(
             native_port_program_index, *precomputed_program_index);
