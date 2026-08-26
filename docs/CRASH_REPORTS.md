@@ -1,5 +1,15 @@
 # Kontrollierte Crashberichte
 
+CrashCapsules sind terminale Evidence der kleinen Bring-up-Schleife aus
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Sie bestimmen
+einen stabilen Stop-Digest und liefern einen Beweisauftrag, promoten aber
+weder Ziel noch Kontrollfluss. Sobald eine fruehere Replay-Divergenz bekannt
+ist, hat diese Vorrang vor dem spaeteren Crashzustand.
+
+Automatisierte Laeufe bleiben stumm und unsichtbar. Der Crashpfad bleibt
+klein, vorallokiert und allokationsfrei; umfangreiche Symbolisierung,
+Clustering und Last-Writer-Auswertung erfolgen offline.
+
 Der additive Runtimebaustein `CrashCapsule` wurde mit Runtime-ABI `116`
 eingefuehrt und liegt im aktuellen Runtime-ABI als v4 vor. Er ergaenzt den
 portablen v1-Bericht um begrenzte PC/PR-/Register-,

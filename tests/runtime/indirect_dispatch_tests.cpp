@@ -683,6 +683,710 @@ void runtime_only_hit_hotloop_regression() {
     require(stale_cache_rejected,
             "Block-/Codegeneration liess einen invalidierten Inline-Cachehit zu.");
 }
+
+void native_bringup_allowlist_regression() {
+    static_assert(!NativeBringupDispatchContext::release_eligible);
+    constexpr std::string_view sha_a =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    constexpr std::string_view sha_b =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    constexpr std::string_view sha_c =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    constexpr std::string_view sha_d =
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    constexpr std::string_view sha_e =
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    constexpr std::string_view sha_f =
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    constexpr std::string_view sha_1 =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    constexpr std::string_view sha_2 =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    constexpr std::string_view sha_3 =
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+    constexpr std::string_view sha_4 =
+        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+    constexpr std::string_view sha_5 =
+        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    constexpr std::string_view sha_6 =
+        "sha256:6666666666666666666666666666666666666666666666666666666666666666";
+    constexpr std::string_view sha_7 =
+        "sha256:7777777777777777777777777777777777777777777777777777777777777777";
+    constexpr std::string_view sha_8 =
+        "sha256:8888888888888888888888888888888888888888888888888888888888888888";
+    constexpr std::string_view sha_9 =
+        "sha256:9999999999999999999999999999999999999999999999999999999999999999";
+    constexpr std::string_view sha_0 =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    constexpr std::string_view aot_pack_identity =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    constexpr std::uint32_t callsite = 0x8C006004u;
+    constexpr std::uint32_t target = 0x8C007000u;
+    constexpr std::uint32_t second_callsite = 0x8C006104u;
+    constexpr std::uint32_t second_target = 0x8C008000u;
+    constexpr std::uint64_t aot_pack_generation = 13u;
+    constexpr std::uint64_t runtime_generation = 29u;
+    const BlockAddress source{callsite - 4u,
+                              canonical_physical_address(callsite - 4u)};
+    const BlockAddress second_source{
+        second_callsite - 4u,
+        canonical_physical_address(second_callsite - 4u)};
+
+    NativeBringupDispatchEntry allowed;
+    allowed.admission.stage = NativeBringupEvidenceStage::Proven;
+    allowed.admission.transfer_kind =
+        NativeBringupTransferKind::CallRegister;
+    allowed.admission.source_owner = source.virtual_address - 0x20u;
+    allowed.admission.source_owner_size = 0x40u;
+    allowed.admission.source_block = source.virtual_address;
+    allowed.admission.source_block_size = 8u;
+    allowed.admission.callsite = callsite;
+    allowed.admission.continuation = callsite + 4u;
+    allowed.admission.source_owner_code_identity = sha_c;
+    allowed.admission.source_block_code_identity = sha_9;
+    allowed.admission.callsite_code_identity = sha_d;
+    allowed.admission.target = target;
+    allowed.admission.target_block_size = 4u;
+    allowed.admission.target_owner = target;
+    allowed.admission.target_owner_size = 0x20u;
+    allowed.admission.target_block_code_identity = sha_e;
+    allowed.admission.target_owner_code_identity = sha_f;
+    allowed.admission.source_image_id = "fixture-source-image-a";
+    allowed.admission.target_image_id = "fixture-target-image-a";
+    allowed.admission.source_module_identity = sha_1;
+    allowed.admission.target_module_identity = sha_2;
+    allowed.admission.source_generation = aot_pack_generation;
+    allowed.admission.target_generation = aot_pack_generation;
+    allowed.admission.proposed_promotion =
+        NativeBringupPromotionType::StaticCompiledTarget;
+    allowed.source = {source,
+                      allowed.admission.source_block_size,
+                      BlockEndKind::Call,
+                      allowed.admission.source_block_code_identity};
+    allowed.target = {{target, canonical_physical_address(target)},
+                      allowed.admission.target_block_size,
+                      BlockEndKind::Return,
+                      allowed.admission.target_block_code_identity};
+
+    auto second_allowed = allowed;
+    second_allowed.admission.stage = NativeBringupEvidenceStage::Candidate;
+    second_allowed.admission.proposed_promotion =
+        NativeBringupPromotionType::AnalyzerReproof;
+    second_allowed.admission.missing_proof =
+        "strict-frontier-proof-remains-open";
+    second_allowed.admission.static_correlation =
+        "export-revalidated-static-correlation";
+    second_allowed.admission.analyzer_path =
+        "control-flow/indirect-dispatch";
+    second_allowed.admission.source_owner =
+        second_source.virtual_address - 0x20u;
+    second_allowed.admission.source_block = second_source.virtual_address;
+    second_allowed.admission.transfer_kind =
+        NativeBringupTransferKind::TailJumpRegister;
+    second_allowed.admission.callsite = second_callsite;
+    second_allowed.admission.continuation = 0u;
+    second_allowed.admission.source_owner_code_identity = sha_3;
+    second_allowed.admission.source_block_code_identity = sha_0;
+    second_allowed.admission.callsite_code_identity = sha_4;
+    second_allowed.admission.target = second_target;
+    second_allowed.admission.target_owner = second_target;
+    second_allowed.admission.target_block_code_identity = sha_5;
+    second_allowed.admission.target_owner_code_identity = sha_6;
+    second_allowed.admission.source_image_id = "fixture-source-image-b";
+    second_allowed.admission.target_image_id = "fixture-target-image-b";
+    second_allowed.admission.source_module_identity = sha_7;
+    second_allowed.admission.target_module_identity = sha_8;
+    second_allowed.admission.source_generation = aot_pack_generation;
+    second_allowed.admission.target_generation = aot_pack_generation;
+    second_allowed.source = {second_source,
+                             second_allowed.admission.source_block_size,
+                             BlockEndKind::DynamicBranch,
+                             second_allowed.admission.source_block_code_identity};
+    second_allowed.target = {
+        {second_target, canonical_physical_address(second_target)},
+        second_allowed.admission.target_block_size,
+        BlockEndKind::Return,
+        second_allowed.admission.target_block_code_identity};
+
+    const NativeBringupDispatchPackIdentity pack_identity{
+        native_bringup_evidence_contract_version,
+        sha_a,
+        "fixture-project",
+        "fixture-v1",
+        sha_b,
+        aot_pack_identity,
+        aot_pack_generation};
+    const std::array allowlist{allowed, second_allowed};
+    const NativeBringupDispatchPack pack{pack_identity, allowlist};
+
+    IndirectDispatchRequest base_request;
+    base_request.kind = IndirectDispatchKind::Call;
+    base_request.callsite = callsite;
+    base_request.target = target;
+    base_request.return_address = callsite + 4u;
+    base_request.source = source;
+    base_request.variant.runtime_generation = runtime_generation;
+    base_request.resolution_origin = DispatchResolutionOrigin::RuntimeOnly;
+    base_request.dispatch_class = RuntimeDispatchClass::RuntimeOnly;
+
+    {
+        RuntimeBlockTable strict_table;
+        CpuState strict_cpu;
+        strict_cpu.write_sr(sr_md_mask);
+        strict_cpu.pc = 0x8C000100u;
+        strict_cpu.pr = 0x8C000200u;
+        const auto pc_before = strict_cpu.pc;
+        const auto pr_before = strict_cpu.pr;
+        bool rejected = false;
+        try {
+            static_cast<void>(
+                dispatch_indirect(strict_cpu, strict_table, base_request));
+        } catch (const IndirectDispatchError& error) {
+            rejected = error.error() == DispatchDiagnosticError::UnknownTarget &&
+                       error.native_bringup_miss() == NativeBringupDispatchMiss::None;
+        }
+        require(rejected && strict_cpu.pc == pc_before &&
+                    strict_cpu.pr == pr_before,
+                "Strict-Product-Dispatch akzeptiert ohne expliziten Bring-up-Kontext ein "
+                "fehlendes statisches Ziel oder mutiert den CPU-Zustand.");
+    }
+
+    const auto make_static_block = [](
+                                       const NativeBringupDispatchStaticAotBinding& binding,
+                                       const std::uint64_t active_runtime_generation) {
+        RuntimeBlock native{binding.block.virtual_address,
+                            binding.block.physical_address,
+                            binding.size,
+                            binding.end_kind,
+                            {0u, 0u, 0u, 0u, active_runtime_generation},
+                            block,
+                            std::string(binding.block_code_identity),
+                            false};
+        native.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        return native;
+    };
+
+    RuntimeBlockTable bringup_table;
+    bringup_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    const auto source_registered = bringup_table.register_static(
+        make_static_block(allowed.source, runtime_generation));
+    const auto registered = bringup_table.register_static(
+        make_static_block(allowed.target, runtime_generation));
+    const auto second_source_registered = bringup_table.register_static(
+        make_static_block(second_allowed.source, runtime_generation));
+    const auto second_registered = bringup_table.register_static(
+        make_static_block(second_allowed.target, runtime_generation));
+    bringup_table.seal_static();
+    const auto table_generation_before = bringup_table.dispatch_generation();
+    NativeBringupDispatchObservations observations;
+    const auto context = make_native_bringup_dispatch_context(
+        bringup_table, pack, runtime_generation, observations);
+    IndirectDispatchMetrics metrics;
+    auto request = base_request;
+    request.metrics = &metrics;
+    request.native_bringup = &context;
+
+    const auto preflight = preflight_native_bringup_dispatch(
+        bringup_table,
+        context,
+        {NativeBringupTransferKind::CallRegister,
+         base_request.callsite,
+         base_request.target,
+         base_request.return_address,
+         base_request.source,
+         base_request.variant});
+    require(preflight.block == registered &&
+                preflight.execution.function == block &&
+                preflight.target == target &&
+                preflight.physical_target ==
+                    canonical_physical_address(target) &&
+                bringup_table.static_dispatch_generation_guard_current(
+                    preflight.execution.generation_guard) &&
+                metrics.hits() == 0u && metrics.misses() == 0u &&
+                observations.total_occurrences() == 0u &&
+                bringup_table.dispatch_generation() == table_generation_before,
+            "Reiner Bring-up-Preflight mutiert Telemetrie/Tabelle oder verliert "
+            "den validierten Target-Guard.");
+    auto missing_preflight_request = NativeBringupDispatchPreflightRequest{
+        NativeBringupTransferKind::CallRegister,
+        base_request.callsite,
+        base_request.target + 2u,
+        base_request.return_address,
+        base_request.source,
+        base_request.variant};
+    bool pure_preflight_miss = false;
+    try {
+        static_cast<void>(preflight_native_bringup_dispatch(
+            bringup_table, context, missing_preflight_request));
+    } catch (const NativeBringupDispatchError& error) {
+        pure_preflight_miss =
+            error.miss() ==
+            NativeBringupDispatchMiss::UnknownCompiledTarget;
+    }
+    require(pure_preflight_miss && metrics.hits() == 0u &&
+                metrics.misses() == 0u &&
+                observations.total_occurrences() == 0u &&
+                bringup_table.dispatch_generation() == table_generation_before,
+            "Bring-up-Preflight-Miss schreibt Telemetrie oder mutiert die Tabelle.");
+
+    RuntimeBlockTable alternate_table;
+    alternate_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    static_cast<void>(alternate_table.register_static(
+        make_static_block(allowed.source, runtime_generation)));
+    static_cast<void>(alternate_table.register_static(
+        make_static_block(allowed.target, runtime_generation)));
+    static_cast<void>(alternate_table.register_static(
+        make_static_block(second_allowed.source, runtime_generation)));
+    static_cast<void>(alternate_table.register_static(
+        make_static_block(second_allowed.target, runtime_generation)));
+    alternate_table.seal_static();
+    bool alternate_table_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_dispatch(
+            alternate_table,
+            context,
+            {NativeBringupTransferKind::CallRegister,
+             base_request.callsite,
+             base_request.target,
+             base_request.return_address,
+             base_request.source,
+             base_request.variant}));
+    } catch (const NativeBringupDispatchError& error) {
+        alternate_table_rejected =
+            error.miss() ==
+            NativeBringupDispatchMiss::InvalidEntry;
+    }
+    require(alternate_table_rejected &&
+                observations.total_occurrences() == 0u,
+            "Validierter Bring-up-Context konnte gegen eine andere versiegelte "
+            "Static-AOT-Tabelle verwendet werden.");
+
+    CpuState cpu;
+    cpu.write_sr(sr_md_mask);
+    cpu.pc = source.virtual_address;
+    cpu.pr = 0x8C000300u;
+    const auto first = dispatch_indirect(cpu, bringup_table, request);
+
+    auto second_request = base_request;
+    second_request.kind = IndirectDispatchKind::TailJump;
+    second_request.callsite = second_callsite;
+    second_request.target = second_target;
+    second_request.return_address = 0u;
+    second_request.source = second_source;
+    second_request.metrics = &metrics;
+    second_request.native_bringup = &context;
+    CpuState second_cpu;
+    second_cpu.write_sr(sr_md_mask);
+    second_cpu.pc = second_source.virtual_address;
+    constexpr std::uint32_t second_pr = 0x8C000320u;
+    second_cpu.pr = second_pr;
+    const auto second =
+        dispatch_indirect(second_cpu, bringup_table, second_request);
+    require(first.native_bringup && second.native_bringup &&
+                source_registered && second_source_registered &&
+                first.block == registered && second.block == second_registered &&
+                first.execution.function == block &&
+                first.execution.virtual_start == target &&
+                first.execution.physical_origin ==
+                    canonical_physical_address(target) &&
+                first.execution.variant.runtime_generation == runtime_generation &&
+                first.execution.provenance ==
+                    allowed.target.block_code_identity &&
+                first.execution.generation_guard.kind ==
+                    BlockDispatchGenerationGuardKind::StaticAot &&
+                first.execution.generation_guard_reusable &&
+                bringup_table.static_dispatch_generation_guard_current(
+                    first.execution.generation_guard) &&
+                first.resulting_pc == target &&
+                first.resulting_pr == base_request.return_address &&
+                second.resulting_pc == second_target &&
+                second.resulting_pr == second_pr &&
+                cpu.pc == target && cpu.pr == base_request.return_address &&
+                second_cpu.pc == second_target &&
+                second_cpu.pr == second_pr &&
+                bringup_table.size() == 4u &&
+                bringup_table.dispatch_generation() == table_generation_before &&
+                metrics.hits() == 2u && metrics.misses() == 0u &&
+                metrics.runtime_only_dispatch_share_ppm() == 1'000'000u &&
+                observations.total_occurrences() == 2u &&
+                observations.events().size() == 2u &&
+                observations.events().front().executed &&
+                observations.events().front().aot_pack_generation ==
+                    aot_pack_generation &&
+                observations.events().front().runtime_generation == runtime_generation &&
+                observations.events().front().occurrences == 1u &&
+                allowed.admission.source_owner_code_identity !=
+                    second_allowed.admission.source_owner_code_identity &&
+                allowed.admission.target_owner_code_identity !=
+                    second_allowed.admission.target_owner_code_identity &&
+                second_allowed.admission.stage ==
+                    NativeBringupEvidenceStage::Candidate &&
+                second_allowed.admission.proposed_promotion ==
+                    NativeBringupPromotionType::AnalyzerReproof &&
+                !second_allowed.admission.missing_proof.empty(),
+            "Multi-Owner-Pack verwendet nicht ausschliesslich aktive versiegelte "
+            "Source-/Target-Static-AOT-Handles oder mutiert Tabelle/Beobachtung.");
+    const auto observation_json = observations.serialize_json();
+    require(observation_json.find("katana-native-bringup-dispatch-v1") !=
+                    std::string::npos &&
+                observation_json.find("\"non_release\":true") !=
+                    std::string::npos &&
+                observation_json.find("\"proof\":\"incomplete\"") !=
+                    std::string::npos &&
+                observation_json.find("\"static_proof_promotions\":0") !=
+                    std::string::npos &&
+                observation_json.find("\"aot_pack_generation\":13") !=
+                    std::string::npos &&
+                observation_json.find("\"runtime_generation\":29") !=
+                    std::string::npos,
+            "Kompakter Bring-up-Snapshot verliert Non-Release-/No-Proof-Vertrag.");
+
+    RuntimeBlockTable rebuilt_table;
+    rebuilt_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    static_cast<void>(rebuilt_table.register_static(
+        make_static_block(allowed.source, runtime_generation + 1u)));
+    const auto rebuilt_registered = rebuilt_table.register_static(
+        make_static_block(allowed.target, runtime_generation + 1u));
+    static_cast<void>(rebuilt_table.register_static(
+        make_static_block(second_allowed.source, runtime_generation + 1u)));
+    static_cast<void>(rebuilt_table.register_static(
+        make_static_block(second_allowed.target, runtime_generation + 1u)));
+    rebuilt_table.seal_static();
+    NativeBringupDispatchObservations rebuilt_observations;
+    const auto rebuilt_context = make_native_bringup_dispatch_context(
+        rebuilt_table,
+        pack,
+        runtime_generation + 1u,
+        rebuilt_observations);
+    auto rebuilt_request = base_request;
+    rebuilt_request.variant.runtime_generation += 1u;
+    rebuilt_request.native_bringup = &rebuilt_context;
+    CpuState rebuilt_cpu;
+    rebuilt_cpu.write_sr(sr_md_mask);
+    const auto rebuilt =
+        dispatch_indirect(rebuilt_cpu, rebuilt_table, rebuilt_request);
+    require(rebuilt.native_bringup && rebuilt.block == rebuilt_registered &&
+                rebuilt.execution.function == block &&
+                rebuilt.execution.variant.runtime_generation ==
+                    runtime_generation + 1u &&
+                rebuilt_table.static_dispatch_generation_guard_current(
+                    rebuilt.execution.generation_guard) &&
+                rebuilt_observations.events().size() == 1u &&
+                rebuilt_observations.events().front().runtime_generation ==
+                    runtime_generation + 1u,
+            "Unveraenderter AOT-Pack kann nach Runtime-/Adapter-Rebuild nicht gegen die "
+            "neu versiegelte aktive Static-AOT-Generation gebunden werden.");
+
+    const auto expect_context_rejection =
+        [&](const RuntimeBlockTable& rejected_table,
+            const NativeBringupDispatchPack& candidate_pack,
+            const std::uint64_t active_runtime_generation) {
+        NativeBringupDispatchObservations rejected_observations;
+        const auto table_size_before = rejected_table.size();
+        const auto table_generation_before =
+            rejected_table.dispatch_generation();
+        bool rejected = false;
+        try {
+            static_cast<void>(make_native_bringup_dispatch_context(
+                rejected_table,
+                candidate_pack,
+                active_runtime_generation,
+                rejected_observations));
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        require(rejected && rejected_observations.total_occurrences() == 0u &&
+                    rejected_table.size() == table_size_before &&
+                    rejected_table.dispatch_generation() ==
+                        table_generation_before,
+                "Ungueltiger Bring-up-Pack/Tabellen-Seal wurde nicht rein bei "
+                "Context-Erzeugung verworfen.");
+    };
+
+    const auto expect_rejection =
+        [&](RuntimeBlockTable& rejected_table,
+            const NativeBringupDispatchPack& candidate_pack,
+            const std::uint64_t active_runtime_generation,
+            IndirectDispatchRequest rejected_request,
+            const NativeBringupDispatchMiss expected_miss,
+            const DispatchDiagnosticError expected_error) {
+        NativeBringupDispatchObservations rejected_observations;
+        const auto rejected_context = make_native_bringup_dispatch_context(
+            rejected_table,
+            candidate_pack,
+            active_runtime_generation,
+            rejected_observations);
+        IndirectDispatchMetrics rejected_metrics;
+        rejected_request.metrics = &rejected_metrics;
+        rejected_request.native_bringup = &rejected_context;
+        CpuState rejected_cpu;
+        rejected_cpu.write_sr(sr_md_mask);
+        rejected_cpu.pc = 0x8C000400u;
+        rejected_cpu.pr = 0x8C000500u;
+        const auto pc_before = rejected_cpu.pc;
+        const auto pr_before = rejected_cpu.pr;
+        const auto table_size_before = rejected_table.size();
+        const auto table_generation_before_rejection =
+            rejected_table.dispatch_generation();
+        try {
+            static_cast<void>(dispatch_indirect(
+                rejected_cpu, rejected_table, rejected_request));
+        } catch (const IndirectDispatchError& error) {
+            require(error.error() == expected_error &&
+                        error.native_bringup_miss() == expected_miss &&
+                        rejected_cpu.pc == pc_before &&
+                        rejected_cpu.pr == pr_before &&
+                        rejected_table.size() == table_size_before &&
+                        rejected_table.dispatch_generation() ==
+                            table_generation_before_rejection &&
+                        rejected_metrics.hits() == 0u &&
+                        rejected_metrics.misses() == 1u &&
+                        rejected_observations.total_occurrences() == 1u &&
+                        rejected_observations.events().size() == 1u &&
+                        !rejected_observations.events().front().executed &&
+                        rejected_observations.events().front().miss == expected_miss,
+                    "Bring-up-Miss ist nicht fatal, transaktional oder strukturiert.");
+            return;
+        }
+        throw std::runtime_error("Ungueltiges Bring-up-Ziel wurde akzeptiert.");
+    };
+
+    auto unknown_request = base_request;
+    unknown_request.target += 2u;
+    expect_rejection(bringup_table,
+                     pack,
+                     runtime_generation,
+                     unknown_request,
+                     NativeBringupDispatchMiss::UnknownCompiledTarget,
+                     DispatchDiagnosticError::UnknownTarget);
+
+    auto missing_pack_identity = pack_identity;
+    missing_pack_identity.authoring_artifact_identity = {};
+    const NativeBringupDispatchPack missing_identity_pack{
+        missing_pack_identity, allowlist};
+    expect_context_rejection(
+        bringup_table, missing_identity_pack, runtime_generation);
+
+    auto raw_hash_pack_identity = pack_identity;
+    raw_hash_pack_identity.authoring_artifact_identity = sha_a.substr(7u);
+    const NativeBringupDispatchPack raw_hash_pack{
+        raw_hash_pack_identity, allowlist};
+    expect_context_rejection(bringup_table, raw_hash_pack, runtime_generation);
+    auto wrong_runtime_request = base_request;
+    ++wrong_runtime_request.variant.runtime_generation;
+    expect_rejection(bringup_table,
+                     pack,
+                     runtime_generation,
+                     wrong_runtime_request,
+                     NativeBringupDispatchMiss::GenerationMismatch,
+                     DispatchDiagnosticError::GenerationMismatch);
+
+    auto wrong_pack_generation_entry = allowed;
+    ++wrong_pack_generation_entry.admission.target_generation;
+    const std::array wrong_generation_allowlist{wrong_pack_generation_entry};
+    const NativeBringupDispatchPack wrong_generation_pack{
+        pack_identity, wrong_generation_allowlist};
+    expect_context_rejection(
+        bringup_table, wrong_generation_pack, runtime_generation);
+
+    const std::array unsorted_allowlist{second_allowed, allowed};
+    const NativeBringupDispatchPack unsorted_pack{
+        pack_identity, unsorted_allowlist};
+    expect_context_rejection(bringup_table, unsorted_pack, runtime_generation);
+
+    std::vector<NativeBringupDispatchEntry> oversized_allowlist(
+        native_bringup_dispatch_maximum_entries + 1u, allowed);
+    const NativeBringupDispatchPack oversized_pack{
+        pack_identity, oversized_allowlist};
+    expect_context_rejection(bringup_table, oversized_pack, runtime_generation);
+
+    auto nonterminal_callsite = allowed;
+    nonterminal_callsite.admission.source_block_size += 2u;
+    const std::array nonterminal_allowlist{nonterminal_callsite};
+    const NativeBringupDispatchPack nonterminal_pack{
+        pack_identity, nonterminal_allowlist};
+    expect_context_rejection(
+        bringup_table, nonterminal_pack, runtime_generation);
+
+    auto crossing_alias = allowed;
+    crossing_alias.admission.target = 0x9FFFFFFCu;
+    crossing_alias.admission.target_block_size = 6u;
+    crossing_alias.admission.target_owner = crossing_alias.admission.target;
+    crossing_alias.admission.target_owner_size = 6u;
+    crossing_alias.target = {
+        {crossing_alias.admission.target,
+         canonical_physical_address(crossing_alias.admission.target)},
+        crossing_alias.admission.target_block_size,
+        BlockEndKind::Return,
+        crossing_alias.admission.target_block_code_identity};
+    const std::array crossing_alias_allowlist{crossing_alias};
+    const NativeBringupDispatchPack crossing_alias_pack{
+        pack_identity, crossing_alias_allowlist};
+    expect_context_rejection(
+        bringup_table, crossing_alias_pack, runtime_generation);
+
+    auto wrong_source_request = base_request;
+    wrong_source_request.source.virtual_address += 2u;
+    wrong_source_request.source.physical_address += 2u;
+    expect_rejection(bringup_table,
+                     pack,
+                     runtime_generation,
+                     wrong_source_request,
+                     NativeBringupDispatchMiss::SourceIdentityMismatch,
+                     DispatchDiagnosticError::ByteIdentityMismatch);
+    auto wrong_continuation_request = base_request;
+    wrong_continuation_request.return_address += 2u;
+    expect_rejection(bringup_table,
+                     pack,
+                     runtime_generation,
+                     wrong_continuation_request,
+                     NativeBringupDispatchMiss::SourceIdentityMismatch,
+                     DispatchDiagnosticError::ByteIdentityMismatch);
+
+    auto runtime_contract = allowed;
+    runtime_contract.admission.stage =
+        NativeBringupEvidenceStage::RuntimeContract;
+    runtime_contract.admission.proposed_promotion =
+        NativeBringupPromotionType::ValidatedRuntimeContract;
+    runtime_contract.admission.runtime_contract_identity = sha_8;
+    const std::array runtime_contract_allowlist{runtime_contract};
+    const NativeBringupDispatchPack runtime_contract_pack{
+        pack_identity, runtime_contract_allowlist};
+    expect_context_rejection(
+        bringup_table, runtime_contract_pack, runtime_generation);
+
+    auto incomplete_candidate = second_allowed;
+    incomplete_candidate.admission.missing_proof = {};
+    const std::array incomplete_candidate_allowlist{incomplete_candidate};
+    const NativeBringupDispatchPack incomplete_candidate_pack{
+        pack_identity, incomplete_candidate_allowlist};
+    expect_context_rejection(
+        bringup_table, incomplete_candidate_pack, runtime_generation);
+
+    auto observed = allowed;
+    observed.admission.stage = NativeBringupEvidenceStage::Observed;
+    const std::array observed_allowlist{observed};
+    const NativeBringupDispatchPack observed_pack{
+        pack_identity, observed_allowlist};
+    expect_context_rejection(bringup_table, observed_pack, runtime_generation);
+
+    auto unresolved = allowed;
+    unresolved.admission.stage = NativeBringupEvidenceStage::Unresolved;
+    const std::array unresolved_allowlist{unresolved};
+    const NativeBringupDispatchPack unresolved_pack{
+        pack_identity, unresolved_allowlist};
+    expect_context_rejection(
+        bringup_table, unresolved_pack, runtime_generation);
+
+    auto malformed_duplicate = allowed;
+    malformed_duplicate.admission.target_block_code_identity = {};
+    const std::array duplicate_allowlist{allowed, malformed_duplicate};
+    const NativeBringupDispatchPack duplicate_pack{
+        pack_identity, duplicate_allowlist};
+    expect_context_rejection(bringup_table, duplicate_pack, runtime_generation);
+
+    RuntimeBlockTable wrong_source_table;
+    wrong_source_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    auto wrong_source = make_static_block(allowed.source, runtime_generation);
+    wrong_source.provenance = "wrong-source-provenance";
+    static_cast<void>(wrong_source_table.register_static(std::move(wrong_source)));
+    static_cast<void>(wrong_source_table.register_static(
+        make_static_block(allowed.target, runtime_generation)));
+    wrong_source_table.seal_static();
+    const std::array first_only_allowlist{allowed};
+    const NativeBringupDispatchPack first_only_pack{
+        pack_identity, first_only_allowlist};
+    expect_context_rejection(
+        wrong_source_table, first_only_pack, runtime_generation);
+
+    RuntimeBlockTable wrong_target_table;
+    wrong_target_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    static_cast<void>(wrong_target_table.register_static(
+        make_static_block(allowed.source, runtime_generation)));
+    auto wrong_target = make_static_block(allowed.target, runtime_generation);
+    wrong_target.provenance = "wrong-target-provenance";
+    static_cast<void>(wrong_target_table.register_static(std::move(wrong_target)));
+    wrong_target_table.seal_static();
+    expect_context_rejection(
+        wrong_target_table, first_only_pack, runtime_generation);
+
+    RuntimeBlockTable missing_target_table;
+    missing_target_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    static_cast<void>(missing_target_table.register_static(
+        make_static_block(allowed.source, runtime_generation)));
+    missing_target_table.seal_static();
+    expect_context_rejection(
+        missing_target_table, first_only_pack, runtime_generation);
+
+    const auto stale_guard = first.execution.generation_guard;
+    require(bringup_table.erase_overlapping_physical(
+                allowed.target.block.physical_address,
+                allowed.target.size) == 1u &&
+                !bringup_table.static_dispatch_generation_guard_current(stale_guard),
+            "Static-AOT-Invalidierung laesst den vorherigen Bring-up-Guard aktiv.");
+    const auto observations_before_stale_preflight =
+        observations.total_occurrences();
+    bool stale_preflight_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_dispatch(
+            bringup_table,
+            context,
+            {NativeBringupTransferKind::CallRegister,
+             base_request.callsite,
+             base_request.target,
+             base_request.return_address,
+             base_request.source,
+             base_request.variant}));
+    } catch (const NativeBringupDispatchError& error) {
+        stale_preflight_rejected =
+            error.miss() ==
+            NativeBringupDispatchMiss::InvalidEntry;
+    }
+    require(stale_preflight_rejected &&
+                observations.total_occurrences() ==
+                    observations_before_stale_preflight,
+            "Staler Preflight-Guard bleibt gueltig oder schreibt Observationen.");
+    const auto pc_before_invalidation = cpu.pc;
+    const auto pr_before_invalidation = cpu.pr;
+    try {
+        static_cast<void>(dispatch_indirect(cpu, bringup_table, request));
+        throw std::runtime_error(
+            "Invalidierter Static-AOT-Block wurde im Bring-up erneut ausgefuehrt.");
+    } catch (const IndirectDispatchError& error) {
+        require(error.native_bringup_miss() ==
+                        NativeBringupDispatchMiss::InvalidEntry &&
+                    cpu.pc == pc_before_invalidation &&
+                    cpu.pr == pr_before_invalidation,
+                "Invalidierter Static-AOT-Block bleibt dispatchbar oder mutiert CPU-Zustand.");
+    }
+
+    NativeBringupDispatchObservations bounded;
+    for (std::size_t index = 0u;
+         index < native_bringup_dispatch_observation_capacity + 1u;
+         ++index) {
+        bounded.record(false,
+                       NativeBringupDispatchMiss::UnknownCompiledTarget,
+                       NativeBringupTransferKind::TailJumpRegister,
+                       static_cast<std::uint32_t>(index * 2u),
+                       static_cast<std::uint32_t>(0x1000u + index * 2u),
+                       aot_pack_generation,
+                       runtime_generation);
+    }
+    require(bounded.events().size() ==
+                    native_bringup_dispatch_observation_capacity &&
+                bounded.total_occurrences() ==
+                    native_bringup_dispatch_observation_capacity + 1u &&
+                bounded.dropped_events() == 1u,
+            "Bring-up-Beobachtungen wachsen ueber ihre feste Kompaktgrenze.");
+}
 } // namespace
 
 int main() {
@@ -693,6 +1397,7 @@ int main() {
         missing_aot_dispatch_regression();
         materialization_identity_diagnostic_regression();
         runtime_only_hit_hotloop_regression();
+        native_bringup_allowlist_regression();
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};
         static_cast<void>(table.register_static({0x8C001000u,

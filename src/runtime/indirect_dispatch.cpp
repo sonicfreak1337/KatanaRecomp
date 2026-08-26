@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <tuple>
 #include <utility>
 
 namespace katana::runtime {
@@ -76,6 +77,51 @@ void diagnose(const IndirectDispatchRequest& request,
 
 void increment(std::uint64_t& value) noexcept {
     if (value != std::numeric_limits<std::uint64_t>::max()) ++value;
+}
+
+std::uint64_t saturating_sum(const std::uint64_t left,
+                             const std::uint64_t right) noexcept {
+    return right > std::numeric_limits<std::uint64_t>::max() - left
+               ? std::numeric_limits<std::uint64_t>::max()
+               : left + right;
+}
+
+// Exact floor(numerator * 1'000'000 / denominator) without constructing the
+// potentially overflowing product. The multiplier has only twenty bits.
+std::uint64_t dispatch_share_ppm(const std::uint64_t numerator,
+                                 const std::uint64_t denominator) noexcept {
+    constexpr std::uint64_t scale = 1'000'000u;
+    if (denominator == 0u) return 0u;
+    if (numerator >= denominator) return scale;
+
+    auto term_quotient = numerator / denominator;
+    auto term_remainder = numerator % denominator;
+    std::uint64_t result_quotient = 0u;
+    std::uint64_t result_remainder = 0u;
+    auto multiplier = scale;
+    while (multiplier != 0u) {
+        if ((multiplier & 1u) != 0u) {
+            result_quotient += term_quotient;
+            if (term_remainder >= denominator - result_remainder) {
+                result_remainder =
+                    term_remainder - (denominator - result_remainder);
+                ++result_quotient;
+            } else {
+                result_remainder += term_remainder;
+            }
+        }
+        multiplier >>= 1u;
+        if (multiplier == 0u) break;
+        term_quotient *= 2u;
+        if (term_remainder >= denominator - term_remainder) {
+            term_remainder =
+                term_remainder - (denominator - term_remainder);
+            ++term_quotient;
+        } else {
+            term_remainder += term_remainder;
+        }
+    }
+    return std::min(result_quotient, scale);
 }
 
 DispatchDiagnosticError materialization_error(const MaterializationFailure failure) noexcept {
@@ -170,6 +216,122 @@ ValidatedBlockExecution make_validated_execution(
     return execution;
 }
 
+DispatchDiagnosticError
+native_bringup_error(const NativeBringupDispatchMiss miss) noexcept {
+    switch (miss) {
+    case NativeBringupDispatchMiss::None:
+        return DispatchDiagnosticError::None;
+    case NativeBringupDispatchMiss::UnknownCompiledTarget:
+        return DispatchDiagnosticError::UnknownTarget;
+    case NativeBringupDispatchMiss::MissingIdentity:
+    case NativeBringupDispatchMiss::SourceIdentityMismatch:
+    case NativeBringupDispatchMiss::PhysicalIdentityMismatch:
+        return DispatchDiagnosticError::ByteIdentityMismatch;
+    case NativeBringupDispatchMiss::GenerationMismatch:
+        return DispatchDiagnosticError::GenerationMismatch;
+    case NativeBringupDispatchMiss::InvalidEntry:
+        return DispatchDiagnosticError::InvalidBoundary;
+    case NativeBringupDispatchMiss::UnmappedTarget:
+        return DispatchDiagnosticError::UnmappedMemory;
+    }
+    return DispatchDiagnosticError::UnknownTarget;
+}
+
+NativeBringupTransferKind native_bringup_transfer_kind(
+    const IndirectDispatchKind kind) noexcept {
+    return kind == IndirectDispatchKind::Call
+               ? NativeBringupTransferKind::CallRegister
+               : NativeBringupTransferKind::TailJumpRegister;
+}
+
+[[noreturn]] void reject_native_bringup(
+    CpuState& cpu,
+    const IndirectDispatchRequest& request,
+    const std::uint32_t target,
+    const NativeBringupDispatchMiss miss) {
+    const auto error = native_bringup_error(miss);
+    request.native_bringup->observations.record(
+        false,
+        miss,
+        native_bringup_transfer_kind(request.kind),
+        request.callsite,
+        target,
+        request.native_bringup->pack.identity.aot_pack_generation,
+        request.variant.runtime_generation);
+    if (request.metrics != nullptr)
+        request.metrics->record_miss(
+            request.dispatch_class, error, request.callsite, target);
+    diagnose(request, target, cpu.pr, false, false, error);
+    throw IndirectDispatchError(
+        request.kind,
+        request.callsite,
+        target,
+        request.source,
+        error,
+        request.dispatch_class,
+        request.metrics != nullptr ? request.metrics->serialize_json()
+                                   : std::string{},
+        miss);
+}
+
+IndirectDispatchResult dispatch_native_bringup(
+    CpuState& cpu,
+    const RuntimeBlockTable& table,
+    const IndirectDispatchRequest& request,
+    const std::uint32_t target) {
+    const auto& context = *request.native_bringup;
+    if (request.kind == IndirectDispatchKind::Return)
+        reject_native_bringup(
+            cpu, request, target,
+            NativeBringupDispatchMiss::UnknownCompiledTarget);
+    NativeBringupDispatchPreflightResult preflight;
+    try {
+        preflight = preflight_native_bringup_dispatch(
+            table,
+            context,
+            {native_bringup_transfer_kind(request.kind),
+             request.callsite,
+             target,
+             request.kind == IndirectDispatchKind::Call
+                 ? request.return_address
+                 : 0u,
+             request.source,
+             request.variant});
+    } catch (const NativeBringupDispatchError& error) {
+        reject_native_bringup(
+            cpu, request, target, error.miss());
+    }
+
+    if (request.kind == IndirectDispatchKind::Call)
+        cpu.pr = request.return_address;
+    cpu.pc = preflight.target;
+    if (request.metrics != nullptr)
+        request.metrics->record_hit(
+            request.dispatch_class, request.callsite, target, false);
+    const bool plain_runtime_hit =
+        request.dispatch_class == RuntimeDispatchClass::RuntimeOnly &&
+        request.kind == IndirectDispatchKind::TailJump;
+    if (!plain_runtime_hit)
+        diagnose(request, target, cpu.pr, false, true);
+    context.observations.record(true,
+                                NativeBringupDispatchMiss::None,
+                                native_bringup_transfer_kind(request.kind),
+                                request.callsite,
+                                target,
+                                context.pack.identity.aot_pack_generation,
+                                request.variant.runtime_generation);
+    return {preflight.block,
+            preflight.execution,
+            target,
+            preflight.physical_target,
+            cpu.pc,
+            cpu.pr,
+            false,
+            false,
+            {},
+            true};
+}
+
 } // namespace
 
 IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
@@ -178,7 +340,8 @@ IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
                                              const BlockAddress source,
                                              const DispatchDiagnosticError error,
                                              const RuntimeDispatchClass dispatch_class,
-                                             std::string metrics_json)
+                                             std::string metrics_json,
+                                             const NativeBringupDispatchMiss native_bringup_miss)
     : std::runtime_error([&] {
           IndirectDispatchRequest request;
           request.kind = kind;
@@ -196,7 +359,8 @@ IndirectDispatchError::IndirectDispatchError(const IndirectDispatchKind kind,
       target_(target),
       source_(source),
       error_(error),
-      dispatch_class_(dispatch_class) {
+      dispatch_class_(dispatch_class),
+      native_bringup_miss_(native_bringup_miss) {
     if (metrics_json_.empty()) {
         IndirectDispatchMetrics metrics;
         metrics.record_miss(dispatch_class, error, callsite, target);
@@ -230,6 +394,10 @@ DispatchDiagnosticError IndirectDispatchError::error() const noexcept {
 
 RuntimeDispatchClass IndirectDispatchError::dispatch_class() const noexcept {
     return dispatch_class_;
+}
+
+NativeBringupDispatchMiss IndirectDispatchError::native_bringup_miss() const noexcept {
+    return native_bringup_miss_;
 }
 
 namespace {
@@ -327,9 +495,9 @@ std::size_t IndirectDispatchMetrics::runtime_only_site_count() const noexcept {
     return runtime_only_sites_.size();
 }
 std::uint64_t IndirectDispatchMetrics::runtime_only_dispatch_share_ppm() const noexcept {
-    return hits_ + misses_ == 0u
-               ? 0u
-               : ((runtime_only_hits_ + runtime_only_misses_) * 1'000'000u) / (hits_ + misses_);
+    return dispatch_share_ppm(
+        saturating_sum(runtime_only_hits_, runtime_only_misses_),
+        saturating_sum(hits_, misses_));
 }
 const std::optional<IndirectDispatchFirstError>&
 IndirectDispatchMetrics::first_error() const noexcept {
@@ -441,6 +609,8 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                                          const IndirectDispatchRequest& request) {
     const auto requested_target =
         request.kind == IndirectDispatchKind::Return ? cpu.pr : request.target;
+    if (request.native_bringup != nullptr)
+        return dispatch_native_bringup(cpu, table, request, requested_target);
     auto target = requested_target;
     std::uint32_t physical = 0u;
     auto effective_variant = request.variant;

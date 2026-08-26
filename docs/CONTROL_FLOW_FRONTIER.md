@@ -2,6 +2,13 @@
 
 Stand: KR-4718
 
+Die Frontier ist eine strikte Closure- und Releasearbeitsliste, aber nicht
+automatisch die Bring-up-Taskqueue. Nach
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) priorisiert die
+kleine Schleife die erste reproduzierbare Divergenz, einen typisierten Stop
+oder einen konkreten Witness. Runtimeimport bleibt `Observed`/`Candidate` und
+schliesst keinen der folgenden Berichtszustaende still.
+
 Jede indirekte Kontrollflussstelle besitzt genau einen der fuenf disjunkten
 Berichtszustaende:
 

@@ -4,6 +4,12 @@ Dieses Dokument enthaelt die aktiven `v0.49.2`-Produktaufgaben. Historische
 Aufgaben und fruehere Detailstaende bleiben in Git und in
 `TASK_ID_REGISTRY.md` nachvollziehbar.
 
+> Taskprioritaet folgt dem verbindlichen Workflow in
+> [`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md): zuerst die erste
+> reproduzierbare Divergenz oder der erste typisierte Stop, dann der kleinste
+> konkrete Fix und dasselbe Replay mit demselben AOT-Pack. Die Anzahl offener
+> Analyzer-Frontiers erzeugt im Bring-up nicht automatisch neue Aufgaben.
+
 ## Aktueller Entwicklungs- und Release-Status
 
 `v0.49.2` ist der aktuelle Entwicklungsstand und kein regulaerer Release.

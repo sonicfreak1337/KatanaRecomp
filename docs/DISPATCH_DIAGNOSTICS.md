@@ -7,6 +7,17 @@ ausnahmesichere `try_record`-Grenze. Ein Diagnosefehler kann deshalb weder PC,
 PR oder Speicherzustand aendern noch einen erfolgreichen Tabellenlookup in
 einen Fallback verwandeln.
 
+Diese Trennung ist Teil des Evidence-Vertrags in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md): Diagnoseereignisse
+sind `Observed`, niemals `Proven`. Sie duerfen eine statische Behauptung
+widerlegen und einen gerichteten Promotion-Auftrag erzeugen, aber keine
+Dispatchklasse, Allowlist oder Closure selbst veraendern.
+
+Der Standard-Bring-up speichert nur begrenzte, vorallokierte Ereignisse oder
+Digests. Symbolisierung, Clustering, Last-Writer- und First-Divergence-
+Auswertung laufen offline. Ein Diagnoseprofil, das den Produktlauf auf
+sekundenlange Frames verlangsamt, ist kein Standardgurt.
+
 Jedes Ereignis enthaelt:
 
 - Callsite sowie virtuelle und kanonische Quelladresse

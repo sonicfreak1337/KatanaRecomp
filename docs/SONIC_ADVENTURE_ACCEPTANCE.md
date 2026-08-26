@@ -11,6 +11,19 @@ ist der massgebliche Produkt- und Integrationstest; neue synthetische Tests,
 Fixtures, Regressionen oder Testmatrizen werden aus Retailbefunden nicht mehr
 abgeleitet.
 
+Fuer die laufende Produktentwicklung gilt zusaetzlich der Zwei-Schleifen-
+Vertrag in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md): Eine strikte
+Analyse erzeugt den stabilen AOT-Pack; danach reproduzieren stille,
+unsichtbare Replays die erste Divergenz und Runtime-/Adapterfixes verwenden
+denselben Pack. Nur ein echter AOT-Miss oder eine AOT-wirksame Aenderung
+erzwingt eine neue Vollanalyse.
+
+Sonic-Witnesses sind private Existenz- und Gegenevidenz. Sie koennen eine
+unvollstaendige Katana-Annahme widerlegen, werden aber niemals automatisch
+zum statischen Produktbeweis. Titeladressen, Retailbytes und identity-bound
+Overrides bleiben im privaten Spielprojekt.
+
 ## Aktives v0.49.2-Entwicklungs- und v0.5.0-Release-Gate
 
 `v0.49.2` ist ein ungetaggter Entwicklungsstand und kein regulaerer Release.

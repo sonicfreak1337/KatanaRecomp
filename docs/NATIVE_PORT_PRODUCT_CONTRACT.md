@@ -7,6 +7,31 @@ RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen. Alte
 Messungen bleiben historische Evidenz, definieren aber nicht mehr die
 Zielarchitektur.
 
+Der Entwicklungsweg zu diesem strikten Produkt ist in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) verbindlich
+definiert. `native-bringup` ist dort ein sicherer Evidenzgenerator mit
+vorkompiliertem Code, kein zweites oder gelockertes Releaseprofil.
+
+## Striktes Produkt und nativer Bring-up
+
+`strict-product` verlangt vollstaendige Closure oder einen explizit
+validierten `RuntimeContract`. `Observed`, `Candidate` und `Unresolved` sind
+niemals Produktadmission. Ein Runtime-Witness kann beweisen, dass ein Ziel
+erreichbar ist und damit eine unvollstaendige statische Analyse widerlegen;
+er kann nicht beweisen, dass keine weiteren Ziele existieren.
+
+`native-bringup` darf bei noch unvollstaendigem Closure-Proof nur exakte,
+aktive und vorkompilierte Blockanfaenge des gebundenen AOT-Packs ausfuehren.
+Allowlist, Modulidentitaet, Generation, Blocktabelle, ABI und Fortsetzung
+werden vor jeder Zustandsaenderung validiert. Ein Miss endet als
+`UnknownCompiledTarget`; es gibt keinen Interpreter-, JIT-, Decoder-,
+Materializer-, No-op- oder Guessing-Fallback.
+
+Runtime-, Adapter- und Providerfixes verwenden denselben stabilen AOT-Pack.
+Eine neue Vollanalyse ist erst bei AOT-wirksamen Aenderungen oder einem
+nachgewiesenen Pack-Miss erforderlich. Der strikte Produktvertrag selbst wird
+dabei nicht gelockert.
+
 ## Entscheidung
 
 KatanaRecomp baut native PC-Ports. Das ausgelieferte Spiel ist kein Emulator

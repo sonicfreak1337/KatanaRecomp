@@ -4,6 +4,14 @@
 
 `katana::io::ExecutableImage` beschreibt eine geladene Programmeingabe unabhaengig vom Dateiformat. Ein Image besitzt eine Quelldatei, sortierte Segmente und bekannte Einstiegspunkte.
 
+Im Zwei-Schleifen-Vertrag aus
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) ist das Image eine
+statische Provenienzquelle. Seine Byte-, Segment- und Entry-Identitaet fliesst
+in Analyse und AOT-Pack ein. Aendern sich diese Daten, beginnt ein neuer
+Strict-Product-Lauf. Der Native-Bring-up-Loop dekodiert oder materialisiert
+keine neuen Bloecke, sondern validiert ausschliesslich bereits vorkompilierte
+Pack-/Modulidentitaeten.
+
 Jedes `ImageSegment` speichert:
 
 - stabilen Namen

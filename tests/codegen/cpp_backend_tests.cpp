@@ -62,6 +62,45 @@ katana::ir::Function make_observed_function() {
     return function;
 }
 
+std::vector<katana::ir::Function> make_indirect_call_program(
+    const katana::ir::DynamicTargetClass target_class) {
+    constexpr std::uint32_t entry = 0x8C020000u;
+    constexpr std::uint32_t target = 0x8C020100u;
+    auto call = instruction(entry, katana::ir::Operation::CallRegister);
+    call.original_opcode = 0x410Bu;
+    call.branch_register = 1u;
+    call.dynamic_target_class = target_class;
+    call.resolved_targets = {target};
+    call.delay_slot = {katana::ir::DelaySlotRole::Owner, entry + 2u};
+    auto slot = instruction(entry + 2u, katana::ir::Operation::Nop);
+    slot.delay_slot = {katana::ir::DelaySlotRole::Slot, entry};
+
+    katana::ir::BasicBlock source_block;
+    source_block.start_address = entry;
+    source_block.instructions = {call, slot};
+    source_block.has_indirect_successor =
+        target_class != katana::ir::DynamicTargetClass::GuardedComplete &&
+        target_class != katana::ir::DynamicTargetClass::ExactGuarded;
+    katana::ir::Function source;
+    source.entry_address = entry;
+    source.blocks = {source_block};
+    source.direct_callees = {target};
+    source.indirect_call_sites = {entry};
+
+    auto target_owner = instruction(target, katana::ir::Operation::Return);
+    target_owner.delay_slot = {
+        katana::ir::DelaySlotRole::Owner, target + 2u};
+    auto target_slot = instruction(target + 2u, katana::ir::Operation::Nop);
+    target_slot.delay_slot = {katana::ir::DelaySlotRole::Slot, target};
+    katana::ir::BasicBlock target_block;
+    target_block.start_address = target;
+    target_block.instructions = {target_owner, target_slot};
+    katana::ir::Function destination;
+    destination.entry_address = target;
+    destination.blocks = {target_block};
+    return {source, destination};
+}
+
 bool same_optimization_options(const katana::ir::OptimizationOptions& left,
                                const katana::ir::OptimizationOptions& right) {
     return left.enabled == right.enabled && left.constant_folding == right.constant_folding &&
@@ -213,6 +252,82 @@ int main() {
     }
     require(product_observer_rejected,
             "Produktprofil akzeptiert faelschlich externe Instruktionsbeobachtung.");
+
+    const auto runtime_only_program = make_indirect_call_program(
+        katana::ir::DynamicTargetClass::RuntimeOnly);
+    auto indirect_options = product_options;
+    indirect_options.metadata_entry_address =
+        runtime_only_program.front().entry_address;
+    indirect_options.runtime_binding =
+        katana::codegen::BackendRuntimeBinding::NativePort;
+    const auto runtime_only_request =
+        katana::codegen::make_native_aot_backend_request(
+            NativeAotEmissionProfile::Product,
+            runtime_only_program,
+            runtime_only_program.front().entry_address,
+            indirect_options);
+    const auto runtime_only_emission =
+        katana::codegen::emit_cpp_port_translation_unit(runtime_only_request);
+    const auto runtime_only_target =
+        runtime_only_emission.functions.find("const std::uint32_t call_target");
+    const auto runtime_only_preflight = runtime_only_emission.functions.find(
+        "preflight_native_bringup_indirect_dispatch(");
+    const auto runtime_only_attempt = runtime_only_emission.functions.find(
+        "ExplicitGuestInstructionAttempt terminal_instruction_attempt");
+    const auto runtime_only_pr =
+        runtime_only_emission.functions.find("const std::uint32_t previous_pr");
+    require(
+        runtime_only_emission.functions.find(
+            "if (native_bringup_dispatch_pending)") != std::string::npos &&
+            runtime_only_target != std::string::npos &&
+            runtime_only_preflight != std::string::npos &&
+            runtime_only_attempt != std::string::npos &&
+            runtime_only_pr != std::string::npos &&
+            runtime_only_target < runtime_only_preflight &&
+            runtime_only_preflight < runtime_only_attempt &&
+            runtime_only_attempt < runtime_only_pr,
+        "RuntimeOnly-Candidate-Call umgeht den billigen versiegelten "
+        "NativeBringup-Preflight oder mutiert CPU-/Cycle-/PR-Zustand vor "
+        "der Autorisierung.");
+
+    const auto guarded_complete_program = make_indirect_call_program(
+        katana::ir::DynamicTargetClass::GuardedComplete);
+    const auto guarded_complete_request =
+        katana::codegen::make_native_aot_backend_request(
+            NativeAotEmissionProfile::Product,
+            guarded_complete_program,
+            guarded_complete_program.front().entry_address,
+            indirect_options);
+    const auto guarded_complete_emission =
+        katana::codegen::emit_cpp_port_translation_unit(
+            guarded_complete_request);
+    require(
+        guarded_complete_emission.functions.find(
+            "native_bringup_dispatch_pending") == std::string::npos &&
+            guarded_complete_emission.functions.find(
+                "preflight_native_bringup_indirect_dispatch") ==
+                std::string::npos,
+        "Vollstaendig bewiesener indirekter Call traegt unnoetigen "
+        "NativeBringup-Hotpath-Overhead.");
+
+    const auto resolved_program = make_indirect_call_program(
+        katana::ir::DynamicTargetClass::NotApplicable);
+    const auto resolved_request =
+        katana::codegen::make_native_aot_backend_request(
+            NativeAotEmissionProfile::Product,
+            resolved_program,
+            resolved_program.front().entry_address,
+            indirect_options);
+    const auto resolved_emission =
+        katana::codegen::emit_cpp_port_translation_unit(resolved_request);
+    require(
+        resolved_emission.functions.find(
+            "native_bringup_dispatch_pending") == std::string::npos &&
+            resolved_emission.functions.find(
+                "preflight_native_bringup_indirect_dispatch") ==
+                std::string::npos,
+        "Vollstaendig statisch aufgeloester indirekter Call traegt "
+        "NativeBringup-Hotpath-Overhead.");
 
     auto direct_ram = instruction(0x8C020000u, katana::ir::Operation::LoadLongPcRelative);
     direct_ram.effective_address = 0x8C000000u;

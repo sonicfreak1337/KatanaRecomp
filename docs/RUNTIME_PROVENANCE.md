@@ -1,5 +1,12 @@
 # Block-, Alias- und Invalidierungsprovenienz
 
+Diese Provenienz ist eine Sicherheitsgrundlage des Native-Bring-up-Vertrags
+in [`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Ein
+Allowlist-Treffer wird nur ueber einen exakten aktiven Static-AOT-Block mit
+aktueller Modul-/Runtimegeneration und wiederverwendbarem Tabellen-Guard
+ausgefuehrt. Beobachtete Writes oder Targets verleihen niemals selbst
+Ausfuehrungsrecht und mutieren keine Blocktabelle.
+
 `serialize_runtime_provenance_json()` verbindet den Zustand des
 `ExecutableCodeTracker` mit dem `FirmwareHandoffMap` in einem deterministischen,
 versionierten Bericht. Der Bericht enthaelt keine Code-, Firmware- oder

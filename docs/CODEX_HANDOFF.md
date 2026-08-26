@@ -5,6 +5,13 @@ Bearbeiter an KatanaRecomp arbeitet. Die repositoryweiten Regeln in
 `../AGENTS.md` sind verbindlich und haben Vorrang vor widersprechenden
 aelteren Prozessbeschreibungen.
 
+> Aktueller Workflow: `NATIVE_BRINGUP_WORKFLOW.md` definiert die verbindliche
+> Trennung aus grossem `strict-product`-Lauf und kleiner
+> `native-bringup`-Replay-Schleife sowie
+> `Observed -> Candidate -> Proven | RuntimeContract -> Strict Product`.
+> Die nachfolgenden Run-, ABI- und Frontierabschnitte sind historische oder
+> punktuelle Evidenz und duerfen diesen Vertrag nicht ueberschreiben.
+
 ## Aktueller Sourcevertrag (2026-08-23)
 
 Der Source-Meilenstein v142 fuehrt einen bounded, disc- und

@@ -6,6 +6,18 @@
 > `NATIVE_PORT_PRODUCT_CONTRACT.md`; RuntimeOnly, Handoff und Geraetestate sind
 > kein Produktfallback.
 
+Executable-First wird durch den verbindlichen Zwei-Schleifen-Vertrag in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) ergaenzt. Die
+immutable Executable-Identitaet speist den stabilen AOT-Pack. Solange Bytes,
+Funktionsgrenzen, CFG, Overlays, AOT-Patches und AOT-ABI unveraendert bleiben,
+werden Runtime und Titeladapter inkrementell gebaut und dasselbe Replay ohne
+erneute Whole-Program-Analyse wiederholt.
+
+Ein Bring-up-Pack-Miss, eine neue Overlayidentitaet oder eine nachgewiesene
+fehlende Function-/Blockabdeckung kehrt explizit zur Analyse und
+Packgenerierung zurueck. Eine Runtimebeobachtung allein invalidiert den Pack
+nicht und wird nicht automatisch zum statischen Beweis.
+
 Seit v0.49 ist die private `.gdi` nicht mehr der normale Eingang jeder
 Bring-up-Iteration. Sie wird einmalig fuer Extraktion und spaeter fuer die
 Nutzerinstallation verwendet. Analyse, Codegen und Warmbuild arbeiten danach

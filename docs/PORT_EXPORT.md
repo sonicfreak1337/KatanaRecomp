@@ -4,6 +4,23 @@
 > Diagnosewerkzeuge. Das einzige Produktprofil ist `native-port`; historische
 > RuntimeOnly-, Handoff- und Dreamcast-Geraetepfade werden nicht gelinkt.
 
+Der aktuelle Export- und Iterationsvertrag steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Der grosse
+`strict-product`-Lauf erzeugt einen identitaetsgebundenen AOT-Pack und eine
+native Allowlist. Der kleine `native-bringup`-Lauf baut Runtime, Adapter und
+Manifest inkrementell und verwendet genau diesen Pack weiter. Erst ein
+nachgewiesener AOT-Miss oder eine AOT-wirksame Sourceaenderung startet erneut
+Analyse und Export.
+
+Runtime-Witnesses werden als `Observed` exportiert beziehungsweise einem
+Promotion Report zugefuehrt. Sie werden weder in Zielmengen hineingemischt
+noch beim Export still als `Proven` oder `RuntimeContract` admittiert.
+Ein explizit authorierter `Candidate` kann im nicht releasefaehigen
+Bring-up-Profil dennoch als einzelnes sicheres Ausfuehrungspaar zugelassen
+werden, wenn der Export Source-Block, terminale Callsite, Targetblock, Owner,
+Bytes, Pack und Generation erneut exakt prueft. Der offene Proof bleibt im
+Report erhalten und der Strict-Export ignoriert diese Allowlist vollstaendig.
+
 ## v0.49: Executable-First als Bring-up-Standard
 
 Aktueller Source-Vertragsstand: Runtime-ABI `120`, Analyzer-ABI `66`,

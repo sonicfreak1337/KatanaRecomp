@@ -12,6 +12,7 @@
 #include "katana/ir/ir.hpp"
 #include "katana/progress.hpp"
 #include "katana/runtime/game_project.hpp"
+#include "katana/runtime/native_bringup_artifact.hpp"
 #include "katana/runtime/native_port.hpp"
 
 #include <cstddef>
@@ -40,7 +41,7 @@ struct NativeDiscAnalysisState;
 inline constexpr std::uint32_t port_project_contract_version =
     abi_contract::port_project_contract_version;
 inline constexpr std::uint32_t port_partition_emission_schema_version = 11u;
-inline constexpr std::uint32_t port_metadata_cache_schema_version = 12u;
+inline constexpr std::uint32_t port_metadata_cache_schema_version = 13u;
 
 using PortExportProgressCallback =
     std::function<void(std::string_view phase)>;
@@ -85,6 +86,14 @@ struct NativePortBootstrapWritePayload {
 enum class PortAnalysisMode : std::uint8_t {
     PlatformAbi,
     ConservativeRuntimeOnly,
+};
+
+// Execution selection is deliberately downstream from analysis. Both
+// profiles consume the same immutable AOT pack; NativeBringup merely enables
+// a non-release, precompiled exact-target allowlist in generated glue.
+enum class NativePortExecutionProfile : std::uint8_t {
+    StrictProduct,
+    NativeBringup,
 };
 
 struct PortExportOptions {
@@ -179,6 +188,15 @@ struct PortExportOptions {
     // to supersede. A successfully serialized refresh may replace only the
     // exact bounded cache artifact observed under the same identity.
     bool analysis_artifact_refresh_requested = false;
+    // StrictProduct is the default and never consults the bring-up table.
+    // The authoring artifact is independent of NativePortDefinition so
+    // runtime/adapter-only revisions do not invalidate analyzer authority or
+    // partition source-cache keys.
+    NativePortExecutionProfile native_execution_profile =
+        NativePortExecutionProfile::StrictProduct;
+    const katana::runtime::NativeBringupAuthoringDefinition*
+        native_bringup_authoring = nullptr;
+    std::string native_bringup_artifact_identity;
 };
 
 struct PortExportResult {

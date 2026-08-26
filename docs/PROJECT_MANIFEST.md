@@ -5,6 +5,23 @@ Adresslayout unabhaengig vom aktuellen Arbeitsverzeichnis. Es ist eine
 UTF-8-Textdatei mit genau einem `KEY = VALUE` pro Zeile. Leerzeilen und Zeilen,
 die nach optionalem Leerraum mit `#` beginnen, werden ignoriert.
 
+## Rolle im Zwei-Schleifen-Vertrag
+
+Das Manifest ist eine deklarative Eingabe und Identitaetsquelle des
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). AOT-wirksame
+Felder wie Eingabe, Segmente, Einstiegspunkte, Overlays, FunctionMap,
+Funktionsgrenzen und statische Patches gehoeren zum Strict-Product-Lauf; ihre
+Aenderung erfordert einen neuen AOT-Pack und eine neue Allowlistgeneration.
+Reine Runtime-, Adapter- und Diagnostikaenderungen duerfen denselben Pack
+weiterverwenden.
+
+Ein Manifest bestaetigt keine zur Laufzeit beobachtete Zieladresse. Witnesses
+und Logs werden separat als `Observed` oder `Candidate` gefuehrt und aendern
+das Manifest nicht automatisch. Der Native-Bring-up-Dispatcher akzeptiert nur
+aktive, vorab kompilierte und generationgebundene Bloecke aus der versiegelten
+Pack-/Allowlistwelt; ein nicht belegtes Ziel bleibt `Unresolved` bzw. endet als
+`UnknownCompiledTarget`.
+
 ## Pflichtfelder
 
 - `version = 1`
@@ -100,9 +117,11 @@ Hardwaredienste enden sichtbar als `service-unavailable`. Lokale BIOS-/Flashquel
 veraenderliche Arbeitskopien muessen ausserhalb eines Port-Ausgabeordners
 bleiben; keine Firmwarequelle wird paketiert.
 
-Ein aktiver `interpreter`- oder `diagnostic`-Fallback verlangt
+Ein historisches `interpreter`- oder `diagnostic`-Fallback verlangt
 `controlled-fallback`, `execution.mmu = sh4` verlangt `mmu`, und WX-Bereiche
-verlangen `executable-ram`. Unbekannte Profile und widerspruechliche Aliase
+verlangen `executable-ram`. Diese optionalen Profile dokumentieren nur einen
+separaten Diagnose-/Harnesspfad; sie sind keine Freigabe fuer `native-port`
+oder `native-bringup`. Unbekannte Profile und widerspruechliche Aliase
 scheitern beim Parsen vor Loader und Analyse.
 
 Dynamische BIOS-Vektoren beschreiben RAM-Laufzeitzustand. Der Loader macht sie

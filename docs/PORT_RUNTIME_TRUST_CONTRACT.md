@@ -9,6 +9,19 @@ Portpartitionsschema 7. Historische Diagnose-/Bring-up-Evidenz bleibt an
 ihre damaligen Vertraege gebunden. Keine der Vertrauensaussagen wird aus
 der blossen Erzeugung oder dem Start eines Hostprozesses abgeleitet.
 
+Der Bring-up- und Evidencevertrag steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Er unterscheidet
+Proof-Completeness von Execution-Safety: Der Bring-up darf unvollstaendig
+bewiesene Kontrolle nur dann ausfuehren, wenn Ziel, Modul, Generation,
+Blockanfang, Handle, ABI und Fortsetzung gegen den aktiven vorkompilierten
+AOT-Pack validiert sind. Die Allowlist enthaelt keine rohen
+Backendfunktionszeiger und erweitert die Runtime-Blocktabelle nicht.
+
+Ein erfolgreicher Bring-up-Dispatch ist `Observed` und kein
+Ausfuehrungsnachweis fuer statische Closure. Ein Miss ist ein typisierter
+`UnknownCompiledTarget` und darf weder einen Fallback noch einen spaeteren
+Checkpoint erzeugen.
+
 ## Eingabeidentitaet
 
 Das erzeugte Programm enthaelt SHA-256-Erwartungswerte fuer den

@@ -1,5 +1,16 @@
 # Indirekter Kontrollfluss
 
+Die Analyseklassen werden im aktuellen Entwicklungsprozess durch
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) ergaenzt.
+Laufzeitbeobachtete Ziele sind `Observed` und koennen eine unvollstaendige
+Zielmenge widerlegen. Erst statische Rueckverfolgung oder ein vollstaendiger,
+identity-bound Titelvertrag macht sie `Proven`; wirklich dynamische Sites
+benoetigen einen expliziten validierten `RuntimeContract`.
+
+Eine Bring-up-Allowlist ist kein neuer Kontrollflussbeweis. Sie darf nur
+bereits vorkompilierte exakte aktive Blockanfaenge sicher ausfuehren und
+erzeugt fuer noch fehlende Vollstaendigkeit einen Promotion-Auftrag.
+
 ## Lokale Konstantenpropagation
 
 `propagate_local_constants` fuehrt einen konservativen Registerzustand durch

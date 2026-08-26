@@ -4,6 +4,14 @@ Dieser KR-4704-Vertrag trennt den Inhalt geladener Bytes von ihren
 Laufzeitberechtigungen und von der Frage, wann ein Block kompiliert sein muss.
 Er gilt allgemein fuer Raw-, ELF-, Disc-, Modul- und Overlayquellen.
 
+Der operative Zwei-Schleifen-Vertrag steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Der
+Strict-Product-Lauf erzeugt aus unveraenderten Image-/Modul-/Overlaybytes den
+stabilen AOT-Pack und versiegelt die Blockwelt. Native-Bring-up verwendet diese
+Welt nur lesend: ein beobachtetes Ziel ist kein neuer Inventareintrag, keine
+Materialisierung und kein Closure-Beweis. Nur ein exakter aktiver
+Pack-/Modulblock mit Generation und Allowlist darf ausgefuehrt werden.
+
 Der aktuelle KR-5005-Stand verwendet Runtime-ABI 103, Block-ABI 5,
 Analyzer-ABI 40, PlatformServices-ABI 14, Backend-Interface-ABI 21,
 Portprojektvertrag 91, Native-Port-Profilvertrag 14, Native-AOT-Emissionsprofil 33 und
@@ -229,7 +237,7 @@ unbeanspruchte Bytes wachsen. So kann insbesondere ein Block an der bisherigen
 128-Byte-Grenze seinen tatsaechlich geschriebenen Delay Slot aufnehmen, ohne
 ID, Generation oder bereits gebundene Prefixbloecke auszutauschen.
 
-## Demand-driven-Materialisierung
+## Historischer Diagnosepfad: Demand-driven-Materialisierung
 
 Der optionale Pfad ist standardmaessig deaktiviert. Im aktivierten Modus gilt:
 
@@ -273,13 +281,14 @@ Belegung und Freigabe sichtbar; die letzte Origin gibt den Proof frei.
 Byteabweichung, Budgetende oder ein veralteter Lifecycle koennen damit weder
 einen alten Block weiterverwenden noch unbegrenzt Beweisspeicher halten.
 
-Das Produkt-Gate erlaubt einen Interpreter nur in einem expliziten Bring-up-
-Diagnoseprofil. Der normale Export emittiert und linkt
-`runtime-sh4-interpreter` nicht, deaktiviert die interpretiert gestuetzte
-Demand-Materialisierung und endet bei fehlendem AOT typisiert. Nur
-`diagnostic_partial` aktiviert den begrenzten Interpreter und weist dies im
-Manifest als `diagnostic-interpreter` aus. Deaktivierung, unbekannte Quelle,
-Byteabweichung, Budgetende und ungueltiger Block bleiben typisierte Misses.
+Im aktuellen `native-bringup`- und `strict-product`-Profil gibt es keinen
+Interpreter, JIT, Runtime-Decoder oder Runtime-Materializer. Ein fehlender
+AOT-Block endet typisiert als `UnknownCompiledTarget` und ist ein Anlass fuer
+die grosse Schleife. Die unten beschriebenen Materialisierungs- und
+Interpreterregeln bleiben ausschliesslich als historische Diagnose-/Harness-
+Referenz erhalten; ein `diagnostic_partial`-Profil ist kein Produktport und
+keine Bring-up-Freigabe. Deaktivierung, unbekannte Quelle, Byteabweichung,
+Budgetende und ungueltiger Block bleiben typisierte Misses.
 `KR-4848` ist mit strukturierten Disc-Ladetransaktionen, dem allgemeinen
 nativen Materializer und vorab erzeugten latenten nativen Modulen
 abgeschlossen. Der aktuelle kumulative Vertrag verwendet Runtime-ABI 103,

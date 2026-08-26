@@ -1,5 +1,13 @@
 # Eingabeprovenienz und Buildidentitaet
 
+Die Zuordnung der Eingaben zu den beiden Entwicklungsloops ist in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) festgelegt. Die
+Identitaet einer AOT-wirksamen Eingabe gehoert zum statischen Pack; eine
+Runtime-, Adapter- oder reine Diagnostikaenderung darf dieses Pack nicht
+still veraendern. Ein Bring-up-Replay bindet deshalb Pack-, Runtime-, Adapter-,
+Manifest- und Replayidentitaet getrennt und verwendet bei unveraenderten
+statischen Eingaben denselben Pack.
+
 KatanaRecomp erfasst externe Eingaben als Rolle, Bytegroesse und SHA-256. Der
 lokale absolute Pfad bleibt getrennt in `InputProvenance::local_path` und geht
 weder in die portable Buildidentitaet noch in den standardmaessigen JSON-Bericht
@@ -29,3 +37,11 @@ der Portexport analysiert die Eingabe nicht ein zweites Mal. Vor einem
 erfolgreichen Abschluss werden die Rollen erneut read-only geprueft. Eine
 waehrend des Jobs veraenderte wirksame Eingabe fuehrt zu einem sichtbaren
 Verarbeitungsfehler statt zu gemischten Artefakten.
+
+Eingabeprovenienz ist eine Identitaets- und Invalidierungsgrundlage, kein
+Runtime-Beweis. Ein Log, Witness oder beobachtetes Ziel aendert weder Hash noch
+Packstatus und wird nicht automatisch von `Observed`/`Candidate` nach `Proven`
+promotet. Eine Aenderung an Disc-/Imagebytes, FunctionMap, Funktionsgrenzen,
+Overlays oder AOT-wirksamen Patches erzwingt einen neuen Strict-Product-Lauf;
+der kleine Bring-up-Loop darf nur die unveraenderten statischen Artefakte
+wiederverwenden.

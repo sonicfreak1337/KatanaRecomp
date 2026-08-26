@@ -13,6 +13,28 @@ duerfen hinzugefuegt werden; eine inkompatible Bedeutungs- oder Typaenderung
 braucht eine neue fachliche Schema-Kennung. Listen, deren Reihenfolge keine
 Gastsemantik traegt, werden vor der Ausgabe nach Gastadresse und Typ sortiert.
 
+## Workflow- und Evidence-Grenze
+
+Die Berichte werden gemaess
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) den getrennten
+Identitaeten von AOT-Pack, Runtime, Adapter, Manifest, Replay und Build
+zugeordnet. `status=success` bestaetigt nur die erfolgreiche Erzeugung des
+jeweiligen Berichts; es promotet keine Laufzeitbeobachtung und schliesst keine
+statische Luecke.
+
+Runtime- und Diagnosereports sind `Observed`, hoechstens der Ausgangspunkt fuer
+einen expliziten `Candidate`-/Promotion-Auftrag. `Proven` erfordert
+vollstaendige statische oder identity-bound Evidenz; `RuntimeContract` erfordert
+einen validierten aktiven, vorab kompilierten RuntimeOnly-Block. Nur diese
+beiden Klassen duerfen in den Strict-Product-Export eingehen. Unvollstaendige,
+stale oder widerspruechliche Reports bleiben `Unresolved`, auch wenn einzelne
+Ziele im Replay beobachtet wurden.
+
+Ein Report darf Blocktabelle, Allowlist, Dispatchklasse oder Packidentitaet
+nicht still veraendern. AOT-wirksame Eingabedeltas erzwingen einen neuen
+Strict-Product-Lauf; reine Runtime-/Adapter-/Diagnostikdeltas bleiben im
+Native-Bring-up-Loop und referenzieren denselben Pack.
+
 `inspect-native-provider-semantics` erzeugt den agentischen Bericht
 `katana.native-provider-semantics-inspection.v1`. Er bindet Artefaktidentitaet,
 Runtime-/Analyzer-ABI, Native-Port-Artefaktformat, Semantikvertrag und

@@ -17171,6 +17171,32 @@ struct NativePortHardwareFaultSite final {
     bool access_valid = false;
 };
 
+struct NativeBringupDispatchBlockEmission final {
+    std::uint32_t address = 0u;
+    std::uint32_t size = 0u;
+    katana::runtime::BlockEndKind end_kind =
+        katana::runtime::BlockEndKind::Fallthrough;
+    std::string code_identity;
+};
+
+struct NativeBringupDispatchEmission final {
+    katana::runtime::NativeBringupTargetEvidence admission;
+    NativeBringupDispatchBlockEmission source;
+    NativeBringupDispatchBlockEmission target;
+};
+
+[[nodiscard]] bool native_bringup_sha256(
+    const std::string_view value) noexcept {
+    constexpr std::string_view prefix = "sha256:";
+    if (!value.starts_with(prefix) || value.size() != prefix.size() + 64u)
+        return false;
+    return std::ranges::all_of(
+        value.substr(prefix.size()), [](const char character) {
+            return (character >= '0' && character <= '9') ||
+                   (character >= 'a' && character <= 'f');
+        });
+}
+
 std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const std::string& entry_namespace,
     const std::span<const katana::ir::Function> program,
@@ -17184,7 +17210,33 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const std::span<const NativePortClosureProbeSite> closure_probe_sites,
     const std::span<const NativePortHardwareFaultSite> hardware_fault_sites,
     const NativeDiscAnalysisArtifactIdentity* const
-        runtime_frontier_binding) {
+        runtime_frontier_binding,
+    const NativePortExecutionProfile execution_profile,
+    const std::string_view native_bringup_authoring_artifact_identity,
+    const std::string_view native_aot_pack_identity,
+    const std::uint64_t native_aot_pack_generation,
+    const std::span<const NativeBringupDispatchEmission>
+        native_bringup_dispatch_entries) {
+    const bool native_bringup =
+        execution_profile == NativePortExecutionProfile::NativeBringup;
+    if (execution_profile != NativePortExecutionProfile::StrictProduct &&
+        !native_bringup)
+        throw std::invalid_argument(
+            "Native product dispatch received an invalid execution profile.");
+    if ((!native_bringup &&
+         (!native_bringup_authoring_artifact_identity.empty() ||
+          !native_aot_pack_identity.empty() ||
+          native_aot_pack_generation != 0u ||
+          !native_bringup_dispatch_entries.empty())) ||
+        (native_bringup &&
+         (game_project == nullptr || runtime_frontier_binding == nullptr ||
+          !native_bringup_sha256(
+              native_bringup_authoring_artifact_identity) ||
+          !native_bringup_sha256(native_aot_pack_identity) ||
+          native_aot_pack_generation == 0u)))
+        throw std::invalid_argument(
+            "Native bring-up dispatch lost its exact project, analysis, "
+            "artifact, or AOT-pack binding.");
     for (std::size_t index = 0u; index < latent_modules.size(); ++index) {
         const auto& module = latent_modules[index];
         if (module.byte_size == 0u)
@@ -17483,6 +17535,79 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     if (blocks.empty())
         throw std::runtime_error(
             "Nativer Produktdispatch besitzt keine AOT-Bloecke.");
+
+    std::vector<NativeBringupDispatchBlockEmission>
+        native_bringup_static_blocks;
+    if (native_bringup) {
+        if (native_bringup_dispatch_entries.size() > 4096u)
+            throw std::runtime_error(
+                "Native bring-up dispatch exceeds its bounded entry limit.");
+        native_bringup_static_blocks.reserve(
+            native_bringup_dispatch_entries.size() * 2u);
+        const auto append_static_binding = [&](const auto& binding) {
+            const auto dispatch = std::lower_bound(
+                blocks.begin(), blocks.end(), binding.address,
+                [](const auto& candidate, const std::uint32_t address) {
+                    return candidate.address < address;
+                });
+            if (binding.address == 0u || binding.size < 2u ||
+                (binding.size & 1u) != 0u ||
+                !native_bringup_sha256(binding.code_identity) ||
+                dispatch == blocks.end() ||
+                dispatch->address != binding.address ||
+                dispatch->size != binding.size)
+                throw std::runtime_error(
+                    "Native bring-up binding is not an exact generated "
+                    "Static-AOT block.");
+            const auto existing = std::find_if(
+                native_bringup_static_blocks.begin(),
+                native_bringup_static_blocks.end(),
+                [&](const auto& candidate) {
+                    return candidate.address == binding.address;
+                });
+            if (existing != native_bringup_static_blocks.end()) {
+                if (existing->size != binding.size ||
+                    existing->end_kind != binding.end_kind ||
+                    existing->code_identity != binding.code_identity)
+                    throw std::runtime_error(
+                        "Native bring-up Static-AOT binding is ambiguous.");
+                return;
+            }
+            native_bringup_static_blocks.push_back(binding);
+        };
+        for (const auto& entry : native_bringup_dispatch_entries) {
+            const auto proven =
+                entry.admission.stage ==
+                katana::runtime::NativeBringupEvidenceStage::Proven;
+            const auto candidate =
+                entry.admission.stage ==
+                katana::runtime::NativeBringupEvidenceStage::Candidate;
+            const auto valid_stage_contract =
+                (proven && entry.admission.missing_proof.empty() &&
+                 entry.admission.proposed_promotion ==
+                     katana::runtime::NativeBringupPromotionType::
+                         StaticCompiledTarget) ||
+                (candidate && !entry.admission.missing_proof.empty() &&
+                 entry.admission.proposed_promotion ==
+                     katana::runtime::NativeBringupPromotionType::
+                         AnalyzerReproof);
+            if (!valid_stage_contract ||
+                !entry.admission.runtime_contract_identity.empty() ||
+                entry.admission.target != entry.target.address ||
+                entry.admission.target_block_size != entry.target.size)
+                throw std::runtime_error(
+                    "Native bring-up generated span contains an unsafe "
+                    "execution admission.");
+            append_static_binding(entry.source);
+            append_static_binding(entry.target);
+        }
+        std::sort(
+            native_bringup_static_blocks.begin(),
+            native_bringup_static_blocks.end(),
+            [](const auto& left, const auto& right) {
+                return left.address < right.address;
+            });
+    }
 
     std::set<std::uint32_t> requested_resident_probe_targets;
     for (const auto& site : closure_probe_sites)
@@ -18125,8 +18250,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
            "#include <cstdint>\n"
            "#include <iostream>\n#include <optional>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <limits>\n#include <string>\n#include <string_view>\n"
-           "#include <system_error>\n#include <thread>\n#include <utility>\n"
-           "#if defined(_WIN32)\n"
+           "#include <system_error>\n#include <thread>\n#include <tuple>\n"
+           "#include <utility>\n";
+    if (native_bringup)
+        output << "#include \"katana/runtime/native_bringup_dispatch.hpp\"\n";
+    output << "#if defined(_WIN32)\n"
            "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
            "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n"
            "#include <windows.h>\n"
@@ -18143,7 +18271,169 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << "(katana::runtime::NativePortContext&) noexcept;\n";
     }
     output << "\nnamespace " << entry_namespace << " {\n"
-           << "namespace {\n"
+           << "namespace {\n";
+    if (native_bringup) {
+        const auto end_kind_name = [](const katana::runtime::BlockEndKind kind)
+            -> std::string_view {
+            using End = katana::runtime::BlockEndKind;
+            switch (kind) {
+            case End::Fallthrough: return "Fallthrough";
+            case End::StaticBranch: return "StaticBranch";
+            case End::ConditionalBranch: return "ConditionalBranch";
+            case End::DynamicBranch: return "DynamicBranch";
+            case End::Call: return "Call";
+            case End::Return: return "Return";
+            case End::ExceptionReturn: return "ExceptionReturn";
+            case End::Sleep: return "Sleep";
+            case End::Exception: return "Exception";
+            }
+            throw std::invalid_argument(
+                "Native bring-up block has an invalid end kind.");
+        };
+        const auto evidence_stage_name = [](
+            const katana::runtime::NativeBringupEvidenceStage stage)
+            -> std::string_view {
+            using Stage = katana::runtime::NativeBringupEvidenceStage;
+            switch (stage) {
+            case Stage::Observed: return "Observed";
+            case Stage::Candidate: return "Candidate";
+            case Stage::Proven: return "Proven";
+            case Stage::RuntimeContract: return "RuntimeContract";
+            case Stage::Unresolved: return "Unresolved";
+            }
+            throw std::invalid_argument(
+                "Native bring-up evidence has an invalid stage.");
+        };
+        const auto transfer_kind_name = [](
+            const katana::runtime::NativeBringupTransferKind kind)
+            -> std::string_view {
+            using Kind = katana::runtime::NativeBringupTransferKind;
+            switch (kind) {
+            case Kind::CallRegister: return "CallRegister";
+            case Kind::TailJumpRegister: return "TailJumpRegister";
+            }
+            throw std::invalid_argument(
+                "Native bring-up evidence has an invalid transfer kind.");
+        };
+        const auto promotion_name = [](
+            const katana::runtime::NativeBringupPromotionType promotion)
+            -> std::string_view {
+            using Promotion = katana::runtime::NativeBringupPromotionType;
+            switch (promotion) {
+            case Promotion::None: return "None";
+            case Promotion::StaticCompiledTarget:
+                return "StaticCompiledTarget";
+            case Promotion::ValidatedRuntimeContract:
+                return "ValidatedRuntimeContract";
+            case Promotion::AnalyzerReproof: return "AnalyzerReproof";
+            }
+            throw std::invalid_argument(
+                "Native bring-up evidence has an invalid promotion.");
+        };
+        output
+            << "inline constexpr std::uint64_t "
+               "native_bringup_runtime_generation = 1u;\n"
+            << "constexpr std::array<katana::runtime::"
+               "NativeBringupDispatchEntry, "
+            << native_bringup_dispatch_entries.size()
+            << "u> native_bringup_dispatch_entries{{\n";
+        for (const auto& entry : native_bringup_dispatch_entries) {
+            const auto& evidence = entry.admission;
+            output
+                << "    {{"
+                << evidence.contract_version
+                << "u, katana::runtime::NativeBringupEvidenceStage::"
+                << evidence_stage_name(evidence.stage)
+                << ", katana::runtime::NativeBringupTransferKind::"
+                << transfer_kind_name(evidence.transfer_kind)
+                << ", 0x" << symbol(evidence.source_owner) << "u, "
+                << evidence.source_owner_size << "u, 0x"
+                << symbol(evidence.source_block) << "u, "
+                << evidence.source_block_size << "u, 0x"
+                << symbol(evidence.callsite) << "u, 0x"
+                << symbol(evidence.continuation) << "u, "
+                << katana::io::quote_json(
+                       evidence.source_owner_code_identity)
+                << ", "
+                << katana::io::quote_json(
+                       evidence.source_block_code_identity)
+                << ", "
+                << katana::io::quote_json(
+                       evidence.callsite_code_identity)
+                << ", 0x" << symbol(evidence.target) << "u, "
+                << evidence.target_block_size << "u, 0x"
+                << symbol(evidence.target_owner) << "u, "
+                << evidence.target_owner_size << "u, "
+                << katana::io::quote_json(
+                       evidence.target_block_code_identity)
+                << ", "
+                << katana::io::quote_json(
+                       evidence.target_owner_code_identity)
+                << ", " << katana::io::quote_json(evidence.source_image_id)
+                << ", " << katana::io::quote_json(evidence.target_image_id)
+                << ", "
+                << katana::io::quote_json(
+                       evidence.source_module_identity)
+                << ", "
+                << katana::io::quote_json(
+                       evidence.target_module_identity)
+                << ", " << evidence.source_generation << "ull, "
+                << evidence.target_generation << "ull, "
+                << katana::io::quote_json(evidence.observation) << ", "
+                << katana::io::quote_json(evidence.static_correlation)
+                << ", " << katana::io::quote_json(evidence.missing_proof)
+                << ", katana::runtime::NativeBringupPromotionType::"
+                << promotion_name(evidence.proposed_promotion)
+                << ", " << katana::io::quote_json(evidence.analyzer_path)
+                << ", "
+                << katana::io::quote_json(
+                       evidence.runtime_contract_identity)
+                << "}, {{0x" << symbol(entry.source.address)
+                << "u, katana::runtime::canonical_physical_address(0x"
+                << symbol(entry.source.address) << "u)}, "
+                << entry.source.size
+                << "u, katana::runtime::BlockEndKind::"
+                << end_kind_name(entry.source.end_kind) << ", "
+                << katana::io::quote_json(entry.source.code_identity)
+                << "}, {{0x" << symbol(entry.target.address)
+                << "u, katana::runtime::canonical_physical_address(0x"
+                << symbol(entry.target.address) << "u)}, "
+                << entry.target.size
+                << "u, katana::runtime::BlockEndKind::"
+                << end_kind_name(entry.target.end_kind) << ", "
+                << katana::io::quote_json(entry.target.code_identity)
+                << "}},\n";
+        }
+        output
+            << "}};\n"
+            << "inline constexpr katana::runtime::"
+               "NativeBringupDispatchPack native_bringup_dispatch_pack{\n"
+            << "    {katana::runtime::"
+               "native_bringup_evidence_contract_version, "
+            << katana::io::quote_json(
+                   native_bringup_authoring_artifact_identity)
+            << ", " << katana::io::quote_json(game_project->project_id)
+            << ", " << katana::io::quote_json(game_project->project_version)
+            << ", " << katana::io::quote_json(runtime_frontier_binding->key)
+            << ", " << katana::io::quote_json(native_aot_pack_identity)
+            << ", " << native_aot_pack_generation << "ull},\n"
+            << "    std::span<const katana::runtime::"
+               "NativeBringupDispatchEntry>(native_bringup_dispatch_entries)};\n"
+            << "constexpr std::array<katana::runtime::"
+               "NativeBringupDispatchStaticAotBinding, "
+            << native_bringup_static_blocks.size()
+            << "u> native_bringup_static_blocks{{\n";
+        for (const auto& block : native_bringup_static_blocks)
+            output
+                << "    {{0x" << symbol(block.address)
+                << "u, katana::runtime::canonical_physical_address(0x"
+                << symbol(block.address) << "u)}, " << block.size
+                << "u, katana::runtime::BlockEndKind::"
+                << end_kind_name(block.end_kind) << ", "
+                << katana::io::quote_json(block.code_identity) << "},\n";
+        output << "}};\n";
+    }
+    output <<
               "void write_bounded_fault_bytes(std::string_view bytes) noexcept {\n"
               "#if defined(_WIN32)\n"
               "    const auto handle = GetStdHandle(STD_ERROR_HANDLE);\n"
@@ -18415,8 +18705,43 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        throw std::runtime_error(\n"
               "            \"native-loaded-aot-dispatch-binding\");\n"
               "    return entry;\n"
-              "}\n"
-              "bool native_hook_address(const std::uint32_t address) noexcept {\n"
+              "}\n";
+    if (native_bringup)
+        output
+            << "void initialize_native_bringup_block_table(\n"
+               "        katana::runtime::RuntimeBlockTable& table) {\n"
+               "    std::vector<katana::runtime::RuntimeBlock> blocks;\n"
+               "    blocks.reserve(native_bringup_static_blocks.size());\n"
+               "    for (const auto& binding : native_bringup_static_blocks) {\n"
+               "        const auto* entry = find_exact_entry(\n"
+               "            binding.block.virtual_address);\n"
+               "        if (entry == nullptr || entry->function == nullptr)\n"
+               "            throw std::runtime_error(\n"
+               "                \"native-bringup-static-entry-missing\");\n"
+               "        katana::runtime::RuntimeBlock block;\n"
+               "        block.virtual_start = binding.block.virtual_address;\n"
+               "        block.physical_origin = binding.block.physical_address;\n"
+               "        block.size = binding.size;\n"
+               "        block.end_kind = binding.end_kind;\n"
+               "        block.variant.runtime_generation =\n"
+               "            native_bringup_runtime_generation;\n"
+               "        block.function = entry->function;\n"
+               "        block.provenance = binding.block_code_identity;\n"
+               "        block.static_variant_policy = katana::runtime::\n"
+               "            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;\n"
+               "        blocks.push_back(std::move(block));\n"
+               "    }\n"
+               "    table.bind_code_tracker(\n"
+               "        nullptr, katana::runtime::\n"
+               "            StaticAotInvalidationContract::Coordinated);\n"
+               "    const auto handles = table.register_static_contextual_bulk(\n"
+               "        std::move(blocks));\n"
+               "    if (handles.size() != native_bringup_static_blocks.size())\n"
+               "        throw std::runtime_error(\n"
+               "            \"native-bringup-static-table-incomplete\");\n"
+               "    table.seal_static();\n"
+               "}\n";
+    output << "bool native_hook_address(const std::uint32_t address) noexcept {\n"
               "    auto source = normalized_source_address(address);\n"
               "    switch (source) {\n";
     for (const auto& hook : definition.hooks) {
@@ -18563,7 +18888,15 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "thread_local std::string_view closure_probe_last_owner_identity;\n"
               "thread_local katana::runtime::NativePortContext* "
               "active_native_context = nullptr;\n"
-              "using HookResult = katana::runtime::NativePortHookResult;\n"
+              "thread_local bool native_bringup_dispatch_pending = false;\n";
+    if (native_bringup)
+        output
+            << "thread_local katana::runtime::RuntimeBlockTable* "
+               "active_native_bringup_table = nullptr;\n"
+            << "thread_local const katana::runtime::"
+               "NativeBringupDispatchContext* "
+               "active_native_bringup_context = nullptr;\n";
+    output << "using HookResult = katana::runtime::NativePortHookResult;\n"
               "using HookAction = katana::runtime::NativePortHookAction;\n"
               "using HookKind = katana::runtime::NativePortHookKind;\n"
               "using HookRequirement = katana::runtime::NativePortHookRequirement;\n"
@@ -19484,12 +19817,26 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        katana::runtime::NativePortRuntimeImageBindings& "
               "runtime_image_bindings,\n"
               "        katana::runtime::NativePortLoadedAotBinder& "
-              "loaded_aot_binder) : context_(context) {\n"
+              "loaded_aot_binder"
+           << (native_bringup
+                   ? ",\n        katana::runtime::RuntimeBlockTable& "
+                     "native_bringup_table,\n"
+                     "        const katana::runtime::"
+                     "NativeBringupDispatchContext& "
+                     "native_bringup_context"
+                   : "")
+           << ") : context_(context) {\n"
               "        if (active_native_context != nullptr ||\n"
               "            runtime_dispatch_detail::active_services != nullptr ||\n"
               "            runtime_dispatch_detail::active_loaded_aot_binder != nullptr ||\n"
               "            context.runtime_images != nullptr ||\n"
-              "            context.loaded_aot != nullptr)\n"
+              "            context.loaded_aot != nullptr"
+           << (native_bringup
+                   ? " ||\n            active_native_bringup_table != nullptr ||\n"
+                     "            active_native_bringup_context != nullptr ||\n"
+                     "            native_bringup_dispatch_pending"
+                   : "")
+           << ")\n"
               "            throw std::runtime_error(\"native-dispatch-reentry-scope\");\n"
               "        active_native_context = &context;\n"
               "        runtime_dispatch_detail::active_services = &services;\n"
@@ -19497,6 +19844,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            &loaded_aot_binder;\n"
               "        context.runtime_images = &runtime_image_bindings;\n"
               "        context.loaded_aot = &loaded_aot_binder;\n"
+           << (native_bringup
+                   ? "        active_native_bringup_table = &native_bringup_table;\n"
+                     "        active_native_bringup_context = &native_bringup_context;\n"
+                     "        native_bringup_dispatch_pending = true;\n"
+                   : "        native_bringup_dispatch_pending = false;\n")
+           <<
               "        configure_native_closure_probe_plan(context);\n"
               "    }\n"
               "    ~NativeDispatchScope() noexcept {\n"
@@ -19507,6 +19860,12 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        closure_probe_last_callsite = 0u;\n"
               "        closure_probe_last_generation = 0u;\n"
               "        closure_probe_last_owner_identity = {};\n"
+           << (native_bringup
+                   ? "        native_bringup_dispatch_pending = false;\n"
+                     "        active_native_bringup_context = nullptr;\n"
+                     "        active_native_bringup_table = nullptr;\n"
+                   : "")
+           <<
               "        context_.loaded_aot = nullptr;\n"
               "        context_.runtime_images = nullptr;\n"
               "        runtime_dispatch_detail::active_loaded_aot_binder = nullptr;\n"
@@ -19878,8 +20237,63 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    const std::uint32_t allowed_target) noexcept {\n"
               "    return exact_guarded_source_address(target) ==\n"
               "           exact_guarded_source_address(allowed_target);\n"
-              "}\n"
-              "void dispatch_call(katana::runtime::CpuState& cpu,\n"
+              "}\n";
+    if (native_bringup) {
+        output
+            << "void preflight_native_bringup_indirect_dispatch(\n"
+               "        const std::uint32_t source_block,\n"
+               "        const std::uint32_t callsite,\n"
+               "        const std::uint32_t target,\n"
+               "        const std::uint32_t continuation,\n"
+               "        const bool call) {\n"
+               "    if (!native_bringup_dispatch_pending) return;\n"
+               "    if (active_native_bringup_table == nullptr ||\n"
+               "        active_native_bringup_context == nullptr)\n"
+               "        throw std::runtime_error(\n"
+               "            \"native-bringup-dispatch-context\");\n"
+               "    const auto transfer_kind = call\n"
+               "        ? katana::runtime::NativeBringupTransferKind::CallRegister\n"
+               "        : katana::runtime::NativeBringupTransferKind::TailJumpRegister;\n"
+               "    const auto source_entry =\n"
+               "        exact_guarded_source_address(source_block);\n"
+               "    const auto source_callsite =\n"
+               "        exact_guarded_source_address(callsite);\n"
+               "    const auto source_target =\n"
+               "        exact_guarded_source_address(target);\n"
+               "    const auto source_continuation = call\n"
+               "        ? exact_guarded_source_address(continuation)\n"
+               "        : 0u;\n"
+               "    if (!call && continuation != 0u)\n"
+               "        throw std::runtime_error(\n"
+               "            \"native-bringup-transfer-state\");\n"
+               "    katana::runtime::\n"
+               "        NativeBringupDispatchPreflightRequest request;\n"
+               "    request.transfer_kind = transfer_kind;\n"
+               "    request.callsite = source_callsite;\n"
+               "    request.target = source_target;\n"
+               "    request.continuation = source_continuation;\n"
+               "    request.source = {\n"
+               "        source_entry,\n"
+               "        katana::runtime::canonical_physical_address(\n"
+               "            source_entry)};\n"
+               "    request.variant.runtime_generation =\n"
+               "        active_native_bringup_context->runtime_generation;\n"
+               "    static_cast<void>(katana::runtime::\n"
+               "        preflight_native_bringup_dispatch(\n"
+               "            *active_native_bringup_table,\n"
+               "            *active_native_bringup_context, request));\n"
+               "}\n";
+    } else {
+        output
+            << "void preflight_native_bringup_indirect_dispatch(\n"
+               "        std::uint32_t, std::uint32_t, std::uint32_t,\n"
+               "        std::uint32_t, bool) {\n"
+               "    if (native_bringup_dispatch_pending)\n"
+               "        throw std::runtime_error(\n"
+               "            \"native-bringup-disabled-in-strict-product\");\n"
+               "}\n";
+    }
+    output << "void dispatch_call(katana::runtime::CpuState& cpu,\n"
               "                   const std::uint32_t target) {\n"
               "    require_active_context(cpu);\n"
               "    const auto result = dispatch_native(\n"
@@ -20340,9 +20754,31 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    katana::runtime::NativePortAotServices services(\n"
               "        context, &runtime_dispatch_detail::native_chainable_entry,\n"
               "        immutable_guard);\n"
+           << (native_bringup
+                   ? "    katana::runtime::RuntimeBlockTable native_bringup_table;\n"
+                     "    runtime_dispatch_detail::"
+                     "initialize_native_bringup_block_table(\n"
+                     "        native_bringup_table);\n"
+                      "    katana::runtime::NativeBringupDispatchObservations\n"
+                      "        native_bringup_observations;\n"
+                      "    const auto native_bringup_context =\n"
+                      "        katana::runtime::"
+                      "make_native_bringup_dispatch_context(\n"
+                      "            native_bringup_table,\n"
+                      "            runtime_dispatch_detail::"
+                      "native_bringup_dispatch_pack,\n"
+                      "            runtime_dispatch_detail::"
+                      "native_bringup_runtime_generation,\n"
+                      "            native_bringup_observations);\n"
+                   : "")
+           <<
               "    NativeDispatchScope scope(\n"
               "        context, services, runtime_image_bindings,\n"
-              "        loaded_aot_binder);\n"
+              "        loaded_aot_binder"
+           << (native_bringup
+                   ? ", native_bringup_table, native_bringup_context"
+                   : "")
+           << ");\n"
               "    require_native_aot_integrity(context, services);\n"
               "    if (context.stop_reason ==\n"
               "        katana::runtime::NativePortStopReason::HostRequested)\n"
@@ -20771,7 +21207,12 @@ std::string root_cmake(const bool diagnostic_partial,
 }
 
 std::string product_gate_runner(const bool native_product,
-                                const bool hardware_closure_complete) {
+                                const bool hardware_closure_complete,
+                                const NativePortExecutionProfile execution_profile) {
+    if (execution_profile == NativePortExecutionProfile::NativeBringup)
+        return "[Console]::Error.WriteLine(\n"
+               "    'KATANA_NATIVE_PRODUCT_GATE status=non-release-native-bringup')\n"
+               "exit 126\n";
     if (native_product) {
         return "param(\n"
                "    [Parameter(Mandatory = $true)][string]$Executable,\n"
@@ -20869,7 +21310,8 @@ std::string product_gate_runner(const bool native_product,
 
 std::string port_install_instructions(
     const bool native_product,
-    const bool hardware_closure_complete) {
+    const bool hardware_closure_complete,
+    const NativePortExecutionProfile execution_profile) {
     if (!native_product)
         return "ORIGINAL DISC REQUIRED - DISTRIBUTABLE PORT\n\n"
                "This package contains native AOT code and a hash/layout recipe, but no retail disc "
@@ -20879,7 +21321,15 @@ std::string port_install_instructions(
                "That local cache contains complete retail data and must never be redistributed.\n"
                "The original GDI and tracks are opened read-only and are never modified or deleted.\n";
 
-    return "ORIGINAL CONTENT REQUIRED - NATIVE PORT\n\n"
+    const auto bringup_warning =
+        execution_profile == NativePortExecutionProfile::NativeBringup
+            ? std::string(
+                  "NATIVE BRING-UP PROFILE - NON-RELEASE\n"
+                  "This executable uses an explicit immutable diagnostic "
+                  "allowlist. It cannot satisfy the strict product gate.\n\n")
+            : std::string{};
+    return bringup_warning +
+           "ORIGINAL CONTENT REQUIRED - NATIVE PORT\n\n"
            "This package contains statically recompiled code and native runtime bindings, but no "
            "retail game bytes.\n"
            "Provide a private content directory whose files and byte ranges match the identities "
@@ -21798,6 +22248,17 @@ port_metadata(const PortExportOptions& options,
            << ",\"target_name\":" << katana::io::quote_json(options.target_name)
            << ",\"console_profile\":" << katana::io::quote_json(options.console_profile)
            << ",\"diagnostic_partial\":" << (options.diagnostic_partial ? "true" : "false")
+           << ",\"native_execution_profile\":"
+           << katana::io::quote_json(
+                  options.native_execution_profile ==
+                          NativePortExecutionProfile::NativeBringup
+                      ? "native-bringup"
+                      : "strict-product")
+           << ",\"release_eligible\":"
+           << (options.native_execution_profile ==
+                       NativePortExecutionProfile::StrictProduct
+                   ? "true"
+                   : "false")
            << ",\"execution_profile\":"
            << katana::io::quote_json(options.diagnostic_partial ? "diagnostic-interpreter"
                                                                 : "native-aot-runtime-selectable")
@@ -26943,6 +27404,630 @@ struct NativePortFunctionCodeIdentity final {
         katana::runtime::NativePortHookCodeSource::StaticImage;
     std::string source_identity;
 };
+
+std::optional<NativePortFunctionCodeIdentity>
+native_port_function_code_identity(
+    const katana::io::ExecutableImage& image,
+    std::span<const PreparedLatentAotModule> latent_modules,
+    std::uint32_t address,
+    std::uint32_t size);
+
+inline constexpr std::uint32_t native_aot_pack_manifest_schema_version = 1u;
+inline constexpr std::uint32_t native_bringup_promotion_report_schema_version =
+    1u;
+// The generation is scoped by the whole-pack SHA-256 below.  A different pack
+// therefore has a different compound identity even when this format-local
+// generation remains one.  Runtime-/adapter-only rebuilds retain both values.
+inline constexpr std::uint64_t native_aot_pack_generation = 1u;
+
+struct NativeAotPackContract final {
+    std::string identity;
+    std::uint64_t generation = native_aot_pack_generation;
+    std::size_t partition_count = 0u;
+    std::size_t function_count = 0u;
+    std::size_t block_count = 0u;
+};
+
+struct RevalidatedNativeBringupTarget final {
+    const katana::runtime::NativeBringupTargetEvidence* evidence = nullptr;
+    std::optional<NativeBringupDispatchEmission> dispatch;
+    bool bringup_execution_admitted = false;
+    bool strict_proof_admitted = false;
+    std::string admission;
+};
+
+[[nodiscard]] std::string_view native_bringup_stage_name(
+    const katana::runtime::NativeBringupEvidenceStage stage) noexcept {
+    using Stage = katana::runtime::NativeBringupEvidenceStage;
+    switch (stage) {
+    case Stage::Observed:
+        return "observed";
+    case Stage::Candidate:
+        return "candidate";
+    case Stage::Proven:
+        return "proven";
+    case Stage::RuntimeContract:
+        return "runtime-contract";
+    case Stage::Unresolved:
+        return "unresolved";
+    }
+    return "invalid";
+}
+
+[[nodiscard]] std::string_view native_bringup_promotion_name(
+    const katana::runtime::NativeBringupPromotionType promotion) noexcept {
+    using Promotion = katana::runtime::NativeBringupPromotionType;
+    switch (promotion) {
+    case Promotion::None:
+        return "none";
+    case Promotion::StaticCompiledTarget:
+        return "static-compiled-target";
+    case Promotion::ValidatedRuntimeContract:
+        return "validated-runtime-contract";
+    case Promotion::AnalyzerReproof:
+        return "analyzer-reproof";
+    }
+    return "invalid";
+}
+
+[[nodiscard]] NativeAotPackContract native_aot_pack_contract(
+    const std::span<const TranslationUnitPartition> partitions,
+    const std::span<const katana::ir::Function> program,
+    const std::span<const std::uint32_t> resume_entries,
+    const std::span<const PreparedLatentAotModule> latent_modules,
+    const std::uint32_t product_entry_address,
+    const std::uint32_t product_entry_owner,
+    const std::string_view partition_configuration_identity,
+    const std::string_view partition_codegen_identity,
+    const std::string_view aot_linkage_identity,
+    const std::string_view project_identity,
+    const katana::runtime::GameProjectDefinition* const game_project) {
+    if (partitions.empty() || aot_linkage_identity.empty())
+        throw std::invalid_argument(
+            "Native AOT pack requires complete partition identities.");
+
+    std::ostringstream material;
+    const auto field = [&](const std::string_view value) {
+        material << value.size() << ':' << value << ';';
+    };
+    field("katana-native-aot-pack-v1");
+    field(partition_configuration_identity);
+    field(partition_codegen_identity);
+    field(aot_linkage_identity);
+    field(project_identity);
+    field(game_project != nullptr
+              ? game_project->identity.boot_byte_identity
+              : std::string_view{"no-game-project-boot-identity"});
+    material << "aot-abi=" << katana::runtime::abi_version << ';'
+             << "block-abi=" << katana::runtime::block_abi_version << ';'
+             << "backend-abi=" << backend_interface_abi_version << ';'
+             << "emission-profile=" << native_aot_emission_profile_version
+             << ';' << "partition-schema="
+             << port_partition_emission_schema_version << ';'
+             << "entry=" << product_entry_address << ';'
+             << "entry-owner=" << product_entry_owner << ';';
+    for (std::size_t index = 0u; index < partitions.size(); ++index) {
+        material << "partition=" << index << ':';
+        field(partitions[index].content_sha256);
+    }
+    auto ordered_resume_entries =
+        std::vector<std::uint32_t>(resume_entries.begin(),
+                                   resume_entries.end());
+    std::sort(ordered_resume_entries.begin(), ordered_resume_entries.end());
+    ordered_resume_entries.erase(
+        std::unique(ordered_resume_entries.begin(),
+                    ordered_resume_entries.end()),
+        ordered_resume_entries.end());
+    for (const auto entry : ordered_resume_entries)
+        material << "resume=" << entry << ';';
+    for (const auto& module : latent_modules) {
+        field(module.id);
+        field(module.byte_identity);
+        material << "latent-source=" << module.source_address << ';'
+                 << "latent-size=" << module.byte_size << ';';
+        for (const auto& block : module.block_identities) {
+            material << "latent-block=" << block.source_offset << ':'
+                     << block.size << ':';
+            field(block.sha256);
+        }
+    }
+
+    NativeAotPackContract result;
+    result.identity = "sha256:" + katana::io::sha256_bytes(material.str());
+    result.partition_count = partitions.size();
+    result.function_count = program.size();
+    for (const auto& function : program) {
+        if (function.blocks.size() >
+            std::numeric_limits<std::size_t>::max() - result.block_count)
+            throw std::overflow_error(
+                "Native AOT pack block count overflowed.");
+        result.block_count += function.blocks.size();
+    }
+    return result;
+}
+
+[[nodiscard]] bool native_port_boundary_is_identity_bound(
+    const NativePortFunctionBoundaryProof proof) noexcept {
+    return proof == NativePortFunctionBoundaryProof::IdentityBoundExact ||
+           proof == NativePortFunctionBoundaryProof::
+                        IdentityBoundExactAndClosedControlFlow ||
+           proof == NativePortFunctionBoundaryProof::
+                        IdentityBoundExactAndGuardedOwnerExtent;
+}
+
+[[nodiscard]] std::uint32_t exact_ir_block_size(
+    const katana::ir::BasicBlock& block) {
+    if (block.instructions.empty())
+        throw std::invalid_argument(
+            "Native bring-up target block has no instructions.");
+    std::uint64_t end = static_cast<std::uint64_t>(block.start_address) + 2u;
+    for (std::size_t index = 0u; index < block.instructions.size(); ++index) {
+        const auto& instruction = block.instructions[index];
+        const auto expected = static_cast<std::uint64_t>(
+                                  block.start_address) +
+                              index * 2u;
+        if (expected > std::numeric_limits<std::uint32_t>::max() ||
+            instruction.source_address != expected)
+            throw std::invalid_argument(
+                "Native bring-up target block is not contiguous in its owner.");
+        end = std::max(
+            end,
+            static_cast<std::uint64_t>(instruction.source_address) + 2u);
+    }
+    if (end > 0x1'0000'0000ull ||
+        end - block.start_address >
+            std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument(
+            "Native bring-up target block extent is invalid.");
+    return static_cast<std::uint32_t>(end - block.start_address);
+}
+
+[[nodiscard]] katana::runtime::BlockEndKind native_bringup_block_end_kind(
+    const katana::ir::BasicBlock& block) noexcept {
+    using Operation = katana::ir::Operation;
+    const katana::ir::Instruction* terminal = nullptr;
+    for (const auto& instruction : block.instructions) {
+        if (instruction.delay_slot.role != katana::ir::DelaySlotRole::Slot)
+            terminal = &instruction;
+    }
+    if (terminal == nullptr)
+        return katana::runtime::BlockEndKind::Fallthrough;
+    switch (terminal->operation) {
+    case Operation::Branch:
+        return katana::runtime::BlockEndKind::StaticBranch;
+    case Operation::BranchIfTrue:
+    case Operation::BranchIfFalse:
+        return katana::runtime::BlockEndKind::ConditionalBranch;
+    case Operation::JumpRegister:
+        return katana::runtime::BlockEndKind::DynamicBranch;
+    case Operation::Call:
+    case Operation::CallRegister:
+        return katana::runtime::BlockEndKind::Call;
+    case Operation::Return:
+        return katana::runtime::BlockEndKind::Return;
+    case Operation::ReturnFromException:
+        return katana::runtime::BlockEndKind::ExceptionReturn;
+    case Operation::Sleep:
+        return katana::runtime::BlockEndKind::Sleep;
+    case Operation::TrapAlways:
+        return katana::runtime::BlockEndKind::Exception;
+    default:
+        return katana::runtime::BlockEndKind::Fallthrough;
+    }
+}
+
+[[nodiscard]] NativeBringupDispatchEmission
+revalidate_native_bringup_execution_target(
+    const katana::runtime::NativeBringupTargetEvidence& evidence,
+    const NativeAotPackContract& pack,
+    const NativePortProgramIndex& index,
+    const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules,
+    const katana::runtime::GameProjectDefinition& game_project) {
+    using TransferKind = katana::runtime::NativeBringupTransferKind;
+    // v1 deliberately admits only the immutable resident image. Mutable
+    // RuntimeImages and relocated latent modules require their existing
+    // lifecycle/generation validator and may not borrow this static proof.
+    if (evidence.source_image_id != "primary" ||
+        evidence.target_image_id != "primary" ||
+        evidence.source_module_identity !=
+            game_project.identity.boot_byte_identity ||
+        evidence.target_module_identity !=
+            game_project.identity.boot_byte_identity ||
+        evidence.source_generation != pack.generation ||
+        evidence.target_generation != pack.generation)
+        throw std::invalid_argument(
+            "Native bring-up execution target is not bound to this resident "
+            "AOT-pack generation.");
+
+    const auto source_boundary =
+        native_port_function_boundary(index, evidence.source_owner);
+    const auto target_boundary =
+        native_port_function_boundary(index, evidence.target_owner);
+    if (!source_boundary.has_value() || !target_boundary.has_value() ||
+        !native_port_boundary_is_identity_bound(source_boundary->proof) ||
+        !native_port_boundary_is_identity_bound(target_boundary->proof) ||
+        source_boundary->size != evidence.source_owner_size ||
+        target_boundary->size != evidence.target_owner_size)
+        throw std::invalid_argument(
+            "Native bring-up execution target lost an exact owner boundary.");
+
+    const auto source_identity = native_port_function_code_identity(
+        image, latent_modules, evidence.source_owner,
+        evidence.source_owner_size);
+    const auto target_identity = native_port_function_code_identity(
+        image, latent_modules, evidence.target_owner,
+        evidence.target_owner_size);
+    if (!source_identity.has_value() || !target_identity.has_value() ||
+        source_identity->source !=
+            katana::runtime::NativePortHookCodeSource::StaticImage ||
+        target_identity->source !=
+            katana::runtime::NativePortHookCodeSource::StaticImage ||
+        source_identity->code_identity !=
+            evidence.source_owner_code_identity ||
+        target_identity->code_identity !=
+            evidence.target_owner_code_identity)
+        throw std::invalid_argument(
+            "Native bring-up execution owner bytes no longer match.");
+
+    const auto callsite_identity = native_port_code_identity(
+        image, latent_modules, evidence.callsite, 4u);
+    const auto target_block_identity = native_port_code_identity(
+        image, latent_modules, evidence.target,
+        evidence.target_block_size);
+    if (!callsite_identity.has_value() ||
+        *callsite_identity != evidence.callsite_code_identity ||
+        !target_block_identity.has_value() ||
+        *target_block_identity != evidence.target_block_code_identity)
+        throw std::invalid_argument(
+            "Native bring-up execution callsite or target block bytes changed.");
+
+    const auto source_functions = index.functions_by_entry.find(
+        evidence.source_owner);
+    const auto target_functions = index.functions_by_entry.find(
+        evidence.target_owner);
+    if (source_functions == index.functions_by_entry.end() ||
+        target_functions == index.functions_by_entry.end() ||
+        source_functions->second.size() != 1u ||
+        target_functions->second.size() != 1u ||
+        source_functions->second.front() == nullptr ||
+        target_functions->second.front() == nullptr)
+        throw std::invalid_argument(
+            "Native bring-up execution target lost unique IR ownership.");
+
+    const auto& source_function = *source_functions->second.front();
+    const auto& target_function = *target_functions->second.front();
+    const katana::ir::Instruction* call = nullptr;
+    const katana::ir::Instruction* delay = nullptr;
+    const katana::ir::BasicBlock* source_block = nullptr;
+    for (const auto& block : source_function.blocks) {
+        for (const auto& instruction : block.instructions) {
+            if (instruction.source_address == evidence.callsite) {
+                if (call != nullptr)
+                    throw std::invalid_argument(
+                        "Native bring-up callsite has multiple IR owners.");
+                call = &instruction;
+                source_block = &block;
+            }
+            if (instruction.source_address == evidence.callsite + 2u) {
+                if (delay != nullptr)
+                    throw std::invalid_argument(
+                        "Native bring-up delay slot has multiple IR owners.");
+                delay = &instruction;
+            }
+        }
+    }
+    const auto expected_operation =
+        evidence.transfer_kind == TransferKind::CallRegister
+            ? katana::ir::Operation::CallRegister
+            : katana::ir::Operation::JumpRegister;
+    if (call == nullptr || delay == nullptr ||
+        source_block == nullptr ||
+        call->operation != expected_operation ||
+        call->delay_slot.role != katana::ir::DelaySlotRole::Owner ||
+        delay->delay_slot.role != katana::ir::DelaySlotRole::Slot ||
+        native_bringup_block_end_kind(*source_block) !=
+            (evidence.transfer_kind == TransferKind::CallRegister
+                 ? katana::runtime::BlockEndKind::Call
+                 : katana::runtime::BlockEndKind::DynamicBranch))
+        throw std::invalid_argument(
+            "Native bring-up transfer lost its SH-4 call/delay shape.");
+
+    const auto source_block_size = exact_ir_block_size(*source_block);
+    const auto source_block_identity = native_port_code_identity(
+        image, latent_modules, source_block->start_address,
+        source_block_size);
+    if (!source_block_identity.has_value() ||
+        !native_bringup_sha256(*source_block_identity) ||
+        source_block->start_address != evidence.source_block ||
+        source_block_size != evidence.source_block_size ||
+        *source_block_identity != evidence.source_block_code_identity ||
+        static_cast<std::uint64_t>(evidence.callsite) + 4u !=
+            static_cast<std::uint64_t>(source_block->start_address) +
+                source_block_size)
+        throw std::invalid_argument(
+            "Native bring-up source block or terminal transfer "
+            "identity changed.");
+
+    const katana::ir::BasicBlock* target_block = nullptr;
+    for (const auto& block : target_function.blocks) {
+        if (block.start_address != evidence.target) continue;
+        if (target_block != nullptr)
+            throw std::invalid_argument(
+                "Native bring-up target block is ambiguous.");
+        target_block = &block;
+    }
+    if (target_block == nullptr ||
+        exact_ir_block_size(*target_block) != evidence.target_block_size)
+        throw std::invalid_argument(
+            "Native bring-up target is not an exact compiled block.");
+
+    NativeBringupDispatchEmission result;
+    result.admission = evidence;
+    result.source = {source_block->start_address,
+                     source_block_size,
+                     native_bringup_block_end_kind(*source_block),
+                     *source_block_identity};
+    result.target = {target_block->start_address,
+                     evidence.target_block_size,
+                     native_bringup_block_end_kind(*target_block),
+                     std::string(evidence.target_block_code_identity)};
+    return result;
+}
+
+[[nodiscard]] std::vector<RevalidatedNativeBringupTarget>
+revalidate_native_bringup_authoring(
+    const PortExportOptions& options,
+    const NativeAotPackContract& pack,
+    const NativePortProgramIndex& index,
+    const katana::io::ExecutableImage& image,
+    const std::span<const PreparedLatentAotModule> latent_modules,
+    const katana::runtime::GameProjectDefinition* const game_project,
+    const NativeDiscAnalysisArtifactIdentity* const analysis_identity) {
+    using Profile = NativePortExecutionProfile;
+    if (options.native_execution_profile == Profile::StrictProduct) {
+        if (options.native_bringup_authoring != nullptr ||
+            !options.native_bringup_artifact_identity.empty())
+            throw std::invalid_argument(
+                "StrictProduct must not observe native bring-up authoring.");
+        return {};
+    }
+    if (options.native_execution_profile != Profile::NativeBringup ||
+        options.native_bringup_authoring == nullptr ||
+        !native_bringup_sha256(options.native_bringup_artifact_identity) ||
+        game_project == nullptr || analysis_identity == nullptr)
+        throw std::invalid_argument(
+            "NativeBringup lacks exact authoring, project, or analysis "
+            "authority.");
+
+    const auto& authoring = *options.native_bringup_authoring;
+    katana::runtime::validate_native_bringup_authoring_definition(authoring);
+    if (authoring.project_id != game_project->project_id ||
+        authoring.project_version != game_project->project_version ||
+        authoring.analysis_identity != analysis_identity->key ||
+        authoring.aot_pack_identity != pack.identity ||
+        authoring.aot_pack_generation != pack.generation)
+        throw std::invalid_argument(
+            "NativeBringup authoring does not match project, analysis, or "
+            "the complete AOT pack.");
+
+    std::vector<RevalidatedNativeBringupTarget> result;
+    result.reserve(authoring.targets.size());
+    for (const auto& evidence : authoring.targets) {
+        RevalidatedNativeBringupTarget entry;
+        entry.evidence = &evidence;
+        switch (evidence.stage) {
+        case katana::runtime::NativeBringupEvidenceStage::Candidate:
+            entry.dispatch = revalidate_native_bringup_execution_target(
+                evidence, pack, index, image, latent_modules, *game_project);
+            entry.bringup_execution_admitted = true;
+            entry.admission = "candidate-execution-safety-revalidated";
+            break;
+        case katana::runtime::NativeBringupEvidenceStage::Proven:
+            entry.dispatch = revalidate_native_bringup_execution_target(
+                evidence, pack, index, image, latent_modules, *game_project);
+            entry.bringup_execution_admitted = true;
+            entry.strict_proof_admitted = true;
+            entry.admission =
+                "strict-proof-and-execution-safety-revalidated";
+            break;
+        case katana::runtime::NativeBringupEvidenceStage::RuntimeContract:
+            entry.admission = "existing-runtime-contract-only";
+            break;
+        case katana::runtime::NativeBringupEvidenceStage::Observed:
+        case katana::runtime::NativeBringupEvidenceStage::Unresolved:
+            entry.admission = "blocked-pending-execution-safety-evidence";
+            break;
+        }
+        result.push_back(std::move(entry));
+    }
+    std::ranges::sort(result, [](const auto& left, const auto& right) {
+        const auto& left_evidence = *left.evidence;
+        const auto& right_evidence = *right.evidence;
+        return std::tuple{
+                   static_cast<std::uint32_t>(left_evidence.transfer_kind),
+                   left_evidence.callsite,
+                   left_evidence.target} <
+               std::tuple{
+                   static_cast<std::uint32_t>(right_evidence.transfer_kind),
+                   right_evidence.callsite,
+                   right_evidence.target};
+    });
+    return result;
+}
+
+[[nodiscard]] std::string native_aot_pack_manifest_json(
+    const NativeAotPackContract& pack,
+    const std::string_view analysis_identity,
+    const katana::runtime::GameProjectDefinition& game_project) {
+    std::ostringstream output;
+    katana::io::write_json_report_header(
+        output, "katana-native-aot-pack", "native-aot-pack");
+    output << ",\"schema_version\":"
+           << native_aot_pack_manifest_schema_version
+           << ",\"identity\":" << katana::io::quote_json(pack.identity)
+           << ",\"generation\":" << pack.generation
+           << ",\"project_id\":"
+           << katana::io::quote_json(game_project.project_id)
+           << ",\"project_version\":"
+           << katana::io::quote_json(game_project.project_version)
+           << ",\"analysis_identity\":"
+           << katana::io::quote_json(analysis_identity)
+           << ",\"aot_runtime_abi\":" << katana::runtime::abi_version
+           << ",\"block_abi\":" << katana::runtime::block_abi_version
+           << ",\"backend_abi\":" << backend_interface_abi_version
+           << ",\"partition_schema\":"
+           << port_partition_emission_schema_version
+           << ",\"emission_profile\":"
+           << native_aot_emission_profile_version
+           << ",\"partition_count\":" << pack.partition_count
+           << ",\"function_count\":" << pack.function_count
+           << ",\"block_count\":" << pack.block_count
+           << ",\"runtime_adapter_independent\":true} ";
+    return output.str();
+}
+
+[[nodiscard]] std::string native_bringup_promotion_report_json(
+    const PortExportOptions& options,
+    const NativeAotPackContract& pack,
+    const std::span<const RevalidatedNativeBringupTarget> targets) {
+    std::ostringstream output;
+    katana::io::write_json_report_header(
+        output,
+        "katana-native-bringup-promotion-report",
+        "native-bringup-promotion-report");
+    output << ",\"schema_version\":"
+           << native_bringup_promotion_report_schema_version
+           << ",\"non_release\":true,\"auto_promotions\":0"
+           << ",\"authoring_artifact_identity\":"
+           << katana::io::quote_json(
+                  options.native_bringup_artifact_identity)
+           << ",\"aot_pack_identity\":"
+           << katana::io::quote_json(pack.identity)
+           << ",\"aot_pack_generation\":" << pack.generation
+           << ",\"records\":[";
+    for (std::size_t index = 0u; index < targets.size(); ++index) {
+        if (index != 0u) output << ',';
+        const auto& target = targets[index];
+        const auto& evidence = *target.evidence;
+        output << "{\"stage\":"
+               << katana::io::quote_json(
+                      native_bringup_stage_name(evidence.stage))
+               << ",\"source_owner\":" << evidence.source_owner
+               << ",\"source_block\":" << evidence.source_block
+               << ",\"callsite\":" << evidence.callsite
+               << ",\"target\":" << evidence.target
+               << ",\"observation\":"
+               << katana::io::quote_json(evidence.observation)
+               << ",\"static_correlation\":"
+               << katana::io::quote_json(evidence.static_correlation)
+               << ",\"missing_proof\":"
+               << katana::io::quote_json(evidence.missing_proof)
+               << ",\"proposed_promotion\":"
+               << katana::io::quote_json(
+                      native_bringup_promotion_name(
+                          evidence.proposed_promotion))
+               << ",\"analyzer_path\":"
+               << katana::io::quote_json(evidence.analyzer_path)
+               << ",\"admission\":"
+               << katana::io::quote_json(target.admission)
+               << ",\"bringup_execution_admitted\":"
+               << (target.bringup_execution_admitted ? "true" : "false")
+               << ",\"strict_proof_admitted\":"
+               << (target.strict_proof_admitted ? "true" : "false")
+               << '}';
+    }
+    output << "]}";
+    return output.str();
+}
+
+[[nodiscard]] std::string native_bringup_executable_allowlist_json(
+    const PortExportOptions& options,
+    const NativeAotPackContract& pack,
+    const std::span<const RevalidatedNativeBringupTarget> targets) {
+    std::ostringstream output;
+    katana::io::write_json_report_header(
+        output,
+        "katana-native-bringup-executable-allowlist",
+        "native-bringup-executable-allowlist");
+    const auto admitted = std::count_if(
+        targets.begin(), targets.end(), [](const auto& target) {
+            return target.bringup_execution_admitted;
+        });
+    const auto strict_proven = std::count_if(
+        targets.begin(), targets.end(), [](const auto& target) {
+            return target.strict_proof_admitted;
+        });
+    output << ",\"schema_version\":1,\"non_release\":true"
+           << ",\"release_eligible\":false"
+           << ",\"authoring_artifact_identity\":"
+           << katana::io::quote_json(
+                  options.native_bringup_artifact_identity)
+           << ",\"aot_pack_identity\":"
+           << katana::io::quote_json(pack.identity)
+           << ",\"aot_pack_generation\":" << pack.generation
+           << ",\"bringup_execution_admitted_target_count\":" << admitted
+           << ",\"strict_proof_admitted_target_count\":" << strict_proven
+           << ",\"targets\":[";
+    std::size_t emitted = 0u;
+    for (const auto& target : targets) {
+        if (!target.bringup_execution_admitted) continue;
+        if (emitted++ != 0u) output << ',';
+        const auto& evidence = *target.evidence;
+        output << "{\"stage\":"
+               << katana::io::quote_json(
+                      native_bringup_stage_name(evidence.stage))
+               << ",\"bringup_execution_admitted\":true"
+               << ",\"strict_proof_admitted\":"
+               << (target.strict_proof_admitted ? "true" : "false")
+               << ",\"missing_proof\":"
+               << katana::io::quote_json(evidence.missing_proof)
+               << ",\"source_owner\":" << evidence.source_owner
+               << ",\"source_owner_size\":"
+               << evidence.source_owner_size
+               << ",\"source_block\":" << evidence.source_block
+               << ",\"source_block_size\":"
+               << evidence.source_block_size
+               << ",\"callsite\":" << evidence.callsite
+               << ",\"continuation\":" << evidence.continuation
+               << ",\"source_owner_code_identity\":"
+               << katana::io::quote_json(
+                      evidence.source_owner_code_identity)
+               << ",\"source_block_code_identity\":"
+               << katana::io::quote_json(
+                      evidence.source_block_code_identity)
+               << ",\"callsite_code_identity\":"
+               << katana::io::quote_json(evidence.callsite_code_identity)
+               << ",\"target\":" << evidence.target
+               << ",\"target_block_size\":"
+               << evidence.target_block_size
+               << ",\"target_owner\":" << evidence.target_owner
+               << ",\"target_owner_size\":"
+               << evidence.target_owner_size
+               << ",\"target_block_code_identity\":"
+               << katana::io::quote_json(
+                      evidence.target_block_code_identity)
+               << ",\"target_owner_code_identity\":"
+               << katana::io::quote_json(
+                      evidence.target_owner_code_identity)
+               << ",\"source_image_id\":"
+               << katana::io::quote_json(evidence.source_image_id)
+               << ",\"target_image_id\":"
+               << katana::io::quote_json(evidence.target_image_id)
+               << ",\"source_module_identity\":"
+               << katana::io::quote_json(
+                      evidence.source_module_identity)
+               << ",\"target_module_identity\":"
+               << katana::io::quote_json(
+                      evidence.target_module_identity)
+               << ",\"source_generation\":"
+               << evidence.source_generation
+               << ",\"target_generation\":"
+               << evidence.target_generation << '}';
+    }
+    output << "]}";
+    return output.str();
+}
 
 std::optional<NativePortFunctionCodeIdentity>
 native_port_function_code_identity(
@@ -36382,6 +37467,26 @@ static PortExportResult export_dreamcast_port_project_impl(
     const bool game_project_image_contract_prevalidated = false) {
     if (output_root.empty())
         throw std::invalid_argument("Portexport braucht ein Ausgabeziel.");
+    switch (options.native_execution_profile) {
+    case NativePortExecutionProfile::StrictProduct:
+        if (options.native_bringup_authoring != nullptr ||
+            !options.native_bringup_artifact_identity.empty())
+            throw std::invalid_argument(
+                "StrictProduct darf kein Native-Bring-up-Artefakt laden "
+                "oder an Analyse, Cache oder Export weiterreichen.");
+        break;
+    case NativePortExecutionProfile::NativeBringup:
+        if (options.native_bringup_authoring == nullptr ||
+            !native_bringup_sha256(
+                options.native_bringup_artifact_identity))
+            throw std::invalid_argument(
+                "NativeBringup braucht ein exakt identifiziertes "
+                "Authoring-Artefakt.");
+        break;
+    default:
+        throw std::invalid_argument(
+            "Portexport erhielt ein ungueltiges ExecutionProfile.");
+    }
     if (!admitted) {
         admitted = prepare_dreamcast_port_project_impl(
             prepared,
@@ -36919,6 +38024,74 @@ static PortExportResult export_dreamcast_port_project_impl(
     for (auto& artifact : generated)
         artifacts.push_back(std::move(*artifact));
     source_progress.complete();
+    std::ostringstream aot_linkage_material;
+    aot_linkage_material << "katana-native-aot-pack-linkage-v1;";
+    const auto append_sorted_addresses = [&](const std::string_view label,
+                                             const auto& addresses) {
+        auto ordered = std::vector<std::uint32_t>(addresses.begin(),
+                                                   addresses.end());
+        std::sort(ordered.begin(), ordered.end());
+        ordered.erase(std::unique(ordered.begin(), ordered.end()),
+                      ordered.end());
+        for (const auto address : ordered)
+            aot_linkage_material << label << '=' << address << ';';
+    };
+    append_sorted_addresses("external-hook", external_hook_entries);
+    append_sorted_addresses("runtime-image-boundary",
+                            runtime_image_architectural_boundaries);
+    append_sorted_addresses("composite-boundary",
+                            composite_callback_architectural_boundaries);
+    append_sorted_addresses("closure-probe", closure_probe_callsites);
+    append_sorted_addresses("resume", native_aot_resume_entries);
+    auto ordered_guarded_calls = std::vector<
+        std::pair<std::uint32_t, std::uint32_t>>(
+        guarded_native_call_targets.begin(),
+        guarded_native_call_targets.end());
+    std::sort(ordered_guarded_calls.begin(), ordered_guarded_calls.end());
+    for (const auto& [callsite, target] : ordered_guarded_calls)
+        aot_linkage_material << "guarded-call=" << callsite << ':'
+                             << target << ';';
+    const auto aot_linkage_identity = katana::io::sha256_bytes(
+        aot_linkage_material.str());
+    const auto aot_pack = native_aot_pack_contract(
+        partitions,
+        emitted_program,
+        native_aot_resume_entries,
+        latent_aot.modules,
+        product_entry_address,
+        product_entry_owner,
+        partition_configuration_hash,
+        partition_codegen_implementation_identity,
+        aot_linkage_identity,
+        prepared.project_identity,
+        options.game_project);
+    const auto revalidated_native_bringup_targets =
+        revalidate_native_bringup_authoring(
+            options,
+            aot_pack,
+            native_port_program_index,
+            prepared.image,
+            latent_aot.modules,
+            options.game_project,
+            runtime_frontier_binding);
+    std::vector<NativeBringupDispatchEmission>
+        native_bringup_dispatch_entries;
+    native_bringup_dispatch_entries.reserve(
+        revalidated_native_bringup_targets.size());
+    for (const auto& target : revalidated_native_bringup_targets) {
+        if (!target.bringup_execution_admitted) {
+            if (target.dispatch.has_value())
+                throw std::logic_error(
+                    "Non-executable native bring-up evidence reached the "
+                    "sealed dispatch span.");
+            continue;
+        }
+        if (!target.dispatch.has_value())
+            throw std::logic_error(
+                "Execution-safe native bring-up evidence lost its generated "
+                "dispatch binding.");
+        native_bringup_dispatch_entries.push_back(*target.dispatch);
+    }
     report_progress(options, "metadata");
     auto metadata_progress = options.progress.begin(
         katana::ProgressOperation::MetadataGeneration,
@@ -37205,7 +38378,12 @@ static PortExportResult export_dreamcast_port_project_impl(
                                         options.native_port_artifact_identity,
                                         closure_probe_sites,
                                         hardware_fault_sites,
-                                        runtime_frontier_binding)
+                                        runtime_frontier_binding,
+                                        options.native_execution_profile,
+                                        options.native_bringup_artifact_identity,
+                                        aot_pack.identity,
+                                        aot_pack.generation,
+                                        native_bringup_dispatch_entries)
                                   : runtime_dispatch_artifacts(
                                         entry_namespace,
                                         emitted_program,
@@ -37236,6 +38414,30 @@ static PortExportResult export_dreamcast_port_project_impl(
                  native_port_build_identity_marker(
                      *native_port_definition,
                      options.native_port_artifact_identity))});
+    if (native_product_export && options.game_project != nullptr &&
+        runtime_frontier_binding != nullptr) {
+        artifacts.push_back(
+            {"metadata/native-aot-pack.json",
+             native_aot_pack_manifest_json(
+                 aot_pack,
+                 runtime_frontier_binding->key,
+                 *options.game_project)});
+    }
+    if (options.native_execution_profile ==
+        NativePortExecutionProfile::NativeBringup) {
+        artifacts.push_back(
+            {"metadata/native-bringup-promotion-report.json",
+             native_bringup_promotion_report_json(
+                 options,
+                 aot_pack,
+                 revalidated_native_bringup_targets)});
+        artifacts.push_back(
+            {"metadata/native-bringup-executable-allowlist.json",
+             native_bringup_executable_allowlist_json(
+                 options,
+                 aot_pack,
+                 revalidated_native_bringup_targets)});
+    }
     artifacts.push_back({"metadata/port-project.json",
                          port_metadata(options,
                                        emitted_program.size(),
@@ -37338,7 +38540,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         "run-product-gate.ps1",
         product_gate_runner(
             native_product_export,
-            native_hardware_closure.complete),
+            native_hardware_closure.complete,
+            options.native_execution_profile),
         true);
     artifact_progress.advance(1u);
     write_port_file(canonical_root,
@@ -37351,7 +38554,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         "INSTALL_ORIGINAL_DISC.txt",
         port_install_instructions(
             native_product_export,
-            native_hardware_closure.complete),
+            native_hardware_closure.complete,
+            options.native_execution_profile),
         true);
     artifact_progress.advance(1u);
     const auto* exported_boot_segment =

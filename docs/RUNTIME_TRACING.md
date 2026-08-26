@@ -1,5 +1,16 @@
 # Runtime-Tracing und Watchpoints
 
+Der Standard-Bring-up aus
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) verwendet keine
+dauerhafte Vollspur. Er schreibt vorallokierte, begrenzte Events oder Rolling
+Digests und aktiviert detailliertes Tracing erst fuer ein kurzes
+First-Divergence-Intervall. Ein Trace, der Frames auf Sekunden verlaengert,
+ist ausschliesslich ein gezieltes Offline-/Diagnosewerkzeug.
+
+Traceereignisse sind `Observed`. Sie duerfen einen statischen Befund
+widerlegen oder einen Promotion-Auftrag erzeugen, aber niemals Blocktabelle,
+Allowlist, Dispatchklasse oder Closure veraendern.
+
 `RuntimeTraceRecorder` sammelt IR-, Block-, Speicher-, Watchpoint-, Exception-
 und Schedulerereignisse in einer gemeinsamen, streng monotonen Reihenfolge.
 Jedes Ereignis besitzt Sequenznummer, logischen Gastzyklus, Ursprung und PC;

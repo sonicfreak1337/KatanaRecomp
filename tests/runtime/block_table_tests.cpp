@@ -142,6 +142,30 @@ int main() {
                     0x0C001000u, 0x8C001000u, boot_variant),
                 "Passende Dynamic-Variante wird vom Static-AOT-Tier ueberschattet.");
 
+        require(direct_p1_p2_block_binding_contiguous(
+                    0x9FFFFFFCu, 0x1FFFFFFCu, 4u) &&
+                    !direct_p1_p2_block_binding_contiguous(
+                        0x9FFFFFFCu, 0x1FFFFFFCu, 6u),
+                "Direct-P1/P2-Bindung prueft nur den Einstieg statt das letzte "
+                "Blockhalfword.");
+        RuntimeBlockTable alias_boundary;
+        RuntimeBlock crossing_alias_boundary{0x9FFFFFFCu,
+                                             0x1FFFFFFCu,
+                                             6u,
+                                             BlockEndKind::Return,
+                                             {},
+                                             block_a,
+                                             "crossing-direct-alias-boundary",
+                                             false};
+        crossing_alias_boundary.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        require(throws_any([&] {
+                    static_cast<void>(alias_boundary.register_static(
+                        std::move(crossing_alias_boundary)));
+                }),
+                "Static-AOT-Registrierung akzeptiert einen Block ueber die "
+                "P1/P2-Aliasgrenze.");
+
         RuntimeBlockTable table;
         const BlockVariantKey base{1u, 2u, 3u, 4u, 5u};
         static_cast<void>(table.register_static({0x8C001000u,
@@ -402,6 +426,61 @@ int main() {
         require(!guarded.resolve(tracked_handle) &&
                     !guarded.lookup(tracked.virtual_start, {}).has_value(),
                 "Trackerinvalidierung zwischen Lookup und Resolve fuehrt stale Code aus.");
+
+        RuntimeBlockTable guarded_static;
+        ExecutableCodeTracker static_tracker;
+        RuntimeBlock tracked_static{0x8C101000u,
+                                    0x0C101000u,
+                                    8u,
+                                    BlockEndKind::Return,
+                                    {},
+                                    block_a,
+                                    "static-tracker-race",
+                                    false};
+        tracked_static.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        const auto tracked_static_identity =
+            stable_runtime_block_identity(tracked_static);
+        static_cast<void>(static_tracker.register_block(
+            {tracked_static_identity,
+             tracked_static.physical_origin,
+             tracked_static.size,
+             tracked_static.provenance,
+             {}}));
+        guarded_static.bind_code_tracker(
+            &static_tracker, StaticAotInvalidationContract::Coordinated);
+        static_cast<void>(guarded_static.register_static(tracked_static));
+        guarded_static.seal_static();
+        const auto tracked_static_execution = guarded_static.lookup_static_aot(
+            tracked_static.physical_origin,
+            tracked_static.virtual_start,
+            tracked_static.variant);
+        require(tracked_static_execution &&
+                    guarded_static.static_dispatch_generation_guard_current(
+                        tracked_static_execution->generation_guard),
+                "Trackergebundener Static-AOT-Guard ist initial nicht aktiv.");
+        auto wrong_static_id = tracked_static_execution->generation_guard;
+        ++wrong_static_id.block.id;
+        auto wrong_static_generation =
+            tracked_static_execution->generation_guard;
+        ++wrong_static_generation.block.generation;
+        require(!guarded_static.static_dispatch_generation_guard_current(
+                    wrong_static_id) &&
+                    !guarded_static.static_dispatch_generation_guard_current(
+                        wrong_static_generation),
+                "Static-AOT-Guard ignoriert Record-ID oder Record-Generation.");
+        static_cast<void>(static_tracker.observe_write(
+            tracked_static.virtual_start + 2u,
+            1u,
+            CodeWriteSource::Cpu));
+        require(!guarded_static.lookup_static_aot(
+                    tracked_static.physical_origin,
+                    tracked_static.virtual_start,
+                    tracked_static.variant) &&
+                    !guarded_static.static_dispatch_generation_guard_current(
+                        tracked_static_execution->generation_guard),
+                "Trackerinvalidierung nach Static-AOT-Lookup laesst Lookup oder "
+                "Generation-Guard dispatchbar.");
 
         RuntimeBlockTable aot_templates;
         const RuntimeAotTemplateContract template_contract{{0x8C500000u, 0xAC200000u, 0x40u},

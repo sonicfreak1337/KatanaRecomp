@@ -4,6 +4,24 @@
 
 ### Geaendert
 
+- Der Portexport trennt nun den unveraenderten `strict-product`-Pfad von
+  einem ausdruecklich nicht releasefaehigen `native-bringup`-Profil. Ein
+  versioniertes Authoring-Artefakt bindet Projekt, committed Analyse,
+  vollstaendigen AOT-Pack, terminale Source-Callsite, Zielblock, Owner,
+  Byteidentitaeten und Generation. Explizit authorierte `Candidate`- und
+  `Proven`-Eintraege gelangen nur nach unabhaengiger erneuter
+  Execution-Safety-Pruefung in die nicht releasefaehige Allowlist; der offene
+  Candidate-Proof bleibt erhalten und kann Strict niemals schliessen.
+  Observations, Unresolved-Eintraege und blosse RuntimeContracts bleiben
+  Report- beziehungsweise bestehenden RuntimeOnly-Vertraegen vorbehalten. Der
+  Generated-Code-Guard autorisiert einen exakten versiegelten Static-AOT-
+  Source-/Target-Pfad vor der ersten Call-/Jump-Zustandsaenderung und besitzt
+  weder Interpreter-, JIT-, Materializer-, No-op- noch Guessing-Fallback.
+  CLI, Promotion-Report und bounded Runtimebeobachtungen halten die schnelle
+  Bring-up-Schleife vom Analyzerzustand getrennt. Der AOT-Emissionsvertrag
+  steigt auf 43, das Port-Metadatencache-Schema auf 13 und der
+  Portprojektvertrag auf 104.
+
 - Native-Graphics-Vertrag 11 macht Frame-Batches und die feste
   Opaque/PunchThrough/Translucent/Overlay-Phasierung explizit, validiert
   Batch-Viewport-/Projektionsinvarianten fail-closed und zeichnet auch durch

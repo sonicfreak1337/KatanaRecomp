@@ -7,6 +7,13 @@ statisches SH-4-AOT und native PC-Plattformdienste
 
 Naechster regulaerer Release: `v0.5.0`
 
+> Verbindlicher aktueller Entwicklungsworkflow:
+> [`docs/NATIVE_BRINGUP_WORKFLOW.md`](docs/NATIVE_BRINGUP_WORKFLOW.md).
+> Der grosse strikte Lauf erzeugt den stabilen AOT-Pack; die kleine native
+> Bring-up-Schleife arbeitet replay- und first-divergence-getrieben mit
+> inkrementellen Runtime-/Adapterbuilds. Historische Runzahlen weiter unten
+> bestimmen weder Taskprioritaet noch Evidence-Admission.
+
 ## Entwicklungs- und Release-Status
 
 `v0.49.2` ist der aktuelle Entwicklungsstand und kein regulaerer Release.

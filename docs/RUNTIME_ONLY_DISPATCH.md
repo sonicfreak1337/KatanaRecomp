@@ -9,6 +9,27 @@ Ein Hint, Forced Override oder allgemeiner unbekannter Laufzeitzeiger bleibt
 `guarded_partial` beziehungsweise `unresolved` und kann den Runtime-only-Pfad
 nicht auswaehlen.
 
+Der Evidence- und Bring-up-Kontext steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Insbesondere sind
+eine Laufzeitbeobachtung und eine Bring-up-Allowlist kein `runtime_only`-
+Vertrag. Sie bleiben `Observed` oder `Candidate`, bis die Site semantisch als
+dynamisch klassifiziert und ihr strikter Runtimevertrag explizit admittiert
+wurde.
+
+## Verhaeltnis zum Native-Bring-up
+
+Der Bring-up-Dispatcher darf einen noch nicht vollstaendig bewiesenen, aber
+exakten aktiven AOT-Block aus einer identity- und generationgebundenen
+Allowlist ausfuehren. Dieser Hit erzeugt einen Witness und schliesst keine
+statische Closure.
+
+Der strikte `runtime_only`-Dispatcher ist enger: Neben demselben validierten
+Blocktabellenlookup muss die konkrete Site als `RuntimeContract` zugelassen
+sein. Allowlist-Eintraege enthalten keine rohen Backendfunktionszeiger,
+duerfen die Blocktabelle nicht mutieren und umgehen weder Handle- noch
+Generationspruefung. Ein unbekanntes oder stale Ziel beendet beide Pfade
+fail-closed.
+
 ## Durchgaengige Klassifikation
 
 Jede indirekte Stelle wird beim Lowering einer IR-Klasse zugeordnet:

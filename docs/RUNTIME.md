@@ -7,6 +7,20 @@
 > duerfen nicht in `native-port` gelinkt werden. Verbindlich ist
 > `NATIVE_PORT_PRODUCT_CONTRACT.md`.
 
+Der operative Zwei-Schleifen-Vertrag steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). `strict-product`
+erzeugt und versiegelt den statischen AOT-Pack; `native-bringup` verwendet
+denselben Pack fuer inkrementelle Runtime-/Adapter-/Manifestaenderungen. Ein
+Bring-up-Treffer darf nur einen aktiven, vorab kompilierten und
+generationgesicherten Block ausfuehren. Er ist `Observed`, nicht automatisch
+`Proven`; ein Miss ist ein typisierter `UnknownCompiledTarget`. Kein Runtime-
+Fallback darf Analyse, Blocktabelle oder Allowlist still erweitern.
+
+Die nachfolgenden historischen ABI- und Geraetevertraege dokumentieren
+Kompatibilitaet und Diagnosegrenzen. Interpreter-, JIT-, Materialisierungs-
+und PVR-/TA-Pfade in diesen Abschnitten sind keine Produktfreigabe und nicht
+Bestandteil des aktuellen nativen Bring-up-Loops.
+
 Die historische Katana-Runtime ist seit KR-2101 eine eigene statische
 Bibliothek. Generierter C++-Code enthaelt keine Implementierung von Speicher,
 CPU-Zustand oder ungeloesten Kontrollflusspfaden mehr. KR-5000 trennt daraus

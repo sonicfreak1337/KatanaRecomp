@@ -646,6 +646,7 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/runtime/native_aot_template.cpp
     # Private tooling artifact support. This remains outside the native-port
     # product closure because it serializes title-project metadata only.
+    src/runtime/native_bringup_artifact.cpp
     src/runtime/native_port_artifact.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
@@ -697,6 +698,7 @@ set(KATANA_AOT_RUNTIME_SOURCES
     src/runtime/fpu.cpp
     src/runtime/guest_program_range.cpp
     src/runtime/memory.cpp
+    src/runtime/native_bringup_dispatch.cpp
     src/runtime/native_port.cpp
     src/runtime/runtime.cpp
 )
@@ -721,6 +723,8 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/guest_program_range.hpp
     include/katana/runtime/memory.hpp
     include/katana/runtime/native_aot_state.hpp
+    include/katana/runtime/native_bringup_artifact.hpp
+    include/katana/runtime/native_bringup_dispatch.hpp
     include/katana/runtime/native_port.hpp
     include/katana/runtime/native_port_semantics.hpp
     include/katana/runtime/native_port_audio.hpp
@@ -2557,6 +2561,29 @@ katana_enable_warnings(
 add_test(
     NAME katana-prepared-native-port-admission-artifact-tests
     COMMAND katana-prepared-native-port-admission-artifact-tests
+)
+
+add_executable(
+    katana-native-bringup-artifact-tests
+    tests/runtime/native_bringup_artifact_tests.cpp
+)
+target_link_libraries(
+    katana-native-bringup-artifact-tests
+    PRIVATE
+        katana_runtime_core
+)
+katana_enable_warnings(katana-native-bringup-artifact-tests)
+add_test(
+    NAME katana-native-bringup-artifact-tests
+    COMMAND katana-native-bringup-artifact-tests
+)
+add_test(
+    NAME katana-native-bringup-author-cli-tests
+    COMMAND
+        ${CMAKE_COMMAND}
+        -DKATANA_CLI=$<TARGET_FILE:katana-recomp>
+        -DKATANA_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/native-bringup-author-cli
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/native_bringup_author_cli_tests.cmake
 )
 
 add_executable(

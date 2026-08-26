@@ -38,6 +38,7 @@
 #include "katana/runtime/gdi.hpp"
 #include "katana/runtime/game_entry_handoff_artifact.hpp"
 #include "katana/runtime/game_project_artifact.hpp"
+#include "katana/runtime/native_bringup_artifact.hpp"
 #include "katana/runtime/native_port_artifact.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
@@ -7757,6 +7758,8 @@ using LatentAotEntryHintArgument = katana::codegen::LatentAotEntryHint;
 using LatentAotDiscoveryModeArgument =
     katana::codegen::LatentAotDiscoveryMode;
 using PortAnalysisMode = katana::codegen::PortAnalysisMode;
+using NativePortExecutionProfile =
+    katana::codegen::NativePortExecutionProfile;
 
 constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hint_arguments = 1024u;
@@ -7780,6 +7783,17 @@ PortAnalysisMode parse_port_analysis_mode(const std::string_view text) {
         return PortAnalysisMode::ConservativeRuntimeOnly;
     throw std::invalid_argument(
         "--analysis-mode erwartet platform oder runtime-only.");
+}
+
+NativePortExecutionProfile parse_native_port_execution_profile(
+    const std::string_view text) {
+    if (text == "strict-product")
+        return NativePortExecutionProfile::StrictProduct;
+    if (text == "native-bringup")
+        return NativePortExecutionProfile::NativeBringup;
+    throw std::invalid_argument(
+        "--native-execution-profile erwartet strict-product oder "
+        "native-bringup.");
 }
 
 std::uint32_t parse_native_aot_resume_entry(const std::string_view text) {
@@ -8455,6 +8469,27 @@ std::string strict_json_identifier(
     return result;
 }
 
+std::string strict_json_text(const StrictJsonObject& object,
+                             const std::string_view key,
+                             const std::size_t maximum_length,
+                             const bool required = true) {
+    const auto* field = strict_json_field(object, key);
+    if (field == nullptr || field->kind != StrictJsonValueKind::String ||
+        (required && field->string_value.empty()) ||
+        field->string_value.size() > maximum_length)
+        throw std::invalid_argument(
+            "Striktes JSON besitzt keinen begrenzten Text " +
+            std::string(key) + '.');
+    std::string result(field->string_value);
+    for (const auto character : result) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte < 0x20u || byte > 0x7Eu)
+            throw std::invalid_argument(
+                "Striktes JSON enthaelt nichtdruckbaren Text.");
+    }
+    return result;
+}
+
 void require_strict_json_keys(
     const StrictJsonObject& object,
     const std::span<const std::string_view> expected) {
@@ -8463,6 +8498,220 @@ void require_strict_json_keys(
     for (const auto key : expected)
         if (strict_json_field(object, key) == nullptr)
             throw std::invalid_argument("Striktes JSON besitzt ein fehlendes Feld " + std::string(key) + '.');
+}
+
+struct NativeBringupAuthoringRecordStorage final {
+    katana::runtime::NativeBringupTargetEvidence evidence;
+    std::string source_owner_code_identity;
+    std::string source_block_code_identity;
+    std::string callsite_code_identity;
+    std::string target_block_code_identity;
+    std::string target_owner_code_identity;
+    std::string source_image_id;
+    std::string target_image_id;
+    std::string source_module_identity;
+    std::string target_module_identity;
+    std::string observation;
+    std::string static_correlation;
+    std::string missing_proof;
+    std::string analyzer_path;
+    std::string runtime_contract_identity;
+
+    void bind_views() noexcept {
+        evidence.source_owner_code_identity = source_owner_code_identity;
+        evidence.source_block_code_identity = source_block_code_identity;
+        evidence.callsite_code_identity = callsite_code_identity;
+        evidence.target_block_code_identity = target_block_code_identity;
+        evidence.target_owner_code_identity = target_owner_code_identity;
+        evidence.source_image_id = source_image_id;
+        evidence.target_image_id = target_image_id;
+        evidence.source_module_identity = source_module_identity;
+        evidence.target_module_identity = target_module_identity;
+        evidence.observation = observation;
+        evidence.static_correlation = static_correlation;
+        evidence.missing_proof = missing_proof;
+        evidence.analyzer_path = analyzer_path;
+        evidence.runtime_contract_identity = runtime_contract_identity;
+    }
+};
+
+katana::runtime::NativeBringupEvidenceStage
+parse_native_bringup_stage(const std::string_view value) {
+    using Stage = katana::runtime::NativeBringupEvidenceStage;
+    if (value == "Observed") return Stage::Observed;
+    if (value == "Candidate") return Stage::Candidate;
+    if (value == "Proven") return Stage::Proven;
+    if (value == "RuntimeContract") return Stage::RuntimeContract;
+    if (value == "Unresolved") return Stage::Unresolved;
+    throw std::invalid_argument("Native-Bring-up-Stage ist ungueltig.");
+}
+
+katana::runtime::NativeBringupTransferKind
+parse_native_bringup_transfer(const std::string_view value) {
+    using Transfer = katana::runtime::NativeBringupTransferKind;
+    if (value == "CallRegister") return Transfer::CallRegister;
+    if (value == "TailJumpRegister") return Transfer::TailJumpRegister;
+    throw std::invalid_argument("Native-Bring-up-Transfer ist ungueltig.");
+}
+
+katana::runtime::NativeBringupPromotionType
+parse_native_bringup_promotion(const std::string_view value) {
+    using Promotion = katana::runtime::NativeBringupPromotionType;
+    if (value == "None") return Promotion::None;
+    if (value == "StaticCompiledTarget")
+        return Promotion::StaticCompiledTarget;
+    if (value == "ValidatedRuntimeContract")
+        return Promotion::ValidatedRuntimeContract;
+    if (value == "AnalyzerReproof") return Promotion::AnalyzerReproof;
+    throw std::invalid_argument("Native-Bring-up-Promotion ist ungueltig.");
+}
+
+int author_native_bringup_cli(const std::filesystem::path& source,
+                               const std::filesystem::path& output) {
+    constexpr std::size_t maximum_source_size = 4u * 1024u * 1024u;
+    constexpr std::size_t maximum_line_size = 64u * 1024u;
+    const auto document = read_safe_small_port_file(
+        source, maximum_source_size, "Native-Bring-up-Authoringquelle");
+    if (document.empty())
+        throw std::invalid_argument(
+            "Native-Bring-up-Authoringquelle ist leer.");
+    std::istringstream input(document);
+
+    std::string line;
+    if (!std::getline(input, line) || line.size() > maximum_line_size)
+        throw std::invalid_argument(
+            "Native-Bring-up-Authoringheader fehlt oder ist zu gross.");
+    StrictJsonObject header;
+    parse_strict_json_object(line, header);
+    constexpr std::array<std::string_view, 7u> header_keys{
+        "kind", "contract_version", "project_id", "project_version",
+        "analysis_identity", "aot_pack_identity", "aot_pack_generation"};
+    require_strict_json_keys(header, header_keys);
+    if (strict_json_text(header, "kind", 64u) !=
+        "katana-native-bringup-authoring")
+        throw std::invalid_argument(
+            "Native-Bring-up-Authoringheader besitzt den falschen Typ.");
+    const auto contract_version =
+        strict_json_u32(header, "contract_version");
+    auto project_id = strict_json_identifier(header, "project_id", 128u);
+    auto project_version =
+        strict_json_identifier(header, "project_version", 128u);
+    auto analysis_identity =
+        strict_json_text(header, "analysis_identity", 128u);
+    auto aot_pack_identity =
+        strict_json_text(header, "aot_pack_identity", 128u);
+    const auto aot_pack_generation =
+        strict_json_u64(header, "aot_pack_generation");
+
+    constexpr std::array<std::string_view, 31u> target_keys{
+        "kind", "contract_version", "stage", "transfer_kind",
+        "source_owner", "source_owner_size", "source_block",
+        "source_block_size", "callsite", "continuation",
+        "source_owner_code_identity", "source_block_code_identity",
+        "callsite_code_identity", "target", "target_block_size",
+        "target_owner", "target_owner_size", "target_block_code_identity",
+        "target_owner_code_identity", "source_image_id", "target_image_id",
+        "source_module_identity", "target_module_identity",
+        "source_generation", "target_generation", "observation",
+        "static_correlation", "missing_proof", "proposed_promotion",
+        "analyzer_path", "runtime_contract_identity"};
+    std::vector<NativeBringupAuthoringRecordStorage> storage;
+    storage.reserve(64u);
+    while (std::getline(input, line)) {
+        if (line.empty() || line.size() > maximum_line_size)
+            throw std::invalid_argument(
+                "Native-Bring-up-Authoringdatensatz ist leer oder zu gross.");
+        if (storage.size() >= 4096u)
+            throw std::invalid_argument(
+                "Native-Bring-up-Authoringquelle ueberschreitet das Zielbudget.");
+        StrictJsonObject object;
+        parse_strict_json_object(line, object);
+        require_strict_json_keys(object, target_keys);
+        if (strict_json_text(object, "kind", 64u) != "target")
+            throw std::invalid_argument(
+                "Native-Bring-up-Authoringdatensatz besitzt den falschen Typ.");
+        NativeBringupAuthoringRecordStorage record;
+        auto& value = record.evidence;
+        value.contract_version = strict_json_u32(object, "contract_version");
+        value.stage = parse_native_bringup_stage(
+            strict_json_text(object, "stage", 64u));
+        value.transfer_kind = parse_native_bringup_transfer(
+            strict_json_text(object, "transfer_kind", 64u));
+        value.source_owner = strict_json_u32(object, "source_owner");
+        value.source_owner_size =
+            strict_json_u32(object, "source_owner_size");
+        value.source_block = strict_json_u32(object, "source_block");
+        value.source_block_size =
+            strict_json_u32(object, "source_block_size");
+        value.callsite = strict_json_u32(object, "callsite");
+        value.continuation = strict_json_u32(object, "continuation");
+        record.source_owner_code_identity = strict_json_text(
+            object, "source_owner_code_identity", 128u, false);
+        record.source_block_code_identity = strict_json_text(
+            object, "source_block_code_identity", 128u, false);
+        record.callsite_code_identity = strict_json_text(
+            object, "callsite_code_identity", 128u, false);
+        value.target = strict_json_u32(object, "target");
+        value.target_block_size =
+            strict_json_u32(object, "target_block_size");
+        value.target_owner = strict_json_u32(object, "target_owner");
+        value.target_owner_size =
+            strict_json_u32(object, "target_owner_size");
+        record.target_block_code_identity = strict_json_text(
+            object, "target_block_code_identity", 128u, false);
+        record.target_owner_code_identity = strict_json_text(
+            object, "target_owner_code_identity", 128u, false);
+        record.source_image_id =
+            strict_json_text(object, "source_image_id", 128u, false);
+        record.target_image_id =
+            strict_json_text(object, "target_image_id", 128u, false);
+        record.source_module_identity = strict_json_text(
+            object, "source_module_identity", 128u, false);
+        record.target_module_identity = strict_json_text(
+            object, "target_module_identity", 128u, false);
+        value.source_generation =
+            strict_json_u64(object, "source_generation");
+        value.target_generation =
+            strict_json_u64(object, "target_generation");
+        record.observation =
+            strict_json_text(object, "observation", 4096u);
+        record.static_correlation =
+            strict_json_text(object, "static_correlation", 4096u);
+        record.missing_proof =
+            strict_json_text(object, "missing_proof", 4096u, false);
+        value.proposed_promotion = parse_native_bringup_promotion(
+            strict_json_text(object, "proposed_promotion", 64u));
+        record.analyzer_path =
+            strict_json_text(object, "analyzer_path", 4096u);
+        record.runtime_contract_identity = strict_json_text(
+            object, "runtime_contract_identity", 128u, false);
+        storage.push_back(std::move(record));
+    }
+    if (!input.eof())
+        throw std::invalid_argument(
+            "Native-Bring-up-Authoringquelle kann nicht vollstaendig gelesen werden.");
+
+    std::vector<katana::runtime::NativeBringupTargetEvidence> targets;
+    targets.reserve(storage.size());
+    for (auto& record : storage) {
+        record.bind_views();
+        targets.push_back(record.evidence);
+    }
+    const katana::runtime::NativeBringupAuthoringDefinition definition{
+        contract_version,
+        project_id,
+        project_version,
+        analysis_identity,
+        aot_pack_identity,
+        aot_pack_generation,
+        targets};
+    const auto artifact =
+        katana::runtime::NativeBringupAuthoringArtifact::write(
+            output, definition);
+    std::cout << "KATANA_NATIVE_BRINGUP_AUTHORING identity="
+              << artifact->artifact_identity() << " targets="
+              << artifact->definition().targets.size() << '\n';
+    return katana::cli::exit_status(katana::cli::ExitCode::Success);
 }
 
 struct RuntimeFrontierImportBinding final {
@@ -11584,7 +11833,12 @@ int export_port_project(const std::filesystem::path& source_path,
                             analysis_generation_path = std::nullopt,
                         const std::optional<std::filesystem::path>&
                             analysis_generation_game_project_path =
-                                std::nullopt) {
+                                std::nullopt,
+                        const NativePortExecutionProfile
+                            native_execution_profile =
+                                NativePortExecutionProfile::StrictProduct,
+                        const std::optional<std::filesystem::path>&
+                            native_bringup_allowlist_path = std::nullopt) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
@@ -11615,6 +11869,38 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--analysis-generation-game-project braucht eine gebundene "
             "--analysis-generation.");
+    if (analysis_only &&
+        (native_execution_profile !=
+             NativePortExecutionProfile::StrictProduct ||
+         native_bringup_allowlist_path.has_value()))
+        throw std::invalid_argument(
+            "Native-Bring-up ist ein Post-Analysis-Exportprofil und darf "
+            "keinen analyze-port-Lauf veraendern.");
+    if (native_execution_profile ==
+            NativePortExecutionProfile::NativeBringup &&
+        !native_bringup_allowlist_path.has_value())
+        throw std::invalid_argument(
+            "--native-execution-profile native-bringup braucht eine "
+            "explizite --native-bringup-allowlist.");
+    if (native_execution_profile ==
+            NativePortExecutionProfile::StrictProduct &&
+        native_bringup_allowlist_path.has_value())
+        throw std::invalid_argument(
+            "--native-bringup-allowlist ist ausschliesslich mit "
+            "--native-execution-profile native-bringup zulaessig.");
+    if (native_execution_profile ==
+            NativePortExecutionProfile::NativeBringup &&
+        !analysis_generation_path.has_value())
+        throw std::invalid_argument(
+            "Native-Bring-up braucht eine explizit gebundene "
+            "--analysis-generation und darf keine neue Analyse starten.");
+    if (native_bringup_allowlist_path.has_value() &&
+        (diagnostic_partial || boot_executable_artifact ||
+         !game_project_path.has_value() ||
+         !native_port_definition_path.has_value()))
+        throw std::invalid_argument(
+            "--native-bringup-allowlist braucht einen vollstaendigen "
+            "NativeDisc-Port mit GameProject und NativePortDefinition.");
     if (refresh_analysis && (!analysis_only || !resume_analysis))
         throw std::invalid_argument(
             "--refresh-analysis braucht einen expliziten "
@@ -12048,6 +12334,8 @@ int export_port_project(const std::filesystem::path& source_path,
         verified_game_project;
     std::shared_ptr<katana::runtime::GameProjectArtifact>
         verified_analysis_generation_game_project;
+    std::shared_ptr<katana::runtime::NativeBringupAuthoringArtifact>
+        verified_native_bringup_authoring;
     std::optional<katana::runtime::GameProjectDefinition>
         resolved_game_project;
     std::vector<std::vector<std::uint8_t>>
@@ -12111,6 +12399,24 @@ int export_port_project(const std::filesystem::path& source_path,
             verified_native_port->artifact_identity();
         native_port_artifact_format_version_for_cache =
             katana::runtime::native_port_artifact_format_version;
+    }
+    if (native_bringup_allowlist_path.has_value()) {
+        verified_native_bringup_authoring =
+            katana::runtime::NativeBringupAuthoringArtifact::load(
+                *native_bringup_allowlist_path);
+        const auto& allowlist =
+            verified_native_bringup_authoring->definition();
+        if (!verified_native_port || !resolved_game_project.has_value() ||
+            allowlist.project_id !=
+                verified_native_port->definition().project_id ||
+            allowlist.project_version !=
+                verified_native_port->definition().project_version ||
+            allowlist.project_id != resolved_game_project->project_id ||
+            allowlist.project_version !=
+                resolved_game_project->project_version)
+            throw std::invalid_argument(
+                "Native-Bring-up-Allowlist gehoert nicht zum aktuellen "
+                "GameProject/NativePort-Projekt oder dessen Version.");
     }
     const auto implementation_identities =
         port_export_implementation_identities(
@@ -12383,6 +12689,13 @@ int export_port_project(const std::filesystem::path& source_path,
             throw std::invalid_argument(
                 "Die gebundene Analyse-Generation besitzt kein "
                 "NativeDisc-Analysearchiv.");
+        if (verified_native_bringup_authoring &&
+            verified_native_bringup_authoring->definition()
+                    .analysis_identity !=
+                committed_analysis_generation->analysis_artifact_id)
+            throw std::invalid_argument(
+                "Native-Bring-up-Allowlist und --analysis-generation "
+                "besitzen unterschiedliche Analyseidentitaeten.");
     }
     const auto latent_aot_hint_identity =
         latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
@@ -12474,6 +12787,16 @@ int export_port_project(const std::filesystem::path& source_path,
                 analysis_only;
             export_options.analysis_artifact_refresh_requested =
                 analysis_only && refresh_analysis;
+            export_options.native_execution_profile =
+                native_execution_profile;
+            export_options.native_bringup_authoring =
+                verified_native_bringup_authoring
+                    ? &verified_native_bringup_authoring->definition()
+                    : nullptr;
+            export_options.native_bringup_artifact_identity =
+                verified_native_bringup_authoring
+                    ? verified_native_bringup_authoring->artifact_identity()
+                    : std::string{};
             if (committed_analysis_generation.has_value()) {
                 const auto& archive =
                     committed_analysis_generation->analysis_archive;
@@ -12624,6 +12947,20 @@ int export_port_project(const std::filesystem::path& source_path,
         analysis_mode_identity,
         implementation_identities.whole_export,
         analysis_generation_cache_binding);
+    if (native_execution_profile ==
+        NativePortExecutionProfile::NativeBringup) {
+        if (!verified_native_bringup_authoring)
+            throw std::logic_error(
+                "Native-Bring-up verlor sein validiertes Authoring-Artefakt.");
+        // This is a post-analysis/product-glue cache dimension only. The
+        // strict cache key above remains byte-for-byte independent from the
+        // non-release profile and its allowlist; partition cache identities
+        // likewise remain tied solely to AOT-affecting inputs.
+        whole_export_cache_key = katana::io::sha256_bytes(
+            std::string("katana-native-bringup-whole-export-v1:") +
+            whole_export_cache_key.value() + ':' +
+            verified_native_bringup_authoring->artifact_identity());
+    }
     if (analysis_only) {
         if (!verified_native_disc)
             throw std::logic_error(
@@ -15041,6 +15378,8 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp emit-cpp <Raw|ELF|Manifest> <Einstieg> <Ausgabe.cpp> [Basisadresse] "
               "[--no-opt] [--dump-ir <Praefix>] [--directives <Datei>]\n\n"
            << "  katana-recomp phase6-probe-source <GDI> <Ausgabe.cpp>\n\n"
+           << "  katana-recomp author-native-bringup <Authoring.jsonl> "
+              "--output <private .katana-native-bringup>\n\n"
            << "  katana-recomp extract-boot-executable <eigene.gdi> --output "
               "<privater-Ordner>\n"
            << "  katana-recomp port <Quelle.gdi> --output <Ordner> --target-name <Name> "
@@ -15050,6 +15389,8 @@ void print_usage(std::ostream& output) {
               "[--analysis-generation <committed analyze-port-Ordner>] "
               "[--analysis-generation-game-project <gebundenes Analyse-GameProject>] "
                "[--analysis-mode <platform|runtime-only>] "
+               "[--native-execution-profile <strict-product|native-bringup>] "
+               "[--native-bringup-allowlist <private .katana-native-bringup>] "
                "[--native-aot-resume-entry <0xAdresse>]... "
                "[--runtime-image-payload <Image-ID>=<private-Datei>] "
               "[--native-bootstrap-write-payload "
@@ -15801,6 +16142,17 @@ int main(const int argc, char* argv[]) {
                 std::filesystem::path(argv[2]));
         }
 
+        if (argc == 5 &&
+            std::string_view(argv[1]) == "author-native-bringup") {
+            if (std::string_view(argv[3]) != "--output")
+                throw std::invalid_argument(
+                    "author-native-bringup erwartet <Authoring.jsonl> "
+                    "--output <private .katana-native-bringup>.");
+            return author_native_bringup_cli(
+                std::filesystem::path(argv[2]),
+                std::filesystem::path(argv[4]));
+        }
+
         const auto port_command =
             argc >= 2 ? std::string_view(argv[1]) : std::string_view{};
         if (argc >= 7 &&
@@ -15837,6 +16189,11 @@ int main(const int argc, char* argv[]) {
             bool latent_aot_discovery_mode_seen = false;
             auto analysis_mode = PortAnalysisMode::PlatformAbi;
             bool analysis_mode_seen = false;
+            auto native_execution_profile =
+                NativePortExecutionProfile::StrictProduct;
+            bool native_execution_profile_seen = false;
+            std::optional<std::filesystem::path>
+                native_bringup_allowlist_path;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             bool resume_analysis = false;
@@ -16016,6 +16373,19 @@ int main(const int argc, char* argv[]) {
                     analysis_mode = parse_port_analysis_mode(
                         value);
                     analysis_mode_seen = true;
+                } else if (
+                    option == "--native-execution-profile" &&
+                    port_command == "port" &&
+                    !native_execution_profile_seen) {
+                    native_execution_profile =
+                        parse_native_port_execution_profile(value);
+                    native_execution_profile_seen = true;
+                } else if (
+                    option == "--native-bringup-allowlist" &&
+                    port_command == "port" &&
+                    !native_bringup_allowlist_path.has_value()) {
+                    native_bringup_allowlist_path =
+                        std::filesystem::path(value);
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
@@ -16064,7 +16434,9 @@ int main(const int argc, char* argv[]) {
                                        refresh_analysis,
                                        runtime_frontier_import_path,
                                        analysis_generation_path,
-                                       analysis_generation_game_project_path);
+                                       analysis_generation_game_project_path,
+                                       native_execution_profile,
+                                       native_bringup_allowlist_path);
         }
 
         if ((argc == 3 || argc == 4) &&

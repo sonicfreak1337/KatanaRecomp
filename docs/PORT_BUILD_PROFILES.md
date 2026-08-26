@@ -5,6 +5,25 @@
 > Referenz. Ein Produktartifact darf weder ARM7-/SkyEmu-, CPU-PVR- noch
 > Diagnoseinterpretercode linken und nicht auf diese Pfade zurueckfallen.
 
+Die Buildoptimierung `bringup` ist vom Ausfuehrungs- und Evidenceworkflow
+`native-bringup` zu unterscheiden. Der verbindliche Gesamtvertrag steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md).
+
+## AOT-Pack und inkrementelle Produktgrenze
+
+Ein `native-bringup`-Lauf verwendet einen stabilen, identitaetsgebundenen
+AOT-Pack samt vorkompilierter Allowlist. Aenderungen an Runtime, Adapter,
+Renderer, Providern oder Diagnostik duerfen weder Analyse noch AOT-Partitionen
+invalidieren. Sie konfigurieren und bauen nur die betroffenen Hosttargets und
+wiederholen dasselbe Replay mit derselben Packidentitaet.
+
+Der Pack wird neu erzeugt, wenn Imagebytes, Funktionsgrenzen, CFG, Roots,
+Tabellen, Overlaymenge, AOT-Patches, Instruktions-/Codegensemantik oder eine
+AOT-relevante ABI wechseln. Ein `UnknownCompiledTarget` ist ein expliziter
+Ruecksprung in diese grosse Schleife. Pack-, Runtime-, Adapter- und
+Manifestidentitaet werden getrennt protokolliert; eine zufaellige gemeinsame
+Buildzeit ist kein Cachevertrag.
+
 KatanaRecomp v0.49 trennt den schnellen Bring-up-Build, den volloptimierten
 Performance-Build ohne globales LTCG und den finalen Gatebuild.
 

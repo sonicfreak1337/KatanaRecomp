@@ -3333,6 +3333,50 @@ const char* dynamic_dispatch_name(const katana::ir::Instruction& instruction,
     return call ? "unresolved_call" : "unresolved_jump";
 }
 
+[[nodiscard]] bool requires_native_bringup_dispatch_validation(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Class = katana::ir::DynamicTargetClass;
+    if (instruction.operation != katana::ir::Operation::CallRegister &&
+        instruction.operation != katana::ir::Operation::JumpRegister)
+        return false;
+    switch (instruction.dynamic_target_class) {
+    case Class::RuntimeOnly:
+    case Class::GuardedPartial:
+    case Class::Unresolved:
+        return true;
+    case Class::NotApplicable:
+    case Class::GuardedComplete:
+    case Class::ExactGuarded:
+        return false;
+    }
+    return true;
+}
+
+void emit_native_bringup_dispatch_preflight(
+    std::ostringstream& output,
+    const int indent,
+    const katana::ir::BasicBlock& block,
+    const katana::ir::Instruction& instruction,
+    const std::string_view target,
+    const bool table_compatible_function_entries) {
+    if (!table_compatible_function_entries ||
+        !requires_native_bringup_dispatch_validation(instruction))
+        return;
+    const bool call =
+        instruction.operation == katana::ir::Operation::CallRegister;
+    emit_indent(output, indent);
+    output << "if (native_bringup_dispatch_pending)\n";
+    emit_indent(output, indent + 1);
+    output << "preflight_native_bringup_indirect_dispatch("
+           << relocated_code_address(block.start_address) << ", "
+           << relocated_code_address(instruction.source_address) << ", "
+           << target << ", "
+           << (call
+                   ? relocated_code_address(instruction.source_address + 4u)
+                   : "0u")
+           << ", " << (call ? "true" : "false") << ");\n";
+}
+
 void emit_block_transition(std::ostringstream& output,
                            const int indent,
                            const bool single_block,
@@ -3508,6 +3552,35 @@ void emit_terminal(std::ostringstream& output,
         throw std::invalid_argument(
             "Guarded-Complete-Codegen braucht mindestens ein erlaubtes Ziel.");
     const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+
+    // A NativeBringup miss must be observationally equivalent to rejecting the
+    // transfer before it executes.  In particular, run the authorization
+    // before ExplicitGuestInstructionAttempt updates PC/cycle accounting (and
+    // before an external instruction observer can see an attempted transfer).
+    // The target expression itself is a pure read of the architectural source
+    // register, so it is safe to hoist for every register transfer.
+    if (instruction.operation == Operation::JumpRegister ||
+        instruction.operation == Operation::CallRegister) {
+        const bool call = instruction.operation == Operation::CallRegister;
+        const std::string_view target_name =
+            call ? "call_target" : "jump_target";
+        emit_indent(output, indent);
+        output << "const std::uint32_t " << target_name << " = "
+               << general_register_expression(
+                      instruction.branch_register, registers);
+        if (instruction.branch_register_relative) {
+            output << " + "
+                   << relocated_code_address(instruction.source_address + 4u);
+        }
+        output << ";\n";
+        emit_native_bringup_dispatch_preflight(
+            output,
+            indent,
+            block,
+            instruction,
+            target_name,
+            table_compatible_function_entries);
+    }
 
     emit_indent(output, indent);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
@@ -3823,15 +3896,6 @@ void emit_terminal(std::ostringstream& output,
     }
 
     case Operation::JumpRegister:
-        emit_indent(output, indent);
-        output << "const std::uint32_t jump_target = "
-               << general_register_expression(
-                      instruction.branch_register, registers);
-        if (instruction.branch_register_relative) {
-            output << " + " << relocated_code_address(instruction.source_address + 4u);
-        }
-        output << ";\n";
-
         if (delay_slot != nullptr) {
             emit_guarded_simple_instruction(
                 output,
@@ -4012,15 +4076,6 @@ void emit_terminal(std::ostringstream& output,
         return;
 
     case Operation::CallRegister:
-        emit_indent(output, indent);
-        output << "const std::uint32_t call_target = "
-               << general_register_expression(
-                      instruction.branch_register, registers);
-        if (instruction.branch_register_relative) {
-            output << " + " << relocated_code_address(instruction.source_address + 4u);
-        }
-        output << ";\n";
-
         emit_indent(output, indent);
         output << "const std::uint32_t previous_pr = "
                << scalar_register_expression(
@@ -5401,6 +5456,12 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "    return source(target) == source(allowed_target);\n"
                  << "}\n";
     if (request.external_dynamic_dispatch) {
+        declarations
+            << "extern thread_local bool native_bringup_dispatch_pending;\n"
+            << "void preflight_native_bringup_indirect_dispatch(\n"
+            << "    std::uint32_t source_block, std::uint32_t callsite,\n"
+            << "    std::uint32_t target, std::uint32_t continuation,\n"
+            << "    bool call);\n";
         if (!closure_probe_callsites.empty()) {
             declarations
                 << "extern thread_local bool closure_probe_dispatch_pending;\n"

@@ -1,5 +1,11 @@
 # Task KR-XXXX - Titel
 
+Vor dem Ausfuellen gegen
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md) routen: Ist der
+Task ein Runtime-/Adapterfix mit stabilem AOT-Pack, eine Evidence-Promotion
+oder eine echte AOT-wirksame Aenderung? Ein Runtime-Witness ist ein
+Beweisauftrag und keine automatische Acceptance.
+
 ## Tasktyp
 
 - [ ] Implementierungs-Task
@@ -13,6 +19,16 @@ Kurze Beschreibung des fachlichen Ergebnisses.
 ## Abhaengigkeiten
 
 - KR-XXXX
+
+## Workflow-Routing
+
+- [ ] kleine `native-bringup`-Schleife, gleicher AOT-Pack
+- [ ] Evidence-Promotion (`Observed`/`Candidate` -> reviewter Ausgang)
+- [ ] grosse `strict-product`-Schleife, AOT-Pack wird erneuert
+
+Erster reproduzierbarer Stop/Witness:
+
+AOT-wirksame Aenderung und Begruendung:
 
 ## Betroffene Schichten
 

@@ -1,5 +1,20 @@
 # Runtime-Blockregistry
 
+Die Registry ist die Laufzeitsicherheitsgrenze beider Schleifen aus
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Der
+`strict-product`-Lauf baut daraus eine sortierte, unveraenderliche Tabelle im
+AOT-Pack und versiegelt sie vor dem Produktlauf. Der `native-bringup`-Loop
+liest dieselbe Tabelle nur; er registriert, materialisiert oder ersetzt dabei
+keinen Block.
+
+Eine Bring-up-Allowlist enthaelt portable Block-/Packidentitaeten und keine
+rohen Hostfunktionszeiger. Ein Treffer ist nur ein sicherer Zugriff auf einen
+bereits vorkompilierten aktiven Block (`Observed`), kein Vollstaendigkeits-
+oder Closure-Beweis (`Proven`). `RuntimeBlockTable::resolve` muss deshalb
+weiterhin Handle, aktive Modul-/Runtimegeneration, Codeidentitaet und
+Containment pruefen. Ein Miss endet typisiert als `UnknownCompiledTarget` und
+kehrt bei fehlender AOT-Abdeckung in die grosse Schleife zurueck.
+
 Dieses Dokument beschreibt den mit `KR-4615` eingefuehrten Vertrag. Die
 ausfuehrbaren Last- und Mutationsregressionen werden gemaess
 `docs/CODEX_HANDOFF.md` gesammelt bei `KR-4617` implementiert und im frischen

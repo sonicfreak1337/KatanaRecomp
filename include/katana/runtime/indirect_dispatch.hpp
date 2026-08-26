@@ -2,12 +2,15 @@
 
 #include "katana/runtime/block_table.hpp"
 #include "katana/runtime/dispatch_diagnostics.hpp"
+#include "katana/runtime/native_bringup_dispatch.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace katana::runtime {
 
@@ -106,6 +109,7 @@ struct IndirectDispatchRequest {
     RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback;
     IndirectDispatchMetrics* metrics = nullptr;
     DemandBlockMaterializer* materializer = nullptr;
+    const NativeBringupDispatchContext* native_bringup = nullptr;
 };
 
 struct IndirectDispatchResult {
@@ -118,6 +122,7 @@ struct IndirectDispatchResult {
     bool alias_lookup = false;
     bool materialized = false;
     std::string diagnostic;
+    bool native_bringup = false;
 };
 
 class IndirectDispatchError final : public std::runtime_error {
@@ -129,7 +134,9 @@ class IndirectDispatchError final : public std::runtime_error {
         BlockAddress source,
         DispatchDiagnosticError error = DispatchDiagnosticError::UnknownTarget,
         RuntimeDispatchClass dispatch_class = RuntimeDispatchClass::GuardedFallback,
-        std::string metrics_json = {});
+        std::string metrics_json = {},
+        NativeBringupDispatchMiss native_bringup_miss =
+            NativeBringupDispatchMiss::None);
     [[nodiscard]] const std::string& metrics_json() const noexcept;
     [[nodiscard]] IndirectDispatchKind kind() const noexcept;
     [[nodiscard]] std::uint32_t callsite() const noexcept;
@@ -137,6 +144,7 @@ class IndirectDispatchError final : public std::runtime_error {
     [[nodiscard]] BlockAddress source() const noexcept;
     [[nodiscard]] DispatchDiagnosticError error() const noexcept;
     [[nodiscard]] RuntimeDispatchClass dispatch_class() const noexcept;
+    [[nodiscard]] NativeBringupDispatchMiss native_bringup_miss() const noexcept;
 
   private:
     std::string metrics_json_;
@@ -146,6 +154,7 @@ class IndirectDispatchError final : public std::runtime_error {
     BlockAddress source_;
     DispatchDiagnosticError error_ = DispatchDiagnosticError::UnknownTarget;
     RuntimeDispatchClass dispatch_class_ = RuntimeDispatchClass::GuardedFallback;
+    NativeBringupDispatchMiss native_bringup_miss_ = NativeBringupDispatchMiss::None;
 };
 
 [[nodiscard]] const char* runtime_dispatch_class_name(RuntimeDispatchClass value) noexcept;

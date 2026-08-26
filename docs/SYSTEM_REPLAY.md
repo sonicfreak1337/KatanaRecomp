@@ -1,5 +1,29 @@
 # Deterministische Systemereignis-Replays
 
+Der Einsatz im aktuellen Produktworkflow steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Ein Replay ist die
+Eingabe der kleinen Bring-up-Schleife und bindet denselben AOT-Pack an
+vergleichbare Hostproviderantworten. Der erste abweichende Checkpoint oder
+Providerwert ist wichtiger als ein spaeter Folgecrash.
+
+## Bring-up-Replay und erste Divergenz
+
+Ein Bring-up-Repro bindet Controllerzustand und Framegrenzen, Titelzeit,
+Providerresultate, asynchrone Completion-Reihenfolge, Datei-/Content- und
+Save-/Load-Antworten, Movie-/Audioereignisse, externe Entropie sowie Modul-
+und Overlay-Lifecycle. Der Gast fuehrt weiterhin denselben vorkompilierten
+nativen Code aus; nur die nichtdeterministischen Hostantworten werden
+aufgezeichnet beziehungsweise wiedergegeben.
+
+Periodische Digests von CPU-Zustand, relevanten Speicherpages, aktivem Modul,
+Providerzustand und Guest-Callstack lokalisieren die erste Divergenz. Erst um
+dieses kurze Intervall wird bei Bedarf feiner aufgezeichnet. Standardreplays
+laufen stumm, unsichtbar und ohne Screenshot-/Audio-Capture.
+
+Ein Runtime-Witness ist `Observed`: Er belegt ein tatsaechliches Ereignis,
+nicht die Vollstaendigkeit aller moeglichen Ereignisse. Replayimport darf
+keinen Witness automatisch zu `Proven` oder `RuntimeContract` promoten.
+
 `SystemReplayLog` zeichnet Plattformereignisse ausschliesslich gegen logische
 Gastzyklen auf. Host-Wall-Clock, Threadzeit, Dateizeitstempel und
 Praesentationszeit sind weder Eingabe noch Berichtsfeld.

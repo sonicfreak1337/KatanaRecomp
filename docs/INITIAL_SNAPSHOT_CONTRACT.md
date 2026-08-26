@@ -1,5 +1,12 @@
 # Initial-Snapshot-Vertrag
 
+Dieser Loadervertrag ist eine statische Eingangsvoraussetzung des
+`strict-product`-Laufs aus
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Er darf weder
+Runtime-Witnesses promoten noch die versiegelte AOT-Blockwelt erweitern. Der
+`native-bringup`-Loop verwendet nur bereits vorkompilierte, identitaets- und
+generationgebundene Bloecke; fehlende Snapshot-Provenienz bleibt offen.
+
 `EntryPointStraightLineQuiescent` ist ein explizites Loader- und
 Plattformversprechen, kein aus dem SH-4-Code abgeleiteter Beweis. Es gilt nur
 vom geladenen Reset-Snapshot bis zur ersten Gast-sichtbaren Kontrollflussgrenze.

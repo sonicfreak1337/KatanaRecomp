@@ -5,6 +5,57 @@ Phase und jeden Teilbereich dieses Repositories. Sie sind keine Empfehlung.
 Widersprechende aeltere Prozessbeschreibungen in Roadmap-, Task-, Status-,
 Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
+## Verbindliche Entwicklungsloops und Evidence-Klassen
+
+Die vollstaendige Definition steht in
+`docs/NATIVE_BRINGUP_WORKFLOW.md`. Fuer jeden Bearbeiter gelten zwei getrennte
+Schleifen:
+
+```text
+strict-product:
+  statische Analyse -> Closure -> AOT/Overlays -> stabiler AOT-Pack
+  -> Produktbuild und Releasegate
+
+native-bringup:
+  gleicher AOT-Pack -> Replay -> erste Divergenz/typisierter Stop
+  -> kleinster Fix -> inkrementeller Runtime-/Adapter-/Manifestbuild
+  -> dasselbe Replay
+```
+
+- Ein vollstaendiger Analyzer-/Exportlauf wird nur bei einer nachgewiesenen
+  AOT-wirksamen Aenderung gestartet: neue oder geaenderte Imagebytes,
+  Funktionsgrenzen, CFG, Roots, Tabellen, Overlays, Patchstellen,
+  Instruktions-/Codegensemantik, AOT-ABI oder ein echtes
+  `UnknownCompiledTarget`.
+- Grafik-, Audio-, Movie-, Input-, Save-, Datei-, Provider-, Adapter-,
+  Renderer- oder Diagnoseaenderungen verwenden den vorhandenen AOT-Pack und
+  die kleine Schleife, solange ihre AOT-Identitaet unveraendert bleibt.
+- Bring-up lockert Proof-Completeness, niemals Execution-Safety. Ausgefuehrt
+  werden nur exakte aktive vorkompilierte Blockanfaenge einer identity- und
+  generationgebundenen Allowlist, validiert durch die versiegelte
+  Blocktabelle. Die Allowlist enthaelt keine rohen Hostfunktionszeiger und
+  mutiert keine Runtime-Tabelle.
+- Ein explizit authorierter `Candidate` darf in dieser nicht releasefaehigen
+  Allowlist nur nach unabhaengiger exakter Source-/Callsite-/Target-/Owner-/
+  Byte-/Pack-/Generationsvalidierung ausgefuehrt werden. Sein `missing_proof`
+  bleibt offen; der Hit darf weder Strict noch eine Frontier schliessen.
+  `Observed`, `Unresolved` und blosse RuntimeContracts sind hier nicht
+  executable.
+- Ein Allowlist-/Blocktabellen-Miss endet sofort als
+  `UnknownCompiledTarget`. Interpreter, JIT, Runtime-Dekodierung,
+  Materializer-, No-op- und Guessing-Fallbacks bleiben verboten.
+- Evidence folgt ausschliesslich
+  `Observed -> Candidate -> Proven | RuntimeContract -> Strict Product`.
+  Runtime-Witnesses sind Existenz- oder Gegenbeweise und erzeugen
+  Beweisauftraege; sie werden nie automatisch zu Closure hochgestuft.
+  `Observed`, `Candidate` und `Unresolved` blockieren den strikten Export.
+- `RuntimeContract` ist nur zulaessig, wenn der bestehende strikte
+  RuntimeOnly-Vertrag Site, aktives Modul, Generation, exakten Blockanfang,
+  ABI und Fortsetzung vor jeder Zustandsaenderung validiert.
+- Im Bring-up ist die erste reproduzierbare Divergenz oder der erste
+  typisierte Stop autoritativ. Die gesamte offene Analyzer-Frontier erzeugt
+  nicht automatisch die naechsten Tasks.
+
 ## Projektweiter Taskablauf
 
 Fuer jeden Task gilt ab sofort genau diese Reihenfolge:
@@ -84,9 +135,14 @@ Task implementieren
   betroffenen Produkttargets ist ein Buildnachweis, keine neue Testsuite und
   kein Ersatz fuer den Sonic-Produktnachweis.
 - Sonic-Produktlaeufe erfolgen an den in Roadmap und Tasks festgelegten
-  Produktgates oder nach einer ausdruecklichen Nutzeranweisung, nicht nach
-  jedem einzelnen Task. Mehrere zusammenhaengende reviewte Tasks duerfen vor
-  dem naechsten Sonic-Lauf auf `main` landen.
+  Produktgates oder innerhalb der kleinen, reproduzierbaren Bring-up-Schleife.
+  Mehrere zusammenhaengende reviewte Tasks duerfen vor dem naechsten
+  vollstaendigen Produktgurt auf `main` landen.
+- Automatisierte Sonic-Laeufe und gezielte Tests sind standardmaessig stumm,
+  unsichtbar und ohne Screenshot-/Audio-Capture. Ein sichtbarer Lauf erfolgt
+  nur auf ausdrueckliche Anforderung. Redundante Replays, die denselben
+  frueheren Checkpoint nur langsamer erreichen, gehoeren nicht in den
+  Standardgurt.
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
@@ -158,9 +214,12 @@ RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen.
 - Produktive Arbeit nutzt die verfuegbaren Hostressourcen parallel;
   Ein-Kern-Ausfuehrung ist kein akzeptabler Default.
 - Potenziell lange Produktphasen melden spaetestens alle zehn Sekunden
-  belastbaren Fortschritt beziehungsweise einen Heartbeat.
-- Lange Prozesse werden so gestartet, dass ihre Ausgabe live sichtbar ist;
-  ein nur am Ende ausgegebener gepufferter Log ist unzulaessig.
+  belastbaren Fortschritt beziehungsweise einen Heartbeat in ein Log. Die
+  Produktoberflaeche selbst bleibt bei automatisierten Tests unsichtbar und
+  stumm.
+- Lange Prozesse stellen maschinenlesbaren Live-Fortschritt bereit; ein nur
+  am Ende ausgegebener gepufferter Log ist unzulaessig. Das erzwingt weder ein
+  sichtbares Fenster noch Audioausgabe.
 - Ein wiederholter Heartbeat ohne Aenderung von Phase, geplant, queued, aktiv,
   fertig oder kanonisch publiziert ist nur Liveness und kein Fortschritt.
   Bleibt ein Prozess 60 Sekunden ohne nachweisliche Arbeitsbewegung, wird er
@@ -189,28 +248,22 @@ aktuelle ausdrueckliche Nutzeranweisung hat Vorrang.
 
 ## Aktueller nativer Portpfad
 
-- RuntimeOnly und seine exakte Guest->Host-Tabelle bleiben als statische AOT-
-  Grundlage nutzbar. Der dortige ARM7-/AICA- und CPU-PVR-Geraetepfad ist nur
-  historische Bring-up-Evidenz und kein Produktpfad mehr.
-- Die aktuelle Reihenfolge ist `KR-5000` bis `KR-5005`: Produktlinkgrenze,
-  native Hookkarte, nativer Audio-/Moviepfad, nativer GPU-Pfad, native
-  Plattformdienste und anschliessend der echte No-Skip-Sonic-Lauf bis
-  mindestens Hauptmenue.
-- Der erste aktive Arbeitspunkt ist die hoechste verifizierbare SH-4-Spiel-/
-  SDK-Hookgrenze vor AICA-Kommandoring und PVR/TA-Geraeteprotokoll. Die
-  privaten Titeladressen bleiben im externen Sonic-Spielprojekt.
-- Der Checkpoint `001f3c2` mit sichtbarem Movie und `24,2926 MHz` ist
-  historische Funktions- und Grenzenevidenz. Er ist keine Abnahme des nativen
-  Produktpfads und wird nicht durch weitere Interpreter- oder
-  Softwarerasterizeroptimierung fortgesetzt.
-- Der historische Candidate-Resolution-Pfad KR-4985 bis KR-4991, KR-4993 und
-  sein bedingter KR-4992-Zweig bleiben fuer den PlatformAbi-Default
-  dokumentiert, sind aber deferred und blockieren den RuntimeOnly-Bring-up
-  nicht. D1 und D2 sind historische Produktdiagnose, keine aktuelle
-  Taskreihenfolge.
-- Fuer jeden aktuellen Bring-up-Task gilt weiterhin der projektweite Ablauf:
+- Der strikte Produktpfad bleibt statisch, fail-closed und releasefaehig.
+  Historische ARM7-/AICA-, CPU-PVR- und sonstige Geraetemodelle sind nur
+  Offline-Referenz und werden weder weiter als Produktarchitektur entwickelt
+  noch in das Produkt gelinkt.
+- Der aktive Bring-up-Pfad arbeitet mit einem stabilen AOT-Pack und einer
+  nativen, identity-/generationgebundenen Allowlist. Er sammelt Witnesses und
+  reproduziert die erste Divergenz, ohne sie als Produktbeweis auszugeben.
+- Titelgebundene Funktionsgrenzen, Roots, Tabellen, dynamische Zielmengen,
+  Overlays, Hooks, Patches und Stubs gehoeren mit exakten Bytes und
+  Identitaeten in das private Spielprojekt. Der oeffentliche Core validiert
+  nur ihre generischen Formate und Vertraege.
+- Agenten bearbeiten zuerst den kleinsten konkreten Auftrag aus Replay,
+  Witness oder typisiertem Stop. Eine generische Analyzerregel ist nur dann
+  der richtige Fix, wenn Disassembly und weitere Evidence ein
+  address-agnostisches Muster tragen; andernfalls bleibt der Fix eng privat
+  identity-bound.
+- Fuer jeden Task gilt weiterhin:
   **implementieren -> betroffene Pfade reviewen und Findings schliessen ->
   dirty konfigurieren und gezielt bauen -> erst danach auf main pushen**.
-- KR-4982 und KR-4983 bleiben als alte optionale Offload-Aufgaben gestrichen.
-  Der neue native GPU-Produktpfad ist die semantisch getrennte Aufgabe
-  KR-5003 und kein optionales Beschleunigungsfeature eines Emulators.

@@ -1,5 +1,11 @@
 # Projektstatus
 
+> Historisches Statusledger. Die kurze aktuelle Wahrheit steht in
+> [`CURRENT_STATE.md`](CURRENT_STATE.md); Prozess und Evidence-Admission in
+> [`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Aeltere Run-,
+> ABI- und Closureangaben weiter unten duerfen diese beiden Dokumente nicht
+> ueberschreiben.
+
 Aktuelle interne Version: `v0.49.2`
 
 `v0.49.2` ist ein ungetaggter Entwicklungsstand und kein regulaerer Release.
@@ -7,6 +13,13 @@ Der naechste echte Release `v0.5.0` wird erst freigegeben und getaggt, wenn
 die vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
 Produktpfad nachgewiesen ist. Das Hauptmenue ist dafuer nur ein
 Zwischenmeilenstein.
+
+> Aktuelle Prozesswahrheit:
+> [`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Der strikte Lauf
+> erzeugt einen stabilen AOT-Pack; danach steuert die erste reproduzierbare
+> Divergenz die kleine native Bring-up-Schleife. Die nachfolgenden Run- und
+> Closurewerte sind historische beziehungsweise punktuelle Evidenz, keine
+> automatische Taskqueue oder Evidence-Promotion.
 
 ## Repositoryweiter Arbeitsvertrag
 

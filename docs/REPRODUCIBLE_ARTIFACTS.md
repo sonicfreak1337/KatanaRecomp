@@ -1,5 +1,19 @@
 # Reproduzierbare Pre-Alpha-Artefakte
 
+Der aktuelle Entwicklungsvertrag fuer AOT-Pack, Runtime, Adapter, Manifest,
+Replay und Witness steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Diese Komponenten
+besitzen getrennte Inhaltsidentitaeten: Ein Runtime-/Adapterfix darf die
+Packidentitaet nicht veraendern, waehrend eine AOT-wirksame Aenderung einen
+neuen Pack und eine neue Allowlistgeneration erzwingt.
+
+Ein Bring-up-Repro bindet mindestens AOT-Pack-, Runtime-, Adapter-, Manifest-,
+Replay- und Buildidentitaet sowie aktive Modulidentitaeten und Generationen.
+Nur dadurch ist nachweisbar, dass zwei inkrementelle Laeufe denselben
+vorkompilierten Gastcode verglichen haben. Runtime-Witnesses sind
+reproduzierbare Evidence, aber keine Releaseartefakte und keine automatische
+Produktadmission.
+
 `artifact-debug` erbt alle bisherigen Phase-8-Debugprofile und aktiviert
 reproduzierbare Compiler- und Linkoptionen. Lokale Quellwurzelpfade werden in
 Debuginformationen auf `.` abgebildet. Das Profil bleibt ein Debug-Build; es

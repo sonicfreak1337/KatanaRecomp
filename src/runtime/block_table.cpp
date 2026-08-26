@@ -188,6 +188,29 @@ std::uint32_t canonical_physical_address(const std::uint32_t address) noexcept {
     return address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
 }
 
+bool direct_p1_p2_block_binding_contiguous(
+    const std::uint32_t virtual_start,
+    const std::uint32_t physical_origin,
+    const std::uint32_t size) noexcept {
+    const auto segment = virtual_start >> 29u;
+    if ((segment != 4u && segment != 5u) ||
+        (virtual_start & 1u) != 0u || (physical_origin & 1u) != 0u ||
+        size < 2u || (size & 1u) != 0u ||
+        physical_origin != canonical_physical_address(physical_origin) ||
+        canonical_physical_address(virtual_start) != physical_origin)
+        return false;
+
+    const auto last_offset = static_cast<std::uint64_t>(size) - 2u;
+    const auto virtual_last =
+        static_cast<std::uint64_t>(virtual_start) + last_offset;
+    const auto physical_last =
+        static_cast<std::uint64_t>(physical_origin) + last_offset;
+    return virtual_last <= std::numeric_limits<std::uint32_t>::max() &&
+           physical_last <= std::numeric_limits<std::uint32_t>::max() &&
+           canonical_physical_address(
+               static_cast<std::uint32_t>(virtual_last)) == physical_last;
+}
+
 bool native_aot_mutable_ranges_valid(
     const std::span<const NativeAotTemplateMutableRange> ranges,
     const std::uint32_t extent) noexcept {
@@ -315,6 +338,9 @@ RuntimeBlockTable::register_static_variant(const std::uint32_t virtual_address,
     variant.virtual_start = virtual_address;
     variant.physical_origin = canonical_physical_address(physical_address);
     variant.variant = target_variant;
+    // A synthesized MMU/contextual variant is exact to that virtual mapping;
+    // it must not inherit a source block's P1/P2-only direct policy.
+    variant.static_variant_policy = StaticVariantPolicy::Exact;
     variant.provenance += "-mmu-variant";
     return insert(std::move(variant), false);
 }
@@ -481,6 +507,16 @@ RuntimeBlockHandle RuntimeBlockTable::insert(RuntimeBlock block,
                                 block.provenance);
     }
     block.physical_origin = canonical_physical_address(block.physical_origin);
+    if (!runtime_registered &&
+        block.static_variant_policy ==
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic &&
+        !direct_p1_p2_block_binding_contiguous(block.virtual_start,
+                                               block.physical_origin,
+                                               block.size)) {
+        throw std::invalid_argument(
+            "Direkte Static-AOT-Bindung kreuzt eine Aliasgrenze: " +
+            block.provenance);
+    }
     if (block.aot_template) {
         if (!runtime_registered) {
             throw std::invalid_argument(
@@ -737,11 +773,10 @@ void RuntimeBlockTable::rebuild_static_aot_index() {
         if (!record.static_block ||
             record.block.static_variant_policy !=
                 StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic ||
-            ((record.block.virtual_start >> 29u) != 4u &&
-             (record.block.virtual_start >> 29u) != 5u) ||
-            (record.block.virtual_start & 1u) != 0u ||
-            (record.block.physical_origin & 1u) != 0u ||
-            record.block.size < 2u || (record.block.size & 1u) != 0u)
+            !direct_p1_p2_block_binding_contiguous(
+                record.block.virtual_start,
+                record.block.physical_origin,
+                record.block.size))
             continue;
         const auto page_index = record.block.physical_origin / physical_page_size;
         if (page_index >= pages.size()) continue;
@@ -876,7 +911,7 @@ RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
     if (const auto& shadow = page.dynamic_entries[halfword]; shadow) {
         const auto matching_dynamic =
             std::any_of(shadow->begin(), shadow->end(), [&](const Record* candidate) {
-                return candidate != nullptr && candidate->active &&
+                return candidate != nullptr && dispatchable(*candidate) &&
                        !candidate->static_block &&
                        candidate->block.variant == variant;
             });
@@ -888,15 +923,21 @@ RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
         entry_index > static_aot_entries_.size())
         return std::nullopt;
     const auto& entry = static_aot_entries_[entry_index - 1u];
-    const auto* const record = entry.record;
-    if (record == nullptr || !record->active ||
+    const auto authoritative_record = records_.find(entry.id);
+    if (entry.id == 0u || authoritative_record == records_.end() ||
+        entry.record != &authoritative_record->second)
+        return std::nullopt;
+    const auto* const record = &authoritative_record->second;
+    if (!dispatchable(*record) ||
         !record->static_block || record->block.runtime_registered ||
-        ((record->block.virtual_start >> 29u) != 4u &&
-         (record->block.virtual_start >> 29u) != 5u) ||
         record->block.function == nullptr || record->block.size < 2u ||
         record->block.physical_origin != canonical ||
         record->block.static_variant_policy !=
             StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic ||
+        !direct_p1_p2_block_binding_contiguous(
+            record->block.virtual_start,
+            record->block.physical_origin,
+            record->block.size) ||
         record->block.variant.runtime_generation != variant.runtime_generation)
         return std::nullopt;
 
@@ -1010,16 +1051,42 @@ std::uint64_t RuntimeBlockTable::dispatch_generation() const noexcept {
     return dispatch_generation_;
 }
 
+bool RuntimeBlockTable::static_aot_dispatch_ready() const noexcept {
+    return static_sealed_ &&
+           static_aot_invalidation_ ==
+               StaticAotInvalidationContract::Coordinated &&
+           !static_aot_pages_.empty();
+}
+
 bool RuntimeBlockTable::static_dispatch_generation_guard_current(
     const BlockDispatchGenerationGuard& guard) const noexcept {
-    return guard.kind == BlockDispatchGenerationGuardKind::StaticAot &&
-           !guard.runtime_registered &&
-           static_aot_invalidation_ == StaticAotInvalidationContract::Coordinated &&
-           guard.table_lifetime == dispatch_lifetime_ &&
-           guard.static_entry_index != 0u &&
-           guard.static_entry_index <= static_aot_entries_.size() &&
-           guard.table_generation ==
-               static_aot_entries_[guard.static_entry_index - 1u].generation;
+    if (!static_sealed_ ||
+        guard.kind != BlockDispatchGenerationGuardKind::StaticAot ||
+        guard.runtime_registered ||
+        static_aot_invalidation_ !=
+            StaticAotInvalidationContract::Coordinated ||
+        guard.table_lifetime != dispatch_lifetime_ ||
+        guard.static_entry_index == 0u ||
+        guard.static_entry_index > static_aot_entries_.size())
+        return false;
+
+    const auto& entry = static_aot_entries_[guard.static_entry_index - 1u];
+    if (entry.record == nullptr || entry.id == 0u ||
+        guard.block.id != entry.id ||
+        guard.table_generation != entry.generation)
+        return false;
+    const auto record = records_.find(entry.id);
+    return record != records_.end() && entry.record == &record->second &&
+           guard.block.generation == record->second.generation &&
+           dispatchable(record->second) && record->second.static_block &&
+           !record->second.block.runtime_registered &&
+           record->second.block.function != nullptr &&
+           record->second.block.static_variant_policy ==
+               StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic &&
+           direct_p1_p2_block_binding_contiguous(
+               record->second.block.virtual_start,
+               record->second.block.physical_origin,
+               record->second.block.size);
 }
 
 RuntimeBlockTableSnapshot RuntimeBlockTable::snapshot() const {

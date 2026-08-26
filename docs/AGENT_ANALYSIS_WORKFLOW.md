@@ -4,6 +4,33 @@ Der agentische Workflow trennt beweisende statische Analyse, beobachtete
 Produktruntime-Frontiers und den eigentlichen Portexport. Er erzeugt keinen
 Interpreter-, JIT- oder Runtime-SH-4-Pfad.
 
+Der uebergeordnete Zwei-Schleifen-Vertrag steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md). Agenten starten
+nicht aufgrund der blossen Anzahl offener Frontiers automatisch eine neue
+Vollanalyse. Im Bring-up entsteht der naechste Auftrag aus der ersten
+reproduzierbaren Divergenz, einem typisierten Stop oder einem konkreten
+Runtime-Witness.
+
+## Analyse-Routing
+
+Ohne neuen Analyzerlauf werden Runtime, Adapter, Renderer, Grafik, Audio,
+Movie, Eingabe, Save, Datei, Hosttiming und Diagnose gegen denselben AOT-Pack
+inkrementell gebaut und mit demselben Replay geprueft.
+
+Ein neuer beziehungsweise fortgesetzter `analyze-port`-Lauf ist erforderlich,
+wenn der Befund AOT-Abdeckung oder statische Welt tatsaechlich aendert:
+
+- unbekanntes vorkompiliertes Ziel oder Overlay;
+- fehlender Block, Function-Entry, Funktionsumfang oder CFG-Pfad;
+- geaenderte Imagebytes, Roots, Tabellen, Grenzen, Overlays oder AOT-Patches;
+- geaenderte Instruktions-/Codegensemantik oder AOT-ABI;
+- reviewte Promotion eines Witness zu `Proven` oder `RuntimeContract`.
+
+Runtimeimports bleiben `Observed` beziehungsweise `Candidate`. Erst ein
+Promotion Report mit Binary-/CFG-/Owner-/Modulkorrelation und expliziter
+Acceptance darf eine statische oder identity-bound Aenderung vorschlagen.
+Import allein schliesst keine Frontier.
+
 ## Analyse starten
 
 ```powershell

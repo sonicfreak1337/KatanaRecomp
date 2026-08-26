@@ -1,5 +1,12 @@
 # KatanaRecomp-v0.49-Architektur
 
+Die aktuelle Entwicklungs- und Artefaktgrenze steht in
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md): Ein seltener
+strikter Lauf erzeugt AOT-Pack und Allowlist; schnelle Runtime-/Adapterloops
+verwenden denselben Pack mit gebundenen Replays. Bring-up lockert nur
+Proof-Completeness, nie Execution-Safety, und bleibt vom Releaseprofil
+getrennt.
+
 ## v0.49.1: native Produktarchitektur
 
 Ab `v0.49.1` ist verbindlich klargestellt: KatanaRecomp erzeugt native PC-

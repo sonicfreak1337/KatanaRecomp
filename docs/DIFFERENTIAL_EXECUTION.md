@@ -1,5 +1,16 @@
 # Differenztests der Ausfuehrungswege
 
+Fuer den nativen Produkt-Bring-up gilt zusaetzlich
+[`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md): Zwei gebundene
+Replays werden zuerst ueber grobe CPU-/Speicher-/Modul-/Providerdigests
+verglichen und dann nur im ersten abweichenden Intervall feiner aufgezeichnet.
+Der erste Unterschied erzeugt den naechsten konkreten Task; ein spaeter
+Folgecrash ist keine bessere Fehlerlokalisierung.
+
+Die nachfolgende synthetische Drei-Runner-Suite ist ein historischer,
+isolierter Semantik-Harness. Ihr Interpreterpfad ist weder Bring-up- noch
+Produktfallback und wird nicht in einen Port gelinkt.
+
 Der KR-3707-Harness verlangt fuer jedes synthetische Mikroprogramm genau drei
 Runner: `ir-reference`, `generated-cpp` und `interpreter-fallback`. Die Adapter
 sind absichtlich explizit; ein Pfad darf nicht unter einem anderen Namen

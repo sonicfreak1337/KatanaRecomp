@@ -238,6 +238,12 @@ struct RuntimeBlockTableSnapshot {
 };
 
 [[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
+// A direct P1/P2 block must retain the same linear virtual-to-physical alias
+// mapping for every halfword, not merely at its entry address.
+[[nodiscard]] bool direct_p1_p2_block_binding_contiguous(
+    std::uint32_t virtual_start,
+    std::uint32_t physical_origin,
+    std::uint32_t size) noexcept;
 [[nodiscard]] std::string stable_runtime_block_identity(const RuntimeBlock& block);
 [[nodiscard]] BlockExit
 execute_runtime_block(const RuntimeBlock& block, CpuState& cpu, BlockExecutionContext& context);
@@ -293,6 +299,7 @@ class RuntimeBlockTable {
     [[nodiscard]] const RuntimeBlockLookupCounters& lookup_counters() const noexcept;
     [[nodiscard]] std::uint64_t dispatch_lifetime() const noexcept;
     [[nodiscard]] std::uint64_t dispatch_generation() const noexcept;
+    [[nodiscard]] bool static_aot_dispatch_ready() const noexcept;
     [[nodiscard]] bool static_dispatch_generation_guard_current(
         const BlockDispatchGenerationGuard& guard) const noexcept;
     [[nodiscard]] RuntimeBlockTableSnapshot snapshot() const;
