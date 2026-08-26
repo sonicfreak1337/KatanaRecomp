@@ -116,6 +116,18 @@ Ein teurer Analyzerlauf wird nicht allein deshalb gestartet, weil Runtime,
 Adapter, Grafik, Audio, Movie, Eingabe, Save, Dateisystem, Hosttiming oder
 Diagnostik geaendert wurden.
 
+Jede tatsaechlich gestartete und erfolgreich publizierte grosse Analyse endet
+mit einem verpflichtenden read-only Frontier-Gate: Der Orchestrator erzeugt
+aus der neuen World einen deterministischen 28er-`next-analysis-task`-Pool
+und delegiert die festen Slices `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23` und
+`#24-#28` an die fuenf Egg-Fleet-Tasks. Sie vergleichen die neue Authority
+mit ihrem letzten Handoff und melden Proof-, Scope-, Kollisions- und
+Multi-Close-Befunde zurueck. Dieses Gate darf parallel zum anschliessenden
+Export/Build laufen, muss aber vor dem Zyklusabschluss vollstaendig
+reconciled sein. Es ersetzt weder den ersten Replay-Stop als konkreten
+Implementierungsauftrag noch erlaubt es Runtime-Evidence als statische
+Closure.
+
 ## Die kleine Schleife: `native-bringup`
 
 ```text

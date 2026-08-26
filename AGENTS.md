@@ -54,7 +54,30 @@ native-bringup:
   ABI und Fortsetzung vor jeder Zustandsaenderung validiert.
 - Im Bring-up ist die erste reproduzierbare Divergenz oder der erste
   typisierte Stop autoritativ. Die gesamte offene Analyzer-Frontier erzeugt
-  nicht automatisch die naechsten Tasks.
+  nicht automatisch einen Implementierungsauftrag. Nach jeder erfolgreichen
+  Analyse muss der Analyzerstand trotzdem als eigener read-only
+  Katana-Taskpool durch die feste Egg-Fleet inventarisiert werden.
+
+### Pflichtgate nach jeder Analyse: Egg Fleet
+
+- Unmittelbar nach jeder erfolgreich publizierten `analyze-port`-Generation
+  wird aus genau deren `materialization-world.katana-world` mit
+  `next-analysis-task --format agent-json --task-count 28` ein neuer,
+  unveraenderter 28er-Pool erzeugt. Pool-, World-, World-JSON- und
+  Native-Analysis-SHA-256 werden vor der Delegation festgehalten.
+- Die 28 Poolpositionen gehen immer an dieselben fuenf read-only Egg-Fleet-
+  Tasks: `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23` und `#24-#28`. Jeder Task
+  prueft Pool-zu-World, den Delta zur zuletzt von ihm geprueften Generation,
+  die aktuelle Source-/Disassembly-/Provider-Evidence, A/B/C-Klassifikation,
+  kleinsten fail-closed Scope, Acceptance, Kollisionen und Multi-Close.
+- Die Egg Fleet darf weder Dateien noch Pools aendern oder erzeugen und keine
+  Builds, Tests, Replays, Commits oder Pushes starten. Fehlende Evidence ist
+  niemals `unreachable`, und Runtime-Witnesses werden nie zu statischem Proof
+  hochgestuft.
+- Analyse, Export und Build duerfen parallel zu dieser read-only Pruefung
+  weiterlaufen. Ein Bring-up-Zyklus gilt aber erst als abgeschlossen, wenn
+  alle fuenf Handoffs eingegangen und vom Haupttask gegen den aktuellen Stand
+  abgeglichen wurden.
 
 ## Projektweiter Taskablauf
 
@@ -146,6 +169,10 @@ Task implementieren
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
+- Jeder Bring-up-Zyklus enthaelt genau eine kleine, reviewbare echte
+  Performanceverbesserung im ohnehin betroffenen Produktpfad. Sie darf weder
+  Proof-Gates lockern noch einen Zusatzbuild oder eine reine Messrunde
+  erzwingen; beobachtet wird sie im ohnehin notwendigen Build und Replay.
 
 ## Unveraenderte Produktgrenzen
 

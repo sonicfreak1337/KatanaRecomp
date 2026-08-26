@@ -121,7 +121,8 @@ feldgenaue `admission-replay-*`-Rejects gemeldet.
 ```powershell
 katana-recomp next-analysis-task `
   --analysis-artifact .\private\analysis-session\materialization-world.katana-world `
-  --format agent-json
+  --format agent-json `
+  --task-count 28
 
 katana-recomp explain `
   --analysis-artifact .\private\analysis-session\materialization-world.katana-world `
@@ -162,6 +163,16 @@ blockierte Site, Funktion, Materialisierung oder Hardwareressource teilen.
 Echte offene Aufgaben schlagen blockierte Aufgaben. Innerhalb desselben
 Frontierzustands werden echte Read-Rollen priorisiert, waehrend eine blosse
 Same-Owner-Beziehung keine Abhaengigkeit erfindet.
+
+Im Sonic-Bring-up ist der 28er-Aufruf nach jeder erfolgreich publizierten
+Analyse verpflichtend. Der unveraenderte Pool wird neben der Generation als
+`r<generation>-<world-sha-prefix>-task-pool-28.json` abgelegt, gegen World und
+Hashes validiert und positionsstabil auf die fuenf bestehenden read-only
+Egg-Fleet-Tasks verteilt: `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23` und
+`#24-#28`. Die Pruefung darf mit Export und Build ueberlappen, muss aber vor
+Abschluss des Bring-up-Zyklus mit fuenf Handoffs vorliegen. Die Egg Fleet
+klassifiziert und belegt Arbeit; sie implementiert, baut, replayt, committed
+oder pusht in diesem Gate nicht.
 
 Auch ein `replacement-reachability`-Task muss handlungsfaehige Evidenz tragen.
 Katana nennt deshalb die Owner-Funktion und fuer jeden bounded Resttransfer den

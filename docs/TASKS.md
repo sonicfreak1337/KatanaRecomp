@@ -285,6 +285,54 @@ Bereiche, Live-PC/PR, aktive Bloecke und Immutable-Ranges bleiben fail-closed.
 Die generated Dispatch-Scope bindet beide Contextzeiger nur waehrend des
 Dispatches. Dies ist kein Sonic-Produktlauf und keine KR-5005-Abnahme.
 
+## [ ] KR-5006 - Billige erklaerbare Grafikdiagnostik
+
+Prioritaet: P0 Bring-up; verbindlicher naechster Entwicklungszyklus
+
+Der aktuelle Drawstream kann den final eingereichten Draw beschreiben, aber
+nicht durchgaengig die verantwortliche Adapter-, Texlist-, Material-, Layer-
+oder Last-Writer-Entscheidung. Seine aktivierte Vollanalyse und synchrone
+JSON-/Screenshot-Ausgabe ist fuer normales Gameplay zu teuer. Der naechste
+Zyklus prueft die vorliegende Grafikdiagnostik-Review feldgenau gegen den
+aktuellen Source und setzt bestaetigte Findings innerhalb desselben
+Reviewdurchlaufs um.
+
+Verbindlicher Scope:
+
+- vier explizite Modi `Off`, `Digest`, `Breadcrumbs` und `ArmedCapture`;
+- feste numerische Draw-Origin-, Intent-, Texlist-/Texture-Binding-,
+  Resolver-, Epoch- und Last-Writer-IDs vom Titeladapter bis zum GPU-Draw;
+- typisierte Decision-Witnesses auch fuer vor dem Renderer uebersprungene
+  Objekte, Modelle, Primitive und Materialien;
+- Resource-Provenienz und Binding-Provenienz bleiben getrennt; dekodierte
+  Pixel-/Mip-Identitaeten entstehen einmal bei Materialisierung, nie pro
+  Draw;
+- hierarchische Frame-/Layer-/Draw-Digests lokalisieren die erste
+  Grafikdivergenz, danach wird nur das enge Intervall bewaffnet erfasst;
+- der Render-Hot-Path enthaelt keine Strings, Allokationen, Locks,
+  Dateizugriffe, Payload-Hashes, zweite Vertexpassage, Screenshots oder
+  synchronen GPU-Readback. Breadcrumbs verwenden vorallokierte feste
+  Binaerrecords und droppen bei Ueberlauf, statt zu warten;
+- JSON, menschenlesbare Attribution, optionale Draw-/Primitive-/Layer-ID-
+  Replays und Counterfactual-Paesse entstehen offline. D3D11-Readback wird
+  ueber einen begrenzten asynchronen Staging-/Query-Ring abgeholt, ohne den
+  Immediate Context von einem Workerthread zu benutzen;
+- die erste P0-Attribution ist Texture-Binding-Provenienz mit Texlist-ID,
+  Resolverart und Texlist-/Material-Last-Writer fuer die sichtbaren Sonic-
+  Texturfehler; Layer-Intent und Geometriephase folgen auf demselben
+  Witness-Unterbau;
+- als kleine verpflichtende Performanceverbesserung wird genau ein bereits
+  betroffener Hotpath ohne Zusatzbuild optimiert, beispielsweise durch
+  Wiederverwenden vorhandener Geometry-Summaries oder einen generierten
+  indexierten Capture-/Preflight-Key statt linearer Suche.
+
+Abnahme erfolgt im ohnehin notwendigen Produktbuild und stillen Sonic-
+Replay: deaktivierte Diagnostik verursacht keine Diagnose-I/O, -GPU-Arbeit
+oder Worker; `Digest` fuehrt nur feste Integer-Mixes aus; Breadcrumbs warten
+nie; und ein bewaffneter kurzer Capture benennt fuer den ersten fehlerhaften
+Draw Origin, Texlist/Asset, Resolver, State-Epochen und letzten Writer. Es
+gibt keinen separaten Messbuild und keine schwere Dauertelemetrie.
+
 ## [ ] KR-5005 - Nativer No-Skip-Sonic-Produktlauf
 
 Prioritaet: P0 Alpha-Gate
