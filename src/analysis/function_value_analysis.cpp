@@ -35120,6 +35120,13 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
     inventory_topology_entries_visited +=
         candidate_call_carriers.size() + candidate_tail_carriers.size();
 
+    // A typed semantic cold fallback invalidates every ABI, summary,
+    // resolution and evaluation shard, but the exact overlaid program arena
+    // still permits content-addressed reuse of unchanged block/function
+    // shards.  Keep that structural source separate from previous_epoch so a
+    // fail-closed semantic restart does not rebuild identical graph objects.
+    const auto graph_reuse_program =
+        exact_program_input ? published_program : nullptr;
     std::shared_ptr<const FunctionAnalysisEpoch> previous_epoch =
         bypass_all_persistent_analysis_state ? nullptr : published_epoch;
     auto previous_program =
@@ -35214,7 +35221,7 @@ detail::analyze_function_values_with_guarded_entry_cache_attempt(
                 materialized_lines,
                 materialized_boundaries,
                 function_edges,
-                previous_program.get());
+                graph_reuse_program.get());
         }
         if (staged_monotone_append) {
             std::vector<std::uint32_t> appended_entries;
