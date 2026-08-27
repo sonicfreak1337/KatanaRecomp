@@ -104,6 +104,15 @@ int main() {
             "CFG/Callgraph werden nicht aus derselben Analyse samt direktem und offenem Call "
             "abgeleitet.");
 
+    auto reversed_cfg = cfg;
+    std::reverse(reversed_cfg.nodes.begin(), reversed_cfg.nodes.end());
+    std::reverse(reversed_cfg.edges.begin(), reversed_cfg.edges.end());
+    require(serialize_analysis_graph_json(cfg) ==
+                    serialize_analysis_graph_json(reversed_cfg) &&
+                serialize_analysis_graph_dot(cfg) ==
+                    serialize_analysis_graph_dot(reversed_cfg),
+            "Kanonischer Graph-Fast-Path und Sortier-Fallback erzeugen verschiedene Artefakte.");
+
     std::cout << "KR-3605 CFG- und Callgraph-Export erfolgreich.\n";
     return EXIT_SUCCESS;
 }

@@ -62,6 +62,36 @@ void sort_graph(AnalysisGraph& graph) {
                       graph.edges.end());
 }
 
+bool graph_is_canonical(const AnalysisGraph& graph) {
+    const auto node_less = [](const auto& left, const auto& right) {
+        if (left.address != right.address) return left.address < right.address;
+        if (left.end_address != right.end_address)
+            return left.end_address < right.end_address;
+        return left.symbol < right.symbol;
+    };
+    const auto edge_less = [](const auto& left, const auto& right) {
+        if (left.source != right.source) return left.source < right.source;
+        if (left.callsite != right.callsite) return left.callsite < right.callsite;
+        if (left.target != right.target) return left.target < right.target;
+        return left.kind < right.kind;
+    };
+    const auto edge_equal = [](const auto& left, const auto& right) {
+        return left.source == right.source && left.target == right.target &&
+               left.callsite == right.callsite && left.kind == right.kind;
+    };
+    return std::is_sorted(graph.nodes.begin(), graph.nodes.end(), node_less) &&
+           std::adjacent_find(
+               graph.nodes.begin(),
+               graph.nodes.end(),
+               [](const auto& left, const auto& right) {
+                   return left.address == right.address;
+               }) == graph.nodes.end() &&
+           std::is_sorted(graph.edges.begin(), graph.edges.end(), edge_less) &&
+           std::adjacent_find(
+               graph.edges.begin(), graph.edges.end(), edge_equal) ==
+               graph.edges.end();
+}
+
 std::string dot_escape(const std::string_view value) {
     std::string result;
     for (const auto character : value) {
@@ -200,16 +230,21 @@ AnalysisGraph build_call_graph(const ControlFlowAnalysisResult& analysis) {
 }
 
 std::string serialize_analysis_graph_json(const AnalysisGraph& graph) {
-    auto ordered = graph;
-    sort_graph(ordered);
+    AnalysisGraph ordered_storage;
+    const AnalysisGraph* ordered = &graph;
+    if (!graph_is_canonical(graph)) {
+        ordered_storage = graph;
+        sort_graph(ordered_storage);
+        ordered = &ordered_storage;
+    }
     std::ostringstream output;
     katana::io::write_json_report_header(output, "katana-analysis-graph", "analysis-graph");
     output << ",\"graph_version\":" << analysis_graph_schema_version
-           << ",\"kind\":" << katana::io::quote_json(analysis_graph_kind_name(ordered.kind))
+           << ",\"kind\":" << katana::io::quote_json(analysis_graph_kind_name(ordered->kind))
            << ",\"nodes\":[";
-    for (std::size_t index = 0u; index < ordered.nodes.size(); ++index) {
+    for (std::size_t index = 0u; index < ordered->nodes.size(); ++index) {
         if (index != 0u) output << ',';
-        const auto& node = ordered.nodes[index];
+        const auto& node = ordered->nodes[index];
         output << "{\"address\":" << katana::io::quote_json(hex32(node.address))
                << ",\"end_address\":" << katana::io::quote_json(hex32(node.end_address))
                << ",\"symbol\":";
@@ -217,9 +252,9 @@ std::string serialize_analysis_graph_json(const AnalysisGraph& graph) {
         output << '}';
     }
     output << "],\"edges\":[";
-    for (std::size_t index = 0u; index < ordered.edges.size(); ++index) {
+    for (std::size_t index = 0u; index < ordered->edges.size(); ++index) {
         if (index != 0u) output << ',';
-        const auto& edge = ordered.edges[index];
+        const auto& edge = ordered->edges[index];
         output << "{\"source\":" << katana::io::quote_json(hex32(edge.source)) << ",\"target\":";
         edge.target.has_value() ? output << katana::io::quote_json(hex32(*edge.target))
                                 : output << "null";
@@ -232,18 +267,23 @@ std::string serialize_analysis_graph_json(const AnalysisGraph& graph) {
 }
 
 std::string serialize_analysis_graph_dot(const AnalysisGraph& graph) {
-    auto ordered = graph;
-    sort_graph(ordered);
+    AnalysisGraph ordered_storage;
+    const AnalysisGraph* ordered = &graph;
+    if (!graph_is_canonical(graph)) {
+        ordered_storage = graph;
+        sort_graph(ordered_storage);
+        ordered = &ordered_storage;
+    }
     std::ostringstream output;
-    output << "digraph " << analysis_graph_kind_name(ordered.kind) << " {\n";
-    for (const auto& node : ordered.nodes) {
+    output << "digraph " << analysis_graph_kind_name(ordered->kind) << " {\n";
+    for (const auto& node : ordered->nodes) {
         output << "  n" << std::hex << std::uppercase << node.address << std::dec << " [label=\""
                << hex32(node.address);
         if (!node.symbol.empty()) output << "\\n" << dot_escape(node.symbol);
         output << "\"];\n";
     }
     std::size_t unresolved = 0u;
-    for (const auto& edge : ordered.edges) {
+    for (const auto& edge : ordered->edges) {
         output << "  n" << std::hex << std::uppercase << edge.source << std::dec << " -> ";
         std::optional<std::size_t> unresolved_index;
         if (edge.target.has_value()) {
