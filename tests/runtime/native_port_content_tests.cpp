@@ -78,14 +78,26 @@ int main() {
         chain_cpu.memory.clear_guest_write_observer();
     }
 
-    immutable_guard.reserve_additional_runtime_executable_ranges(2u);
+    immutable_guard.reserve_additional_runtime_executable_ranges(3u);
     immutable_guard.add_runtime_executable_range(0x8C900000u, 0x100u);
+    immutable_guard.add_runtime_executable_range(0x8C900200u, 0x80u);
     immutable_guard.validate_runtime_executable_range_present(
         0x0C900000u, 0x100u);
+    require(immutable_guard.tracks_address(0x0C900000u, 0x100u) &&
+                immutable_guard.tracks_address(0x8C900200u, 0x80u),
+            "Verzoegerter Guard-Rebuild verlor registrierte Ranges.");
     immutable_guard.remove_runtime_executable_range_committed(
         0x0C900000u, 0x100u);
-    require(!immutable_guard.tracks_address(0x8C900000u, 0x100u),
-            "Vorbereitete Guard-Retirement-Transaktion bleibt aktiv.");
+    require(!immutable_guard.tracks_address(0x8C900000u, 0x100u) &&
+                immutable_guard.tracks_address(0x0C900200u, 0x80u),
+            "Guard-Retirement verlor verbleibende Range oder blieb aktiv.");
+    immutable_guard.observe_write(
+        {0x8C900200u, 2u, katana::runtime::CodeWriteSource::Cpu, true});
+    require(immutable_guard.write_detected() &&
+                immutable_guard.first_write_address() == 0x0C900200u,
+            "Noexcept Write-Observer materialisierte Dirty-Guard nicht.");
+    immutable_guard.remove_runtime_executable_range_committed(
+        0x0C900200u, 0x80u);
 
     katana::runtime::NativePortExecutableLifecycleLedger lifecycle_ledger(2u);
     const auto first_lifecycle = lifecycle_ledger.acquire(0x8C900000u, 0x1000u);

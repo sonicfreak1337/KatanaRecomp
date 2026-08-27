@@ -97,7 +97,13 @@ void NativePortImmutableWriteGuard::add_runtime_executable_range(
             NativePortContractFailure::AotContractViolation,
             "native-runtime-executable-range-capacity");
     runtime_ranges_.push_back(inserted);
-    rebuild_ranges();
+    // ranges_ is a derived lookup cache. Runtime module activation commonly
+    // registers thousands of already validated executable blocks in one
+    // burst; rebuilding and sorting the growing union after every insertion
+    // makes that path quadratic. The non-empty fixed-range contract makes an
+    // empty cache an unambiguous dirty sentinel, and reserve() above the
+    // activation path guarantees the later noexcept rebuild cannot allocate.
+    ranges_.clear();
 }
 
 void NativePortImmutableWriteGuard::reserve_additional_runtime_executable_ranges(
@@ -158,10 +164,10 @@ remove_runtime_executable_range_committed(
         std::find(runtime_ranges_.begin(), runtime_ranges_.end(), removed);
     if (found == runtime_ranges_.end()) std::terminate();
     runtime_ranges_.erase(found);
-    rebuild_ranges();
+    ranges_.clear();
 }
 
-void NativePortImmutableWriteGuard::rebuild_ranges() noexcept {
+void NativePortImmutableWriteGuard::rebuild_ranges() const noexcept {
     ranges_.clear();
     ranges_.insert(
         ranges_.end(), fixed_ranges_.begin(), fixed_ranges_.end());
@@ -206,6 +212,7 @@ std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
     const std::uint32_t address,
     const std::size_t size) const noexcept {
     if (size == 0u) return 0u;
+    if (ranges_.empty()) rebuild_ranges();
     if (size > std::numeric_limits<std::uint32_t>::max())
         return all_kind_mask_;
     const auto physical = native_port_backing_address(address);
