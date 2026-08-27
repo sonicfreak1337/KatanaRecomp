@@ -846,7 +846,7 @@ void emit_direct_ram_write_helper(std::ostringstream& output,
            << "                katana_ram_address, sizeof(katana_ram_value),\n"
            << "                katana_direct_ram_address);\n"
            << "        const auto katana_physical_address =\n"
-           << "            katana::runtime::canonical_physical_address("
+           << "            katana::runtime::canonical_physical_address_inline("
               "katana_direct_address_resolved\n"
            << "                ? katana_direct_ram_address : katana_ram_address);\n"
            << "        const auto katana_code_generation_before = "
@@ -2913,7 +2913,7 @@ void emit_direct_write_instruction_exit(
         output << "runtime_dispatch_detail::active_exit_source = {\n";
         emit_indent(output, indent + 2);
         output << relocated_code_address(instruction.source_address)
-               << ", katana::runtime::canonical_physical_address("
+               << ", katana::runtime::canonical_physical_address_inline("
                << relocated_code_address(instruction.source_address)
                << ")};\n";
         emit_indent(output, indent + 1);
@@ -4965,7 +4965,7 @@ void emit_block(std::ostringstream& output,
                << relocated_code_address(exit_source) << ";\n"
                << "                runtime_dispatch_detail::active_exit_source = {\n"
                << "                    katana_block_exit_virtual_source,\n"
-               << "                    katana::runtime::canonical_physical_address("
+               << "                    katana::runtime::canonical_physical_address_inline("
                   "katana_block_exit_virtual_source)};\n"
                << "                runtime_dispatch_detail::active_exit_kind = "
                   "katana::runtime::BlockEndKind::"
@@ -5483,7 +5483,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "        auto canonical = address;\n"
                  << "        if ((canonical >> 29u) < 6u)\n"
                  << "            canonical =\n"
-                 << "                katana::runtime::canonical_physical_address("
+                 << "                katana::runtime::canonical_physical_address_inline("
                     "canonical) |\n"
                  << "                0x80000000u;\n"
                  << "        return katana::runtime::unrelocate_code_address("
@@ -5565,7 +5565,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                         "    const auto exact_guarded_source = [](const std::uint32_t address) noexcept { \\\n"
                         "        auto canonical = address; \\\n"
                         "        if ((canonical >> 29u) < 6u) canonical = \\\n"
-                        "            katana::runtime::canonical_physical_address(canonical) | 0x80000000u; \\\n"
+                        "            katana::runtime::canonical_physical_address_inline(canonical) | 0x80000000u; \\\n"
                         "        return katana::runtime::unrelocate_code_address(canonical); \\\n"
                         "    }; \\\n"
                         "    if (exact_guarded_source((target)) != exact_guarded_source((allowed))) \\\n"
@@ -5576,7 +5576,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                         "    const auto exact_guarded_source = [](const std::uint32_t address) noexcept { \\\n"
                         "        auto canonical = address; \\\n"
                         "        if ((canonical >> 29u) < 6u) canonical = \\\n"
-                        "            katana::runtime::canonical_physical_address(canonical) | 0x80000000u; \\\n"
+                        "            katana::runtime::canonical_physical_address_inline(canonical) | 0x80000000u; \\\n"
                         "        return katana::runtime::unrelocate_code_address(canonical); \\\n"
                         "    }; \\\n"
                         "    if (exact_guarded_source((target)) != exact_guarded_source((allowed))) \\\n"
@@ -5688,7 +5688,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "        runtime_dispatch_detail::active_exit_site_class,\n"
                 << "        runtime_dispatch_detail::tail_dispatch_completed,\n"
                 << "        {cpu.pc, "
-                   "katana::runtime::canonical_physical_address(cpu.pc)});\n"
+                   "katana::runtime::canonical_physical_address_inline(cpu.pc)});\n"
                 << "    const auto exception_generation_on_entry = "
                    "cpu.exception_generation;\n"
                 << "    [&] {\n"
@@ -5740,7 +5740,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "                 katana_virtual_address >= 0x80000000u))\n"
                 << "                return false;\n"
                 << "            katana_direct_address =\n"
-                << "                katana::runtime::canonical_physical_address(\n"
+                << "                katana::runtime::canonical_physical_address_inline(\n"
                 << "                    katana_virtual_address) | 0x80000000u;\n"
                 << "        }\n"
                 << "        return true;\n"
@@ -5922,7 +5922,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                    "runtime_dispatch_detail::active_exit_source,\n"
                 << "        katana::runtime::BlockAddress{\n"
                 << "            cpu.pc, "
-                   "katana::runtime::canonical_physical_address(cpu.pc)});\n"
+                   "katana::runtime::canonical_physical_address_inline(cpu.pc)});\n"
                 << "    native_call_exit_state.release();\n"
                 << "    return exit;\n";
         }

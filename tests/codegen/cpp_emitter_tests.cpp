@@ -1259,6 +1259,15 @@ int main() {
             .joined_text();
     const auto direct_store_instruction =
         emitted_instruction(direct_store_port_source, "0x8C051000");
+    require(
+        direct_store_port_source.find(
+            "katana::runtime::canonical_physical_address_inline(") !=
+                std::string::npos &&
+            direct_store_port_source.find(
+                "katana::runtime::canonical_physical_address(") ==
+                std::string::npos,
+        "Generierter AOT-Hotpath benutzt den externen Canonicalization-"
+        "ABI-Wrapper statt des ABI-neutralen Inline-Helpers.");
     const auto direct_store_smc_exit =
         direct_store_instruction.find(
             "if (katana_guest_write_exit_requested) {");
