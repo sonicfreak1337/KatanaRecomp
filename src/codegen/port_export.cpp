@@ -38286,16 +38286,36 @@ static PortExportResult export_dreamcast_port_project_impl(
             katana::analysis::AnalysisGraphKind::CallGraph)
         throw std::runtime_error(
             "Vorbereiteter Analysegraph besitzt einen falschen Typ.");
+    auto control_flow_graph_json_future = std::async(
+        std::launch::async,
+        [&current_control_flow_graph] {
+            return katana::analysis::serialize_analysis_graph_json(
+                current_control_flow_graph);
+        });
+    auto control_flow_graph_dot_future = std::async(
+        std::launch::async,
+        [&current_control_flow_graph] {
+            return katana::analysis::serialize_analysis_graph_dot(
+                current_control_flow_graph);
+        });
+    auto call_graph_json_future = std::async(
+        std::launch::async,
+        [&current_call_graph] {
+            return katana::analysis::serialize_analysis_graph_json(
+                current_call_graph);
+        });
+    auto call_graph_dot_future = std::async(
+        std::launch::async,
+        [&current_call_graph] {
+            return katana::analysis::serialize_analysis_graph_dot(
+                current_call_graph);
+        });
     auto current_control_flow_graph_json =
-        katana::analysis::serialize_analysis_graph_json(
-            current_control_flow_graph);
+        control_flow_graph_json_future.get();
     auto current_control_flow_graph_dot =
-        katana::analysis::serialize_analysis_graph_dot(
-            current_control_flow_graph);
-    auto current_call_graph_json =
-        katana::analysis::serialize_analysis_graph_json(current_call_graph);
-    auto current_call_graph_dot =
-        katana::analysis::serialize_analysis_graph_dot(current_call_graph);
+        control_flow_graph_dot_future.get();
+    auto current_call_graph_json = call_graph_json_future.get();
+    auto current_call_graph_dot = call_graph_dot_future.get();
     auto native_hook_requirements_json =
         native_port_hook_requirements_json(
             native_hardware_audit,
