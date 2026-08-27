@@ -217,6 +217,10 @@ class FfmpegDecoder final {
     }
 
     void read(NativePortCodecReadResult& result) {
+        if (current_.audio.capacity() > recycled_audio_.capacity()) {
+            current_.audio.clear();
+            current_.audio.swap(recycled_audio_);
+        }
         current_ = {};
         if (failure_ != NativePortCodecFailure::None) {
             write_failure(result);
@@ -552,6 +556,7 @@ class FfmpegDecoder final {
         sample.kind = NativePortCodecSampleKind::Audio;
         sample.sample_rate = requested_audio_rate_;
         sample.channels = audio_channels_;
+        sample.audio = std::move(recycled_audio_);
         sample.audio.resize(static_cast<std::size_t>(capacity) * audio_channels_);
         auto* output = reinterpret_cast<std::uint8_t*>(sample.audio.data());
         const auto converted = swr_convert(audio_resampler_,
@@ -561,7 +566,10 @@ class FfmpegDecoder final {
                                            frame_->nb_samples);
         if (converted < 0) return fail(map_error(converted), converted);
         sample.audio.resize(static_cast<std::size_t>(converted) * audio_channels_);
-        if (sample.audio.empty()) return true;
+        if (sample.audio.empty()) {
+            recycled_audio_ = std::move(sample.audio);
+            return true;
+        }
         sample.timestamp = normalize_reordered_timestamp(
             frame_timestamp(*frame_, audio_stream_index_, next_audio_timestamp_),
             next_audio_timestamp_,
@@ -591,11 +599,16 @@ class FfmpegDecoder final {
             sample.kind = NativePortCodecSampleKind::Audio;
             sample.sample_rate = requested_audio_rate_;
             sample.channels = audio_channels_;
+            sample.audio = std::move(recycled_audio_);
             sample.audio.resize(static_cast<std::size_t>(capacity) * audio_channels_);
             auto* output = reinterpret_cast<std::uint8_t*>(sample.audio.data());
             const auto converted = swr_convert(audio_resampler_, &output, capacity, nullptr, 0);
             if (converted < 0) return fail(map_error(converted), converted);
-            if (converted == 0) return true;
+            if (converted == 0) {
+                sample.audio.clear();
+                recycled_audio_ = std::move(sample.audio);
+                return true;
+            }
             sample.audio.resize(static_cast<std::size_t>(converted) * audio_channels_);
             sample.timestamp = next_audio_timestamp_;
             sample.duration = samples_to_ns(converted);
@@ -801,6 +814,7 @@ class FfmpegDecoder final {
     std::uint64_t queued_video_bytes_ = 0u;
     std::deque<OutputSample> audio_queue_;
     std::deque<OutputSample> video_queue_;
+    std::vector<std::int16_t> recycled_audio_;
     OutputSample current_;
     NativePortCodecFailure failure_ = NativePortCodecFailure::None;
     std::uint32_t error_code_ = 0u;
