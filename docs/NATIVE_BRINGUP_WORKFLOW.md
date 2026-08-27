@@ -15,6 +15,14 @@ ausgefuehrten Maschine. Es gibt in beiden Modi keinen Interpreter, keinen JIT,
 keine Runtime-Dekodierung, keine Gast-CPU- oder PVR-Emulation und kein Raten
 von Zieladressen.
 
+Der aktuelle Portstand ist M3: Intro, Menues und Character Select sind
+erreichbar, und eine idle-getriggerte Gameplay-Demo laeuft teilweise.
+Spielersteuerbares Gameplay und Sonics Story-Intro sind noch nicht erreichbar.
+Damit ist die primaere Engstelle statische Spielabdeckung: Funktionen,
+Callbacks, Overlays, Story-/Eventpfade, Providervertraege und ihre
+Reachability. Runtime-Performance und Grafiktreue sind nachgeordnet, solange
+sie nicht denselben Bring-up-Pfad beschleunigen beziehungsweise blockieren.
+
 ## Artefaktgrenze
 
 Der Entwicklungsstand wird in zwei unabhaengig erneuerbare Teile getrennt:
@@ -53,9 +61,21 @@ maschinenlesbares Manifest eingefroren. Das Manifest bindet mindestens:
   "aot_pack_sha256": "...",
   "runtime_commit_or_source_identity": "...",
   "replay_set_sha256": "...",
-  "replays": ["r1", "r2", "r3", "r4", "r5", "r6"],
-  "performance_target": "...",
-  "graphics_root_cause_cluster": "...",
+  "current_milestone": "M3",
+  "target_milestone": "M4",
+  "replays": [
+    {"id": "r1", "knowledge_class": "K1", "root_cause_key": "..."},
+    {"id": "r2", "knowledge_class": "K2", "root_cause_key": "..."},
+    {"id": "r3", "knowledge_class": "K3", "root_cause_key": "..."},
+    {"id": "r4", "knowledge_class": "K2", "root_cause_key": "..."},
+    {"id": "r5", "knowledge_class": "K1", "root_cause_key": "..."},
+    {"id": "r6", "knowledge_class": "K5", "root_cause_key": "..."}
+  ],
+  "knowledge_gap_clusters": ["..."],
+  "performance_companion": {
+    "root_cause_key": "...",
+    "target": "..."
+  },
   "product_build_budget": 1,
   "analysis_required": false
 }
@@ -133,15 +153,20 @@ Bedingungen eintritt:
 - unbekannte Image-, Modul- oder Overlayidentitaet;
 - fehlender Block, Function-Entry, Funktionsumfang oder CFG-Pfad;
 - geaenderte Disc-/Imagebytes, Funktionsgrenzen, Jump-/Switchtabellen,
-  Roots, Overlaydefinitionen oder AOT-wirksame Patches;
+  Roots, Callbackregistrierungen, Overlaydefinitionen oder AOT-wirksame
+  Patches;
 - geaenderte Instruktionssemantik, Codegen-ABI oder AOT-Datenformat;
+- geaenderte Provider-/Owner-Semantik, Replacement-Reachability oder
+  statische Rueckkehrpfade;
 - eine bestaetigte Evidence-Promotion, die AOT-Abdeckung oder Closure
   veraendert;
 - Vorbereitung eines strikten Produkt- oder Releasegates.
 
-Ein teurer Analyzerlauf wird nicht allein deshalb gestartet, weil Runtime,
-Adapter, Grafik, Audio, Movie, Eingabe, Save, Dateisystem, Hosttiming oder
-Diagnostik geaendert wurden.
+Ein Analyzerlauf ist fuer einen aktiven K1-K3-Spielwissensblocker kein zu
+vermeidender Aufwand, sondern das richtige Closure-Gate. Er wird lediglich
+nicht allein deshalb gestartet, weil eine bereits vollstaendig bekannte
+Ausfuehrung nur in Runtime, Adapter, Grafik, Audio, Movie, Eingabe, Save,
+Dateisystem, Hosttiming oder Diagnostik geaendert wurde.
 
 Jede tatsaechlich gestartete und erfolgreich publizierte grosse Analyse endet
 mit einem verpflichtenden read-only Frontier-Gate: Der Orchestrator erzeugt
@@ -170,6 +195,19 @@ Multi-Close-Set, Klassifikation und Acceptance:
   unzureichend bewiesen oder ausserhalb des aktuellen Produkts; nicht
   implementieren.
 
+Zusaetzlich beantwortet die Fleet fuer jeden Frontier sechs Produktfragen:
+
+1. Ist er auf einem der sechs erreichten Replaypfade aktiv?
+2. Kann er mehrere Replaystops gleichzeitig schliessen?
+3. Ist die Ursache generisch oder Sonic-spezifisch?
+4. Kann `sad_disasm` Zielmenge oder Funktionsgrenze vollstaendig belegen?
+5. Ist ein privater identity-bound Titelvertrag schneller und ebenso strikt?
+6. Welcher neue Story-/Gameplaycheckpoint wird dadurch erreichbar?
+
+Die Prioritaet ist nicht rohe P0-Reihenfolge, sondern
+`Replay-Reachability * Multi-Close * Story-/Gameplay-Naehe /
+Implementierungsrisiko`.
+
 ## Der Mikrozyklus: `native-bringup`
 
 ```text
@@ -187,46 +225,53 @@ Tasks entstehen aus der ersten reproduzierbaren Divergenz, einem exakten
 Contract-Stop oder einem Witness, nicht automatisch aus der gesamten offenen
 Analyzer-Frontier.
 
-Jeder Zyklus liefert genau eine kleine, isoliert reviewbare und ausgefuehrte
-Produktruntime-Performanceverbesserung. Reine Instrumentierung sowie
-Analyzer-, Export-, Graph-, Cache-, Ninja- oder Buildsystemarbeit erfuellt
-diese Pflicht nicht. Der Fix wird mit dem normalen Batch gebaut, mit denselben
-sechs Replays gemessen und nur angenommen, wenn kein Replay regressiert. Es
-gibt weder einen Zusatzbuild noch eine reine Messrunde; Proof-Gates und
-Fail-closed-Semantik bleiben unveraendert.
+### Replays als Knowledge-Gap-Probes
 
-Jeder Zyklus schliesst ausserdem mindestens einen kausal gebuendelten
-Grafik-Root-Cause-Cluster: fehlende Submission, verschwindende Geometrie,
-falsches Asset, falscher Renderstate, falscher Shadervertrag oder falsche
-Reihenfolge. Ein Dual-Close darf Grafik- und Performancepflicht gemeinsam
-erfuellen.
+Jeder der sechs Replays laeuft mit demselben Binary bis zum ersten Stop und
+liefert genau eine Primaerklasse:
+
+| Klasse | Erste fehlende Kenntnis | Folgearbeit |
+| --- | --- | --- |
+| K1 | unbekanntes Ziel, FunctionEntry, Block, Overlay oder Loaded-AOT | Analyzer/AOT |
+| K2 | bekannte Funktion, unvollstaendige Callback-, Ziel-, Return- oder mutable Pointer-Menge | CFA/FVA oder identity-bound Titelbeweis |
+| K3 | bekannte Ausfuehrung, fehlender Provider-/Result-/State-Vertrag | Owner-Semantik und Providerbindung |
+| K4 | falsche Register-, PR-, Memory-, Delay-Slot-, Carry- oder Sign-Semantik | Decoder/IR/Codegen/Runtime |
+| K5 | reine Grafik-, Audio-, Movie-, Input- oder Pacingabweichung | kleine Hostschleife |
+
+Nach der Matrix werden nicht sechs Einzelbugs implementiert. Replay- und
+Fleetbefunde werden nach gemeinsamer Callback-, Overlay-, AOT-, Provider-
+oder Semantikursache geclustert; ein Cluster kann mehrere Stops und Frontiers
+schliessen. Der erste Stop bleibt autoritativ.
+
+Jeder Analysezyklus darf genau eine kleine, isoliert reviewbare und
+ausgefuehrte Produktruntime-Performanceverbesserung im ohnehin bearbeiteten
+Knowledge-Gap-Pfad mitnehmen. Reine Instrumentierung sowie Analyzer-, Export-,
+Graph-, Cache-, Ninja- oder Buildsystemarbeit erfuellt diese Begleitpflicht
+nicht. Der Fix wird mit dem normalen Batch gebaut, mit denselben sechs Replays
+gemessen und nur angenommen, wenn kein Replay regressiert. Es gibt weder
+Zusatzbuild noch reine Messrunde; der Bring-up-Fix bleibt autoritativ.
+
+Grafikarbeit kommt vor M4-M8 nur in den Batch, wenn sie mehrere Szenen
+schliesst, einen generischen Rendererfehler oder Crash behebt, den aktuellen
+Fortschritt beziehungsweise seine Diagnose verdeckt oder dieselbe
+Performancearbeit mit Multi-Close erfuellt. Ein einzelner kosmetischer Fehler
+ist nachrangig.
 
 Crashsammlung nutzt hoechstens zwei parallele Produktprozesse. Frametiming-
 und Performancewerte stammen ausschliesslich aus nicht konkurrierenden
 Laeufen mit Grafikdiagnostik `Off`; Breadcrumbs werden nur fuer den ersten
 relevanten Grafikpfad aktiviert.
 
-### Priorisierte Produktruntime-Folge
+### Gekoppelte Produktruntime-Optimierung
 
-Solange die Replayaggregate keinen klar groesseren Hotspot zeigen, gilt fuer
-die naechsten Zyklen diese Reihenfolge:
-
-1. exportseitig indexierter NativeBringup-Preflight ohne globale lineare
-   Allowlistsuche, optional mit kleinem generationgebundenem monomorphem
-   Cache;
-2. Immutable-Write-Page-Filter mit billigem negativem Seitentest vor der
-   exakten Rangepruefung;
-3. Fog-LUT nur fuer Lookup-Modi validieren und Drawstate/Fogtable versiegeln;
-4. Frame-Upload-Arena fuer wenige grosse Vertex-/Index-Maps bei unveraenderter
-   Drawreihenfolge;
-5. bei Smooth Shading nur Small-Triangle-Indizes filtern und persistente
-   Flat-Last-Varianten einmalig erzeugen;
-6. Constant-Buffer-Ring beziehungsweise begrenzten Dynamic-Buffer-Pool statt
-   einzelner Updates pro Draw verwenden.
-
-Jeder Punkt wird einzeln im Cycle-Manifest benannt, mit dem ohnehin
-erforderlichen Produktbinary ausgefuehrt und anhand der sechs Replays
-akzeptiert oder verworfen.
+Die Optimierung wird aus dem bearbeiteten Cluster abgeleitet: Callback- oder
+Dispatcharbeit darf Lookupindizes oder einen generationgebundenen
+monomorphen Cache mitbringen; ProgramIndex-/Closurearbeit darf checkpointete
+Relationen wiederverwenden; Providerarbeit darf einen bereits validierten
+Handle unter Generation Guard cachen; ein bring-up-relevanter Grafikfix darf
+Geometrie, Texturebinding oder Stateobjekte persistent beziehungsweise
+indexiert machen. Eine davon unabhaengige Performance-Roadmap ist kein
+Zyklusinhalt.
 
 Replays sind stille, unsichtbare, native Produktlaeufe. Redundante Szenarien,
 die denselben frueheren Checkpoint langsamer erreichen, gehoeren nicht in den
@@ -442,6 +487,23 @@ mindestens aus:
 Promotion bleibt eine explizite, reviewte Aenderung. Kein Runtime-Witness
 wird beim Import still zu `Proven` oder `RuntimeContract`.
 
+### Generische Analyse oder private Titel-Evidence
+
+Nicht jede einmalige Sonic-Struktur braucht eine neue allgemeine Heuristik.
+Die Entscheidungsregel ist:
+
+- wiederkehrendes, adressunabhaengiges SH-4-Muster: generischen Analyzer
+  verbessern;
+- Sonic-spezifische, vollstaendig bekannte Tabelle, Grenze, Callback-,
+  Objektmethoden-, Story-/Event-, Overlay-, Stage- oder Charakterstruktur:
+  private identity-bound `sad_disasm`-Evidence;
+- wirklich dynamischer Callback: strikter RuntimeContract/RuntimeOnly.
+
+Private Evidence bindet mindestens Disc-/Image-SHA, Adressbereich,
+Tabellenbytes, Eintragszahl, Zielbytes, Function-Boundary, Modulidentitaet und
+Generation. Sie ist Titelwissen und darf keine Sonic-Adresse in den
+oeffentlichen Core verschieben.
+
 ## Zielvertrag fuer Replay und First-Divergence
 
 Der vorhandene deterministische System-Replaypfad kann einen Ereignisstrom
@@ -478,16 +540,36 @@ sekundenlange Frames erzeugt, ist kein Standard-Bring-up-Profil.
 
 Die Prioritaet waehrend des Bring-ups ist:
 
-1. erster reproduzierbarer Produktfehler oder erste Divergenz;
-2. AOT-/Identity-Luecke, wenn sie genau diesen Lauf blockiert;
-3. kleinster Runtime-, Adapter-, Manifest- oder generischer Fix;
-4. Wiederholung desselben Replays mit demselben AOT-Pack;
-5. erst bei einer nachgewiesenen AOT-Ursache Rueckkehr zur grossen Schleife.
+1. weitester naechster Story- oder steuerbarer Gameplaycheckpoint;
+2. gemeinsame K1-K3-Ursache, die mehrere Replays oder Frontiers schliesst;
+3. kleinster strenger generischer oder identity-bound Knowledge-Gap-Fix;
+4. gekoppelte kleine Runtime-Optimierung desselben Pfads;
+5. genau eine neue Analyse bei AOT-/Closure-Wirkung, sonst Mikrobuild;
+6. Export beziehungsweise Build und Wiederholung derselben sechs Replays.
 
 Offene globale Frontiers bleiben wichtige Releasearbeit, werden aber nicht
 allein durch ihre Anzahl zu Bring-up-Auftraegen. Private Titeladressen und
 title-bound Evidenz bleiben im privaten Portprojekt; der oeffentliche Kern
 implementiert nur address-agnostische Vertraege, Validierung und Formate.
+
+Fortschritt wird primaer gemessen als weitester Storycheckpoint, weitester
+steuerbarer Gameplaycheckpoint, Zahl der Replays jenseits ihres vorherigen
+Stops, geschlossene gemeinsame Root Causes und verbleibende K1/K2/K3-Blocker.
+Task-, Commit-, Closure- und Grafikbugzahlen sind nur Sekundaermetriken.
+
+| ID | Produktmeilenstein |
+| --- | --- |
+| M0 | Intro |
+| M1 | Hauptmenue |
+| M2 | Character Select |
+| M3 | Idle Gameplay Demo |
+| M4 | Sonic Story Intro startet |
+| M5 | Sonic Story Intro vollstaendig |
+| M6 | Station Square steuerbar |
+| M7 | Emerald Coast Load |
+| M8 | Emerald Coast steuerbar |
+
+Der aktuelle Stand ist M3; das naechste Produktgate ist M4.
 
 ## Strict Admission Rule
 

@@ -9,8 +9,8 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 Die vollstaendige Definition steht in
 `docs/NATIVE_BRINGUP_WORKFLOW.md`. Fuer jeden Bearbeiter gelten zwei getrennte
-Schleifen. Der schnelle Produktzyklus ist der Normalfall; die grosse Analyse
-ist ereignisgesteuert und niemals der automatische Beginn jedes Zyklus:
+Schleifen. Welche Schleife gilt, entscheidet der erste fehlende
+Spielwissensvertrag des aktiven Replaypfads:
 
 ```text
 strict-product:
@@ -26,31 +26,35 @@ native-bringup:
 ### Makro- und Mikrozyklen
 
 - Ein `Mikrozyklus` verwendet die vorhandene World, den vorhandenen AOT-Pack
-  und dasselbe Replayset. Er sammelt die sechs Replaybefunde, den
-  Performance-Aggregatwert und einen Grafikdigest, implementiert ein
-  gemeinsames Runtime-/Adapter-/Renderer-/Providerpaket, baut genau ein
+  und dasselbe Replayset. Er ist nur fuer bereits statisch bekannte
+  Ausfuehrung mit reinem Host-, Adapter-, Renderer-, Audio-, Eingabe- oder
+  Praesentationsfehler zulaessig. Er baut genau ein
   inkrementelles NativeBringup-Produktbinary und wiederholt dieselben sechs
   Replays. Er erzeugt weder eine neue Analyse noch einen neuen Egg-Fleet-Pool.
-- Ein `Makrozyklus` beginnt nur bei einem echten AOT-Ereignis:
+- Ein `Makrozyklus` beginnt bei einem AOT-/Spielwissensereignis:
   `UnknownCompiledTarget`, neue oder geaenderte Funktionen beziehungsweise
   CFG, neue Overlays, geaenderte Roots/Switch-/Jumptabellen, AOT-/Codegen-
-  Semantik, AOT-ABI oder eine Evidence-Promotion, die die ausfuehrbare Welt
-  veraendert. Erst dann folgen Analyse, neuer Pool, Egg Fleet, AOT/Export und
-  die sechs Replays.
+  Semantik, AOT-ABI, Callbacks, Provider-/Owner-Semantik, Replacement-
+  Reachability, statische Rueckkehrpfade oder eine Evidence-Promotion, die
+  die ausfuehrbare Welt veraendert. Erst dann folgen Analyse, neuer Pool, Egg
+  Fleet, AOT/Export und die sechs Replays. Viele notwendige Makrozyklen sind
+  kein Prozessfehler, solange jeder einen aktiven Knowledge Gap voranbringt.
 - Texture-Binding-, Grafik-, Renderer-, Audio-, Provider-, Adapter-, Movie-,
   Input-, Save-, Datei- und reine Diagnosefixes bleiben im Mikrozyklus und
-  verwenden den vorhandenen Pack, solange keine der genannten AOT-Grenzen
-  beruehrt wird. Zwischen zwei Analysen sind beliebig viele Mikrozyklen
-  zulaessig.
+  verwenden den vorhandenen Pack nur, wenn Aufruf, Zielmenge und
+  Providervertrag bereits vollstaendig bekannt sind und keine der genannten
+  AOT-/Closure-Grenzen beruehrt wird.
 
 ### Verbindlicher Cycle-Freeze
 
 - Vor der Implementierung wird jeder Zyklus durch ein maschinenlesbares
   Manifest eingefroren. Es bindet mindestens Zyklus-ID, Workflowklasse,
   World- und Pack-SHA-256, Runtime-Commit/Source-Identity, Replayset-SHA-256,
-  exakt sechs Replay-IDs, den einen Runtime-Performance-Fix, den einen
-  Grafik-Root-Cause-Cluster, Produktbuildbudget `1` und
-  `analysis_required=true|false`.
+  exakt sechs Replay-IDs samt K1-K5-Stopklasse, aktuellen und angestrebten
+  Storycheckpoint, Knowledge-Gap-Cluster, den an ein bearbeitetes Cluster
+  gekoppelten kleinen Runtime-Performance-Fix, Produktbuildbudget `1` und
+  `analysis_required=true|false`. Ein Grafikcluster ist nur bei
+  Bring-up-Relevanz, Crashursache oder nachgewiesenem Multi-Close Pflicht.
 - Nur Findings, deren World/Pack/Source und Replay-Reachability zum Freeze
   passen, gehoeren in den Batch. Spaeter eintreffende Findings gehen in den
   naechsten Zyklus. Das Ein-Build-Budget darf nicht durch ein nachtraeglich
@@ -144,7 +148,11 @@ native-bringup:
   A/B/C-Klassifikation, kleinsten fail-closed Scope, Acceptance, Kollisionen
   und Multi-Close. Sein maschinenlesbarer Handoff bindet zusaetzlich World-
   und Pack-SHA, Task-IDs, Root-Cause-Key, betroffene Dateien, Collision-Key,
-  Replay-Reachability und Multi-Close-Set.
+  Replay-Reachability, Multi-Close-Set, naechsten erreichbaren
+  Story-/Gameplaycheckpoint und beantwortet fuer jeden Frontier:
+  aktiver Sechserpfad, gemeinsamer Replay-Close, generischer oder
+  Sonic-spezifischer Ursprung, `sad_disasm`-Beweischance, strenger
+  identity-bound Titelvertrag und erwarteter neuer Produktpfad.
 - `A` bedeutet: aktuelle World und Source, aktuelle Replay-/Produkt-
   Reachability oder klarer Multi-Close, genaue Ursache und Implementierung,
   keine offene Evidencefrage; der Fall wird in diesem Zyklus umgesetzt.
@@ -160,6 +168,29 @@ native-bringup:
   laufen. Der eine Produktbuild darf erst starten, wenn alle fuer den Pool
   benoetigten Handoffs eingegangen, gegen den Freeze abgeglichen und alle
   relevanten A-Faelle umgesetzt sind.
+
+### Replays als Knowledge-Gap-Probes
+
+- Jeder der sechs ersten Stops traegt genau eine Primaerklasse:
+  `K1` unbekanntes ausfuehrbares Ziel/FunctionEntry/Block/Overlay/Loaded-AOT;
+  `K2` bekannte Funktion mit unvollstaendiger Callback-, Ziel-, Return- oder
+  Function-Pointer-Menge; `K3` bekannter Code mit fehlendem nativen
+  Provider-/Result-/State-Vertrag; `K4` falsche CPU-/AOT-Semantik; `K5` reine
+  native Grafik-/Audio-/Movie-/Input-/Pacing-Abweichung.
+- K1 fuehrt zu Analyzer-/AOT-Arbeit, K2 zu CFA/FVA oder identity-bound
+  Titelbeweis, K3 zu Owner-Semantik und Providerbindung, K4 zu Decoder/IR/
+  Codegen/Runtime-Semantik und K5 zur kleinen Hostschleife.
+- Nach der Sechsermatrix werden nicht sechs Einzelbugs, sondern gemeinsame
+  Callback-/Overlay-/AOT-/Provider-/Semantikcluster implementiert. Prioritaet
+  ist `Replay-Reachability * Multi-Close * Story-/Gameplay-Naehe /
+  Implementierungsrisiko`, nicht rohe P0- oder Frontier-Reihenfolge.
+- Exakte Sonic-Tabellen, Funktionsgrenzen, Callbackregistrierungen,
+  Objektmethoden, Story-/Event-Dispatch, Overlayeintritte und Handler duerfen
+  als private `sad_disasm`-Evidence gebunden werden, wenn Disc-/Image-SHA,
+  Tabellenbereich und -bytes, Eintragszahl, Zielbytes, Function-Boundary,
+  Modulidentitaet und Generation exakt validiert werden. Wiederkehrende
+  adressunabhaengige SH-4-Muster gehoeren dagegen in den generischen Analyzer;
+  wirklich dynamische Callbacks bleiben RuntimeContract/RuntimeOnly.
 
 ## Projektweiter Taskablauf
 
@@ -266,29 +297,31 @@ Task implementieren
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
-- Jeder NativeBringup-Zyklus enthaelt dauerhaft genau eine kleine,
-  isoliert reviewbare und im ausgefuehrten Produktpfad wirksame
-  Runtime-Performanceoptimierung. Sie wird mit dem normalen Fixpaket gebaut,
-  mit den ohnehin notwendigen sechs Replays gemessen und nur akzeptiert, wenn
-  kein Replay regressiert. Sie erzeugt weder einen Zusatzbuild noch eine reine
-  Messrunde.
+- Jeder Analysezyklus darf genau eine kleine, isoliert reviewbare und im
+  ausgefuehrten Produktpfad wirksame Runtime-Performanceoptimierung im ohnehin
+  bearbeiteten Knowledge-Gap-Pfad mitnehmen. Sie ist kein eigenstaendiger
+  Arbeitsblock, wird mit dem normalen Fixpaket gebaut und mit denselben sechs
+  Replays nur akzeptiert, wenn kein Replay regressiert. Sie erzeugt weder
+  Zusatzbuild noch reine Messrunde und darf den Bring-up-Fix nicht verdraengen.
 - Reine Instrumentierung sowie Analyzer-, Exporter-, Graph-, Cache-, Ninja-
   oder Buildsystemarbeit erfuellt diese Pflicht nicht. Solche Optimierungen
   duerfen separat sinnvoll sein, werden aber niemals als Produktruntime-Fix
   gezaehlt.
-- Jeder Zyklus enthaelt ausserdem mindestens einen kausal gebuendelten
-  Grafik-Root-Cause-Cluster. Er wird als `Submission fehlt`, `Geometrie
-  verschwindet`, `falsches Asset`, `falscher Renderstate`, `falscher
-  Shadervertrag` oder `falsche Reihenfolge` klassifiziert. Ein Fix darf
-  Grafik- und Performancepflicht gemeinsam erfuellen, wenn beide Wirkungen im
-  regulaeren Replaypfad nachgewiesen werden.
+- Grafikarbeit wird nur in den Batch aufgenommen, wenn sie mehrere Szenen
+  schliesst, einen generischen Rendererfehler oder Crash behebt, Diagnose oder
+  aktuellen Fortschritt verdeckt oder zugleich die gekoppelte Performance-
+  Verbesserung liefert. Ein einzelner kosmetischer Fehler ist vor M4-M8
+  nachrangig. Aufgenommene Grafikcluster werden weiterhin als `Submission
+  fehlt`, `Geometrie verschwindet`, `falsches Asset`, `falscher Renderstate`,
+  `falscher Shadervertrag` oder `falsche Reihenfolge` klassifiziert.
 - Performance-Replays laufen einzeln und mit Grafikdiagnostik `Off`, damit
   weder konkurrierende D3D11-Instanzen noch Breadcrumb-/Capture-I/O die
   Messung verfaelschen. Fuer reine Crashsammlung sind hoechstens zwei
   Produktprozesse parallel erlaubt; Breadcrumbs werden nur fuer den ersten
   relevanten Fehlerpfad aktiviert.
-- Der Runtime-Fix, die relevanten aktuellen und historischen A-Befunde, die
-  sechs Replayursachen und der Grafikcluster werden vor genau einem
+- Der gekoppelte Runtime-Fix, die relevanten aktuellen und historischen
+  A-Befunde, die geclusterten sechs Replayursachen und ein gegebenenfalls
+  bring-up-relevanter Grafikcluster werden vor genau einem
   NativeBringup-Produktbuild gebuendelt. A-Befunde werden implementiert und
   auf Closure geprueft, nicht nur erneut ausgewertet. Ueberholte oder fuer die
   eingefrorene Produkt-/Replay-Reachability irrelevante Befunde werden mit
@@ -301,6 +334,12 @@ Task implementieren
   permanenten Draw-Hotpath. Binding-Provenienz (Texlist, Resolver, Epoch,
   Last Writer) und Resource-Provenienz (Content-SHA, Generation, Archivslot)
   bleiben getrennt und werden erst offline menschenlesbar dekodiert.
+- Zyklusfortschritt wird primaer als weitester Storycheckpoint, weitester
+  steuerbarer Gameplaycheckpoint, Zahl der Replays jenseits ihres alten Stops,
+  geschlossene gemeinsame Root Causes und verbleibende K1/K2/K3-Blocker
+  berichtet. Task-, Commit-, Closure- und Grafikbugzahlen sind nur
+  Sekundaermetriken. Der aktuelle Produktstand ist M3 (teilweise laufende
+  Idle-Demo); das naechste Gate ist M4 (Sonics Story-Intro startet).
 
 ## Unveraenderte Produktgrenzen
 

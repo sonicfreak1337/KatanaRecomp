@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 26. August 2026. Diese Datei enthaelt nur die aktuelle
+Stand: 27. August 2026. Diese Datei enthaelt nur die aktuelle
 Entwicklungswahrheit. Historische Runs, ABI-Zwischenstaende und erledigte
 Tasks stehen in `STATUS.md`, `TASKS.md`, `ROADMAP.md` und Git.
 
@@ -17,7 +17,11 @@ keine Releaseabnahme.
 
 ## Erreichter Produktstand
 
-- Der private native Integrationsport hat Gameplay erreicht.
+- Intro, Hauptmenue, Optionen und Character Select sind erreichbar.
+- Die idle-getriggerte, selbstlaufende Gameplay-Demo laeuft teilweise.
+- Spielersteuerbares Gameplay und Sonics Story-Intro sind noch nicht
+  erreichbar. Der Port hat damit einen begrenzten voraufgezeichneten
+  Gameplaypfad, aber noch keinen vollstaendigen Story-/Gameplay-Bring-up.
 - Der zuvor gemeinsame Grafik-Contract-Stop ist geschlossen.
 - Der erreichte Gameplaypfad besitzt weiterhin deutlich sichtbare
   Grafikfehler und deckt neue Callback-/AOT- sowie Providerauftraege auf.
@@ -28,19 +32,37 @@ keine Releaseabnahme.
 Private Titeladressen, Disassemblybytes und Retailidentitaeten bleiben im
 externen Spielprojekt und seinen Diagnoseartefakten.
 
+Die Meilensteinskala ist:
+
+| ID | Produktcheckpoint | Stand |
+| --- | --- | --- |
+| M0 | Intro | erreicht |
+| M1 | Hauptmenue | erreicht |
+| M2 | Character Select | erreicht |
+| M3 | Idle Gameplay Demo | teilweise erreicht, aktueller Stand |
+| M4 | Sonic Story Intro startet | offen |
+| M5 | Sonic Story Intro vollstaendig | offen |
+| M6 | Station Square steuerbar | offen |
+| M7 | Emerald Coast Load | offen |
+| M8 | Emerald Coast steuerbar | offen |
+
 ## Aktiver Entwicklungsweg
 
 Verbindlich ist
 [`NATIVE_BRINGUP_WORKFLOW.md`](NATIVE_BRINGUP_WORKFLOW.md):
 
-1. Ein seltener `strict-product`-Lauf erzeugt statische Closure, bekannten
-   nativen AOT-Code, Overlays, einen stabilen AOT-Pack und seine Allowlist.
-2. Die schnelle `native-bringup`-Schleife wiederholt gebundene Replays mit
-   demselben Pack und baut nur Runtime, Adapter oder Manifest inkrementell.
-3. Die erste Divergenz oder der erste typisierte Stop erzeugt den naechsten
-   konkreten Task.
-4. Nur ein echter AOT-Miss oder eine AOT-wirksame Aenderung kehrt zur
-   Vollanalyse zurueck.
+1. Eine neue Analyse erzeugt die autoritative World und den Katana-Taskpool;
+   die feste read-only Fleet klassifiziert dessen erreichbare Frontiers.
+2. Parallel laufen sechs gebundene Replays bis zu ihrem jeweils ersten Stop.
+   Jeder Stop wird als K1 bis K5 klassifiziert und benennt die erste fehlende
+   Spielkenntnis, nicht nur eine Crashsignatur.
+3. Haupttask und Fleet gruppieren Replay- und Frontierbefunde nach gemeinsamer
+   Callback-, Overlay-, AOT-, Provider- oder Semantikursache und priorisieren
+   Story-/Gameplay-Reichweite sowie Multi-Close.
+4. AOT-/Closure-wirksame Cluster kehren nach der gebuendelten Implementierung
+   genau einmal in die grosse Analyse zurueck. Nur vollstaendig bekannte
+   Host-, Adapter- oder Praesentationsfehler bleiben im kleinen Zyklus mit
+   demselben Pack.
 
 Evidence folgt
 `Observed -> Candidate -> Proven | RuntimeContract -> Strict Product`.
@@ -77,15 +99,17 @@ Noch nicht als vollstaendiger Unterbau implementiert sind:
 
 ## Naechste Gates
 
-1. Den privaten residenten Pack mit den aktuell belegten exakten Targets neu
-   erzeugen; Overlay-/Loaded-AOT-Faelle bleiben bis zur ModuleInstance-
-   Bindung fail-closed.
-2. Den Replaygurt gegen denselben Pack ausfuehren und den ersten
-   neuen Stop beziehungsweise die erste Divergenz klassifizieren.
-3. Runtime-/Adapterfixes in der kleinen Schleife wiederholen; Analyse nur bei
-   nachgewiesener AOT-Luecke.
-4. Erst nach stabiler Spielabdeckung den strikten Produktlauf und das
-   Releasegate ausfuehren.
+1. Die sechs aktuellen Stops als K1 bis K5 und nach Story-/Gameplay-Naehe
+   klassifizieren; Loaded-AOT-/Overlay-/Callback-Evidence bleibt fail-closed.
+2. Nach der autoritativen Analyse sofort den neuen Pool an die bestehende
+   Fleet geben und Replay-/Fleetbefunde zu wenigen gemeinsamen
+   Knowledge-Gap-Clustern reconciliieren.
+3. Das hoechstwertige Cluster vollstaendig schliessen. Eine kleine
+   Performanceverbesserung darf nur im ohnehin bearbeiteten Pfad mitlaufen;
+   Grafik wird nur bei Bring-up-Relevanz oder echtem Multi-Close aufgenommen.
+4. Nach genau einem Export-/Produktbuild dieselben sechs Replays wiederholen.
+   Der naechste Produktmeilenstein ist M4: Sonics Story-Intro startet.
+5. Strict wird weiterhin nur auf ausdrueckliche Nutzeranweisung gebaut.
 
 ## Quellenhierarchie
 
