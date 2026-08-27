@@ -17,6 +17,34 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
+class ChainGuardHost final
+    : public katana::runtime::NativePortHostServices {
+  public:
+    [[nodiscard]] std::uint64_t monotonic_time_nanoseconds()
+        const noexcept override {
+        return 1u;
+    }
+
+    [[nodiscard]] katana::runtime::NativePortLifecycleState
+    poll_lifecycle() override {
+        return katana::runtime::NativePortLifecycleState::Running;
+    }
+
+    void synchronize_simulation_boundary() override {}
+    void begin_frame(std::uint64_t) override {}
+    void present_frame(std::uint64_t) override {}
+
+    [[nodiscard]] std::uint64_t presented_frames()
+        const noexcept override {
+        return 0u;
+    }
+};
+
+[[nodiscard]] bool chain_guard_static_entry(
+    const std::uint32_t address) noexcept {
+    return address == 0x8C010000u;
+}
+
 } // namespace
 
 int main() {
@@ -27,6 +55,29 @@ int main() {
                 katana::runtime::NativePortImmutableRangeKind::Executable)}};
     katana::runtime::NativePortImmutableWriteGuard immutable_guard(
         immutable_ranges);
+
+    {
+        katana::runtime::CpuState chain_cpu;
+        ChainGuardHost chain_host;
+        katana::runtime::NativePortContext chain_context;
+        chain_context.cpu = &chain_cpu;
+        chain_context.host = &chain_host;
+        katana::runtime::NativePortImmutableWriteGuard chain_guard(
+            immutable_ranges);
+        katana::runtime::NativePortAotServices chain_services(
+            chain_context, chain_guard_static_entry, chain_guard);
+        require(chain_services.aot_contract_valid() &&
+                    chain_services.can_chain_executable_block(0x8C010000u) &&
+                    !chain_services.can_chain_executable_block(0x8C010002u),
+                "Vollstaendiger AOT-Observer-Vertrag laesst keinen exakten "
+                "statischen Chain-Entry zu.");
+        chain_cpu.memory.clear_guest_write_batch_observer();
+        require(!chain_services.aot_contract_valid() &&
+                    !chain_services.can_chain_executable_block(0x8C010000u),
+                "Retired Batch-Observer stoppt AOT-Chaining nicht fail-closed.");
+        chain_cpu.memory.clear_guest_write_observer();
+    }
+
     immutable_guard.reserve_additional_runtime_executable_ranges(2u);
     immutable_guard.add_runtime_executable_range(0x8C900000u, 0x100u);
     immutable_guard.validate_runtime_executable_range_present(
@@ -89,6 +140,18 @@ int main() {
              static_cast<std::uint32_t>(bytes.size())});
         require(binder.bind_entry(runtime_start),
                 "Geladenes AOT-Testmodul wurde nicht aktiviert.");
+        require(binder.validate_bound_entry(runtime_start) &&
+                    binder.validate_bound_entry(0x0C900000u),
+                "Geladenes AOT-Entry-Bitmap verlor Exact- oder Alias-Entry.");
+        bool midblock_failed = false;
+        try {
+            static_cast<void>(
+                binder.validate_bound_entry(runtime_start + 2u));
+        } catch (const katana::runtime::NativePortContractError&) {
+            midblock_failed = true;
+        }
+        require(midblock_failed,
+                "Geladenes AOT-Entry-Bitmap akzeptierte Midblock-Ziel.");
         const auto active = binder.active_module_for_address(
             0x0C900002u);
         require(active.has_value() && active->sha256 == identity &&
@@ -99,6 +162,20 @@ int main() {
                 "Aktive Modulidentitaet verliert Alias, Range oder Generation.");
         require(!binder.active_module_for_address(0x8C800000u).has_value(),
                 "Ungebundene Adresse wurde einem geladenen Modul zugeordnet.");
+        module_guard.observe_write(
+            {runtime_start, 2u, katana::runtime::CodeWriteSource::Cpu, true});
+        bool generation_failed = false;
+        try {
+            static_cast<void>(binder.validate_bound_entry(runtime_start));
+        } catch (const katana::runtime::NativePortContractError&) {
+            generation_failed = true;
+        }
+        require(generation_failed,
+                "Geladenes AOT-Entry-Bitmap umging Guard-Invalidierung.");
+        require(binder.deactivate_runtime_range(runtime_start, bytes.size()) ==
+                        1u &&
+                    !binder.validate_bound_entry(runtime_start),
+                "Retired geladenes AOT-Entry blieb dispatchbar.");
     } catch (const std::exception& error) {
         require(false, std::string("Aktive Modulidentitaet warf: ") +
                            error.what());

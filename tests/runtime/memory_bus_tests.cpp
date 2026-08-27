@@ -208,6 +208,36 @@ int main(const int argc, const char* const* argv) {
     require(bus.guest_write_observer_allows_prevalidated_linear_writes(),
             "Geloeschter GuestWriteObserver hinterlaesst einen unsicheren Batch-Vertrag.");
 
+    Memory observer_pair(0u);
+    const auto empty_observer_generation =
+        observer_pair.guest_write_observer_generation();
+    require(!observer_pair.guest_write_observer_pair_current(
+                empty_observer_generation),
+            "Leeres Observer-Paar wird als aktueller AOT-Vertrag akzeptiert.");
+    observer_pair.set_guest_write_observer(
+        [](const katana::runtime::GuestWriteEvent&) noexcept {},
+        GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+    const auto scalar_observer_generation =
+        observer_pair.guest_write_observer_generation();
+    require(!observer_pair.guest_write_observer_pair_current(
+                scalar_observer_generation),
+            "Skalarer Observer ohne Batch-Haelfte wird als vollstaendig akzeptiert.");
+    DirectWriteBatchProbe observer_pair_probe;
+    observer_pair.set_guest_write_batch_observer(
+        {&observer_pair_probe, admit_direct_write_batch,
+         commit_direct_write_batch});
+    const auto complete_observer_generation =
+        observer_pair.guest_write_observer_generation();
+    require(observer_pair.guest_write_observer_pair_current(
+                complete_observer_generation),
+            "Vollstaendiges Observer-Paar wird vom aktuellen Vertrag abgelehnt.");
+    observer_pair.clear_guest_write_batch_observer();
+    require(!observer_pair.guest_write_observer_pair_current(
+                complete_observer_generation) &&
+                !observer_pair.guest_write_observer_pair_current(
+                    observer_pair.guest_write_observer_generation()),
+            "Batch-Retirement invalidiert den AOT-Observer-Vertrag nicht fail-closed.");
+
     {
         constexpr std::uint32_t physical_base = 0x0C000000u;
         constexpr std::uint32_t p1_alias = 0x8C000000u;

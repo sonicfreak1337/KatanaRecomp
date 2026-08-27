@@ -63,9 +63,9 @@ katana::ir::Function make_observed_function() {
 }
 
 std::vector<katana::ir::Function> make_indirect_call_program(
-    const katana::ir::DynamicTargetClass target_class) {
-    constexpr std::uint32_t entry = 0x8C020000u;
-    constexpr std::uint32_t target = 0x8C020100u;
+    const katana::ir::DynamicTargetClass target_class,
+    const std::uint32_t entry = 0x8C020000u,
+    const std::uint32_t target = 0x8C020100u) {
     auto call = instruction(entry, katana::ir::Operation::CallRegister);
     call.original_opcode = 0x410Bu;
     call.branch_register = 1u;
@@ -253,20 +253,31 @@ int main() {
     require(product_observer_rejected,
             "Produktprofil akzeptiert faelschlich externe Instruktionsbeobachtung.");
 
-    const auto runtime_only_program = make_indirect_call_program(
+    auto runtime_only_program = make_indirect_call_program(
         katana::ir::DynamicTargetClass::RuntimeOnly);
+    auto unlisted_runtime_only_program = make_indirect_call_program(
+        katana::ir::DynamicTargetClass::RuntimeOnly,
+        0x8C021000u,
+        0x8C021100u);
+    runtime_only_program.insert(runtime_only_program.end(),
+                                unlisted_runtime_only_program.begin(),
+                                unlisted_runtime_only_program.end());
     auto indirect_options = product_options;
     indirect_options.metadata_entry_address =
         runtime_only_program.front().entry_address;
     indirect_options.runtime_binding =
         katana::codegen::BackendRuntimeBinding::NativePort;
     indirect_options.native_bringup_dispatch_validation = true;
-    const auto runtime_only_request =
+    auto runtime_only_request =
         katana::codegen::make_native_aot_backend_request(
             NativeAotEmissionProfile::Product,
             runtime_only_program,
             runtime_only_program.front().entry_address,
             indirect_options);
+    const std::array native_bringup_dispatch_callsites = {
+        runtime_only_program.front().entry_address};
+    runtime_only_request.native_bringup_dispatch_callsites =
+        native_bringup_dispatch_callsites;
     const auto runtime_only_emission =
         katana::codegen::emit_cpp_port_translation_unit(runtime_only_request);
     const auto runtime_only_target =
@@ -282,14 +293,34 @@ int main() {
             "if (native_bringup_dispatch_pending)") != std::string::npos &&
             runtime_only_target != std::string::npos &&
             runtime_only_preflight != std::string::npos &&
+            runtime_only_emission.functions.find(
+                "preflight_native_bringup_indirect_dispatch(",
+                runtime_only_preflight + 1u) == std::string::npos &&
             runtime_only_attempt != std::string::npos &&
             runtime_only_pr != std::string::npos &&
             runtime_only_target < runtime_only_preflight &&
             runtime_only_preflight < runtime_only_attempt &&
             runtime_only_attempt < runtime_only_pr,
-        "RuntimeOnly-Candidate-Call umgeht den billigen versiegelten "
-        "NativeBringup-Preflight oder mutiert CPU-/Cycle-/PR-Zustand vor "
-        "der Autorisierung.");
+        "RuntimeOnly-Candidate-Call emittiert den versiegelten Preflight "
+        "nicht exakt fuer die freigegebene Callsite oder mutiert CPU-/Cycle-/"
+        "PR-Zustand vor der Autorisierung.");
+
+    bool unbound_native_bringup_rejected = false;
+    try {
+        const auto unbound_request =
+            katana::codegen::make_native_aot_backend_request(
+                NativeAotEmissionProfile::Product,
+                runtime_only_program,
+                runtime_only_program.front().entry_address,
+                indirect_options);
+        static_cast<void>(
+            katana::codegen::emit_cpp_port_translation_unit(unbound_request));
+    } catch (const std::invalid_argument&) {
+        unbound_native_bringup_rejected = true;
+    }
+    require(unbound_native_bringup_rejected,
+            "NativeBringup-Validierung akzeptiert eine ungebundene "
+            "Callsite-Liste.");
 
     auto strict_indirect_options = indirect_options;
     strict_indirect_options.native_bringup_dispatch_validation = false;
@@ -319,7 +350,7 @@ int main() {
             NativeAotEmissionProfile::Product,
             guarded_complete_program,
             guarded_complete_program.front().entry_address,
-            indirect_options);
+            strict_indirect_options);
     const auto guarded_complete_emission =
         katana::codegen::emit_cpp_port_translation_unit(
             guarded_complete_request);
@@ -339,7 +370,7 @@ int main() {
             NativeAotEmissionProfile::Product,
             resolved_program,
             resolved_program.front().entry_address,
-            indirect_options);
+            strict_indirect_options);
     const auto resolved_emission =
         katana::codegen::emit_cpp_port_translation_unit(resolved_request);
     require(

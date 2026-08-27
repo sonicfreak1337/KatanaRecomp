@@ -237,7 +237,6 @@ struct RuntimeBlockTableSnapshot {
     [[nodiscard]] bool operator==(const RuntimeBlockTableSnapshot&) const = default;
 };
 
-[[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
 // A direct P1/P2 block must retain the same linear virtual-to-physical alias
 // mapping for every halfword, not merely at its entry address.
 [[nodiscard]] bool direct_p1_p2_block_binding_contiguous(

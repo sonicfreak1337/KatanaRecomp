@@ -19,10 +19,8 @@ struct ActiveCodeAddressMapping {
 
 thread_local std::vector<ActiveCodeAddressMapping> active_code_address_mappings;
 thread_local std::uint64_t next_code_address_mapping_token = 1u;
-thread_local std::uint64_t code_address_mapping_generation = 1u;
 
 struct CodeAddressLookupCacheEntry final {
-    std::uint64_t generation = 0u;
     std::uint64_t begin = 0u;
     std::uint64_t end = 0u;
     std::int64_t delta = 0;
@@ -55,10 +53,11 @@ std::uint64_t allocate_mapping_token() noexcept {
 }
 
 void invalidate_code_address_lookup_cache() noexcept {
-    if (++code_address_mapping_generation != 0u) return;
-    code_address_mapping_generation = 1u;
-    relocate_code_address_cache = {};
-    unrelocate_code_address_cache = {};
+    // Mapping changes are rare. An empty interval is sufficient to invalidate
+    // an entry, avoiding both a generation load on every lookup and needless
+    // writes to the cached range/delta fields.
+    for (auto& cached : relocate_code_address_cache) cached.end = 0u;
+    for (auto& cached : unrelocate_code_address_cache) cached.end = 0u;
 }
 
 template <bool Reverse>
@@ -70,8 +69,7 @@ std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
          (static_cast<std::size_t>(address) >> 20u)) &
         (code_address_lookup_cache_size - 1u);
     auto& cached = cache[cache_index];
-    if (cached.generation == code_address_mapping_generation &&
-        static_cast<std::uint64_t>(address) >= cached.begin &&
+    if (static_cast<std::uint64_t>(address) >= cached.begin &&
         static_cast<std::uint64_t>(address) < cached.end)
         return static_cast<std::uint32_t>(
             static_cast<std::int64_t>(address) + cached.delta);
@@ -119,7 +117,7 @@ std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
         for (const auto& mapping : active_code_address_mappings)
             constrain_gap(mapping.mapping);
     }
-    cached = {code_address_mapping_generation, begin, end, delta};
+    cached = {begin, end, delta};
     return static_cast<std::uint32_t>(
         static_cast<std::int64_t>(address) + delta);
 }

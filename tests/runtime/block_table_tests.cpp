@@ -13,6 +13,17 @@ namespace {
 
 using namespace katana::runtime;
 
+static_assert(canonical_physical_address_inline(0x00000000u) == 0x00000000u &&
+              canonical_physical_address_inline(0x1FFFFFFFu) == 0x1FFFFFFFu &&
+              canonical_physical_address_inline(0x20000000u) == 0x00000000u &&
+              canonical_physical_address_inline(0x7BFFFFFFu) == 0x1BFFFFFFu &&
+              canonical_physical_address_inline(0x7C000000u) == 0x7C000000u &&
+              canonical_physical_address_inline(0x7FFFFFFFu) == 0x7FFFFFFFu &&
+              canonical_physical_address_inline(0x80000000u) == 0x00000000u &&
+              canonical_physical_address_inline(0xDFFFFFFFu) == 0x1FFFFFFFu &&
+              canonical_physical_address_inline(0xE0000000u) == 0xE0000000u &&
+              canonical_physical_address_inline(0xFFFFFFFFu) == 0xFFFFFFFFu);
+
 BlockExit block_a(CpuState&, BlockExecutionContext&) {
     return {};
 }

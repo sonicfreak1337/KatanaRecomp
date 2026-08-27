@@ -2353,6 +2353,20 @@ endif()
 katana_enable_warnings(katana-host-video-tests)
 add_test(NAME katana-host-video-tests COMMAND katana-host-video-tests)
 
+add_executable(
+    katana-native-port-graphics-tests
+    tests/runtime/native_port_graphics_tests.cpp
+)
+target_link_libraries(
+    katana-native-port-graphics-tests
+    PRIVATE katana_native_port_runtime
+)
+katana_enable_warnings(katana-native-port-graphics-tests)
+add_test(
+    NAME katana-native-port-graphics-tests
+    COMMAND katana-native-port-graphics-tests
+)
+
 add_executable(katana-host-runtime-tests tests/runtime/host_runtime_tests.cpp)
 target_link_libraries(katana-host-runtime-tests PRIVATE katana_runtime)
 katana_enable_warnings(katana-host-runtime-tests)

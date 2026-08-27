@@ -836,8 +836,14 @@ void validate_game_project_definition(
         if (!valid_code_address(identity.address) ||
             !valid_range(identity.address, identity.size, 2u) ||
             !valid_game_project_sha256_identity(identity.byte_identity) ||
-            identity.address < previous_identity_end)
-            throw std::invalid_argument("game-project-code-identity-invalid");
+            identity.address < previous_identity_end) {
+            std::ostringstream error;
+            error << "game-project-code-identity-invalid:address=0x"
+                  << std::hex << identity.address << ":size=0x"
+                  << identity.size << ":previous-end=0x"
+                  << previous_identity_end;
+            throw std::invalid_argument(error.str());
+        }
         previous_identity_end =
             static_cast<std::uint64_t>(identity.address) + identity.size;
     }

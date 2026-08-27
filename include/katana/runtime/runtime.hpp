@@ -239,7 +239,16 @@ void add_guest_instruction_cycles(CpuState& cpu, std::uint64_t guest_cycles) noe
 void retire_guest_instruction(CpuState& cpu) noexcept;
 [[nodiscard]] std::uint64_t take_pending_guest_cycles(CpuState& cpu) noexcept;
 [[nodiscard]] std::uint64_t elapsed_guest_cycles(const CpuState& cpu) noexcept;
-[[nodiscard]] std::uint32_t canonical_physical_address(std::uint32_t address) noexcept;
+[[nodiscard]] inline constexpr std::uint32_t
+canonical_physical_address_inline(const std::uint32_t address) noexcept {
+    constexpr std::uint32_t on_chip_ram_segment = 0x7C000000u;
+    if ((address & 0xFC000000u) == on_chip_ram_segment) return address;
+    return address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
+}
+// Preserve the Runtime-ABI symbol for existing consumers. Generated
+// per-instruction paths which require folding use the explicit inline helper.
+[[nodiscard]] std::uint32_t
+canonical_physical_address(std::uint32_t address) noexcept;
 
 // Native AOT code has an explicit successful-instruction edge.  Using that edge
 // avoids the exception-runtime query and out-of-line RAII destructor required by
@@ -261,7 +270,7 @@ class ExplicitGuestInstructionAttempt final {
             cpu_.active_block_size != 0u &&
                     block_offset < cpu_.active_block_size
                 ? cpu_.active_block_physical_start + block_offset
-                : canonical_physical_address(instruction_pc);
+                : canonical_physical_address_inline(instruction_pc);
         cpu_.pending_guest_cycles += guest_cycles;
     }
 

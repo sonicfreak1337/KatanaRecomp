@@ -1,6 +1,8 @@
 #include "katana/codegen/cpp_emitter.hpp"
 #include "katana/runtime/platform_services.hpp"
 
+#include "../../src/runtime/native_port_input_policy.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -126,6 +128,46 @@ template <typename Function> std::string failure(Function&& function) {
 
 int main() {
     using namespace katana::runtime;
+
+    // One physical Cross/A press must remain one rising title edge when a
+    // proven Sony endpoint hands off to its XInput compatibility endpoint.
+    // This is the focused regression for Sonic's observed double jump.
+    constexpr auto sony = detail::joystick_device_domain | 0x1234u;
+    constexpr auto xinput = detail::xinput_device_domain | 1u;
+    constexpr auto button =
+        native_port_gamepad_button_mask(NativePortGamepadButton::A);
+    constexpr std::array aliases{std::pair{sony, xinput}};
+    require(detail::retain_cross_backend_alias(
+                false, true, true, false) &&
+                detail::is_correlated_backend_handoff(sony, xinput, aliases),
+            "Ein bewiesener Sony-XInput-Handoff verliert seine Aliasidentitaet.");
+    require(!detail::retain_cross_backend_alias(
+                false, true, false, false) &&
+                !detail::is_correlated_backend_handoff(
+                    detail::keyboard_device_domain | 1u, xinput, aliases),
+            "Ein stale oder Keyboard-Alias wird als physischer Handoff akzeptiert.");
+
+    detail::NativeGamepadButtonStability handoff_stability;
+    std::uint32_t previous_published = 0u;
+    unsigned rising_edges = 0u;
+    const auto publish = [&](const std::uint32_t raw) {
+        const auto published =
+            detail::stabilize_gamepad_buttons(handoff_stability, raw);
+        if ((published & button) != 0u &&
+            (previous_published & button) == 0u)
+            ++rising_edges;
+        previous_published = published;
+    };
+    publish(button); // Sony endpoint: physical press.
+    publish(0u);     // First neutral poll while HID disappears.
+    publish(0u);     // Second neutral poll before XInput takes over.
+    publish(button); // Same held press arrives through XInput after handoff.
+    publish(0u);
+    publish(0u);
+    publish(0u); // Stable physical release.
+    require(rising_edges == 1u && (previous_published & button) == 0u,
+            "Ein einzelner physischer Buttondruck erzeugt mehrere Kanten oder bleibt haengen.");
+
     MockServices services;
     PlatformServiceRequirements all;
     all.capabilities = services.available;

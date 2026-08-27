@@ -809,6 +809,16 @@ class Memory {
     [[nodiscard]] bool has_guest_write_observer() const noexcept;
     [[nodiscard]] std::uint64_t
     guest_write_observer_generation() const noexcept;
+    // Native AOT chaining samples this complete observer pair at every local
+    // block edge. Keep the live fail-closed contract in one inline query so
+    // the hot path does not pay for separate out-of-line presence and
+    // generation probes.
+    [[nodiscard]] bool guest_write_observer_pair_current(
+        std::uint64_t generation) const noexcept {
+        return guest_write_observer_generation_ == generation &&
+               static_cast<bool>(guest_write_observer_) &&
+               static_cast<bool>(guest_write_batch_observer_);
+    }
     [[nodiscard]] bool
     guest_write_observer_allows_prevalidated_linear_writes() const noexcept;
     void set_guest_write_batch_observer(GuestWriteBatchObserver observer) noexcept;

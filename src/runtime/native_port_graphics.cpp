@@ -976,14 +976,6 @@ class NativePortGraphicsDevice::Impl final {
         bool nonzero_normals = true;
         bool unit_position_w = true;
         bool positive_position_w = true;
-        std::array<float, 3u> position_min{
-            std::numeric_limits<float>::infinity(),
-            std::numeric_limits<float>::infinity(),
-            std::numeric_limits<float>::infinity()};
-        std::array<float, 3u> position_max{
-            -std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity()};
         float depth_coordinate_min =
             std::numeric_limits<float>::infinity();
         float depth_coordinate_max =
@@ -1089,6 +1081,7 @@ class NativePortGraphicsDevice::Impl final {
         initialize_frame_capture();
         initialize_graphics_diagnostics();
         create_window();
+        refresh_layout();
         try {
             create_device();
             create_pipeline();
@@ -1145,38 +1138,7 @@ class NativePortGraphicsDevice::Impl final {
 
     [[nodiscard]] NativePortGraphicsLayout layout() const {
         require_owner_thread();
-        NativePortGraphicsLayout result;
-        result.output_extent = output_extent_;
-        result.render_extent = config_.render_extent;
-        result.output_viewport = fit_aspect(
-            {0u, 0u, output_extent_.width, output_extent_.height},
-            {config_.render_extent.width, config_.render_extent.height});
-        result.game_viewport =
-            configured_viewport(config_.render_extent, config_.game_viewport);
-        result.ui_viewport =
-            configured_viewport(config_.render_extent, config_.ui_viewport);
-        switch (config_.camera_aspect_policy) {
-        case NativePortCameraAspectPolicy::GameViewport:
-            result.camera_aspect =
-                result.game_viewport.height != 0u
-                    ? static_cast<float>(result.game_viewport.width) /
-                          static_cast<float>(result.game_viewport.height)
-                    : 1.0f;
-            break;
-        case NativePortCameraAspectPolicy::OutputSurface:
-            result.camera_aspect =
-                output_extent_.height != 0u
-                    ? static_cast<float>(output_extent_.width) /
-                          static_cast<float>(output_extent_.height)
-                    : 1.0f;
-            break;
-        case NativePortCameraAspectPolicy::Explicit:
-            result.camera_aspect =
-                static_cast<float>(config_.explicit_camera_aspect.numerator) /
-                static_cast<float>(config_.explicit_camera_aspect.denominator);
-            break;
-        }
-        return result;
+        return cached_layout_;
     }
 
     [[nodiscard]] NativePortTextureHandle create_texture(
@@ -1282,6 +1244,14 @@ class NativePortGraphicsDevice::Impl final {
     void destroy_texture(const NativePortTextureHandle handle) {
         require_owner_thread();
         auto& slot = resolve_texture(handle);
+        const auto index = texture_handle_index(handle);
+        const bool retire_generation =
+            slot.generation == std::numeric_limits<std::uint32_t>::max();
+        // Match immutable-mesh lifetime semantics: reserve free-list storage
+        // before invalidating a reusable texture, and permanently retire the
+        // last representable generation. Wrapping it back to one would make
+        // the first handle ever issued for this slot valid again.
+        if (!retire_generation) free_texture_slots_.push_back(index);
         if (image_texture_ == handle) image_texture_ = {};
         const auto* const destroyed_view = slot.view.Get();
         if (bound_shader_resource_valid_ &&
@@ -1298,10 +1268,7 @@ class NativePortGraphicsDevice::Impl final {
         slot.config = {};
         slot.byte_size = 0u;
         slot.live = false;
-        ++slot.generation;
-        if (slot.generation == 0u) ++slot.generation;
-        const auto index = texture_handle_index(handle);
-        free_texture_slots_.push_back(index);
+        if (!retire_generation) ++slot.generation;
     }
 
     [[nodiscard]] NativePortMeshHandle create_mesh(
@@ -1496,11 +1463,6 @@ class NativePortGraphicsDevice::Impl final {
         frame_batch_active_ = false;
         frame_batch_identity_ = 0u;
         frame_batch_semantic_ = NativePortDrawBatchClass::Scene3D;
-        frame_batch_viewport_ = NativePortViewportTarget::Game;
-        frame_batch_vertex_space_ = NativePortVertexSpace::ObjectHomogeneous;
-        frame_batch_interpolation_ =
-            NativePortInterpolationMode::PerspectiveCorrect;
-        frame_batch_depth_mode_ = NativePortDepthCoordinateMode::ClipSpace;
         frame_batch_phase_ = NativePortDrawClass::Opaque;
         frame_batch_submission_order_ = 0u;
         graphics_frame_digest_ = graphics_digest_seed ^
@@ -1548,36 +1510,44 @@ class NativePortGraphicsDevice::Impl final {
                 packet.rasterizer.shading ==
                     NativePortShadingMode::FlatLastVertex ||
                 packet.rasterizer.small_triangle_area_threshold > 0.0f;
-            preprocess_stats = preprocess_geometry(
-                vertices,
-                indices,
-                topology,
-                packet.rasterizer,
-                packet.transform,
-                packet.vertex_space,
-                config_.maximum_transient_vertices,
-                prepared_vertices_,
-                NativePortGraphicsFailure::InvalidDraw,
-                "draw-triangle-preprocess-topology",
-                "draw-triangle-preprocess-budget");
+            // The preprocessing helper also computes drawstream statistics,
+            // but otherwise its smooth/zero-threshold branch is a guaranteed
+            // no-op. Keep the exact diagnostic record when drawstream capture
+            // is armed while avoiding that work on the normal draw hotpath.
+            if (preprocessing_required || drawstream_enabled_)
+                preprocess_stats = preprocess_geometry(
+                    vertices,
+                    indices,
+                    topology,
+                    packet.rasterizer,
+                    packet.transform,
+                    packet.vertex_space,
+                    config_.maximum_transient_vertices,
+                    prepared_vertices_,
+                    NativePortGraphicsFailure::InvalidDraw,
+                    "draw-triangle-preprocess-topology",
+                    "draw-triangle-preprocess-budget");
             if (vertices.empty()) {
-                const auto current_layout = layout();
+                const auto& current_layout = cached_layout_;
                 const auto viewport_rect =
                     packet.viewport == NativePortViewportTarget::Ui
                         ? current_layout.ui_viewport
                         : current_layout.game_viewport;
-                record_graphics_diagnostic(
-                    packet, texture_slot, false, true);
-                capture_drawstream(packet,
-                                   source_vertices,
-                                   source_indices,
-                                   source_topology,
-                                   viewport_rect,
-                                   texture_slot,
-                                   nullptr,
-                                   &preprocess_stats,
-                                   false,
-                                   "preprocessed-empty");
+                if (graphics_diagnostic_mode_ !=
+                    NativePortGraphicsDiagnosticMode::Off)
+                    record_graphics_diagnostic(
+                        packet, texture_slot, false, true);
+                if (drawstream_enabled_)
+                    capture_drawstream(packet,
+                                       source_vertices,
+                                       source_indices,
+                                       source_topology,
+                                       viewport_rect,
+                                       texture_slot,
+                                       nullptr,
+                                       &preprocess_stats,
+                                       false,
+                                       "preprocessed-empty");
                 return;
             }
             if (preprocessing_required) {
@@ -1732,28 +1702,42 @@ class NativePortGraphicsDevice::Impl final {
             std::memcmp(&last_draw_constants_,
                         &constants,
                         sizeof(constants)) != 0) {
-            context_->UpdateSubresource(
-                draw_constants_.Get(), 0u, nullptr, &constants, 0u, 0u);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            const auto result = context_->Map(draw_constants_.Get(),
+                                              0u,
+                                              D3D11_MAP_WRITE_DISCARD,
+                                              0u,
+                                              &mapped);
+            if (FAILED(result))
+                fail(NativePortGraphicsFailure::DeviceLost,
+                     static_cast<std::uint32_t>(result),
+                     "draw-constants-map");
+            std::memcpy(mapped.pData, &constants, sizeof(constants));
+            context_->Unmap(draw_constants_.Get(), 0u);
             last_draw_constants_ = constants;
             draw_constants_valid_ = true;
         }
 
-        const auto current_layout = layout();
+        const auto& current_layout = cached_layout_;
         const auto viewport_rect =
             packet.viewport == NativePortViewportTarget::Ui
                 ? current_layout.ui_viewport
                 : current_layout.game_viewport;
-        record_graphics_diagnostic(packet, texture_slot, true, false);
-        capture_drawstream(packet,
-                           vertices,
-                           indices,
-                           topology,
-                           viewport_rect,
-                           texture_slot,
-                           mesh_slot,
-                           mesh_slot == nullptr ? &preprocess_stats : nullptr,
-                           true,
-                           nullptr);
+        if (graphics_diagnostic_mode_ !=
+            NativePortGraphicsDiagnosticMode::Off)
+            record_graphics_diagnostic(packet, texture_slot, true, false);
+        if (drawstream_enabled_)
+            capture_drawstream(
+                packet,
+                vertices,
+                indices,
+                topology,
+                viewport_rect,
+                texture_slot,
+                mesh_slot,
+                mesh_slot == nullptr ? &preprocess_stats : nullptr,
+                true,
+                nullptr);
         set_viewport(viewport_rect);
 
         auto* const blend = resolve_blend_state(packet.blend);
@@ -1880,7 +1864,7 @@ class NativePortGraphicsDevice::Impl final {
             1u, swap_chain_target_.GetAddressOf(), nullptr);
         constexpr std::array black{0.0f, 0.0f, 0.0f, 1.0f};
         context_->ClearRenderTargetView(swap_chain_target_.Get(), black.data());
-        set_viewport(layout().output_viewport);
+        set_viewport(cached_layout_.output_viewport);
         constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
         NativePortBlendState composite_blend;
         NativePortDepthState composite_depth;
@@ -1952,7 +1936,7 @@ class NativePortGraphicsDevice::Impl final {
         update_texture(image_texture_, image);
         begin_frame({});
 
-        const auto current_layout = layout();
+        const auto& current_layout = cached_layout_;
         const auto target = viewport == NativePortViewportTarget::Ui
                                 ? current_layout.ui_viewport
                                 : current_layout.game_viewport;
@@ -2352,8 +2336,9 @@ class NativePortGraphicsDevice::Impl final {
 
         D3D11_BUFFER_DESC constant_description{};
         constant_description.ByteWidth = sizeof(DrawConstants);
-        constant_description.Usage = D3D11_USAGE_DEFAULT;
+        constant_description.Usage = D3D11_USAGE_DYNAMIC;
         constant_description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        constant_description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
         check(device_->CreateBuffer(
                   &constant_description, nullptr, draw_constants_.GetAddressOf()),
               "draw-constants");
@@ -2361,6 +2346,8 @@ class NativePortGraphicsDevice::Impl final {
         D3D11_SUBRESOURCE_DATA initial_fog_data{};
         initial_fog_data.pSysMem = &initial_fog_constants;
         constant_description.ByteWidth = sizeof(FogTableConstants);
+        constant_description.Usage = D3D11_USAGE_DEFAULT;
+        constant_description.CPUAccessFlags = 0u;
         check(device_->CreateBuffer(&constant_description,
                                     &initial_fog_data,
                                     fog_table_constants_.GetAddressOf()),
@@ -2643,6 +2630,7 @@ class NativePortGraphicsDevice::Impl final {
                  static_cast<std::uint32_t>(result),
                  "swap-chain-resize");
         output_extent_ = pending_output_extent_;
+        refresh_layout();
         create_swap_chain_target();
         // poll_events() is a public lifecycle boundary and may observe a
         // resize between begin_frame() and draw(). ResizeBuffers requires all
@@ -2652,6 +2640,39 @@ class NativePortGraphicsDevice::Impl final {
             context_->OMSetRenderTargets(
                 1u, render_target_.GetAddressOf(), depth_view_.Get());
         saturating_increment(snapshot_.swap_chain_resizes);
+    }
+
+    void refresh_layout() noexcept {
+        cached_layout_.output_extent = output_extent_;
+        cached_layout_.render_extent = config_.render_extent;
+        cached_layout_.output_viewport = fit_aspect(
+            {0u, 0u, output_extent_.width, output_extent_.height},
+            {config_.render_extent.width, config_.render_extent.height});
+        cached_layout_.game_viewport =
+            configured_viewport(config_.render_extent, config_.game_viewport);
+        cached_layout_.ui_viewport =
+            configured_viewport(config_.render_extent, config_.ui_viewport);
+        switch (config_.camera_aspect_policy) {
+        case NativePortCameraAspectPolicy::GameViewport:
+            cached_layout_.camera_aspect =
+                cached_layout_.game_viewport.height != 0u
+                    ? static_cast<float>(cached_layout_.game_viewport.width) /
+                          static_cast<float>(cached_layout_.game_viewport.height)
+                    : 1.0f;
+            break;
+        case NativePortCameraAspectPolicy::OutputSurface:
+            cached_layout_.camera_aspect =
+                output_extent_.height != 0u
+                    ? static_cast<float>(output_extent_.width) /
+                          static_cast<float>(output_extent_.height)
+                    : 1.0f;
+            break;
+        case NativePortCameraAspectPolicy::Explicit:
+            cached_layout_.camera_aspect =
+                static_cast<float>(config_.explicit_camera_aspect.numerator) /
+                static_cast<float>(config_.explicit_camera_aspect.denominator);
+            break;
+        }
     }
 
     [[nodiscard]] GeometryCapabilities validate_geometry(
@@ -2702,14 +2723,6 @@ class NativePortGraphicsDevice::Impl final {
                 capabilities.unit_position_w && vertex.position_w == 1.0f;
             capabilities.positive_position_w =
                 capabilities.positive_position_w && vertex.position_w > 0.0f;
-            for (std::size_t component = 0u; component < 3u; ++component) {
-                capabilities.position_min[component] = std::min(
-                    capabilities.position_min[component],
-                    vertex.position[component]);
-                capabilities.position_max[component] = std::max(
-                    capabilities.position_max[component],
-                    vertex.position[component]);
-            }
             capabilities.depth_coordinate_min = std::min(
                 capabilities.depth_coordinate_min, vertex.depth_coordinate);
             capabilities.depth_coordinate_max = std::max(
@@ -2799,18 +2812,20 @@ class NativePortGraphicsDevice::Impl final {
                  0u,
                  "draw-position-w");
 
-        const auto clip_w = transformed_w_range(packet, capabilities);
         const bool requires_positive_clip_w =
             packet.vertex_space == NativePortVertexSpace::PvrScreenReciprocal ||
             packet.depth_mapping.mode ==
                 NativePortDepthCoordinateMode::
                     ReciprocalPositiveHomogeneousClip;
-        if (requires_positive_clip_w &&
-            (!std::isfinite(clip_w[0]) || !std::isfinite(clip_w[1]) ||
-             clip_w[0] <= 0.0 || clip_w[1] < clip_w[0]))
-            fail(NativePortGraphicsFailure::InvalidDraw,
-                 0u,
-                 "draw-positive-clip-w");
+        std::array<double, 2u> clip_w{};
+        if (requires_positive_clip_w) {
+            clip_w = transformed_w_range(packet, capabilities);
+            if (!std::isfinite(clip_w[0]) || !std::isfinite(clip_w[1]) ||
+                clip_w[0] <= 0.0 || clip_w[1] < clip_w[0])
+                fail(NativePortGraphicsFailure::InvalidDraw,
+                     0u,
+                     "draw-positive-clip-w");
+        }
 
         if (reciprocal_depth_mode(packet.depth_mapping.mode)) {
             double minimum_reciprocal =
@@ -2912,10 +2927,6 @@ class NativePortGraphicsDevice::Impl final {
             frame_batch_active_ = true;
             frame_batch_identity_ = packet.batch.identity;
             frame_batch_semantic_ = packet.batch.semantic;
-            frame_batch_viewport_ = packet.viewport;
-            frame_batch_vertex_space_ = packet.vertex_space;
-            frame_batch_interpolation_ = packet.interpolation;
-            frame_batch_depth_mode_ = packet.depth_mapping.mode;
             frame_batch_phase_ = packet.draw_class;
             frame_batch_submission_order_ = packet.batch.submission_order;
             return;
@@ -2929,20 +2940,17 @@ class NativePortGraphicsDevice::Impl final {
                      "draw-batch-order");
             frame_batch_identity_ = packet.batch.identity;
             frame_batch_semantic_ = packet.batch.semantic;
-            frame_batch_viewport_ = packet.viewport;
-            frame_batch_vertex_space_ = packet.vertex_space;
-            frame_batch_interpolation_ = packet.interpolation;
-            frame_batch_depth_mode_ = packet.depth_mapping.mode;
             frame_batch_phase_ = packet.draw_class;
             frame_batch_submission_order_ = packet.batch.submission_order;
             return;
         }
 
-        if (packet.batch.semantic != frame_batch_semantic_ ||
-            packet.viewport != frame_batch_viewport_ ||
-            packet.vertex_space != frame_batch_vertex_space_ ||
-            packet.interpolation != frame_batch_interpolation_ ||
-            packet.depth_mapping.mode != frame_batch_depth_mode_)
+        // A batch owns one semantic layer and its stable submission order.
+        // Viewport, vertex-space, interpolation and depth mapping remain
+        // per-draw pipeline state: validate_draw() proves those contracts and
+        // draw() binds them independently. Requiring them to be identical
+        // here rejects valid semantic batches that combine native producers.
+        if (packet.batch.semantic != frame_batch_semantic_)
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
                  "draw-batch-contract");
@@ -4723,6 +4731,7 @@ class NativePortGraphicsDevice::Impl final {
     HWND window_ = nullptr;
     NativePortExtent output_extent_;
     NativePortExtent pending_output_extent_;
+    NativePortGraphicsLayout cached_layout_;
     bool close_requested_ = false;
     bool minimized_ = false;
     bool frame_open_ = false;
@@ -4797,14 +4806,6 @@ class NativePortGraphicsDevice::Impl final {
     std::uint64_t frame_batch_identity_ = 0u;
     NativePortDrawBatchClass frame_batch_semantic_ =
         NativePortDrawBatchClass::Scene3D;
-    NativePortViewportTarget frame_batch_viewport_ =
-        NativePortViewportTarget::Game;
-    NativePortVertexSpace frame_batch_vertex_space_ =
-        NativePortVertexSpace::ObjectHomogeneous;
-    NativePortInterpolationMode frame_batch_interpolation_ =
-        NativePortInterpolationMode::PerspectiveCorrect;
-    NativePortDepthCoordinateMode frame_batch_depth_mode_ =
-        NativePortDepthCoordinateMode::ClipSpace;
     NativePortDrawClass frame_batch_phase_ = NativePortDrawClass::Opaque;
     std::uint32_t frame_batch_submission_order_ = 0u;
     std::vector<NativePortVertex> prepared_vertices_;
@@ -5079,9 +5080,10 @@ NativePortDesktopHost::frame_pacing_snapshot() const noexcept {
 
 void NativePortDesktopHost::paced_present() {
     const auto present_and_record = [this](const bool repeated) {
-        const auto before = graphics_.snapshot().presented_frames;
+        const auto before_state = graphics_.snapshot();
+        const auto before = before_state.presented_frames;
         const bool repeat_completed_frame =
-            repeated || !graphics_.snapshot().frame_open;
+            repeated || !before_state.frame_open;
         if (repeat_completed_frame)
             graphics_.repeat_present();
         else

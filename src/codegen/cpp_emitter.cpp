@@ -519,9 +519,8 @@ void emit_direct_ram_read_helper(std::ostringstream& output,
            << "        " << raw_type << " katana_ram_value = 0u;\n"
            << "        std::uint32_t katana_direct_ram_address = 0u;\n"
            << "        if (katana_allow_direct_read &&\n"
-           << "            katana_direct_ram_resolve(\n"
-           << "                katana_ram_address, sizeof(katana_ram_value),\n"
-           << "                katana_direct_ram_address) &&\n"
+           << "            katana_direct_ram_translate(\n"
+           << "                katana_ram_address, katana_direct_ram_address) &&\n"
            << "            katana::runtime::" << direct_read
            << "(katana_direct_ram, katana_direct_ram_address, "
               "katana_ram_value)) {\n";
@@ -4921,7 +4920,8 @@ void emit_block(std::ostringstream& output,
                 const bool uses_proven_linear_ram,
                 const BlockEntryMetadataMode block_entry_metadata_mode,
                 const bool external_instruction_observer,
-                const bool native_bringup_dispatch_validation,
+                const std::unordered_set<std::uint32_t>&
+                    native_bringup_dispatch_callsites,
                 const NativeRegisterEmission& registers,
                 const bool has_direct_ram_writes,
                 const bool enable_direct_write_batch,
@@ -5102,7 +5102,8 @@ void emit_block(std::ostringstream& output,
                       uses_proven_linear_ram,
                       external_instruction_observer,
                       table_compatible_function_entries,
-                      native_bringup_dispatch_validation,
+                      native_bringup_dispatch_callsites.contains(
+                          block.instructions[*control_index].source_address),
                       registers,
                       has_direct_ram_writes,
                       enable_direct_write_batch,
@@ -5324,6 +5325,54 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 "Ein nativer AOT-Block besitzt mehrere Owner-Entries.");
         }
     }
+    if (!request.native_bringup_dispatch_callsites.empty() &&
+        (!request.native_bringup_dispatch_validation ||
+         !request.external_dynamic_dispatch))
+        throw std::invalid_argument(
+            "NativeBringup-Dispatch-Callsites brauchen den externen "
+            "Produktdispatcher und aktivierte Validierung.");
+    if (request.native_bringup_dispatch_validation !=
+        !request.native_bringup_dispatch_callsites.empty())
+        throw std::invalid_argument(
+            "NativeBringup-Dispatch-Validierung braucht eine exakte "
+            "Callsite-Liste.");
+    std::unordered_set<std::uint32_t> native_bringup_dispatch_callsites;
+    native_bringup_dispatch_callsites.reserve(
+        request.native_bringup_dispatch_callsites.size());
+    for (const auto callsite : request.native_bringup_dispatch_callsites) {
+        if (!native_bringup_dispatch_callsites.insert(callsite).second)
+            throw std::invalid_argument(
+                "NativeBringup-Dispatch-Callsites muessen eindeutig sein.");
+    }
+    std::unordered_set<std::uint32_t>
+        discovered_native_bringup_dispatch_callsites;
+    discovered_native_bringup_dispatch_callsites.reserve(
+        native_bringup_dispatch_callsites.size());
+    if (!native_bringup_dispatch_callsites.empty()) {
+        for (const auto& function : functions) {
+            for (const auto& block : function.blocks) {
+                for (const auto& instruction : block.instructions) {
+                    if (!native_bringup_dispatch_callsites.contains(
+                            instruction.source_address))
+                        continue;
+                    if (!requires_native_bringup_dispatch_validation(
+                            instruction))
+                        throw std::invalid_argument(
+                            "NativeBringup-Dispatch-Callsite ist kein "
+                            "validierbarer indirekter Transfer.");
+                    if (!discovered_native_bringup_dispatch_callsites.insert(
+                            instruction.source_address).second)
+                        throw std::invalid_argument(
+                            "NativeBringup-Dispatch-Callsite besitzt mehrere "
+                            "IR-Owner.");
+                }
+            }
+        }
+        if (discovered_native_bringup_dispatch_callsites.size() !=
+            native_bringup_dispatch_callsites.size())
+            throw std::invalid_argument(
+                "NativeBringup-Dispatch-Callsite fehlt im emittierten IR.");
+    }
     if (!request.closure_probe_callsites.empty() &&
         !request.external_dynamic_dispatch)
         throw std::invalid_argument(
@@ -5443,7 +5492,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                  << "    return source(target) == source(allowed_target);\n"
                  << "}\n";
     if (request.external_dynamic_dispatch) {
-        if (request.native_bringup_dispatch_validation) {
+        if (!native_bringup_dispatch_callsites.empty()) {
             declarations
                 << "extern thread_local bool native_bringup_dispatch_pending;\n"
                 << "void preflight_native_bringup_indirect_dispatch(\n"
@@ -5670,12 +5719,14 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                         : "executable_code_tracker()")
                 << " : nullptr;\n";
         if (uses_direct_linear_ram_accesses) {
+            // The direct read helper performs the guard-generation and range
+            // check itself. Keep address translation separate so that hot
+            // reads do not repeat the full preflight resolver.
             emitted_function
                 << "    auto katana_direct_ram = "
                    "cpu.memory.direct_linear_memory_guard(false);\n"
-                << "    const auto katana_direct_ram_resolve =\n"
+                << "    const auto katana_direct_ram_translate =\n"
                 << "        [&](const std::uint32_t katana_virtual_address,\n"
-                << "            const std::size_t katana_ram_width,\n"
                 << "            std::uint32_t& katana_direct_address) noexcept {\n"
                 << "        const auto katana_segment = "
                    "katana_virtual_address >> 29u;\n"
@@ -5692,6 +5743,15 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "                katana::runtime::canonical_physical_address(\n"
                 << "                    katana_virtual_address) | 0x80000000u;\n"
                 << "        }\n"
+                << "        return true;\n"
+                << "    };\n"
+                << "    const auto katana_direct_ram_resolve =\n"
+                << "        [&](const std::uint32_t katana_virtual_address,\n"
+                << "            const std::size_t katana_ram_width,\n"
+                << "            std::uint32_t& katana_direct_address) noexcept {\n"
+                << "        if (!katana_direct_ram_translate(\n"
+                << "                katana_virtual_address, katana_direct_address))\n"
+                << "            return false;\n"
                 << "        if (!cpu.memory.direct_linear_memory_guard_current(\n"
                 << "                katana_direct_ram, false))\n"
                 << "            return false;\n"
@@ -5829,7 +5889,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        uses_direct_linear_ram_accesses,
                        effective_block_entry_metadata_mode,
                        request.external_instruction_observer,
-                       request.native_bringup_dispatch_validation,
+                       native_bringup_dispatch_callsites,
                        registers,
                        has_direct_ram_writes,
                        enable_direct_write_batch,

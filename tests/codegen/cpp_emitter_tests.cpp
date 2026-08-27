@@ -865,7 +865,11 @@ int main() {
                 std::string::npos &&
             proven_delay_memory_source.find(
                 "if (katana_allow_direct_read &&\n"
-                "            katana_direct_ram_resolve(") !=
+                "            katana_direct_ram_translate(") !=
+                std::string::npos &&
+            proven_delay_memory_source.find(
+                "const auto katana_direct_ram_resolve =\n"
+                "        [&](const std::uint32_t katana_virtual_address,") !=
                 std::string::npos &&
             proven_delay_memory_source.find(
                 "katana::runtime::direct_linear_guard_read_u32("

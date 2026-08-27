@@ -444,10 +444,8 @@ bool NativePortAotServices::immutable_write_detected() const noexcept {
 bool NativePortAotServices::aot_contract_valid() const noexcept {
     return write_observer_bound_ && context_ != nullptr &&
            context_->cpu != nullptr &&
-           context_->cpu->memory.has_guest_write_observer() &&
-           context_->cpu->memory.has_guest_write_batch_observer() &&
-           context_->cpu->memory.guest_write_observer_generation() ==
-               write_observer_generation_;
+           context_->cpu->memory.guest_write_observer_pair_current(
+               write_observer_generation_);
 }
 
 std::uint32_t

@@ -16,6 +16,7 @@ namespace katana::runtime {
 namespace {
 
 constexpr std::uint32_t physical_page_size = 4096u;
+static_assert(sh4_on_chip_ram_address == 0x7C000000u);
 std::atomic<std::uint64_t> next_block_table_lifetime{1u};
 
 std::uint64_t allocate_block_table_lifetime() noexcept {
@@ -184,8 +185,7 @@ RuntimeBlockTable::VariantAddressHash::operator()(const VariantAddressKey& key) 
 }
 
 std::uint32_t canonical_physical_address(const std::uint32_t address) noexcept {
-    if ((address & 0xFC000000u) == sh4_on_chip_ram_address) return address;
-    return address < 0xE0000000u ? address & 0x1FFFFFFFu : address;
+    return canonical_physical_address_inline(address);
 }
 
 bool direct_p1_p2_block_binding_contiguous(

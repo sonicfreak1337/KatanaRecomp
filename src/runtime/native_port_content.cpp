@@ -1032,6 +1032,7 @@ struct NativePortLoadedAotBinder::Impl final {
         std::uint64_t code_generation = 0u;
         std::uint64_t lifecycle_generation = 0u;
         std::unique_ptr<ScopedCodeAddressMapping> mapping;
+        std::vector<std::uint64_t> block_entry_bits;
     };
 
     CpuState& cpu;
@@ -1228,6 +1229,26 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
     const auto match_runtime_start =
         canonical_native_port_runtime_alias(match->runtime_start);
     const auto offset = runtime_target - match_runtime_start;
+    // Binding verifies the complete immutable AOT identity once and registers
+    // every emitted block with the write observer. Re-hashing a block on every
+    // dispatch turns a static overlay into an O(code-size) runtime hot path.
+    // The activation-built halfword bitmap proves an exact generated entry in
+    // O(1); the observer generation independently proves that no bound
+    // executable byte changed since activation. Odd addresses cannot alias an
+    // adjacent SH-4 halfword entry.
+    const auto current_generation = impl_->immutable_guard.generation();
+    const auto write_detected = impl_->immutable_guard.write_detected();
+    const auto halfword_offset = offset >> 1u;
+    const auto exact_entry =
+        (offset & 1u) == 0u &&
+        (match->block_entry_bits[halfword_offset >> 6u] &
+         (std::uint64_t{1u} << (halfword_offset & 63u))) != 0u;
+    if (!write_detected &&
+        match->code_generation == current_generation && exact_entry)
+        return true;
+
+    // Diagnostics and typed failure details stay exact without imposing the
+    // logarithmic identity search on the successful dispatch path.
     const auto block = std::lower_bound(
         module.block_identities.begin(), module.block_identities.end(),
         offset, [](const auto& candidate, const std::uint32_t value) {
@@ -1246,16 +1267,9 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
         impl_->crash_capsule->note_v3_loaded_aot(
             target, match_runtime_start, module.source_start, offset,
             module.byte_size, block_size, match->code_generation,
-            impl_->immutable_guard.generation(), module.sha256);
+            current_generation, module.sha256);
     };
-
-    // Binding verifies the complete immutable AOT identity once and registers
-    // every emitted block with the write observer. Re-hashing a block on every
-    // dispatch turns a static overlay into an O(code-size) runtime hot path.
-    // The observer generation is the authoritative O(1) proof that no bound
-    // executable byte changed since activation.
-    if (impl_->immutable_guard.write_detected() ||
-        match->code_generation != impl_->immutable_guard.generation()) {
+    if (write_detected || match->code_generation != current_generation) {
         note_loaded_aot();
         throw NativePortContractError(
             NativePortContractFailure::AotContractViolation,
@@ -1670,8 +1684,20 @@ bool NativePortLoadedAotBinder::bind_entry(
     }
 
     std::unique_ptr<ScopedCodeAddressMapping> mapping;
+    std::vector<std::uint64_t> block_entry_bits;
     std::size_t registered = 0u;
     try {
+        // SH-4 instructions and every validated generated entry are aligned
+        // to two bytes. Build the compact exact-entry index once during the
+        // already rare authenticated module activation; at the 4-MiB module
+        // limit it remains bounded to 256 KiB.
+        block_entry_bits.resize(
+            (static_cast<std::size_t>(module.byte_size) + 127u) / 128u);
+        for (const auto& block : module.block_identities) {
+            const auto halfword_offset = block.source_offset >> 1u;
+            block_entry_bits[halfword_offset >> 6u] |=
+                std::uint64_t{1u} << (halfword_offset & 63u);
+        }
         mapping = std::make_unique<ScopedCodeAddressMapping>(
             CodeAddressMapping{module.source_start, match->runtime_start,
                                module.byte_size});
@@ -1691,7 +1717,8 @@ bool NativePortLoadedAotBinder::bind_entry(
         impl_->active.push_back(
             {match->module_index, match->runtime_start,
              impl_->immutable_guard.generation(),
-             match->lifecycle_generation, std::move(mapping)});
+             match->lifecycle_generation, std::move(mapping),
+             std::move(block_entry_bits)});
     } catch (...) {
         while (registered != 0u) {
             --registered;

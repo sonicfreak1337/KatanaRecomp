@@ -38095,11 +38095,85 @@ static PortExportResult export_dreamcast_port_project_impl(
         << ':' << native_port_export_identity(native_port_definition);
     const auto metadata_overrides_hash =
         katana::io::sha256_bytes(metadata_override_identity.str());
+    // Seal and revalidate NativeBringup authoring before source emission. The
+    // resulting exact callsite set lets every partition omit an otherwise
+    // inert runtime preflight from unrelated unresolved transfers.
+    std::ostringstream aot_linkage_material;
+    aot_linkage_material << "katana-native-aot-pack-linkage-v1;";
+    const auto append_sorted_addresses = [&](const std::string_view label,
+                                             const auto& addresses) {
+        auto ordered = std::vector<std::uint32_t>(addresses.begin(),
+                                                   addresses.end());
+        std::sort(ordered.begin(), ordered.end());
+        ordered.erase(std::unique(ordered.begin(), ordered.end()),
+                      ordered.end());
+        for (const auto address : ordered)
+            aot_linkage_material << label << '=' << address << ';';
+    };
+    append_sorted_addresses("external-hook", external_hook_entries);
+    append_sorted_addresses("runtime-image-boundary",
+                            runtime_image_architectural_boundaries);
+    append_sorted_addresses("composite-boundary",
+                            composite_callback_architectural_boundaries);
+    append_sorted_addresses("closure-probe", closure_probe_callsites);
+    append_sorted_addresses("resume", native_aot_resume_entries);
+    auto ordered_guarded_calls = std::vector<
+        std::pair<std::uint32_t, std::uint32_t>>(
+        guarded_native_call_targets.begin(),
+        guarded_native_call_targets.end());
+    std::sort(ordered_guarded_calls.begin(), ordered_guarded_calls.end());
+    for (const auto& [callsite, target] : ordered_guarded_calls)
+        aot_linkage_material << "guarded-call=" << callsite << ':'
+                             << target << ';';
+    const auto aot_linkage_identity = katana::io::sha256_bytes(
+        aot_linkage_material.str());
+    const auto aot_pack = native_aot_pack_contract(
+        partitions,
+        emitted_program,
+        native_aot_resume_entries,
+        latent_aot.modules,
+        product_entry_address,
+        product_entry_owner,
+        partition_pack_configuration_hash,
+        partition_codegen_implementation_identity,
+        aot_linkage_identity,
+        prepared.project_identity,
+        options.game_project);
+    const auto revalidated_native_bringup_targets =
+        revalidate_native_bringup_authoring(
+            options,
+            aot_pack,
+            native_port_program_index,
+            prepared.image,
+            latent_aot.modules,
+            options.game_project,
+            runtime_frontier_binding);
+    std::vector<NativeBringupDispatchEmission>
+        native_bringup_dispatch_entries;
+    native_bringup_dispatch_entries.reserve(
+        revalidated_native_bringup_targets.size());
+    std::unordered_set<std::uint32_t>
+        native_bringup_dispatch_callsites;
+    native_bringup_dispatch_callsites.reserve(
+        revalidated_native_bringup_targets.size());
+    for (const auto& target : revalidated_native_bringup_targets) {
+        if (!target.bringup_execution_admitted) {
+            if (target.dispatch.has_value())
+                throw std::logic_error(
+                    "Non-executable native bring-up evidence reached the "
+                    "sealed dispatch span.");
+            continue;
+        }
+        if (!target.dispatch.has_value())
+            throw std::logic_error(
+                "Execution-safe native bring-up evidence lost its generated "
+                "dispatch binding.");
+        native_bringup_dispatch_callsites.insert(
+            target.dispatch->admission.callsite);
+        native_bringup_dispatch_entries.push_back(*target.dispatch);
+    }
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 10u);
-    const bool native_bringup_execution_profile =
-        options.native_execution_profile ==
-        NativePortExecutionProfile::NativeBringup;
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
         auto functions = select_functions(emitted_program, partition);
         std::unordered_set<std::uint32_t> local_function_entries;
@@ -38111,7 +38185,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::vector<NativeAotBlockOwnerEntry> partition_native_block_owners;
         std::vector<std::uint32_t> partition_architectural_boundaries;
         std::vector<std::uint32_t> partition_closure_probe_callsites;
-        bool partition_requires_native_bringup_dispatch_validation = false;
+        std::vector<std::uint32_t>
+            partition_native_bringup_dispatch_callsites;
         const auto append_native_block_owner = [&](const std::uint32_t target) {
             const auto owner = emitted_block_owners.find(target);
             if (owner == emitted_block_owners.end()) return;
@@ -38147,11 +38222,10 @@ static PortExportResult export_dreamcast_port_project_impl(
                     append_native_block_owner(successor);
                 const katana::ir::Instruction* terminal = nullptr;
                 for (const auto& instruction : block.instructions) {
-                    if (native_bringup_execution_profile &&
-                        !partition_requires_native_bringup_dispatch_validation)
-                        partition_requires_native_bringup_dispatch_validation =
-                            requires_native_bringup_dispatch_validation(
-                                instruction);
+                    if (native_bringup_dispatch_callsites.contains(
+                            instruction.source_address))
+                        partition_native_bringup_dispatch_callsites.push_back(
+                            instruction.source_address);
                     if (instruction.delay_slot.role !=
                         katana::ir::DelaySlotRole::Slot)
                         terminal = &instruction;
@@ -38253,6 +38327,12 @@ static PortExportResult export_dreamcast_port_project_impl(
             std::unique(partition_closure_probe_callsites.begin(),
                         partition_closure_probe_callsites.end()),
             partition_closure_probe_callsites.end());
+        std::sort(partition_native_bringup_dispatch_callsites.begin(),
+                  partition_native_bringup_dispatch_callsites.end());
+        partition_native_bringup_dispatch_callsites.erase(
+            std::unique(partition_native_bringup_dispatch_callsites.begin(),
+                        partition_native_bringup_dispatch_callsites.end()),
+            partition_native_bringup_dispatch_callsites.end());
         const auto contains_program_entry = std::any_of(
             functions.begin(),
             functions.end(),
@@ -38275,8 +38355,12 @@ static PortExportResult export_dreamcast_port_project_impl(
                                        << boundary << ';';
         for (const auto callsite : partition_closure_probe_callsites)
             partition_linkage_identity << "closure-probe=" << callsite << ';';
+        for (const auto callsite :
+             partition_native_bringup_dispatch_callsites)
+            partition_linkage_identity << "native-bringup-dispatch="
+                                       << callsite << ';';
         const bool native_bringup_dispatch_validation =
-            partition_requires_native_bringup_dispatch_validation;
+            !partition_native_bringup_dispatch_callsites.empty();
         // NativeBringup inserts a product-ineligible preflight before eligible
         // unresolved register transfers. Only partitions that can emit that
         // instrumentation need a distinct generated-source cache key. Preserve
@@ -38342,6 +38426,8 @@ static PortExportResult export_dreamcast_port_project_impl(
             partition_architectural_boundaries;
         request.closure_probe_callsites =
             partition_closure_probe_callsites;
+        request.native_bringup_dispatch_callsites =
+            partition_native_bringup_dispatch_callsites;
         auto content = emit_cpp_port_translation_unit(request).joined_text();
         if (partition_cache) {
             if (content.size() <=
@@ -38455,74 +38541,6 @@ static PortExportResult export_dreamcast_port_project_impl(
     for (auto& artifact : generated)
         artifacts.push_back(std::move(*artifact));
     source_progress.complete();
-    std::ostringstream aot_linkage_material;
-    aot_linkage_material << "katana-native-aot-pack-linkage-v1;";
-    const auto append_sorted_addresses = [&](const std::string_view label,
-                                             const auto& addresses) {
-        auto ordered = std::vector<std::uint32_t>(addresses.begin(),
-                                                   addresses.end());
-        std::sort(ordered.begin(), ordered.end());
-        ordered.erase(std::unique(ordered.begin(), ordered.end()),
-                      ordered.end());
-        for (const auto address : ordered)
-            aot_linkage_material << label << '=' << address << ';';
-    };
-    append_sorted_addresses("external-hook", external_hook_entries);
-    append_sorted_addresses("runtime-image-boundary",
-                            runtime_image_architectural_boundaries);
-    append_sorted_addresses("composite-boundary",
-                            composite_callback_architectural_boundaries);
-    append_sorted_addresses("closure-probe", closure_probe_callsites);
-    append_sorted_addresses("resume", native_aot_resume_entries);
-    auto ordered_guarded_calls = std::vector<
-        std::pair<std::uint32_t, std::uint32_t>>(
-        guarded_native_call_targets.begin(),
-        guarded_native_call_targets.end());
-    std::sort(ordered_guarded_calls.begin(), ordered_guarded_calls.end());
-    for (const auto& [callsite, target] : ordered_guarded_calls)
-        aot_linkage_material << "guarded-call=" << callsite << ':'
-                             << target << ';';
-    const auto aot_linkage_identity = katana::io::sha256_bytes(
-        aot_linkage_material.str());
-    const auto aot_pack = native_aot_pack_contract(
-        partitions,
-        emitted_program,
-        native_aot_resume_entries,
-        latent_aot.modules,
-        product_entry_address,
-        product_entry_owner,
-        partition_pack_configuration_hash,
-        partition_codegen_implementation_identity,
-        aot_linkage_identity,
-        prepared.project_identity,
-        options.game_project);
-    const auto revalidated_native_bringup_targets =
-        revalidate_native_bringup_authoring(
-            options,
-            aot_pack,
-            native_port_program_index,
-            prepared.image,
-            latent_aot.modules,
-            options.game_project,
-            runtime_frontier_binding);
-    std::vector<NativeBringupDispatchEmission>
-        native_bringup_dispatch_entries;
-    native_bringup_dispatch_entries.reserve(
-        revalidated_native_bringup_targets.size());
-    for (const auto& target : revalidated_native_bringup_targets) {
-        if (!target.bringup_execution_admitted) {
-            if (target.dispatch.has_value())
-                throw std::logic_error(
-                    "Non-executable native bring-up evidence reached the "
-                    "sealed dispatch span.");
-            continue;
-        }
-        if (!target.dispatch.has_value())
-            throw std::logic_error(
-                "Execution-safe native bring-up evidence lost its generated "
-                "dispatch binding.");
-        native_bringup_dispatch_entries.push_back(*target.dispatch);
-    }
     report_progress(options, "metadata");
     auto metadata_progress = options.progress.begin(
         katana::ProgressOperation::MetadataGeneration,

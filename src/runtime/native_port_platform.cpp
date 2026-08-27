@@ -1,5 +1,7 @@
 #include "katana/runtime/native_port_platform.hpp"
 
+#include "native_port_input_policy.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -722,10 +724,10 @@ enum class NativeGamepadSourceKind : std::uint8_t {
     Keyboard,
 };
 
-constexpr std::uint64_t xinput_device_domain = 0x0100000000000000ull;
-constexpr std::uint64_t joystick_device_domain = 0x0200000000000000ull;
-constexpr std::uint64_t keyboard_device_domain = 0x0300000000000000ull;
-constexpr std::uint64_t input_device_domain_mask = 0xFF00000000000000ull;
+using detail::input_device_domain_mask;
+using detail::joystick_device_domain;
+using detail::keyboard_device_domain;
+using detail::xinput_device_domain;
 constexpr std::uint64_t input_device_slot_mask = 0x00000000FFFFFFFFull;
 
 struct NativeGamepadCandidate final {
@@ -912,6 +914,9 @@ void add_button(std::uint32_t& buttons,
     add_button(result.buttons,
                pressed(VK_BACK),
                NativePortGamepadButton::View);
+    // Keyboard compatibility mapping is deliberately distinct from the
+    // physical XInput labels: Z=A, X=B, A=X and S=Y. XInput A/X already map
+    // to NativePortGamepadButton::A/X in xinput_buttons() above.
     add_button(result.buttons, pressed('Z'), NativePortGamepadButton::A);
     add_button(result.buttons, pressed('X'), NativePortGamepadButton::B);
     add_button(result.buttons, pressed('A'), NativePortGamepadButton::X);
@@ -1040,26 +1045,8 @@ void add_joystick_buttons(NativePortGamepadState& state,
            left.right_trigger_raw == right.right_trigger_raw;
 }
 
-struct NativeGamepadButtonStability final {
-    std::uint32_t buttons = 0u;
-    std::uint32_t release_candidates = 0u;
-};
-
-// A physical pad exposed through more than one Windows input path can leave a
-// single neutral sample between the two representations of one button press.
-// Publishing that sample creates a false release/press pair at the title
-// boundary.  Confirm releases on the next poll while publishing presses
-// immediately; this adds one poll of release latency without delaying input
-// or suppressing a normally sampled double tap.
-[[nodiscard]] constexpr std::uint32_t stabilize_gamepad_buttons(
-    NativeGamepadButtonStability& stability,
-    const std::uint32_t raw_buttons) noexcept {
-    const auto released = stability.buttons & ~raw_buttons;
-    const auto confirmed = released & stability.release_candidates;
-    stability.buttons = (stability.buttons | raw_buttons) & ~confirmed;
-    stability.release_candidates = released & ~confirmed;
-    return stability.buttons;
-}
+using detail::NativeGamepadButtonStability;
+using detail::stabilize_gamepad_buttons;
 
 static_assert([] {
     NativeGamepadButtonStability stability;
@@ -1068,6 +1055,7 @@ static_assert([] {
     return stabilize_gamepad_buttons(stability, button) == button &&
            stabilize_gamepad_buttons(stability, 0u) == button &&
            stabilize_gamepad_buttons(stability, button) == button &&
+           stabilize_gamepad_buttons(stability, 0u) == button &&
            stabilize_gamepad_buttons(stability, 0u) == button &&
            stabilize_gamepad_buttons(stability, 0u) == 0u;
 }());
@@ -2482,8 +2470,15 @@ class NativePortPlatformServices::Impl final {
             independent_xinput_devices_.clear();
             cross_backend_correlation_.clear();
         }
+        const auto is_assigned_device = [&](const std::uint64_t device_id) {
+            return std::ranges::find(input_device_ids_, device_id) !=
+                   input_device_ids_.end();
+        };
         std::erase_if(cross_backend_aliases_, [&](const auto& alias) {
-            return !has_device(alias.first) || !has_device(alias.second);
+            return !detail::retain_cross_backend_alias(
+                has_device(alias.first), has_device(alias.second),
+                is_assigned_device(alias.first),
+                is_assigned_device(alias.second));
         });
         std::erase_if(independent_xinput_devices_, [&](const auto device_id) {
             return !has_device(device_id);
@@ -2601,11 +2596,12 @@ class NativePortPlatformServices::Impl final {
         std::erase_if(candidates, [&](const auto& candidate) {
             if (candidate.kind != NativeGamepadSourceKind::XInput)
                 return false;
-            const bool aliases_sony = std::ranges::any_of(
+            const bool aliases_visible_sony = std::ranges::any_of(
                 cross_backend_aliases_, [&](const auto& alias) {
-                    return alias.second == candidate.device_id;
+                    return alias.second == candidate.device_id &&
+                           has_device(alias.first);
                 });
-            if (aliases_sony) return true;
+            if (aliases_visible_sony) return true;
             return has_unpaired_sony &&
                    !known_independent_xinput(candidate.device_id);
         });
@@ -2669,8 +2665,18 @@ class NativePortPlatformServices::Impl final {
             const auto old_device_id = input_device_ids_[slot];
             const auto new_device_id = placement[slot].has_value()
                                            ? candidates[*placement[slot]]
-                                                 .device_id
+                                                  .device_id
                                            : 0u;
+            const bool correlated_handoff =
+                detail::is_correlated_backend_handoff(
+                    old_device_id, new_device_id, cross_backend_aliases_);
+            // A proven Sony<->XInput alias is a source/backend handoff for the
+            // same physical pad, not a new title-visible controller. Preserve
+            // button debounce, packet continuity and connection generation
+            // across that one bounded transition. Every other id change keeps
+            // the disconnect/reconnect reset and remains fail-closed.
+            const bool same_logical_controller =
+                old_device_id == new_device_id || correlated_handoff;
             if (old_device_id != new_device_id) {
                 if (vibration_active_[slot] && xinput_.set_state != nullptr) {
                     const auto old_xinput =
@@ -2681,7 +2687,8 @@ class NativePortPlatformServices::Impl final {
                 }
                 vibration_active_[slot] = false;
                 vibration_device_ids_[slot] = 0u;
-                saturating_increment(result.connection_generation);
+                if (!correlated_handoff)
+                    saturating_increment(result.connection_generation);
             }
 
             if (!placement[slot].has_value()) {
@@ -2694,14 +2701,14 @@ class NativePortPlatformServices::Impl final {
             auto destination = candidates[*placement[slot]].state;
             if (slot == 0u)
                 merge_keyboard_gamepad(destination, keyboard);
-            if (old_device_id != new_device_id)
+            if (!same_logical_controller)
                 input_button_stability_[slot] = {
-                    destination.buttons, 0u};
+                    destination.buttons, {}};
             else
                 destination.buttons = stabilize_gamepad_buttons(
                     input_button_stability_[slot], destination.buttons);
             const auto& previous = input_snapshot_.gamepads[slot];
-            if (old_device_id == new_device_id && previous.connected) {
+            if (same_logical_controller && previous.connected) {
                 destination.packet_number = previous.packet_number;
                 if (!same_gamepad_payload(previous, destination) &&
                     destination.packet_number !=

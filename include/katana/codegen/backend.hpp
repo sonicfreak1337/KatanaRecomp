@@ -116,6 +116,10 @@ struct BackendRequest {
     // plan. Only these callsites emit the one predictable pending-plan branch;
     // every unrelated guest call remains byte-for-byte free of probe work.
     std::span<const std::uint32_t> closure_probe_callsites;
+    // Exact revalidated callsites in this translation unit which can consume
+    // the sealed NativeBringup allowlist. Keep extension fields at the end so
+    // the offsets of the ABI-25 request fields remain stable.
+    std::span<const std::uint32_t> native_bringup_dispatch_callsites;
 };
 
 struct BackendEmission {
