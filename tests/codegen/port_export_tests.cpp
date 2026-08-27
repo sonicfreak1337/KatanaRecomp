@@ -1950,6 +1950,13 @@ int run_test(const int argc, char* argv[]) {
                 latent_dispatch_shard.find(
                     "register_executable_block(table, services, 0x88000000u") == std::string::npos &&
                 latent_dispatch.find("set_aot_module_descriptors") != std::string::npos &&
+                latent_dispatch.find(
+                    "class NativeLoadedAotSourceIndex final") != std::string::npos &&
+                latent_dispatch.find(
+                    "std::vector<std::uint16_t> slots_") != std::string::npos &&
+                latent_dispatch.find(
+                    "native_loaded_aot_source_index().contains(address)") !=
+                    std::string::npos &&
                 latent_dispatch.find("source->read(") == std::string::npos &&
                 latent_dispatch.find("sha256_bytes(") == std::string::npos &&
                 latent_dispatch.find("ExecutableModule source_module") == std::string::npos &&
