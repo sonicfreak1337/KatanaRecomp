@@ -1069,6 +1069,36 @@ class NativePortAudioEngine::Impl final {
         }
         compact_pcm(voice);
 
+        // FFmpeg commonly hands the native ADX path a complete stereo batch.
+        // Keep boundary-sensitive loop/discard/error handling below, but copy
+        // the ordinary contiguous batch at once and aggregate its monotone
+        // counters instead of paying two vector appends and three saturating
+        // additions for every decoded frame.
+        const auto complete_source_range =
+            sample_frames <=
+            std::numeric_limits<std::uint64_t>::max() - voice.source_frame;
+        const auto before_loop_boundary =
+            !voice.config.loop || voice.config.loop_end_frame == 0u ||
+            (voice.source_frame < voice.config.loop_end_frame &&
+             sample_frames <=
+                 voice.config.loop_end_frame - voice.source_frame);
+        const auto available = available_frames(voice);
+        if (sample.audio_channels == 2u && complete_source_range &&
+            before_loop_boundary &&
+            voice.source_frame >= voice.discard_before_frame &&
+            sample_frames <= config_.maximum_buffered_frames_per_voice &&
+            available <=
+                config_.maximum_buffered_frames_per_voice - sample_frames) {
+            voice.pcm.insert(
+                voice.pcm.end(), sample.audio_samples,
+                sample.audio_samples + sample.audio_sample_count);
+            voice.source_frame += sample_frames;
+            saturating_add(voice.frames_since_restart, sample_frames);
+            saturating_add(voice.decoded_source_frames, sample_frames);
+            saturating_add(decoded_source_frames_, sample_frames);
+            return;
+        }
+
         for (std::uint64_t frame = 0u; frame < sample_frames; ++frame) {
             if (voice.config.loop && voice.config.loop_end_frame != 0u &&
                 voice.source_frame >= voice.config.loop_end_frame) {

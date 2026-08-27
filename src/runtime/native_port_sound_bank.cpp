@@ -3497,7 +3497,9 @@ class NativePortSoundBankEngine::Impl final {
                   channel_gain;
         voice.phase += step;
         voice.lfo_phase += voice.lfo_step;
-        voice.lfo_phase -= std::floor(voice.lfo_phase);
+        // Both the normalized starting phase and the bounded AICA LFO step
+        // are below one, so at most one wrap is possible per output frame.
+        if (voice.lfo_phase >= 1.0) voice.lfo_phase -= 1.0;
         return sample;
     }
 
