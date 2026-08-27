@@ -308,6 +308,8 @@ void append_text(std::string& output,
         copy.support_reason.resize(options.maximum_text_bytes);
     if (copy.register_name.size() > options.maximum_text_bytes)
         copy.register_name.resize(options.maximum_text_bytes);
+    if (copy.address_expression.size() > options.maximum_text_bytes)
+        copy.address_expression.resize(options.maximum_text_bytes);
     return copy;
 }
 
@@ -541,6 +543,7 @@ OwnerSemanticSummary summarize_owner_semantics(
     OwnerSemanticBoundary boundary,
     const std::span<const HardwareAccessReference> hardware_references,
     const std::span<const OwnerSemanticLiteralEvidence> literal_evidence,
+    const std::span<const OwnerSemanticDirectCallEvidence> direct_call_evidence,
     const OwnerSemanticSummaryOptions options) {
     OwnerSemanticSummary summary;
     summary.boundary = std::move(boundary);
@@ -625,13 +628,17 @@ OwnerSemanticSummary summarize_owner_semantics(
                       return std::tuple{
                                  static_cast<std::uint8_t>(left->kind),
                                  left->width,
+                                 left->canonical_address_known,
                                  left->canonical_address,
+                                 left->address_expression,
                                  static_cast<std::uint8_t>(left->region),
                                  left->register_name} <
                              std::tuple{
                                  static_cast<std::uint8_t>(right->kind),
                                  right->width,
+                                 right->canonical_address_known,
                                  right->canonical_address,
+                                 right->address_expression,
                                  static_cast<std::uint8_t>(right->region),
                                  right->register_name};
                   });
@@ -676,6 +683,48 @@ OwnerSemanticSummary summarize_owner_semantics(
     }
     if (!literal_evidence_valid)
         append_reason(summary, options, "authenticated-literal-evidence-invalid");
+
+    std::unordered_map<std::uint32_t, const OwnerSemanticDirectCallEvidence*>
+        direct_call_by_instruction;
+    direct_call_by_instruction.reserve(direct_call_evidence.size());
+    bool direct_call_evidence_valid = true;
+    std::optional<std::uint32_t> previous_direct_call_instruction;
+    for (const auto& evidence : direct_call_evidence) {
+        const auto instruction = [&]() -> const ir::Instruction* {
+            for (const auto& block : function.blocks)
+                for (const auto& candidate : block.instructions)
+                    if (candidate.source_address == evidence.instruction_address)
+                        return &candidate;
+            return nullptr;
+        }();
+        const auto exact_target = instruction != nullptr
+            ? instruction->target_address
+                  ? instruction->target_address
+                  : instruction->resolved_targets.size() == 1u
+                        ? std::optional<std::uint32_t>{
+                              instruction->resolved_targets.front()}
+                        : std::nullopt
+            : std::nullopt;
+        if ((previous_direct_call_instruction.has_value() &&
+             evidence.instruction_address <=
+                 *previous_direct_call_instruction) ||
+            instruction == nullptr ||
+            instruction->operation != ir::Operation::Call ||
+            !exact_target.has_value() ||
+            *exact_target != evidence.target_entry_address ||
+            evidence.callee == nullptr ||
+            evidence.callee->boundary.entry_address !=
+                evidence.target_entry_address ||
+            !direct_call_by_instruction
+                 .emplace(evidence.instruction_address, &evidence)
+                 .second) {
+            direct_call_evidence_valid = false;
+            continue;
+        }
+        previous_direct_call_instruction = evidence.instruction_address;
+    }
+    if (!direct_call_evidence_valid)
+        append_reason(summary, options, "direct-call-evidence-invalid");
 
     const auto block_end = [&](const std::uint32_t start) {
         return static_cast<std::uint64_t>(start) + 2u;
@@ -766,7 +815,7 @@ OwnerSemanticSummary summarize_owner_semantics(
 
     std::vector<bool> block_has_return(block_count, false);
     bool saw_return = false;
-    bool saw_direct_call = false;
+    bool saw_uncomposed_direct_call = false;
     bool saw_unrepresentable_terminal = false;
     bool saw_fpu_state = false;
 
@@ -835,7 +884,8 @@ OwnerSemanticSummary summarize_owner_semantics(
                         if (effect.width_bytes == 0u)
                             append_reason(summary, options, "memory-width-unresolved");
                         if (hardware != nullptr) {
-                            effect.canonical_address_known = true;
+                            effect.canonical_address_known =
+                                hardware->canonical_address_known;
                             effect.canonical_address = hardware->canonical_address;
                             effect.region = dreamcast_hardware_region_name(hardware->region);
                             effect.register_name = hardware->register_name.substr(
@@ -844,7 +894,11 @@ OwnerSemanticSummary summarize_owner_semantics(
                                                   ? effect.region
                                                   : effect.register_name;
                             effect.address_expression =
-                                "canonical:" + hex_token(hardware->canonical_address);
+                                hardware->address_expression.empty()
+                                    ? "canonical:" +
+                                          hex_token(hardware->canonical_address)
+                                    : hardware->address_expression.substr(
+                                          0u, options.maximum_text_bytes);
                             switch (hardware->kind) {
                             case HardwareAccessKind::Read:
                                 effect.kind = OwnerSemanticEffectKind::HardwareRead;
@@ -936,7 +990,8 @@ OwnerSemanticSummary summarize_owner_semantics(
                     OwnerSemanticEffect effect;
                     effect.instruction_address = instruction.source_address;
                     effect.width_bytes = reference->width;
-                    effect.canonical_address_known = true;
+                    effect.canonical_address_known =
+                        reference->canonical_address_known;
                     effect.canonical_address = reference->canonical_address;
                     effect.hardware_reference =
                         bounded_hardware_reference(reference, options);
@@ -947,7 +1002,11 @@ OwnerSemanticSummary summarize_owner_semantics(
                                           ? effect.region
                                           : effect.register_name;
                     effect.address_expression =
-                        "canonical:" + hex_token(reference->canonical_address);
+                        reference->address_expression.empty()
+                            ? "canonical:" +
+                                  hex_token(reference->canonical_address)
+                            : reference->address_expression.substr(
+                                  0u, options.maximum_text_bytes);
                     effect.provider_resource_kind =
                         runtime::NativePortProviderResourceKind::HardwareRegister;
                     switch (reference->kind) {
@@ -997,7 +1056,6 @@ OwnerSemanticSummary summarize_owner_semantics(
             // a status comparison or RTS from masquerading as a device read.
 
             if (instruction.operation == ir::Operation::Call) {
-                saw_direct_call = true;
                 const auto exact_call_target =
                     instruction.target_address
                         ? instruction.target_address
@@ -1005,12 +1063,93 @@ OwnerSemanticSummary summarize_owner_semantics(
                               ? std::optional<std::uint32_t>{instruction.resolved_targets.front()}
                               : std::nullopt;
                 if (!exact_call_target) {
+                    saw_uncomposed_direct_call = true;
                     output.open_edge = true;
                     summary.has_open_edges = true;
                     append_reason(summary, options, "direct-call-target-unresolved");
-                } else
-                    append_reason(summary, options,
-                                  "direct-call-effect-not-composed");
+                } else {
+                    const auto composed = direct_call_by_instruction.find(
+                        instruction.source_address);
+                    const auto* const callee =
+                        composed != direct_call_by_instruction.end() &&
+                                composed->second != nullptr
+                            ? composed->second->callee
+                            : nullptr;
+                    if (callee == nullptr ||
+                        composed->second->target_entry_address !=
+                            *exact_call_target) {
+                        saw_uncomposed_direct_call = true;
+                        append_reason(summary, options,
+                                      "direct-call-effect-not-composed");
+                    } else if (
+                        callee->status != OwnerSemanticSummaryStatus::Complete ||
+                        !callee->result.complete ||
+                        callee->authority !=
+                            OwnerSemanticAuthority::IdentityBound ||
+                        callee->digest.empty()) {
+                        saw_uncomposed_direct_call = true;
+                        append_reason(
+                            summary, options,
+                            "direct-call-callee-semantic-contract-partial");
+                    } else {
+                        OwnerSemanticDirectCallProof proof;
+                        proof.instruction_address = instruction.source_address;
+                        proof.target_entry_address = *exact_call_target;
+                        proof.callee_semantic_identity = callee->digest;
+                        summary.direct_calls.push_back(std::move(proof));
+                        summary.provider_contract_required =
+                            summary.provider_contract_required ||
+                            callee->provider_contract_required;
+                        summary.result.gpr_write_mask |=
+                            callee->result.gpr_write_mask;
+                        summary.result.special_write_mask |=
+                            callee->result.special_write_mask;
+                        summary.result.status_write_mask |=
+                            callee->result.status_write_mask;
+                        for (const auto& callee_effect : callee->effects) {
+                            auto effect = callee_effect;
+                            effect.path_identity =
+                                "call:" + hex_token(instruction.source_address) +
+                                "/" + effect.path_identity;
+                            if (effect.path_identity.size() >
+                                options.maximum_text_bytes) {
+                                append_reason(
+                                    summary, options,
+                                    "direct-call-path-identity-too-long");
+                                saw_uncomposed_direct_call = true;
+                                break;
+                            }
+                            append_effect(block_index, std::move(effect));
+                        }
+                        for (const auto& callee_guard : callee->guards) {
+                            if (summary.guards.size() >=
+                                options.maximum_guards) {
+                                summary.guards_truncated = true;
+                                ++summary.truncated_guard_count;
+                                append_reason(summary, options,
+                                              "guard-budget-exceeded");
+                                break;
+                            }
+                            auto guard = callee_guard;
+                            guard.order = static_cast<std::uint16_t>(
+                                std::min<std::size_t>(
+                                    summary.guards.size(),
+                                    std::numeric_limits<std::uint16_t>::max()));
+                            guard.path_identity =
+                                "call:" + hex_token(instruction.source_address) +
+                                "/" + guard.path_identity;
+                            if (guard.path_identity.size() >
+                                options.maximum_text_bytes) {
+                                append_reason(
+                                    summary, options,
+                                    "direct-call-path-identity-too-long");
+                                saw_uncomposed_direct_call = true;
+                                break;
+                            }
+                            summary.guards.push_back(std::move(guard));
+                        }
+                    }
+                }
             } else if (instruction.operation == ir::Operation::Return) {
                 saw_return = true;
                 block_has_return[block_index] = true;
@@ -1269,7 +1408,7 @@ OwnerSemanticSummary summarize_owner_semantics(
     // this first compositional leaf contract and therefore fail closed.
     summary.result.complete =
         summary.status == OwnerSemanticSummaryStatus::Complete &&
-        every_terminal_path_returns && !saw_direct_call &&
+        every_terminal_path_returns && !saw_uncomposed_direct_call &&
         !saw_unrepresentable_terminal && !saw_fpu_state;
 
     std::string digest_material;
@@ -1392,6 +1531,17 @@ OwnerSemanticSummary summarize_owner_semantics(
                         options.maximum_text_bytes);
             append_text(digest_material,
                         effect.hardware_reference->support_reason,
+                        options.maximum_text_bytes);
+        }
+    }
+    if (!summary.direct_calls.empty()) {
+        append_text(digest_material, "direct-call-semantics-v1",
+                    options.maximum_text_bytes);
+        append_u64(digest_material, summary.direct_calls.size());
+        for (const auto& call : summary.direct_calls) {
+            append_u64(digest_material, call.instruction_address);
+            append_u64(digest_material, call.target_entry_address);
+            append_text(digest_material, call.callee_semantic_identity,
                         options.maximum_text_bytes);
         }
     }

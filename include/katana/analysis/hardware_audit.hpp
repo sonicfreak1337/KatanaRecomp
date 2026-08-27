@@ -73,6 +73,12 @@ struct HardwareAccessReference {
     std::uint32_t instruction_address = 0u;
     std::uint32_t guest_address = 0u;
     std::uint32_t canonical_address = 0u;
+    // A bounded aperture proof may establish the hardware family without
+    // proving one scalar address.  In that case canonical_address is only the
+    // diagnostic lower bound and address_expression carries the exact bounded
+    // derivation consumed by owner/provider semantics.
+    bool canonical_address_known = true;
+    std::string address_expression;
     DreamcastHardwareRegion region = DreamcastHardwareRegion::Unknown;
     HardwareAccessKind kind = HardwareAccessKind::Read;
     std::uint8_t width = 0u;

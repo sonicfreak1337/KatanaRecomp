@@ -145,6 +145,12 @@ struct OwnerSemanticSccSummary final {
     bool open_edge = false;
 };
 
+struct OwnerSemanticDirectCallProof final {
+    std::uint32_t instruction_address = 0u;
+    std::uint32_t target_entry_address = 0u;
+    std::string callee_semantic_identity;
+};
+
 struct OwnerSemanticSummaryOptions final {
     // There is deliberately no block or instruction cap.  The only output
     // budget is on retained effects/reasons, so a large owner is summarized
@@ -181,9 +187,19 @@ struct OwnerSemanticSummary final {
     std::vector<OwnerSemanticSccSummary> sccs;
     std::vector<OwnerSemanticGuard> guards;
     std::vector<OwnerSemanticEffect> effects;
+    std::vector<OwnerSemanticDirectCallProof> direct_calls;
     OwnerSemanticResultProjection result;
     std::vector<std::string> incomplete_reasons;
     std::string digest;
+};
+
+// A direct call is composable only when the exporter independently proves the
+// exact callee boundary/bytes and supplies the resulting complete semantic
+// summary.  The pointer is input-only and is never retained in the summary.
+struct OwnerSemanticDirectCallEvidence final {
+    std::uint32_t instruction_address = 0u;
+    std::uint32_t target_entry_address = 0u;
+    const OwnerSemanticSummary* callee = nullptr;
 };
 
 // Builds a deterministic, pointer-free owner summary.  Hardware references
@@ -197,6 +213,7 @@ struct OwnerSemanticSummary final {
     OwnerSemanticBoundary boundary,
     std::span<const HardwareAccessReference> hardware_references = {},
     std::span<const OwnerSemanticLiteralEvidence> literal_evidence = {},
+    std::span<const OwnerSemanticDirectCallEvidence> direct_call_evidence = {},
     OwnerSemanticSummaryOptions options = {});
 
 [[nodiscard]] const char*

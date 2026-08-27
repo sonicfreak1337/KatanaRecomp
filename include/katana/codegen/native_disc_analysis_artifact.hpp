@@ -23,7 +23,7 @@ namespace katana::codegen {
 // checkpoint envelope. It also removes downstream codegen implementation
 // churn from the canonical analysis lookup key; current product admission is
 // always replayed and validated before any result is consumed.
-inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 10u;
+inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 11u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
     256u * 1024u * 1024u;

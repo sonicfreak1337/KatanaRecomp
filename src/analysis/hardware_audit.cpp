@@ -785,6 +785,8 @@ struct EffectiveAccess {
     std::uint32_t address = 0u;
     HardwareAccessKind kind = HardwareAccessKind::Read;
     std::uint8_t width = 0u;
+    bool address_known = true;
+    std::string address_expression;
 };
 
 struct EffectiveAccessSet {
@@ -1435,6 +1437,90 @@ std::string hex8(const std::uint32_t value) {
     std::ostringstream output;
     output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value;
     return output.str();
+}
+
+std::optional<EffectiveAccess> bounded_store_queue_prefetch_access(
+    const std::span<const sh4::DisassemblyLine> lines,
+    const std::span<const ConstantTraceEntry> trace,
+    const std::size_t prefetch_index) {
+    using K = sh4::InstructionKind;
+    if (prefetch_index >= lines.size() || prefetch_index >= trace.size() ||
+        lines[prefetch_index].instruction.kind != K::Prefetch)
+        return std::nullopt;
+
+    const auto address_register =
+        lines[prefetch_index].instruction.source_register;
+    if (address_register >= 16u) return std::nullopt;
+    const auto register_mask =
+        static_cast<std::uint16_t>(1u << address_register);
+    std::int64_t delta = 0;
+    std::optional<std::uint32_t> or_value;
+    std::optional<std::uint32_t> and_mask;
+
+    for (std::size_t cursor = prefetch_index; cursor != 0u;) {
+        --cursor;
+        const auto& instruction = lines[cursor].instruction;
+        if ((general_register_write_mask(instruction) & register_mask) == 0u)
+            continue;
+
+        if ((instruction.kind == K::MovByteStorePreDecrement ||
+             instruction.kind == K::MovWordStorePreDecrement ||
+             instruction.kind == K::MovLongStorePreDecrement) &&
+            instruction.destination_register == address_register) {
+            delta -= instruction.kind == K::MovByteStorePreDecrement   ? 1
+                     : instruction.kind == K::MovWordStorePreDecrement ? 2
+                                                                       : 4;
+            continue;
+        }
+        if (instruction.kind == K::AddImmediate &&
+            instruction.destination_register == address_register) {
+            delta += instruction.immediate;
+            continue;
+        }
+        if (instruction.kind == K::OrRegister &&
+            instruction.destination_register == address_register &&
+            !or_value.has_value()) {
+            or_value = trace[cursor].before.registers[
+                instruction.source_register];
+            if (!or_value.has_value()) return std::nullopt;
+            continue;
+        }
+        if (instruction.kind == K::AndRegister &&
+            instruction.destination_register == address_register &&
+            or_value.has_value()) {
+            and_mask = trace[cursor].before.registers[
+                instruction.source_register];
+            break;
+        }
+        return std::nullopt;
+    }
+    if (!or_value.has_value() || !and_mask.has_value())
+        return std::nullopt;
+
+    const auto minimum64 = static_cast<std::int64_t>(*or_value) + delta;
+    const auto maximum64 =
+        static_cast<std::int64_t>(*or_value | *and_mask) + delta;
+    if (minimum64 < 0 || maximum64 < minimum64 ||
+        maximum64 > std::numeric_limits<std::uint32_t>::max())
+        return std::nullopt;
+    const auto minimum = static_cast<std::uint32_t>(minimum64);
+    const auto maximum = static_cast<std::uint32_t>(maximum64);
+    const auto minimum_description = describe(minimum);
+    const auto maximum_description = describe(maximum);
+    if (minimum_description.region != DreamcastHardwareRegion::StoreQueue ||
+        maximum_description.region != DreamcastHardwareRegion::StoreQueue ||
+        !minimum_description.aperture_mapped ||
+        !maximum_description.aperture_mapped)
+        return std::nullopt;
+
+    EffectiveAccess access;
+    access.address = minimum;
+    access.kind = HardwareAccessKind::Prefetch;
+    access.width = runtime::native_port_store_queue_prefetch_width;
+    access.address_known = false;
+    access.address_expression =
+        "canonical-range:" + hex8(minimum) + "-" + hex8(maximum);
+    return access;
 }
 
 std::string hex4(const std::uint16_t value) {
@@ -2745,7 +2831,9 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
         HardwareAccessReference reference;
         std::size_t multiplicity = 0u;
     };
-    using ReferenceKey = std::tuple<std::uint32_t, std::uint32_t, HardwareAccessKind, std::uint8_t>;
+    using ReferenceKey =
+        std::tuple<std::uint32_t, std::uint32_t, HardwareAccessKind,
+                   std::uint8_t, bool, std::string>;
 
     struct MemorySiteAggregate final {
         bool complete = true;
@@ -2804,6 +2892,14 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                 auto access_set =
                     effective_accesses(lines[index], trace[index].before, gbr_trace[index]);
                 if (!access_set.complete) {
+                    const auto bounded_prefetch =
+                        bounded_store_queue_prefetch_access(lines, trace, index);
+                    if (bounded_prefetch.has_value()) {
+                        access_set.accesses = {*bounded_prefetch};
+                        access_set.complete = true;
+                    }
+                }
+                if (!access_set.complete) {
                     const auto table = table_driven_store_resolutions.find(lines[index].address);
                     if (table != table_driven_store_resolutions.end() &&
                         table->second.recognized)
@@ -2845,7 +2941,9 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                     HardwareAccessReference reference;
                     reference.instruction_address = lines[index].address;
                     reference.guest_address = projected_address;
+                    reference.canonical_address_known = access.address_known;
                     reference.canonical_address = description.canonical;
+                    reference.address_expression = access.address_expression;
                     reference.region = description.region;
                     reference.kind = access.kind;
                     reference.width = access.width;
@@ -2858,7 +2956,9 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
                     const ReferenceKey key{reference.instruction_address,
                                            reference.guest_address,
                                            reference.kind,
-                                           reference.width};
+                                           reference.width,
+                                           reference.canonical_address_known,
+                                           reference.address_expression};
                     const auto [context, context_inserted] =
                         context_references.try_emplace(key, AggregatedReference{reference, 0u});
                     static_cast<void>(context_inserted);
@@ -2895,9 +2995,20 @@ DreamcastHardwareAudit audit_dreamcast_hardware(const io::ExecutableImage& image
         result.references.begin(),
         result.references.end(),
         [](const auto& left, const auto& right) {
-            return std::tie(left.guest_address, left.instruction_address, left.kind, left.width) <
-                   std::tie(
-                       right.guest_address, right.instruction_address, right.kind, right.width);
+            return std::tie(left.guest_address,
+                            left.instruction_address,
+                            left.kind,
+                            left.width,
+                            left.canonical_address_known,
+                            left.canonical_address,
+                            left.address_expression) <
+                   std::tie(right.guest_address,
+                            right.instruction_address,
+                            right.kind,
+                            right.width,
+                            right.canonical_address_known,
+                            right.canonical_address,
+                            right.address_expression);
         });
     for (const auto& reference : result.references) {
         if (result.addresses.empty() ||
@@ -3339,6 +3450,10 @@ std::string format_hardware_audit_json(const DreamcastHardwareAudit& audit,
                    << io::quote_json(hex8(reference.instruction_address))
                    << ",\"guest_address\":" << io::quote_json(hex8(reference.guest_address))
                    << ",\"canonical_address\":" << io::quote_json(hex8(reference.canonical_address))
+                   << ",\"canonical_address_known\":"
+                   << (reference.canonical_address_known ? "true" : "false")
+                   << ",\"address_expression\":"
+                   << io::quote_json(reference.address_expression)
                    << ",\"region\":"
                    << io::quote_json(dreamcast_hardware_region_name(reference.region))
                    << ",\"kind\":" << io::quote_json(hardware_access_kind_name(reference.kind))

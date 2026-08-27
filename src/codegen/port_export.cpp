@@ -26875,7 +26875,7 @@ owner_semantic_literal_evidence(
     return result;
 }
 
-constexpr std::uint32_t owner_semantic_proof_bundle_version = 1u;
+constexpr std::uint32_t owner_semantic_proof_bundle_version = 2u;
 
 struct OwnerSemanticProofKey final {
     katana::runtime::NativePortHookCodeSource code_source =
@@ -26899,22 +26899,105 @@ struct OwnerSemanticProofBundle final {
 using OwnerSemanticProofCache =
     std::map<OwnerSemanticProofKey, OwnerSemanticProofBundle>;
 
+struct NativePortFunctionCodeIdentity final {
+    std::string code_identity;
+    katana::runtime::NativePortHookCodeSource source =
+        katana::runtime::NativePortHookCodeSource::StaticImage;
+    std::string source_identity;
+};
+
+std::optional<NativePortFunctionCodeIdentity>
+native_port_function_code_identity(
+    const katana::io::ExecutableImage& image,
+    std::span<const PreparedLatentAotModule> latent_modules,
+    std::uint32_t address,
+    std::uint32_t size);
+
 [[nodiscard]] const OwnerSemanticProofBundle*
 owner_semantic_proof_bundle(
     OwnerSemanticProofCache& cache,
+    const NativePortProgramIndex& program_index,
+    const katana::io::ExecutableImage& image,
     const katana::ir::Function& function,
     const std::span<const PreparedLatentAotModule> latent_modules,
     const std::span<const katana::analysis::HardwareAccessReference>
         hardware_references,
     const OwnerSemanticProofKey& key,
-    const bool exact) {
+    const bool exact,
+    std::set<OwnerSemanticProofKey>* active_proofs = nullptr) {
     if (const auto cached = cache.find(key); cached != cache.end())
         return cached->second.version == owner_semantic_proof_bundle_version
                    ? &cached->second
                    : nullptr;
+    std::set<OwnerSemanticProofKey> local_active_proofs;
+    if (active_proofs == nullptr) active_proofs = &local_active_proofs;
+    if (!active_proofs->insert(key).second) return nullptr;
+    struct ActiveProofGuard final {
+        std::set<OwnerSemanticProofKey>& active;
+        const OwnerSemanticProofKey& key;
+        ~ActiveProofGuard() { active.erase(key); }
+    } active_guard{*active_proofs, key};
+
     auto literal_evidence = owner_semantic_literal_evidence(
         function, latent_modules);
     if (!literal_evidence.has_value()) return nullptr;
+    std::vector<katana::analysis::OwnerSemanticDirectCallEvidence>
+        direct_call_evidence;
+    for (const auto& block : function.blocks) {
+        for (const auto& instruction : block.instructions) {
+            if (instruction.operation != katana::ir::Operation::Call)
+                continue;
+            const auto target = instruction.target_address
+                ? instruction.target_address
+                : instruction.resolved_targets.size() == 1u
+                      ? std::optional<std::uint32_t>{
+                            instruction.resolved_targets.front()}
+                      : std::nullopt;
+            if (!target.has_value()) continue;
+            const auto functions =
+                program_index.functions_by_entry.find(*target);
+            if (functions == program_index.functions_by_entry.end() ||
+                functions->second.size() != 1u ||
+                functions->second.front() == nullptr)
+                continue;
+            const auto boundary =
+                native_port_function_boundary(program_index, *target);
+            if (!boundary.has_value() || boundary->size == 0u) continue;
+            const auto identity = native_port_function_code_identity(
+                image, latent_modules, *target, boundary->size);
+            if (!identity.has_value()) continue;
+            const OwnerSemanticProofKey callee_key{
+                identity->source,
+                identity->source ==
+                        katana::runtime::NativePortHookCodeSource::StaticImage
+                    ? std::string{"static-image"}
+                    : identity->source_identity,
+                *target,
+                boundary->size,
+                identity->code_identity};
+            const auto* const callee = owner_semantic_proof_bundle(
+                cache,
+                program_index,
+                image,
+                *functions->second.front(),
+                latent_modules,
+                hardware_references,
+                callee_key,
+                true,
+                active_proofs);
+            if (callee == nullptr) continue;
+            direct_call_evidence.push_back(
+                {instruction.source_address, *target, &callee->summary});
+        }
+    }
+    std::sort(
+        direct_call_evidence.begin(), direct_call_evidence.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.instruction_address,
+                            left.target_entry_address) <
+                   std::tie(right.instruction_address,
+                            right.target_entry_address);
+        });
     katana::analysis::OwnerSemanticBoundary boundary;
     boundary.entry_address = key.entry_address;
     boundary.size = key.size;
@@ -26928,7 +27011,8 @@ owner_semantic_proof_bundle(
         function,
         std::move(boundary),
         hardware_references,
-        bundle.literal_evidence);
+        bundle.literal_evidence,
+        direct_call_evidence);
     return &cache.emplace(key, std::move(bundle)).first->second;
 }
 
@@ -26937,6 +27021,7 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     const katana::runtime::NativePortDefinition* const definition,
     const bool complete_module_scope,
     const NativePortProgramIndex& program_index,
+    const katana::io::ExecutableImage& image,
     const std::span<const std::uint32_t> native_resume_entries,
     const std::span<const PreparedLatentAotModule> latent_modules,
     OwnerSemanticProofCache& owner_semantic_proof_cache) {
@@ -27075,6 +27160,8 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
                     std::string{hook.code_identity}};
                 const auto* const bundle = owner_semantic_proof_bundle(
                     owner_semantic_proof_cache,
+                    program_index,
+                    image,
                     *functions->second.front(),
                     latent_modules,
                     audit.references,
@@ -27454,20 +27541,6 @@ std::optional<std::string> native_port_code_identity(
     }
     return ambiguous_match ? std::nullopt : match;
 }
-
-struct NativePortFunctionCodeIdentity final {
-    std::string code_identity;
-    katana::runtime::NativePortHookCodeSource source =
-        katana::runtime::NativePortHookCodeSource::StaticImage;
-    std::string source_identity;
-};
-
-std::optional<NativePortFunctionCodeIdentity>
-native_port_function_code_identity(
-    const katana::io::ExecutableImage& image,
-    std::span<const PreparedLatentAotModule> latent_modules,
-    std::uint32_t address,
-    std::uint32_t size);
 
 inline constexpr std::uint32_t native_aot_pack_manifest_schema_version = 1u;
 inline constexpr std::uint32_t native_bringup_promotion_report_schema_version =
@@ -31024,6 +31097,7 @@ validate_prepared_native_port_admission_state(
             native_port,
             true,
             index,
+            prepared.image,
             state.native_aot_resume_entries,
             analysis_artifact.latent.modules,
             closure_proof_cache);
@@ -31953,6 +32027,7 @@ prepare_dreamcast_port_project_impl(
             native_port_definition,
             true,
             native_port_program_index,
+            prepared.image,
             native_aot_resume_entries,
             latent_aot.modules,
             owner_semantic_proof_cache);
@@ -34186,6 +34261,7 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
 OwnerSemanticTaskContract owner_semantic_task_contract(
     const std::span<const katana::ir::Function> program,
     const katana::io::ExecutableImage& image,
+    const NativePortProgramIndex& program_index,
     const std::span<const PreparedLatentAotModule> latent_modules,
     OwnerSemanticProofCache& owner_semantic_proof_cache,
     const std::uint32_t entry,
@@ -34229,6 +34305,8 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
         std::string{code_identity}};
     const auto* const bundle = owner_semantic_proof_bundle(
         owner_semantic_proof_cache,
+        program_index,
+        image,
         function,
         latent_modules,
         hardware_references,
@@ -34262,6 +34340,10 @@ OwnerSemanticTaskContract owner_semantic_task_contract(
         std::to_string(semantic_summary.instruction_count) +
         ";effects=" + std::to_string(semantic_summary.effects.size()) +
         ";guards=" + std::to_string(semantic_summary.guards.size()));
+    if (!semantic_summary.direct_calls.empty())
+        contract.fields.push_back(
+            "owner-semantic-composed-direct-calls=" +
+            std::to_string(semantic_summary.direct_calls.size()));
     contract.fields.push_back(
         std::string{"owner-semantic-result-projection="} +
         (semantic_summary.result.complete ? "complete" : "partial"));
@@ -35130,6 +35212,7 @@ build_native_disc_materialization_world(
             auto contract = owner_semantic_task_contract(
                 result.admitted_state->emitted_program,
                 result.image,
+                result.admitted_state->native_port_program_index,
                 result.admitted_state->latent_aot.modules,
                 result.admitted_state->owner_semantic_proof_cache,
                 owner_hook_contract.entry,

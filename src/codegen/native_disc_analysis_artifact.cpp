@@ -405,6 +405,8 @@ void write_hardware_audit(Writer& output,
         output.u32(value.instruction_address);
         output.u32(value.guest_address);
         output.u32(value.canonical_address);
+        output.boolean(value.canonical_address_known);
+        output.text(value.address_expression);
         output.enumeration(value.region);
         output.enumeration(value.kind);
         output.u8(value.width);
@@ -472,6 +474,8 @@ katana::analysis::DreamcastHardwareAudit read_hardware_audit(Reader& input) {
         value.instruction_address = input.u32();
         value.guest_address = input.u32();
         value.canonical_address = input.u32();
+        value.canonical_address_known = input.boolean();
+        value.address_expression = input.text();
         value.region = input.enumeration(DreamcastHardwareRegion::Unknown);
         value.kind = input.enumeration(HardwareAccessKind::Prefetch);
         value.width = input.u8();

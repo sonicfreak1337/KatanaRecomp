@@ -22,6 +22,24 @@ native-bringup:
   -> dasselbe Replay
 ```
 
+### Verbindliches Produktbuild-Budget im Native-Bring-up
+
+- Im laufenden Sonic-NativeBring-up ist standardmaessig ausschliesslich ein
+  `NativeBringup`-Produktbuild zulaessig. Ein Strict-/Release-/Gate-Build wird
+  nur nach einer aktuellen ausdruecklichen Nutzeranweisung fuer genau diesen
+  Build gestartet; statischer Fortschritt allein ist keine Freigabe.
+- Pro zusammenhaengendem Fortschrittsbatch wird hoechstens ein
+  NativeBringup-Produktbinary gebaut. Mehrere kompatible Bug-, Evidence-,
+  Analyzer-, Runtime-, Adapter- und Manifestarbeiten werden davor gebuendelt;
+  ein Produktbuild pro Einzelbug ist unzulaessig.
+- Dasselbe NativeBringup-Binary wird fuer alle zugehoerigen Pflichtreplays
+  wiederverwendet. Ein zweiter Produktbuild im selben Batch braucht eine neue
+  ausdrueckliche Nutzeranweisung.
+- Gezielte CLI-, Unit- oder Komponenten-Targets zur lokalen
+  Quellverifikation sind keine Produktbuilds und bleiben zulaessig. Sie duerfen
+  aber weder vorsorglich den Strict-Port bauen noch einen zusaetzlichen
+  Produktbuild als Messlauf erzwingen.
+
 - Ein vollstaendiger Analyzer-/Exportlauf wird nur bei einer nachgewiesenen
   AOT-wirksamen Aenderung gestartet: neue oder geaenderte Imagebytes,
   Funktionsgrenzen, CFG, Roots, Tabellen, Overlays, Patchstellen,
@@ -60,13 +78,31 @@ native-bringup:
 
 ### Pflichtgate nach jeder Analyse: Egg Fleet
 
-- Unmittelbar nach jeder erfolgreich publizierten `analyze-port`-Generation
-  wird aus genau deren `materialization-world.katana-world` mit
+- Die allererste Aktion unmittelbar nach jeder erfolgreich publizierten
+  `analyze-port`-Generation ist die Ausgabe und Delegation des neuen
+  Egg-Fleet-Pools. Lokale Closure-, RuntimeOnly-, Replay- oder sonstige
+  Folgearbeit beginnt erst, nachdem diese Tasks gestartet wurden, damit ihre
+  Ergebnisse und relevanten Fixes noch in die naechste Analyse eingehen.
+- Aus genau der publizierten `materialization-world.katana-world` wird mit
   `next-analysis-task --format agent-json --task-count 28` ein neuer,
-  unveraenderter 28er-Pool erzeugt. Pool-, World-, World-JSON- und
-  Native-Analysis-SHA-256 werden vor der Delegation festgehalten.
-- Die 28 Poolpositionen gehen immer an dieselben fuenf read-only Egg-Fleet-
-  Tasks: `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23` und `#24-#28`. Jeder Task
+  unveraenderter Pool erzeugt. Pool-, World-, World-JSON- und
+  Native-Analysis-SHA-256 werden vor der Delegation festgehalten. Liefert die
+  Authority nach echter Closure weniger als 28 priorisierte Tasks, ist diese
+  kleinere Taskzahl autoritativ; es werden keine leeren Positionen erfunden.
+- Die vorhandenen Poolpositionen gehen unmittelbar in fortlaufenden,
+  exklusiven Slices von hoechstens sechs Positionen an read-only Egg-Fleet-
+  Tasks, zum Beispiel bei 28 Tasks `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23`
+  und `#24-#28`, bei 22 Tasks `#1-#6`, `#7-#12`, `#13-#18` und `#19-#22`.
+  Dafuer werden die bestehenden, dauerhaften Egg-Fleet-Chats wiederverwendet.
+  Ein neuer Analysezyklus erzeugt neue Arbeitspakete, aber keine neuen Chats;
+  neue Chats duerfen nur auf eine ausdrueckliche Nutzeranweisung angelegt
+  werden. Nicht benoetigte bestehende Slice-Chats bleiben fuer den Zyklus
+  einfach ohne Auftrag.
+- Jeder Egg-Fleet-Slice und jeder andere delegierte Analyse-Task laeuft
+  verbindlich mit `gpt-5.6-luna` und Reasoning `max`. `gpt-5.6-sol` mit
+  Reasoning `max` ist ausschliesslich dem Haupttask vorbehalten und darf fuer
+  die Flotte weder implizit geerbt noch explizit gewaehlt werden.
+  Jeder Task
   prueft Pool-zu-World, den Delta zur zuletzt von ihm geprueften Generation,
   die aktuelle Source-/Disassembly-/Provider-Evidence, A/B/C-Klassifikation,
   kleinsten fail-closed Scope, Acceptance, Kollisionen und Multi-Close.
@@ -161,6 +197,21 @@ Task implementieren
   Produktgates oder innerhalb der kleinen, reproduzierbaren Bring-up-Schleife.
   Mehrere zusammenhaengende reviewte Tasks duerfen vor dem naechsten
   vollstaendigen Produktgurt auf `main` landen.
+- Vor jeder Implementierungsrunde der sechs Pflichtreplays werden zuerst mit
+  demselben bereits vorhandenen BringUp-Binary alle sechs ersten
+  reproduzierbaren Crash-/Typed-Stop-Befunde aufgenommen. Bis die vollstaendige
+  6er-Crashmatrix vorliegt, werden aus einzelnen Replaybefunden keine Fixes
+  implementiert und keine Zwischenbuilds erzeugt.
+- Erst danach werden die sechs Ursachen gemeinsam mit den relevanten
+  Egg-Fleet-/RuntimeOnly-Befunden als ein zusammenhaengendes Fixpaket
+  umgesetzt. Fuer dieses Gesamtpaket folgt genau ein neuer NativeBringup-
+  Produktbuild; ein Build pro Replay oder pro Bug ist unzulaessig.
+- Der gemeinsame Zyklusbatch ist erst vollstaendig, wenn neben der
+  6er-Crashmatrix auch alle aktuellen Egg-Fleet-Handoffs abgeglichen und alle
+  relevanten aktuellen sowie historischen, noch nicht umgesetzten A-Befunde
+  aufgenommen sind. Vor diesem Abgleich darf kein Produktbuild starten;
+  irrelevante oder nachweislich ueberholte A-Befunde werden mit Evidence
+  begruendet ausgelassen.
 - Automatisierte Sonic-Laeufe und gezielte Tests sind standardmaessig stumm,
   unsichtbar und ohne Screenshot-/Audio-Capture. Ein sichtbarer Lauf erfolgt
   nur auf ausdrueckliche Anforderung. Redundante Replays, die denselben
@@ -169,12 +220,33 @@ Task implementieren
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
-- Jeder Bring-up-Zyklus enthaelt genau eine kleine, reviewbare echte
-  Performanceverbesserung. Sie darf im Runtime-, Analyzer-, Export-, Codegen-
-  oder Buildpfad liegen und soll die inkrementelle Schleife langfristig auf
-  Sekunden statt Minuten bringen. Sie darf weder Proof-Gates lockern noch
-  einen Zusatzbuild oder eine reine Messrunde erzwingen; beobachtet wird sie
-  im ohnehin notwendigen Build und Replay.
+- Bring-up-Zyklen enthalten standardmaessig keine Performancearbeit. Der Fokus
+  liegt ausschliesslich auf dem realen Fortschritt der sechs Pflichtreplays.
+  Performanceanalyse oder -patches werden nur nach einer aktuellen
+  ausdruecklichen Nutzeranweisung fuer den konkret benannten Auftrag begonnen;
+  sie sind weder Pflichtbestandteil eines Zyklus noch Grund fuer einen
+  Zusatzbuild oder eine reine Messrunde.
+- Befristete aktuelle Nutzerfreigabe: Beginnend mit dem laufenden
+  NativeBringup-Zyklus enthalten genau drei aufeinanderfolgende Zyklen jeweils
+  genau einen echten Runtime-Performance-Fix fuer die ruckelnde
+  Egg-Carrier-Cutscene. Der Zaehler startet bei `1/3` und wird nur erhoeht,
+  wenn der Fix implementiert, reviewt, in das gemeinsame BringUp-Binary
+  aufgenommen und auf dem realen Produktpfad geprueft wurde; reine Analyse,
+  Instrumentierung oder ein verworfener Patch verbraucht keinen Zyklus.
+- Diese drei Fixes muessen im ausgefuehrten Runtime-/Adapter-/Rendererpfad der
+  Cutscene liegen. Exporter-, Analyzer-, Graph-, Cache-, Ninja- oder
+  Buildsystem-Optimierungen erfuellen den Auftrag nicht. Sie rechtfertigen
+  weder einen separaten Messlauf noch einen zweiten Produktbuild.
+- In jedem dieser drei Zyklen wird der Performance-Fix gemeinsam mit den
+  relevanten noch offenen aktuellen und historischen Egg-Fleet-A-Befunden
+  sowie den sechs RuntimeOnly-/Replay-Fixes vor genau einem NativeBringup-
+  Produktbuild gebuendelt. A-Befunde werden implementiert und auf Closure
+  geprueft, nicht nur erneut ausgewertet. Nachweislich ueberholte oder fuer
+  Produkt-/Replay-Reachability irrelevante Befunde werden ausgelassen; die
+  Relevanzentscheidung muss sich auf den aktuellen World-/Replaystand stuetzen.
+- Nach dem dritten erfolgreich abgeschlossenen Performance-Zyklus gilt wieder
+  der Standard: keine Performancearbeit ohne neue ausdrueckliche
+  Nutzeranweisung.
 - Grafikdiagnostik ist standardmaessig `Off`. `Digest` darf nur feste
   Integer-Mixes ausfuehren; `Breadcrumbs` schreibt vorallokierte numerische
   Records ohne Hotpath-I/O; `ArmedCapture` ist auf ein kurzes Frameintervall
