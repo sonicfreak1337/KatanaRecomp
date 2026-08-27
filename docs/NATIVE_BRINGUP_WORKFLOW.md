@@ -40,6 +40,33 @@ Provider- und Diagnostikaenderungen bauen nur ihren inkrementellen Teil neu.
 Jedes Artefakt traegt eine stabile Inhaltsidentitaet; ein Lauf protokolliert
 Pack-, Runtime-, Adapter-, Manifest- und Replay-Identitaet.
 
+## Cycle-Manifest und Freeze
+
+Jeder Makro- und Mikrozyklus wird vor seiner Implementierung durch ein
+maschinenlesbares Manifest eingefroren. Das Manifest bindet mindestens:
+
+```json
+{
+  "cycle": "rNNN-product-M",
+  "workflow": "macro|micro",
+  "world_sha256": "...",
+  "aot_pack_sha256": "...",
+  "runtime_commit_or_source_identity": "...",
+  "replay_set_sha256": "...",
+  "replays": ["r1", "r2", "r3", "r4", "r5", "r6"],
+  "performance_target": "...",
+  "graphics_root_cause_cluster": "...",
+  "product_build_budget": 1,
+  "analysis_required": false
+}
+```
+
+Nur Findings mit passender World-, Pack-, Source- und Replay-Reachability
+duerfen in diesen Batch aufgenommen werden. Nach dem Freeze eintreffende
+Arbeit gehoert in den naechsten Zyklus. Dadurch bleibt das Ein-Build-Budget
+beweisbar und der Batch kann nicht waehrend der Implementierung unbegrenzt
+wachsen.
+
 ## Deterministisches Authoring-Artefakt
 
 Die private Allowlist wird nicht aus einem Runtime-Log gelernt. Ein
@@ -89,7 +116,7 @@ aktuellen ProgramIndex, die IR-Bloecke und den unveraenderten AOT-Pack
 revalidiert. Ihr `missing_proof` bleibt offen. Nur `Proven` darf zusaetzlich
 `strict_proof_admitted=true` tragen.
 
-## Die grosse Schleife: `strict-product`
+## Der Makrozyklus: `strict-product`
 
 ```text
 vollstaendige statische Analyse
@@ -118,17 +145,32 @@ Diagnostik geaendert wurden.
 
 Jede tatsaechlich gestartete und erfolgreich publizierte grosse Analyse endet
 mit einem verpflichtenden read-only Frontier-Gate: Der Orchestrator erzeugt
-aus der neuen World einen deterministischen 28er-`next-analysis-task`-Pool
-und delegiert die festen Slices `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23` und
-`#24-#28` an die fuenf Egg-Fleet-Tasks. Sie vergleichen die neue Authority
-mit ihrem letzten Handoff und melden Proof-, Scope-, Kollisions- und
-Multi-Close-Befunde zurueck. Dieses Gate darf parallel zum anschliessenden
-Export/Build laufen, muss aber vor dem Zyklusabschluss vollstaendig
-reconciled sein. Es ersetzt weder den ersten Replay-Stop als konkreten
-Implementierungsauftrag noch erlaubt es Runtime-Evidence als statische
-Closure.
+aus der neuen World einen deterministischen `next-analysis-task`-Pool. Die
+Positionen werden nach Owner, Provider, Frontierart und betroffenen Dateien
+geclustert und in exklusive Pakete von hoechstens sechs Positionen auf die
+bestehenden Egg-Fleet-Tasks verteilt. Dieselbe Ownerfamilie bleibt moeglichst
+beim selben Task; nicht zusammenhaengende Poolpositionen sind erlaubt, ihre
+Authority und Frontier-IDs bleiben aber explizit und verlustfrei. Die Fleet
+vergleicht die neue Authority mit ihrem letzten Handoff und meldet Proof-,
+Scope-, Kollisions- und Multi-Close-Befunde zurueck. Replay-Sammlung darf
+parallel laufen; der eine Produktbuild wartet auf die Reconciliation aller
+Handoffs und relevanten A-Fixes. Das Gate ersetzt weder den ersten Replay-
+Stop als konkreten Implementierungsauftrag noch erlaubt es Runtime-Evidence
+als statische Closure.
 
-## Die kleine Schleife: `native-bringup`
+Der Fleet-Handoff ist maschinenlesbar und bindet World-/Pack-SHA, Task-IDs,
+Root-Cause-Key, betroffene Dateien, Collision-Key, Replay-Reachability,
+Multi-Close-Set, Klassifikation und Acceptance:
+
+- `A`: aktuell bewiesen und im eingefrorenen Zyklus erreichbar; sofort
+  umsetzen.
+- `B`: bestaetigt, aber fuer den aktuellen Freeze nicht erreicht oder durch
+  eine andere Voraussetzung blockiert; nicht Teil des Batches.
+- `C`: stale, duplicate, bereits geschlossen, falsch interpretiert,
+  unzureichend bewiesen oder ausserhalb des aktuellen Produkts; nicht
+  implementieren.
+
+## Der Mikrozyklus: `native-bringup`
 
 ```text
 identischen AOT-Pack laden
@@ -145,12 +187,46 @@ Tasks entstehen aus der ersten reproduzierbaren Divergenz, einem exakten
 Contract-Stop oder einem Witness, nicht automatisch aus der gesamten offenen
 Analyzer-Frontier.
 
-Jeder Zyklus liefert ausserdem genau eine kleine, isoliert reviewbare
-Performanceverbesserung. Der Engpass darf in Runtime, Analyzer, Export,
-Codegen oder Build liegen; bevorzugt wird jeweils der teuerste Pfad, den der
-ohnehin notwendige Zyklus real ausfuehrt. Dafuer gibt es keinen Zusatzbuild
-und keine reine Messrunde. Proof-Gates und Fail-closed-Semantik bleiben
-unveraendert; die Wirkung wird im regulaeren End-to-End-Lauf mitbeobachtet.
+Jeder Zyklus liefert genau eine kleine, isoliert reviewbare und ausgefuehrte
+Produktruntime-Performanceverbesserung. Reine Instrumentierung sowie
+Analyzer-, Export-, Graph-, Cache-, Ninja- oder Buildsystemarbeit erfuellt
+diese Pflicht nicht. Der Fix wird mit dem normalen Batch gebaut, mit denselben
+sechs Replays gemessen und nur angenommen, wenn kein Replay regressiert. Es
+gibt weder einen Zusatzbuild noch eine reine Messrunde; Proof-Gates und
+Fail-closed-Semantik bleiben unveraendert.
+
+Jeder Zyklus schliesst ausserdem mindestens einen kausal gebuendelten
+Grafik-Root-Cause-Cluster: fehlende Submission, verschwindende Geometrie,
+falsches Asset, falscher Renderstate, falscher Shadervertrag oder falsche
+Reihenfolge. Ein Dual-Close darf Grafik- und Performancepflicht gemeinsam
+erfuellen.
+
+Crashsammlung nutzt hoechstens zwei parallele Produktprozesse. Frametiming-
+und Performancewerte stammen ausschliesslich aus nicht konkurrierenden
+Laeufen mit Grafikdiagnostik `Off`; Breadcrumbs werden nur fuer den ersten
+relevanten Grafikpfad aktiviert.
+
+### Priorisierte Produktruntime-Folge
+
+Solange die Replayaggregate keinen klar groesseren Hotspot zeigen, gilt fuer
+die naechsten Zyklen diese Reihenfolge:
+
+1. exportseitig indexierter NativeBringup-Preflight ohne globale lineare
+   Allowlistsuche, optional mit kleinem generationgebundenem monomorphem
+   Cache;
+2. Immutable-Write-Page-Filter mit billigem negativem Seitentest vor der
+   exakten Rangepruefung;
+3. Fog-LUT nur fuer Lookup-Modi validieren und Drawstate/Fogtable versiegeln;
+4. Frame-Upload-Arena fuer wenige grosse Vertex-/Index-Maps bei unveraenderter
+   Drawreihenfolge;
+5. bei Smooth Shading nur Small-Triangle-Indizes filtern und persistente
+   Flat-Last-Varianten einmalig erzeugen;
+6. Constant-Buffer-Ring beziehungsweise begrenzten Dynamic-Buffer-Pool statt
+   einzelner Updates pro Draw verwenden.
+
+Jeder Punkt wird einzeln im Cycle-Manifest benannt, mit dem ohnehin
+erforderlichen Produktbinary ausgefuehrt und anhand der sechs Replays
+akzeptiert oder verworfen.
 
 Replays sind stille, unsichtbare, native Produktlaeufe. Redundante Szenarien,
 die denselben frueheren Checkpoint langsamer erreichen, gehoeren nicht in den
@@ -188,6 +264,23 @@ Identitaet wird im Breadcrumb nur kopiert bzw. in den bestehenden Integer-
 Digest gemischt; es gibt weder Hashing noch Datei-I/O im Draw-Hotpath.
 Der Ring wartet bei Ueberlauf nicht, sondern ueberschreibt den aeltesten Record
 und zaehlt den Drop.
+
+Breadcrumb-Persistenz darf den Renderthread nicht periodisch synchron auf
+Dateischreib-, Flush-, Close- oder atomare Replace-Operationen warten lassen.
+Der Renderthread uebergibt hoechstens einen vorallokierten Snapshot an einen
+freien Worker-Slot; alternativ wird nur bei Crash, typisiertem Stop,
+Replayende oder explizitem Flush persistiert. `ArmedCapture` verwendet einen
+begrenzten Staging-/Query-Ring. GPU-Completion wird auf dem Renderthread nur
+abgefragt; Pixelkonvertierung und Dateiausgabe laufen ausserhalb des
+Draw-Hotpaths.
+
+Entscheidungen, die bereits im Titeladapter vor Erzeugung eines
+`NativePortDrawPacket` verwerfen, brauchen einen separaten rein numerischen
+Diagnosesink. Er bindet Origin-, Modell-, Material- und Primitive-Identitaet
+sowie `Skipped` und einen festen Reason-Code, ist vorallokiert, besitzt keine
+Admissionwirkung und enthaelt weder Strings noch Titeladressen im
+oeffentlichen Core. Nur so koennen fehlende Submissions von spaeteren
+Rendererfehlern unterschieden werden.
 
 Nur `ArmedCapture` aktiviert zusaetzlich den vorhandenen schweren Drawstream
 fuer maximal drei ausgewaehlte Frames. Start, Ende, Intervall und Drawbudget

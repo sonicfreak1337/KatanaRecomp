@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://katana.invalid/schemas/native-bringup-cycle-manifest-v1.json",
+  "title": "Katana NativeBringup cycle manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "cycle",
+    "workflow",
+    "frozen_utc",
+    "world_sha256",
+    "aot_pack_sha256",
+    "runtime_commit_or_source_identity",
+    "replay_set_sha256",
+    "replays",
+    "performance_target",
+    "graphics_root_cause_cluster",
+    "product_build_budget",
+    "analysis_required"
+  ],
+  "properties": {
+    "schema": {
+      "const": "katana-native-bringup-cycle-manifest-v1"
+    },
+    "cycle": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow": {
+      "enum": ["macro", "micro"]
+    },
+    "frozen_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "world_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "aot_pack_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "runtime_commit_or_source_identity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "replay_set_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "replays": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "performance_target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "graphics_root_cause_cluster": {
+      "enum": [
+        "submission-missing",
+        "geometry-disappears",
+        "wrong-asset",
+        "wrong-render-state",
+        "wrong-shader-contract",
+        "wrong-order"
+      ]
+    },
+    "product_build_budget": {
+      "const": 1
+    },
+    "analysis_required": {
+      "type": "boolean"
+    },
+    "analysis_event": {
+      "type": "string"
+    },
+    "a_findings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "late_findings_policy": {
+      "const": "next-cycle"
+    },
+    "performance_diagnostics_mode": {
+      "const": "off"
+    },
+    "maximum_parallel_crash_replays": {
+      "const": 2
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    }
+  }
+}

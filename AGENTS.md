@@ -9,7 +9,8 @@ Handoff- oder Performance-Dokumenten werden durch diesen Vertrag ersetzt.
 
 Die vollstaendige Definition steht in
 `docs/NATIVE_BRINGUP_WORKFLOW.md`. Fuer jeden Bearbeiter gelten zwei getrennte
-Schleifen:
+Schleifen. Der schnelle Produktzyklus ist der Normalfall; die grosse Analyse
+ist ereignisgesteuert und niemals der automatische Beginn jedes Zyklus:
 
 ```text
 strict-product:
@@ -21,6 +22,39 @@ native-bringup:
   -> kleinster Fix -> inkrementeller Runtime-/Adapter-/Manifestbuild
   -> dasselbe Replay
 ```
+
+### Makro- und Mikrozyklen
+
+- Ein `Mikrozyklus` verwendet die vorhandene World, den vorhandenen AOT-Pack
+  und dasselbe Replayset. Er sammelt die sechs Replaybefunde, den
+  Performance-Aggregatwert und einen Grafikdigest, implementiert ein
+  gemeinsames Runtime-/Adapter-/Renderer-/Providerpaket, baut genau ein
+  inkrementelles NativeBringup-Produktbinary und wiederholt dieselben sechs
+  Replays. Er erzeugt weder eine neue Analyse noch einen neuen Egg-Fleet-Pool.
+- Ein `Makrozyklus` beginnt nur bei einem echten AOT-Ereignis:
+  `UnknownCompiledTarget`, neue oder geaenderte Funktionen beziehungsweise
+  CFG, neue Overlays, geaenderte Roots/Switch-/Jumptabellen, AOT-/Codegen-
+  Semantik, AOT-ABI oder eine Evidence-Promotion, die die ausfuehrbare Welt
+  veraendert. Erst dann folgen Analyse, neuer Pool, Egg Fleet, AOT/Export und
+  die sechs Replays.
+- Texture-Binding-, Grafik-, Renderer-, Audio-, Provider-, Adapter-, Movie-,
+  Input-, Save-, Datei- und reine Diagnosefixes bleiben im Mikrozyklus und
+  verwenden den vorhandenen Pack, solange keine der genannten AOT-Grenzen
+  beruehrt wird. Zwischen zwei Analysen sind beliebig viele Mikrozyklen
+  zulaessig.
+
+### Verbindlicher Cycle-Freeze
+
+- Vor der Implementierung wird jeder Zyklus durch ein maschinenlesbares
+  Manifest eingefroren. Es bindet mindestens Zyklus-ID, Workflowklasse,
+  World- und Pack-SHA-256, Runtime-Commit/Source-Identity, Replayset-SHA-256,
+  exakt sechs Replay-IDs, den einen Runtime-Performance-Fix, den einen
+  Grafik-Root-Cause-Cluster, Produktbuildbudget `1` und
+  `analysis_required=true|false`.
+- Nur Findings, deren World/Pack/Source und Replay-Reachability zum Freeze
+  passen, gehoeren in den Batch. Spaeter eintreffende Findings gehen in den
+  naechsten Zyklus. Das Ein-Build-Budget darf nicht durch ein nachtraeglich
+  wachsendes Batch umgangen werden.
 
 ### Verbindliches Produktbuild-Budget im Native-Bring-up
 
@@ -89,10 +123,13 @@ native-bringup:
   Native-Analysis-SHA-256 werden vor der Delegation festgehalten. Liefert die
   Authority nach echter Closure weniger als 28 priorisierte Tasks, ist diese
   kleinere Taskzahl autoritativ; es werden keine leeren Positionen erfunden.
-- Die vorhandenen Poolpositionen gehen unmittelbar in fortlaufenden,
-  exklusiven Slices von hoechstens sechs Positionen an read-only Egg-Fleet-
-  Tasks, zum Beispiel bei 28 Tasks `#1-#6`, `#7-#12`, `#13-#18`, `#19-#23`
-  und `#24-#28`, bei 22 Tasks `#1-#6`, `#7-#12`, `#13-#18` und `#19-#22`.
+- Die vorhandenen Poolpositionen werden zuerst nach Owner, Provider,
+  Frontierart und betroffenen Dateien geclustert. Exklusive Arbeitspakete von
+  hoechstens sechs Positionen gehen an die bestehenden read-only Egg-Fleet-
+  Tasks; Positionen duerfen dafuer nicht zusammenhaengend sein. Dieselbe
+  Ownerfamilie bleibt ueber Zyklen moeglichst beim selben Chat. Nur bei echter
+  Lastungsdifferenz wird umverteilt. Poolposition, Frontier-ID und Authority
+  bleiben in jedem Paket explizit und verlustfrei.
   Dafuer werden die bestehenden, dauerhaften Egg-Fleet-Chats wiederverwendet.
   Ein neuer Analysezyklus erzeugt neue Arbeitspakete, aber keine neuen Chats;
   neue Chats duerfen nur auf eine ausdrueckliche Nutzeranweisung angelegt
@@ -102,18 +139,27 @@ native-bringup:
   verbindlich mit `gpt-5.6-luna` und Reasoning `max`. `gpt-5.6-sol` mit
   Reasoning `max` ist ausschliesslich dem Haupttask vorbehalten und darf fuer
   die Flotte weder implizit geerbt noch explizit gewaehlt werden.
-  Jeder Task
-  prueft Pool-zu-World, den Delta zur zuletzt von ihm geprueften Generation,
-  die aktuelle Source-/Disassembly-/Provider-Evidence, A/B/C-Klassifikation,
-  kleinsten fail-closed Scope, Acceptance, Kollisionen und Multi-Close.
+  Jeder Task prueft Pool-zu-World, den Delta zur zuletzt von ihm geprueften
+  Generation, die aktuelle Source-/Disassembly-/Provider-Evidence,
+  A/B/C-Klassifikation, kleinsten fail-closed Scope, Acceptance, Kollisionen
+  und Multi-Close. Sein maschinenlesbarer Handoff bindet zusaetzlich World-
+  und Pack-SHA, Task-IDs, Root-Cause-Key, betroffene Dateien, Collision-Key,
+  Replay-Reachability und Multi-Close-Set.
+- `A` bedeutet: aktuelle World und Source, aktuelle Replay-/Produkt-
+  Reachability oder klarer Multi-Close, genaue Ursache und Implementierung,
+  keine offene Evidencefrage; der Fall wird in diesem Zyklus umgesetzt.
+  `B` ist ein bestaetigter, aber fuer den eingefrorenen Batch nicht
+  erreichter oder anderweitig blockierter Befund. `C` ist stale, duplicate,
+  bereits geschlossen, falsch interpretiert, unzureichend bewiesen oder
+  ausserhalb des aktuellen Produkts und wird nicht implementiert.
 - Die Egg Fleet darf weder Dateien noch Pools aendern oder erzeugen und keine
   Builds, Tests, Replays, Commits oder Pushes starten. Fehlende Evidence ist
   niemals `unreachable`, und Runtime-Witnesses werden nie zu statischem Proof
   hochgestuft.
-- Analyse, Export und Build duerfen parallel zu dieser read-only Pruefung
-  weiterlaufen. Ein Bring-up-Zyklus gilt aber erst als abgeschlossen, wenn
-  alle fuenf Handoffs eingegangen und vom Haupttask gegen den aktuellen Stand
-  abgeglichen wurden.
+- Replay-Sammlung und read-only Inspektion duerfen parallel zur Egg Fleet
+  laufen. Der eine Produktbuild darf erst starten, wenn alle fuer den Pool
+  benoetigten Handoffs eingegangen, gegen den Freeze abgeglichen und alle
+  relevanten A-Faelle umgesetzt sind.
 
 ## Projektweiter Taskablauf
 
@@ -220,33 +266,33 @@ Task implementieren
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
-- Bring-up-Zyklen enthalten standardmaessig keine Performancearbeit. Der Fokus
-  liegt ausschliesslich auf dem realen Fortschritt der sechs Pflichtreplays.
-  Performanceanalyse oder -patches werden nur nach einer aktuellen
-  ausdruecklichen Nutzeranweisung fuer den konkret benannten Auftrag begonnen;
-  sie sind weder Pflichtbestandteil eines Zyklus noch Grund fuer einen
-  Zusatzbuild oder eine reine Messrunde.
-- Befristete aktuelle Nutzerfreigabe: Beginnend mit dem laufenden
-  NativeBringup-Zyklus enthalten genau drei aufeinanderfolgende Zyklen jeweils
-  genau einen echten Runtime-Performance-Fix fuer die ruckelnde
-  Egg-Carrier-Cutscene. Der Zaehler startet bei `1/3` und wird nur erhoeht,
-  wenn der Fix implementiert, reviewt, in das gemeinsame BringUp-Binary
-  aufgenommen und auf dem realen Produktpfad geprueft wurde; reine Analyse,
-  Instrumentierung oder ein verworfener Patch verbraucht keinen Zyklus.
-- Diese drei Fixes muessen im ausgefuehrten Runtime-/Adapter-/Rendererpfad der
-  Cutscene liegen. Exporter-, Analyzer-, Graph-, Cache-, Ninja- oder
-  Buildsystem-Optimierungen erfuellen den Auftrag nicht. Sie rechtfertigen
-  weder einen separaten Messlauf noch einen zweiten Produktbuild.
-- In jedem dieser drei Zyklen wird der Performance-Fix gemeinsam mit den
-  relevanten noch offenen aktuellen und historischen Egg-Fleet-A-Befunden
-  sowie den sechs RuntimeOnly-/Replay-Fixes vor genau einem NativeBringup-
-  Produktbuild gebuendelt. A-Befunde werden implementiert und auf Closure
-  geprueft, nicht nur erneut ausgewertet. Nachweislich ueberholte oder fuer
-  Produkt-/Replay-Reachability irrelevante Befunde werden ausgelassen; die
-  Relevanzentscheidung muss sich auf den aktuellen World-/Replaystand stuetzen.
-- Nach dem dritten erfolgreich abgeschlossenen Performance-Zyklus gilt wieder
-  der Standard: keine Performancearbeit ohne neue ausdrueckliche
-  Nutzeranweisung.
+- Jeder NativeBringup-Zyklus enthaelt dauerhaft genau eine kleine,
+  isoliert reviewbare und im ausgefuehrten Produktpfad wirksame
+  Runtime-Performanceoptimierung. Sie wird mit dem normalen Fixpaket gebaut,
+  mit den ohnehin notwendigen sechs Replays gemessen und nur akzeptiert, wenn
+  kein Replay regressiert. Sie erzeugt weder einen Zusatzbuild noch eine reine
+  Messrunde.
+- Reine Instrumentierung sowie Analyzer-, Exporter-, Graph-, Cache-, Ninja-
+  oder Buildsystemarbeit erfuellt diese Pflicht nicht. Solche Optimierungen
+  duerfen separat sinnvoll sein, werden aber niemals als Produktruntime-Fix
+  gezaehlt.
+- Jeder Zyklus enthaelt ausserdem mindestens einen kausal gebuendelten
+  Grafik-Root-Cause-Cluster. Er wird als `Submission fehlt`, `Geometrie
+  verschwindet`, `falsches Asset`, `falscher Renderstate`, `falscher
+  Shadervertrag` oder `falsche Reihenfolge` klassifiziert. Ein Fix darf
+  Grafik- und Performancepflicht gemeinsam erfuellen, wenn beide Wirkungen im
+  regulaeren Replaypfad nachgewiesen werden.
+- Performance-Replays laufen einzeln und mit Grafikdiagnostik `Off`, damit
+  weder konkurrierende D3D11-Instanzen noch Breadcrumb-/Capture-I/O die
+  Messung verfaelschen. Fuer reine Crashsammlung sind hoechstens zwei
+  Produktprozesse parallel erlaubt; Breadcrumbs werden nur fuer den ersten
+  relevanten Fehlerpfad aktiviert.
+- Der Runtime-Fix, die relevanten aktuellen und historischen A-Befunde, die
+  sechs Replayursachen und der Grafikcluster werden vor genau einem
+  NativeBringup-Produktbuild gebuendelt. A-Befunde werden implementiert und
+  auf Closure geprueft, nicht nur erneut ausgewertet. Ueberholte oder fuer die
+  eingefrorene Produkt-/Replay-Reachability irrelevante Befunde werden mit
+  Evidence begruendet ausgelassen.
 - Grafikdiagnostik ist standardmaessig `Off`. `Digest` darf nur feste
   Integer-Mixes ausfuehren; `Breadcrumbs` schreibt vorallokierte numerische
   Records ohne Hotpath-I/O; `ArmedCapture` ist auf ein kurzes Frameintervall
