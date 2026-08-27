@@ -59,7 +59,10 @@ Verbindlich ist
 3. Haupttask und Fleet gruppieren Replay- und Frontierbefunde nach gemeinsamer
    Callback-, Overlay-, AOT-, Provider- oder Semantikursache und priorisieren
    Story-/Gameplay-Reichweite sowie Multi-Close.
-4. AOT-/Closure-wirksame Cluster kehren nach der gebuendelten Implementierung
+4. Jeder bereits streng beweisbare Hardware-Owner wird in diesem Batch
+   umgesetzt, auch wenn er erst auf einem spaeteren Replaypfad aktiv wird;
+   Replay-Reichweite bestimmt seine Reihenfolge, nicht seine Aufnahme.
+5. AOT-/Closure-wirksame Cluster kehren nach der gebuendelten Implementierung
    genau einmal in die grosse Analyse zurueck. Nur vollstaendig bekannte
    Host-, Adapter- oder Praesentationsfehler bleiben im kleinen Zyklus mit
    demselben Pack.
@@ -104,7 +107,8 @@ Noch nicht als vollstaendiger Unterbau implementiert sind:
 2. Nach der autoritativen Analyse sofort den neuen Pool an die bestehende
    Fleet geben und Replay-/Fleetbefunde zu wenigen gemeinsamen
    Knowledge-Gap-Clustern reconciliieren.
-3. Das hoechstwertige Cluster vollstaendig schliessen. Eine kleine
+3. Das hoechstwertige Cluster und alle daneben bereits streng beweisbaren
+   Hardware-Owner vollstaendig schliessen. Eine kleine
    Performanceverbesserung darf nur im ohnehin bearbeiteten Pfad mitlaufen;
    Grafik wird nur bei Bring-up-Relevanz oder echtem Multi-Close aufgenommen.
 4. Nach genau einem Export-/Produktbuild dieselben sechs Replays wiederholen.

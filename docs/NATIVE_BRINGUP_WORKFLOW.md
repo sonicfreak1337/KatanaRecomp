@@ -208,6 +208,13 @@ Die Prioritaet ist nicht rohe P0-Reihenfolge, sondern
 `Replay-Reachability * Multi-Close * Story-/Gameplay-Naehe /
 Implementierungsrisiko`.
 
+Diese Formel ordnet beweisbare Arbeit, sie darf sie nicht wegfiltern. Jeder
+aktuelle Hardware-Owner mit exakter Boundary/Byte-Identity, vollstaendiger
+Owner-Semantik, zugelassenem Provider und beweisbarer Residualfreiheit ist
+verpflichtender Same-Cycle-Scope, selbst wenn keiner der sechs aktuellen
+Replays ihn bereits erreicht. Nur echte offene Evidence-, Result-/State-,
+Consumer- oder CFG-Fragen halten einen Hardware-Owner aus dem Batch.
+
 ## Der Mikrozyklus: `native-bringup`
 
 ```text
@@ -242,6 +249,12 @@ Nach der Matrix werden nicht sechs Einzelbugs implementiert. Replay- und
 Fleetbefunde werden nach gemeinsamer Callback-, Overlay-, AOT-, Provider-
 oder Semantikursache geclustert; ein Cluster kann mehrere Stops und Frontiers
 schliessen. Der erste Stop bleibt autoritativ.
+
+Parallel werden alle aktuellen, bereits streng beweisbaren Hardware-Owner
+geschlossen. Ihre Replay-Reachability steuert nur die Reihenfolge. Ein Owner
+wird nicht vertagt, nur weil seine erste aktive Szene noch hinter dem heutigen
+Produktcheckpoint liegt; er wird nur dann fail-closed offengelassen, wenn
+Boundary, Bytes, CFG, Result/State, Provider oder Residualfreiheit fehlen.
 
 Jeder Analysezyklus darf genau eine kleine, isoliert reviewbare und
 ausgefuehrte Produktruntime-Performanceverbesserung im ohnehin bearbeiteten
@@ -542,10 +555,12 @@ Die Prioritaet waehrend des Bring-ups ist:
 
 1. weitester naechster Story- oder steuerbarer Gameplaycheckpoint;
 2. gemeinsame K1-K3-Ursache, die mehrere Replays oder Frontiers schliesst;
-3. kleinster strenger generischer oder identity-bound Knowledge-Gap-Fix;
-4. gekoppelte kleine Runtime-Optimierung desselben Pfads;
-5. genau eine neue Analyse bei AOT-/Closure-Wirkung, sonst Mikrobuild;
-6. Export beziehungsweise Build und Wiederholung derselben sechs Replays.
+3. alle uebrigen bereits streng beweisbaren Hardware-Owner, nach Multi-Close
+   und Risiko geordnet, aber ohne Replay-Reachability als Ausschlussfilter;
+4. kleinster strenger generischer oder identity-bound Knowledge-Gap-Fix;
+5. gekoppelte kleine Runtime-Optimierung desselben Pfads;
+6. genau eine neue Analyse bei AOT-/Closure-Wirkung, sonst Mikrobuild;
+7. Export beziehungsweise Build und Wiederholung derselben sechs Replays.
 
 Offene globale Frontiers bleiben wichtige Releasearbeit, werden aber nicht
 allein durch ihre Anzahl zu Bring-up-Auftraegen. Private Titeladressen und

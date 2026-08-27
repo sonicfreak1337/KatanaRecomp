@@ -153,9 +153,12 @@ native-bringup:
   aktiver Sechserpfad, gemeinsamer Replay-Close, generischer oder
   Sonic-spezifischer Ursprung, `sad_disasm`-Beweischance, strenger
   identity-bound Titelvertrag und erwarteter neuer Produktpfad.
-- `A` bedeutet: aktuelle World und Source, aktuelle Replay-/Produkt-
-  Reachability oder klarer Multi-Close, genaue Ursache und Implementierung,
+- `A` bedeutet: aktuelle World und Source, genaue Ursache und Implementierung,
   keine offene Evidencefrage; der Fall wird in diesem Zyklus umgesetzt.
+  Aktuelle Replay-/Produkt-Reachability oder klarer Multi-Close erhoehen die
+  Reihenfolge, sind aber keine Voraussetzung: Jeder streng beweisbare
+  Hardware-Owner wird im selben Zyklus geschlossen, auch wenn ihn erst ein
+  spaeterer Story- oder Gameplaypfad erreicht.
   `B` ist ein bestaetigter, aber fuer den eingefrorenen Batch nicht
   erreichter oder anderweitig blockierter Befund. `C` ist stale, duplicate,
   bereits geschlossen, falsch interpretiert, unzureichend bewiesen oder
@@ -323,9 +326,11 @@ Task implementieren
   A-Befunde, die geclusterten sechs Replayursachen und ein gegebenenfalls
   bring-up-relevanter Grafikcluster werden vor genau einem
   NativeBringup-Produktbuild gebuendelt. A-Befunde werden implementiert und
-  auf Closure geprueft, nicht nur erneut ausgewertet. Ueberholte oder fuer die
-  eingefrorene Produkt-/Replay-Reachability irrelevante Befunde werden mit
-  Evidence begruendet ausgelassen.
+  auf Closure geprueft, nicht nur erneut ausgewertet. Dazu gehoert jeder
+  aktuelle Hardware-Owner, dessen Boundary, Bytes, Semantik, Provider und
+  Residualfreiheit bereits streng beweisbar sind; fehlende unmittelbare
+  Replay-Reachability ist kein Auslassgrund. Nur ueberholte, doppelte oder
+  weiterhin beweisoffene Befunde werden mit Evidence begruendet ausgelassen.
 - Grafikdiagnostik ist standardmaessig `Off`. `Digest` darf nur feste
   Integer-Mixes ausfuehren; `Breadcrumbs` schreibt vorallokierte numerische
   Records ohne Hotpath-I/O; `ArmedCapture` ist auf ein kurzes Frameintervall
