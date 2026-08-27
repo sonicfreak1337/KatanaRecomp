@@ -3333,25 +3333,6 @@ const char* dynamic_dispatch_name(const katana::ir::Instruction& instruction,
     return call ? "unresolved_call" : "unresolved_jump";
 }
 
-[[nodiscard]] bool requires_native_bringup_dispatch_validation(
-    const katana::ir::Instruction& instruction) noexcept {
-    using Class = katana::ir::DynamicTargetClass;
-    if (instruction.operation != katana::ir::Operation::CallRegister &&
-        instruction.operation != katana::ir::Operation::JumpRegister)
-        return false;
-    switch (instruction.dynamic_target_class) {
-    case Class::RuntimeOnly:
-    case Class::GuardedPartial:
-    case Class::Unresolved:
-        return true;
-    case Class::NotApplicable:
-    case Class::GuardedComplete:
-    case Class::ExactGuarded:
-        return false;
-    }
-    return true;
-}
-
 void emit_native_bringup_dispatch_preflight(
     std::ostringstream& output,
     const int indent,

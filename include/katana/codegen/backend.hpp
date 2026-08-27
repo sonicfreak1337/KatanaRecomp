@@ -61,6 +61,29 @@ enum class BackendRuntimeBinding : std::uint8_t {
     NativePort
 };
 
+// NativeBringup observes only unresolved register transfers. Keep this
+// predicate shared by partition cache-key reduction and C++ emission so a
+// partition can reuse StrictProduct output exactly when no preflight can be
+// emitted.
+[[nodiscard]] inline bool requires_native_bringup_dispatch_validation(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Class = katana::ir::DynamicTargetClass;
+    if (instruction.operation != katana::ir::Operation::CallRegister &&
+        instruction.operation != katana::ir::Operation::JumpRegister)
+        return false;
+    switch (instruction.dynamic_target_class) {
+    case Class::RuntimeOnly:
+    case Class::GuardedPartial:
+    case Class::Unresolved:
+        return true;
+    case Class::NotApplicable:
+    case Class::GuardedComplete:
+    case Class::ExactGuarded:
+        return false;
+    }
+    return true;
+}
+
 struct BackendRequest {
     std::span<const katana::ir::Function> functions;
     std::uint32_t entry_address = 0u;

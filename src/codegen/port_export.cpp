@@ -37778,11 +37778,10 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::to_string(options.diagnostic_partial) + ':' +
         std::to_string(native_port_definition != nullptr) + ':' +
         options.console_profile);
-    // NativeBringup inserts a product-ineligible preflight before unresolved
-    // register transfers.  That instrumentation must invalidate generated
-    // host source, but it does not change the sealed guest/AOT-pack identity
-    // against which authoring evidence was collected.
-    const auto partition_configuration_hash = katana::io::sha256_bytes(
+    // The final effective NativeBringup bit is appended per partition below.
+    // Keeping the zero form byte-identical to StrictProduct lets partitions
+    // without an eligible register transfer reuse their generated host source.
+    const auto partition_configuration_identity_prefix =
         std::string("cpp-port-partition-v") +
         std::to_string(port_partition_emission_schema_version) + ':' +
         std::to_string(katana::runtime::block_abi_version) + ':' +
@@ -37792,11 +37791,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::to_string(options.partition_options.maximum_instructions) + ':' +
         std::to_string(native_aot_emission_profile_version) + ':' +
         std::to_string(options.diagnostic_partial) + ':' +
-        std::to_string(native_port_definition != nullptr) + ':' +
-        std::to_string(
-            options.native_execution_profile ==
-            NativePortExecutionProfile::NativeBringup) + ':' +
-        options.console_profile);
+        std::to_string(native_port_definition != nullptr) + ':';
     const auto partition_manifest_hash = katana::io::sha256_bytes(
         std::string("katana-port-partition-manifest-v2:") +
         options.target_name);
@@ -37826,6 +37821,9 @@ static PortExportResult export_dreamcast_port_project_impl(
         katana::io::sha256_bytes(metadata_override_identity.str());
     std::vector<ProjectArtifact> artifacts;
     artifacts.reserve(partitions.size() + 10u);
+    const bool native_bringup_execution_profile =
+        options.native_execution_profile ==
+        NativePortExecutionProfile::NativeBringup;
     const auto emit_partition = [&](const TranslationUnitPartition& partition) {
         auto functions = select_functions(emitted_program, partition);
         std::unordered_set<std::uint32_t> local_function_entries;
@@ -37837,6 +37835,7 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::vector<NativeAotBlockOwnerEntry> partition_native_block_owners;
         std::vector<std::uint32_t> partition_architectural_boundaries;
         std::vector<std::uint32_t> partition_closure_probe_callsites;
+        bool partition_requires_native_bringup_dispatch_validation = false;
         const auto append_native_block_owner = [&](const std::uint32_t target) {
             const auto owner = emitted_block_owners.find(target);
             if (owner == emitted_block_owners.end()) return;
@@ -37872,6 +37871,11 @@ static PortExportResult export_dreamcast_port_project_impl(
                     append_native_block_owner(successor);
                 const katana::ir::Instruction* terminal = nullptr;
                 for (const auto& instruction : block.instructions) {
+                    if (native_bringup_execution_profile &&
+                        !partition_requires_native_bringup_dispatch_validation)
+                        partition_requires_native_bringup_dispatch_validation =
+                            requires_native_bringup_dispatch_validation(
+                                instruction);
                     if (instruction.delay_slot.role !=
                         katana::ir::DelaySlotRole::Slot)
                         terminal = &instruction;
@@ -37995,6 +37999,17 @@ static PortExportResult export_dreamcast_port_project_impl(
                                        << boundary << ';';
         for (const auto callsite : partition_closure_probe_callsites)
             partition_linkage_identity << "closure-probe=" << callsite << ';';
+        const bool native_bringup_dispatch_validation =
+            partition_requires_native_bringup_dispatch_validation;
+        // NativeBringup inserts a product-ineligible preflight before eligible
+        // unresolved register transfers. Only partitions that can emit that
+        // instrumentation need a distinct generated-source cache key. Preserve
+        // the prior zero/one identity shape so existing StrictProduct entries
+        // remain reusable.
+        const auto partition_configuration_hash = katana::io::sha256_bytes(
+            partition_configuration_identity_prefix +
+            std::to_string(native_bringup_dispatch_validation) + ':' +
+            options.console_profile);
         const auto partition_emission_hash = katana::io::sha256_bytes(
             partition_configuration_hash + ':' + partition_linkage_identity.str());
         const auto translation_unit_name =
@@ -38038,8 +38053,7 @@ static PortExportResult export_dreamcast_port_project_impl(
                 ? BackendRuntimeBinding::NativePort
                 : BackendRuntimeBinding::DiagnosticPlatformServices;
         request_options.native_bringup_dispatch_validation =
-            options.native_execution_profile ==
-            NativePortExecutionProfile::NativeBringup;
+            native_bringup_dispatch_validation;
         auto request = make_native_aot_backend_request(NativeAotEmissionProfile::Product,
                                                        functions,
                                                        functions.front().entry_address,
