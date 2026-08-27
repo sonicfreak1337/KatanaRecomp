@@ -48,55 +48,32 @@ Provider- und Diagnostikaenderungen bauen nur ihren inkrementellen Teil neu.
 Jedes Artefakt traegt eine stabile Inhaltsidentitaet; ein Lauf protokolliert
 Pack-, Runtime-, Adapter-, Manifest- und Replay-Identitaet.
 
-## Cycle-Manifest und Freeze
+## Automatische Build-Authority
 
-Jeder Makro- und Mikrozyklus wird vor seiner Implementierung durch ein
-maschinenlesbares Manifest eingefroren. Das Manifest bindet mindestens:
+Makro- und Mikrozyklen werden vor der Implementierung nicht manuell
+eingefroren. Bis zum Beginn des einen Produktexports werden kompatible,
+streng beweisbare Findings laufend aufgenommen. Der Export publiziert die
+Build-Authority automatisch als kanonische Metadatenmenge: Input-Provenance,
+aktuelle Analyse, AOT-Pack, Promotion-Report und executable Allowlist binden
+die verwendeten Source-/Manifest-/Runtime-/Analyse-/Pack-Identitaeten. Das
+zugehoerige Laufmanifest bindet Workflowklasse, Replayset, K1-K5-Stops,
+Milestones und Produktbuildbudget `1`. Es gibt kein zusaetzliches manuell zu
+pflegendes Freeze-Artefakt.
 
-```json
-{
-  "cycle": "rNNN-product-M",
-  "workflow": "macro|micro",
-  "world_sha256": "...",
-  "aot_pack_sha256": "...",
-  "runtime_commit_or_source_identity": "...",
-  "replay_set_sha256": "...",
-  "current_milestone": "M3",
-  "target_milestone": "M4",
-  "replays": [
-    {"id": "r1", "knowledge_class": "K1", "root_cause_key": "..."},
-    {"id": "r2", "knowledge_class": "K2", "root_cause_key": "..."},
-    {"id": "r3", "knowledge_class": "K3", "root_cause_key": "..."},
-    {"id": "r4", "knowledge_class": "K2", "root_cause_key": "..."},
-    {"id": "r5", "knowledge_class": "K1", "root_cause_key": "..."},
-    {"id": "r6", "knowledge_class": "K5", "root_cause_key": "..."}
-  ],
-  "knowledge_gap_clusters": ["..."],
-  "performance_companion": {
-    "root_cause_key": "...",
-    "target": "..."
-  },
-  "product_build_budget": 1,
-  "analysis_required": false
-}
-```
-
-Nur Findings mit passender World-, Pack-, Source- und Replay-Reachability
-duerfen in diesen Batch aufgenommen werden. Nach dem Freeze eintreffende
-Arbeit gehoert in den naechsten Zyklus. Dadurch bleibt das Ein-Build-Budget
-beweisbar und der Batch kann nicht waehrend der Implementierung unbegrenzt
-wachsen.
+Analyse, Build und Replays muessen exakt dieselbe publizierte Authority
+verwenden. Erst der Beginn des Exports schliesst den Batch. Spaeter
+eintreffende Arbeit gehoert in den naechsten normalen Batch; davor gibt es
+keinen zeremoniellen Freeze und keinen kuenstlichen Arbeitsstopp.
 
 ## Deterministisches Authoring-Artefakt
 
 Die private Allowlist wird nicht aus einem Runtime-Log gelernt. Ein
 versioniertes JSONL-Authoring-Dokument enthaelt genau einen Header und danach
 explizit reviewte Evidence-Records. Der Header bindet mindestens Projekt-ID,
-Projektversion, committed Analysis-Generation, die SHA-256-Identitaet des
-vollstaendigen AOT-Packs und dessen nicht-null Generation. Jeder Record bindet
-Source-Owner, terminalen Source-Block, Callsite samt Delay-Slot, Transferart,
-Fortsetzung, Target-Block, beide Owner, exakte Codeidentitaeten sowie Image-,
-Modul- und Generationsidentitaeten.
+Projektversion sowie den Analyse-/Packstand, gegen den die Records authoriert
+wurden. Jeder Record bindet Source-Owner, terminalen Source-Block, Callsite
+samt Delay-Slot, Transferart, Fortsetzung, Target-Block, beide Owner, exakte
+Codeidentitaeten sowie Image-, Modul- und Generationsidentitaeten.
 
 Die executable v1-Implementierung ist absichtlich enger als das allgemeine
 Artefaktformat: Source und Target muessen beide dem unveraenderlichen
@@ -116,25 +93,38 @@ katana-recomp author-native-bringup <Authoring.jsonl> \
 Der Writer sortiert Records kanonisch, verwirft Duplikate und Konflikte und
 publiziert exklusiv und atomar ohne Symlink-/Reparse-Following. Derselbe
 Record-Satz erzeugt unabhaengig von der JSONL-Reihenfolge dieselbe
-Artefaktidentitaet. Der Bring-up-Export akzeptiert das Artefakt nur zusammen
-mit einer committed Analysis-Generation und nur wenn Projekt-ID,
-Projektversion, Analysis-, Authoring- und Whole-Pack-Identitaet sowie die
-Packgeneration exakt passen:
+Artefaktidentitaet. Der Bring-up-Export kann entweder eine bereits committed
+Analysis-Generation verwenden oder die aktuelle source-bound Analyse und den
+AOT-Pack im selben Exportdurchlauf erzeugen. Im zweiten Fall darf ein
+aelteres Candidate-only-Artefakt den Lauf seed-en: Projekt und Version muessen
+exakt passen und jeder Candidate muss gegen den aktuellen ProgramIndex, die
+aktuelle IR, die authentifizierten Bytes, Ownergrenzen und die neu erzeugte
+Blocktabelle vollstaendig revalidiert werden. Danach binden Promotion-Report
+und executable Allowlist ausschliesslich die aktuelle Analyse-/Packidentitaet.
+Enthielt der Seed irgendeinen `Proven`-Record, ist ein Analyse- oder
+Pack-Mismatch weiterhin ein harter Fehler.
+
+Beide Varianten sind zulaessig:
 
 ```text
 katana-recomp port <Quelle.gdi> ... \
   --analysis-generation <committed-generation> \
   --native-execution-profile native-bringup \
   --native-bringup-allowlist <private.katana-native-bringup>
+
+katana-recomp port <Quelle.gdi> ... \
+  --native-execution-profile native-bringup \
+  --native-bringup-allowlist <candidate-only-seed.katana-native-bringup>
 ```
 
 `strict-product` verbietet die Allowlist bereits an der CLI-Grenze und sieht
 sie weder im Export noch in einer Cacheidentitaet. `Candidate`-Records werden
 nur dann in die nicht releasefaehige executable Sicht uebernommen, wenn der
 Exporter alle oben genannten Execution-Safety-Bindungen unabhaengig gegen den
-aktuellen ProgramIndex, die IR-Bloecke und den unveraenderten AOT-Pack
-revalidiert. Ihr `missing_proof` bleibt offen. Nur `Proven` darf zusaetzlich
-`strict_proof_admitted=true` tragen.
+aktuellen ProgramIndex, die IR-Bloecke und den aktuellen, im Export
+versiegelten AOT-Pack revalidiert. Ihr `missing_proof` bleibt offen. Nur
+`Proven` darf zusaetzlich `strict_proof_admitted=true` tragen; `Proven` wird
+niemals ueber Candidate-Rebind auf einen anderen Analyse-/Packstand gehoben.
 
 ## Der Makrozyklus: `strict-product`
 
@@ -177,9 +167,11 @@ bestehenden Egg-Fleet-Tasks verteilt. Dieselbe Ownerfamilie bleibt moeglichst
 beim selben Task; nicht zusammenhaengende Poolpositionen sind erlaubt, ihre
 Authority und Frontier-IDs bleiben aber explizit und verlustfrei. Die Fleet
 vergleicht die neue Authority mit ihrem letzten Handoff und meldet Proof-,
-Scope-, Kollisions- und Multi-Close-Befunde zurueck. Replay-Sammlung darf
-parallel laufen; der eine Produktbuild wartet auf die Reconciliation aller
-Handoffs und relevanten A-Fixes. Das Gate ersetzt weder den ersten Replay-
+Scope-, Kollisions- und Multi-Close-Befunde zurueck. Replay-Sammlung und
+Produktvorbereitung duerfen parallel laufen. Die Pool-Delegation blockiert
+den Produktbuild nicht bis zum letzten Handoff; relevante A-Fixes, die vor
+Exportbeginn eintreffen, werden aufgenommen, spaetere im naechsten Batch.
+Das Gate ersetzt weder den ersten Replay-
 Stop als konkreten Implementierungsauftrag noch erlaubt es Runtime-Evidence
 als statische Closure.
 
@@ -187,9 +179,9 @@ Der Fleet-Handoff ist maschinenlesbar und bindet World-/Pack-SHA, Task-IDs,
 Root-Cause-Key, betroffene Dateien, Collision-Key, Replay-Reachability,
 Multi-Close-Set, Klassifikation und Acceptance:
 
-- `A`: aktuell bewiesen und im eingefrorenen Zyklus erreichbar; sofort
+- `A`: aktuell bewiesen und fuer den aktuellen Produktstand relevant; sofort
   umsetzen.
-- `B`: bestaetigt, aber fuer den aktuellen Freeze nicht erreicht oder durch
+- `B`: bestaetigt, aber fuer den aktuellen Batch nicht erreicht oder durch
   eine andere Voraussetzung blockiert; nicht Teil des Batches.
 - `C`: stale, duplicate, bereits geschlossen, falsch interpretiert,
   unzureichend bewiesen oder ausserhalb des aktuellen Produkts; nicht

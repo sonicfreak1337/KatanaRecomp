@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -92,7 +93,7 @@ class PackedDiscSource final : public DiscSource {
     mutable std::mutex stream_mutex_;
     std::size_t chunk_cache_capacity_ = 8u;
     mutable std::unordered_map<std::size_t, std::vector<std::uint8_t>> chunk_cache_;
-    mutable std::vector<std::size_t> chunk_cache_order_;
+    mutable std::deque<std::size_t> chunk_cache_order_;
     mutable std::mutex cache_mutex_;
 };
 

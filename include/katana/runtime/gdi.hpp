@@ -4,6 +4,7 @@
 #include "katana/runtime/disc.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -94,7 +95,7 @@ class GdiDiscSource final : public DiscSource {
     std::uint64_t logical_size_ = 0u;
     std::size_t sector_cache_capacity_ = 256u;
     mutable std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> sector_cache_;
-    mutable std::vector<std::uint64_t> sector_cache_order_;
+    mutable std::deque<std::uint64_t> sector_cache_order_;
     mutable std::mutex cache_mutex_;
     mutable std::once_flag packed_content_identity_once_;
     mutable std::string packed_content_identity_;

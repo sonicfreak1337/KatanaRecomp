@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -70,8 +71,8 @@ class Iso9660Filesystem final {
     Iso9660CacheMode cache_mode_ = Iso9660CacheMode::Enabled;
     mutable std::unordered_map<std::uint64_t, std::vector<Iso9660Entry>> directory_cache_;
     mutable std::unordered_map<std::string, Iso9660Entry> extent_cache_;
-    mutable std::vector<std::uint64_t> directory_cache_order_;
-    mutable std::vector<std::string> extent_cache_order_{"/"};
+    mutable std::deque<std::uint64_t> directory_cache_order_;
+    mutable std::deque<std::string> extent_cache_order_{"/"};
     std::size_t directory_cache_capacity_ = 256u;
     std::size_t extent_cache_capacity_ = 4096u;
     mutable std::mutex cache_mutex_;

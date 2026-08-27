@@ -157,7 +157,7 @@ Iso9660Filesystem::read_directory(const Iso9660Entry& directory,
         if (!directory_cache_.contains(cache_key)) {
             if (directory_cache_.size() == directory_cache_capacity_) {
                 directory_cache_.erase(directory_cache_order_.front());
-                directory_cache_order_.erase(directory_cache_order_.begin());
+                directory_cache_order_.pop_front();
                 ++io_counters_.cache_evictions;
             }
             directory_cache_order_.push_back(cache_key);
@@ -196,7 +196,7 @@ Iso9660Entry Iso9660Filesystem::resolve(const std::string_view path) const {
             if (!extent_cache_.contains(canonical)) {
                 if (extent_cache_.size() == extent_cache_capacity_) {
                     extent_cache_.erase(extent_cache_order_.front());
-                    extent_cache_order_.erase(extent_cache_order_.begin());
+                    extent_cache_order_.pop_front();
                     ++io_counters_.cache_evictions;
                 }
                 extent_cache_order_.push_back(canonical);

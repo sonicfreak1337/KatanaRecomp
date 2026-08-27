@@ -3404,41 +3404,43 @@ int main() {
         {".post-bootstrap",
          0u,
          0u,
-         0x28u,
+         0x2Cu,
          katana::io::SegmentKind::Mixed,
          {true, true, true},
          {0x02u, 0xE1u, // mov #2,r1
           0x12u, 0x30u, // cmp/hs r1,r0
           0x01u, 0x8Bu, // bf 0x0A
-          0x0Bu, 0xA0u, // bra 0x20 (bounded fallback)
+           0x0Du, 0xA0u, // bra 0x24 (bounded fallback)
           0x09u, 0x00u, // nop (delay)
           0x00u, 0x40u, // shll r0
           0x03u, 0x61u, // mov r0,r1
-          0x02u, 0xC7u, // mova 0x18,r0
+          0x03u, 0xC7u, // mova 0x1C,r0
           0x1Du, 0x00u, // mov.w @(r0,r1),r0
-          0x23u, 0x00u, // braf r0
+          0x07u, 0xE2u, // mov #7,r2 (independent scheduling)
+          0x01u, 0x72u, // add #1,r2 (preserves loaded r0)
+          0x23u, 0x00u, // braf r0; producer is intentionally non-adjacent
           0x09u, 0x00u, // nop (delay)
           0x09u, 0x00u, // padding
-          0x0Au, 0x00u, // table[0] -> 0x20 (base 0x16)
-          0x0Eu, 0x00u, // table[1] -> 0x24
+          0x0Au, 0x00u, // table[0] -> 0x24 (base 0x1A)
+          0x0Eu, 0x00u, // table[1] -> 0x28
           0x09u, 0x00u, 0x09u, 0x00u,
-          0x0Bu, 0x00u, 0x09u, 0x00u, // 0x20: rts / nop
-          0x0Bu, 0x00u, 0x09u, 0x00u}}); // 0x24: rts / nop
+          0x0Bu, 0x00u, 0x09u, 0x00u, // 0x24: rts / nop
+          0x0Bu, 0x00u, 0x09u, 0x00u}}); // 0x28: rts / nop
     identity_bound_braf_image.add_entry_point(0u);
     identity_bound_braf_image.add_immutable_range(
-        {0x12u, 4u, "synthetic-braf-dispatch-v1", 0u});
+        {0x16u, 4u, "synthetic-braf-dispatch-v1", 0u});
     identity_bound_braf_image.add_immutable_range(
-        {0x18u, 4u, "synthetic-braf-table-v1", 0u});
+        {0x1Cu, 4u, "synthetic-braf-table-v1", 0u});
     katana::analysis::AnalysisOverrides identity_bound_braf_override;
     identity_bound_braf_override.source_path =
         "identity-bound-braf-table.txt";
     katana::analysis::JumpTableOverride identity_bound_braf_table{
-        0x12u,
-        0x18u,
+        0x16u,
+        0x1Cu,
         2u,
         1u,
         sizeof(std::uint16_t),
-        0x16u,
+        0x1Au,
         katana::analysis::JumpTableOverrideEncoding::SignedRelative16,
         katana::analysis::JumpTableOverrideTransfer::Jump};
     identity_bound_braf_table.identity_bound_complete = true;
@@ -3451,7 +3453,7 @@ int main() {
         identity_bound_braf.indirect_control_flow.begin(),
         identity_bound_braf.indirect_control_flow.end(),
         [](const auto& resolution) {
-            return resolution.instruction_address == 0x12u;
+            return resolution.instruction_address == 0x16u;
         });
     require(
         identity_bound_braf_resolution !=
@@ -3461,9 +3463,10 @@ int main() {
             identity_bound_braf_resolution->evidence ==
                 katana::analysis::ControlFlowEvidence::GuardedComplete &&
             identity_bound_braf_resolution->targets ==
-                std::vector<std::uint32_t>{0x20u, 0x24u},
+                std::vector<std::uint32_t>{0x24u, 0x28u},
         "Eine exakt gebundene BRAF-Tabelle verlangte zusaetzliche "
-        "CodeIdentity-Ranges fuer bereits validierte Zielbloecke.");
+        "Producer-Inferenz oder CodeIdentity-Ranges fuer bereits validierte "
+        "Zielbloecke.");
 
     auto partial_table_image = table_jump_image;
     partial_table_image.write_u32_le(0x104u, 0x200u);

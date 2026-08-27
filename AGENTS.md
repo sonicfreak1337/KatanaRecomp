@@ -45,20 +45,22 @@ native-bringup:
   Providervertrag bereits vollstaendig bekannt sind und keine der genannten
   AOT-/Closure-Grenzen beruehrt wird.
 
-### Verbindlicher Cycle-Freeze
+### Automatische Build-Authority statt Cycle-Freeze
 
-- Vor der Implementierung wird jeder Zyklus durch ein maschinenlesbares
-  Manifest eingefroren. Es bindet mindestens Zyklus-ID, Workflowklasse,
-  World- und Pack-SHA-256, Runtime-Commit/Source-Identity, Replayset-SHA-256,
-  exakt sechs Replay-IDs samt K1-K5-Stopklasse, aktuellen und angestrebten
-  Storycheckpoint, Knowledge-Gap-Cluster, den an ein bearbeitetes Cluster
-  gekoppelten kleinen Runtime-Performance-Fix, Produktbuildbudget `1` und
-  `analysis_required=true|false`. Ein Grafikcluster ist nur bei
-  Bring-up-Relevanz, Crashursache oder nachgewiesenem Multi-Close Pflicht.
-- Nur Findings, deren World/Pack/Source und Replay-Reachability zum Freeze
-  passen, gehoeren in den Batch. Spaeter eintreffende Findings gehen in den
-  naechsten Zyklus. Das Ein-Build-Budget darf nicht durch ein nachtraeglich
-  wachsendes Batch umgangen werden.
+- Es gibt keinen manuellen Cycle-Freeze und keinen Arbeitsstopp vor der
+  Implementierung. Streng beweisbare, kompatible Findings werden bis zum
+  Beginn des einen Produktexports laufend in den Batch aufgenommen.
+- Der Export publiziert automatisch die maschinenlesbare, unveraenderliche
+  Build-Authority aus den kanonischen Input-Provenance-, Analyse-, AOT-Pack-,
+  Promotion- und Executable-Allowlist-Metadaten. Sie bindet insbesondere
+  Source-/Manifest-/Runtime-Identitaet, aktuelle Analyse- und Pack-SHA-256,
+  Workflowklasse und Produktbuildbudget `1`; Replayset und Milestones werden
+  im zugehoerigen Laufmanifest gebunden. Ein separates manuell gepflegtes
+  Freeze-Dokument ist weder erforderlich noch autoritativ.
+- Analyse, Produktbuild und Replays duerfen nur gegen diese automatisch
+  publizierte Authority laufen. Findings, die nach Beginn des Exports
+  eintreffen, gehen ohne nachtraegliches Aufschnueren des Builds in den
+  naechsten normalen Batch. Das Ein-Build-Budget bleibt unveraendert.
 
 ### Verbindliches Produktbuild-Budget im Native-Bring-up
 
@@ -97,6 +99,12 @@ native-bringup:
   bleibt offen; der Hit darf weder Strict noch eine Frontier schliessen.
   `Observed`, `Unresolved` und blosse RuntimeContracts sind hier nicht
   executable.
+- Ein vorheriger Candidate-only-Stand darf den naechsten Ein-Durchlauf-Export
+  seed-en. Weichen seine Analyse- oder Packidentitaeten von den aktuellen
+  source-bound Inputs ab, darf er nur nach vollstaendiger exakter
+  Revalidierung jedes Records auf die im selben Export erzeugte Analyse und
+  Blocktabelle rebound werden. Ein `Proven`-Record darf nie auf diese Weise
+  rebound werden; jeder Identity-Mismatch bleibt dort fail-closed.
 - Ein Allowlist-/Blocktabellen-Miss endet sofort als
   `UnknownCompiledTarget`. Interpreter, JIT, Runtime-Dekodierung,
   Materializer-, No-op- und Guessing-Fallbacks bleiben verboten.
@@ -159,7 +167,7 @@ native-bringup:
   Reihenfolge, sind aber keine Voraussetzung: Jeder streng beweisbare
   Hardware-Owner wird im selben Zyklus geschlossen, auch wenn ihn erst ein
   spaeterer Story- oder Gameplaypfad erreicht.
-  `B` ist ein bestaetigter, aber fuer den eingefrorenen Batch nicht
+  `B` ist ein bestaetigter, aber fuer den aktuellen Batch nicht
   erreichter oder anderweitig blockierter Befund. `C` ist stale, duplicate,
   bereits geschlossen, falsch interpretiert, unzureichend bewiesen oder
   ausserhalb des aktuellen Produkts und wird nicht implementiert.
@@ -167,10 +175,11 @@ native-bringup:
   Builds, Tests, Replays, Commits oder Pushes starten. Fehlende Evidence ist
   niemals `unreachable`, und Runtime-Witnesses werden nie zu statischem Proof
   hochgestuft.
-- Replay-Sammlung und read-only Inspektion duerfen parallel zur Egg Fleet
-  laufen. Der eine Produktbuild darf erst starten, wenn alle fuer den Pool
-  benoetigten Handoffs eingegangen, gegen den Freeze abgeglichen und alle
-  relevanten A-Faelle umgesetzt sind.
+- Replay-Sammlung, read-only Inspektion und Produktvorbereitung duerfen
+  parallel zur Egg Fleet laufen. Die Pool-Delegation startet unmittelbar
+  nach der Analyse, blockiert den Produktbuild aber nicht bis zum letzten
+  Handoff. Relevante A-Faelle, die vor Beginn des Exports eintreffen, werden
+  umgesetzt; spaetere gehen in den naechsten normalen Batch.
 
 ### Replays als Knowledge-Gap-Probes
 
@@ -286,11 +295,11 @@ Task implementieren
   Egg-Fleet-/RuntimeOnly-Befunden als ein zusammenhaengendes Fixpaket
   umgesetzt. Fuer dieses Gesamtpaket folgt genau ein neuer NativeBringup-
   Produktbuild; ein Build pro Replay oder pro Bug ist unzulaessig.
-- Der gemeinsame Zyklusbatch ist erst vollstaendig, wenn neben der
-  6er-Crashmatrix auch alle aktuellen Egg-Fleet-Handoffs abgeglichen und alle
-  relevanten aktuellen sowie historischen, noch nicht umgesetzten A-Befunde
-  aufgenommen sind. Vor diesem Abgleich darf kein Produktbuild starten;
-  irrelevante oder nachweislich ueberholte A-Befunde werden mit Evidence
+- Der gemeinsame Zyklusbatch umfasst die 6er-Crashmatrix sowie alle vor
+  Beginn des Exports bereits eingegangenen relevanten aktuellen und
+  historischen A-Befunde. Ausstehende read-only Egg-Fleet-Handoffs blockieren
+  den Produktbuild nicht; spaete A-Befunde gehen in den naechsten normalen
+  Batch. Irrelevante oder nachweislich ueberholte Befunde werden mit Evidence
   begruendet ausgelassen.
 - Automatisierte Sonic-Laeufe und gezielte Tests sind standardmaessig stumm,
   unsichtbar und ohne Screenshot-/Audio-Capture. Ein sichtbarer Lauf erfolgt

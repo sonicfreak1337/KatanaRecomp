@@ -23,7 +23,7 @@ class NativePortLoadedAotBinder;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     abi_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 12u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 13u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;
@@ -246,6 +246,16 @@ struct NativePortFrameTimingBinding final {
     std::uint32_t maximum_presentation_rate_hz = 1'000u;
 };
 
+// A native product has exactly one live host-controller owner. Generic ports
+// retain the Maple device projection. Titles which replace their complete SDK
+// peripheral update family instead consume NativePortPlatformServices input
+// directly; the generated Maple device then remains attached but neutral so
+// one physical edge cannot be published through both contracts.
+enum class NativePortInputOwnership : std::uint8_t {
+    MapleDevice,
+    NativeTitleProjection,
+};
+
 struct NativePortDefinition final {
     std::uint32_t contract_version =
         native_port_definition_contract_version;
@@ -273,6 +283,8 @@ struct NativePortDefinition final {
         provider_semantic_contracts;
     NativePortProviderSemanticCoverage provider_semantic_coverage =
         NativePortProviderSemanticCoverage::DeclaredOnly;
+    NativePortInputOwnership input_ownership =
+        NativePortInputOwnership::MapleDevice;
 };
 
 enum class NativePortLifecycleState : std::uint8_t {

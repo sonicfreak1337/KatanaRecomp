@@ -128,6 +128,16 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool valid_input_ownership(
+    const NativePortInputOwnership ownership) noexcept {
+    switch (ownership) {
+    case NativePortInputOwnership::MapleDevice:
+    case NativePortInputOwnership::NativeTitleProjection:
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] bool valid_provider_semantic_width(
     const std::uint8_t width) noexcept {
     switch (width) {
@@ -578,6 +588,8 @@ void validate_native_port_definition(
     if (!valid_provider_semantic_coverage(
             definition.provider_semantic_coverage))
         invalid_definition("provider-semantic-coverage");
+    if (!valid_input_ownership(definition.input_ownership))
+        invalid_definition("input-ownership");
     if (definition.provider_semantic_contracts.size() >
         native_port_provider_semantics_maximum_contracts)
         invalid_definition("provider-semantic-contract-count");

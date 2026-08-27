@@ -5082,11 +5082,24 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     jump_table.dispatch_address,
                     sizeof(std::uint16_t),
                     AuthenticatedRangePermission::Executable);
+                const auto delay_proof =
+                    jump_table.dispatch_address <=
+                            std::numeric_limits<std::uint32_t>::max() -
+                                sizeof(std::uint16_t)
+                        ? authenticated_range(
+                              jump_table.dispatch_address +
+                                  sizeof(std::uint16_t),
+                              sizeof(std::uint16_t),
+                              AuthenticatedRangePermission::Executable)
+                        : std::nullopt;
                 bool jump_table_generation_bound =
                     table_proof.has_value() &&
                     dispatch_proof.has_value() &&
+                    delay_proof.has_value() &&
                     same_authenticated_range_generation(
-                        *dispatch_proof, *table_proof);
+                        *dispatch_proof, *table_proof) &&
+                    same_authenticated_range_generation(
+                        *delay_proof, *table_proof);
                 // The authenticated table bytes are the identity-bound
                 // producer of the complete target set. Requiring a separate
                 // CodeIdentity range for every decoded landing instruction
@@ -5149,13 +5162,37 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         });
                 const bool native_entries_match =
                     native_full_table_match || native_fixed_entry_match;
-                bool native_producer_identity_bound =
-                    native_entries_match && jump_table_generation_bound;
+                const bool relative_dispatch_identity_bound =
+                    encoding != JumpTableEncoding::Absolute32 &&
+                    jump_table.authority ==
+                        JumpTableAuthority::IdentityBoundDeclared &&
+                    (dispatch->instruction.kind ==
+                         katana::sh4::InstructionKind::Braf ||
+                     dispatch->instruction.kind ==
+                         katana::sh4::InstructionKind::Bsrf) &&
+                    jump_table.dispatch_address <=
+                        std::numeric_limits<std::uint32_t>::max() - 4u &&
+                    jump_table.target_base ==
+                        jump_table.dispatch_address + 4u;
+                // identity_bound_complete is internal GameProject evidence:
+                // its producer has already authenticated the exact table
+                // bytes and the decoded dispatch/delay pair in one immutable
+                // image generation.  For BRAF/BSRF relative tables those
+                // facts, the architectural PC+4 base and the accepted table
+                // entries define the complete guarded target set.  Requiring
+                // the adjacent-instruction recognizer to rediscover the same
+                // producer is both redundant and incorrect for valid compiler
+                // schedules that preserve the loaded branch register across
+                // unrelated instructions.  Absolute pointer tables retain the
+                // stronger independently recognized producer/literal proof.
+                bool declaration_producer_identity_bound =
+                    jump_table_generation_bound &&
+                    relative_dispatch_identity_bound;
                 if (encoding == JumpTableEncoding::Absolute32) {
-                    native_producer_identity_bound =
-                        native_producer_identity_bound &&
+                    declaration_producer_identity_bound =
+                        native_entries_match && jump_table_generation_bound &&
                         native_producer != nullptr;
-                    if (native_producer_identity_bound) {
+                    if (declaration_producer_identity_bound) {
                         const auto& producer =
                             *native_producer;
                         const auto literal_proof =
@@ -5165,7 +5202,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                       sizeof(std::uint32_t),
                                       AuthenticatedRangePermission::Readable)
                                 : std::nullopt;
-                        native_producer_identity_bound =
+                        declaration_producer_identity_bound =
                             literal_proof.has_value() &&
                             !producer.instruction_addresses.empty() &&
                             same_authenticated_range_generation(
@@ -5177,8 +5214,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                     address,
                                     sizeof(std::uint16_t),
                                     AuthenticatedRangePermission::Executable);
-                            native_producer_identity_bound =
-                                native_producer_identity_bound &&
+                            declaration_producer_identity_bound =
+                                declaration_producer_identity_bound &&
                                 instruction_proof.has_value() &&
                                 same_authenticated_range_generation(
                                     *dispatch_proof, *instruction_proof);
@@ -5188,7 +5225,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                 jump_table.evidence =
                     hints ? ControlFlowEvidence::HintCandidate
                     : table.identity_bound_complete && jump_table.resolved &&
-                              native_producer_identity_bound
+                              !jump_table.aot_candidates_only &&
+                              !jump_table.candidate_scan_truncated &&
+                              declaration_producer_identity_bound
                         ? ControlFlowEvidence::GuardedComplete
                         : ControlFlowEvidence::ForcedOverride;
                 jump_table_result_index.insert_or_assign(

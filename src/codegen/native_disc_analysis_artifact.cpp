@@ -26,6 +26,8 @@ constexpr std::size_t maximum_artifact_allocation_bytes =
 class CodecError final : public std::runtime_error {
   public:
     CodecError() : std::runtime_error("native-disc-analysis-artifact-codec") {}
+    explicit CodecError(std::string detail)
+        : std::runtime_error(std::move(detail)) {}
 };
 
 class Writer final {
@@ -96,7 +98,12 @@ class Writer final {
 
   private:
     void append(const void* const data, const std::size_t size) {
-        if (size > maximum_ - bytes_.size()) throw CodecError();
+        if (size > maximum_ - bytes_.size())
+            throw CodecError(
+                "native-disc-analysis-artifact-size-current-" +
+                std::to_string(bytes_.size()) + "-append-" +
+                std::to_string(size) + "-maximum-" +
+                std::to_string(maximum_));
         const auto* first = static_cast<const std::uint8_t*>(data);
         bytes_.insert(bytes_.end(), first, first + size);
     }
@@ -513,10 +520,15 @@ katana::analysis::DreamcastHardwareAudit read_hardware_audit(Reader& input) {
 }
 
 IrProgramCacheLimits latent_ir_limits() {
-    return {maximum_latent_aot_analysis_cache_artifact_bytes,
-            maximum_latent_aot_analysis_cache_functions,
-            maximum_latent_aot_analysis_cache_blocks,
-            maximum_latent_aot_analysis_cache_instructions,
+    // The monolithic NativeDisc checkpoint is not the narrow persistent
+    // candidate cache. It must transport every module which already passed
+    // the shared prepared-discovery limits without weakening those limits.
+    constexpr std::size_t maximum_checkpoint_payload_bytes =
+        64u * 1024u * 1024u;
+    return {maximum_checkpoint_payload_bytes,
+            maximum_prepared_latent_aot_functions_per_module,
+            maximum_prepared_latent_aot_blocks_per_module,
+            maximum_prepared_latent_aot_instructions_per_module,
             maximum_latent_aot_analysis_cache_successors,
             maximum_latent_aot_analysis_cache_targets,
             maximum_latent_aot_analysis_cache_callsites,
@@ -681,8 +693,18 @@ PreparedLatentAotModule read_latent_module(Reader& input) {
 }
 
 void write_latent(Writer& output, const LatentAotDiscovery& latent) {
-    write_vector(output, latent.modules,
-                 [&](const auto& module) { write_latent_module(output, module); });
+    output.u64(latent.modules.size());
+    for (std::size_t index = 0u; index < latent.modules.size(); ++index) {
+        try {
+            write_latent_module(output, latent.modules[index]);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception& error) {
+            throw std::runtime_error(
+                "native-disc-analysis-latent-module-" +
+                std::to_string(index) + '-' + error.what());
+        }
+    }
     write_vector(output, latent.analysis_candidate_duration_ms,
                  [&](const auto value) { output.u64(value); });
     write_vector(output, latent.analysis_candidate_diagnostics, [&](const auto& value) {

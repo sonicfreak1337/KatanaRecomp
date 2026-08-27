@@ -133,6 +133,39 @@ void report_deferred_latent_primary_root_seed_cache_failure(
     static_cast<void>(std::fflush(stderr));
 }
 
+void report_native_disc_analysis_artifact_failure(
+    const std::string_view stage,
+    const std::string_view reason) noexcept {
+    const auto write_token = [](const std::string_view token) noexcept {
+        constexpr std::size_t maximum_token_bytes = 96u;
+        const auto count = std::min(token.size(), maximum_token_bytes);
+        for (std::size_t index = 0u; index < count; ++index) {
+            const auto character =
+                static_cast<unsigned char>(token[index]);
+            const bool ascii_alphanumeric =
+                (character >= static_cast<unsigned char>('a') &&
+                 character <= static_cast<unsigned char>('z')) ||
+                (character >= static_cast<unsigned char>('A') &&
+                 character <= static_cast<unsigned char>('Z')) ||
+                (character >= static_cast<unsigned char>('0') &&
+                 character <= static_cast<unsigned char>('9'));
+            const char output =
+                ascii_alphanumeric || character == '-' || character == '_'
+                    ? static_cast<char>(character)
+                    : '_';
+            static_cast<void>(std::fputc(output, stderr));
+        }
+    };
+    static_cast<void>(std::fputs(
+        "KATANA_NATIVE_DISC_ANALYSIS_ARTIFACT_DIAGNOSTIC stage=",
+        stderr));
+    write_token(stage);
+    static_cast<void>(std::fputs(" reason=", stderr));
+    write_token(reason);
+    static_cast<void>(std::fputc('\n', stderr));
+    static_cast<void>(std::fflush(stderr));
+}
+
 bool valid_target_name(const std::string_view value) noexcept {
     if (value.empty() || !std::isalpha(static_cast<unsigned char>(value.front()))) {
         return false;
@@ -308,7 +341,7 @@ std::string native_port_export_identity(
     katana::runtime::validate_native_port_definition(*definition);
     NativePortIdentityMaterial material;
     material.text("katana.native-port-export.identity");
-    material.u32(4u);
+    material.u32(5u);
     material.u32(definition->contract_version);
     material.text(definition->project_id);
     material.text(definition->project_version);
@@ -424,6 +457,7 @@ std::string native_port_export_identity(
         material.text(contract.result.title_state_expression);
     }
     material.enumeration(definition->provider_semantic_coverage);
+    material.enumeration(definition->input_ownership);
 
     material.u32(definition->frame_timing.simulation_rate_hz);
     material.u32(
@@ -548,6 +582,18 @@ std::string native_port_input_compatibility_identity(
         return "katana::runtime::NativePortProviderSemanticCoverage::RequiredForHardwareClosure";
     }
     throw std::invalid_argument("native-port-provider-semantic-coverage");
+}
+
+[[nodiscard]] std::string_view native_port_input_ownership_name(
+    const katana::runtime::NativePortInputOwnership ownership) {
+    using Ownership = katana::runtime::NativePortInputOwnership;
+    switch (ownership) {
+    case Ownership::MapleDevice:
+        return "katana::runtime::NativePortInputOwnership::MapleDevice";
+    case Ownership::NativeTitleProjection:
+        return "katana::runtime::NativePortInputOwnership::NativeTitleProjection";
+    }
+    throw std::invalid_argument("native-port-input-ownership");
 }
 
 std::string boot_analysis_semantic_contract_identity(
@@ -900,7 +946,7 @@ std::string latent_primary_root_seed_cache_semantic_identity(
     // existing export identity while allowing those downstream declarations
     // to reuse an already authoritative root seed.
     static_assert(
-        katana::runtime::native_port_definition_contract_version == 12u,
+        katana::runtime::native_port_definition_contract_version == 13u,
         "Review the latent-root NativePort projection for the new contract.");
     if (options.native_port_definition == nullptr)
         return latent_primary_root_seed_semantic_identity(
@@ -3426,6 +3472,30 @@ std::string guarded_aot_address(const std::uint32_t address) {
     std::ostringstream output;
     output << "0x" << std::uppercase << std::hex << std::setw(8)
            << std::setfill('0') << address;
+    return output.str();
+}
+
+std::optional<std::string> canonical_latent_aot_location(
+    const std::span<const PreparedLatentAotModule> modules,
+    const std::uint32_t address) {
+    const PreparedLatentAotModule* matched = nullptr;
+    for (const auto& module : modules) {
+        const auto begin = static_cast<std::uint64_t>(module.source_address);
+        const auto end = begin + module.byte_size;
+        if (address < begin || address >= end) continue;
+        // Overlapping synthetic extents cannot safely name one immutable
+        // module-relative owner. Keep the raw address in that invalid state so
+        // the ordinary ambiguity gates remain fail-closed.
+        if (matched != nullptr) return std::nullopt;
+        matched = &module;
+    }
+    if (matched == nullptr || matched->byte_identity.empty())
+        return std::nullopt;
+
+    std::ostringstream output;
+    output << "latent-module:" << matched->byte_identity << "@+0x"
+           << std::uppercase << std::hex << std::setw(8)
+           << std::setfill('0') << address - matched->source_address;
     return output.str();
 }
 
@@ -11337,12 +11407,22 @@ std::string handwritten_main(
            "                cpu, state, detailed_diagnostics, wait_loop_trace);\n"
            "        auto controller_input =\n"
            "            std::make_shared<katana::runtime::ControllerInputTimeline>();\n"
+           "        const bool maple_live_input_enabled =\n"
+           "            definition.input_ownership ==\n"
+           "            katana::runtime::NativePortInputOwnership::MapleDevice;\n"
+           "        std::cerr << \"KATANA_NATIVE_INPUT_OWNER owner=\"\n"
+           "                  << (maple_live_input_enabled ? \"maple-device\"\n"
+           "                                               : \"native-title-projection\")\n"
+           "                  << '\\n';\n"
            "        std::shared_ptr<katana::runtime::HostInputBackend> maple_input =\n"
            "            controller_input;\n"
            "        bool controller_input_replay_enabled = false;\n"
            "        if (const auto* replay_path = std::getenv(\n"
            "                \"KATANA_CONTROLLER_INPUT_REPLAY\");\n"
            "            replay_path != nullptr && *replay_path != '\\0') {\n"
+           "            if (!maple_live_input_enabled)\n"
+           "                throw std::runtime_error(\n"
+           "                    \"controller-input-replay-conflicts-with-native-title-owner\");\n"
            "            const auto* replay_identity = std::getenv(\n"
            "                \"KATANA_CONTROLLER_INPUT_REPLAY_IDENTITY\");\n"
            "            if (replay_identity == nullptr || *replay_identity == '\\0')\n"
@@ -11502,7 +11582,8 @@ std::string handwritten_main(
            "            auto source = std::make_unique<ControllerContractGamepadSource>();\n"
            "            controller_contract_source = source.get();\n"
            "            gamepad_source = std::move(source);\n"
-           "        } else if (!controller_input_replay_enabled && lifecycle_test.empty() &&\n"
+           "        } else if (maple_live_input_enabled &&\n"
+           "            !controller_input_replay_enabled && lifecycle_test.empty() &&\n"
            "            katana::runtime::native_gamepad_input_available())\n"
            "            gamepad_source = katana::runtime::create_native_gamepad_source();\n"
            "        std::size_t lifecycle_test_step = 0u;\n"
@@ -11980,7 +12061,8 @@ std::string handwritten_main(
            "                    const auto guest_cycle = state.scheduler->current_cycle();\n"
            "                    if (event.kind == "
            "katana::runtime::NativeHostEventKind::FocusGained) {\n"
-           "                        if (controller_input->set_focus(true, guest_cycle))\n"
+           "                        if (maple_live_input_enabled &&\n"
+           "                            controller_input->set_focus(true, guest_cycle))\n"
            "                            ++controller_changes;\n"
            "                        host.inject({host_sequence++, guest_cycle,\n"
            "                                     katana::runtime::HostRuntimeEventKind::"
@@ -11990,7 +12072,8 @@ std::string handwritten_main(
            "                    if (event.kind == "
            "katana::runtime::NativeHostEventKind::FocusLost) {\n"
            "                        if (ignore_focus) continue;\n"
-           "                        if (controller_input->set_focus(false, guest_cycle))\n"
+           "                        if (maple_live_input_enabled &&\n"
+           "                            controller_input->set_focus(false, guest_cycle))\n"
            "                            ++controller_changes;\n"
            "                        host.inject({host_sequence++, guest_cycle,\n"
            "                                     katana::runtime::HostRuntimeEventKind::"
@@ -12027,7 +12110,7 @@ std::string handwritten_main(
            "                        key = katana::runtime::KeyboardControllerKey::DpadRight; break;\n"
            "                    case katana::runtime::NativeHostKey::Unknown: break;\n"
            "                    }\n"
-           "                    if (key)\n"
+           "                    if (maple_live_input_enabled && key)\n"
            "                        forward_controller_change(\n"
            "                            controller_input->keyboard_event(\n"
            "                                *key, down, guest_cycle));\n"
@@ -18588,10 +18671,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     for (std::size_t shard = 0u; shard < shard_count; ++shard)
         output << "        append_native_dispatch_shard_"
                << shard_suffix(shard) << "(result);\n";
-    output << "        std::sort(result.begin(), result.end(),\n"
-              "                  [](const auto& left, const auto& right) {\n"
-              "                      return left.address < right.address;\n"
-              "                  });\n"
+    output << "        // Export shards preserve the already address-sorted block table.\n"
+              "        // Validate that contract in linear time instead of sorting it again.\n"
               "        if (result.size() != "
            << blocks.size()
            << "u ||\n"
@@ -18599,7 +18680,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            std::adjacent_find(\n"
               "                result.begin(), result.end(),\n"
               "                [](const auto& left, const auto& right) {\n"
-              "                    return left.address == right.address;\n"
+              "                    return left.address >= right.address;\n"
               "                }) != result.end())\n"
               "            throw std::runtime_error(\"native-dispatch-table\");\n"
               "        return result;\n"
@@ -20594,6 +20675,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
            << "u}, native_provider_semantic_contracts, "
            << native_port_provider_semantic_coverage_name(
                   definition.provider_semantic_coverage)
+           << ", "
+           << native_port_input_ownership_name(definition.input_ownership)
            << "};\n"
               "    return definition;\n"
               "}\n\n"
@@ -26829,6 +26912,7 @@ prove_native_port_hook_code_source(
 [[nodiscard]] std::optional<
     std::vector<katana::analysis::OwnerSemanticLiteralEvidence>>
 owner_semantic_literal_evidence(
+    const katana::io::ExecutableImage& image,
     const katana::ir::Function& function,
     const std::span<const PreparedLatentAotModule> latent_modules) {
     std::set<std::uint32_t> instruction_addresses;
@@ -26838,6 +26922,12 @@ owner_semantic_literal_evidence(
 
     std::map<std::uint32_t,
              katana::analysis::OwnerSemanticLiteralEvidence> collected;
+    const auto insert = [&](katana::analysis::OwnerSemanticLiteralEvidence
+                                evidence) {
+        const auto [found, inserted] = collected.try_emplace(
+            evidence.instruction_address, std::move(evidence));
+        return inserted || found->second == evidence;
+    };
     for (const auto& module : latent_modules) {
         for (const auto& literal : module.pc_literal_evidence) {
             const auto instruction_address =
@@ -26860,10 +26950,58 @@ owner_semantic_literal_evidence(
                 literal.width_bytes,
                 literal.signed_value,
                 module.byte_identity};
-            const auto [found, inserted] = collected.try_emplace(
-                evidence.instruction_address, evidence);
-            if (!inserted && found->second != evidence)
-                return std::nullopt;
+            if (!insert(std::move(evidence))) return std::nullopt;
+        }
+    }
+
+    // The post-bootstrap image loader installs immutable ranges only after
+    // authenticating their committed bytes.  Consume that existing ledger for
+    // scalar PC-relative loads as well: segment readability or the current
+    // snapshot alone is deliberately insufficient.  This gives static-image
+    // owners the same byte-authority contract as decoded latent modules while
+    // retaining fail-closed ambiguity handling across the two domains.
+    for (const auto& block : function.blocks) {
+        for (const auto& instruction : block.instructions) {
+            std::size_t width = 0u;
+            bool signed_value = false;
+            if (instruction.operation ==
+                katana::ir::Operation::LoadWordSignedPcRelative) {
+                width = 2u;
+                signed_value = true;
+            } else if (instruction.operation ==
+                       katana::ir::Operation::LoadLongPcRelative) {
+                width = 4u;
+            } else {
+                continue;
+            }
+            if (!instruction.effective_address.has_value()) continue;
+            const auto resolved = image.resolve_segment_address(
+                *instruction.effective_address, width);
+            if (!resolved.has_value()) continue;
+            const auto* const immutable =
+                image.find_immutable_range(*resolved, width);
+            const auto* const segment = image.find_segment(*resolved, width);
+            const auto offset = segment != nullptr
+                ? segment->byte_offset(*resolved)
+                : std::optional<std::size_t>{};
+            if (immutable == nullptr || segment == nullptr ||
+                !segment->permissions.readable || !offset.has_value() ||
+                *offset > segment->bytes.size() ||
+                width > segment->bytes.size() - *offset)
+                continue;
+            std::uint32_t bits = 0u;
+            for (std::size_t index = 0u; index < width; ++index)
+                bits |= static_cast<std::uint32_t>(
+                            segment->bytes[*offset + index]) <<
+                        (index * 8u);
+            katana::analysis::OwnerSemanticLiteralEvidence evidence{
+                instruction.source_address,
+                *instruction.effective_address,
+                bits,
+                static_cast<std::uint8_t>(width),
+                signed_value,
+                immutable->identity};
+            if (!insert(std::move(evidence))) return std::nullopt;
         }
     }
     std::vector<katana::analysis::OwnerSemanticLiteralEvidence> result;
@@ -26875,7 +27013,7 @@ owner_semantic_literal_evidence(
     return result;
 }
 
-constexpr std::uint32_t owner_semantic_proof_bundle_version = 2u;
+constexpr std::uint32_t owner_semantic_proof_bundle_version = 3u;
 
 struct OwnerSemanticProofKey final {
     katana::runtime::NativePortHookCodeSource code_source =
@@ -26939,7 +27077,7 @@ owner_semantic_proof_bundle(
     } active_guard{*active_proofs, key};
 
     auto literal_evidence = owner_semantic_literal_evidence(
-        function, latent_modules);
+        image, function, latent_modules);
     if (!literal_evidence.has_value()) return nullptr;
     std::vector<katana::analysis::OwnerSemanticDirectCallEvidence>
         direct_call_evidence;
@@ -27982,11 +28120,26 @@ revalidate_native_bringup_authoring(
     const auto expected_analysis_identity =
         native_disc_analysis_artifact_bringup_identity_key(
             *analysis_identity);
-    if (authoring.project_id != game_project->project_id ||
-        authoring.project_version != game_project->project_version ||
-        authoring.analysis_identity != expected_analysis_identity ||
-        authoring.aot_pack_identity != pack.identity ||
-        authoring.aot_pack_generation != pack.generation) {
+    const bool project_matches =
+        authoring.project_id == game_project->project_id &&
+        authoring.project_version == game_project->project_version;
+    const bool analysis_matches =
+        authoring.analysis_identity == expected_analysis_identity;
+    const bool pack_matches =
+        authoring.aot_pack_identity == pack.identity &&
+        authoring.aot_pack_generation == pack.generation;
+    const bool identity_rebind = !analysis_matches || !pack_matches;
+    const bool contains_strict_proof = std::ranges::any_of(
+        authoring.targets, [](const auto& target) {
+            return target.stage ==
+                katana::runtime::NativeBringupEvidenceStage::Proven;
+        });
+    // Candidate authoring is only a seed for executable bring-up.  Rebinding
+    // it to a newer analysis/pack does not promote proof: every admitted
+    // target is revalidated below against the current unique IR owners,
+    // exact boundaries, call/delay shape and byte identities.  Proven input
+    // remains fail-closed because its proof authority is analysis-specific.
+    if (!project_matches || (identity_rebind && contains_strict_proof)) {
         std::ostringstream detail;
         detail << "NativeBringup authoring does not match project, analysis, "
                   "or the complete AOT pack. authoring-project="
@@ -28012,7 +28165,9 @@ revalidate_native_bringup_authoring(
             entry.dispatch = revalidate_native_bringup_execution_target(
                 evidence, pack, index, image, latent_modules, *game_project);
             entry.bringup_execution_admitted = true;
-            entry.admission = "candidate-execution-safety-revalidated";
+            entry.admission = identity_rebind
+                ? "candidate-current-analysis-and-pack-rebound-revalidated"
+                : "candidate-execution-safety-revalidated";
             break;
         case katana::runtime::NativeBringupEvidenceStage::Proven:
             entry.dispatch = revalidate_native_bringup_execution_target(
@@ -33896,7 +34051,7 @@ OwnerHardwareSiteTaskContract owner_hardware_site_task_contract(
         authenticated_literals;
     if (function != program.end()) {
         const auto collected = owner_semantic_literal_evidence(
-            *function, latent_modules);
+            image, *function, latent_modules);
         if (collected.has_value())
             authenticated_literals = *collected;
     }
@@ -35033,8 +35188,17 @@ build_native_disc_materialization_world(
                 group_identity, descriptor);
         append_persistent_epoch_key_value(
             group_identity, owners.size());
-        for (const auto owner : owners)
-            append_persistent_epoch_key_value(group_identity, owner);
+        for (const auto owner : owners) {
+            if (const auto canonical = canonical_latent_aot_location(
+                    result.admitted_state->latent_aot.modules, owner)) {
+                append_persistent_epoch_key_field(
+                    group_identity, "latent-owner");
+                append_persistent_epoch_key_field(
+                    group_identity, *canonical);
+            } else {
+                append_persistent_epoch_key_value(group_identity, owner);
+            }
+        }
         append_persistent_epoch_key_field(
             group_identity, expected_provider);
         auto& group = hardware_groups[group_identity.str()];
@@ -35280,10 +35444,15 @@ build_native_disc_materialization_world(
             entry.family = "native-hardware-closure";
             if (group.owners.size() == 1u) {
                 const auto owner = *group.owners.begin();
-                const auto symbol = analyzed_function_symbols.find(owner);
-                entry.owner = symbol != analyzed_function_symbols.end()
-                    ? symbol->second
-                    : guarded_aot_address(owner);
+                if (const auto canonical = canonical_latent_aot_location(
+                        result.admitted_state->latent_aot.modules, owner)) {
+                    entry.owner = *canonical;
+                } else {
+                    const auto symbol = analyzed_function_symbols.find(owner);
+                    entry.owner = symbol != analyzed_function_symbols.end()
+                        ? symbol->second
+                        : guarded_aot_address(owner);
+                }
             } else if (!group.owners.empty()) {
                 entry.owner = "owner-set-" +
                     katana::io::sha256_bytes(group_identity).substr(0u, 12u);
@@ -37638,9 +37807,33 @@ void publish_native_disc_analysis_artifact(
     } catch (const std::bad_alloc&) {
         restore();
         throw;
+    } catch (const std::exception& error) {
+        restore();
+        result.analysis_artifact_bytes.clear();
+        report_native_disc_analysis_artifact_failure(
+            analysis_checkpoint_requested ||
+                    native_disc_analysis_positive_product_cache_enabled
+                ? "publish"
+                : "archive",
+            error.what());
+        if (analysis_checkpoint_requested ||
+            native_disc_analysis_positive_product_cache_enabled) {
+            result.analysis_artifact_cache_publish_missed = true;
+            report_progress(
+                options, "native-disc-analysis-artifact-publish-missed");
+        } else {
+            report_progress(
+                options, "native-disc-analysis-archive-missed");
+        }
     } catch (...) {
         restore();
         result.analysis_artifact_bytes.clear();
+        report_native_disc_analysis_artifact_failure(
+            analysis_checkpoint_requested ||
+                    native_disc_analysis_positive_product_cache_enabled
+                ? "publish"
+                : "archive",
+            "unknown");
         if (analysis_checkpoint_requested ||
             native_disc_analysis_positive_product_cache_enabled) {
             result.analysis_artifact_cache_publish_missed = true;

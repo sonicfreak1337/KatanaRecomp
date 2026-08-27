@@ -1157,6 +1157,7 @@ int audit_latent_aot_module_cli(
         external_callback_sinks,
     const std::optional<std::uint32_t> runtime_base,
     const bool sega_prs,
+    const bool strict,
     const bool json) {
     std::sort(entry_offsets.begin(), entry_offsets.end());
     entry_offsets.erase(
@@ -1169,8 +1170,10 @@ int audit_latent_aot_module_cli(
     katana::codegen::LatentAotDiscoveryOptions options;
     options.mode = katana::codegen::LatentAotDiscoveryMode::ExactOnly;
     options.completeness_policy =
-        katana::codegen::LatentAotCompletenessPolicy::
-            ExactRuntimeOnlyStopOnMiss;
+        strict
+            ? katana::codegen::LatentAotCompletenessPolicy::Strict
+            : katana::codegen::LatentAotCompletenessPolicy::
+                  ExactRuntimeOnlyStopOnMiss;
     std::sort(
         external_callback_sinks.begin(), external_callback_sinks.end(),
         [](const auto& left, const auto& right) {
@@ -1260,6 +1263,7 @@ int audit_latent_aot_module_cli(
     }
 
     std::cout << "{\"schema\":\"katana.latent-aot-module-audit.v1\",";
+    std::cout << "\"strict\":" << (strict ? "true" : "false") << ',';
     std::cout << "\"admitted\":"
               << (audit.admitted ? "true" : "false") << ',';
     std::cout << "\"byte_identity\":"
@@ -7762,7 +7766,8 @@ using NativePortExecutionProfile =
     katana::codegen::NativePortExecutionProfile;
 
 constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
-constexpr std::size_t maximum_latent_aot_entry_hint_arguments = 1024u;
+constexpr std::size_t maximum_latent_aot_entry_hint_arguments =
+    katana::codegen::maximum_prepared_latent_aot_entry_hints;
 constexpr std::uintmax_t maximum_latent_aot_entry_file_bytes = 1024u * 1024u;
 constexpr std::size_t maximum_latent_aot_entry_file_line_bytes = 512u;
 constexpr std::size_t maximum_native_aot_resume_entry_arguments = 4096u;
@@ -11888,12 +11893,12 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--native-bringup-allowlist ist ausschliesslich mit "
             "--native-execution-profile native-bringup zulaessig.");
-    if (native_execution_profile ==
-            NativePortExecutionProfile::NativeBringup &&
-        !analysis_generation_path.has_value())
-        throw std::invalid_argument(
-            "Native-Bring-up braucht eine explizit gebundene "
-            "--analysis-generation und darf keine neue Analyse starten.");
+    // NativeBringup may consume a committed analysis generation, but it may
+    // also derive the analysis and AOT pack in this same source-bound export.
+    // Candidate authoring is independently revalidated against the exact
+    // current analysis, bytes, owner boundaries and complete pack below.  A
+    // mandatory prior generation used to force an otherwise identical
+    // analysis/export double pass without adding execution-safety evidence.
     if (native_bringup_allowlist_path.has_value() &&
         (diagnostic_partial || boot_executable_artifact ||
          !game_project_path.has_value() ||
@@ -12696,10 +12701,24 @@ int export_port_project(const std::filesystem::path& source_path,
                     .analysis_identity !=
                 katana::codegen::
                     native_disc_analysis_artifact_bringup_identity_key(
-                        committed_analysis_generation->analysis_artifact_id))
-            throw std::invalid_argument(
-                "Native-Bring-up-Allowlist und --analysis-generation "
-                "besitzen unterschiedliche Analyseidentitaeten.");
+                        committed_analysis_generation->analysis_artifact_id)) {
+            const auto& targets =
+                verified_native_bringup_authoring->definition().targets;
+            const bool contains_strict_proof = std::ranges::any_of(
+                targets, [](const auto& target) {
+                    return target.stage ==
+                        katana::runtime::NativeBringupEvidenceStage::Proven;
+                });
+            if (contains_strict_proof)
+                throw std::invalid_argument(
+                    "Native-Bring-up-Allowlist mit Proven-Zielen und "
+                    "--analysis-generation besitzen unterschiedliche "
+                    "Analyseidentitaeten.");
+            std::cout
+                << "KATANA_NATIVE_BRINGUP_ANALYSIS_REBIND_PENDING "
+                   "mode=candidate-current-analysis-revalidation\n"
+                << std::flush;
+        }
     }
     const auto latent_aot_hint_identity =
         latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
@@ -15369,7 +15388,7 @@ void print_usage(std::ostream& output) {
            << "  katana-recomp latent-aot-module-audit <Modul.bin> "
               "--source-address <0xAdresse> --entry <0xOffset>... "
               "[--external-callback-sink <0xAdresse>:<0xMaske>]... "
-              "[--runtime-base <0xAdresse>] [--sega-prs] [--json]\n"
+              "[--runtime-base <0xAdresse>] [--sega-prs] [--strict] [--json]\n"
            << "  katana-recomp firmware-diagnose <bios|flash> <Datei> [--sha256 <Hash>] "
               "[--include-sensitive]\n"
            << "  katana-recomp disasm <Datei> [Basisadresse [Dateioffset [Byteanzahl]]]\n"
@@ -15810,6 +15829,7 @@ int main(const int argc, char* argv[]) {
             std::vector<katana::codegen::LatentAotExternalCallbackSink>
                 external_callback_sinks;
             bool sega_prs = false;
+            bool strict = false;
             bool json = false;
             for (int index = 3; index < argc; ++index) {
                 const auto option = std::string_view(argv[index]);
@@ -15823,6 +15843,11 @@ int main(const int argc, char* argv[]) {
                         throw std::invalid_argument(
                             "latent-aot-module-audit erhielt --sega-prs doppelt.");
                     sega_prs = true;
+                } else if (option == "--strict") {
+                    if (strict)
+                        throw std::invalid_argument(
+                            "latent-aot-module-audit erhielt --strict doppelt.");
+                    strict = true;
                 } else if (option == "--source-address") {
                     if (source_address.has_value() || ++index >= argc)
                         throw std::invalid_argument(
@@ -15892,6 +15917,7 @@ int main(const int argc, char* argv[]) {
                 std::move(external_callback_sinks),
                 runtime_base,
                 sega_prs,
+                strict,
                 json);
         }
         if ((argc == 3 || argc == 4) &&

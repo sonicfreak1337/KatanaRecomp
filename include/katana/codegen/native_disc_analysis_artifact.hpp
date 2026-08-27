@@ -25,8 +25,12 @@ namespace katana::codegen {
 // always replayed and validated before any result is consumed.
 inline constexpr std::uint32_t native_disc_analysis_artifact_schema_version = 11u;
 inline constexpr std::uint32_t native_disc_analysis_artifact_codec_version = 1u;
+// A complete all-disc checkpoint can retain hundreds of thousands of exact
+// latent block identities and their optimized IR. Keep one finite aggregate
+// transport budget instead of silently dropping modules which already passed
+// the stricter per-module discovery limits.
 inline constexpr std::size_t maximum_native_disc_analysis_artifact_bytes =
-    256u * 1024u * 1024u;
+    1024u * 1024u * 1024u;
 // Current bytes can authenticate a bounded analysis checkpoint, but cannot
 // prove that an incomplete whole-disc result omitted no callback, transfer
 // target or hardware owner. Analysis tooling may resume an exact checkpoint;

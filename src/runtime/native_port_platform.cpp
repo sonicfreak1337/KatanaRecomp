@@ -1040,6 +1040,38 @@ void add_joystick_buttons(NativePortGamepadState& state,
            left.right_trigger_raw == right.right_trigger_raw;
 }
 
+struct NativeGamepadButtonStability final {
+    std::uint32_t buttons = 0u;
+    std::uint32_t release_candidates = 0u;
+};
+
+// A physical pad exposed through more than one Windows input path can leave a
+// single neutral sample between the two representations of one button press.
+// Publishing that sample creates a false release/press pair at the title
+// boundary.  Confirm releases on the next poll while publishing presses
+// immediately; this adds one poll of release latency without delaying input
+// or suppressing a normally sampled double tap.
+[[nodiscard]] constexpr std::uint32_t stabilize_gamepad_buttons(
+    NativeGamepadButtonStability& stability,
+    const std::uint32_t raw_buttons) noexcept {
+    const auto released = stability.buttons & ~raw_buttons;
+    const auto confirmed = released & stability.release_candidates;
+    stability.buttons = (stability.buttons | raw_buttons) & ~confirmed;
+    stability.release_candidates = released & ~confirmed;
+    return stability.buttons;
+}
+
+static_assert([] {
+    NativeGamepadButtonStability stability;
+    constexpr auto button = native_port_gamepad_button_mask(
+        NativePortGamepadButton::A);
+    return stabilize_gamepad_buttons(stability, button) == button &&
+           stabilize_gamepad_buttons(stability, 0u) == button &&
+           stabilize_gamepad_buttons(stability, button) == button &&
+           stabilize_gamepad_buttons(stability, 0u) == button &&
+           stabilize_gamepad_buttons(stability, 0u) == 0u;
+}());
+
 [[nodiscard]] std::optional<DWORD> xinput_slot_from_device(
     const std::uint64_t device_id) noexcept {
     if ((device_id & input_device_domain_mask) != xinput_device_domain)
@@ -2655,12 +2687,19 @@ class NativePortPlatformServices::Impl final {
             if (!placement[slot].has_value()) {
                 result.gamepads[slot] = {};
                 input_device_ids_[slot] = 0u;
+                input_button_stability_[slot] = {};
                 continue;
             }
 
             auto destination = candidates[*placement[slot]].state;
             if (slot == 0u)
                 merge_keyboard_gamepad(destination, keyboard);
+            if (old_device_id != new_device_id)
+                input_button_stability_[slot] = {
+                    destination.buttons, 0u};
+            else
+                destination.buttons = stabilize_gamepad_buttons(
+                    input_button_stability_[slot], destination.buttons);
             const auto& previous = input_snapshot_.gamepads[slot];
             if (old_device_id == new_device_id && previous.connected) {
                 destination.packet_number = previous.packet_number;
@@ -3155,6 +3194,8 @@ class NativePortPlatformServices::Impl final {
     bool input_recording_finalized_ = false;
     NativePortInputSnapshot input_snapshot_;
     std::array<std::uint64_t, native_port_gamepad_count> input_device_ids_{};
+    std::array<NativeGamepadButtonStability, native_port_gamepad_count>
+        input_button_stability_{};
     std::array<std::uint64_t, native_port_gamepad_count>
         vibration_device_ids_{};
     std::array<bool, native_port_gamepad_count> vibration_active_{};

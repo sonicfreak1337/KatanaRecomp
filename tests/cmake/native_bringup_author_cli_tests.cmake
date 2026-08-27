@@ -68,8 +68,10 @@ execute_process(
     RESULT_VARIABLE BRINGUP_RESULT
     ERROR_VARIABLE BRINGUP_ERROR
 )
-if(BRINGUP_RESULT EQUAL 0 OR NOT BRINGUP_ERROR MATCHES "analysis-generation")
-    message(FATAL_ERROR "NativeBringup without committed generation was accepted: ${BRINGUP_ERROR}")
+if(BRINGUP_RESULT EQUAL 0 OR
+   BRINGUP_ERROR MATCHES "analysis-generation" OR
+   NOT BRINGUP_ERROR MATCHES "Native-port artifact")
+    message(FATAL_ERROR "NativeBringup one-pass validation did not advance to its product inputs: ${BRINGUP_ERROR}")
 endif()
 
 file(REMOVE_RECURSE "${KATANA_TEST_ROOT}")

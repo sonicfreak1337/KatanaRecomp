@@ -47,7 +47,8 @@ namespace katana::codegen {
 namespace {
 
 constexpr std::uint32_t iso_sector_size = 2048u;
-constexpr std::size_t maximum_latent_aot_entry_hints = 1024u;
+constexpr std::size_t maximum_latent_aot_entry_hints =
+    maximum_prepared_latent_aot_entry_hints;
 constexpr std::size_t maximum_latent_aot_runtime_alias_entry_passes = 16u;
 // The in-process replay cache is an optimization only.  Keep its ownership
 // explicit and bounded so a retained source catalog cannot turn a long

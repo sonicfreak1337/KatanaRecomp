@@ -2,6 +2,7 @@
 
 #include "katana/analysis/abi.hpp"
 #include "katana/analysis/analysis_index.hpp"
+#include "katana/analysis/authenticated_range_proof.hpp"
 #include "katana/analysis/basic_blocks.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/graph_export.hpp"
@@ -2052,12 +2053,87 @@ bool validate_boot_analysis_cache_source_binding(
                         });
                 const bool native_entries_match =
                     native_full_table_match || native_fixed_entry_match;
-                bool native_producer_identity_bound =
-                    native_entries_match;
+                const auto table_width =
+                    encoding ==
+                            katana::analysis::JumpTableEncoding::SignedRelative16
+                        ? 2u
+                        : 4u;
+                const auto table_extent64 =
+                    table.requested_entries == 0u
+                        ? 0u
+                        : static_cast<std::uint64_t>(
+                              table.requested_entries - 1u) *
+                                  declaration.entry_stride +
+                              table_width;
+                const auto table_proof =
+                    table_extent64 != 0u &&
+                            table_extent64 <=
+                                std::numeric_limits<std::size_t>::max()
+                        ? katana::analysis::authenticate_image_range(
+                              image,
+                              table.table_address,
+                              static_cast<std::size_t>(table_extent64),
+                              katana::analysis::
+                                  AuthenticatedRangeAddressPolicy::ResolveAlias,
+                              katana::analysis::
+                                  AuthenticatedRangePermission::Readable)
+                        : std::nullopt;
+                const auto dispatch_proof =
+                    katana::analysis::authenticate_image_range(
+                        image,
+                        table.dispatch_address,
+                        sizeof(std::uint16_t),
+                        katana::analysis::
+                            AuthenticatedRangeAddressPolicy::ResolveAlias,
+                        katana::analysis::
+                            AuthenticatedRangePermission::Executable);
+                const auto delay_proof =
+                    table.dispatch_address <=
+                            std::numeric_limits<std::uint32_t>::max() -
+                                sizeof(std::uint16_t)
+                        ? katana::analysis::authenticate_image_range(
+                              image,
+                              table.dispatch_address +
+                                  sizeof(std::uint16_t),
+                              sizeof(std::uint16_t),
+                              katana::analysis::
+                                  AuthenticatedRangeAddressPolicy::ResolveAlias,
+                              katana::analysis::
+                                  AuthenticatedRangePermission::Executable)
+                        : std::nullopt;
+                const bool declaration_generation_bound =
+                    table_proof.has_value() && dispatch_proof.has_value() &&
+                    delay_proof.has_value() &&
+                    katana::analysis::same_authenticated_range_generation(
+                        *table_proof, *dispatch_proof) &&
+                    katana::analysis::same_authenticated_range_generation(
+                        *table_proof, *delay_proof);
+                const auto dispatch_kind =
+                    current_lines[dispatch->second].instruction.kind;
+                const bool relative_dispatch_identity_bound =
+                    encoding !=
+                        katana::analysis::JumpTableEncoding::Absolute32 &&
+                    table.authority == katana::analysis::
+                        JumpTableAuthority::IdentityBoundDeclared &&
+                    (dispatch_kind == katana::sh4::InstructionKind::Braf ||
+                     dispatch_kind == katana::sh4::InstructionKind::Bsrf) &&
+                    table.dispatch_address <=
+                        std::numeric_limits<std::uint32_t>::max() - 4u &&
+                    table.target_base == table.dispatch_address + 4u;
+                // The internal declaration already binds the exact relative
+                // table and BRAF/BSRF dispatch pair.  The native recognizer is
+                // deliberately a compact-pattern inference aid, not a second
+                // authority requirement for compiler schedules with unrelated
+                // instructions between the table load and branch.  Absolute
+                // pointer tables continue to require their independently
+                // recognized producer and literal chain.
+                bool declaration_producer_identity_bound =
+                    declaration_generation_bound &&
+                    relative_dispatch_identity_bound;
                 if (encoding ==
                     katana::analysis::JumpTableEncoding::Absolute32) {
-                    native_producer_identity_bound =
-                        native_producer_identity_bound &&
+                    declaration_producer_identity_bound =
+                        declaration_generation_bound && native_entries_match &&
                         producer.literal_address != 0u &&
                         !producer.instruction_addresses.empty() &&
                         identity_bound_immutable_range(
@@ -2079,7 +2155,9 @@ bool validate_boot_analysis_cache_source_binding(
                         ? katana::analysis::
                               ControlFlowEvidence::HintCandidate
                     : declaration.identity_bound_complete && table.resolved &&
-                              native_producer_identity_bound
+                              !table.aot_candidates_only &&
+                              !table.candidate_scan_truncated &&
+                              declaration_producer_identity_bound
                         ? katana::analysis::
                               ControlFlowEvidence::GuardedComplete
                         : katana::analysis::

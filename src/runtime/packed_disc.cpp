@@ -427,7 +427,6 @@ PackedDiscSource::PackedDiscSource(std::filesystem::path path,
     for (std::size_t index = 0u; index < info_.tracks.size(); ++index)
         track_number_index_.emplace(info_.tracks[index].number, index);
     chunk_cache_.reserve(chunk_cache_capacity_);
-    chunk_cache_order_.reserve(chunk_cache_capacity_);
 }
 
 std::uint64_t PackedDiscSource::size() const noexcept {
@@ -511,7 +510,7 @@ std::vector<std::uint8_t> PackedDiscSource::load_chunk(const std::size_t chunk_i
         if (!chunk_cache_.contains(chunk_index)) {
             if (chunk_cache_.size() == chunk_cache_capacity_) {
                 chunk_cache_.erase(chunk_cache_order_.front());
-                chunk_cache_order_.erase(chunk_cache_order_.begin());
+                chunk_cache_order_.pop_front();
             }
             chunk_cache_order_.push_back(chunk_index);
             chunk_cache_.emplace(chunk_index, bytes);

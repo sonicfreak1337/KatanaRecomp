@@ -20,6 +20,8 @@ namespace katana::codegen {
 // Discovery production and checkpoint replay validate the same bounded
 // aggregate. Keep these limits shared so a producer cannot serialize a valid
 // discovery that the export-time source revalidator later rejects.
+inline constexpr std::size_t maximum_prepared_latent_aot_entry_hints =
+    16'384u;
 inline constexpr std::size_t maximum_prepared_latent_aot_source_bindings =
     1024u;
 inline constexpr std::uint64_t
@@ -28,6 +30,12 @@ inline constexpr std::uint64_t
 inline constexpr std::uint64_t
     maximum_prepared_latent_aot_total_source_bytes =
         256ull * 1024ull * 1024ull;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_functions_per_module = 2'048u;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_blocks_per_module = 16'384u;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_instructions_per_module = 65'536u;
 
 // Native internal resume entries are separate authenticated dispatch entries,
 // but they are not separate IR blocks. Keep their transport budget aligned
@@ -214,9 +222,16 @@ struct LatentAotDiscoveryOptions {
     std::size_t maximum_transformed_candidate_files = 128u;
     std::size_t maximum_workers = 64u;
     std::size_t maximum_entry_scan_instructions = 1024u;
-    std::size_t maximum_native_instructions_per_module = 32768u;
-    std::size_t maximum_blocks_per_module = 8192u;
-    std::size_t maximum_functions_per_module = 2048u;
+    std::size_t maximum_native_instructions_per_module =
+        maximum_prepared_latent_aot_instructions_per_module;
+    // Complete authenticated stage modules can exceed the former narrow-batch
+    // ceiling once all exact object callbacks and their source-bound targets
+    // participate in one graph. Keep the analysis bounded, but leave room well
+    // below the 65,536 block-identity transport contract.
+    std::size_t maximum_blocks_per_module =
+        maximum_prepared_latent_aot_blocks_per_module;
+    std::size_t maximum_functions_per_module =
+        maximum_prepared_latent_aot_functions_per_module;
     std::size_t maximum_analysis_iterations = 64u;
     std::size_t maximum_analysis_contexts = 65536u;
     std::uint32_t source_address_begin = 0x88000000u;

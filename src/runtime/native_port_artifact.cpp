@@ -344,6 +344,7 @@ serialize_definition(const NativePortDefinition& definition) {
     writer.u32(definition.frame_timing.simulation_rate_hz);
     writer.u32(definition.frame_timing.default_presentation_rate_hz);
     writer.u32(definition.frame_timing.maximum_presentation_rate_hz);
+    writer.enumeration(definition.input_ownership);
     return std::move(writer).finish();
 }
 
@@ -624,6 +625,7 @@ void NativePortArtifact::rebuild_definition() {
     definition_.provider_semantic_contracts =
         provider_semantic_contract_views_;
     definition_.provider_semantic_coverage = provider_semantic_coverage_;
+    definition_.input_ownership = input_ownership_;
     validate_native_port_definition(definition_);
 }
 
@@ -862,6 +864,8 @@ NativePortArtifact::load(const std::filesystem::path& path) {
     result->frame_timing_.simulation_rate_hz = reader.u32();
     result->frame_timing_.default_presentation_rate_hz = reader.u32();
     result->frame_timing_.maximum_presentation_rate_hz = reader.u32();
+    result->input_ownership_ =
+        reader.enumeration<NativePortInputOwnership>();
 
     if (!reader.empty())
         artifact_error("Native-port artifact has unexpected trailing data.");

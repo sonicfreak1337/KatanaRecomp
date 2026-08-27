@@ -366,7 +366,6 @@ GdiDiscSource::GdiDiscSource(GdiDescriptor descriptor, const ProgressReporter& p
     identity_ = "gdi-sha256:" + katana::io::sha256_bytes(identity_material.str());
     io_counters_.persistent_track_opens = track_sources_.size();
     sector_cache_.reserve(sector_cache_capacity_);
-    sector_cache_order_.reserve(sector_cache_capacity_);
     hash_progress.complete();
 }
 
@@ -542,7 +541,7 @@ std::vector<std::uint8_t> GdiDiscSource::read_data_sectors(const std::uint64_t a
                     if (!sector_cache_.contains(sector_lba)) {
                         if (sector_cache_.size() == sector_cache_capacity_) {
                             sector_cache_.erase(sector_cache_order_.front());
-                            sector_cache_order_.erase(sector_cache_order_.begin());
+                            sector_cache_order_.pop_front();
                             ++io_counters_.sector_cache_evictions;
                         }
                         sector_cache_order_.push_back(sector_lba);
