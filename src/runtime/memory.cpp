@@ -481,6 +481,28 @@ Memory::Memory(const std::size_t legacy_size, const MemoryAlignmentPolicy alignm
     }
 }
 
+Memory::Memory(Memory&& other) noexcept : Memory(MoveConstructionTag{}) {
+    swap_state(other);
+    refresh_direct_linear_access_state();
+    other.lookup_mode_ = MemoryLookupMode::Reference;
+    other.refresh_direct_linear_access_state();
+}
+
+Memory& Memory::operator=(Memory&& other) noexcept {
+    if (this == &other) return *this;
+
+    // A direct-linear guard binds to this object's generation storage.  A
+    // compiler-generated move assignment can copy an equal numeric generation
+    // from another Memory while retaining that storage address, making an old
+    // destination guard appear current with stale backing pointers. The move
+    // constructor leaves the source with a valid empty state, so its old
+    // guards fail the disabled-window check as well.
+    Memory moved(std::move(other));
+    swap_state(moved);
+    refresh_direct_linear_access_state();
+    return *this;
+}
+
 void Memory::map_region(std::string name,
                         const std::uint32_t base_address,
                         std::shared_ptr<MemoryDevice> device,
@@ -649,6 +671,14 @@ MemoryLookupMode Memory::lookup_mode() const noexcept {
 }
 
 void Memory::set_lookup_mode(const MemoryLookupMode mode) noexcept {
+    if (mode == MemoryLookupMode::Indexed &&
+        region_page_index_.size() != region_page_count) {
+        try {
+            rebuild_region_index();
+        } catch (...) {
+            return;
+        }
+    }
     lookup_mode_ = mode;
     refresh_direct_linear_access_state();
 }
@@ -752,17 +782,17 @@ bool Memory::direct_linear_memory_guard_current(
     if ((write && !direct_linear_writes_enabled_) ||
         (!write && !direct_linear_reads_enabled_))
         return false;
+    // Every mapping, backing, lookup-mode or observer mutation advances this
+    // generation after updating the corresponding direct-access state.  The
+    // source pointer also rejects guards captured from another Memory object.
+    // Therefore a current generation proves that the immutable guard snapshot
+    // still describes this exact direct window; repeating every captured field
+    // comparison at each generated local-block edge is redundant.
     if (guard.generation_source_ != &direct_linear_generation_ ||
-        guard.performance_counters_ != &performance_counters_ ||
-        guard.generation != direct_linear_generation_ ||
-        guard.read_bytes != direct_linear_bytes_ ||
-        guard.physical_base != direct_linear_physical_base_ ||
-        guard.physical_span != direct_linear_physical_span_ ||
-        guard.backing_mask != direct_linear_backing_mask_)
+        guard.generation != direct_linear_generation_)
         return false;
     return !write ||
-           (guard.write_bytes != nullptr && guard.write_bytes == direct_linear_bytes_ &&
-            !guest_write_observer_);
+           (guard.write_bytes != nullptr && !guest_write_observer_);
 }
 
 bool Memory::direct_linear_offset(const std::uint32_t physical_address,
@@ -2958,7 +2988,10 @@ Memory::prevalidated_writable_linear_region(const std::uint32_t address,
 }
 
 void Memory::rebuild_region_index() {
-    std::fill(region_page_index_.begin(), region_page_index_.end(), unmapped_region);
+    if (region_page_index_.size() != region_page_count)
+        region_page_index_.assign(region_page_count, unmapped_region);
+    else
+        std::fill(region_page_index_.begin(), region_page_index_.end(), unmapped_region);
     for (std::size_t index = 0u; index < regions_.size(); ++index) {
         const auto& info = regions_[index].info;
         const auto first_page = info.base_address >> region_page_shift;
@@ -2977,6 +3010,36 @@ void Memory::rebuild_region_index() {
 
 bool Memory::access_observers_active() const noexcept {
     return static_cast<bool>(trace_handler_) || !watchpoints_.empty();
+}
+
+void Memory::swap_state(Memory& other) noexcept {
+    using std::swap;
+    swap(alignment_policy_, other.alignment_policy_);
+    swap(lookup_mode_, other.lookup_mode_);
+    swap(regions_, other.regions_);
+    swap(region_page_index_, other.region_page_index_);
+    swap(watchpoints_, other.watchpoints_);
+    swap(trace_handler_, other.trace_handler_);
+    swap(mmio_trace_handler_, other.mmio_trace_handler_);
+    swap(guest_write_observer_, other.guest_write_observer_);
+    swap(guest_write_observer_contract_, other.guest_write_observer_contract_);
+    swap(guest_write_observer_generation_, other.guest_write_observer_generation_);
+    swap(guest_write_batch_observer_, other.guest_write_batch_observer_);
+    swap(guest_memory_access_sink_, other.guest_memory_access_sink_);
+    swap(mmio_interrupt_state_sink_, other.mmio_interrupt_state_sink_);
+    swap(crash_capsule_, other.crash_capsule_);
+    swap(mmio_access_tracking_enabled_, other.mmio_access_tracking_enabled_);
+    swap(last_mmio_access_, other.last_mmio_access_);
+    swap(mmio_boundary_epoch_, other.mmio_boundary_epoch_);
+    swap(next_watchpoint_id_, other.next_watchpoint_id_);
+    swap(performance_counters_, other.performance_counters_);
+    swap(direct_linear_backing_, other.direct_linear_backing_);
+    swap(direct_linear_bytes_, other.direct_linear_bytes_);
+    swap(direct_linear_physical_base_, other.direct_linear_physical_base_);
+    swap(direct_linear_physical_span_, other.direct_linear_physical_span_);
+    swap(direct_linear_backing_mask_, other.direct_linear_backing_mask_);
+    swap(direct_linear_reads_enabled_, other.direct_linear_reads_enabled_);
+    swap(direct_linear_writes_enabled_, other.direct_linear_writes_enabled_);
 }
 
 void Memory::refresh_direct_linear_access_state() noexcept {

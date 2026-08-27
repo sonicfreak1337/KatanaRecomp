@@ -696,6 +696,10 @@ class Memory {
 
     explicit Memory(std::size_t legacy_size = 1024u * 1024u,
                     MemoryAlignmentPolicy alignment_policy = MemoryAlignmentPolicy::Strict);
+    Memory(const Memory&) = delete;
+    Memory& operator=(const Memory&) = delete;
+    Memory(Memory&& other) noexcept;
+    Memory& operator=(Memory&& other) noexcept;
 
     void map_region(std::string name,
                     std::uint32_t base_address,
@@ -997,6 +1001,8 @@ class Memory {
   private:
     friend class ExecutableDiscLoadTransactionCoordinator;
     friend class Sh4Dmac;
+    struct MoveConstructionTag {};
+    explicit Memory(MoveConstructionTag) noexcept {}
     void write_dma_words(std::uint32_t address,
                          std::span<const std::uint8_t> bytes,
                          CodeWriteSource source);
@@ -1052,6 +1058,7 @@ class Memory {
                                         std::size_t size) const noexcept;
     void rebuild_region_index();
     [[nodiscard]] bool access_observers_active() const noexcept;
+    void swap_state(Memory& other) noexcept;
     void refresh_direct_linear_access_state() noexcept;
     [[nodiscard]] bool direct_linear_write_batch_current(
         const DirectLinearWriteBatch& batch) const noexcept;

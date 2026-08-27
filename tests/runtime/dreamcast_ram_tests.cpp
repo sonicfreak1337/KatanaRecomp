@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace {
 
@@ -35,6 +36,11 @@ std::uint32_t alias_base(const std::uint32_t area_base, const std::size_t mirror
 } // namespace
 
 int main() {
+    static_assert(!std::is_copy_constructible_v<katana::runtime::Memory>);
+    static_assert(!std::is_copy_assignable_v<katana::runtime::Memory>);
+    static_assert(std::is_nothrow_move_constructible_v<katana::runtime::Memory>);
+    static_assert(std::is_nothrow_move_assignable_v<katana::runtime::Memory>);
+
     using katana::runtime::dreamcast_main_ram_alias_count;
     using katana::runtime::dreamcast_main_ram_area_bases;
     using katana::runtime::dreamcast_main_ram_mirrors_per_area;
@@ -42,6 +48,8 @@ int main() {
     using katana::runtime::LinearMemoryDevice;
     using katana::runtime::map_dreamcast_main_ram;
     using katana::runtime::Memory;
+    using katana::runtime::MemoryAccessError;
+    using katana::runtime::MemoryLookupMode;
 
     Memory bus(0u);
     const auto main_ram = map_dreamcast_main_ram(bus);
@@ -52,6 +60,138 @@ int main() {
     require(direct_read_guard &&
                 bus.direct_linear_memory_guard_current(direct_read_guard, false),
             "Das vollstaendig abgebildete Haupt-RAM besitzt keinen direkten Leseguard.");
+    {
+        constexpr std::uint32_t guard_base = 0x0C000000u;
+        Memory guard_memory(0u);
+        const auto guard_backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        guard_memory.map_region("guard-contract", guard_base, guard_backing);
+        guard_memory.bind_direct_linear_alias_window(
+            guard_base, 4096u, *guard_backing);
+        const auto read_guard =
+            guard_memory.direct_linear_memory_guard(false);
+        const auto write_guard =
+            guard_memory.direct_linear_memory_guard(true);
+        Memory foreign_memory(0u);
+        const auto foreign_backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        foreign_memory.map_region(
+            "foreign-guard-contract", guard_base, foreign_backing);
+        foreign_memory.bind_direct_linear_alias_window(
+            guard_base, 4096u, *foreign_backing);
+        require(
+            read_guard && write_guard &&
+                guard_memory.direct_linear_memory_guard_current(
+                    read_guard, false) &&
+                guard_memory.direct_linear_memory_guard_current(
+                    write_guard, true) &&
+                !guard_memory.direct_linear_memory_guard_current(
+                    read_guard, true) &&
+                !foreign_memory.direct_linear_memory_guard_current(
+                    read_guard, false),
+            "Direktguard akzeptiert einen read-only oder fremden Generationstoken.");
+
+        Memory moved_memory(std::move(guard_memory));
+        const auto moved_constructor_guard =
+            moved_memory.direct_linear_memory_guard(false);
+        require(
+            !guard_memory.direct_linear_memory_guard_current(
+                read_guard, false) &&
+                moved_constructor_guard &&
+                moved_memory.direct_linear_memory_guard_current(
+                    moved_constructor_guard, false),
+            "Memory-Move-Konstruktion laesst einen alten Quellguard aktiv.");
+
+        Memory foreign_moved(std::move(foreign_memory));
+        require(
+            foreign_memory.lookup_mode() == MemoryLookupMode::Reference &&
+                throws<MemoryAccessError>([&] {
+                    static_cast<void>(foreign_memory.read_u8(guard_base));
+                }),
+            "Moved-from Memory ist vor einem neuen Mapping nicht sicher leer.");
+        const auto reused_constructor_backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        foreign_memory.map_region(
+            "move-constructor-reuse", guard_base + 0x10000u,
+            reused_constructor_backing);
+        foreign_memory.write_u32(guard_base + 0x10000u, 0x12345678u);
+        require(foreign_moved.read_u8(guard_base) == 0u &&
+                    foreign_memory.read_u32(guard_base + 0x10000u) == 0x12345678u,
+                "Moved-from Memory ist nach Move-Konstruktion nicht wiederverwendbar.");
+
+        Memory assigned_memory(0u);
+        const auto assigned_backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        assigned_memory.map_region(
+            "assigned-guard-contract", guard_base, assigned_backing);
+        assigned_memory.bind_direct_linear_alias_window(
+            guard_base, 4096u, *assigned_backing);
+        const auto assigned_guard =
+            assigned_memory.direct_linear_memory_guard(false);
+        require(static_cast<bool>(assigned_guard),
+                "ABA-Regressionsaufbau besitzt keinen Zielguard.");
+        assigned_memory = std::move(moved_memory);
+        const auto moved_guard =
+            assigned_memory.direct_linear_memory_guard(false);
+        require(
+            !assigned_memory.direct_linear_memory_guard_current(
+                assigned_guard, false) &&
+                !moved_memory.direct_linear_memory_guard_current(
+                    moved_constructor_guard, false) &&
+                moved_guard &&
+                moved_guard.generation == assigned_guard.generation + 1u &&
+                assigned_memory.direct_linear_memory_guard_current(
+                    moved_guard, false),
+            "Memory-Move-Assignment akzeptiert einen alten Quell- oder "
+            "Zielguard mit gleicher Generation.");
+
+        const auto reused_assignment_backing =
+            std::make_shared<LinearMemoryDevice>(4096u);
+        require(
+            moved_memory.lookup_mode() == MemoryLookupMode::Reference &&
+                throws<MemoryAccessError>([&] {
+                    static_cast<void>(moved_memory.read_u8(guard_base));
+                }),
+            "Move-Assignment hinterlaesst keine sichere leere Reference-Instanz.");
+        moved_memory.set_lookup_mode(MemoryLookupMode::Indexed);
+        require(moved_memory.lookup_mode() == MemoryLookupMode::Indexed,
+                "Moved-from Memory materialisiert den Indexed-Modus nicht erneut.");
+        moved_memory.map_region(
+            "move-assignment-reuse", guard_base + 0x20000u,
+            reused_assignment_backing);
+        moved_memory.write_u32(guard_base + 0x20000u, 0x89ABCDEFu);
+        require(moved_memory.read_u32(guard_base + 0x20000u) == 0x89ABCDEFu,
+                "Moved-from Memory ist nach Move-Assignment nicht wiederverwendbar.");
+
+        guard_memory = std::move(assigned_memory);
+        const auto returned_guard =
+            guard_memory.direct_linear_memory_guard(false);
+        require(
+            returned_guard &&
+                returned_guard.generation == read_guard.generation + 2u &&
+                guard_memory.direct_linear_memory_guard_current(
+                    returned_guard, false),
+            "Memory-Moves bewahren keinen monotonen objektlokalen Guardtoken.");
+
+        guard_memory.set_guest_write_observer(
+            [](const katana::runtime::GuestWriteEvent&) noexcept {},
+            katana::runtime::GuestWriteObserverContract::
+                StableForPrevalidatedLinearWrites);
+        const auto observed_read_guard =
+            guard_memory.direct_linear_memory_guard(false);
+        require(
+            !guard_memory.direct_linear_memory_guard_current(
+                read_guard, false) &&
+                !guard_memory.direct_linear_memory_guard_current(
+                    write_guard, true) &&
+                observed_read_guard &&
+                observed_read_guard.generation == read_guard.generation + 3u &&
+                guard_memory.direct_linear_memory_guard_current(
+                    observed_read_guard, false) &&
+                !guard_memory.direct_linear_memory_guard(true),
+            "Observermutation invalidiert alte Direktguards nicht oder erlaubt "
+            "einen rohen Writeguard.");
+    }
     require(bus.region_count() == dreamcast_main_ram_alias_count,
             "Nicht alle Dreamcast-RAM-Aliasfenster wurden registriert.");
     require(main_ram->read_u8(0u) == 0u &&
