@@ -585,7 +585,7 @@ std::optional<std::string> guarded_linear_ram_read_preflight_expression(
         if (instruction.operation == Operation::FmovLoadR0Indexed)
             address = "cpu.r[0] + " + address;
         return can_read(address, 4u) +
-               " && (!cpu.fpu_transfer_pair() || " +
+               " && ((cpu.fpscr & katana::runtime::fpscr_sz_mask) == 0u || " +
                can_read("(" + address + ") + 4u", 4u) + ")";
     }
     case Operation::MultiplyAccumulateWord:
@@ -676,9 +676,11 @@ std::optional<std::string> guarded_linear_ram_write_preflight_expression(
         if (instruction.operation == Operation::FmovStoreR0Indexed)
             address = "cpu.r[0] + " + address;
         else if (instruction.operation == Operation::FmovStorePreDecrement)
-            address = address + " - (cpu.fpu_transfer_pair() ? 8u : 4u)";
+            address = address +
+                      " - ((cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u ? "
+                      "8u : 4u)";
         return can_write(address, 4u) +
-               " && (!cpu.fpu_transfer_pair() || " +
+               " && ((cpu.fpscr & katana::runtime::fpscr_sz_mask) == 0u || " +
                can_write("(" + address + ") + 4u", 4u) + ")";
     }
     case Operation::StoreByte:
@@ -915,7 +917,7 @@ std::string special_register_read_expression(const katana::ir::SpecialRegister s
     case Register::Fpul:
         return "cpu.fpul";
     case Register::Fpscr:
-        return "cpu.read_fpscr()";
+        return "cpu.fpscr";
     case Register::Sr:
         return "cpu.read_sr()";
     case Register::Gbr:
@@ -1122,7 +1124,7 @@ void emit_fpu_disabled_guard(std::ostringstream& output,
     }
 
     emit_indent(output, indent);
-    output << "if (cpu.fpu_disabled()) {\n";
+    output << "if ((cpu.sr & katana::runtime::sr_fd_mask) != 0u) {\n";
     emit_indent(output, indent + 1);
     output << "raise_fpu_disabled(cpu, " << relocated_code_address(instruction.source_address);
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
@@ -1164,7 +1166,9 @@ void emit_fpu_mode_guard(std::ostringstream& output,
     case Operation::FmovStore:
     case Operation::FmovStorePreDecrement:
     case Operation::FmovStoreR0Indexed:
-        append_condition("(cpu.fpu_double_precision() && cpu.fpu_transfer_pair())");
+        append_condition(
+            "((cpu.fpscr & katana::runtime::fpscr_pr_mask) != 0u && "
+            "(cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u)");
         break;
     case Operation::Fldi0:
     case Operation::Fldi1:
@@ -1175,11 +1179,11 @@ void emit_fpu_mode_guard(std::ostringstream& output,
     case Operation::Ftrv:
     case Operation::Frchg:
     case Operation::Fschg:
-        append_condition("cpu.fpu_double_precision()");
+        append_condition("(cpu.fpscr & katana::runtime::fpscr_pr_mask) != 0u");
         break;
     case Operation::FcnvDoubleToSingle:
     case Operation::FcnvSingleToDouble:
-        append_condition("!cpu.fpu_double_precision()");
+        append_condition("(cpu.fpscr & katana::runtime::fpscr_pr_mask) == 0u");
         break;
     default:
         break;
@@ -1216,13 +1220,14 @@ void emit_fpu_mode_guard(std::ostringstream& output,
         instruction.operation == Operation::FcnvSingleToDouble;
 
     if (checks_source && (instruction.source_register & 1u) != 0u) {
-        append_condition("cpu.fpu_double_precision()");
+        append_condition("(cpu.fpscr & katana::runtime::fpscr_pr_mask) != 0u");
     }
     if (checks_destination && (instruction.destination_register & 1u) != 0u) {
-        append_condition("cpu.fpu_double_precision()");
+        append_condition("(cpu.fpscr & katana::runtime::fpscr_pr_mask) != 0u");
     }
     if (checks_rounding_mode || checks_graphics_rounding) {
-        append_condition("((cpu.read_fpscr() & katana::runtime::fpscr_rounding_mode_mask) > 1u)");
+        append_condition(
+            "((cpu.fpscr & katana::runtime::fpscr_rounding_mode_mask) > 1u)");
     }
 
     if (invalid_condition.empty()) {
@@ -1281,7 +1286,7 @@ void emit_simple_instruction_raw(std::ostringstream& output,
         return;
 
     case Operation::FmovRegister:
-        output << "if (cpu.fpu_transfer_pair()) {\n"
+        output << "if ((cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u) {\n"
                << "    katana::runtime::write_fpu_pair_bits(cpu, "
                << static_cast<unsigned>(instruction.destination_register) << "u,\n"
                << "        katana::runtime::read_fpu_pair_bits(cpu, "
@@ -1302,7 +1307,7 @@ void emit_simple_instruction_raw(std::ostringstream& output,
             output << "cpu.r[0] + ";
         }
         output << "cpu.r[" << source << "];\n"
-               << "if (cpu.fpu_transfer_pair()) {\n"
+               << "if ((cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u) {\n"
                << "    const std::uint32_t low = "
                << direct_ram_read_expression(instruction, "address", DirectRamReadKind::U32)
                << ";\n"
@@ -1317,7 +1322,9 @@ void emit_simple_instruction_raw(std::ostringstream& output,
                << ";\n"
                << "}\n";
         if (instruction.operation == Operation::FmovLoadPostIncrement) {
-            output << "cpu.r[" << source << "] = address + (cpu.fpu_transfer_pair() ? 8u : 4u);\n";
+            output << "cpu.r[" << source
+                   << "] = address + ((cpu.fpscr & katana::runtime::fpscr_sz_mask) "
+                      "!= 0u ? 8u : 4u);\n";
         }
         output << "}\n";
         return;
@@ -1329,7 +1336,8 @@ void emit_simple_instruction_raw(std::ostringstream& output,
         const unsigned destination = instruction.destination_register;
         output << "{\n";
         if (instruction.operation == Operation::FmovStorePreDecrement) {
-            output << "const std::uint32_t width = cpu.fpu_transfer_pair() ? 8u : 4u;\n";
+            output << "const std::uint32_t width = "
+                      "(cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u ? 8u : 4u;\n";
         }
         output << "const std::uint32_t address = ";
         if (instruction.operation == Operation::FmovStoreR0Indexed) {
@@ -1340,7 +1348,7 @@ void emit_simple_instruction_raw(std::ostringstream& output,
             output << "cpu.r[" << destination << "]";
         }
         output << ";\n"
-               << "if (cpu.fpu_transfer_pair()) {\n"
+               << "if ((cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u) {\n"
                << "    const std::uint64_t bits = katana::runtime::read_fpu_pair_bits(cpu, "
                << source << "u);\n    "
                << direct_ram_write_statement(
@@ -1467,7 +1475,7 @@ void emit_simple_instruction_raw(std::ostringstream& output,
         output << "cpu.toggle_fpu_register_bank();\n";
         return;
     case Operation::Fschg:
-        output << "cpu.write_fpscr(cpu.read_fpscr() ^ katana::runtime::fpscr_sz_mask);\n";
+        output << "cpu.write_fpscr(cpu.fpscr ^ katana::runtime::fpscr_sz_mask);\n";
         return;
     case Operation::Prefetch:
         output << "if (services != nullptr) {\n";

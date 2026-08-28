@@ -3394,51 +3394,54 @@ int main() {
                 katana::ir::verify_program(table_jump_ir).empty(),
             "Jump-Table-Ziele erreichen CFG oder Lowering nicht konsistent.");
 
-    // Product post-bootstrap images are writable as a coarse segment. The
-    // table plus BRAF/delay pair receive exact CodeIdentity ranges, while the
-    // decoded case blocks are owned/materialized independently. Requiring an
-    // extra immutable range for every landing instruction regresses this
-    // exact table to ForcedOverride even though its complete target set is
-    // already authenticated by the table bytes.
+    // Product post-bootstrap images are writable as a coarse segment. This
+    // compiler-shaped selector assembles the byte offset with forward
+    // conditional branches instead of a canonical compare/shift pair. The
+    // finite value proof must derive {0,2,4,6}, authenticate the complete
+    // producer slice and still reject any declaration whose entry count does
+    // not exactly match the native table.
     katana::io::ExecutableImage identity_bound_braf_image;
     identity_bound_braf_image.add_segment(
         {".post-bootstrap",
          0u,
          0u,
-         0x2Cu,
+         0x34u,
          katana::io::SegmentKind::Mixed,
          {true, true, true},
-         {0x02u, 0xE1u, // mov #2,r1
-          0x12u, 0x30u, // cmp/hs r1,r0
-          0x01u, 0x8Bu, // bf 0x0A
-           0x0Du, 0xA0u, // bra 0x24 (bounded fallback)
-          0x09u, 0x00u, // nop (delay)
-          0x00u, 0x40u, // shll r0
-          0x03u, 0x61u, // mov r0,r1
+         {0x00u, 0xE1u, // mov #0,r1
+          0x01u, 0x89u, // bt 0x08
+          0x02u, 0x71u, // add #2,r1
+          0x09u, 0x00u, // nop
+          0x01u, 0x89u, // bt 0x0E
+          0x04u, 0x71u, // add #4,r1
+          0x09u, 0x00u, // nop
           0x03u, 0xC7u, // mova 0x1C,r0
-          0x1Du, 0x00u, // mov.w @(r0,r1),r0
+          0x1Du, 0x01u, // mov.w @(r0,r1),r1
           0x07u, 0xE2u, // mov #7,r2 (independent scheduling)
-          0x01u, 0x72u, // add #1,r2 (preserves loaded r0)
-          0x23u, 0x00u, // braf r0; producer is intentionally non-adjacent
+          0x01u, 0x72u, // add #1,r2 (preserves loaded r1)
+          0x23u, 0x01u, // braf r1; producer is intentionally non-adjacent
           0x09u, 0x00u, // nop (delay)
           0x09u, 0x00u, // padding
           0x0Au, 0x00u, // table[0] -> 0x24 (base 0x1A)
           0x0Eu, 0x00u, // table[1] -> 0x28
-          0x09u, 0x00u, 0x09u, 0x00u,
+          0x12u, 0x00u, // table[2] -> 0x2C
+          0x16u, 0x00u, // table[3] -> 0x30
           0x0Bu, 0x00u, 0x09u, 0x00u, // 0x24: rts / nop
-          0x0Bu, 0x00u, 0x09u, 0x00u}}); // 0x28: rts / nop
+          0x0Bu, 0x00u, 0x09u, 0x00u, // 0x28: rts / nop
+          0x0Bu, 0x00u, 0x09u, 0x00u, // 0x2C: rts / nop
+          0x0Bu, 0x00u, 0x09u, 0x00u}}); // 0x30: rts / nop
     identity_bound_braf_image.add_entry_point(0u);
     identity_bound_braf_image.add_immutable_range(
-        {0x16u, 4u, "synthetic-braf-dispatch-v1", 0u});
+        {0u, 0x1Au, "synthetic-braf-producer-v2", 0u});
     identity_bound_braf_image.add_immutable_range(
-        {0x1Cu, 4u, "synthetic-braf-table-v1", 0u});
+        {0x1Cu, 8u, "synthetic-braf-table-v2", 0u});
     katana::analysis::AnalysisOverrides identity_bound_braf_override;
     identity_bound_braf_override.source_path =
         "identity-bound-braf-table.txt";
     katana::analysis::JumpTableOverride identity_bound_braf_table{
         0x16u,
         0x1Cu,
-        2u,
+        4u,
         1u,
         sizeof(std::uint16_t),
         0x1Au,
@@ -3464,13 +3467,38 @@ int main() {
             identity_bound_braf_resolution->evidence ==
                 katana::analysis::ControlFlowEvidence::GuardedComplete &&
             identity_bound_braf_resolution->targets ==
-                std::vector<std::uint32_t>{0x24u, 0x28u},
+                std::vector<std::uint32_t>{0x24u, 0x28u, 0x2Cu, 0x30u},
         "Eine exakt gebundene BRAF-Tabelle verlor ihren begrenzten "
         "nicht-clobbernden Producer-Nachweis.");
 
+    const auto identity_bound_braf_lines = katana::sh4::disassemble(
+        identity_bound_braf_image.segments().front().bytes, 0u);
+    const auto identity_bound_braf_native =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            identity_bound_braf_image, identity_bound_braf_lines, 11u);
+    require(identity_bound_braf_native.has_value() &&
+                identity_bound_braf_native->resolved &&
+                identity_bound_braf_native->entries.size() == 4u,
+            "Der native BRAF-Recognizer leitete die endliche "
+            "branch-assemblierte Indexmenge nicht vollstaendig her.");
+
+    auto short_braf_override = identity_bound_braf_override;
+    short_braf_override.jump_tables.front().entry_count = 3u;
+    const auto short_braf = katana::analysis::analyze_control_flow(
+        identity_bound_braf_image, &short_braf_override);
+    const auto short_braf_table = std::find_if(
+        short_braf.jump_tables.begin(),
+        short_braf.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(short_braf_table != short_braf.jump_tables.end() &&
+                short_braf_table->evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride,
+            "Eine zu kurze BRAF-Deklaration umging die native "
+            "Entry-Count-Bindung.");
+
     auto clobbered_braf_image = identity_bound_braf_image;
     clobbered_braf_image.write_u32_le(
-        0x12u, 0x720107E0u); // mov #7,r0; add #1,r2
+        0x12u, 0x7201E107u); // mov #7,r1; add #1,r2
     const auto clobbered_braf_lines = katana::sh4::disassemble(
         clobbered_braf_image.segments().front().bytes, 0u);
     const auto clobbered_braf_native =

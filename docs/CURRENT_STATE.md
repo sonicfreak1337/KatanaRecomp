@@ -30,6 +30,11 @@ keine Releaseabnahme.
   Performanceprofil (`/O2 /Ob2`). Die im Gameplay weiter beobachtete
   Unter-Echtzeitgeschwindigkeit ist daher ein Runtime-/AOT-/Geometrie-P0 und
   kein erklaertes `/O1 /Ob0`-Bring-up-Artefakt.
+- Wiederverwendete, ausreichend grosse Object-Space-BasicAttach-Geometrie
+  besitzt im privaten Titelpfad nun einen bounded, identity- und
+  generation-gebundenen Persistent-Meshcache. Dynamische, geclippte, kleine
+  und diagnostisch aufgezeichnete Draws bleiben transient; die reale
+  Produkt-Hitquote ist im naechsten normalen Build zu messen.
 - Der zuvor gemeinsame Grafik-Contract-Stop ist geschlossen.
 - Der erreichte Gameplaypfad besitzt weiterhin deutlich sichtbare
   Grafikfehler und deckt neue Callback-/AOT- sowie Providerauftraege auf.

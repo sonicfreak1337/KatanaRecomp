@@ -1319,7 +1319,30 @@ int main() {
         katana::codegen::emit_cpp_program(fmov_memory_program, 0x8C060000u);
     const auto fmov_load = emitted_instruction(fmov_memory_source, "0x8C060000");
     const auto fmov_store = emitted_instruction(fmov_memory_source, "0x8C060002");
-    require(count_occurrences(
+    require(fmov_memory_source.find(
+                "(cpu.sr & katana::runtime::sr_fd_mask) != 0u") !=
+                    std::string::npos &&
+                fmov_memory_source.find(
+                    "(cpu.fpscr & katana::runtime::fpscr_pr_mask) != 0u") !=
+                    std::string::npos &&
+                fmov_memory_source.find(
+                    "(cpu.fpscr & katana::runtime::fpscr_sz_mask) != 0u") !=
+                    std::string::npos &&
+                fmov_memory_source.find("cpu.fpu_disabled()") ==
+                    std::string::npos &&
+                fmov_memory_source.find("cpu.fpu_double_precision()") ==
+                    std::string::npos &&
+                fmov_memory_source.find("cpu.fpu_transfer_pair()") ==
+                    std::string::npos &&
+                emitter_implementation.find("cpu.fpu_disabled()") ==
+                    std::string::npos &&
+                emitter_implementation.find("cpu.fpu_double_precision()") ==
+                    std::string::npos &&
+                emitter_implementation.find("cpu.fpu_transfer_pair()") ==
+                    std::string::npos &&
+                emitter_implementation.find("cpu.read_fpscr()") ==
+                    std::string::npos &&
+                count_occurrences(
                 fmov_load,
                 "GuestInstructionOrigin guest_origin{0x8C060000u") == 1u &&
                 count_occurrences(fmov_load,
@@ -1331,7 +1354,8 @@ int main() {
                                   "katana_direct_ram_write_u32("
                                   "katana_direct_ram_writes, guest_origin") == 3u &&
                 count_occurrences(fmov_store, "CodeWriteSource::Fpu") == 3u,
-            "FMOV.S erzeugt fuer 32-/64-Bit-Pfade nicht 1/2 Events mit FPU-Writequelle.");
+            "FMOV.S erzeugt fuer 32-/64-Bit-Pfade nicht 1/2 Events mit "
+            "FPU-Writequelle oder behaelt out-of-line FPU-Statusabfragen.");
 
     constexpr std::array<std::uint8_t, 8> mac_memory_bytes = {
         0x1Fu,

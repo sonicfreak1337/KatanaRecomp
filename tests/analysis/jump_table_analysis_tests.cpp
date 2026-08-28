@@ -632,6 +632,18 @@ int main() {
                 bt_table->entries.size() == 2u,
             "BT-begrenzte relative Tabelle wurde nicht erkannt.");
 
+    auto bsrf_lines = bt_lines;
+    bsrf_lines[7].instruction.kind =
+        katana::sh4::InstructionKind::Bsrf;
+    const auto bsrf_table =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            relative, bsrf_lines, 7u);
+    require(bsrf_table.has_value() && bsrf_table->resolved &&
+                bsrf_table->dispatch_kind ==
+                    katana::analysis::JumpTableDispatchKind::Call &&
+                bsrf_table->entries.size() == 2u,
+            "BSRF-verzweigte relative Call-Tabelle wurde nicht erkannt.");
+
     auto bf_lines = std::vector<katana::sh4::DisassemblyLine>{
         line(0u, katana::sh4::InstructionKind::MovImmediate, 0u, 1u),
         line(2u, katana::sh4::InstructionKind::CompareHigherOrSame, 1u, 2u),

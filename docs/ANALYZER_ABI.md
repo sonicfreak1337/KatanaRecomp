@@ -28,9 +28,13 @@ unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
 keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
 dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
 
-Analyzer-ABI 71 bindet deklarierte relative BRAF-Tabellen wieder an einen
-bounded, nicht clobbernden Register-/Producer-Slice; authentifizierte Tabellen-
-und Dispatchbytes allein schliessen keinen indirekten Successor. Ausserdem
+Analyzer-ABI 71 bindet deklarierte relative BRAF-/BSRF-Tabellen wieder an
+einen bounded, nicht clobbernden Register-/Producer-Slice. Neben klassischen
+Compare-/Shift-Formen darf der adressagnostische Recognizer eine endliche,
+vorwaerts verzweigte Indexmenge herleiten; ihre Entry-Zahl muss exakt mit der
+vollstaendig nativ dekodierten Tabelle uebereinstimmen. Authentifizierte
+Tabellen- und Dispatchbytes allein schliessen keinen indirekten Successor.
+Ausserdem
 ordnet die Owner-Semantik direkte Calls architekturgerecht als Call,
 physischen Delay-Slot und erst danach Callee-Effekte. Backend-Interface-ABI 26
 invalidiert Backends ohne die exakte NativeBringup-Callsite-Schnittstelle.

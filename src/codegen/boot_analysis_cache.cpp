@@ -1982,21 +1982,37 @@ bool validate_boot_analysis_cache_source_binding(
                     dispatch->second - first_index;
                 std::optional<katana::analysis::JumpTableAnalysis>
                     native_table;
+                std::optional<katana::analysis::detail::
+                                  RelativeJumpTableProducerEvidence>
+                    relative_producer;
                 katana::analysis::detail::
                     SnapshotAbsoluteJumpTableProducerEvidence producer;
-                if (current_lines[dispatch->second].instruction.kind ==
-                    katana::sh4::InstructionKind::Braf) {
+                const auto dispatch_instruction_kind =
+                    current_lines[dispatch->second].instruction.kind;
+                if (dispatch_instruction_kind ==
+                        katana::sh4::InstructionKind::Braf ||
+                    dispatch_instruction_kind ==
+                        katana::sh4::InstructionKind::Bsrf) {
+                    relative_producer = katana::analysis::detail::
+                        recognize_relative_jump_table_producer(
+                            image,
+                            recognition_lines,
+                            recognition_dispatch_index);
+                }
+                if (dispatch_instruction_kind ==
+                        katana::sh4::InstructionKind::Braf ||
+                    dispatch_instruction_kind ==
+                        katana::sh4::InstructionKind::Bsrf) {
                     native_table =
                         katana::analysis::
                             recognize_bounded_relative_jump_table(
                                 image,
                                 recognition_lines,
                                 recognition_dispatch_index);
-                } else if (
-                    current_lines[dispatch->second].instruction.kind ==
-                        katana::sh4::InstructionKind::Jmp ||
-                    current_lines[dispatch->second].instruction.kind ==
-                        katana::sh4::InstructionKind::Jsr) {
+                } else if (dispatch_instruction_kind ==
+                               katana::sh4::InstructionKind::Jmp ||
+                           dispatch_instruction_kind ==
+                               katana::sh4::InstructionKind::Jsr) {
                     native_table =
                         katana::analysis::detail::
                             recognize_snapshot_absolute_jump_table_candidates_with_producer(
@@ -2108,8 +2124,43 @@ bool validate_boot_analysis_cache_source_binding(
                         *table_proof, *dispatch_proof) &&
                     katana::analysis::same_authenticated_range_generation(
                         *table_proof, *delay_proof);
+                bool relative_producer_identity_bound =
+                    declaration_generation_bound &&
+                    relative_producer.has_value() &&
+                    relative_producer->dispatch_address ==
+                        table.dispatch_address &&
+                    relative_producer->table_address == table.table_address &&
+                    relative_producer->dispatch_kind == table.dispatch_kind &&
+                    relative_producer->encoding == table.encoding &&
+                    relative_producer->bounded_entry_count ==
+                        table.requested_entries &&
+                    !relative_producer->instruction_addresses.empty();
+                if (relative_producer_identity_bound) {
+                    for (const auto address :
+                         relative_producer->instruction_addresses) {
+                        const auto instruction_proof =
+                            katana::analysis::authenticate_image_range(
+                                image,
+                                address,
+                                sizeof(std::uint16_t),
+                                katana::analysis::
+                                    AuthenticatedRangeAddressPolicy::ResolveAlias,
+                                katana::analysis::
+                                    AuthenticatedRangePermission::Executable);
+                        if (!instruction_proof.has_value() ||
+                            !katana::analysis::
+                                same_authenticated_range_generation(
+                                    *instruction_proof, *dispatch_proof) ||
+                            !katana::analysis::
+                                same_authenticated_range_generation(
+                                    *instruction_proof, *table_proof)) {
+                            relative_producer_identity_bound = false;
+                            break;
+                        }
+                    }
+                }
                 const auto dispatch_kind =
-                    current_lines[dispatch->second].instruction.kind;
+                    dispatch_instruction_kind;
                 const bool relative_dispatch_identity_bound =
                     encoding !=
                         katana::analysis::JumpTableEncoding::Absolute32 &&
@@ -2120,13 +2171,15 @@ bool validate_boot_analysis_cache_source_binding(
                     table.dispatch_address <=
                         std::numeric_limits<std::uint32_t>::max() - 4u &&
                     table.target_base == table.dispatch_address + 4u;
-                // The declaration authenticates bytes, while the bounded
-                // recognizer proves that the BRAF register is actually fed by
-                // this table across only non-clobbering instructions.
+                // The declaration authenticates the target set. Independently
+                // bind every instruction in the BRAF/BSRF producer slice so a
+                // cached result cannot attach the table to an unrelated branch
+                // register or reuse mutable producer bytes.
                 bool declaration_producer_identity_bound =
                     declaration_generation_bound &&
                     relative_dispatch_identity_bound &&
-                    native_entries_match;
+                    native_entries_match &&
+                    relative_producer_identity_bound;
                 if (encoding ==
                     katana::analysis::JumpTableEncoding::Absolute32) {
                     declaration_producer_identity_bound =

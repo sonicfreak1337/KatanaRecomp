@@ -25,6 +25,28 @@ struct SnapshotAbsoluteJumpTableProducerEvidence {
     std::vector<std::uint32_t> instruction_addresses;
 };
 
+// Run-local proof that a relative BRAF/BSRF consumes an offset loaded from
+// one concrete PC-relative table. The native recognizer derives the bounded
+// entry count and complete target set; this evidence binds that count and
+// every instruction in the non-clobbering producer slice to the current
+// executable-image generation.
+// Keeping it internal avoids adding transient provenance to persisted
+// analyzer result layouts.
+struct RelativeJumpTableProducerEvidence {
+    std::uint32_t dispatch_address = 0u;
+    std::uint32_t table_address = 0u;
+    JumpTableDispatchKind dispatch_kind = JumpTableDispatchKind::Jump;
+    JumpTableEncoding encoding = JumpTableEncoding::SignedRelative16;
+    std::size_t bounded_entry_count = 0u;
+    std::vector<std::uint32_t> instruction_addresses;
+};
+
+[[nodiscard]] std::optional<RelativeJumpTableProducerEvidence>
+recognize_relative_jump_table_producer(
+    const katana::io::ExecutableImage& image,
+    std::span<const katana::sh4::DisassemblyLine> lines,
+    std::size_t dispatch_index);
+
 [[nodiscard]] std::optional<JumpTableAnalysis>
 recognize_snapshot_absolute_jump_table_candidates_with_producer(
     const katana::io::ExecutableImage& image,

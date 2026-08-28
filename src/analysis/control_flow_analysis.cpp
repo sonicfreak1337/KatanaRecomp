@@ -474,6 +474,8 @@ class IncrementalCfaScanCache final {
     struct DispatchRecognition final {
         std::optional<RelativeCallIslandCandidates> relative_call_island;
         std::optional<JumpTableAnalysis> jump_table;
+        std::optional<detail::RelativeJumpTableProducerEvidence>
+            relative_table_producer;
         std::optional<detail::SnapshotAbsoluteJumpTableProducerEvidence>
             snapshot_absolute_producer;
     };
@@ -706,11 +708,21 @@ class IncrementalCfaScanCache final {
                 recognition.relative_call_island =
                     recognize_snapshot_relative_call_island_candidates(
                         image, window, dispatch_index);
+                recognition.jump_table =
+                    recognize_bounded_relative_jump_table(
+                        image, window, dispatch_index,
+                        &jump_table_cache);
+                recognition.relative_table_producer =
+                    detail::recognize_relative_jump_table_producer(
+                        image, window, dispatch_index);
             } else if (kind == katana::sh4::InstructionKind::Braf) {
                 recognition.jump_table =
                     recognize_bounded_relative_jump_table(
                         image, window, dispatch_index,
                         &jump_table_cache);
+                recognition.relative_table_producer =
+                    detail::recognize_relative_jump_table_producer(
+                        image, window, dispatch_index);
             } else {
                 detail::SnapshotAbsoluteJumpTableProducerEvidence producer;
                 recognition.jump_table =
@@ -721,7 +733,8 @@ class IncrementalCfaScanCache final {
                         std::move(producer);
             }
             if (recognition.relative_call_island.has_value() ||
-                recognition.jump_table.has_value())
+                recognition.jump_table.has_value() ||
+                recognition.relative_table_producer.has_value())
                 recognition_index_.insert_or_assign(
                     address, std::move(recognition));
         }
@@ -5058,6 +5071,12 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         ? &*native_recognition
                                ->snapshot_absolute_producer
                         : nullptr;
+                const auto* relative_producer =
+                    native_recognition != nullptr &&
+                            native_recognition
+                                ->relative_table_producer.has_value()
+                        ? &*native_recognition->relative_table_producer
+                        : nullptr;
                 const auto table_width =
                     encoding == JumpTableEncoding::SignedRelative16
                         ? 2u
@@ -5100,6 +5119,36 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         *dispatch_proof, *table_proof) &&
                     same_authenticated_range_generation(
                         *delay_proof, *table_proof);
+                bool relative_producer_identity_bound =
+                    jump_table_generation_bound &&
+                    relative_producer != nullptr &&
+                    relative_producer->dispatch_address ==
+                        jump_table.dispatch_address &&
+                    relative_producer->table_address ==
+                        jump_table.table_address &&
+                    relative_producer->dispatch_kind ==
+                        jump_table.dispatch_kind &&
+                    relative_producer->encoding == jump_table.encoding &&
+                    relative_producer->bounded_entry_count ==
+                        jump_table.requested_entries &&
+                    !relative_producer->instruction_addresses.empty();
+                if (relative_producer_identity_bound) {
+                    for (const auto address :
+                         relative_producer->instruction_addresses) {
+                        const auto instruction_proof = authenticated_range(
+                            address,
+                            sizeof(std::uint16_t),
+                            AuthenticatedRangePermission::Executable);
+                        if (!instruction_proof.has_value() ||
+                            !same_authenticated_range_generation(
+                                *instruction_proof, *dispatch_proof) ||
+                            !same_authenticated_range_generation(
+                                *instruction_proof, *table_proof)) {
+                            relative_producer_identity_bound = false;
+                            break;
+                        }
+                    }
+                }
                 // The authenticated table bytes are the identity-bound
                 // producer of the complete target set. Requiring a separate
                 // CodeIdentity range for every decoded landing instruction
@@ -5174,14 +5223,17 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         std::numeric_limits<std::uint32_t>::max() - 4u &&
                     jump_table.target_base ==
                         jump_table.dispatch_address + 4u;
-                // Identity-bound bytes authenticate the declaration, but do
-                // not by themselves prove that BRAF consumes this table. The
-                // bounded recognizer must independently connect the table
-                // load to the branch register through a non-clobbering slice.
+                // Identity-bound table bytes authenticate the declared target
+                // set, but do not by themselves prove that BRAF/BSRF consumes
+                // that table. Bind every instruction in the independently
+                // recognized, non-clobbering producer slice to the same image
+                // generation; the compiler's index shape need not match the
+                // narrower automatic entry-count inference pattern.
                 bool declaration_producer_identity_bound =
                     jump_table_generation_bound &&
                     relative_dispatch_identity_bound &&
-                    native_entries_match;
+                    native_entries_match &&
+                    relative_producer_identity_bound;
                 if (encoding == JumpTableEncoding::Absolute32) {
                     declaration_producer_identity_bound =
                         native_entries_match && jump_table_generation_bound &&

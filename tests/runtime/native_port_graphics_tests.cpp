@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -100,7 +101,7 @@ int main(const int argc, char** const argv) {
     config.maximum_texture_bytes = 1u << 20u;
     config.maximum_meshes = 4u;
     config.maximum_mesh_bytes = 1u << 20u;
-    config.maximum_transient_vertices = 64u;
+    config.maximum_transient_vertices = 512u;
     config.maximum_transient_indices = 64u;
     config.maximum_pipeline_states = 64u;
     NativePortGraphicsDevice graphics(config);
@@ -171,22 +172,58 @@ int main(const int argc, char** const argv) {
                       << " observed=" << observed << '\n';
             return EXIT_SUCCESS;
         }
-        const bool object_draws = benchmark == "--benchmark-object-draws";
-        const bool model_draws = benchmark == "--benchmark-model-draws";
+        const bool large_object_draws =
+            benchmark == "--benchmark-large-object-draws";
+        const bool large_model_draws =
+            benchmark == "--benchmark-large-model-draws";
+        const bool medium_object_draws =
+            benchmark == "--benchmark-medium-object-draws";
+        const bool medium_model_draws =
+            benchmark == "--benchmark-medium-model-draws";
+        const bool object_draws =
+            benchmark == "--benchmark-object-draws" || large_object_draws ||
+            medium_object_draws;
+        const bool model_draws =
+            benchmark == "--benchmark-model-draws" || large_model_draws ||
+            medium_model_draws;
         require(benchmark == "--benchmark-draws" || object_draws ||
                     model_draws,
                 "Unbekannter Graphics-Benchmark-Modus.");
+        std::vector<NativePortVertex> large_vertices;
+        if (large_object_draws || large_model_draws || medium_object_draws ||
+            medium_model_draws) {
+            // 74 expanded triangles / 222 vertices match a representative
+            // r178 BasicAttach character mesh; eight triangles also measure
+            // the fixed-overhead crossover. Keep both benchmark-only.
+            const auto triangle_count =
+                large_object_draws || large_model_draws ? 74u : 8u;
+            large_vertices.reserve(triangle_count * 3u);
+            for (std::uint32_t triangle = 0u; triangle < triangle_count;
+                 ++triangle) {
+                const auto x = static_cast<float>(triangle % 10u) * 0.01f;
+                const auto y = static_cast<float>(triangle / 10u) * 0.01f;
+                large_vertices.push_back(NativePortVertex{{x, y, 0.0f}});
+                large_vertices.push_back(
+                    NativePortVertex{{x + 0.005f, y, 0.0f}});
+                large_vertices.push_back(
+                    NativePortVertex{{x, y + 0.005f, 0.0f}});
+            }
+        }
+        const std::span<const NativePortVertex> benchmark_vertices =
+            large_vertices.empty()
+                ? std::span<const NativePortVertex>(object_vertices)
+                : std::span<const NativePortVertex>(large_vertices);
         NativePortMeshHandle benchmark_mesh;
         NativePortDrawPacket packet;
         if (model_draws) {
             NativePortMeshConfig mesh;
-            mesh.vertices = object_vertices;
+            mesh.vertices = benchmark_vertices;
             benchmark_mesh = graphics.create_mesh(mesh);
             packet = object_packet({}, 1u, 1u);
             packet.mesh = benchmark_mesh;
         } else {
             packet = object_draws
-                         ? object_packet(object_vertices, 1u, 1u)
+                         ? object_packet(benchmark_vertices, 1u, 1u)
                          : screen_packet(reciprocal_vertices, 1u, 1u);
         }
         if (object_draws || model_draws) {
