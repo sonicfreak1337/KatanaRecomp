@@ -1,12 +1,18 @@
 #include "katana/runtime/native_port_content.hpp"
 #include "katana/runtime/native_port_aot_runtime.hpp"
 
+#include <algorithm>
 #include <array>
+#include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace {
 
@@ -45,9 +51,122 @@ class ChainGuardHost final
     return address == 0x8C010000u;
 }
 
+struct ImmutableGuardBenchmarkInput final {
+    std::vector<katana::runtime::NativePortImmutableRange> ranges;
+    std::array<std::vector<std::uint32_t>, 3u> queries;
+};
+
+[[nodiscard]] ImmutableGuardBenchmarkInput
+make_immutable_guard_benchmark_input() {
+    constexpr std::size_t page_size = 4096u;
+    constexpr std::size_t page_count =
+        katana::runtime::native_port_main_memory_backing_size / page_size;
+    constexpr std::size_t occupied_page_count = 369u;
+    constexpr std::size_t range_count = 4750u;
+    constexpr std::size_t query_count = 1u << 18u;
+
+    ImmutableGuardBenchmarkInput input;
+    input.ranges.reserve(range_count);
+    std::array<bool, page_count> occupied_pages{};
+    std::vector<std::uint32_t> occupied_page_indices;
+    occupied_page_indices.reserve(occupied_page_count);
+    for (std::size_t ordinal = 0u; ordinal < occupied_page_count;
+         ++ordinal) {
+        const auto page = static_cast<std::uint32_t>(
+            (ordinal * 4051u + 137u) & (page_count - 1u));
+        occupied_pages[page] = true;
+        occupied_page_indices.push_back(page);
+        const auto ranges_on_page = 12u + (ordinal < 322u ? 1u : 0u);
+        for (std::size_t range = 0u; range < ranges_on_page; ++range) {
+            input.ranges.push_back({
+                katana::runtime::native_port_main_memory_physical_base +
+                    page * static_cast<std::uint32_t>(page_size) +
+                    16u + static_cast<std::uint32_t>(range * 16u),
+                4u,
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::NativePortImmutableRangeKind::Executable)});
+        }
+    }
+    std::sort(input.ranges.begin(), input.ranges.end(),
+              [](const auto& left, const auto& right) {
+                  return left.physical_address < right.physical_address;
+              });
+
+    std::vector<std::uint32_t> empty_page_indices;
+    empty_page_indices.reserve(page_count - occupied_page_count);
+    for (std::uint32_t page = 0u; page < page_count; ++page) {
+        if (!occupied_pages[page]) empty_page_indices.push_back(page);
+    }
+    for (auto& queries : input.queries) queries.reserve(query_count);
+    for (std::size_t index = 0u; index < query_count; ++index) {
+        const auto empty_page = empty_page_indices[
+            (index * 2654435761u) % empty_page_indices.size()];
+        input.queries[0].push_back(
+            katana::runtime::native_port_main_memory_physical_base +
+            empty_page * static_cast<std::uint32_t>(page_size) +
+            static_cast<std::uint32_t>((index * 4u) & (page_size - 4u)));
+
+        const auto occupied_page = occupied_page_indices[
+            (index * 2246822519u) % occupied_page_indices.size()];
+        const auto occupied_offset =
+            (index & 1u) == 0u ? 16u : 2048u;
+        input.queries[1].push_back(
+            katana::runtime::native_port_main_memory_physical_base +
+            occupied_page * static_cast<std::uint32_t>(page_size) +
+            occupied_offset);
+
+        const bool use_empty_page = index % 100u < 91u;
+        input.queries[2].push_back(
+            use_empty_page ? input.queries[0].back()
+                           : input.queries[1].back());
+    }
+    require(input.ranges.size() == range_count,
+            "Benchmark bildet die repraesentative Range-Anzahl nicht ab.");
+    return input;
+}
+
+void run_immutable_guard_benchmark(const std::uint64_t calls) {
+    const auto input = make_immutable_guard_benchmark_input();
+    katana::runtime::NativePortImmutableWriteGuard guard(input.ranges);
+    constexpr std::array<std::string_view, 3u> names{
+        "empty", "occupied", "mixed"};
+    for (std::size_t mix = 0u; mix < input.queries.size(); ++mix) {
+        const auto& queries = input.queries[mix];
+        std::uint64_t warmup_checksum = 0u;
+        for (const auto address : queries)
+            warmup_checksum += guard.tracks_address(address, 4u) ? 1u : 0u;
+
+        std::uint64_t checksum = 0u;
+        const auto begin = std::chrono::steady_clock::now();
+        for (std::uint64_t call = 0u; call < calls; ++call) {
+            const auto address = queries[
+                static_cast<std::size_t>(call) & (queries.size() - 1u)];
+            checksum += guard.tracks_address(address, 4u) ? 1u : 0u;
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 std::chrono::steady_clock::now() - begin)
+                                 .count();
+        std::cout << "KATANA_IMMUTABLE_PAGE_REJECT_BENCHMARK mix="
+                  << names[mix] << " calls=" << calls << " ns=" << elapsed
+                  << " checksum=" << checksum
+                  << " warmup_checksum=" << warmup_checksum << '\n';
+    }
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, char** const argv) {
+    if (argc == 3 &&
+        std::string_view(argv[1]) == "--benchmark-immutable-page-reject") {
+        std::uint64_t calls = 0u;
+        const auto end = argv[2] + std::char_traits<char>::length(argv[2]);
+        const auto parsed = std::from_chars(argv[2], end, calls);
+        require(parsed.ec == std::errc{} && parsed.ptr == end && calls != 0u,
+                "Benchmark-Aufrufzahl ist ungueltig.");
+        run_immutable_guard_benchmark(calls);
+        return EXIT_SUCCESS;
+    }
+    require(argc == 1, "Unbekannte Native-Port-Content-Testoption.");
     const std::array immutable_ranges{
         katana::runtime::NativePortImmutableRange{
             0x0C000000u, 2u,
@@ -55,6 +174,48 @@ int main() {
                 katana::runtime::NativePortImmutableRangeKind::Executable)}};
     katana::runtime::NativePortImmutableWriteGuard immutable_guard(
         immutable_ranges);
+
+    constexpr std::uint32_t guard_page_size = 4096u;
+    const std::array page_index_ranges{
+        katana::runtime::NativePortImmutableRange{
+            katana::runtime::native_port_main_memory_physical_base +
+                guard_page_size - 2u,
+            4u,
+            katana::runtime::native_port_immutable_range_mask(
+                katana::runtime::NativePortImmutableRangeKind::Executable)},
+        katana::runtime::NativePortImmutableRange{
+            katana::runtime::native_port_main_memory_physical_base +
+                3u * guard_page_size + 16u,
+            4u,
+            katana::runtime::native_port_immutable_range_mask(
+                katana::runtime::NativePortImmutableRangeKind::ReadOnlyImage)},
+        katana::runtime::NativePortImmutableRange{
+            0x1F000000u, 4u,
+            katana::runtime::native_port_immutable_range_mask(
+                katana::runtime::NativePortImmutableRangeKind::Executable)}};
+    katana::runtime::NativePortImmutableWriteGuard page_index_guard(
+        page_index_ranges);
+    require(
+        page_index_guard.tracks_address(
+            katana::runtime::native_port_main_memory_physical_base +
+                guard_page_size - 4u,
+            8u) &&
+            page_index_guard.tracks_address(0x8C000FFEu, 4u) &&
+            !page_index_guard.tracks_address(
+                katana::runtime::native_port_main_memory_physical_base +
+                    2u * guard_page_size + 32u,
+                4u) &&
+            !page_index_guard.tracks_address(
+                katana::runtime::native_port_main_memory_physical_base +
+                    3u * guard_page_size + 2048u,
+                4u) &&
+            page_index_guard.tracks_address(
+                katana::runtime::native_port_main_memory_physical_base +
+                    3u * guard_page_size + 16u,
+                4u) &&
+            page_index_guard.tracks_address(0x1F000000u, 4u),
+        "Negativer Page-Reject verlor Seitenrand, Alias, belegte Seite "
+        "oder Baseline ausserhalb des Main-RAM-Backings.");
 
     {
         katana::runtime::CpuState chain_cpu;
@@ -98,6 +259,8 @@ int main() {
             "Noexcept Write-Observer materialisierte Dirty-Guard nicht.");
     immutable_guard.remove_runtime_executable_range_committed(
         0x0C900200u, 0x80u);
+    require(!immutable_guard.tracks_address(0x8C900200u, 2u),
+            "Letztes Runtime-Range-Retirement liess den Page-Index stale.");
 
     katana::runtime::NativePortExecutableLifecycleLedger lifecycle_ledger(2u);
     const auto first_lifecycle = lifecycle_ledger.acquire(0x8C900000u, 0x1000u);

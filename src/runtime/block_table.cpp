@@ -923,11 +923,9 @@ RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
         entry_index > static_aot_entries_.size())
         return std::nullopt;
     const auto& entry = static_aot_entries_[entry_index - 1u];
-    const auto authoritative_record = records_.find(entry.id);
-    if (entry.id == 0u || authoritative_record == records_.end() ||
-        entry.record != &authoritative_record->second)
+    if (entry.id == 0u || entry.record == nullptr)
         return std::nullopt;
-    const auto* const record = &authoritative_record->second;
+    const auto* const record = entry.record;
     if (!dispatchable(*record) ||
         !record->static_block || record->block.runtime_registered ||
         record->block.function == nullptr || record->block.size < 2u ||
@@ -1075,18 +1073,17 @@ bool RuntimeBlockTable::static_dispatch_generation_guard_current(
         guard.block.id != entry.id ||
         guard.table_generation != entry.generation)
         return false;
-    const auto record = records_.find(entry.id);
-    return record != records_.end() && entry.record == &record->second &&
-           guard.block.generation == record->second.generation &&
-           dispatchable(record->second) && record->second.static_block &&
-           !record->second.block.runtime_registered &&
-           record->second.block.function != nullptr &&
-           record->second.block.static_variant_policy ==
+    const auto* const record = entry.record;
+    return guard.block.generation == record->generation &&
+           dispatchable(*record) && record->static_block &&
+           !record->block.runtime_registered &&
+           record->block.function != nullptr &&
+           record->block.static_variant_policy ==
                StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic &&
            direct_p1_p2_block_binding_contiguous(
-               record->second.block.virtual_start,
-               record->second.block.physical_origin,
-               record->second.block.size);
+                record->block.virtual_start,
+                record->block.physical_origin,
+                record->block.size);
 }
 
 RuntimeBlockTableSnapshot RuntimeBlockTable::snapshot() const {

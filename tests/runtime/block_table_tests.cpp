@@ -493,6 +493,62 @@ int main() {
                 "Trackerinvalidierung nach Static-AOT-Lookup laesst Lookup oder "
                 "Generation-Guard dispatchbar.");
 
+        RuntimeBlockTable static_record_lifetime;
+        static_record_lifetime.bind_code_tracker(
+            nullptr, StaticAotInvalidationContract::Coordinated);
+        RuntimeBlock lifetime_block{0x8C102000u,
+                                    0x0C102000u,
+                                    8u,
+                                    BlockEndKind::Return,
+                                    {},
+                                    block_a,
+                                    "static-record-lifetime",
+                                    false};
+        lifetime_block.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        const auto lifetime_identity = stable_runtime_block_identity(lifetime_block);
+        static_cast<void>(static_record_lifetime.register_static(lifetime_block));
+        static_record_lifetime.seal_static();
+        const auto original_lifetime_execution =
+            static_record_lifetime.lookup_static_aot(
+                lifetime_block.physical_origin,
+                lifetime_block.virtual_start,
+                lifetime_block.variant);
+        require(original_lifetime_execution &&
+                    static_record_lifetime.static_dispatch_generation_guard_current(
+                        original_lifetime_execution->generation_guard) &&
+                    static_record_lifetime.erase_identity(lifetime_identity) &&
+                    !static_record_lifetime.static_dispatch_generation_guard_current(
+                        original_lifetime_execution->generation_guard),
+                "Static-AOT-Recordzeiger ueberlebt Erase als dispatchbarer Guard.");
+
+        const auto original_table_lifetime =
+            original_lifetime_execution->generation_guard.table_lifetime;
+        static_record_lifetime.clear();
+        static_record_lifetime.bind_code_tracker(
+            nullptr, StaticAotInvalidationContract::Coordinated);
+        static_cast<void>(static_record_lifetime.register_static(lifetime_block));
+        static_record_lifetime.seal_static();
+        const auto rebuilt_lifetime_execution =
+            static_record_lifetime.lookup_static_aot(
+                lifetime_block.physical_origin,
+                lifetime_block.virtual_start,
+                lifetime_block.variant);
+        require(rebuilt_lifetime_execution &&
+                    rebuilt_lifetime_execution->generation_guard.table_lifetime !=
+                        original_table_lifetime &&
+                    static_record_lifetime.static_dispatch_generation_guard_current(
+                        rebuilt_lifetime_execution->generation_guard) &&
+                    !static_record_lifetime.static_dispatch_generation_guard_current(
+                        original_lifetime_execution->generation_guard),
+                "Clear/Rebuild reaktiviert einen alten Static-AOT-Guard ueber Record-ABA.");
+        auto stale_lifetime_aba = rebuilt_lifetime_execution->generation_guard;
+        stale_lifetime_aba.table_lifetime = original_table_lifetime;
+        require(!static_record_lifetime.static_dispatch_generation_guard_current(
+                    stale_lifetime_aba),
+                "Static-AOT-Guard akzeptiert aktuelle IDs/Generationen mit alter "
+                "Tabellenlifetime.");
+
         RuntimeBlockTable aot_templates;
         const RuntimeAotTemplateContract template_contract{{0x8C500000u, 0xAC200000u, 0x40u},
                                                            0x80u};

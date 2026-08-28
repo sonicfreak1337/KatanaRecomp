@@ -139,10 +139,15 @@ int main() {
     constexpr std::array aliases{std::pair{sony, xinput}};
     require(detail::retain_cross_backend_alias(
                 false, true, true, false) &&
+                detail::retain_cross_backend_alias(
+                    false, false, true, false) &&
                 detail::is_correlated_backend_handoff(sony, xinput, aliases),
-            "Ein bewiesener Sony-XInput-Handoff verliert seine Aliasidentitaet.");
+            "Ein bewiesener Sony-XInput-Handoff verliert seine Aliasidentitaet "
+            "im neutralen Uebergangsfenster.");
     require(!detail::retain_cross_backend_alias(
                 false, true, false, false) &&
+                !detail::retain_cross_backend_alias(
+                    false, false, false, false) &&
                 !detail::is_correlated_backend_handoff(
                     detail::keyboard_device_domain | 1u, xinput, aliases),
             "Ein stale oder Keyboard-Alias wird als physischer Handoff akzeptiert.");
@@ -167,6 +172,31 @@ int main() {
     publish(0u); // Stable physical release.
     require(rising_edges == 1u && (previous_published & button) == 0u,
             "Ein einzelner physischer Buttondruck erzeugt mehrere Kanten oder bleibt haengen.");
+
+    detail::NativeGamepadButtonStability fallback_stability;
+    static_cast<void>(
+        detail::stabilize_gamepad_buttons(fallback_stability, button));
+    constexpr auto keyboard = detail::keyboard_device_domain | 1u;
+    const auto missing_poll_1 =
+        detail::retain_buttons_across_neutral_keyboard_fallback(
+            fallback_stability, true, xinput, keyboard, 0u);
+    const auto missing_poll_2 =
+        detail::retain_buttons_across_neutral_keyboard_fallback(
+            fallback_stability, true, xinput, keyboard, 0u);
+    const auto confirmed_disconnect =
+        detail::retain_buttons_across_neutral_keyboard_fallback(
+            fallback_stability, true, xinput, keyboard, 0u);
+    require(missing_poll_1 == button && missing_poll_2 == button &&
+                confirmed_disconnect == 0u,
+            "Der neutrale Keyboard-Fallback umgeht den Drei-Poll-Releasevertrag.");
+
+    detail::NativeGamepadButtonStability active_keyboard_stability;
+    static_cast<void>(detail::stabilize_gamepad_buttons(
+        active_keyboard_stability, button));
+    require(detail::retain_buttons_across_neutral_keyboard_fallback(
+                active_keyboard_stability, true, xinput, keyboard, button) ==
+                0u,
+            "Aktive Keyboard-Eingabe wird faelschlich als Endpoint-Luecke verdeckt.");
 
     MockServices services;
     PlatformServiceRequirements all;

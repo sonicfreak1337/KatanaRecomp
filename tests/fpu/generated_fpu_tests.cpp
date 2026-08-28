@@ -1,4 +1,5 @@
 #include "generated_fpu_program.cpp"
+#include "katana/runtime/code_invalidation.hpp"
 #include "katana/runtime/store_queue.hpp"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -21,9 +23,9 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
-class StoreQueueServices final : public katana::runtime::PlatformServices {
+class GeneratedFpuServices final : public katana::runtime::PlatformServices {
   public:
-    explicit StoreQueueServices(katana::runtime::CpuState& cpu)
+    explicit GeneratedFpuServices(katana::runtime::CpuState& cpu)
         : cpu_(cpu), queues_(cpu.memory, [this](const auto& transfer) {
               if (transfer.target == katana::runtime::StoreQueueTarget::Ram) {
                   cpu_.memory.write_bytes_at(
@@ -37,7 +39,25 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
               } else {
                   transfers.push_back(transfer);
               }
-          }) {}
+          }) {
+        const auto registration = tracker_.register_block(
+            {fmov_fixture_identity,
+             fmov_fixture_start,
+             fmov_fixture_size,
+             "generated-fpu-test",
+             {}});
+        if (registration != katana::runtime::BlockRegistrationResult::Inserted) {
+            throw std::runtime_error("Generated-FPU-Fixture konnte nicht registriert werden.");
+        }
+        cpu_.memory.set_guest_write_observer([this](const auto& event) {
+            static_cast<void>(tracker_.observe_write(
+                event.address, event.size, event.source, event.bytes_changed));
+        });
+    }
+
+    ~GeneratedFpuServices() override {
+        cpu_.memory.clear_guest_write_observer();
+    }
 
     [[nodiscard]] std::string_view name() const noexcept override {
         return "generated-sq";
@@ -97,11 +117,28 @@ class StoreQueueServices final : public katana::runtime::PlatformServices {
                                 cpu.retired_guest_instructions,
                                 cpu.attempted_guest_instructions);
     }
+    [[nodiscard]] katana::runtime::ExecutableCodeTracker*
+    executable_code_tracker() noexcept override {
+        return &tracker_;
+    }
+    [[nodiscard]] bool fmov_fixture_intact() const noexcept {
+        return tracker_.valid(fmov_fixture_identity) &&
+               tracker_.tracks_address(fmov_fixture_start, fmov_fixture_size) &&
+               !tracker_.tracks_address(fmov_fixture_start - 1u) &&
+               !tracker_.tracks_address(fmov_fixture_start + fmov_fixture_size) &&
+               tracker_.invalidation_count() == 0u;
+    }
 
     katana::runtime::CpuState& cpu_;
     katana::runtime::Sh4StoreQueues queues_;
     std::vector<katana::runtime::StoreQueueTransfer> transfers;
     std::uint64_t scheduler_cycle_ = 0u;
+
+  private:
+    static constexpr const char* fmov_fixture_identity = "generated-fpu-fmov-fixture";
+    static constexpr std::uint32_t fmov_fixture_start = 0x12Cu;
+    static constexpr std::uint32_t fmov_fixture_size = 0x12u;
+    katana::runtime::ExecutableCodeTracker tracker_;
 };
 
 } // namespace
@@ -127,7 +164,7 @@ int main() {
     {
         auto cpu_storage = std::make_unique<katana_generated::CpuState>();
         auto& cpu = *cpu_storage;
-        StoreQueueServices services(cpu);
+        GeneratedFpuServices services(cpu);
         cpu.r[3] = 0x8C010000u;
         cpu.pc = 0x170u;
         katana_generated::fn_00000170_with_services(cpu, &services);
@@ -337,11 +374,12 @@ int main() {
         cpu.memory.write_u32(0x48u, 0x40400000u);
         cpu.fr[7] = 0x40800000u;
         cpu.pc = 0x12Cu;
-        katana_generated::fn_0000012C(cpu);
+        GeneratedFpuServices services(cpu);
+        katana_generated::fn_0000012C_with_services(cpu, &services);
         require(cpu.fr[5] == 0x40400000u && cpu.fr[8] == 0x40400000u && cpu.fr[9] == 0x40400000u &&
                     cpu.r[4] == 0x44u && cpu.r[6] == 0x7Cu &&
                     cpu.memory.read_u32(0x7Cu) == 0x40400000u &&
-                    cpu.memory.read_u32(0x80u) == 0x40400000u,
+                    cpu.memory.read_u32(0x80u) == 0x40400000u && services.fmov_fixture_intact(),
                 "Generierte FMOV-Register- oder Speicherformen sind falsch.");
     }
 

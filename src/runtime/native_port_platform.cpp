@@ -2667,6 +2667,23 @@ class NativePortPlatformServices::Impl final {
                                            ? candidates[*placement[slot]]
                                                   .device_id
                                            : 0u;
+            const auto& previous = input_snapshot_.gamepads[slot];
+            if (placement[slot].has_value()) {
+                const auto& replacement = candidates[*placement[slot]];
+                const auto retained_buttons =
+                    detail::retain_buttons_across_neutral_keyboard_fallback(
+                        input_button_stability_[slot],
+                        previous.connected,
+                        old_device_id,
+                        new_device_id,
+                        replacement.state.buttons);
+                if (retained_buttons != 0u) {
+                    auto retained = previous;
+                    retained.buttons = retained_buttons;
+                    result.gamepads[slot] = retained;
+                    continue;
+                }
+            }
             const bool correlated_handoff =
                 detail::is_correlated_backend_handoff(
                     old_device_id, new_device_id, cross_backend_aliases_);
@@ -2707,7 +2724,6 @@ class NativePortPlatformServices::Impl final {
             else
                 destination.buttons = stabilize_gamepad_buttons(
                     input_button_stability_[slot], destination.buttons);
-            const auto& previous = input_snapshot_.gamepads[slot];
             if (same_logical_controller && previous.connected) {
                 destination.packet_number = previous.packet_number;
                 if (!same_gamepad_payload(previous, destination) &&

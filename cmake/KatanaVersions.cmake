@@ -9,7 +9,7 @@ endif()
 # Generated AOT translation units consume the narrow ABI contract. Product
 # runtime/package changes that do not alter their visible structs or helpers
 # must not invalidate every cached partition.
-set(KATANA_AOT_RUNTIME_ABI_VERSION 125)
+set(KATANA_AOT_RUNTIME_ABI_VERSION 126)
 set(KATANA_PRODUCT_RUNTIME_ABI_VERSION 127)
 # Compatibility input for the byte-stable abi_contract.hpp template.
 set(KATANA_RUNTIME_ABI_VERSION ${KATANA_AOT_RUNTIME_ABI_VERSION})

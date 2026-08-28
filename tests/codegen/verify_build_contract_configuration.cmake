@@ -78,10 +78,17 @@ if(NOT extract_result EQUAL 0)
     "${extract_output}\n${extract_error}")
 endif()
 # The production CMake change under test is intentionally still uncommitted in
-# the outer checkout, so overlay that exact file on the archived source.
+# the outer checkout, so overlay the exact configure-contract inputs on the
+# archived source. This also lets an ABI bump prove its new contract before
+# the commit which makes it part of the archive.
 file(COPY_FILE
   "${KATANA_SOURCE_ROOT}/CMakeLists.txt"
   "${identity_source}/CMakeLists.txt"
+  ONLY_IF_DIFFERENT
+)
+file(COPY_FILE
+  "${KATANA_SOURCE_ROOT}/cmake/KatanaVersions.cmake"
+  "${identity_source}/cmake/KatanaVersions.cmake"
   ONLY_IF_DIFFERENT
 )
 

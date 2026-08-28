@@ -79,7 +79,7 @@ bool CpuState::interrupts_blocked() const noexcept {
 }
 
 bool CpuState::privileged_mode() const noexcept {
-    return (read_sr() & sr_md_mask) != 0u;
+    return privileged_mode_inline();
 }
 
 bool CpuState::register_bank_selected() const noexcept {

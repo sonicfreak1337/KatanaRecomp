@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
@@ -11,6 +12,12 @@
 namespace katana::runtime {
 
 namespace {
+
+inline constexpr std::size_t immutable_guard_page_size = 4096u;
+inline constexpr std::size_t immutable_guard_page_count =
+    native_port_main_memory_backing_size / immutable_guard_page_size;
+static_assert(
+    native_port_main_memory_backing_size % immutable_guard_page_size == 0u);
 
 [[nodiscard]] std::uint32_t native_port_backing_address(
     const std::uint32_t address) noexcept {
@@ -61,6 +68,14 @@ NativePortImmutableWriteGuard::NativePortImmutableWriteGuard(
         previous_end = range_end;
         first = false;
     }
+    try {
+        range_page_kind_masks_.resize(immutable_guard_page_count);
+    } catch (const std::bad_alloc&) {
+        // The page index is only a negative lookup accelerator. Allocation
+        // failure deliberately retains the exact range-search baseline.
+        range_page_kind_masks_.clear();
+    }
+    rebuild_range_page_index();
 }
 
 void NativePortImmutableWriteGuard::add_runtime_executable_range(
@@ -206,6 +221,32 @@ void NativePortImmutableWriteGuard::rebuild_ranges() const noexcept {
     ranges_.resize(merged_size);
     all_kind_mask_ = 0u;
     for (const auto& range : ranges_) all_kind_mask_ |= range.kind_mask;
+    rebuild_range_page_index();
+}
+
+void NativePortImmutableWriteGuard::rebuild_range_page_index() const noexcept {
+    if (range_page_kind_masks_.size() != immutable_guard_page_count) return;
+    std::fill(range_page_kind_masks_.begin(),
+              range_page_kind_masks_.end(), 0u);
+    constexpr auto backing_begin = static_cast<std::uint64_t>(
+        native_port_main_memory_physical_base);
+    constexpr auto backing_end = backing_begin +
+        native_port_main_memory_backing_size;
+    for (const auto& range : ranges_) {
+        const auto range_begin = static_cast<std::uint64_t>(
+            range.physical_address);
+        const auto range_end = range_begin + range.byte_size;
+        const auto overlap_begin = std::max(range_begin, backing_begin);
+        const auto overlap_end = std::min(range_end, backing_end);
+        if (overlap_begin >= overlap_end) continue;
+        const auto first_page = static_cast<std::size_t>(
+            (overlap_begin - backing_begin) / immutable_guard_page_size);
+        const auto last_page = static_cast<std::size_t>(
+            (overlap_end - 1u - backing_begin) /
+            immutable_guard_page_size);
+        for (auto page = first_page; page <= last_page; ++page)
+            range_page_kind_masks_[page] |= range.kind_mask;
+    }
 }
 
 std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
@@ -231,6 +272,18 @@ std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
         // represented by one canonical interval. It must never become a
         // proof of non-aliasing for the static product.
         return all_kind_mask_;
+    const auto relative = physical - native_port_main_memory_physical_base;
+    if (range_page_kind_masks_.size() == immutable_guard_page_count &&
+        relative < native_port_main_memory_backing_size) {
+        const auto page_offset =
+            static_cast<std::size_t>(relative) &
+            (immutable_guard_page_size - 1u);
+        if (size <= immutable_guard_page_size - page_offset &&
+            range_page_kind_masks_[
+                static_cast<std::size_t>(relative) /
+                immutable_guard_page_size] == 0u)
+            return 0u;
+    }
     const auto found = std::lower_bound(
         ranges_.begin(), ranges_.end(), physical,
         [](const NativePortImmutableRange& range,

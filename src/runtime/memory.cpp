@@ -3076,7 +3076,7 @@ void Memory::require_alignment(const std::uint32_t address,
     }
 
     const auto access_size = width_bytes(width);
-    if ((static_cast<std::size_t>(address) % access_size) != 0u) {
+    if ((static_cast<std::size_t>(address) & (access_size - 1u)) != 0u) {
         throw MemoryAccessError(MemoryAccessErrorReason::Misaligned, operation, address, width);
     }
 }

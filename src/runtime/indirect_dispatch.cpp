@@ -752,8 +752,8 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
                 cached.direct_p1_p2 && cached.target == target &&
                 cpu.address_space->direct_p1_p2_dispatch_guard_current(
                     target,
-                    cpu.read_fpscr(),
-                    cpu.privileged_mode(),
+                    cpu.fpscr,
+                    cpu.privileged_mode_inline(),
                     cached.effective_variant,
                     request.variant.runtime_generation)) {
                 direct_p1_p2_target = true;
@@ -767,7 +767,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
     }
     if (cpu.address_space) {
         if (const auto guard = cpu.address_space->direct_p1_p2_instruction_guard(
-                target, cpu.read_fpscr(), cpu.privileged_mode())) {
+                target, cpu.fpscr, cpu.privileged_mode_inline())) {
             direct_p1_p2_target = true;
             physical = canonical_physical_address(target);
             effective_variant =
@@ -789,7 +789,7 @@ IndirectDispatchResult dispatch_indirect(CpuState& cpu,
         if (cpu.address_space) {
             effective_variant = block_variant_key(
                 cpu.address_space->guard_for(
-                    target, cpu.read_fpscr(), cpu.privileged_mode()),
+                    target, cpu.fpscr, cpu.privileged_mode_inline()),
                 request.variant.runtime_generation);
         }
     };

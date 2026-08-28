@@ -225,6 +225,9 @@ struct CpuState {
     [[nodiscard]] std::uint8_t interrupt_mask() const noexcept;
     void set_interrupt_mask(std::uint8_t level) noexcept;
     [[nodiscard]] bool interrupts_blocked() const noexcept;
+    [[nodiscard]] bool privileged_mode_inline() const noexcept {
+        return (sr & sr_md_mask) != 0u;
+    }
     [[nodiscard]] bool privileged_mode() const noexcept;
     [[nodiscard]] bool register_bank_selected() const noexcept;
     [[nodiscard]] bool fpu_disabled() const noexcept;

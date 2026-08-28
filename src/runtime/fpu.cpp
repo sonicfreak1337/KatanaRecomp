@@ -20,6 +20,14 @@ namespace {
 constexpr std::uint32_t canonical_single_nan = 0x7FBFFFFFu;
 constexpr std::uint64_t canonical_double_nan = 0x7FF7FFFFFFFFFFFFull;
 
+[[nodiscard]] bool double_precision(const CpuState& cpu) noexcept {
+    return (cpu.fpscr & fpscr_pr_mask) != 0u;
+}
+
+[[nodiscard]] bool flush_denormals(const CpuState& cpu) noexcept {
+    return (cpu.fpscr & fpscr_dn_mask) != 0u;
+}
+
 class ScopedHostRounding final {
   public:
     explicit ScopedHostRounding(const CpuState& cpu) noexcept {
@@ -27,7 +35,7 @@ class ScopedHostRounding final {
         const std::uint32_t current = _mm_getcsr();
         previous_ = current & _MM_ROUND_MASK;
         const std::uint32_t requested =
-            (cpu.read_fpscr() & fpscr_rounding_mode_mask) == 1u
+            (cpu.fpscr & fpscr_rounding_mode_mask) == 1u
                 ? _MM_ROUND_TOWARD_ZERO
                 : _MM_ROUND_NEAREST;
         changed_ = requested != previous_;
@@ -37,7 +45,7 @@ class ScopedHostRounding final {
 #else
         previous_ = std::fegetround();
         const int requested =
-            (cpu.read_fpscr() & fpscr_rounding_mode_mask) == 1u ? FE_TOWARDZERO : FE_TONEAREST;
+            (cpu.fpscr & fpscr_rounding_mode_mask) == 1u ? FE_TOWARDZERO : FE_TONEAREST;
         changed_ = requested != previous_;
         if (changed_) {
             static_cast<void>(std::fesetround(requested));
@@ -72,7 +80,7 @@ std::uint8_t even_register(const std::uint8_t index) noexcept {
 
 template <typename Float>
 Float flush_denormalized(const CpuState& cpu, const Float value) noexcept {
-    if (cpu.fpu_flush_denormals() && std::fpclassify(value) == FP_SUBNORMAL) {
+    if (flush_denormals(cpu) && std::fpclassify(value) == FP_SUBNORMAL) {
         return std::copysign(static_cast<Float>(0.0), value);
     }
     return value;
@@ -175,7 +183,7 @@ void fpu_binary(CpuState& cpu,
                 const std::uint8_t source,
                 const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
-    if (cpu.fpu_double_precision()) {
+    if (double_precision(cpu)) {
         write_double_result(cpu,
                             destination,
                             binary_result(operation,
@@ -191,7 +199,7 @@ void fpu_binary(CpuState& cpu,
 }
 
 void fpu_absolute(CpuState& cpu, const std::uint8_t destination) noexcept {
-    if (cpu.fpu_double_precision()) {
+    if (double_precision(cpu)) {
         cpu.fr[even_register(destination)] &= 0x7FFFFFFFu;
     } else {
         cpu.fr[destination & 0x0Fu] &= 0x7FFFFFFFu;
@@ -199,13 +207,13 @@ void fpu_absolute(CpuState& cpu, const std::uint8_t destination) noexcept {
 }
 
 void fpu_negate(CpuState& cpu, const std::uint8_t destination) noexcept {
-    cpu.fr[cpu.fpu_double_precision() ? even_register(destination) : destination & 0x0Fu] ^=
+    cpu.fr[double_precision(cpu) ? even_register(destination) : destination & 0x0Fu] ^=
         0x80000000u;
 }
 
 void fpu_square_root(CpuState& cpu, const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
-    if (cpu.fpu_double_precision()) {
+    if (double_precision(cpu)) {
         write_double_result(cpu, destination, std::sqrt(read_double_operand(cpu, destination)));
     } else {
         write_single_result(cpu, destination, std::sqrt(read_single_operand(cpu, destination)));
@@ -301,7 +309,7 @@ void fpu_multiply_accumulate(CpuState& cpu,
 void fpu_compare_equal(CpuState& cpu,
                        const std::uint8_t source,
                        const std::uint8_t destination) noexcept {
-    cpu.t = cpu.fpu_double_precision()
+    cpu.t = double_precision(cpu)
                 ? read_double_operand(cpu, destination) == read_double_operand(cpu, source)
                 : read_single_operand(cpu, destination) == read_single_operand(cpu, source);
 }
@@ -309,7 +317,7 @@ void fpu_compare_equal(CpuState& cpu,
 void fpu_compare_greater(CpuState& cpu,
                          const std::uint8_t source,
                          const std::uint8_t destination) noexcept {
-    cpu.t = cpu.fpu_double_precision()
+    cpu.t = double_precision(cpu)
                 ? read_double_operand(cpu, destination) > read_double_operand(cpu, source)
                 : read_single_operand(cpu, destination) > read_single_operand(cpu, source);
 }
@@ -317,7 +325,7 @@ void fpu_compare_greater(CpuState& cpu,
 void fpu_float_from_fpul(CpuState& cpu, const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
     const auto value = static_cast<std::int32_t>(cpu.fpul);
-    if (cpu.fpu_double_precision()) {
+    if (double_precision(cpu)) {
         write_double_result(cpu, destination, static_cast<double>(value));
     } else {
         write_single_result(cpu, destination, static_cast<float>(value));
@@ -325,7 +333,7 @@ void fpu_float_from_fpul(CpuState& cpu, const std::uint8_t destination) noexcept
 }
 
 void fpu_truncate_to_fpul(CpuState& cpu, const std::uint8_t source) noexcept {
-    cpu.fpul = cpu.fpu_double_precision()
+    cpu.fpul = double_precision(cpu)
                    ? truncate_to_integer_bits(read_double_operand(cpu, source))
                    : truncate_to_integer_bits(read_single_operand(cpu, source));
 }

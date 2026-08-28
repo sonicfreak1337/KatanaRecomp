@@ -42,9 +42,30 @@ struct NativeGamepadButtonStability final {
     return stability.buttons;
 }
 
-// Keep a proven cross-backend alias for exactly the poll in which its old,
-// currently assigned endpoint disappeared and the correlated replacement is
-// still visible. Once the slot has moved, the absent endpoint is no longer
+// Windows keeps a neutral keyboard endpoint available even while a physical
+// gamepad briefly disappears from enumeration. Do not let that compatibility
+// fallback bypass the release debounce for a button that is already held:
+// retain it for the same two neutral polls, then allow the normal identity
+// change on the third. An active keyboard or an already-keyboard-owned slot is
+// a real source transition and is never retained here.
+[[nodiscard]] constexpr std::uint32_t
+retain_buttons_across_neutral_keyboard_fallback(
+    NativeGamepadButtonStability& stability,
+    const bool previous_connected,
+    const std::uint64_t old_device_id,
+    const std::uint64_t new_device_id,
+    const std::uint32_t new_buttons) noexcept {
+    if (!previous_connected || old_device_id == 0u ||
+        (old_device_id & input_device_domain_mask) == keyboard_device_domain ||
+        (new_device_id & input_device_domain_mask) != keyboard_device_domain ||
+        new_buttons != 0u)
+        return 0u;
+    return stabilize_gamepad_buttons(stability, 0u);
+}
+
+// Keep a proven cross-backend alias while exactly one endpoint still owns its
+// title slot, including the two-poll neutral fallback window above. Once the
+// slot has moved or the bounded release is confirmed, neither endpoint is
 // assigned and the stale alias is retired on the next poll.
 [[nodiscard]] constexpr bool retain_cross_backend_alias(
     const bool first_present,
@@ -52,7 +73,8 @@ struct NativeGamepadButtonStability final {
     const bool first_assigned,
     const bool second_assigned) noexcept {
     if (first_present && second_present) return true;
-    if (first_present == second_present) return false;
+    if (!first_present && !second_present)
+        return first_assigned != second_assigned;
     return first_present ? second_assigned : first_assigned;
 }
 

@@ -57,6 +57,7 @@ class NativePortImmutableWriteGuard final {
 
   private:
     void rebuild_ranges() const noexcept;
+    void rebuild_range_page_index() const noexcept;
     [[nodiscard]] std::uint8_t range_kind_mask(
         std::uint32_t address,
         std::size_t size) const noexcept;
@@ -64,6 +65,7 @@ class NativePortImmutableWriteGuard final {
     std::vector<NativePortImmutableRange> fixed_ranges_;
     std::vector<NativePortImmutableRange> runtime_ranges_;
     mutable std::vector<NativePortImmutableRange> ranges_;
+    mutable std::vector<std::uint8_t> range_page_kind_masks_;
     std::size_t maximum_runtime_ranges_ = 0u;
     std::uint64_t generation_ = 0u;
     std::uint32_t first_write_address_ = 0u;

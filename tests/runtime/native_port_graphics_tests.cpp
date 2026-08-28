@@ -228,9 +228,26 @@ int main(const int argc, char** const argv) {
     graphics.begin_frame(reciprocal_frame());
     graphics.draw(screen_packet(reciprocal_vertices, 1u, 1u));
     graphics.draw(object_packet(object_vertices, 1u, 2u));
-    require(graphics.snapshot().draw_calls == 2u,
+    auto near_clipped = object_packet(object_vertices, 1u, 3u);
+    near_clipped.transform.values = {
+        1.0f, 0.0f, 0.5f, 1.0f,
+        0.0f, 0.25f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.125f, 0.25f};
+    graphics.draw(near_clipped);
+
+    NativePortMeshConfig near_clipped_mesh_config;
+    near_clipped_mesh_config.vertices = object_vertices;
+    const auto near_clipped_mesh =
+        graphics.create_mesh(near_clipped_mesh_config);
+    auto persistent_near_clipped = object_packet({}, 1u, 4u);
+    persistent_near_clipped.mesh = near_clipped_mesh;
+    persistent_near_clipped.transform = near_clipped.transform;
+    graphics.draw(persistent_near_clipped);
+    require(graphics.snapshot().draw_calls == 4u,
             "Ein semantischer Batch akzeptiert keinen dynamischen Draw-State.");
     graphics.present();
+    graphics.destroy_mesh(near_clipped_mesh);
     graphics.repeat_present();
 
     graphics.begin_frame(reciprocal_frame());
@@ -238,7 +255,7 @@ int main(const int argc, char** const argv) {
     flat_packet.rasterizer.shading = NativePortShadingMode::FlatLastVertex;
     graphics.draw(flat_packet);
     const auto draws_after_flat = graphics.snapshot().draw_calls;
-    require(draws_after_flat == 3u,
+    require(draws_after_flat == 5u,
             "Flat-Last-Vertex umgeht die erforderliche Vorverarbeitung.");
     graphics.present();
 

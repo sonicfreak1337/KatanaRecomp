@@ -570,6 +570,14 @@ template <std::size_t Size>
     return transform.values == identity;
 }
 
+[[nodiscard]] bool positive_affine_w_transform(
+    const NativePortMatrix4x4& transform) noexcept {
+    return transform.values[3u] == 0.0f &&
+           transform.values[7u] == 0.0f &&
+           transform.values[11u] == 0.0f &&
+           transform.values[15u] > 0.0f;
+}
+
 [[nodiscard]] bool compatible_vertex_contract(
     const NativePortDrawPacket& packet) noexcept {
     switch (packet.vertex_space) {
@@ -584,6 +592,7 @@ template <std::size_t Size>
                    NativePortDepthCoordinateMode::ReciprocalPositive &&
                packet.interpolation ==
                    NativePortInterpolationMode::PvrScreenGouraud &&
+               positive_affine_w_transform(packet.transform) &&
                packet.rasterizer.small_triangle_area_space ==
                    NativePortTriangleAreaSpace::Submitted &&
                !packet.rasterizer.depth_clip_enabled;
@@ -980,8 +989,6 @@ class NativePortGraphicsDevice::Impl final {
             std::numeric_limits<float>::infinity();
         float depth_coordinate_max =
             -std::numeric_limits<float>::infinity();
-        float position_w_min = std::numeric_limits<float>::infinity();
-        float position_w_max = -std::numeric_limits<float>::infinity();
     };
 
     struct GeometryPreprocessStats final {
@@ -2727,10 +2734,6 @@ class NativePortGraphicsDevice::Impl final {
                 capabilities.depth_coordinate_min, vertex.depth_coordinate);
             capabilities.depth_coordinate_max = std::max(
                 capabilities.depth_coordinate_max, vertex.depth_coordinate);
-            capabilities.position_w_min = std::min(
-                capabilities.position_w_min, vertex.position_w);
-            capabilities.position_w_max = std::max(
-                capabilities.position_w_max, vertex.position_w);
         }
 
         const auto element_count =
@@ -2752,33 +2755,6 @@ class NativePortGraphicsDevice::Impl final {
         }();
         if (!valid_count) fail(failure, 0u, topology_operation);
         return capabilities;
-    }
-
-    [[nodiscard]] static std::array<double, 2u> transformed_w_range(
-        const NativePortDrawPacket& packet,
-        const GeometryCapabilities& capabilities) noexcept {
-        if (packet.vertex_space == NativePortVertexSpace::ClipHomogeneous)
-            return {capabilities.position_w_min,
-                    capabilities.position_w_max};
-        // W is linear in one submitted vertex, but the independent XYZ bounds
-        // above are not: combining each component's extremum constructs box
-        // corners which need not belong to any vertex.  That conservative box
-        // can cross W=0 for a rotated, already near-clipped triangle even when
-        // every actual vertex has positive W.  Evaluate the submitted vertices
-        // themselves so this remains an exact draw contract rather than a
-        // correlation-destroying AABB rejection.
-        double minimum = std::numeric_limits<double>::infinity();
-        double maximum = -std::numeric_limits<double>::infinity();
-        for (const auto& vertex : packet.vertices) {
-            double transformed = packet.transform.values[15u];
-            for (std::size_t component = 0u; component < 3u; ++component)
-                transformed +=
-                    static_cast<double>(vertex.position[component]) *
-                    packet.transform.values[component * 4u + 3u];
-            minimum = std::min(minimum, transformed);
-            maximum = std::max(maximum, transformed);
-        }
-        return {minimum, maximum};
     }
 
     void require_geometry_capabilities(
@@ -2812,32 +2788,20 @@ class NativePortGraphicsDevice::Impl final {
                  0u,
                  "draw-position-w");
 
-        const bool requires_positive_clip_w =
-            packet.vertex_space == NativePortVertexSpace::PvrScreenReciprocal ||
-            packet.depth_mapping.mode ==
-                NativePortDepthCoordinateMode::
-                    ReciprocalPositiveHomogeneousClip;
-        std::array<double, 2u> clip_w{};
-        if (requires_positive_clip_w) {
-            clip_w = transformed_w_range(packet, capabilities);
-            if (!std::isfinite(clip_w[0]) || !std::isfinite(clip_w[1]) ||
-                clip_w[0] <= 0.0 || clip_w[1] < clip_w[0])
-                fail(NativePortGraphicsFailure::InvalidDraw,
-                     0u,
-                     "draw-positive-clip-w");
-        }
-
-        if (reciprocal_depth_mode(packet.depth_mapping.mode)) {
-            double minimum_reciprocal =
+        // ReciprocalPositiveHomogeneousClip deliberately accepts object
+        // vertices outside the homogeneous clip volume.  The host GPU clips
+        // those primitives and the shader reconstructs reciprocal W only for
+        // surviving fragments.  Requiring every submitted W to be positive
+        // both contradicted that contract and made persistent meshes
+        // impossible to validate because their CPU vertex span is absent.
+        // PVR screen-space draws carry an explicit reciprocal coordinate and
+        // retain the exact data-dependent range check below.
+        if (packet.depth_mapping.mode ==
+            NativePortDepthCoordinateMode::ReciprocalPositive) {
+            const double minimum_reciprocal =
                 capabilities.depth_coordinate_min;
-            double maximum_reciprocal =
+            const double maximum_reciprocal =
                 capabilities.depth_coordinate_max;
-            if (packet.depth_mapping.mode ==
-                NativePortDepthCoordinateMode::
-                    ReciprocalPositiveHomogeneousClip) {
-                minimum_reciprocal = 1.0 / clip_w[1];
-                maximum_reciprocal = 1.0 / clip_w[0];
-            }
             const auto map_depth = [&](const double reciprocal) {
                 return std::log2(
                            1.0 + packet.depth_mapping.reciprocal_scale *
@@ -5336,6 +5300,7 @@ struct DrawVertexOutput {
     noperspective float4 pvr_screen_color : TEXCOORD4;
     noperspective float4 pvr_screen_secondary_color : TEXCOORD5;
     noperspective float pvr_screen_fog_coordinate : TEXCOORD6;
+    float homogeneous_clip_w : TEXCOORD7;
 };
 
 DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
@@ -5347,6 +5312,7 @@ DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     output.position = clip_homogeneous
         ? source_position
         : mul(source_position, draw_transform);
+    output.homogeneous_clip_w = output.position.w;
     if ((pipeline_flags.x & 0x20u) != 0u &&
         (pipeline_flags.x & 0x10000u) == 0u)
         output.position.z = 0.0;
@@ -5360,12 +5326,10 @@ DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     output.secondary_color = input.secondary_color;
     output.fog_coordinate = input.fog_coordinate;
     // Pixel-stage SV_Position.w is not a portable source for the original
-    // clip-space W. Carry 1/W explicitly as a noperspective value so native
-    // homogeneous geometry and pretransformed UI share the same reciprocal
-    // depth domain on every backend.
-    output.depth_coordinate = (pipeline_flags.x & 0x10000u) != 0u
-        ? rcp(output.position.w)
-        : input.depth_coordinate;
+    // clip-space W.  Screen-space geometry therefore keeps its explicit
+    // reciprocal coordinate; homogeneous geometry carries clip W separately
+    // and derives the reciprocal only after host clipping in the pixel stage.
+    output.depth_coordinate = input.depth_coordinate;
     output.reciprocal_texcoord =
         output.texcoord * input.depth_coordinate;
     const float pvr_screen_weight = input.depth_coordinate;
@@ -5423,7 +5387,13 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
     const bool screen_space_reciprocal =
         (flags & 0x20u) != 0u && !homogeneous_reciprocal_clip;
-    const float reciprocal_coordinate = input.depth_coordinate;
+    // homogeneous_clip_w uses ordinary perspective interpolation.  Because
+    // each vertex publishes its own clip W, clipping preserves the equality
+    // and perspective interpolation reconstructs fragment W exactly.  Taking
+    // the reciprocal here avoids evaluating 1/W on rejected W<=0 vertices.
+    const float reciprocal_coordinate = homogeneous_reciprocal_clip
+        ? rcp(input.homogeneous_clip_w)
+        : input.depth_coordinate;
     const bool pvr_screen_gouraud = (flags & 0x40000u) != 0u;
     const float pvr_screen_weight = input.depth_coordinate;
     const float4 interpolated_color = pvr_screen_gouraud

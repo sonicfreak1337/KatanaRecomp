@@ -864,6 +864,10 @@ int main() {
                 "const auto katana_direct_ram_read_u32 =") !=
                 std::string::npos &&
             proven_delay_memory_source.find(
+                "cpu.privileged_mode_inline()") != std::string::npos &&
+            proven_delay_memory_source.find(
+                "cpu.privileged_mode()") == std::string::npos &&
+            proven_delay_memory_source.find(
                 "if (katana_allow_direct_read &&\n"
                 "            katana_direct_ram_translate(") !=
                 std::string::npos &&
@@ -1616,7 +1620,7 @@ int main() {
     const auto rte_release = privileged_token_source.find(
         "katana_registers.flush_release();");
     const auto rte_privilege =
-        privileged_token_source.find("cpu.privileged_mode()", rte_release);
+        privileged_token_source.find("cpu.privileged_mode_inline()", rte_release);
     const auto rte_apply =
         privileged_token_source.find("return_from_exception(cpu);", rte_privilege);
     const auto rte_reload = privileged_token_source.find(

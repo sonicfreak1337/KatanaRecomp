@@ -1252,7 +1252,7 @@ void emit_privileged_guard(std::ostringstream& output,
                            const bool single_block) {
     if (!instruction.is_privileged) return;
     emit_indent(output, indent);
-    output << "if (!cpu.privileged_mode()) {\n";
+    output << "if (!cpu.privileged_mode_inline()) {\n";
     emit_indent(output, indent + 1);
     output << "raise_illegal_instruction(cpu, "
            << relocated_code_address(instruction.source_address);
@@ -5731,12 +5731,12 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "        const auto katana_segment = "
                    "katana_virtual_address >> 29u;\n"
                 << "        if (katana_segment == 4u || katana_segment == 5u) {\n"
-                << "            if (!cpu.privileged_mode()) return false;\n"
+                << "            if (!cpu.privileged_mode_inline()) return false;\n"
                 << "            katana_direct_address = katana_virtual_address;\n"
                 << "        } else {\n"
                 << "            if ((cpu.mmucr & 1u) != 0u || "
                    "katana_segment >= 7u ||\n"
-                << "                (!cpu.privileged_mode() &&\n"
+                << "                (!cpu.privileged_mode_inline() &&\n"
                 << "                 katana_virtual_address >= 0x80000000u))\n"
                 << "                return false;\n"
                 << "            katana_direct_address =\n"

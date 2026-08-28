@@ -18,8 +18,8 @@ void require(const bool condition, const std::string& message) {
 } // namespace
 
 int main() {
-    static_assert(katana::runtime::abi_version == 125u);
-    static_assert(katana::build_contract::aot_runtime_abi_version == 125u);
+    static_assert(katana::runtime::abi_version == 126u);
+    static_assert(katana::build_contract::aot_runtime_abi_version == 126u);
     static_assert(katana::build_contract::runtime_abi_version == 127u);
 
     katana::runtime::Memory memory(16u);
