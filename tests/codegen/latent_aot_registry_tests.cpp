@@ -110,6 +110,52 @@ std::vector<std::uint8_t> fixture_iso() {
          {23u, "DATA.DAT;1", {0xFFu, 0xFFu, 0xFFu, 0xFFu}}});
 }
 
+std::vector<std::uint8_t> indexed_call_table_module(
+    const bool clobber_index = false,
+    const bool noncontiguous = false) {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(0x220u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // Root -> indexed absolute CallRegister.  The backward BRA at 0x0E
+    // makes the call a separately reachable normal-entry block while the
+    // physical producer instructions remain contiguous at 0x00..0x08.
+    put_u16(0x00u, 0xE001u); // mov #1,r0
+    put_u16(0x02u, 0xDC7Du); // mov.l @(0x1f4,pc),r12 -> literal at 0x1f8
+    put_u16(0x04u, noncontiguous ? 0xA001u : 0x0009u);
+    put_u16(0x06u, noncontiguous ? 0x0009u
+                                  : (clobber_index ? 0xE002u : 0x4008u));
+    put_u16(0x08u, 0x03CEu); // mov.l @(r0,r12),r3
+    put_u16(0x0Au, 0x430Bu); // jsr @r3
+    put_u16(0x0Cu, 0x64E3u); // mov r14,r4 (delay slot)
+    put_u16(0x0Eu, 0xAFFCu); // bra 0x0a
+    put_u16(0x10u, 0x0009u); // delay slot
+
+    // Valid bounded targets and a terminating local table.  The indexed
+    // value one selects the second target at runtime, while static discovery
+    // must retain the complete two-target family.
+    for (const auto offset : {0x100u, 0x108u}) {
+        put_u16(offset, 0x000Bu);      // rts
+        put_u16(offset + 2u, 0x0009u); // delay slot
+    }
+    put_u32(0x1F8u, runtime_base + 0x200u);
+    put_u32(0x200u, runtime_base + 0x100u);
+    put_u32(0x204u, runtime_base + 0x108u);
+    put_u32(0x208u, 0u);
+    return bytes;
+}
+
 std::vector<std::uint8_t> local_descriptor_module(
     const bool include_pointer_producer,
     const std::uint32_t descriptor_stride,
@@ -931,6 +977,53 @@ int main() {
                 !has_dispatch_entry(local_descriptor_single_target, 0x120u),
             "Ein einzelnes Descriptorziel wurde trotz Mindestfamilie als "
             "Callbacktabelle akzeptiert.");
+
+        katana::codegen::LatentAotDiscoveryOptions indexed_table_options;
+        indexed_table_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        indexed_table_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        const std::array indexed_table_roots{0u};
+        const auto audit_has_entry = [](const auto& audit,
+                                        const std::uint32_t offset) {
+            return std::binary_search(audit.final_entry_offsets.begin(),
+                                      audit.final_entry_offsets.end(), offset) &&
+                   std::binary_search(audit.emitted_block_offsets.begin(),
+                                      audit.emitted_block_offsets.end(), offset);
+        };
+        const auto indexed_table_positive =
+            katana::codegen::audit_latent_aot_module(
+                indexed_call_table_module(), 0x88000000u,
+                indexed_table_roots, 0x8C900000u, indexed_table_options);
+        require(
+            indexed_table_positive.admitted &&
+                audit_has_entry(indexed_table_positive, 0x100u) &&
+                audit_has_entry(indexed_table_positive, 0x108u),
+            "Gesplitteter indexed-Call-Table-Producer verlor seine lokalen "
+            "Targets trotz contiguous First-Writer-Proof.");
+
+        const auto indexed_table_clobber =
+            katana::codegen::audit_latent_aot_module(
+                indexed_call_table_module(true), 0x88000000u,
+                indexed_table_roots, 0x8C900000u, indexed_table_options);
+        require(
+            indexed_table_clobber.admitted &&
+                !audit_has_entry(indexed_table_clobber, 0x100u) &&
+                !audit_has_entry(indexed_table_clobber, 0x108u),
+            "Indexed-Call-Table wurde trotz R0-Clobber als Rootfamilie "
+            "akzeptiert.");
+
+        const auto indexed_table_noncontiguous =
+            katana::codegen::audit_latent_aot_module(
+                indexed_call_table_module(false, true), 0x88000000u,
+                indexed_table_roots, 0x8C900000u, indexed_table_options);
+        require(
+            indexed_table_noncontiguous.admitted &&
+                !audit_has_entry(indexed_table_noncontiguous, 0x100u) &&
+                !audit_has_entry(indexed_table_noncontiguous, 0x108u),
+            "Indexed-Call-Table ueber eine nicht zusammenhaengende Funktion "
+            "wurde als Rootfamilie akzeptiert.");
 
         const std::array unrelated_record_external_targets{
             0x8C018120u, 0x8C020000u};

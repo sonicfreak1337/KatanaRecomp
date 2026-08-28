@@ -827,6 +827,8 @@ OwnerSemanticSummary summarize_owner_semantics(
         if (block.instructions.empty())
             append_reason(summary, options, "empty-basic-block");
         std::optional<std::uint32_t> previous_address;
+        const OwnerSemanticSummary* pending_direct_call_callee = nullptr;
+        std::uint32_t pending_direct_call_address = 0u;
         for (const auto& instruction : block.instructions) {
             ++summary.instruction_count;
             if (!in_boundary(instruction.source_address))
@@ -1091,6 +1093,16 @@ OwnerSemanticSummary summarize_owner_semantics(
                         append_reason(
                             summary, options,
                             "direct-call-callee-semantic-contract-partial");
+                    } else if (
+                        instruction.delay_slot.role !=
+                            ir::DelaySlotRole::Owner ||
+                        !instruction.delay_slot.counterpart_address.has_value() ||
+                        *instruction.delay_slot.counterpart_address !=
+                            instruction.source_address + 2u ||
+                        pending_direct_call_callee != nullptr) {
+                        saw_uncomposed_direct_call = true;
+                        append_reason(summary, options,
+                                      "direct-call-delay-slot-unavailable");
                     } else {
                         OwnerSemanticDirectCallProof proof;
                         proof.instruction_address = instruction.source_address;
@@ -1106,48 +1118,9 @@ OwnerSemanticSummary summarize_owner_semantics(
                             callee->result.special_write_mask;
                         summary.result.status_write_mask |=
                             callee->result.status_write_mask;
-                        for (const auto& callee_effect : callee->effects) {
-                            auto effect = callee_effect;
-                            effect.path_identity =
-                                "call:" + hex_token(instruction.source_address) +
-                                "/" + effect.path_identity;
-                            if (effect.path_identity.size() >
-                                options.maximum_text_bytes) {
-                                append_reason(
-                                    summary, options,
-                                    "direct-call-path-identity-too-long");
-                                saw_uncomposed_direct_call = true;
-                                break;
-                            }
-                            append_effect(block_index, std::move(effect));
-                        }
-                        for (const auto& callee_guard : callee->guards) {
-                            if (summary.guards.size() >=
-                                options.maximum_guards) {
-                                summary.guards_truncated = true;
-                                ++summary.truncated_guard_count;
-                                append_reason(summary, options,
-                                              "guard-budget-exceeded");
-                                break;
-                            }
-                            auto guard = callee_guard;
-                            guard.order = static_cast<std::uint16_t>(
-                                std::min<std::size_t>(
-                                    summary.guards.size(),
-                                    std::numeric_limits<std::uint16_t>::max()));
-                            guard.path_identity =
-                                "call:" + hex_token(instruction.source_address) +
-                                "/" + guard.path_identity;
-                            if (guard.path_identity.size() >
-                                options.maximum_text_bytes) {
-                                append_reason(
-                                    summary, options,
-                                    "direct-call-path-identity-too-long");
-                                saw_uncomposed_direct_call = true;
-                                break;
-                            }
-                            summary.guards.push_back(std::move(guard));
-                        }
+                        pending_direct_call_callee = callee;
+                        pending_direct_call_address =
+                            instruction.source_address;
                     }
                 }
             } else if (instruction.operation == ir::Operation::Return) {
@@ -1176,6 +1149,66 @@ OwnerSemanticSummary summarize_owner_semantics(
                 for (const auto target_address : output.successor_addresses)
                     append_guard(block_index, target_address);
             }
+
+            // SH-4 executes the physical delay slot before transferring to
+            // the callee. Compose the callee only after every effect of that
+            // slot has entered the ordered owner stream.
+            if (pending_direct_call_callee != nullptr &&
+                instruction.delay_slot.role == ir::DelaySlotRole::Slot &&
+                instruction.delay_slot.counterpart_address ==
+                    pending_direct_call_address) {
+                for (const auto& callee_effect :
+                     pending_direct_call_callee->effects) {
+                    auto effect = callee_effect;
+                    effect.path_identity =
+                        "call:" + hex_token(pending_direct_call_address) +
+                        "/" + effect.path_identity;
+                    if (effect.path_identity.size() >
+                        options.maximum_text_bytes) {
+                        append_reason(
+                            summary, options,
+                            "direct-call-path-identity-too-long");
+                        saw_uncomposed_direct_call = true;
+                        break;
+                    }
+                    append_effect(block_index, std::move(effect));
+                }
+                for (const auto& callee_guard :
+                     pending_direct_call_callee->guards) {
+                    if (summary.guards.size() >=
+                        options.maximum_guards) {
+                        summary.guards_truncated = true;
+                        ++summary.truncated_guard_count;
+                        append_reason(summary, options,
+                                      "guard-budget-exceeded");
+                        break;
+                    }
+                    auto guard = callee_guard;
+                    guard.order = static_cast<std::uint16_t>(
+                        std::min<std::size_t>(
+                            summary.guards.size(),
+                            std::numeric_limits<std::uint16_t>::max()));
+                    guard.path_identity =
+                        "call:" + hex_token(pending_direct_call_address) +
+                        "/" + guard.path_identity;
+                    if (guard.path_identity.size() >
+                        options.maximum_text_bytes) {
+                        append_reason(
+                            summary, options,
+                            "direct-call-path-identity-too-long");
+                        saw_uncomposed_direct_call = true;
+                        break;
+                    }
+                    summary.guards.push_back(std::move(guard));
+                }
+                pending_direct_call_callee = nullptr;
+                pending_direct_call_address = 0u;
+            }
+        }
+        if (pending_direct_call_callee != nullptr) {
+            saw_uncomposed_direct_call = true;
+            append_reason(summary, options,
+                          "direct-call-delay-slot-unavailable");
         }
     }
 

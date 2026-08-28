@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 13u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 14u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -136,6 +136,7 @@ enum class NativePortGraphicsFailure : std::uint8_t {
     InvalidDraw,
     DeviceLost,
     ThreadViolation,
+    MissingRequiredTexture,
 };
 
 class NativePortGraphicsError final : public std::runtime_error {
@@ -163,6 +164,14 @@ struct NativePortTextureHandle final {
     }
     friend constexpr bool operator==(NativePortTextureHandle,
                                      NativePortTextureHandle) = default;
+};
+
+// A null texture handle is meaningful only for an authored untextured draw.
+// RequiredResolved makes the adapter's texture obligation explicit, so a
+// failed lookup cannot silently become the renderer's white fallback.
+enum class NativePortTextureStage : std::uint8_t {
+    Disabled,
+    RequiredResolved,
 };
 
 using NativePortTexturePayloadSha256 = std::array<std::uint8_t, 32u>;
@@ -703,8 +712,10 @@ struct NativePortMeshConfig final {
     NativePortPrimitiveTopology topology =
         NativePortPrimitiveTopology::TriangleList;
     NativePortShadingMode shading = NativePortShadingMode::Smooth;
-    // Zero disables rejection. A positive threshold is measured only in the
-    // submitted vertex XY space so it is independent of per-draw transforms.
+    // Persistent geometry keeps the complete authored primitive set. A
+    // transform-dependent small-triangle decision belongs to a draw's logical
+    // raster contract and therefore cannot be baked into this immutable mesh.
+    // The only currently valid value is zero.
     float small_triangle_area_threshold = 0.0f;
 };
 
@@ -736,6 +747,7 @@ struct NativePortDrawPacket final {
     NativePortMatrix4x4 transform;
     NativePortMatrix4x4 normal_transform;
     NativePortTextureHandle texture;
+    NativePortTextureStage texture_stage = NativePortTextureStage::Disabled;
     NativePortViewportTarget viewport = NativePortViewportTarget::Game;
     NativePortPrimitiveTopology topology =
         NativePortPrimitiveTopology::TriangleList;

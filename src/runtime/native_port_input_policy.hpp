@@ -21,17 +21,27 @@ inline constexpr std::uint64_t input_device_domain_mask =
 struct NativeGamepadButtonStability final {
     std::uint32_t buttons = 0u;
     std::array<std::uint32_t, 2u> release_history{};
+    std::uint8_t handoff_polls_remaining = 0u;
 };
 
 // A physical pad exposed through more than one Windows input path can leave a
 // short run of neutral samples between the two representations of one button
 // press. Publishing that run creates a false release/press pair at the title
-// boundary. Confirm releases only after three consecutive neutral polls while
-// publishing presses immediately. This covers the observed zero-, one- and
-// two-poll XInput/HID hand-off holes; a stable release still clears the state.
+// boundary. Confirm releases only inside an explicitly proven, bounded
+// hand-off window. Stable input from one unchanged endpoint is always
+// published verbatim so a one-poll release and a fast double tap survive.
 [[nodiscard]] constexpr std::uint32_t stabilize_gamepad_buttons(
     NativeGamepadButtonStability& stability,
-    const std::uint32_t raw_buttons) noexcept {
+    const std::uint32_t raw_buttons,
+    const bool begin_handoff_window) noexcept {
+    if (begin_handoff_window && stability.handoff_polls_remaining == 0u)
+        stability.handoff_polls_remaining = 3u;
+    if (stability.handoff_polls_remaining == 0u) {
+        stability.buttons = raw_buttons;
+        stability.release_history = {};
+        return raw_buttons;
+    }
+
     const auto released = stability.buttons & ~raw_buttons;
     const auto confirmed =
         released & stability.release_history[0] &
@@ -39,6 +49,18 @@ struct NativeGamepadButtonStability final {
     stability.buttons = (stability.buttons | raw_buttons) & ~confirmed;
     stability.release_history[1] = stability.release_history[0];
     stability.release_history[0] = released & ~confirmed;
+    --stability.handoff_polls_remaining;
+    if (stability.buttons == raw_buttons &&
+        stability.release_history[0] == 0u) {
+        stability.release_history = {};
+        stability.handoff_polls_remaining = 0u;
+    } else if (stability.handoff_polls_remaining == 0u) {
+        // A handoff may expose changing multi-button samples rather than a
+        // clean neutral gap. Never let that extend debounce past the exact
+        // three-poll contract; the newest endpoint becomes authoritative.
+        stability.buttons = raw_buttons;
+        stability.release_history = {};
+    }
     return stability.buttons;
 }
 
@@ -60,7 +82,7 @@ retain_buttons_across_neutral_keyboard_fallback(
         (new_device_id & input_device_domain_mask) != keyboard_device_domain ||
         new_buttons != 0u)
         return 0u;
-    return stabilize_gamepad_buttons(stability, 0u);
+    return stabilize_gamepad_buttons(stability, 0u, true);
 }
 
 // Keep a proven cross-backend alias while exactly one endpoint still owns its

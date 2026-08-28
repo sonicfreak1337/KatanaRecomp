@@ -2120,16 +2120,13 @@ bool validate_boot_analysis_cache_source_binding(
                     table.dispatch_address <=
                         std::numeric_limits<std::uint32_t>::max() - 4u &&
                     table.target_base == table.dispatch_address + 4u;
-                // The internal declaration already binds the exact relative
-                // table and BRAF/BSRF dispatch pair.  The native recognizer is
-                // deliberately a compact-pattern inference aid, not a second
-                // authority requirement for compiler schedules with unrelated
-                // instructions between the table load and branch.  Absolute
-                // pointer tables continue to require their independently
-                // recognized producer and literal chain.
+                // The declaration authenticates bytes, while the bounded
+                // recognizer proves that the BRAF register is actually fed by
+                // this table across only non-clobbering instructions.
                 bool declaration_producer_identity_bound =
                     declaration_generation_bound &&
-                    relative_dispatch_identity_bound;
+                    relative_dispatch_identity_bound &&
+                    native_entries_match;
                 if (encoding ==
                     katana::analysis::JumpTableEncoding::Absolute32) {
                     declaration_producer_identity_bound =

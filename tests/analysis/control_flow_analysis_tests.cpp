@@ -1,6 +1,7 @@
 #include "katana/analysis/control_flow_analysis.hpp"
 #include "katana/analysis/control_flow_report.hpp"
 #include "katana/analysis/code_address.hpp"
+#include "katana/analysis/owner_semantic_summary.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/verifier.hpp"
 
@@ -3464,9 +3465,99 @@ int main() {
                 katana::analysis::ControlFlowEvidence::GuardedComplete &&
             identity_bound_braf_resolution->targets ==
                 std::vector<std::uint32_t>{0x24u, 0x28u},
-        "Eine exakt gebundene BRAF-Tabelle verlangte zusaetzliche "
-        "Producer-Inferenz oder CodeIdentity-Ranges fuer bereits validierte "
-        "Zielbloecke.");
+        "Eine exakt gebundene BRAF-Tabelle verlor ihren begrenzten "
+        "nicht-clobbernden Producer-Nachweis.");
+
+    auto clobbered_braf_image = identity_bound_braf_image;
+    clobbered_braf_image.write_u32_le(
+        0x12u, 0x720107E0u); // mov #7,r0; add #1,r2
+    const auto clobbered_braf_lines = katana::sh4::disassemble(
+        clobbered_braf_image.segments().front().bytes, 0u);
+    const auto clobbered_braf_native =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            clobbered_braf_image, clobbered_braf_lines, 11u);
+    require(
+        !clobbered_braf_native.has_value() ||
+            !clobbered_braf_native->resolved,
+        "Eine BRAF-Tabelle schloss trotz Clobber des geladenen "
+        "Branchregisters statisch.");
+
+    auto delay_slot_braf_lines = katana::sh4::disassemble(
+        identity_bound_braf_image.segments().front().bytes, 0u);
+    delay_slot_braf_lines[8u].is_delay_slot = true;
+    const auto delay_slot_braf_native =
+        katana::analysis::recognize_bounded_relative_jump_table(
+            identity_bound_braf_image, delay_slot_braf_lines, 11u);
+    require(
+        !delay_slot_braf_native.has_value() ||
+            !delay_slot_braf_native->resolved,
+        "Eine BRAF-Tabelle verwendete einen Delay-Slot als "
+        "geradlinigen Producer.");
+
+    katana::analysis::OwnerSemanticSummary ordered_callee;
+    ordered_callee.status =
+        katana::analysis::OwnerSemanticSummaryStatus::Complete;
+    ordered_callee.authority =
+        katana::analysis::OwnerSemanticAuthority::IdentityBound;
+    ordered_callee.boundary.entry_address = 0x2000u;
+    ordered_callee.boundary.size = 2u;
+    ordered_callee.result.complete = true;
+    ordered_callee.digest = "sha256:synthetic-callee";
+    katana::analysis::OwnerSemanticEffect callee_effect;
+    callee_effect.instruction_address = 0x2000u;
+    callee_effect.kind =
+        katana::analysis::OwnerSemanticEffectKind::MemoryWrite;
+    callee_effect.path_identity = "callee:block0";
+    ordered_callee.effects.push_back(std::move(callee_effect));
+
+    katana::ir::Instruction ordered_call;
+    ordered_call.source_address = 0x1000u;
+    ordered_call.operation = katana::ir::Operation::Call;
+    ordered_call.target_address = 0x2000u;
+    ordered_call.delay_slot = {
+        katana::ir::DelaySlotRole::Owner, 0x1002u};
+    katana::ir::Instruction ordered_slot;
+    ordered_slot.source_address = 0x1002u;
+    ordered_slot.operation = katana::ir::Operation::StoreLong;
+    ordered_slot.memory_effects.access =
+        katana::ir::MemoryAccessKind::Write;
+    ordered_slot.memory_effects.width = katana::ir::OperandWidth::Bits32;
+    ordered_slot.memory_effects.access_count = 1u;
+    ordered_slot.source_register = 4u;
+    ordered_slot.effective_address = 0x3000u;
+    ordered_slot.delay_slot = {
+        katana::ir::DelaySlotRole::Slot, 0x1000u};
+    katana::ir::Instruction ordered_return;
+    ordered_return.source_address = 0x1004u;
+    ordered_return.operation = katana::ir::Operation::Return;
+    katana::ir::BasicBlock ordered_block;
+    ordered_block.start_address = 0x1000u;
+    ordered_block.instructions = {
+        ordered_call, ordered_slot, ordered_return};
+    katana::ir::Function ordered_caller;
+    ordered_caller.entry_address = 0x1000u;
+    ordered_caller.blocks.push_back(std::move(ordered_block));
+    const std::array ordered_call_evidence{
+        katana::analysis::OwnerSemanticDirectCallEvidence{
+            0x1000u, 0x2000u, &ordered_callee}};
+    const auto ordered_summary =
+        katana::analysis::summarize_owner_semantics(
+            ordered_caller,
+            {0x1000u,
+             6u,
+             "sha256:synthetic-caller",
+             true,
+             true},
+            {},
+            {},
+            ordered_call_evidence);
+    require(
+        ordered_summary.effects.size() == 2u &&
+            ordered_summary.effects[0].instruction_address == 0x1002u &&
+            ordered_summary.effects[1].instruction_address == 0x2000u &&
+            ordered_summary.direct_calls.size() == 1u,
+        "Direktaufruf-Effekte wurden vor dem physischen Delay Slot "
+        "komponiert.");
 
     auto partial_table_image = table_jump_image;
     partial_table_image.write_u32_le(0x104u, 0x200u);

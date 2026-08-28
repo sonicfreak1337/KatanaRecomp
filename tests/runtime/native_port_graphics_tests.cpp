@@ -86,7 +86,7 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 13u);
+    static_assert(native_port_graphics_contract_version == 14u);
 
     NativePortGraphicsConfig config;
     config.title = "Katana Native Graphics Contract Test";
@@ -225,6 +225,64 @@ int main(const int argc, char** const argv) {
         return EXIT_SUCCESS;
     }
 
+    const auto draw_texture = graphics.create_texture(texture_config, &image);
+    graphics.begin_frame(reciprocal_frame());
+    auto missing_required_texture =
+        screen_packet(reciprocal_vertices, 1u, 1u);
+    missing_required_texture.texture_stage =
+        NativePortTextureStage::RequiredResolved;
+    require(throws_graphics(
+                [&] { graphics.draw(missing_required_texture); },
+                NativePortGraphicsFailure::MissingRequiredTexture,
+                "draw-texture-required"),
+            "Eine fehlende Pflichttextur faellt auf den untexturierten Pfad zurueck.");
+    auto contradictory_disabled_texture =
+        screen_packet(reciprocal_vertices, 1u, 1u);
+    contradictory_disabled_texture.texture = draw_texture;
+    require(throws_graphics(
+                [&] { graphics.draw(contradictory_disabled_texture); },
+                NativePortGraphicsFailure::InvalidDraw,
+                "draw-texture-stage-disabled"),
+            "Ein deaktivierter Texture-Stage-Vertrag akzeptiert einen Handle.");
+    auto resolved_required_texture =
+        screen_packet(reciprocal_vertices, 1u, 1u);
+    resolved_required_texture.texture = draw_texture;
+    resolved_required_texture.texture_stage =
+        NativePortTextureStage::RequiredResolved;
+    graphics.draw(resolved_required_texture);
+    graphics.present();
+    graphics.destroy_texture(draw_texture);
+
+    graphics.begin_frame(reciprocal_frame());
+    auto disabled_fog_with_unused_invalid_table =
+        screen_packet(reciprocal_vertices, 1u, 1u);
+    disabled_fog_with_unused_invalid_table.fog.lookup_table.front() =
+        std::numeric_limits<float>::quiet_NaN();
+    graphics.draw(disabled_fog_with_unused_invalid_table);
+    auto lookup_fog_with_invalid_table =
+        screen_packet(reciprocal_vertices, 1u, 2u);
+    lookup_fog_with_invalid_table.fog.mode = NativePortFogMode::LookupTable;
+    lookup_fog_with_invalid_table.fog.lookup_table.front() =
+        std::numeric_limits<float>::quiet_NaN();
+    require(throws_graphics(
+                [&] { graphics.draw(lookup_fog_with_invalid_table); },
+                NativePortGraphicsFailure::InvalidDraw,
+                "draw-layout"),
+            "Ein aktiver Lookup-Fog akzeptiert eine ungueltige Tabelle.");
+    graphics.present();
+
+    NativePortMeshConfig filtered_persistent_mesh;
+    filtered_persistent_mesh.vertices = object_vertices;
+    filtered_persistent_mesh.small_triangle_area_threshold = 1.0f;
+    require(throws_graphics(
+                [&] {
+                    static_cast<void>(
+                        graphics.create_mesh(filtered_persistent_mesh));
+                },
+                NativePortGraphicsFailure::InvalidResource,
+                "mesh-transform-dependent-triangle-filter"),
+            "Ein persistentes Mesh backt einen transformabhaengigen Filter ein.");
+
     graphics.begin_frame(reciprocal_frame());
     graphics.draw(screen_packet(reciprocal_vertices, 1u, 1u));
     graphics.draw(object_packet(object_vertices, 1u, 2u));
@@ -244,7 +302,7 @@ int main(const int argc, char** const argv) {
     persistent_near_clipped.mesh = near_clipped_mesh;
     persistent_near_clipped.transform = near_clipped.transform;
     graphics.draw(persistent_near_clipped);
-    require(graphics.snapshot().draw_calls == 4u,
+    require(graphics.snapshot().draw_calls == 6u,
             "Ein semantischer Batch akzeptiert keinen dynamischen Draw-State.");
     graphics.present();
     graphics.destroy_mesh(near_clipped_mesh);
@@ -255,7 +313,7 @@ int main(const int argc, char** const argv) {
     flat_packet.rasterizer.shading = NativePortShadingMode::FlatLastVertex;
     graphics.draw(flat_packet);
     const auto draws_after_flat = graphics.snapshot().draw_calls;
-    require(draws_after_flat == 5u,
+    require(draws_after_flat == 7u,
             "Flat-Last-Vertex umgeht die erforderliche Vorverarbeitung.");
     graphics.present();
 

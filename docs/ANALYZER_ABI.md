@@ -1,13 +1,12 @@
 # Analyzer-ABI
 
-Der aktuelle oeffentliche Analyzervertrag ist Version `66`. Der aktuelle
-Source-Stand verwendet Runtime-ABI 123, Block-ABI 5, PlatformServices-ABI 14,
-Backend-Interface-ABI 24, Portprojektvertrag 103 und Native-Port-
-Profilvertrag 24. GameProject-Vertrag 9/Artefaktformat 6 und Analysis-
-Directives-Version 5, Native-AOT-Emissionsprofil 40, AOT-Partitionsschema 10
-und Port-Metadata-Cache-
-Schema 12 gehoeren zum aktuellen Exportvertrag; sie ersetzen nicht den
-Analyzer-ABI-Zaehler.
+Der aktuelle oeffentliche Analyzervertrag ist Version `71`. Der aktuelle
+Source-Stand verwendet Product-Runtime-ABI 128, AOT-Runtime-ABI 126,
+Block-ABI 5, PlatformServices-ABI 14, Backend-Interface-ABI 26,
+Portprojektvertrag 104 und Native-Port-Profilvertrag 24. GameProject-Vertrag
+9, Analysis-Directives-Version 5, Native-AOT-Emissionsprofil 44,
+AOT-Partitionsschema 11 und Port-Metadata-Cache-Schema 13 gehoeren zum
+aktuellen Exportvertrag; sie ersetzen nicht den Analyzer-ABI-Zaehler.
 Der bestehende Function-Value-Sanitylauf ist mit `463/463` Checks gruen, und
 der erste vollstaendige `analyze-port`-Lauf samt identitaetsgebundenem Resume
 ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
@@ -15,8 +14,8 @@ ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 ABI-34-Referenz erhalten.
 
 Der aktuelle Native-Port-Vertrag verwendet
-`NativePortDefinition` `12`, `NativePortArtifact` `14` und
-Hardware-Closure `v8`. Seine fail-closed Beweisschicht bildet
+`NativePortDefinition` `13` und `NativePortArtifact` `15`. Seine fail-closed
+Beweisschicht bildet
 `OwnerSemanticSummary` auf der Analyzer-Seite und den
 `NativeProviderSemanticContract` (Runtime-Typ
 `NativePortProviderSemanticContract`) auf der Provider-Seite. Das Owner-
@@ -28,6 +27,13 @@ sowie dieselben geordneten Guards, Effekte und Resultate. Jede fehlende,
 unbekannte, truncierte oder nicht identische Evidenz bleibt ein Gap und darf
 keinen Replacement-Hook schliessen. Der alte Dreamcast-Geraetepfad bleibt
 dabei ausschliesslich internes Offline-Orakel, nie Produktlink oder Runtime.
+
+Analyzer-ABI 71 bindet deklarierte relative BRAF-Tabellen wieder an einen
+bounded, nicht clobbernden Register-/Producer-Slice; authentifizierte Tabellen-
+und Dispatchbytes allein schliessen keinen indirekten Successor. Ausserdem
+ordnet die Owner-Semantik direkte Calls architekturgerecht als Call,
+physischen Delay-Slot und erst danach Callee-Effekte. Backend-Interface-ABI 26
+invalidiert Backends ohne die exakte NativeBringup-Callsite-Schnittstelle.
 
 Runtime-ABI 123 fuehrt einen gemeinsamen, monotonen Executable-Lifecycle fuer
 feste Runtime-Images und dynamisch geladene AOT-Module ein. Ein titelgebundener

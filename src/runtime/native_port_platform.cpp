@@ -1049,15 +1049,17 @@ using detail::NativeGamepadButtonStability;
 using detail::stabilize_gamepad_buttons;
 
 static_assert([] {
-    NativeGamepadButtonStability stability;
+    NativeGamepadButtonStability stable;
+    NativeGamepadButtonStability handoff;
     constexpr auto button = native_port_gamepad_button_mask(
         NativePortGamepadButton::A);
-    return stabilize_gamepad_buttons(stability, button) == button &&
-           stabilize_gamepad_buttons(stability, 0u) == button &&
-           stabilize_gamepad_buttons(stability, button) == button &&
-           stabilize_gamepad_buttons(stability, 0u) == button &&
-           stabilize_gamepad_buttons(stability, 0u) == button &&
-           stabilize_gamepad_buttons(stability, 0u) == 0u;
+    return stabilize_gamepad_buttons(stable, button, false) == button &&
+           stabilize_gamepad_buttons(stable, 0u, false) == 0u &&
+           stabilize_gamepad_buttons(stable, button, false) == button &&
+           stabilize_gamepad_buttons(handoff, button, false) == button &&
+           stabilize_gamepad_buttons(handoff, 0u, true) == button &&
+           stabilize_gamepad_buttons(handoff, 0u, false) == button &&
+           stabilize_gamepad_buttons(handoff, 0u, false) == 0u;
 }());
 
 [[nodiscard]] std::optional<DWORD> xinput_slot_from_device(
@@ -2718,12 +2720,16 @@ class NativePortPlatformServices::Impl final {
             auto destination = candidates[*placement[slot]].state;
             if (slot == 0u)
                 merge_keyboard_gamepad(destination, keyboard);
-            if (!same_logical_controller)
+            if (!same_logical_controller ||
+                (!correlated_handoff &&
+                 input_button_stability_[slot].handoff_polls_remaining == 0u))
                 input_button_stability_[slot] = {
                     destination.buttons, {}};
             else
                 destination.buttons = stabilize_gamepad_buttons(
-                    input_button_stability_[slot], destination.buttons);
+                    input_button_stability_[slot],
+                    destination.buttons,
+                    correlated_handoff);
             if (same_logical_controller && previous.connected) {
                 destination.packet_number = previous.packet_number;
                 if (!same_gamepad_payload(previous, destination) &&

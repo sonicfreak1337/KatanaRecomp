@@ -427,6 +427,12 @@ template <std::size_t Size>
            filter == NativePortTextureFilter::Anisotropic;
 }
 
+[[nodiscard]] bool valid_texture_stage(
+    const NativePortTextureStage stage) noexcept {
+    return stage == NativePortTextureStage::Disabled ||
+           stage == NativePortTextureStage::RequiredResolved;
+}
+
 [[nodiscard]] bool valid_address(
     const NativePortTextureAddress address) noexcept {
     return address == NativePortTextureAddress::Clamp ||
@@ -511,15 +517,14 @@ template <std::size_t Size>
 [[nodiscard]] bool valid_fog(const NativePortFogState& fog) noexcept {
     if (!valid_fog_mode(fog.mode) || !finite_array(fog.color) ||
         !std::isfinite(fog.start) || !std::isfinite(fog.end) ||
-        !std::isfinite(fog.density) || fog.density < 0.0f ||
-        !finite_array(fog.lookup_table))
+        !std::isfinite(fog.density) || fog.density < 0.0f)
         return false;
     if (fog.mode == NativePortFogMode::Linear && fog.end <= fog.start)
         return false;
     if (fog.mode != NativePortFogMode::LookupTable &&
         fog.mode != NativePortFogMode::LookupTablePrimary)
         return true;
-    if (fog.density <= 0.0f) return false;
+    if (fog.density <= 0.0f || !finite_array(fog.lookup_table)) return false;
     return std::all_of(
         fog.lookup_table.begin(), fog.lookup_table.end(),
         [](const float value) { return value >= 0.0f && value <= 1.0f; });
@@ -1283,10 +1288,10 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         if (!valid_shading(mesh.shading) ||
             !std::isfinite(mesh.small_triangle_area_threshold) ||
-            mesh.small_triangle_area_threshold < 0.0f)
+            mesh.small_triangle_area_threshold != 0.0f)
             fail(NativePortGraphicsFailure::InvalidResource,
                  0u,
-                 "mesh-preprocess-state");
+                 "mesh-transform-dependent-triangle-filter");
 
         const auto remaining_mesh_bytes =
             config_.maximum_mesh_bytes - mesh_bytes_;
@@ -1317,8 +1322,7 @@ class NativePortGraphicsDevice::Impl final {
         std::vector<NativePortVertex> prepared;
         NativePortRasterizerState preprocessing;
         preprocessing.shading = mesh.shading;
-        preprocessing.small_triangle_area_threshold =
-            mesh.small_triangle_area_threshold;
+        preprocessing.small_triangle_area_threshold = 0.0f;
         preprocessing.small_triangle_area_space =
             NativePortTriangleAreaSpace::Submitted;
         static_cast<void>(preprocess_geometry(
@@ -1999,6 +2003,7 @@ class NativePortGraphicsDevice::Impl final {
         packet.vertices = vertices;
         packet.indices = indices;
         packet.texture = image_texture_;
+        packet.texture_stage = NativePortTextureStage::RequiredResolved;
         packet.viewport = viewport;
         packet.draw_class = NativePortDrawClass::Overlay;
         packet.batch.identity = 1u;
@@ -2829,6 +2834,7 @@ class NativePortGraphicsDevice::Impl final {
             !valid_translucency_policy(packet.translucency) ||
             !valid_draw_diagnostics(packet.diagnostics) ||
             !valid_interpolation(packet.interpolation) ||
+            !valid_texture_stage(packet.texture_stage) ||
             !valid_topology(packet.topology) ||
             !valid_blend(packet.blend) || !valid_depth(packet.depth) ||
             !valid_depth_mapping(packet.depth_mapping) ||
@@ -2841,6 +2847,17 @@ class NativePortGraphicsDevice::Impl final {
             !finite_array(packet.transform.values) ||
             !finite_array(packet.normal_transform.values))
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-layout");
+        if (packet.texture_stage == NativePortTextureStage::Disabled &&
+            packet.texture)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-texture-stage-disabled");
+        if (packet.texture_stage ==
+                NativePortTextureStage::RequiredResolved &&
+            !packet.texture)
+            fail(NativePortGraphicsFailure::MissingRequiredTexture,
+                 0u,
+                 "draw-texture-required");
         if (!compatible_vertex_contract(packet))
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
@@ -3595,6 +3612,7 @@ class NativePortGraphicsDevice::Impl final {
         mix(static_cast<std::uint64_t>(packet.batch.semantic));
         mix(static_cast<std::uint64_t>(packet.draw_class));
         mix(packet.texture.value);
+        mix(static_cast<std::uint64_t>(packet.texture_stage));
         mix(diagnostics.material_identity);
         mix(diagnostics.origin_identity);
         mix(diagnostics.model_identity);
@@ -4207,6 +4225,8 @@ class NativePortGraphicsDevice::Impl final {
                << ",\"indices\":" << index_count
                << ",\"mesh\":" << packet.mesh.value
                << ",\"texture\":" << packet.texture.value
+               << ",\"texture_stage\":"
+               << static_cast<unsigned>(packet.texture_stage)
                << ",\"diagnostics\":{\"material_identity\":"
                << packet.diagnostics.material_identity
                << ",\"origin_identity\":"

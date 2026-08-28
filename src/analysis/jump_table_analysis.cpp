@@ -878,13 +878,57 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
                                        JumpTableSnapshotCache* const cache) {
     if (dispatch_index < 3u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
-    const auto& load = lines[dispatch_index - 1u];
-    const auto& table_base = lines[dispatch_index - 2u];
-    if (!contiguous(table_base, load) || !contiguous(load, dispatch) ||
-        dispatch.instruction.kind != katana::sh4::InstructionKind::Braf ||
-        load.instruction.kind != katana::sh4::InstructionKind::MovWordLoadR0Indexed ||
-        load.instruction.destination_register != dispatch.instruction.branch_register ||
-        table_base.instruction.kind != katana::sh4::InstructionKind::MoveAddressPcRelative)
+    if (dispatch.instruction.kind != katana::sh4::InstructionKind::Braf)
+        return std::nullopt;
+
+    // Follow the first straight-line writer of the BRAF register instead of
+    // requiring an adjacent producer. SH-4 compilers may schedule independent
+    // instructions between the table load and branch; accepting them is safe
+    // only while none clobbers the tracked value. Keep the slice deliberately
+    // small so a declaration cannot borrow a producer from another region.
+    constexpr std::size_t producer_instruction_budget = 12u;
+    const auto previous_writer = [&](const std::size_t before,
+                                     const std::uint8_t register_index)
+        -> std::optional<std::size_t> {
+        auto next_address = lines[before].address;
+        for (std::size_t distance = 1u;
+             distance <= producer_instruction_budget && distance <= before;
+             ++distance) {
+            const auto index = before - distance;
+            if (dispatch_index - index > producer_instruction_budget)
+                return std::nullopt;
+            const auto& candidate = lines[index];
+            if (candidate.address >
+                    std::numeric_limits<std::uint32_t>::max() - 2u ||
+                candidate.address + 2u != next_address)
+                return std::nullopt;
+            next_address = candidate.address;
+            if (candidate.is_delay_slot ||
+                candidate.instruction.changes_control_flow())
+                return std::nullopt;
+            if ((general_register_write_mask(candidate.instruction) &
+                 static_cast<std::uint16_t>(1u << register_index)) != 0u)
+                return index;
+        }
+        return std::nullopt;
+    };
+
+    const auto load_index = previous_writer(
+        dispatch_index, dispatch.instruction.branch_register);
+    if (!load_index.has_value()) return std::nullopt;
+    const auto& load = lines[*load_index];
+    if (load.instruction.kind !=
+            katana::sh4::InstructionKind::MovWordLoadR0Indexed ||
+        load.instruction.destination_register !=
+            dispatch.instruction.branch_register ||
+        load.instruction.source_register == 0u)
+        return std::nullopt;
+
+    const auto table_base_index = previous_writer(*load_index, 0u);
+    if (!table_base_index.has_value()) return std::nullopt;
+    const auto& table_base = lines[*table_base_index];
+    if (table_base.instruction.kind !=
+        katana::sh4::InstructionKind::MoveAddressPcRelative)
         return std::nullopt;
 
     // GCC-family SH-4 output uses both of these equivalent bounded switch
@@ -900,31 +944,29 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
     // Keep the same dominating bounds proof for both forms.  Recognizing the
     // compact form as a single table is important: treating a case target as
     // an independent function would lose the remaining switch closure.
-    std::size_t scale_line_index = dispatch_index - 3u;
+    const auto index_writer = previous_writer(
+        *load_index, load.instruction.source_register);
+    if (!index_writer.has_value()) return std::nullopt;
+    std::size_t scale_line_index = *index_writer;
     const auto& direct_scale = lines[scale_line_index];
-    const bool direct_index =
-        contiguous(direct_scale, table_base) &&
-        direct_scale.instruction.kind ==
-            katana::sh4::InstructionKind::ShiftLogicalLeftOne &&
-        direct_scale.instruction.destination_register ==
-            load.instruction.source_register &&
-        load.instruction.source_register != 0u;
-    if (!direct_index) {
-        if (dispatch_index < 4u) return std::nullopt;
-        const auto& copy_index = lines[dispatch_index - 3u];
-        scale_line_index = dispatch_index - 4u;
-        const auto& copied_scale = lines[scale_line_index];
-        if (!contiguous(copied_scale, copy_index) ||
-            !contiguous(copy_index, table_base) ||
-            copy_index.instruction.kind !=
+    if (direct_scale.instruction.kind !=
+            katana::sh4::InstructionKind::ShiftLogicalLeftOne ||
+        direct_scale.instruction.destination_register !=
+            load.instruction.source_register) {
+        if (direct_scale.instruction.kind !=
                 katana::sh4::InstructionKind::MovRegister ||
-            copy_index.instruction.destination_register !=
-                load.instruction.source_register ||
-            copy_index.instruction.destination_register == 0u ||
-            copied_scale.instruction.kind !=
+            direct_scale.instruction.destination_register !=
+                load.instruction.source_register)
+            return std::nullopt;
+        const auto copied_scale_index = previous_writer(
+            scale_line_index, direct_scale.instruction.source_register);
+        if (!copied_scale_index.has_value()) return std::nullopt;
+        scale_line_index = *copied_scale_index;
+        const auto& copied_scale = lines[scale_line_index];
+        if (copied_scale.instruction.kind !=
                 katana::sh4::InstructionKind::ShiftLogicalLeftOne ||
             copied_scale.instruction.destination_register !=
-                copy_index.instruction.source_register)
+                direct_scale.instruction.source_register)
             return std::nullopt;
     }
 

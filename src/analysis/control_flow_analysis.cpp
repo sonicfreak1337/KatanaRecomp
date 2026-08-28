@@ -5174,20 +5174,14 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         std::numeric_limits<std::uint32_t>::max() - 4u &&
                     jump_table.target_base ==
                         jump_table.dispatch_address + 4u;
-                // identity_bound_complete is internal GameProject evidence:
-                // its producer has already authenticated the exact table
-                // bytes and the decoded dispatch/delay pair in one immutable
-                // image generation.  For BRAF/BSRF relative tables those
-                // facts, the architectural PC+4 base and the accepted table
-                // entries define the complete guarded target set.  Requiring
-                // the adjacent-instruction recognizer to rediscover the same
-                // producer is both redundant and incorrect for valid compiler
-                // schedules that preserve the loaded branch register across
-                // unrelated instructions.  Absolute pointer tables retain the
-                // stronger independently recognized producer/literal proof.
+                // Identity-bound bytes authenticate the declaration, but do
+                // not by themselves prove that BRAF consumes this table. The
+                // bounded recognizer must independently connect the table
+                // load to the branch register through a non-clobbering slice.
                 bool declaration_producer_identity_bound =
                     jump_table_generation_bound &&
-                    relative_dispatch_identity_bound;
+                    relative_dispatch_identity_bound &&
+                    native_entries_match;
                 if (encoding == JumpTableEncoding::Absolute32) {
                     declaration_producer_identity_bound =
                         native_entries_match && jump_table_generation_bound &&

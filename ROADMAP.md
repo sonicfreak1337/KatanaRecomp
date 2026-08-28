@@ -24,6 +24,25 @@ Produktpfad nachgewiesen ist.
 
 ## Aktueller Produktmeilenstein
 
+Der letzte atomar publizierte Whole-Game-Produktstand ist `r178`. Seine
+Authority umfasst `16.374` kombinierte Funktionen, `961` externe Primary-
+Roots, `248` identitaetsgebundene Latent-AOT-Module und `975` Codegen-
+Partitionen. Guarded Inventory und Backend-Admission sind geschlossen; die
+native Hardware-Closure bleibt mit `245` bekannten Sites und `100` offenen
+Gaps bewusst fail-closed. Der aktuelle Sourcevertrag ist Analyzer-ABI `71`,
+Product-Runtime-ABI `128`, AOT-Runtime-ABI `126` und Backend-Interface-ABI
+`26`. Die aktive Produktarbeit betrifft die noch reproduzierbaren
+identitaetsgebundenen Crashfamilien, nicht eine pauschale Hardware- oder
+Runtime-Emulation.
+
+Der r178-Hostbuild lief bereits im `performance`-Profil mit `/O2 /Ob2` fuer
+die generierten AOT-Einheiten. Die im steuerbaren Gameplay beobachtete
+Unter-Echtzeitgeschwindigkeit kann deshalb nicht durch einen weiteren reinen
+Bring-up-gegen-Performance-Profilvergleich geschlossen werden; die aktiven
+Performanceauftraege liegen in Runtime-/AOT-Accounting, FPU- und
+Geometriepfaden. Crashfamilien bleiben in der Ausfuehrungsreihenfolge zuerst,
+Grafiktreue und Performance bleiben daneben P0.
+
 Die native Audiogrundlage ist fuer den belegten Titelvertrag geschlossen.
 Der echte Produktruntime-Parser und Predecoder akzeptieren alle `122`
 identitaetsgebundenen MLT-Collections (`52.253.920` Bytes), `5.695` nutzbare
@@ -35,13 +54,13 @@ idempotent. Der native Ablauf laedt eine identitaetsgebundene Collection
 erfolgreich und endet erst danach an einem statischen AOT-Entry. Kein
 AICA-/ARM7-/Geraetefallback ist beteiligt.
 
-Der v111/v30-Lauf schliesst die echte zweiteilige Introsequenz im nativen
+Der historische v111/v30-Lauf schliesst die echte zweiteilige Introsequenz im nativen
 Spielablauf ohne Controllerinput oder Skip. Sonic Team erreichte `200/200`
 Videoframes und `294.016` Audioframes; das Opening erreichte `3.257/3.257`
 Videoframes und `4.709.760` Audioframes. Der Sequenzabschluss kehrte mit dem
 originalen Erfolgsstatus in statisch rekompilierten Titelcode zurueck.
 
-Der aktuelle v127-Export verknuepft erstmals statisch Callbackliterale, die
+Der historische v127-Export verknuepft erstmals statisch Callbackliterale, die
 ein identitaetsgebundenes Latent-AOT-Modul nach einer direkten
 Record-Konstruktion in ein 32-Bit-Recordfeld schreibt, mit den auf der
 Primary-Image-Seite nachgewiesenen Record-/Listen-Walkern desselben Feldes.
@@ -85,7 +104,7 @@ VMU-Geraetemodell gehoeren nicht zu diesem Produktvertrag. Der Source-/
 Linkreview ist geschlossen; der private Sonic-Adapter und der reale
 Memory-Card-/Hauptmenupfad sind noch nicht abgenommen.
 
-Die Hardware-Closure bleibt bei `243` bekannten Sites und `244` Gaps
+Im damaligen Zwischenstand blieb die Hardware-Closure bei `243` bekannten Sites und `244` Gaps
 (`189` hook-missing, `55` progress-wait); `1.173` Sites werden durch Hooks
 ersetzt. Das ist erwartbar, weil die neue Analyse AOT-Erreichbarkeit statt
 Hardwaresemantik schliesst. Der reale Folgeblocker ist eine noch offene
@@ -97,18 +116,17 @@ noch nicht produktseitig geschlossen; Memory-Card-Pfad und Hauptmenue bleiben
 offen. Ein Start-Controllerimpuls ist seit dem vollstaendigen No-Skip-Beleg
 fuer kuerzere Diagnoselaeufe erlaubt.
 
-Der Windows-Native-Port hat jetzt XInput- sowie identitaetsgebundene WinMM-
-Controllerabdeckung fuer DualSense und DualShock. Plattformvertrag `5`
-verwirft unbekannte HID-Layouts, prueft echte Backendbereitschaft und bindet
-Sony ueber echte DirectInput-VID/PID- und Geraeteinstanzevidenz. Ein XInput-
-Kompatibilitaetsduplikat bleibt unterdrueckt, bis drei aufeinanderfolgende
-aktive Samples den Endpunkt eindeutig demselben Sony-Pad oder einem
-unabhaengigen Controller zuordnen. Hotplug verwirft veraltete
-Unabhaengigkeitsevidenz. Achsen und Trigger sind symmetrisch normalisiert;
-Vibration bleibt an den wirklichen XInput-Endpunkt gebunden und wird dort
-beim Shutdown gestoppt. Der Runtime-/CLI-Build ist sauber;
-die physische DualSense-Menuabnahme bleibt offen, bis ein Nutzer vor Ort
-testet.
+Der Windows-Native-Port hat XInput- sowie identitaetsgebundene WinMM-
+Controllerabdeckung fuer DualSense und DualShock. Bei
+`NativeTitleProjection` besitzt genau der Titelprovider die Live-Eingabe;
+der verdrängte Maple-Pfad bleibt neutral. Ein Release-Debounce ist nicht
+global aktiv: Ein-Poll-Releases und schnelle Double-Taps eines stabilen
+Endpunkts bleiben erhalten. Nur ein konkret korrelierter Backend-Handoff darf
+ein exakt auf drei Polls begrenztes Neutralfenster ueberbruecken; unbekannte
+oder neu verbundene Geraete setzen die Identitaetsgeneration fail-closed
+zurueck. Achsen und Trigger sind symmetrisch normalisiert; Vibration bleibt
+an den wirklichen XInput-Endpunkt gebunden und wird dort beim Shutdown
+gestoppt.
 
 ## Produktziel
 

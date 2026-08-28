@@ -76,6 +76,12 @@ constexpr std::size_t maximum_latent_aot_inferred_authoritative_candidates =
     maximum_latent_aot_source_bindings;
 constexpr std::size_t maximum_latent_aot_indexed_call_table_targets = 64u;
 constexpr std::size_t minimum_latent_aot_indexed_call_table_targets = 2u;
+// A table-dispatch producer may be split at an independently reachable
+// normal-entry leader even though the physical instructions remain a single
+// straight-line slice.  Keep the cross-block proof deliberately small: this
+// is discovery evidence, not a general value-propagation pass.
+constexpr std::size_t
+    maximum_latent_indexed_call_table_producer_instructions = 12u;
 constexpr std::size_t maximum_latent_aot_descriptor_table_records = 256u;
 constexpr std::size_t minimum_latent_aot_descriptor_table_targets = 2u;
 constexpr std::uint32_t maximum_latent_aot_descriptor_table_stride = 256u;
@@ -1901,20 +1907,164 @@ infer_latent_configured_root_dispatch_base(
                                                   : std::nullopt;
 }
 
-[[nodiscard]] bool latent_r0_is_scaled_table_index(
-    const katana::ir::BasicBlock& block,
-    const std::size_t before_index) noexcept {
-    for (auto index = before_index; index-- > 0u;) {
-        const auto& instruction = block.instructions[index];
-        const auto use_def =
-            katana::ir::instruction_register_use_def(instruction);
-        if ((use_def.defs & katana::ir::gpr_register_bit(0u)) == 0u)
-            continue;
-        return instruction.operation ==
-                   katana::ir::Operation::ShiftLogicalLeftTwo &&
-               instruction.destination_register == 0u;
+struct LatentIndexedCallTableProducer final {
+    const katana::ir::Instruction* load = nullptr;
+    const katana::ir::Instruction* table_literal = nullptr;
+};
+
+[[nodiscard]] bool latent_indexed_table_slice_barrier(
+    const katana::ir::Instruction& instruction) noexcept {
+    using katana::ir::DelaySlotRole;
+    using katana::ir::Operation;
+    if (instruction.delay_slot.role != DelaySlotRole::None ||
+        instruction.is_privileged)
+        return true;
+    switch (instruction.operation) {
+    case Operation::Unknown:
+    case Operation::Branch:
+    case Operation::BranchIfTrue:
+    case Operation::BranchIfFalse:
+    case Operation::JumpRegister:
+    case Operation::Call:
+    case Operation::CallRegister:
+    case Operation::Return:
+    case Operation::TrapAlways:
+    case Operation::ReturnFromException:
+    case Operation::Sleep:
+        return true;
+    default:
+        return false;
     }
-    return false;
+}
+
+// Return the exact instruction at an address only when the function contains
+// one such instruction.  Normal-entry aliases and malformed IR are both
+// ambiguous here and must not be converted into table-root evidence.
+const katana::ir::Instruction* latent_unique_function_instruction(
+    const katana::ir::Function& function,
+    const std::uint32_t address,
+    bool& duplicate) noexcept {
+    const katana::ir::Instruction* result = nullptr;
+    for (const auto& block : function.blocks) {
+        for (const auto& instruction : block.instructions) {
+            if (instruction.source_address != address) continue;
+            if (result != nullptr) {
+                duplicate = true;
+                return nullptr;
+            }
+            result = &instruction;
+        }
+    }
+    return result;
+}
+
+// Prove an indexed absolute CallRegister from a bounded, physically
+// contiguous first-writer slice.  The old implementation searched only the
+// current BasicBlock, which loses a valid producer when a normal-entry leader
+// splits otherwise linear instructions.  Deliberately do not follow CFG
+// predecessors or dataflow facts from outside this slice: that would allow a
+// call or an ambiguous register value to manufacture executable roots.
+std::optional<LatentIndexedCallTableProducer>
+latent_indexed_call_table_producer(
+    const katana::ir::Function& function,
+    const katana::ir::Instruction& call) noexcept {
+    using katana::ir::Operation;
+    if (call.operation != Operation::CallRegister ||
+        call.branch_register_relative || call.branch_register >= 16u ||
+        call.source_address < 2u)
+        return std::nullopt;
+
+    bool duplicate = false;
+    if (latent_unique_function_instruction(
+            function, call.source_address, duplicate) != &call || duplicate)
+        return std::nullopt;
+
+    const auto branch_bit =
+        katana::ir::gpr_register_bit(call.branch_register);
+    bool found_load = false;
+    bool found_scale = false;
+    bool found_table_literal = false;
+    std::uint8_t table_register = 0u;
+    const katana::ir::Instruction* table_literal = nullptr;
+    const katana::ir::Instruction* load = nullptr;
+    std::array<const katana::ir::Instruction*,
+               maximum_latent_indexed_call_table_producer_instructions>
+        scanned{};
+    std::size_t scanned_count = 0u;
+
+    // The call itself is not part of the producer slice.  Every preceding
+    // halfword must be represented exactly once in this same Function.
+    for (std::size_t distance = 1u;
+         distance <= maximum_latent_indexed_call_table_producer_instructions;
+         ++distance) {
+        const auto delta = static_cast<std::uint32_t>(distance * 2u);
+        if (call.source_address < delta) return std::nullopt;
+        const auto address = call.source_address - delta;
+        duplicate = false;
+        const auto* instruction = latent_unique_function_instruction(
+            function, address, duplicate);
+        if (instruction == nullptr || duplicate) return std::nullopt;
+        if (latent_indexed_table_slice_barrier(*instruction))
+            return std::nullopt;
+        scanned[scanned_count++] = instruction;
+
+        const auto use_def =
+            katana::ir::instruction_register_use_def(*instruction);
+        if (!found_load) {
+            // Any write to the eventual branch register between the indexed
+            // load and the call invalidates the first-writer proof.  A write
+            // to r0 in this suffix is likewise a post-load clobber and cannot
+            // be the scale producer we are looking for.
+            if ((use_def.defs & branch_bit) != 0u) {
+                if (instruction->operation != Operation::LoadLongR0Indexed ||
+                    instruction->destination_register != call.branch_register)
+                    return std::nullopt;
+                table_register = instruction->source_register;
+                if (table_register >= 16u) return std::nullopt;
+                for (std::size_t index = 0u; index + 1u < scanned_count;
+                     ++index) {
+                    const auto suffix_use_def =
+                        katana::ir::instruction_register_use_def(
+                            *scanned[index]);
+                    if ((suffix_use_def.defs &
+                         katana::ir::gpr_register_bit(table_register)) != 0u)
+                        return std::nullopt;
+                }
+                load = instruction;
+                found_load = true;
+                continue;
+            }
+            if ((use_def.defs & katana::ir::gpr_register_bit(0u)) != 0u)
+                return std::nullopt;
+            continue;
+        }
+
+        if (!found_scale &&
+            (use_def.defs & katana::ir::gpr_register_bit(0u)) != 0u) {
+            if (instruction->operation != Operation::ShiftLogicalLeftTwo ||
+                instruction->destination_register != 0u)
+                return std::nullopt;
+            found_scale = true;
+        }
+        if (!found_table_literal &&
+            (use_def.defs & katana::ir::gpr_register_bit(table_register)) !=
+                0u) {
+            if ((instruction->operation != Operation::LoadLongPcRelative &&
+                 instruction->operation != Operation::MoveAddressPcRelative) ||
+                instruction->destination_register != table_register ||
+                !instruction->effective_address.has_value())
+                return std::nullopt;
+            table_literal = instruction;
+            found_table_literal = true;
+        }
+
+        if (found_scale && found_table_literal)
+            return LatentIndexedCallTableProducer{load,
+                                                   table_literal};
+
+        continue;
+    }
+    return std::nullopt;
 }
 
 using LatentRegisterLiteralState =
@@ -3896,49 +4046,26 @@ std::vector<std::uint32_t> latent_indexed_call_table_entry_offsets(
 
     std::vector<std::uint32_t> result;
     for (const auto& function : program) {
-        const auto block_inputs =
-            latent_block_literal_inputs(candidate, function);
-        for (std::size_t block_index = 0u;
-             block_index < function.blocks.size(); ++block_index) {
-            const auto& block = function.blocks[block_index];
-            const auto trace = trace_latent_block_literals(
-                candidate, block,
-                block_index < block_inputs.size() &&
-                        block_inputs[block_index].reachable
-                    ? block_inputs[block_index].registers
-                    : LatentRegisterLiteralState{});
-            for (std::size_t call_index = 0u;
-                 call_index < block.instructions.size(); ++call_index) {
-                const auto& call = block.instructions[call_index];
+        for (const auto& block : function.blocks) {
+            for (const auto& call : block.instructions) {
                 if (call.operation != Operation::CallRegister ||
                     call.branch_register_relative)
                     continue;
 
-                std::optional<std::size_t> load_index;
-                for (auto index = call_index; index-- > 0u;) {
-                    const auto& candidate_load = block.instructions[index];
-                    const auto use_def =
-                        katana::ir::instruction_register_use_def(
-                            candidate_load);
-                    if ((use_def.defs & katana::ir::gpr_register_bit(
-                                             call.branch_register)) == 0u)
-                        continue;
-                    if (candidate_load.operation ==
-                            Operation::LoadLongR0Indexed &&
-                        candidate_load.destination_register ==
-                            call.branch_register)
-                        load_index = index;
-                    break;
-                }
-                if (!load_index.has_value() ||
-                    !latent_r0_is_scaled_table_index(block, *load_index))
+                const auto producer =
+                    latent_indexed_call_table_producer(function, call);
+                if (!producer.has_value() || producer->load == nullptr ||
+                    producer->table_literal == nullptr ||
+                    !producer->table_literal->effective_address.has_value())
                     continue;
-
-                const auto& load = block.instructions[*load_index];
-                if (*load_index >= trace.before.size()) continue;
-                const auto& literal_state = trace.before[*load_index];
                 const auto raw_table =
-                    literal_state[load.source_register];
+                    producer->table_literal->operation ==
+                            Operation::LoadLongPcRelative
+                        ? latent_read_u32(
+                              candidate,
+                              *producer->table_literal->effective_address)
+                        : std::optional<std::uint32_t>{
+                              *producer->table_literal->effective_address};
                 if (!raw_table.has_value()) continue;
                 const auto table = resolver.resolve_local(*raw_table);
                 if (!table.has_value() || (*table & 3u) != 0u)
@@ -3947,7 +4074,7 @@ std::vector<std::uint32_t> latent_indexed_call_table_entry_offsets(
                 std::vector<std::uint32_t> table_targets;
                 table_targets.reserve(
                     maximum_latent_aot_indexed_call_table_targets);
-                bool admitted_leading_null = false;
+                bool terminated = false;
                 for (std::size_t slot = 0u;
                      slot <=
                      maximum_latent_aot_indexed_call_table_targets;
@@ -3962,17 +4089,23 @@ std::vector<std::uint32_t> latent_indexed_call_table_entry_offsets(
                         static_cast<std::uint32_t>(address64));
                     if (!raw.has_value()) break;
                     if (*raw == 0u && slot == 0u) {
-                        admitted_leading_null = true;
                         continue;
                     }
-                    if (*raw == 0u) break;
+                    if (*raw == 0u) {
+                        terminated = true;
+                        break;
+                    }
                     if (slot ==
                         maximum_latent_aot_indexed_call_table_targets) {
                         table_targets.clear();
                         break;
                     }
                     const auto target = resolver.resolve_local(*raw);
-                    if (!target.has_value() ||
+                    const bool physical_delay_slot =
+                        target.has_value() && *target >= candidate.source_address &&
+                        latent_candidate_entry_is_physical_delay_slot(
+                            candidate, *target - candidate.source_address);
+                    if (!target.has_value() || physical_delay_slot ||
                         !latent_entry_has_early_control_flow(
                             candidate, *target,
                             maximum_entry_scan_instructions)) {
@@ -3983,7 +4116,7 @@ std::vector<std::uint32_t> latent_indexed_call_table_entry_offsets(
                 }
                 if (table_targets.size() <
                         minimum_latent_aot_indexed_call_table_targets ||
-                    (!admitted_leading_null && table_targets.empty()))
+                    !terminated)
                     continue;
                 for (const auto target : table_targets)
                     result.push_back(target - candidate.source_address);

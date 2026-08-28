@@ -1,6 +1,6 @@
 # Aktueller Projektstand
 
-Stand: 27. August 2026. Diese Datei enthaelt nur die aktuelle
+Stand: 28. August 2026. Diese Datei enthaelt nur die aktuelle
 Entwicklungswahrheit. Historische Runs, ABI-Zwischenstaende und erledigte
 Tasks stehen in `STATUS.md`, `TASKS.md`, `ROADMAP.md` und Git.
 
@@ -19,9 +19,17 @@ keine Releaseabnahme.
 
 - Intro, Hauptmenue, Optionen und Character Select sind erreichbar.
 - Die idle-getriggerte, selbstlaufende Gameplay-Demo laeuft teilweise.
-- Spielersteuerbares Gameplay und Sonics Story-Intro sind noch nicht
-  erreichbar. Der Port hat damit einen begrenzten voraufgezeichneten
-  Gameplaypfad, aber noch keinen vollstaendigen Story-/Gameplay-Bring-up.
+- Spielersteuerbares Gameplay ist in Station Square und Emerald Coast ueber
+  die nativen Debug-/Szenariopfade erreicht. Sonics regulaeres Story-Intro
+  startet und laedt Titelinhalt, endet aber noch an einer reproduzierbaren
+  Crashfamilie; der Storyfortschritt ist daher nicht abgenommen.
+- Native Event-Voices und der direkte Titel-Inputpfad funktionieren im
+  aktuellen Nutzerlauf. Diese Beobachtung ersetzt weder die Replaymatrix noch
+  die weiterhin offenen Event-/Untertitel- und Crashvertraege.
+- Der r178-Produktbuild verwendet bereits das vollstaendige
+  Performanceprofil (`/O2 /Ob2`). Die im Gameplay weiter beobachtete
+  Unter-Echtzeitgeschwindigkeit ist daher ein Runtime-/AOT-/Geometrie-P0 und
+  kein erklaertes `/O1 /Ob0`-Bring-up-Artefakt.
 - Der zuvor gemeinsame Grafik-Contract-Stop ist geschlossen.
 - Der erreichte Gameplaypfad besitzt weiterhin deutlich sichtbare
   Grafikfehler und deckt neue Callback-/AOT- sowie Providerauftraege auf.
@@ -39,12 +47,12 @@ Die Meilensteinskala ist:
 | M0 | Intro | erreicht |
 | M1 | Hauptmenue | erreicht |
 | M2 | Character Select | erreicht |
-| M3 | Idle Gameplay Demo | teilweise erreicht, aktueller Stand |
-| M4 | Sonic Story Intro startet | offen |
+| M3 | Idle Gameplay Demo | teilweise erreicht |
+| M4 | Sonic Story Intro startet | erreicht, danach Crash |
 | M5 | Sonic Story Intro vollstaendig | offen |
-| M6 | Station Square steuerbar | offen |
-| M7 | Emerald Coast Load | offen |
-| M8 | Emerald Coast steuerbar | offen |
+| M6 | Station Square steuerbar | erreicht ueber Debugpfad |
+| M7 | Emerald Coast Load | erreicht |
+| M8 | Emerald Coast steuerbar | erreicht ueber Szenariopfad |
 
 ## Aktiver Entwicklungsweg
 
@@ -102,17 +110,21 @@ Noch nicht als vollstaendiger Unterbau implementiert sind:
 
 ## Naechste Gates
 
-1. Die sechs aktuellen Stops als K1 bis K5 und nach Story-/Gameplay-Naehe
-   klassifizieren; Loaded-AOT-/Overlay-/Callback-Evidence bleibt fail-closed.
+1. Die verbleibenden Crashfamilien der sechs Replaypfade nach gemeinsamer
+   Loaded-AOT-, Objektcallback-, Hardware-Owner- oder Providerursache
+   schliessen; erfolgreiche Fuenf-Minuten-Pfade verlassen die Crashmatrix.
 2. Nach der autoritativen Analyse sofort den neuen Pool an die bestehende
    Fleet geben und Replay-/Fleetbefunde zu wenigen gemeinsamen
    Knowledge-Gap-Clustern reconciliieren.
 3. Das hoechstwertige Cluster und alle daneben bereits streng beweisbaren
-   Hardware-Owner vollstaendig schliessen. Eine kleine
-   Performanceverbesserung darf nur im ohnehin bearbeiteten Pfad mitlaufen;
-   Grafik wird nur bei Bring-up-Relevanz oder echtem Multi-Close aufgenommen.
-4. Nach genau einem Export-/Produktbuild dieselben sechs Replays wiederholen.
-   Der naechste Produktmeilenstein ist M4: Sonics Story-Intro startet.
+   Hardware-Owner vollstaendig schliessen. Parallel bleiben allgemeine
+   Grafiktreue und Runtimeperformance P0: Grafikfixes muessen den authored
+   Material-/Textur-/Lichtvertrag wiedergeben; Performancefixes muessen einen
+   gemessenen AOT-, FPU-, Speicher- oder Geometrie-Hotpath adressieren.
+4. Nach genau einem Export-/Produktbuild dieselben verbleibenden Replays
+   hoechstens fuenf Minuten wiederholen und jeden stabilen Pfad aus der Matrix
+   nehmen. Der naechste Storymeilenstein ist M5: Sonics Intro laeuft
+   vollstaendig in den regulaeren Spielzustand.
 5. Strict wird weiterhin nur auf ausdrueckliche Nutzeranweisung gebaut.
 
 ## Quellenhierarchie

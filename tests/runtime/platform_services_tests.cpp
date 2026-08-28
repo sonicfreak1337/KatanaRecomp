@@ -155,27 +155,28 @@ int main() {
     detail::NativeGamepadButtonStability handoff_stability;
     std::uint32_t previous_published = 0u;
     unsigned rising_edges = 0u;
-    const auto publish = [&](const std::uint32_t raw) {
+    const auto publish = [&](const std::uint32_t raw,
+                             const bool begin_handoff) {
         const auto published =
-            detail::stabilize_gamepad_buttons(handoff_stability, raw);
+            detail::stabilize_gamepad_buttons(
+                handoff_stability, raw, begin_handoff);
         if ((published & button) != 0u &&
             (previous_published & button) == 0u)
             ++rising_edges;
         previous_published = published;
     };
-    publish(button); // Sony endpoint: physical press.
-    publish(0u);     // First neutral poll while HID disappears.
-    publish(0u);     // Second neutral poll before XInput takes over.
-    publish(button); // Same held press arrives through XInput after handoff.
-    publish(0u);
-    publish(0u);
-    publish(0u); // Stable physical release.
+    publish(button, false); // Sony endpoint: physical press.
+    publish(0u, true);      // First neutral poll while HID disappears.
+    publish(0u, false);     // Second neutral poll before XInput takes over.
+    publish(button, false); // Same held press arrives through XInput.
+    publish(0u, false);     // Stable physical release is immediate.
     require(rising_edges == 1u && (previous_published & button) == 0u,
             "Ein einzelner physischer Buttondruck erzeugt mehrere Kanten oder bleibt haengen.");
 
     detail::NativeGamepadButtonStability fallback_stability;
     static_cast<void>(
-        detail::stabilize_gamepad_buttons(fallback_stability, button));
+        detail::stabilize_gamepad_buttons(
+            fallback_stability, button, false));
     constexpr auto keyboard = detail::keyboard_device_domain | 1u;
     const auto missing_poll_1 =
         detail::retain_buttons_across_neutral_keyboard_fallback(
@@ -188,15 +189,45 @@ int main() {
             fallback_stability, true, xinput, keyboard, 0u);
     require(missing_poll_1 == button && missing_poll_2 == button &&
                 confirmed_disconnect == 0u,
-            "Der neutrale Keyboard-Fallback umgeht den Drei-Poll-Releasevertrag.");
+            "Der neutrale Keyboard-Fallback umgeht das begrenzte Handofffenster.");
 
     detail::NativeGamepadButtonStability active_keyboard_stability;
     static_cast<void>(detail::stabilize_gamepad_buttons(
-        active_keyboard_stability, button));
+        active_keyboard_stability, button, false));
     require(detail::retain_buttons_across_neutral_keyboard_fallback(
                 active_keyboard_stability, true, xinput, keyboard, button) ==
                 0u,
             "Aktive Keyboard-Eingabe wird faelschlich als Endpoint-Luecke verdeckt.");
+
+    detail::NativeGamepadButtonStability stable_stability;
+    const auto stable_press = detail::stabilize_gamepad_buttons(
+        stable_stability, button, false);
+    const auto stable_release = detail::stabilize_gamepad_buttons(
+        stable_stability, 0u, false);
+    const auto stable_second_press = detail::stabilize_gamepad_buttons(
+        stable_stability, button, false);
+    require(stable_press == button && stable_release == 0u &&
+                stable_second_press == button,
+            "Ein stabiler Controller verliert eine einpollige Release-Flanke.");
+
+    detail::NativeGamepadButtonStability bounded_handoff;
+    constexpr auto second_button = native_port_gamepad_button_mask(
+        NativePortGamepadButton::B);
+    static_cast<void>(detail::stabilize_gamepad_buttons(
+        bounded_handoff, button, false));
+    const auto handoff_first = detail::stabilize_gamepad_buttons(
+        bounded_handoff, 0u, true);
+    const auto handoff_second = detail::stabilize_gamepad_buttons(
+        bounded_handoff, second_button, false);
+    const auto handoff_third = detail::stabilize_gamepad_buttons(
+        bounded_handoff, button, false);
+    const auto handoff_release = detail::stabilize_gamepad_buttons(
+        bounded_handoff, 0u, false);
+    require(handoff_first == button &&
+                handoff_second == (button | second_button) &&
+                handoff_third == button && handoff_release == 0u &&
+                bounded_handoff.handoff_polls_remaining == 0u,
+            "Wechselnde Handoff-Samples verlaengern das Debouncefenster.");
 
     MockServices services;
     PlatformServiceRequirements all;
