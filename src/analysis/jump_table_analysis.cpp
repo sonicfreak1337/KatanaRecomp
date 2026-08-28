@@ -1161,11 +1161,12 @@ JumpTableAnalysis analyze_declared_jump_table(
     return analysis;
 }
 
-std::optional<JumpTableAnalysis>
-recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
-                                       const std::span<const katana::sh4::DisassemblyLine> lines,
-                                       const std::size_t dispatch_index,
-                                       JumpTableSnapshotCache* const cache) {
+std::optional<detail::RelativeJumpTableRecognition>
+detail::recognize_relative_jump_table(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index,
+    JumpTableSnapshotCache* const cache) {
     if (dispatch_index < 3u || dispatch_index >= lines.size()) return std::nullopt;
     const auto& dispatch = lines[dispatch_index];
     if ((dispatch.instruction.kind != katana::sh4::InstructionKind::Braf &&
@@ -1225,113 +1226,16 @@ recognize_bounded_relative_jump_table(const katana::io::ExecutableImage& image,
     const auto resolved_table = image.resolve_segment_address(
         static_cast<std::uint32_t>(table_address64), table_byte_count);
     if (!resolved_table.has_value()) return std::nullopt;
-    auto analysis = analyze_relative_jump_table(
-        image,
-        dispatch.address,
-        *resolved_table,
-        dispatch.address + 4u,
-        index_proof->entry_count,
-        cache);
-    analysis.dispatch_kind =
-        dispatch.instruction.kind == katana::sh4::InstructionKind::Bsrf
-            ? JumpTableDispatchKind::Call
-            : JumpTableDispatchKind::Jump;
-    if (analysis.reason != "table-segment-writable") return analysis;
 
-    const auto dispatch_address = image.resolve_segment_address(dispatch.address, 2u);
-    const auto* dispatch_segment = dispatch_address.has_value()
-                                       ? image.find_segment(*dispatch_address, 2u)
-                                       : nullptr;
-    const auto* table_segment = resolved_table.has_value()
-                                    ? image.find_segment(*resolved_table, table_byte_count)
-                                    : nullptr;
-    if (dispatch_segment == nullptr || table_segment == nullptr ||
-        !dispatch_segment->permissions.executable || !table_segment->permissions.writable ||
-        !snapshot_candidate_source(image, *dispatch_segment) ||
-        !snapshot_candidate_source(image, *table_segment))
-        return analysis;
-
-    analysis = analyze_relative_jump_table_impl(image,
-                                                dispatch.address,
-                                                *resolved_table,
-                                                dispatch.address + 4u,
-                                                index_proof->entry_count,
-                                                true);
-    analysis.dispatch_kind =
-        dispatch.instruction.kind == katana::sh4::InstructionKind::Bsrf
-            ? JumpTableDispatchKind::Call
-            : JumpTableDispatchKind::Jump;
-    return analysis;
-}
-
-std::optional<detail::RelativeJumpTableProducerEvidence>
-detail::recognize_relative_jump_table_producer(
-    const katana::io::ExecutableImage& image,
-    const std::span<const katana::sh4::DisassemblyLine> lines,
-    const std::size_t dispatch_index) {
-    if (dispatch_index == 0u || dispatch_index >= lines.size())
-        return std::nullopt;
-    const auto& dispatch = lines[dispatch_index];
-    if (dispatch.instruction.kind != katana::sh4::InstructionKind::Braf &&
-        dispatch.instruction.kind != katana::sh4::InstructionKind::Bsrf)
-        return std::nullopt;
-    if (dispatch.is_delay_slot)
-        return std::nullopt;
-
-    const auto load_index = previous_straight_line_writer(
-        lines,
-        dispatch_index,
-        dispatch_index,
-        dispatch.instruction.branch_register);
-    if (!load_index.has_value()) return std::nullopt;
-    const auto& load = lines[*load_index];
-    if (load.instruction.kind !=
-            katana::sh4::InstructionKind::MovWordLoadR0Indexed ||
-        load.instruction.destination_register !=
-            dispatch.instruction.branch_register ||
-        load.instruction.source_register == 0u)
-        return std::nullopt;
-    constexpr auto encoding = JumpTableEncoding::SignedRelative16;
-
-    const auto table_base_index = previous_straight_line_writer(
-        lines, *load_index, dispatch_index, 0u);
-    if (!table_base_index.has_value()) return std::nullopt;
-    const auto& table_base = lines[*table_base_index];
-    if (table_base.instruction.kind !=
-        katana::sh4::InstructionKind::MoveAddressPcRelative)
-        return std::nullopt;
-    const auto table_address64 =
-        ((static_cast<std::uint64_t>(table_base.address) + 4u) &
-         ~std::uint64_t{3u}) +
-        static_cast<std::uint32_t>(table_base.instruction.displacement);
-    if (table_address64 > std::numeric_limits<std::uint32_t>::max())
-        return std::nullopt;
-    constexpr std::size_t table_width = sizeof(std::uint16_t);
-    const auto index_proof = recognize_relative_index_proof(
-        lines,
-        image,
-        *load_index,
-        dispatch_index,
-        load.instruction.source_register,
-        table_width);
-    if (!index_proof.has_value()) return std::nullopt;
-    const auto table_byte_count64 =
-        static_cast<std::uint64_t>(index_proof->entry_count) * table_width;
-    if (table_byte_count64 > std::numeric_limits<std::size_t>::max())
-        return std::nullopt;
-    const auto resolved_table = image.resolve_segment_address(
-        static_cast<std::uint32_t>(table_address64),
-        static_cast<std::size_t>(table_byte_count64));
-    if (!resolved_table.has_value()) return std::nullopt;
-
-    RelativeJumpTableProducerEvidence evidence;
+    RelativeJumpTableRecognition recognition;
+    auto& evidence = recognition.producer;
     evidence.dispatch_address = dispatch.address;
     evidence.table_address = *resolved_table;
     evidence.dispatch_kind =
         dispatch.instruction.kind == katana::sh4::InstructionKind::Bsrf
             ? JumpTableDispatchKind::Call
             : JumpTableDispatchKind::Jump;
-    evidence.encoding = encoding;
+    evidence.encoding = JumpTableEncoding::SignedRelative16;
     evidence.bounded_entry_count = index_proof->entry_count;
     evidence.requires_global_ingress_proof =
         index_proof->requires_global_ingress_proof;
@@ -1346,7 +1250,62 @@ detail::recognize_relative_jump_table_producer(
         dispatch_index - first_producer_index + 1u);
     for (auto index = first_producer_index; index <= dispatch_index; ++index)
         evidence.instruction_addresses.push_back(lines[index].address);
-    return evidence;
+
+    auto analysis = analyze_relative_jump_table(
+        image,
+        dispatch.address,
+        *resolved_table,
+        dispatch.address + 4u,
+        index_proof->entry_count,
+        cache);
+    analysis.dispatch_kind =
+        dispatch.instruction.kind == katana::sh4::InstructionKind::Bsrf
+            ? JumpTableDispatchKind::Call
+            : JumpTableDispatchKind::Jump;
+    if (analysis.reason != "table-segment-writable") {
+        recognition.table = std::move(analysis);
+        return recognition;
+    }
+
+    const auto dispatch_address = image.resolve_segment_address(dispatch.address, 2u);
+    const auto* dispatch_segment = dispatch_address.has_value()
+                                       ? image.find_segment(*dispatch_address, 2u)
+                                       : nullptr;
+    const auto* table_segment = resolved_table.has_value()
+                                    ? image.find_segment(*resolved_table, table_byte_count)
+                                    : nullptr;
+    if (dispatch_segment == nullptr || table_segment == nullptr ||
+        !dispatch_segment->permissions.executable || !table_segment->permissions.writable ||
+        !snapshot_candidate_source(image, *dispatch_segment) ||
+        !snapshot_candidate_source(image, *table_segment)) {
+        recognition.table = std::move(analysis);
+        return recognition;
+    }
+
+    analysis = analyze_relative_jump_table_impl(image,
+                                                dispatch.address,
+                                                *resolved_table,
+                                                dispatch.address + 4u,
+                                                index_proof->entry_count,
+                                                true);
+    analysis.dispatch_kind =
+        dispatch.instruction.kind == katana::sh4::InstructionKind::Bsrf
+            ? JumpTableDispatchKind::Call
+            : JumpTableDispatchKind::Jump;
+    recognition.table = std::move(analysis);
+    return recognition;
+}
+
+std::optional<JumpTableAnalysis>
+recognize_bounded_relative_jump_table(
+    const katana::io::ExecutableImage& image,
+    const std::span<const katana::sh4::DisassemblyLine> lines,
+    const std::size_t dispatch_index,
+    JumpTableSnapshotCache* const cache) {
+    auto recognition = detail::recognize_relative_jump_table(
+        image, lines, dispatch_index, cache);
+    if (!recognition.has_value()) return std::nullopt;
+    return std::move(recognition->table);
 }
 
 std::optional<JumpTableAnalysis>

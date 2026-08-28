@@ -61,11 +61,20 @@ struct RelativeJumpTableProducerEvidence {
     std::vector<InternalBranchEdge> internal_branch_edges;
 };
 
-[[nodiscard]] std::optional<RelativeJumpTableProducerEvidence>
-recognize_relative_jump_table_producer(
+struct RelativeJumpTableRecognition final {
+    JumpTableAnalysis table;
+    RelativeJumpTableProducerEvidence producer;
+};
+
+// Decode the finite index domain, table bytes and producer provenance once.
+// CFA and cache validation consume both halves of this run-local recognition;
+// splitting the calls would repeat the bounded set/queue propagation.
+[[nodiscard]] std::optional<RelativeJumpTableRecognition>
+recognize_relative_jump_table(
     const katana::io::ExecutableImage& image,
     std::span<const katana::sh4::DisassemblyLine> lines,
-    std::size_t dispatch_index);
+    std::size_t dispatch_index,
+    JumpTableSnapshotCache* cache = nullptr);
 
 [[nodiscard]] std::optional<JumpTableAnalysis>
 recognize_snapshot_absolute_jump_table_candidates_with_producer(

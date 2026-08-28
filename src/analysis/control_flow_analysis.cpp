@@ -709,25 +709,19 @@ class IncrementalCfaScanCache final {
             telemetry.jump_table_instruction_visits += window.size();
             DispatchRecognition recognition;
             const auto kind = dispatch->second.instruction.kind;
-            if (kind == katana::sh4::InstructionKind::Bsrf) {
+            if (kind == katana::sh4::InstructionKind::Bsrf)
                 recognition.relative_call_island =
                     recognize_snapshot_relative_call_island_candidates(
                         image, window, dispatch_index);
-                recognition.jump_table =
-                    recognize_bounded_relative_jump_table(
-                        image, window, dispatch_index,
-                        &jump_table_cache);
-                recognition.relative_table_producer =
-                    detail::recognize_relative_jump_table_producer(
-                        image, window, dispatch_index);
-            } else if (kind == katana::sh4::InstructionKind::Braf) {
-                recognition.jump_table =
-                    recognize_bounded_relative_jump_table(
-                        image, window, dispatch_index,
-                        &jump_table_cache);
-                recognition.relative_table_producer =
-                    detail::recognize_relative_jump_table_producer(
-                        image, window, dispatch_index);
+            if (kind == katana::sh4::InstructionKind::Braf ||
+                kind == katana::sh4::InstructionKind::Bsrf) {
+                auto relative = detail::recognize_relative_jump_table(
+                    image, window, dispatch_index, &jump_table_cache);
+                if (relative.has_value()) {
+                    recognition.jump_table = std::move(relative->table);
+                    recognition.relative_table_producer =
+                        std::move(relative->producer);
+                }
             } else {
                 detail::SnapshotAbsoluteJumpTableProducerEvidence producer;
                 recognition.jump_table =

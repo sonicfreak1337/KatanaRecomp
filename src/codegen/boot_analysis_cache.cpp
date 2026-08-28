@@ -2038,26 +2038,18 @@ bool validate_boot_analysis_cache_source_binding(
                         katana::sh4::InstructionKind::Braf ||
                     dispatch_instruction_kind ==
                         katana::sh4::InstructionKind::Bsrf) {
-                    relative_producer = katana::analysis::detail::
-                        recognize_relative_jump_table_producer(
-                            image,
-                            recognition_lines,
+                    auto recognition = katana::analysis::detail::
+                        recognize_relative_jump_table(
+                            image, recognition_lines,
                             recognition_dispatch_index);
-                    if (relative_producer.has_value())
+                    if (recognition.has_value()) {
+                        native_table = std::move(recognition->table);
+                        relative_producer =
+                            std::move(recognition->producer);
                         relative_producer->global_ingress_proven =
                             relative_table_global_ingress_closed(
                                 *relative_producer);
-                }
-                if (dispatch_instruction_kind ==
-                        katana::sh4::InstructionKind::Braf ||
-                    dispatch_instruction_kind ==
-                        katana::sh4::InstructionKind::Bsrf) {
-                    native_table =
-                        katana::analysis::
-                            recognize_bounded_relative_jump_table(
-                                image,
-                                recognition_lines,
-                                recognition_dispatch_index);
+                    }
                 } else if (dispatch_instruction_kind ==
                                katana::sh4::InstructionKind::Jmp ||
                            dispatch_instruction_kind ==
