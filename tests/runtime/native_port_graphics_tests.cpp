@@ -87,7 +87,7 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 14u);
+    static_assert(native_port_graphics_contract_version == 15u);
 
     NativePortGraphicsConfig config;
     config.title = "Katana Native Graphics Contract Test";
@@ -268,11 +268,65 @@ int main(const int argc, char** const argv) {
         screen_packet(reciprocal_vertices, 1u, 1u);
     missing_required_texture.texture_stage =
         NativePortTextureStage::RequiredResolved;
+    auto& missing_diagnostics = missing_required_texture.diagnostics;
+    missing_diagnostics.enabled = true;
+    missing_diagnostics.material_identity = 0x101u;
+    missing_diagnostics.origin_identity = 0x202u;
+    missing_diagnostics.model_identity = 0x303u;
+    missing_diagnostics.material_identity_bound = true;
+    missing_diagnostics.origin_identity_bound = true;
+    missing_diagnostics.model_identity_bound = true;
+    missing_diagnostics.texture_list_index = 3u;
+    missing_diagnostics.texture_list_index_bound = true;
+    auto& missing_binding = missing_diagnostics.texture_binding;
+    missing_binding.texture_list_identity = 0x404u;
+    missing_binding.texture_list_epoch = 7u;
+    missing_binding.texture_list_count = 8u;
+    missing_binding.last_writer_identity = 0x505u;
+    missing_binding.last_writer_sequence = 9u;
+    missing_binding.expected_asset_identity = 0x606u;
+    missing_binding.resolver =
+        NativePortTextureResolverKind::ExactArchiveNames;
+    missing_binding.last_writer =
+        NativePortTextureBindingWriterKind::TextureNumberSelect;
+    missing_binding.texture_list_bound = true;
+    missing_binding.texture_list_epoch_bound = true;
+    missing_binding.last_writer_bound = true;
+    missing_binding.expected_asset_bound = true;
     require(throws_graphics(
                 [&] { graphics.draw(missing_required_texture); },
                 NativePortGraphicsFailure::MissingRequiredTexture,
                 "draw-texture-required"),
             "Eine fehlende Pflichttextur faellt auf den untexturierten Pfad zurueck.");
+    const auto missing_snapshot = graphics.snapshot();
+    const auto& missing_witness =
+        missing_snapshot.last_contract_failure;
+    require(missing_snapshot.contract_failures == 1u &&
+                missing_witness.valid &&
+                missing_witness.failure ==
+                    NativePortGraphicsFailure::MissingRequiredTexture &&
+                missing_witness.frame == 1u &&
+                missing_witness.draw_sequence == 1u &&
+                missing_witness.batch_identity == 1u &&
+                missing_witness.submission_order == 1u &&
+                missing_witness.diagnostics.material_identity == 0x101u &&
+                missing_witness.diagnostics.origin_identity == 0x202u &&
+                missing_witness.diagnostics.model_identity == 0x303u &&
+                missing_witness.diagnostics.texture_list_index == 3u &&
+                missing_witness.diagnostics.texture_binding
+                        .texture_list_identity == 0x404u &&
+                missing_witness.diagnostics.texture_binding
+                        .texture_list_epoch == 7u &&
+                missing_witness.diagnostics.texture_binding
+                        .last_writer_identity == 0x505u &&
+                missing_witness.diagnostics.texture_binding
+                        .last_writer_sequence == 9u &&
+                missing_witness.diagnostics.texture_binding
+                        .expected_asset_identity == 0x606u &&
+                missing_witness.diagnostics.texture_binding.resolver ==
+                    NativePortTextureResolverKind::ExactArchiveNames,
+            "Der Pflichttexturfehler verlor seinen kompakten Material-/"
+            "Texlist-/Last-Writer-Zeugen.");
     auto contradictory_disabled_texture =
         screen_packet(reciprocal_vertices, 1u, 1u);
     contradictory_disabled_texture.texture = draw_texture;

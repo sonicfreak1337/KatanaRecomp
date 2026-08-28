@@ -52,6 +52,21 @@ WRITERS = {
     3: "registered-texture-select",
     4: "identity-bound-override",
 }
+GRAPHICS_FAILURES = {
+    0: "invalid-config",
+    1: "unsupported-host",
+    2: "window-creation",
+    3: "hardware-device-unavailable",
+    4: "shader-compilation",
+    5: "resource-creation",
+    6: "resource-limit",
+    7: "invalid-resource",
+    8: "invalid-frame",
+    9: "invalid-draw",
+    10: "device-lost",
+    11: "thread-violation",
+    12: "missing-required-texture",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -149,7 +164,7 @@ def main() -> int:
                 intent,
                 resolver,
                 writer,
-                _,
+                contract_failure,
             ) = enums
             record = {
                 "schema": "katana-native-graphics-breadcrumb-v2",
@@ -208,6 +223,11 @@ def main() -> int:
                 },
                 "geometry_available": bool(flags & 1),
                 "rejected": bool(flags & 2),
+                "contract_failure": (
+                    GRAPHICS_FAILURES.get(contract_failure, contract_failure)
+                    if flags & (1 << 15)
+                    else None
+                ),
                 "adapter_diagnostics_enabled": bool(flags & (1 << 13)),
             }
             emit(output, record)

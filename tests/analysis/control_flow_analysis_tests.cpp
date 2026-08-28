@@ -3471,6 +3471,45 @@ int main() {
         "Eine exakt gebundene BRAF-Tabelle verlor ihren begrenzten "
         "nicht-clobbernden Producer-Nachweis.");
 
+    auto interior_root_braf_image = identity_bound_braf_image;
+    interior_root_braf_image.add_entry_point(0x0Au);
+    const auto interior_root_braf =
+        katana::analysis::analyze_control_flow(
+            interior_root_braf_image, &identity_bound_braf_override);
+    const auto interior_root_table = std::find_if(
+        interior_root_braf.jump_tables.begin(),
+        interior_root_braf.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(interior_root_table != interior_root_braf.jump_tables.end() &&
+                interior_root_table->evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride,
+            "Ein externer Function-Root hinter dem endlichen Index-Seed "
+            "umging den globalen Ingressvertrag.");
+
+    auto distant_ingress_braf_image = identity_bound_braf_image;
+    distant_ingress_braf_image.add_segment(
+        {".distant-ingress",
+         0x80u,
+         0x80u,
+         4u,
+         katana::io::SegmentKind::Code,
+         {true, false, true},
+         {0xC3u, 0xAFu, // bra 0x0A from outside the 48-instruction window
+          0x09u, 0x00u}});
+    distant_ingress_braf_image.add_entry_point(0x80u);
+    const auto distant_ingress_braf =
+        katana::analysis::analyze_control_flow(
+            distant_ingress_braf_image, &identity_bound_braf_override);
+    const auto distant_ingress_table = std::find_if(
+        distant_ingress_braf.jump_tables.begin(),
+        distant_ingress_braf.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(distant_ingress_table != distant_ingress_braf.jump_tables.end() &&
+                distant_ingress_table->evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride,
+            "Ein entfernter direkter CFG-Vorgaenger hinter dem endlichen "
+            "Index-Seed umging den globalen Ingressvertrag.");
+
     const auto identity_bound_braf_lines = katana::sh4::disassemble(
         identity_bound_braf_image.segments().front().bytes, 0u);
     const auto identity_bound_braf_native =

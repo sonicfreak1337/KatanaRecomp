@@ -437,6 +437,11 @@ bool fixed_stride_terminal_tail(const katana::io::ExecutableImage& image,
 struct BoundedRelativeIndexProof {
     std::size_t entry_count = 0u;
     std::size_t first_instruction_index = 0u;
+    bool requires_global_ingress_proof = false;
+    std::uint32_t ingress_seed_address = 0u;
+    std::uint32_t ingress_load_address = 0u;
+    std::vector<detail::RelativeJumpTableProducerEvidence::InternalBranchEdge>
+        internal_branch_edges;
 };
 
 std::optional<BoundedRelativeIndexProof>
@@ -618,6 +623,9 @@ std::optional<BoundedRelativeIndexProof> bounded_finite_index_values(
         states[seed_index + 1u].insert(seed_value);
         pending.emplace_back(seed_index + 1u, seed_value);
         std::set<std::uint32_t> terminal_values;
+        std::vector<detail::RelativeJumpTableProducerEvidence::
+                        InternalBranchEdge>
+            internal_branch_edges;
         bool rejected = false;
         const auto enqueue = [&](const std::size_t index,
                                  const std::uint32_t value,
@@ -669,6 +677,13 @@ std::optional<BoundedRelativeIndexProof> bounded_finite_index_values(
                     !enqueue(index + 1u, *value, pending, states)) {
                     rejected = true;
                 }
+                const detail::RelativeJumpTableProducerEvidence::
+                    InternalBranchEdge edge{line.address,
+                                            *line.target_address};
+                if (std::find(internal_branch_edges.begin(),
+                              internal_branch_edges.end(),
+                              edge) == internal_branch_edges.end())
+                    internal_branch_edges.push_back(edge);
                 continue;
             }
             if (line.instruction.changes_control_flow() ||
@@ -692,8 +707,14 @@ std::optional<BoundedRelativeIndexProof> bounded_finite_index_values(
         if (!aligned || count64 == 0u ||
             count64 > maximum_jump_table_entries)
             continue;
-        return BoundedRelativeIndexProof{
-            static_cast<std::size_t>(count64), seed_index};
+        BoundedRelativeIndexProof proof;
+        proof.entry_count = static_cast<std::size_t>(count64);
+        proof.first_instruction_index = seed_index;
+        proof.requires_global_ingress_proof = true;
+        proof.ingress_seed_address = seed.address;
+        proof.ingress_load_address = lines[load_index].address;
+        proof.internal_branch_edges = std::move(internal_branch_edges);
+        return proof;
     }
     return std::nullopt;
 }
@@ -1312,6 +1333,13 @@ detail::recognize_relative_jump_table_producer(
             : JumpTableDispatchKind::Jump;
     evidence.encoding = encoding;
     evidence.bounded_entry_count = index_proof->entry_count;
+    evidence.requires_global_ingress_proof =
+        index_proof->requires_global_ingress_proof;
+    evidence.global_ingress_proven =
+        !index_proof->requires_global_ingress_proof;
+    evidence.ingress_seed_address = index_proof->ingress_seed_address;
+    evidence.ingress_load_address = index_proof->ingress_load_address;
+    evidence.internal_branch_edges = index_proof->internal_branch_edges;
     const auto first_producer_index = std::min(
         index_proof->first_instruction_index, *table_base_index);
     evidence.instruction_addresses.reserve(

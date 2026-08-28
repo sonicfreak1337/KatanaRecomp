@@ -1667,6 +1667,9 @@ bool validate_boot_analysis_cache_source_binding(
                 return false;
         }
 
+        const auto cached_architectural_entries =
+            katana::ir::architectural_safepoint_block_leaders(
+                artifact.analysis);
         auto rebuilt_analysis = std::move(artifact.analysis);
         const auto cached_guarded_entries =
             std::move(rebuilt_analysis.guarded_aot_entries);
@@ -1710,6 +1713,48 @@ bool validate_boot_analysis_cache_source_binding(
                     return !cached_block_leaders.contains(address);
                 }))
             return false;
+
+        std::set<std::uint32_t> global_entry_boundaries = function_roots;
+        global_entry_boundaries.insert(cached_architectural_entries.begin(),
+                                       cached_architectural_entries.end());
+        if (overrides != nullptr) {
+            for (const auto& boundary : overrides->function_boundaries)
+                global_entry_boundaries.insert(boundary.address);
+            for (const auto& hint : overrides->function_entry_hints)
+                global_entry_boundaries.insert(hint.address);
+        }
+        const auto relative_table_global_ingress_closed =
+            [&](const katana::analysis::detail::
+                    RelativeJumpTableProducerEvidence& producer) {
+                if (!producer.requires_global_ingress_proof) return true;
+                if (producer.ingress_seed_address >=
+                    producer.ingress_load_address)
+                    return false;
+                const auto is_interior = [&](const std::uint32_t address) {
+                    return address > producer.ingress_seed_address &&
+                           address <= producer.ingress_load_address;
+                };
+                const auto entry = global_entry_boundaries.upper_bound(
+                    producer.ingress_seed_address);
+                if (entry != global_entry_boundaries.end() &&
+                    is_interior(*entry))
+                    return false;
+                for (const auto& line : current_lines) {
+                    if (!line.target_address.has_value() ||
+                        !is_interior(*line.target_address))
+                        continue;
+                    const auto allowed = std::find_if(
+                        producer.internal_branch_edges.begin(),
+                        producer.internal_branch_edges.end(),
+                        [&](const auto& edge) {
+                            return edge.source == line.address &&
+                                   edge.target == *line.target_address;
+                        });
+                    if (allowed == producer.internal_branch_edges.end())
+                        return false;
+                }
+                return true;
+            };
 
         std::map<std::uint32_t, std::uint32_t> exact_function_sizes;
         for (const auto& symbol : image.symbols()) {
@@ -1998,6 +2043,10 @@ bool validate_boot_analysis_cache_source_binding(
                             image,
                             recognition_lines,
                             recognition_dispatch_index);
+                    if (relative_producer.has_value())
+                        relative_producer->global_ingress_proven =
+                            relative_table_global_ingress_closed(
+                                *relative_producer);
                 }
                 if (dispatch_instruction_kind ==
                         katana::sh4::InstructionKind::Braf ||
@@ -2134,6 +2183,7 @@ bool validate_boot_analysis_cache_source_binding(
                     relative_producer->encoding == table.encoding &&
                     relative_producer->bounded_entry_count ==
                         table.requested_entries &&
+                    relative_producer->global_ingress_proven &&
                     !relative_producer->instruction_addresses.empty();
                 if (relative_producer_identity_bound) {
                     for (const auto address :

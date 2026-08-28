@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -2854,10 +2855,14 @@ class NativePortGraphicsDevice::Impl final {
                  "draw-texture-stage-disabled");
         if (packet.texture_stage ==
                 NativePortTextureStage::RequiredResolved &&
-            !packet.texture)
+            !packet.texture) {
+            record_graphics_contract_failure(
+                packet,
+                NativePortGraphicsFailure::MissingRequiredTexture);
             fail(NativePortGraphicsFailure::MissingRequiredTexture,
                  0u,
                  "draw-texture-required");
+        }
         if (!compatible_vertex_contract(packet))
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
@@ -3568,7 +3573,9 @@ class NativePortGraphicsDevice::Impl final {
         const NativePortDrawPacket& packet,
         const TextureSlot* const texture,
         const bool geometry_available,
-        const bool rejected) noexcept {
+        const bool rejected,
+        const std::optional<NativePortGraphicsFailure> contract_failure =
+            std::nullopt) noexcept {
         if (graphics_diagnostic_mode_ ==
             NativePortGraphicsDiagnosticMode::Off)
             return;
@@ -3599,6 +3606,7 @@ class NativePortGraphicsDevice::Impl final {
         if (texture != nullptr &&
             texture->config.provenance.decoded_payload_identity_bound)
             record_flags |= 1u << 14u;
+        if (contract_failure.has_value()) record_flags |= 1u << 15u;
         auto digest = graphics_digest_;
         auto frame_digest = graphics_frame_digest_;
         const auto mix = [&](const std::uint64_t value) {
@@ -3632,6 +3640,8 @@ class NativePortGraphicsDevice::Impl final {
         mix(static_cast<std::uint64_t>(binding.resolver));
         mix(static_cast<std::uint64_t>(binding.last_writer));
         mix(record_flags);
+        if (contract_failure.has_value())
+            mix(static_cast<std::uint64_t>(*contract_failure));
         if (texture != nullptr) {
             mix(texture->config.provenance.generation);
             mix(texture->config.provenance.archive_ordinal);
@@ -3717,6 +3727,9 @@ class NativePortGraphicsDevice::Impl final {
         record.intent = static_cast<std::uint8_t>(diagnostics.intent);
         record.resolver = static_cast<std::uint8_t>(binding.resolver);
         record.last_writer = static_cast<std::uint8_t>(binding.last_writer);
+        if (contract_failure.has_value())
+            record.reserved =
+                static_cast<std::uint8_t>(*contract_failure);
         record.flags = record_flags;
         if (texture != nullptr) {
             const auto& provenance = texture->config.provenance;
@@ -3747,6 +3760,37 @@ class NativePortGraphicsDevice::Impl final {
         }
         graphics_breadcrumbs_[destination] = record;
         graphics_breadcrumbs_dirty_ = true;
+    }
+
+    void record_graphics_contract_failure(
+        const NativePortDrawPacket& packet,
+        const NativePortGraphicsFailure failure) noexcept {
+        NativePortGraphicsContractFailureWitness witness;
+        witness.frame = snapshot_.begun_frames;
+        const auto remaining_draw_sequence =
+            std::numeric_limits<std::uint64_t>::max() -
+            snapshot_.draw_calls;
+        witness.draw_sequence =
+            snapshot_.contract_failures >= remaining_draw_sequence
+                ? std::numeric_limits<std::uint64_t>::max()
+                : snapshot_.draw_calls + snapshot_.contract_failures + 1u;
+        witness.batch_identity = packet.batch.identity;
+        witness.diagnostics = packet.diagnostics;
+        witness.submission_order = packet.batch.submission_order;
+        witness.failure = failure;
+        witness.batch_semantic = packet.batch.semantic;
+        witness.draw_class = packet.draw_class;
+        witness.valid = true;
+        snapshot_.last_contract_failure = witness;
+        saturating_increment(snapshot_.contract_failures);
+
+        if (graphics_diagnostic_mode_ ==
+            NativePortGraphicsDiagnosticMode::Off)
+            return;
+        record_graphics_diagnostic(packet, nullptr, false, true, failure);
+        // The exception may immediately unwind the title. Persist the bounded
+        // breadcrumb now instead of waiting for a periodic checkpoint.
+        flush_graphics_breadcrumbs();
     }
 
     [[nodiscard]] bool write_graphics_breadcrumb_snapshot() noexcept {

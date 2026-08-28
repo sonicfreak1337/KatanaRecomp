@@ -484,6 +484,7 @@ class IncrementalCfaScanCache final {
         lines_.clear();
         functions_.clear();
         direct_target_references_.clear();
+        direct_target_sources_.clear();
         components_.clear();
         recognition_index_.clear();
         last_changed_dispatches_.clear();
@@ -497,6 +498,7 @@ class IncrementalCfaScanCache final {
     void apply(const detail::RecursiveAnalysisSnapshot& snapshot,
                const katana::io::ExecutableImage& image,
                JumpTableSnapshotCache& jump_table_cache,
+               const std::span<const std::uint32_t> external_entry_boundaries,
                ControlFlowAnalysisResult& telemetry) {
         last_changed_dispatches_.clear();
         last_changed_runtime_copies_.clear();
@@ -519,12 +521,15 @@ class IncrementalCfaScanCache final {
             if (previous != lines_.end() &&
                 previous->second.target_address.has_value()) {
                 retain_old_component(*previous->second.target_address);
-                decrement_target(*previous->second.target_address);
+                decrement_target(*previous->second.target_address,
+                                 previous->second.address);
                 dirty_addresses.insert(*previous->second.target_address);
             }
             lines_.insert_or_assign(line.address, line);
             if (line.target_address.has_value()) {
                 ++direct_target_references_[*line.target_address];
+                direct_target_sources_[*line.target_address].insert(
+                    line.address);
                 dirty_addresses.insert(*line.target_address);
             }
         }
@@ -731,6 +736,22 @@ class IncrementalCfaScanCache final {
                 if (recognition.jump_table.has_value())
                     recognition.snapshot_absolute_producer =
                         std::move(producer);
+            }
+            if (recognition.relative_table_producer.has_value() &&
+                recognition.relative_table_producer
+                    ->requires_global_ingress_proof) {
+                auto& producer =
+                    *recognition.relative_table_producer;
+                producer.global_ingress_proven =
+                    relative_table_global_ingress_closed(
+                        producer, external_entry_boundaries);
+                // A locally finite suffix is not complete CFG evidence until
+                // every global root and direct predecessor agrees that its
+                // seed dominates the indexed load. Retain the producer for
+                // fail-closed declaration diagnostics, but never publish its
+                // target set as recursive CFG edges.
+                if (!producer.global_ingress_proven)
+                    recognition.jump_table.reset();
             }
             if (recognition.relative_call_island.has_value() ||
                 recognition.jump_table.has_value() ||
@@ -1044,10 +1065,59 @@ class IncrementalCfaScanCache final {
         components_.erase(component);
     }
 
-    void decrement_target(const std::uint32_t address) {
+    [[nodiscard]] bool relative_table_global_ingress_closed(
+        const detail::RelativeJumpTableProducerEvidence& producer,
+        const std::span<const std::uint32_t> external_entry_boundaries) const {
+        if (!producer.requires_global_ingress_proof) return true;
+        if (producer.ingress_seed_address >= producer.ingress_load_address)
+            return false;
+
+        const auto is_interior = [&](const std::uint32_t address) {
+            return address > producer.ingress_seed_address &&
+                   address <= producer.ingress_load_address;
+        };
+        const auto function =
+            functions_.upper_bound(producer.ingress_seed_address);
+        if (function != functions_.end() && is_interior(function->first))
+            return false;
+        const auto boundary = std::upper_bound(
+            external_entry_boundaries.begin(),
+            external_entry_boundaries.end(),
+            producer.ingress_seed_address);
+        if (boundary != external_entry_boundaries.end() &&
+            is_interior(*boundary))
+            return false;
+
+        for (auto target = direct_target_sources_.upper_bound(
+                 producer.ingress_seed_address);
+             target != direct_target_sources_.end() &&
+             target->first <= producer.ingress_load_address;
+             ++target) {
+            for (const auto source : target->second) {
+                const auto allowed = std::find_if(
+                    producer.internal_branch_edges.begin(),
+                    producer.internal_branch_edges.end(),
+                    [&](const auto& edge) {
+                        return edge.source == source &&
+                               edge.target == target->first;
+                    });
+                if (allowed == producer.internal_branch_edges.end())
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    void decrement_target(const std::uint32_t address,
+                          const std::uint32_t source) {
         const auto found = direct_target_references_.find(address);
-        if (found == direct_target_references_.end()) return;
-        if (--found->second == 0u) direct_target_references_.erase(found);
+        if (found != direct_target_references_.end() &&
+            --found->second == 0u)
+            direct_target_references_.erase(found);
+        const auto sources = direct_target_sources_.find(address);
+        if (sources == direct_target_sources_.end()) return;
+        sources->second.erase(source);
+        if (sources->second.empty()) direct_target_sources_.erase(sources);
     }
 
     [[nodiscard]] static bool same_runtime_code_patch(
@@ -1171,6 +1241,8 @@ class IncrementalCfaScanCache final {
     std::map<std::uint32_t, katana::sh4::DisassemblyLine> lines_;
     std::map<std::uint32_t, FunctionCandidate> functions_;
     std::map<std::uint32_t, std::size_t> direct_target_references_;
+    std::map<std::uint32_t, std::set<std::uint32_t>>
+        direct_target_sources_;
     std::map<std::uint32_t, Component> components_;
     std::map<std::uint32_t, DispatchRecognition> recognition_index_;
     std::set<std::uint32_t> last_changed_dispatches_;
@@ -3678,6 +3750,18 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         std::unique(non_root_function_entry_hints.begin(),
                     non_root_function_entry_hints.end()),
         non_root_function_entry_hints.end());
+    std::vector<std::uint32_t> external_entry_boundaries =
+        non_root_function_entry_hints;
+    external_entry_boundaries.reserve(
+        external_entry_boundaries.size() + exact_function_ownership.size());
+    for (const auto& interval : exact_function_ownership)
+        external_entry_boundaries.push_back(interval.begin);
+    std::sort(external_entry_boundaries.begin(),
+              external_entry_boundaries.end());
+    external_entry_boundaries.erase(
+        std::unique(external_entry_boundaries.begin(),
+                    external_entry_boundaries.end()),
+        external_entry_boundaries.end());
 
     const bool root_only_session_reuse = session_state.prepare(
         image, overrides, options, seeds);
@@ -4649,7 +4733,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                 entry, std::move(delta));
         }
         cfa_scan_cache.apply(recursive_snapshot, image,
-                             jump_table_cache, analysis);
+                             jump_table_cache,
+                             external_entry_boundaries,
+                             analysis);
         for (const auto key : cfa_scan_cache.changed_runtime_copies()) {
             ++analysis.runtime_copy_result_entries_visited;
             if (const auto* copy = cfa_scan_cache.runtime_copy(key))
@@ -5131,6 +5217,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     relative_producer->encoding == jump_table.encoding &&
                     relative_producer->bounded_entry_count ==
                         jump_table.requested_entries &&
+                    relative_producer->global_ingress_proven &&
                     !relative_producer->instruction_addresses.empty();
                 if (relative_producer_identity_bound) {
                     for (const auto address :

@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 14u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 15u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 
 struct NativePortExtent final {
@@ -448,6 +448,24 @@ struct NativePortDrawDiagnostics final {
     bool primitive_index_bound = false;
 };
 
+// Last fail-closed draw-contract violation observed by the renderer. This is
+// deliberately a compact numeric witness rather than a drawstream: callers
+// can attach it to crash/repro summaries even when validation stops the draw
+// before texture resolution and normal graphics diagnostics begin.
+struct NativePortGraphicsContractFailureWitness final {
+    std::uint64_t frame = 0u;
+    std::uint64_t draw_sequence = 0u;
+    std::uint64_t batch_identity = 0u;
+    NativePortDrawDiagnostics diagnostics;
+    std::uint32_t submission_order = 0u;
+    NativePortGraphicsFailure failure =
+        NativePortGraphicsFailure::InvalidDraw;
+    NativePortDrawBatchClass batch_semantic =
+        NativePortDrawBatchClass::Scene3D;
+    NativePortDrawClass draw_class = NativePortDrawClass::Opaque;
+    bool valid = false;
+};
+
 enum class NativePortInterpolationMode : std::uint8_t {
     // Ordinary GPU perspective-correct interpolation for homogeneous object
     // or clip geometry.
@@ -791,6 +809,8 @@ struct NativePortGraphicsSnapshot final {
     std::uint64_t diagnostic_digest = 0u;
     std::uint64_t diagnostic_draws = 0u;
     std::uint64_t diagnostic_drops = 0u;
+    std::uint64_t contract_failures = 0u;
+    NativePortGraphicsContractFailureWitness last_contract_failure;
     std::uint32_t live_textures = 0u;
     std::uint32_t live_meshes = 0u;
     std::uint32_t platform_error_code = 0u;

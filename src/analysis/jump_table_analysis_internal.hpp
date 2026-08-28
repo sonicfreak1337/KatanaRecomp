@@ -33,12 +33,32 @@ struct SnapshotAbsoluteJumpTableProducerEvidence {
 // Keeping it internal avoids adding transient provenance to persisted
 // analyzer result layouts.
 struct RelativeJumpTableProducerEvidence {
+    struct InternalBranchEdge final {
+        std::uint32_t source = 0u;
+        std::uint32_t target = 0u;
+
+        [[nodiscard]] friend bool operator==(
+            const InternalBranchEdge&,
+            const InternalBranchEdge&) noexcept = default;
+    };
+
     std::uint32_t dispatch_address = 0u;
     std::uint32_t table_address = 0u;
     JumpTableDispatchKind dispatch_kind = JumpTableDispatchKind::Jump;
     JumpTableEncoding encoding = JumpTableEncoding::SignedRelative16;
     std::size_t bounded_entry_count = 0u;
     std::vector<std::uint32_t> instruction_addresses;
+    // A finite-value proof starts at one concrete register seed and may
+    // traverse bounded forward BT/BF edges before the indexed table load.
+    // Local bytes alone cannot exclude a distant branch, function root or
+    // resume entry into that suffix. The CFA/cache owner must therefore prove
+    // the complete global ingress contract before this producer may promote a
+    // declaration to GuardedComplete.
+    bool requires_global_ingress_proof = false;
+    bool global_ingress_proven = true;
+    std::uint32_t ingress_seed_address = 0u;
+    std::uint32_t ingress_load_address = 0u;
+    std::vector<InternalBranchEdge> internal_branch_edges;
 };
 
 [[nodiscard]] std::optional<RelativeJumpTableProducerEvidence>
