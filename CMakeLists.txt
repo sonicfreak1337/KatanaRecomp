@@ -37,6 +37,34 @@ set(KATANA_SOURCE_IDENTITY_TRUSTED 0)
 find_package(Git QUIET)
 if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}"
+                rev-parse --show-toplevel
+        RESULT_VARIABLE KATANA_GIT_TOPLEVEL_RESULT
+        OUTPUT_VARIABLE KATANA_GIT_TOPLEVEL
+        ERROR_VARIABLE KATANA_GIT_TOPLEVEL_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT KATANA_GIT_TOPLEVEL_RESULT EQUAL 0)
+        message(
+            FATAL_ERROR
+            "Cannot determine the Katana Git root: ${KATANA_GIT_TOPLEVEL_ERROR}"
+        )
+    endif()
+    file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" KATANA_SOURCE_ROOT_REAL)
+    file(REAL_PATH "${KATANA_GIT_TOPLEVEL}" KATANA_GIT_TOPLEVEL_REAL)
+    if(WIN32)
+        string(TOLOWER "${KATANA_SOURCE_ROOT_REAL}" KATANA_SOURCE_ROOT_REAL)
+        string(TOLOWER "${KATANA_GIT_TOPLEVEL_REAL}" KATANA_GIT_TOPLEVEL_REAL)
+    endif()
+    if(NOT "${KATANA_GIT_TOPLEVEL_REAL}" STREQUAL "${KATANA_SOURCE_ROOT_REAL}")
+        message(
+            FATAL_ERROR
+            "Katana source identity resolved an unexpected Git root: "
+            "${KATANA_GIT_TOPLEVEL}"
+        )
+    endif()
+
+    execute_process(
         COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
         RESULT_VARIABLE KATANA_GIT_COMMIT_RESULT
         OUTPUT_VARIABLE KATANA_GIT_HEAD
@@ -74,6 +102,98 @@ if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
             "Cannot inspect the Katana worktree: ${KATANA_GIT_STATUS_ERROR}"
         )
     endif()
+
+    # Git state is not a normal CMake input. Without explicit dependencies a
+    # build tree configured while the worktree was dirty keeps embedding the
+    # untrusted sentinel after that work is committed, because the commit does
+    # not necessarily change any source timestamp. Bind the exact checkout's
+    # worktree metadata so the native build graph reconfigures before compiling
+    # against a newly clean HEAD. The per-worktree HEAD/index paths also keep
+    # linked worktrees isolated from the ambient repository.
+    set(KATANA_GIT_CONFIGURE_INPUTS)
+    foreach(KATANA_GIT_METADATA_NAME IN ITEMS HEAD index packed-refs)
+        execute_process(
+            COMMAND
+                "${GIT_EXECUTABLE}"
+                -C "${CMAKE_CURRENT_SOURCE_DIR}"
+                rev-parse --git-path "${KATANA_GIT_METADATA_NAME}"
+            RESULT_VARIABLE KATANA_GIT_METADATA_RESULT
+            OUTPUT_VARIABLE KATANA_GIT_METADATA_PATH
+            ERROR_VARIABLE KATANA_GIT_METADATA_ERROR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT KATANA_GIT_METADATA_RESULT EQUAL 0 OR
+           "${KATANA_GIT_METADATA_PATH}" STREQUAL "")
+            message(
+                FATAL_ERROR
+                "Cannot resolve Katana Git metadata ${KATANA_GIT_METADATA_NAME}: "
+                "${KATANA_GIT_METADATA_ERROR}"
+            )
+        endif()
+        if(NOT IS_ABSOLUTE "${KATANA_GIT_METADATA_PATH}")
+            get_filename_component(
+                KATANA_GIT_METADATA_PATH
+                "${KATANA_GIT_METADATA_PATH}"
+                ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+            )
+        endif()
+        if(EXISTS "${KATANA_GIT_METADATA_PATH}")
+            list(APPEND KATANA_GIT_CONFIGURE_INPUTS "${KATANA_GIT_METADATA_PATH}")
+        endif()
+    endforeach()
+    execute_process(
+        COMMAND
+            "${GIT_EXECUTABLE}"
+            -C "${CMAKE_CURRENT_SOURCE_DIR}"
+            symbolic-ref --quiet HEAD
+        RESULT_VARIABLE KATANA_GIT_SYMBOLIC_REF_RESULT
+        OUTPUT_VARIABLE KATANA_GIT_SYMBOLIC_REF
+        ERROR_VARIABLE KATANA_GIT_SYMBOLIC_REF_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(KATANA_GIT_SYMBOLIC_REF_RESULT EQUAL 0)
+        execute_process(
+            COMMAND
+                "${GIT_EXECUTABLE}"
+                -C "${CMAKE_CURRENT_SOURCE_DIR}"
+                rev-parse --git-path "${KATANA_GIT_SYMBOLIC_REF}"
+            RESULT_VARIABLE KATANA_GIT_REF_PATH_RESULT
+            OUTPUT_VARIABLE KATANA_GIT_REF_PATH
+            ERROR_VARIABLE KATANA_GIT_REF_PATH_ERROR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT KATANA_GIT_REF_PATH_RESULT EQUAL 0 OR
+           "${KATANA_GIT_REF_PATH}" STREQUAL "")
+            message(
+                FATAL_ERROR
+                "Cannot resolve Katana Git ref ${KATANA_GIT_SYMBOLIC_REF}: "
+                "${KATANA_GIT_REF_PATH_ERROR}"
+            )
+        endif()
+        if(NOT IS_ABSOLUTE "${KATANA_GIT_REF_PATH}")
+            get_filename_component(
+                KATANA_GIT_REF_PATH
+                "${KATANA_GIT_REF_PATH}"
+                ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+            )
+        endif()
+        if(EXISTS "${KATANA_GIT_REF_PATH}")
+            list(APPEND KATANA_GIT_CONFIGURE_INPUTS "${KATANA_GIT_REF_PATH}")
+        endif()
+    elseif(NOT KATANA_GIT_SYMBOLIC_REF_RESULT EQUAL 1)
+        message(
+            FATAL_ERROR
+            "Cannot inspect the Katana Git HEAD ref: ${KATANA_GIT_SYMBOLIC_REF_ERROR}"
+        )
+    endif()
+    list(REMOVE_DUPLICATES KATANA_GIT_CONFIGURE_INPUTS)
+    set_property(
+        DIRECTORY APPEND PROPERTY
+        CMAKE_CONFIGURE_DEPENDS ${KATANA_GIT_CONFIGURE_INPUTS}
+    )
+
     if(NOT "${KATANA_GIT_COMMIT_ASSERTION}" STREQUAL "" AND
        NOT "${KATANA_GIT_STATUS}" STREQUAL "")
         message(
@@ -3458,21 +3578,33 @@ add_test(
         -P
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_runtime_buildtree_profile.cmake
 )
-add_test(
-    NAME katana-build-contract-configuration-tests
-    COMMAND ${CMAKE_COMMAND}
-        -DKATANA_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
-        -P
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_build_contract_configuration.cmake
-)
+if(Git_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    add_test(
+        NAME katana-build-contract-configuration-tests
+        COMMAND ${CMAKE_COMMAND}
+            -DKATANA_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DKATANA_GIT_EXECUTABLE=${GIT_EXECUTABLE}
+            -DKATANA_TEST_GENERATOR=${CMAKE_GENERATOR}
+            -DKATANA_TEST_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
+            -DKATANA_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+            -DKATANA_TEST_LINKER=${CMAKE_LINKER}
+            -DKATANA_TEST_RC_COMPILER=${CMAKE_RC_COMPILER}
+            -DKATANA_TEST_MT=${CMAKE_MT}
+            -DKATANA_TEST_FFMPEG_ROOT=${KATANA_FFMPEG_ROOT}
+            -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/codegen/verify_build_contract_configuration.cmake
+    )
+endif()
 set_tests_properties(
     katana-runtime-buildtree-profile-tests
     PROPERTIES TIMEOUT 90 RESOURCE_LOCK katana-external-port-build
 )
-set_tests_properties(
-    katana-build-contract-configuration-tests
-    PROPERTIES TIMEOUT 180
-)
+if(TEST katana-build-contract-configuration-tests)
+    set_tests_properties(
+        katana-build-contract-configuration-tests
+        PROPERTIES TIMEOUT 180
+    )
+endif()
 add_test(
     NAME katana-counted-loop-differential-tests
     COMMAND ${CMAKE_COMMAND}
