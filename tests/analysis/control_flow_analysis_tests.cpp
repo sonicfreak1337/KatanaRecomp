@@ -3486,6 +3486,47 @@ int main() {
             "Ein externer Function-Root hinter dem endlichen Index-Seed "
             "umging den globalen Ingressvertrag.");
 
+    auto resume_entry_braf_override = identity_bound_braf_override;
+    resume_entry_braf_override.external_entry_hints.push_back({0x0Au, 0u});
+    const auto resume_entry_braf =
+        katana::analysis::analyze_control_flow(
+            identity_bound_braf_image, &resume_entry_braf_override);
+    const auto resume_entry_table = std::find_if(
+        resume_entry_braf.jump_tables.begin(),
+        resume_entry_braf.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(resume_entry_table != resume_entry_braf.jump_tables.end() &&
+                resume_entry_table->evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride &&
+                std::none_of(
+                    resume_entry_braf.recursive.functions.begin(),
+                    resume_entry_braf.recursive.functions.end(),
+                    [](const auto& function) {
+                        return function.address == 0x0Au;
+                    }),
+            "Ein nicht-rootender AOT-Resume-Entry hinter dem endlichen "
+            "Index-Seed umging den globalen Ingressvertrag oder erzeugte "
+            "selbst Reichweite.");
+
+    auto architectural_resume_braf_image = identity_bound_braf_image;
+    architectural_resume_braf_image.write_u32_le(
+        0x0Cu, 0xC703FBFDu); // frchg; mova 0x1C,r0
+    const auto architectural_resume_braf =
+        katana::analysis::analyze_control_flow(
+            architectural_resume_braf_image,
+            &identity_bound_braf_override);
+    const auto architectural_resume_table = std::find_if(
+        architectural_resume_braf.jump_tables.begin(),
+        architectural_resume_braf.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(
+        architectural_resume_table !=
+                architectural_resume_braf.jump_tables.end() &&
+            architectural_resume_table->evidence ==
+                katana::analysis::ControlFlowEvidence::ForcedOverride,
+        "Eine architektonische Safepoint-Fortsetzung hinter dem endlichen "
+        "Index-Seed wurde als geschlossener Producer zugelassen.");
+
     auto distant_ingress_braf_image = identity_bound_braf_image;
     distant_ingress_braf_image.add_segment(
         {".distant-ingress",

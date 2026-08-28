@@ -128,6 +128,19 @@ int main() {
         auto artifact = make_artifact(image);
         const auto key = katana::codegen::make_boot_analysis_cache_key(
             image, nullptr, "test-contract", std::string(64u, 'a'));
+        katana::analysis::AnalysisOverrides external_entry_overrides;
+        external_entry_overrides.external_entry_hints.push_back(
+            {image_base + 2u, 0u});
+        const auto external_entry_key =
+            katana::codegen::make_boot_analysis_cache_key(
+                image,
+                &external_entry_overrides,
+                "test-contract",
+                std::string(64u, 'a'));
+        require(
+            external_entry_key != key,
+            "Ein nicht-rootender externer Entry fehlte in der "
+            "Bootcache-Quellbindung.");
 
         artifact.analysis.guarded_code_inventory_walk
             .forwarded_store_evaluation_cache_hits = 7u;

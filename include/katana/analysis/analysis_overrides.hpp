@@ -37,6 +37,16 @@ struct FunctionEntryHintOverride {
     std::size_t line = 0u;
 };
 
+// A non-root external control-flow entry boundary.  Unlike a function-entry
+// hint this supplies no normal invocation context and can never authenticate
+// a callback or guarded AOT entry.  It only prevents a local dominance or
+// closed-ingress proof from spanning an independently dispatchable resume,
+// hook or architectural continuation.
+struct ExternalEntryHintOverride {
+    std::uint32_t address = 0u;
+    std::size_t line = 0u;
+};
+
 struct JumpOverride {
     std::uint32_t instruction_address = 0u;
     std::uint32_t target = 0u;
@@ -84,6 +94,7 @@ struct AnalysisOverrides {
     std::vector<FunctionOverride> functions;
     std::vector<FunctionBoundaryOverride> function_boundaries;
     std::vector<FunctionEntryHintOverride> function_entry_hints;
+    std::vector<ExternalEntryHintOverride> external_entry_hints;
     std::vector<JumpOverride> jumps;
     std::vector<JumpTableOverride> jump_tables;
 };

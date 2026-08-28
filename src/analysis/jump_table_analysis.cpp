@@ -78,6 +78,22 @@ bool contiguous(const katana::sh4::DisassemblyLine& left,
            left.address + 2u == right.address;
 }
 
+bool creates_architectural_resume_entry(
+    const katana::sh4::DisassemblyLine& line) noexcept {
+    using Kind = katana::sh4::InstructionKind;
+    using Register = katana::sh4::SpecialRegister;
+
+    if (line.is_delay_slot) return false;
+    if ((line.instruction.kind == Kind::LoadSpecialRegister ||
+         line.instruction.kind == Kind::LoadSpecialRegisterPostIncrement) &&
+        (line.instruction.special_register == Register::Sr ||
+         line.instruction.special_register == Register::Fpscr))
+        return true;
+    return line.instruction.kind == Kind::LoadTlb ||
+           line.instruction.kind == Kind::Frchg ||
+           line.instruction.kind == Kind::Fschg;
+}
+
 void append_dispatch_delay_slot_evidence(
     const std::span<const katana::sh4::DisassemblyLine> lines,
     const std::size_t dispatch_index,
@@ -649,6 +665,14 @@ std::optional<BoundedRelativeIndexProof> bounded_finite_index_values(
             }
             const auto& line = lines[index];
             if (line.is_delay_slot) {
+                rejected = true;
+                break;
+            }
+            // These instructions force an independently dispatchable block
+            // entry at the following word. A locally finite value suffix may
+            // not span that architectural resume boundary because execution
+            // can re-enter without passing through the finite seed.
+            if (creates_architectural_resume_entry(line)) {
                 rejected = true;
                 break;
             }

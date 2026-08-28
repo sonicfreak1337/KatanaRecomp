@@ -3221,6 +3221,8 @@ void merge_retained_seed_evidence(
             right->function_boundaries.size() ||
         left->function_entry_hints.size() !=
             right->function_entry_hints.size() ||
+        left->external_entry_hints.size() !=
+            right->external_entry_hints.size() ||
         left->jumps.size() != right->jumps.size() ||
         left->jump_tables.size() != right->jump_tables.size())
         return false;
@@ -3249,6 +3251,15 @@ void merge_retained_seed_evidence(
             return std::tie(a.address, a.line) ==
                    std::tie(b.address, b.line);
         });
+    const auto same_external_entry_hints = std::equal(
+        left->external_entry_hints.begin(),
+        left->external_entry_hints.end(),
+        right->external_entry_hints.begin(),
+        right->external_entry_hints.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.address, a.line) ==
+                   std::tie(b.address, b.line);
+        });
     const auto same_jumps = std::equal(
         left->jumps.begin(), left->jumps.end(),
         right->jumps.begin(), right->jumps.end(),
@@ -3272,7 +3283,7 @@ void merge_retained_seed_evidence(
                             b.identity_bound_complete);
         });
     return same_functions && same_boundaries && same_entry_hints &&
-           same_jumps && same_tables;
+           same_external_entry_hints && same_jumps && same_tables;
 }
 
 [[nodiscard]] bool control_flow_session_binding_is_bounded(
@@ -3297,6 +3308,7 @@ void merge_retained_seed_evidence(
             overrides->functions.size(),
             overrides->function_boundaries.size(),
             overrides->function_entry_hints.size(),
+            overrides->external_entry_hints.size(),
             overrides->jumps.size(),
             overrides->jump_tables.size()};
         for (const auto count : counts) {
@@ -3608,6 +3620,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
     std::vector<ExactFunctionOwnershipInterval>
         exact_function_ownership;
     std::vector<std::uint32_t> non_root_function_entry_hints;
+    std::vector<std::uint32_t> non_root_external_entry_hints;
     const auto add_exact_function_ownership =
         [&](const std::uint32_t begin,
             const std::uint32_t size) {
@@ -3658,6 +3671,17 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                entry_hint.address,
                                code_address_status_name(validation.status));
             non_root_function_entry_hints.push_back(
+                validation.resolved_address);
+        }
+        for (const auto& entry_hint : overrides->external_entry_hints) {
+            const auto validation = validate_committed_code_address(
+                image, entry_hint.address, 2u);
+            if (!validation.valid())
+                override_error(*overrides,
+                               entry_hint.line,
+                               entry_hint.address,
+                               code_address_status_name(validation.status));
+            non_root_external_entry_hints.push_back(
                 validation.resolved_address);
         }
         for (const auto& function : overrides->functions) {
@@ -3746,6 +3770,10 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         non_root_function_entry_hints.end());
     std::vector<std::uint32_t> external_entry_boundaries =
         non_root_function_entry_hints;
+    external_entry_boundaries.insert(
+        external_entry_boundaries.end(),
+        non_root_external_entry_hints.begin(),
+        non_root_external_entry_hints.end());
     external_entry_boundaries.reserve(
         external_entry_boundaries.size() + exact_function_ownership.size());
     for (const auto& interval : exact_function_ownership)

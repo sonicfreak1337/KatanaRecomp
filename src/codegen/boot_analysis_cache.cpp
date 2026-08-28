@@ -1361,6 +1361,12 @@ std::string make_boot_analysis_cache_key(
             append_key_value(canonical, entry_hint.address);
             append_key_value(canonical, entry_hint.line);
         }
+        append_key_value(
+            canonical, overrides->external_entry_hints.size());
+        for (const auto& entry_hint : overrides->external_entry_hints) {
+            append_key_value(canonical, entry_hint.address);
+            append_key_value(canonical, entry_hint.line);
+        }
         append_key_value(canonical, overrides->jumps.size());
         for (const auto& jump : overrides->jumps) {
             append_key_value(canonical, jump.instruction_address);
@@ -1721,6 +1727,8 @@ bool validate_boot_analysis_cache_source_binding(
             for (const auto& boundary : overrides->function_boundaries)
                 global_entry_boundaries.insert(boundary.address);
             for (const auto& hint : overrides->function_entry_hints)
+                global_entry_boundaries.insert(hint.address);
+            for (const auto& hint : overrides->external_entry_hints)
                 global_entry_boundaries.insert(hint.address);
         }
         const auto relative_table_global_ingress_closed =

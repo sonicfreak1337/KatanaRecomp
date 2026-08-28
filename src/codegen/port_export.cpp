@@ -766,6 +766,18 @@ std::string persistent_boot_epoch_cache_key(
             append_persistent_epoch_key_value(material, boundary.size);
         }
         append_persistent_epoch_key_value(
+            material, overrides->function_entry_hints.size());
+        for (const auto& hint : overrides->function_entry_hints) {
+            append_persistent_epoch_key_value(material, hint.address);
+            append_persistent_epoch_key_value(material, hint.line);
+        }
+        append_persistent_epoch_key_value(
+            material, overrides->external_entry_hints.size());
+        for (const auto& hint : overrides->external_entry_hints) {
+            append_persistent_epoch_key_value(material, hint.address);
+            append_persistent_epoch_key_value(material, hint.line);
+        }
+        append_persistent_epoch_key_value(
             material, overrides->jumps.size());
         for (const auto& jump : overrides->jumps) {
             append_persistent_epoch_key_value(
@@ -2753,7 +2765,8 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
 std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
     const katana::runtime::GameProjectDefinition* const game_project,
     const katana::runtime::NativePortDefinition* const native_port,
-    const katana::io::ExecutableImage& image) {
+    const katana::io::ExecutableImage& image,
+    const std::span<const std::uint32_t> native_aot_resume_entries) {
     std::optional<katana::analysis::AnalysisOverrides> overrides;
     if (game_project != nullptr)
         overrides = game_project_analysis_overrides(
@@ -2761,7 +2774,8 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
             image,
             native_port == nullptr,
             native_port);
-    if (native_port == nullptr) return overrides;
+    if (native_port == nullptr && native_aot_resume_entries.empty())
+        return overrides;
 
     if (!overrides.has_value()) {
         overrides.emplace();
@@ -2769,6 +2783,27 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
             katana::analysis::AnalysisDirectiveMode::Override;
     }
     overrides->source_path = "external-port-contract";
+    for (const auto resume : native_aot_resume_entries)
+        overrides->external_entry_hints.push_back({resume, 0u});
+    const auto normalize_external_entry_hints = [&] {
+        std::sort(overrides->external_entry_hints.begin(),
+                  overrides->external_entry_hints.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.address < right.address;
+                  });
+        overrides->external_entry_hints.erase(
+            std::unique(
+                overrides->external_entry_hints.begin(),
+                overrides->external_entry_hints.end(),
+                [](const auto& left, const auto& right) {
+                    return left.address == right.address;
+                }),
+            overrides->external_entry_hints.end());
+    };
+    if (native_port == nullptr) {
+        normalize_external_entry_hints();
+        return overrides;
+    }
     // ExecutableImage::entry_points is the authoritative root lane. Do not
     // duplicate that monotone set in AnalysisOverrides::functions: every
     // cross-image root extension would otherwise look like a semantic
@@ -2779,6 +2814,8 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
 
     for (const auto& continuation :
          native_port->bootstrap.post_aot_continuations) {
+        overrides->external_entry_hints.push_back(
+            {continuation.resume_address, 0u});
         if (game_project == nullptr)
             throw std::invalid_argument(
                 "Post-Bootstrap-AOT-Continuation benoetigt eine exakte "
@@ -2804,6 +2841,15 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
             {continuation.resume_address, 0u, 0u});
     }
 
+    for (const auto& hook : native_port->hooks) {
+        if (katana::runtime::native_port_hook_is_executable(
+                hook.requirement) &&
+            hook.code_source ==
+                katana::runtime::NativePortHookCodeSource::StaticImage)
+            overrides->external_entry_hints.push_back(
+                {hook.guest_address, 0u});
+    }
+
     // Required hooks are consumers of the post-bootstrap reachable graph,
     // never additional product roots. A hook absent from this closure is
     // rejected during native admission instead of silently reviving stale or
@@ -2827,6 +2873,7 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
                 return left.address == right.address;
             }),
         overrides->functions.end());
+    normalize_external_entry_hints();
     return overrides;
 }
 
@@ -32534,7 +32581,10 @@ native_disc_analysis_resume_manifest_identity(
     for (const auto root : external_primary_roots)
         image.add_entry_point(root);
     const auto overrides = port_analysis_overrides(
-        options.game_project, options.native_port_definition, image);
+        options.game_project,
+        options.native_port_definition,
+        image,
+        options.native_aot_resume_entries);
     const auto project_identity =
         katana::platform::dreamcast_disc_project_identity(disc);
     const auto boot_sha256 = executable_image_range_sha256(
@@ -37282,7 +37332,8 @@ try_reuse_native_disc_analysis_artifact(
         const auto current_overrides = port_analysis_overrides(
             analysis_game_project,
             options.native_port_definition,
-            image);
+            image,
+            options.native_aot_resume_entries);
         const auto image_key = make_boot_analysis_cache_key(
             image,
             current_overrides ? &*current_overrides : nullptr,
@@ -37374,7 +37425,8 @@ try_reuse_native_disc_analysis_artifact(
             const auto product_overrides = port_analysis_overrides(
                 options.game_project,
                 options.native_port_definition,
-                result.image);
+                result.image,
+                options.native_aot_resume_entries);
             result.analysis_artifact_identity.image_analysis_key =
                 make_boot_analysis_cache_key(
                     result.image,
@@ -39734,7 +39786,8 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     external_port_overrides = port_analysis_overrides(
         analysis_options.game_project,
         options.native_port_definition,
-        image);
+        image,
+        options.native_aot_resume_entries);
 
     const auto project_identity =
         katana::platform::dreamcast_disc_project_identity(disc);
@@ -40101,7 +40154,10 @@ NativeDiscAnalysisResult analyze_native_disc_port(
                 "Cross-Image-Callback-Analyse erreicht keinen Fixpunkt.");
 
         external_port_overrides = port_analysis_overrides(
-            options.game_project, options.native_port_definition, image);
+            options.game_project,
+            options.native_port_definition,
+            image,
+            options.native_aot_resume_entries);
         // The previous run's large CFA/FVA state is no longer needed once its
         // delta roots have been extracted. Release it before allocating the
         // next run instead of overlapping two near-peak analyses.
@@ -40686,7 +40742,10 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
             options.native_port_definition);
     }
     external_port_overrides = port_analysis_overrides(
-        options.game_project, options.native_port_definition, image);
+        options.game_project,
+        options.native_port_definition,
+        image,
+        options.native_aot_resume_entries);
     if (analysis_mode == PortAnalysisMode::ConservativeRuntimeOnly) {
         report_progress(
             options,
