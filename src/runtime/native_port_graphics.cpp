@@ -1485,6 +1485,7 @@ class NativePortGraphicsDevice::Impl final {
 
     void draw(const NativePortDrawPacket& packet) {
         require_owner_thread();
+        try {
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-outside-frame");
         auto* const mesh_slot = packet.mesh != NativePortMeshHandle{}
@@ -1844,6 +1845,15 @@ class NativePortGraphicsDevice::Impl final {
         saturating_increment(snapshot_.draw_calls);
         if (mesh_slot != nullptr)
             saturating_increment(snapshot_.persistent_mesh_draw_calls);
+        } catch (const NativePortGraphicsError& error) {
+            // Draw validation is a single public contract boundary. Preserve
+            // the exact packet identity for every typed failure, including
+            // failures raised before texture resolution or diagnostic capture.
+            // Thread ownership is checked above so this bounded snapshot is
+            // never mutated from a foreign thread.
+            record_graphics_contract_failure(packet, error.failure());
+            throw;
+        }
     }
 
     void present() {
@@ -2856,9 +2866,6 @@ class NativePortGraphicsDevice::Impl final {
         if (packet.texture_stage ==
                 NativePortTextureStage::RequiredResolved &&
             !packet.texture) {
-            record_graphics_contract_failure(
-                packet,
-                NativePortGraphicsFailure::MissingRequiredTexture);
             fail(NativePortGraphicsFailure::MissingRequiredTexture,
                  0u,
                  "draw-texture-required");

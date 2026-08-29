@@ -44,6 +44,9 @@ constexpr std::size_t maximum_stack_values = 256u;
 constexpr std::size_t maximum_callback_field_origins = 256u;
 constexpr std::size_t maximum_persistent_store_observations = 4096u;
 constexpr std::size_t minimum_static_code_pointer_vector_entries = 4u;
+constexpr std::size_t minimum_repeated_short_code_pointer_vector_entries = 2u;
+constexpr std::size_t maximum_repeated_short_code_pointer_vector_keys =
+    maximum_inventory_candidates * 4u;
 constexpr std::size_t maximum_static_code_pointer_table_entries = 256u;
 constexpr std::uint32_t maximum_static_code_pointer_table_stride = 256u;
 
@@ -720,10 +723,12 @@ discover_structural_callback_field_sinks(
                                              const std::uint32_t constant,
                                              GuardedNativeEntryShapeCache&
                                                  native_entry_shapes) {
+    const auto canonical = native_entry_shapes.canonical_address(constant);
+    if (!canonical.has_value()) return false;
     if (value.code_constants_truncated ||
-        value.code_constants.contains(constant))
+        value.code_constants.contains(*canonical))
         return false;
-    const auto status = native_entry_shapes.classify(constant);
+    const auto status = native_entry_shapes.classify(*canonical);
     if (status == GuardedNativeEntryShapeStatus::ShapeBudgetExceeded) {
         value.code_constants.clear();
         value.code_constants_truncated = true;
@@ -735,7 +740,7 @@ discover_structural_callback_field_sinks(
         value.code_constants_truncated = true;
         return true;
     }
-    value.code_constants.insert(constant);
+    value.code_constants.insert(*canonical);
     return true;
 }
 
@@ -1778,12 +1783,85 @@ struct StaticCodePointerVectorInventory final {
     bool truncated = false;
 };
 
+struct StaticCodePointerVectorEntry final {
+    std::uint32_t target = 0u;
+    std::uint32_t slot = 0u;
+};
+
+struct ShortCodePointerVectorOccurrence final {
+    std::array<StaticCodePointerVectorEntry,
+               minimum_repeated_short_code_pointer_vector_entries>
+        entries{};
+};
+
+struct RepeatedShortCodePointerVectorEvidence final {
+    std::optional<ShortCodePointerVectorOccurrence> first;
+    std::optional<ShortCodePointerVectorOccurrence> second;
+};
+
+using RepeatedShortCodePointerVectorMap =
+    std::map<std::tuple<std::size_t, std::uint32_t, std::uint32_t>,
+             RepeatedShortCodePointerVectorEvidence>;
+
+[[nodiscard]] bool same_static_vector_source_component(
+    const katana::io::ImageSegment& left,
+    const katana::io::ImageSegment& right) noexcept {
+    if (left.source_kind != right.source_kind ||
+        left.load_phase != right.load_phase)
+        return false;
+    if (!left.local_source_name.empty() ||
+        !right.local_source_name.empty())
+        return !left.local_source_name.empty() &&
+               left.local_source_name == right.local_source_name;
+    // Without an explicit source identity, fail closed at exact-segment
+    // scope. This still admits an independently rooted single-segment raw
+    // image, but cannot merge unrelated anonymous modules merely because
+    // their load phases happen to match.
+    return &left == &right;
+}
+
+[[nodiscard]] std::optional<StaticCodePointerVectorEntry>
+static_code_pointer_vector_entry_at(
+    const katana::io::ExecutableImage& image,
+    const katana::io::ImageSegment& segment,
+    const std::span<const katana::io::ImageSegment* const>
+        analyzed_source_components,
+    const std::size_t entry_offset) {
+    const auto slot64 =
+        static_cast<std::uint64_t>(segment.virtual_address) + entry_offset;
+    if (slot64 > std::numeric_limits<std::uint32_t>::max())
+        return std::nullopt;
+    const auto slot = static_cast<std::uint32_t>(slot64);
+    const auto raw = read_image_u32(image, slot);
+    if (!raw.has_value()) return std::nullopt;
+    const auto target = executable_constant(image, *raw);
+    if (!target.has_value()) return std::nullopt;
+    const auto* target_segment =
+        image.find_segment(*target, sizeof(std::uint16_t));
+    if (target_segment == nullptr ||
+        target_segment->load_phase != segment.load_phase)
+        return std::nullopt;
+    const auto active_target_component = std::any_of(
+        analyzed_source_components.begin(), analyzed_source_components.end(),
+        [&](const auto* active) {
+            return active != nullptr &&
+                   same_static_vector_source_component(
+                       *target_segment, *active);
+        });
+    if (!active_target_component) return std::nullopt;
+    return StaticCodePointerVectorEntry{*target, slot};
+}
+
 [[nodiscard]] StaticCodePointerVectorInventory
 discover_static_code_pointer_vectors(
     const katana::io::ExecutableImage& image,
-    const std::span<const std::uint32_t> non_root_function_entry_hints,
+    const std::span<const katana::io::ImageSegment* const>
+        analyzed_source_components,
     GuardedNativeEntryShapeCache& native_entry_shapes) {
     StaticCodePointerVectorInventory inventory;
+    std::vector<const katana::io::ImageSegment*>
+        vector_source_components;
+    RepeatedShortCodePointerVectorMap repeated_short_vectors;
     // Constructors commonly install a static callback descriptor into a
     // mutable object before any consumer can expose the descriptor base to
     // value analysis. That creates a real dependency cycle: the constructor
@@ -1791,76 +1869,194 @@ discover_static_code_pointer_vectors(
     //
     // Four contiguous, aligned and independently decodable function entries
     // in an identity-bound image are a sufficiently strong positive shape to
-    // break that cycle. This remains guarded inventory only. It neither
-    // resolves an indirect transfer nor claims the vector is complete at
-    // runtime. Shorter runs stay excluded because ordinary structures often
-    // contain one or two incidental code pointers.
+    // break that cycle. A two-entry descriptor is admitted only when the
+    // exact ordered pair occurs twice, without overlap, in the same bound
+    // source component and both targets independently satisfy the same native
+    // entry-shape proof. This covers repeated short vtables without turning an
+    // incidental scalar pair into inventory. Both rules remain guarded
+    // inventory only. They neither resolve an indirect transfer nor claim the
+    // vector is complete at runtime.
     for (const auto& segment : image.segments()) {
-        // Runtime modules and overlays own independent address identities and
-        // retirement epochs. Their vectors must be discovered by the bound
-        // latent/module analysis, never imported into the initial-image
-        // closure merely because the current snapshot also contains bytes at
-        // their source address.
-        if (segment.load_phase != katana::io::ImageLoadPhase::Initial ||
-            !segment.permissions.readable || segment.bytes.size() < 16u)
+        // A vector may intentionally live in a carrier component such as the
+        // Dreamcast system bootstrap while naming callbacks in the selected
+        // disc executable. The carrier therefore need not own an analyzed
+        // function. Only the promoted target must belong to an active source
+        // component in this ExecutableImage generation.
+        if (!segment.permissions.readable || segment.bytes.size() < 8u)
             continue;
+        auto component = std::find_if(
+            vector_source_components.begin(),
+            vector_source_components.end(),
+            [&](const auto* representative) {
+                return representative != nullptr &&
+                       same_static_vector_source_component(
+                           segment, *representative);
+            });
+        if (component == vector_source_components.end()) {
+            vector_source_components.push_back(&segment);
+            component = std::prev(vector_source_components.end());
+        }
+        const auto component_index = static_cast<std::size_t>(
+            std::distance(vector_source_components.begin(), component));
         const auto first_offset = static_cast<std::size_t>(
             (4u - (segment.virtual_address & 3u)) & 3u);
         auto offset = first_offset;
         while (offset <= segment.bytes.size() - 4u) {
-            struct Entry final {
-                std::uint32_t target = 0u;
-                std::uint32_t slot = 0u;
+            const auto entry_at = [&](const std::size_t entry_offset) {
+                return static_code_pointer_vector_entry_at(
+                    image, segment, analyzed_source_components, entry_offset);
             };
-            std::vector<Entry> entries;
+            // First identify a raw contiguous code-pointer run without
+            // decoding any target. Ordinary data contains many isolated code
+            // pointers; validating each of those would let unrelated data
+            // consume the global entry-shape budget before a real vector is
+            // reached. Only a run which can satisfy the four-entry contract
+            // pays for independent CFG validation. Do not apply the 256-entry
+            // exhaustive typed-table limit here: this inventory is guarded
+            // positive evidence, and large images legitimately concatenate
+            // multiple callback families. The global candidate and shape-work
+            // budgets below remain the fail-closed bounds.
             auto cursor = offset;
-            for (; cursor <= segment.bytes.size() - 4u; cursor += 4u) {
-                const auto slot64 =
-                    static_cast<std::uint64_t>(segment.virtual_address) +
-                    cursor;
-                if (slot64 > std::numeric_limits<std::uint32_t>::max())
-                    break;
-                const auto slot = static_cast<std::uint32_t>(slot64);
-                const auto raw = read_image_u32(image, slot);
-                if (!raw.has_value()) break;
-                const auto target = executable_constant(image, *raw);
-                if (!target.has_value()) break;
-                const auto* target_segment =
-                    image.find_segment(*target, sizeof(std::uint16_t));
-                if (target_segment == nullptr ||
-                    target_segment->load_phase != segment.load_phase)
-                    break;
-                if (!std::binary_search(
-                        non_root_function_entry_hints.begin(),
-                        non_root_function_entry_hints.end(), *target))
-                    break;
+            for (; cursor <= segment.bytes.size() - 4u &&
+                   entry_at(cursor).has_value();
+                 cursor += 4u) {}
 
-                const auto status = native_entry_shapes.classify(*target);
-                if (status ==
-                    GuardedNativeEntryShapeStatus::ShapeBudgetExceeded) {
-                    inventory.truncated = true;
-                    return inventory;
-                }
-                if (status != GuardedNativeEntryShapeStatus::Valid) break;
-                entries.push_back({*target, slot});
-                if (entries.size() >
-                    maximum_static_code_pointer_table_entries) {
-                    inventory.truncated = true;
-                    return inventory;
+            const auto raw_entry_count = (cursor - offset) / 4u;
+            if (raw_entry_count >=
+                minimum_repeated_short_code_pointer_vector_entries) {
+                for (auto pair_offset = offset;
+                     pair_offset + 8u <= cursor;
+                     pair_offset += 4u) {
+                    const auto first = entry_at(pair_offset);
+                    const auto second = entry_at(pair_offset + 4u);
+                    if (!first.has_value() || !second.has_value()) {
+                        inventory.truncated = true;
+                        return inventory;
+                    }
+                    const auto key = std::tuple{
+                        component_index, first->target, second->target};
+                    const auto [found, inserted] =
+                        repeated_short_vectors.try_emplace(key);
+                    if (inserted && repeated_short_vectors.size() >
+                                        maximum_repeated_short_code_pointer_vector_keys) {
+                        inventory.truncated = true;
+                        return inventory;
+                    }
+                    const ShortCodePointerVectorOccurrence occurrence{
+                        {*first, *second}};
+                    if (!found->second.first.has_value()) {
+                        found->second.first = occurrence;
+                        continue;
+                    }
+                    if (found->second.second.has_value()) continue;
+                    const auto first_start = static_cast<std::uint64_t>(
+                        found->second.first->entries.front().slot);
+                    const auto candidate_start =
+                        static_cast<std::uint64_t>(first->slot);
+                    if (first_start + 8u <= candidate_start ||
+                        candidate_start + 8u <= first_start)
+                        found->second.second = occurrence;
                 }
             }
-
-            if (entries.size() >=
+            if (raw_entry_count >=
                 minimum_static_code_pointer_vector_entries) {
-                for (const auto& entry : entries)
-                    add_candidate(inventory.candidates, image, entry.target,
-                                  entry.slot);
+                std::array<StaticCodePointerVectorEntry,
+                           minimum_static_code_pointer_vector_entries>
+                    pending{};
+                std::size_t pending_count = 0u;
+                bool valid_run_admitted = false;
+                const auto publish =
+                    [&](const StaticCodePointerVectorEntry& entry) {
+                    add_candidate(inventory.candidates, image,
+                                  entry.target, entry.slot);
+                    return inventory.candidates.size() <=
+                           maximum_inventory_candidates;
+                };
+                for (auto entry_offset = offset;
+                     entry_offset < cursor;
+                     entry_offset += 4u) {
+                    const auto entry = entry_at(entry_offset);
+                    if (!entry.has_value()) {
+                        inventory.truncated = true;
+                        return inventory;
+                    }
+                    const auto status =
+                        native_entry_shapes.classify(entry->target);
+                    if (status == GuardedNativeEntryShapeStatus::
+                                      ShapeBudgetExceeded) {
+                        inventory.truncated = true;
+                        return inventory;
+                    }
+                    if (status == GuardedNativeEntryShapeStatus::Valid) {
+                        if (valid_run_admitted) {
+                            if (!publish(*entry)) {
+                                inventory.truncated = true;
+                                return inventory;
+                            }
+                            continue;
+                        }
+                        pending[pending_count++] = *entry;
+                        if (pending_count < pending.size()) continue;
+                        for (const auto& admitted : pending) {
+                            if (!publish(admitted)) {
+                                inventory.truncated = true;
+                                return inventory;
+                            }
+                        }
+                        valid_run_admitted = true;
+                        continue;
+                    }
+                    pending_count = 0u;
+                    valid_run_admitted = false;
+                }
             }
             // cursor names the first rejected word. It cannot begin a valid
             // vector; resume at the following aligned slot. At end-of-segment
             // the overflow-safe assignment simply terminates the outer loop.
             if (cursor > segment.bytes.size() - 4u) break;
             offset = cursor + 4u;
+        }
+    }
+    const auto publish_unique =
+        [&](const StaticCodePointerVectorEntry& entry) {
+        const auto existing = std::find_if(
+            inventory.candidates.begin(), inventory.candidates.end(),
+            [&](const auto& candidate) {
+                return candidate.target_address == entry.target;
+            });
+        if (existing != inventory.candidates.end() &&
+            std::find(existing->store_instruction_addresses.begin(),
+                      existing->store_instruction_addresses.end(),
+                      entry.slot) !=
+                existing->store_instruction_addresses.end())
+            return true;
+        add_candidate(inventory.candidates, image, entry.target, entry.slot);
+        return inventory.candidates.size() <= maximum_inventory_candidates;
+    };
+    for (const auto& [key, evidence] : repeated_short_vectors) {
+        (void)key;
+        if (!evidence.first.has_value() ||
+            !evidence.second.has_value())
+            continue;
+        bool valid = true;
+        for (const auto& entry : evidence.first->entries) {
+            const auto status = native_entry_shapes.classify(entry.target);
+            if (status ==
+                GuardedNativeEntryShapeStatus::ShapeBudgetExceeded) {
+                inventory.truncated = true;
+                return inventory;
+            }
+            valid = valid &&
+                    status == GuardedNativeEntryShapeStatus::Valid;
+        }
+        if (!valid) continue;
+        for (const auto* occurrence :
+             {&*evidence.first, &*evidence.second}) {
+            for (const auto& entry : occurrence->entries) {
+                if (publish_unique(entry)) continue;
+                inventory.truncated = true;
+                return inventory;
+            }
         }
     }
     return inventory;
@@ -3753,8 +3949,25 @@ GuardedCodeInventory analyze_static_callback_inventory(
             source.evidence_callees.begin(),
             source.evidence_callees.end());
     };
+    std::vector<const katana::io::ImageSegment*>
+        analyzed_source_components;
+    analyzed_source_components.reserve(functions.size());
+    for (const auto& function : functions) {
+        const auto* segment = image.find_segment(
+            function.entry_address, sizeof(std::uint16_t));
+        if (segment == nullptr) continue;
+        if (std::none_of(
+                analyzed_source_components.begin(),
+                analyzed_source_components.end(),
+                [&](const auto* active) {
+                    return active != nullptr &&
+                           same_static_vector_source_component(
+                               *segment, *active);
+                }))
+            analyzed_source_components.push_back(segment);
+    }
     const auto static_vectors = discover_static_code_pointer_vectors(
-        image, non_root_function_entry_hints, native_entry_shapes);
+        image, analyzed_source_components, native_entry_shapes);
     for (const auto& candidate : static_vectors.candidates)
         merge_candidate(candidate);
     candidate_values_truncated =
@@ -3887,9 +4100,13 @@ GuardedCodeInventory analyze_static_callback_inventory(
         const auto independently_bound = std::binary_search(
             non_root_function_entry_hints.begin(),
             non_root_function_entry_hints.end(), candidate->first);
-        if (!independently_bound &&
-            native_entry_shapes.classify(candidate->first) !=
-                GuardedNativeEntryShapeStatus::Valid) {
+        const auto shape = independently_bound
+                               ? native_entry_shapes
+                                     .classify_independent_normal_entry(
+                                         candidate->first)
+                               : native_entry_shapes.classify(
+                                     candidate->first);
+        if (shape != GuardedNativeEntryShapeStatus::Valid) {
             candidate = candidates.erase(candidate);
             continue;
         }

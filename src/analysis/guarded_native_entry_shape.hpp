@@ -72,12 +72,14 @@ class GuardedNativeEntryShapeCache {
         bound_image_revision_ = revision;
         bound_image_immutable_generation_ = immutable_generation;
         results_.clear();
+        independent_normal_entry_results_.clear();
         statistics_ = {};
         statistics_.work_budget = maximum_total_instructions;
     }
 
     void clear() noexcept {
         results_.clear();
+        independent_normal_entry_results_.clear();
         statistics_ = {};
         statistics_.work_budget = maximum_total_instructions;
     }
@@ -120,6 +122,53 @@ class GuardedNativeEntryShapeCache {
         return result;
     }
 
+    // Candidate values can arrive through any SH-4 direct-mapped alias.  The
+    // shape cache already validates and memoizes the physical image identity;
+    // expose that same canonicalization so every positive-inventory consumer
+    // stores one address rather than retaining P1/P2 spellings as distinct
+    // entries.  This is deliberately only an address lookup: callers must
+    // still invoke classify() (or the stronger independent-entry variant)
+    // before treating the result as executable inventory.
+    [[nodiscard]] std::optional<std::uint32_t>
+    canonical_address(const std::uint32_t address) {
+        bind(*image_);
+        const auto validation = validate_decode_candidate(*image_, address);
+        if (!validation.valid()) return std::nullopt;
+        return validation.resolved_address;
+    }
+
+    // A physical SH-4 delay-slot word may also be an independently callable
+    // normal entry, but only when a separate identity-bound entry contract
+    // proves that second context. The ordinary classifier deliberately
+    // rejects the slot before consulting its cache. This entrypoint skips
+    // only that contextual rejection; it still performs the complete bounded
+    // decode/CFG shape validation, including unknown-instruction, control-flow
+    // and work-budget checks. Keep its root result separate so a successful
+    // dual-context proof can never make an unqualified slot admissible.
+    [[nodiscard]] GuardedNativeEntryShapeStatus
+    classify_independent_normal_entry(const std::uint32_t address) {
+        bind(*image_);
+        const auto validation = validate_decode_candidate(*image_, address);
+        if (!validation.valid())
+            return remember_independent(
+                address, GuardedNativeEntryShapeStatus::OutsideImage);
+        const auto canonical_address = validation.resolved_address;
+        if (const auto cached = independent_normal_entry_results_.find(address);
+            cached != independent_normal_entry_results_.end())
+            return cached->second;
+        if (const auto cached =
+                independent_normal_entry_results_.find(canonical_address);
+            cached != independent_normal_entry_results_.end()) {
+            independent_normal_entry_results_.insert_or_assign(
+                address, cached->second);
+            return cached->second;
+        }
+        const auto result = validate(canonical_address);
+        static_cast<void>(remember_independent(canonical_address, result));
+        independent_normal_entry_results_.insert_or_assign(address, result);
+        return result;
+    }
+
     [[nodiscard]] bool
     is_physical_delay_slot(const std::uint32_t address) {
         bind(*image_);
@@ -153,6 +202,29 @@ class GuardedNativeEntryShapeCache {
     remember(const std::uint32_t address,
              const GuardedNativeEntryShapeStatus status) {
         const auto [iterator, inserted] = results_.try_emplace(address, status);
+        if (!inserted) return iterator->second;
+        switch (status) {
+        case GuardedNativeEntryShapeStatus::Valid:
+            ++statistics_.valid;
+            break;
+        case GuardedNativeEntryShapeStatus::StructurallyInvalid:
+            ++statistics_.structurally_invalid;
+            break;
+        case GuardedNativeEntryShapeStatus::OutsideImage:
+            ++statistics_.outside_image;
+            break;
+        case GuardedNativeEntryShapeStatus::ShapeBudgetExceeded:
+            ++statistics_.shape_budget_exceeded;
+            break;
+        }
+        return status;
+    }
+
+    [[nodiscard]] GuardedNativeEntryShapeStatus
+    remember_independent(const std::uint32_t address,
+                         const GuardedNativeEntryShapeStatus status) {
+        const auto [iterator, inserted] =
+            independent_normal_entry_results_.try_emplace(address, status);
         if (!inserted) return iterator->second;
         switch (status) {
         case GuardedNativeEntryShapeStatus::Valid:
@@ -291,6 +363,8 @@ class GuardedNativeEntryShapeCache {
     std::uint64_t bound_image_revision_ = 0u;
     std::uint64_t bound_image_immutable_generation_ = 0u;
     std::unordered_map<std::uint32_t, GuardedNativeEntryShapeStatus> results_;
+    std::unordered_map<std::uint32_t, GuardedNativeEntryShapeStatus>
+        independent_normal_entry_results_;
     GuardedNativeEntryShapeStatistics statistics_;
 };
 

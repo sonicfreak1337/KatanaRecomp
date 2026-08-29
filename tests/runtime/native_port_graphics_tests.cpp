@@ -335,6 +335,17 @@ int main(const int argc, char** const argv) {
                 NativePortGraphicsFailure::InvalidDraw,
                 "draw-texture-stage-disabled"),
             "Ein deaktivierter Texture-Stage-Vertrag akzeptiert einen Handle.");
+    const auto invalid_draw_snapshot = graphics.snapshot();
+    require(invalid_draw_snapshot.contract_failures == 2u &&
+                invalid_draw_snapshot.last_contract_failure.valid &&
+                invalid_draw_snapshot.last_contract_failure.failure ==
+                    NativePortGraphicsFailure::InvalidDraw &&
+                invalid_draw_snapshot.last_contract_failure.frame == 1u &&
+                invalid_draw_snapshot.last_contract_failure.draw_sequence == 2u &&
+                invalid_draw_snapshot.last_contract_failure.batch_identity == 1u &&
+                invalid_draw_snapshot.last_contract_failure.submission_order == 1u,
+            "Ein allgemeiner Draw-Vertragsfehler wurde nicht zentral mit "
+            "Frame-/Batch-/Submission-Zeugen gebunden.");
     auto resolved_required_texture =
         screen_packet(reciprocal_vertices, 1u, 1u);
     resolved_required_texture.texture = draw_texture;
@@ -451,6 +462,33 @@ int main(const int argc, char** const argv) {
                 NativePortGraphicsFailure::InvalidDraw,
                 "draw-batch-order"),
             "Ein Frame akzeptiert mehrere Batches derselben Semantik.");
+    graphics.present();
+
+    graphics.begin_frame(reciprocal_frame());
+    auto invalid_stable_translucent =
+        screen_packet(reciprocal_vertices, 8u, 1u);
+    invalid_stable_translucent.viewport = NativePortViewportTarget::Ui;
+    invalid_stable_translucent.batch.semantic =
+        NativePortDrawBatchClass::UiOverlay;
+    invalid_stable_translucent.draw_class =
+        NativePortDrawClass::Translucent;
+    invalid_stable_translucent.translucency =
+        NativePortTranslucencyPolicy::StableDepthSorted;
+    invalid_stable_translucent.blend.enabled = true;
+    invalid_stable_translucent.blend.source_color =
+        NativePortBlendFactor::SourceAlpha;
+    invalid_stable_translucent.blend.destination_color =
+        NativePortBlendFactor::InverseSourceAlpha;
+    invalid_stable_translucent.depth.test_enabled = true;
+    invalid_stable_translucent.depth.write_enabled = true;
+    require(throws_graphics(
+                [&] { graphics.draw(invalid_stable_translucent); },
+                NativePortGraphicsFailure::InvalidDraw,
+                "draw-class-contract"),
+            "StableDepthSorted akzeptiert einen schreibenden Depth-Pass.");
+    auto stable_translucent = invalid_stable_translucent;
+    stable_translucent.depth.write_enabled = false;
+    graphics.draw(stable_translucent);
     graphics.present();
 
     return EXIT_SUCCESS;

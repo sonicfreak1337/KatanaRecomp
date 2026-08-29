@@ -465,6 +465,48 @@ bool latent_validated_reverse_prologue_start(
     return false;
 }
 
+bool latent_validated_fallthrough_save_prefix(
+    const DiscFileCandidate& candidate,
+    const std::uint32_t entry_address,
+    const std::uint32_t body_address) noexcept {
+    if (body_address <= entry_address ||
+        body_address - entry_address > 8u * sizeof(std::uint16_t) ||
+        ((body_address - entry_address) & 1u) != 0u)
+        return false;
+
+    std::array<bool, 16u> saved_registers{};
+    bool saw_callee_saved_push = false;
+    bool saw_pr_push = false;
+    for (auto address = entry_address; address < body_address;
+         address += sizeof(std::uint16_t)) {
+        const auto instruction =
+            latent_candidate_instruction_at(candidate, address);
+        if (!instruction.has_value()) return false;
+        if (instruction->kind ==
+                katana::sh4::InstructionKind::MovLongStorePreDecrement &&
+            instruction->destination_register == 15u &&
+            instruction->source_register >= 8u &&
+            instruction->source_register <= 14u) {
+            if (saved_registers[instruction->source_register]) return false;
+            saved_registers[instruction->source_register] = true;
+            saw_callee_saved_push = true;
+            continue;
+        }
+        if (instruction->kind ==
+                katana::sh4::InstructionKind::
+                    StoreSpecialRegisterPreDecrement &&
+            instruction->destination_register == 15u &&
+            instruction->special_register ==
+                katana::sh4::SpecialRegister::Pr &&
+            !saw_pr_push) {
+            saw_pr_push = true;
+            continue;
+        }
+        return false;
+    }
+    return saw_callee_saved_push && saw_pr_push;
+}
+
 std::vector<std::uint32_t> latent_explicit_tail_prologue_entry_offsets(
     const DiscFileCandidate& candidate,
     const std::span<const katana::ir::Function> program) {
@@ -1659,6 +1701,7 @@ std::optional<std::uint32_t> latent_function_adjacent_pc_literal(
     std::set<std::uint32_t> physical_delay_slots;
     std::size_t decoded_instructions = 0u;
     bool saw_control_flow = false;
+    bool reached_known_function = false;
 
     const auto local_address = [&](const std::int64_t address) {
         return address >= candidate.source_address &&
@@ -1682,15 +1725,20 @@ std::optional<std::uint32_t> latent_function_adjacent_pc_literal(
                 << 8u));
         return katana::sh4::decode(opcode);
     };
-
     while (!pending.empty()) {
         auto address = pending.front();
         pending.pop_front();
         queued.erase(address);
         if (physical_delay_slots.contains(address)) return false;
         if (address != source_address &&
-            known_function_entries.contains(address))
+            known_function_entries.contains(address)) {
+            if (!saw_control_flow &&
+                !latent_validated_fallthrough_save_prefix(
+                    candidate, source_address, address))
+                return false;
+            reached_known_function = true;
             continue;
+        }
 
         while (true) {
             if (!local_address(address) ||
@@ -1705,8 +1753,14 @@ std::optional<std::uint32_t> latent_function_adjacent_pc_literal(
             if (!decoded.changes_control_flow()) {
                 address += 2u;
                 if (address != source_address &&
-                    known_function_entries.contains(address))
+                    known_function_entries.contains(address)) {
+                    if (!saw_control_flow &&
+                        !latent_validated_fallthrough_save_prefix(
+                            candidate, source_address, address))
+                        return false;
+                    reached_known_function = true;
                     break;
+                }
                 continue;
             }
             saw_control_flow = true;
@@ -1800,7 +1854,7 @@ std::optional<std::uint32_t> latent_function_adjacent_pc_literal(
             break;
         }
     }
-    return saw_control_flow;
+    return saw_control_flow || reached_known_function;
 }
 
 std::optional<std::uint32_t>
@@ -6567,6 +6621,18 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     segment.load_phase =
         katana::io::ImageLoadPhase::RuntimeModule;
     image.add_segment(std::move(segment));
+    // A caller-proven runtime base is part of the exact latent-module binding,
+    // not a heuristic relocation guess. Install that alias before CFA so
+    // generation-bound code-pointer tables expressed in runtime addresses can
+    // contribute guarded positive inventory. Inferred aliases remain on the
+    // late audit-only path below and can never manufacture executable roots.
+    if (candidate.proven_runtime_base.has_value() &&
+        *candidate.proven_runtime_base != candidate.source_address) {
+        image.add_address_alias(
+            {candidate.source_address,
+             *candidate.proven_runtime_base,
+             candidate.size});
+    }
     auto analysis_entry_offsets = candidate.entry_offsets;
     for (const auto offset : analysis_entry_offsets)
         image.add_entry_point(candidate.source_address + offset);
@@ -7042,6 +7108,43 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     // the prepared module and generated dispatch.
     auto published_entry_offsets = candidate.entry_offsets;
     merge_entry_offsets(published_entry_offsets, analysis_entry_offsets);
+
+    // Positive Guarded-AOT inventory is already canonicalized, structurally
+    // validated and bound to the immutable segment generation by CFA.  The
+    // optimizer therefore materializes each guest address as an external
+    // BlockEntry below.  The loaded-module binder uses entry_offsets as its
+    // exact ingress bitmap, so omitting the same addresses here compiled the
+    // callback/vtable targets but rejected them at runtime with an entry-
+    // identity miss.  Publish every in-module positive entry as one global
+    // family; typed rejections and merely conservative candidates never
+    // appear in analysis.guarded_aot_entries and cannot cross this boundary.
+    std::vector<std::uint32_t> guarded_entry_offsets;
+    guarded_entry_offsets.reserve(analysis.guarded_aot_entries.size());
+    const auto module_begin =
+        static_cast<std::uint64_t>(candidate.source_address);
+    const auto module_end = module_begin + candidate.bytes.size();
+    for (const auto& guarded : analysis.guarded_aot_entries) {
+        const auto address =
+            static_cast<std::uint64_t>(guarded.guest_address);
+        if (address < module_begin || address >= module_end) continue;
+        const auto offset = static_cast<std::uint32_t>(address - module_begin);
+        if (guarded.source_identity != candidate.byte_identity ||
+            guarded.source_byte_offset != offset ||
+            (guarded.entry_byte_extent != 2u &&
+             guarded.entry_byte_extent != 4u) ||
+            guarded.entry_byte_extent > candidate.bytes.size() - offset)
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        const auto entry_bytes = std::string_view(
+            reinterpret_cast<const char*>(candidate.bytes.data() + offset),
+            guarded.entry_byte_extent);
+        if (guarded.entry_byte_identity !=
+            "sha256:" + katana::io::sha256_bytes(entry_bytes))
+            return reject_candidate(
+                LatentAotAnalysisRejection::ProgramInvalid);
+        guarded_entry_offsets.push_back(offset);
+    }
+    merge_entry_offsets(published_entry_offsets, guarded_entry_offsets);
     if (module_audit != nullptr)
         module_audit->final_entry_offsets = published_entry_offsets;
     control_flow_progress.complete(
@@ -7083,7 +7186,10 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         options.external_code_targets);
     if (audit_address_resolver.preferred_runtime_base.has_value() &&
         *audit_address_resolver.preferred_runtime_base !=
-            candidate.source_address) {
+            candidate.source_address &&
+        (!candidate.proven_runtime_base.has_value() ||
+         *candidate.proven_runtime_base !=
+             *audit_address_resolver.preferred_runtime_base)) {
         try {
             image.add_address_alias(
                 {candidate.source_address,

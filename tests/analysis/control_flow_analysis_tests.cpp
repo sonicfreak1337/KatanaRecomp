@@ -705,6 +705,453 @@ int main() {
                     stored_callback.recursive.guarded_candidate_instruction_addresses.end(),
                     0x30u),
             "Gespeicherter endlicher Codepointer erreichte das bewachte AOT-Inventar nicht.");
+    const auto static_callback_vector_image = [](
+                                                  const katana::io::ImageLoadPhase phase,
+                                                  const bool initial_root_only,
+                                                  const std::size_t target_count) {
+        constexpr std::uint32_t initial_base = 0x8C010000u;
+        constexpr std::uint32_t dormant_initial_base = 0x8C020000u;
+        constexpr std::uint32_t module_source_base = 0x8088B000u;
+        constexpr std::uint32_t module_runtime_base = 0x8C900000u;
+        constexpr std::uint32_t table_offset = 0x20u;
+        const auto target_base = std::max<std::size_t>(
+            0x80u,
+            (table_offset + target_count * sizeof(std::uint32_t) + 0x3Fu) &
+                ~std::size_t{0x3Fu});
+        std::vector<std::uint32_t> target_offsets;
+        target_offsets.reserve(target_count);
+        for (std::size_t index = 0u; index < target_count; ++index)
+            target_offsets.push_back(static_cast<std::uint32_t>(
+                target_base + index * 4u));
+        const auto source_base =
+            phase == katana::io::ImageLoadPhase::RuntimeModule
+                ? module_source_base
+                : (initial_root_only ? dormant_initial_base
+                                     : initial_base);
+        const auto pointer_base =
+            phase == katana::io::ImageLoadPhase::RuntimeModule
+                ? module_runtime_base
+                : source_base;
+        const auto image_size = target_base + target_count * 4u;
+        std::vector<std::uint8_t> bytes(image_size, 0u);
+        const auto put_u16 = [&bytes](const std::size_t offset,
+                                      const std::uint16_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        };
+        const auto put_u32 = [&bytes](const std::size_t offset,
+                                      const std::uint32_t value) {
+            bytes[offset] = static_cast<std::uint8_t>(value);
+            bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+            bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+            bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+        };
+        put_u16(0u, 0x000Bu); // sole declared root: rts
+        put_u16(2u, 0x0009u); // nop (delay)
+        for (std::size_t index = 0u; index < target_offsets.size(); ++index) {
+            put_u32(table_offset + index * sizeof(std::uint32_t),
+                    pointer_base + target_offsets[index]);
+            put_u16(target_offsets[index], 0x000Bu); // callback: rts
+            put_u16(target_offsets[index] + 2u, 0x0009u); // nop (delay)
+        }
+
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.set_address_model(katana::io::ImageAddressModel::Sh4DirectMapped);
+        if (initial_root_only) {
+            image.add_segment({".initial-root",
+                               initial_base,
+                               0u,
+                               4u,
+                               katana::io::SegmentKind::Code,
+                               {true, false, true},
+                               {0x0Bu, 0x00u, 0x09u, 0x00u},
+                               katana::io::ImageSourceKind::DiscBootFile,
+                               katana::io::ImageLoadPhase::Initial,
+                               "synthetic-static-vector-initial-root"});
+            image.add_entry_point(initial_base);
+        }
+        image.add_segment({phase == katana::io::ImageLoadPhase::RuntimeModule
+                               ? ".runtime-callback-vector"
+                               : ".initial-callback-vector",
+                           source_base,
+                           0u,
+                           bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(bytes),
+                           phase == katana::io::ImageLoadPhase::RuntimeModule
+                               ? katana::io::ImageSourceKind::DiscModule
+                               : katana::io::ImageSourceKind::DiscBootFile,
+                           phase,
+                           "synthetic-static-callback-vector"});
+        image.add_immutable_range(
+            {source_base, image_size,
+             "synthetic-static-callback-vector-v1", 0u});
+        if (phase == katana::io::ImageLoadPhase::RuntimeModule) {
+            image.add_address_alias(
+                {module_source_base, module_runtime_base, image_size});
+        }
+        if (!initial_root_only) image.add_entry_point(source_base);
+        return std::pair{std::move(image), target_offsets};
+    };
+    for (const auto phase : {katana::io::ImageLoadPhase::Initial,
+                             katana::io::ImageLoadPhase::RuntimeModule}) {
+        auto fixture = static_callback_vector_image(phase, false, 4u);
+        const auto source_base =
+            phase == katana::io::ImageLoadPhase::RuntimeModule
+                ? 0x8088B000u
+                : 0x8C010000u;
+        const auto static_vector =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            std::all_of(fixture.second.begin(), fixture.second.end(),
+                        [&](const auto offset) {
+                            const auto* callback =
+                                find_function(static_vector, source_base + offset);
+                            return callback != nullptr &&
+                                   callback->origins ==
+                                       std::vector{
+                                           katana::analysis::FunctionOrigin::
+                                               StoredCodeAddress} &&
+                                   has_instruction(static_vector,
+                                                   source_base + offset);
+                        }) &&
+                !static_vector.candidate_inventory_truncated,
+            "Identity-gebundener statischer Callbackvektor wurde ohne "
+            "FunctionMap-Hints im Primary-/Runtime-Modul nicht vollstaendig "
+            "als bewachtes Inventar materialisiert.");
+    }
+    {
+        constexpr std::uint32_t base = 0x8C010000u;
+        constexpr std::uint32_t table = base + 0x20u;
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::Initial, false, 2u);
+        const auto single_short_vector =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            std::none_of(
+                fixture.second.begin(), fixture.second.end(),
+                [&](const auto offset) {
+                    return find_function(single_short_vector,
+                                         base + offset) != nullptr ||
+                           has_instruction(single_short_vector,
+                                           base + offset);
+                }),
+            "Ein einzelnes kurzes Codepointerpaar wurde ohne wiederholte "
+            "Vtable-Identitaet als positives Inventar zugelassen.");
+
+        for (std::size_t index = 0u; index < fixture.second.size(); ++index) {
+            fixture.first.write_u32_le(
+                table + 0x10u +
+                    static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+                base + fixture.second[index]);
+        }
+        const auto repeated_short_vector =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            std::all_of(
+                fixture.second.begin(), fixture.second.end(),
+                [&](const auto offset) {
+                    const auto* callback =
+                        find_function(repeated_short_vector, base + offset);
+                    return callback != nullptr &&
+                           callback->origins ==
+                               std::vector{
+                                   katana::analysis::FunctionOrigin::
+                                       StoredCodeAddress} &&
+                           has_instruction(repeated_short_vector,
+                                           base + offset);
+                }) &&
+                !repeated_short_vector.candidate_inventory_truncated,
+            "Ein zweimal nicht ueberlappend wiederholtes, identity-"
+            "gebundenes Zwei-Eintrags-Vtable-Paar erreichte das bewachte "
+            "Inventar nicht.");
+    }
+    {
+        constexpr std::uint32_t base = 0x8C010000u;
+        constexpr std::uint32_t foreign_base = 0x8C030000u;
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::Initial, false, 2u);
+        std::vector<std::uint8_t> foreign_pair(8u, 0u);
+        for (std::size_t index = 0u; index < fixture.second.size(); ++index) {
+            const auto target = base + fixture.second[index];
+            const auto slot = index * sizeof(std::uint32_t);
+            foreign_pair[slot] = static_cast<std::uint8_t>(target);
+            foreign_pair[slot + 1u] =
+                static_cast<std::uint8_t>(target >> 8u);
+            foreign_pair[slot + 2u] =
+                static_cast<std::uint8_t>(target >> 16u);
+            foreign_pair[slot + 3u] =
+                static_cast<std::uint8_t>(target >> 24u);
+        }
+        fixture.first.add_segment({
+            ".foreign-short-vector",
+            foreign_base,
+            0u,
+            foreign_pair.size(),
+            katana::io::SegmentKind::Data,
+            {true, false, false},
+            std::move(foreign_pair),
+            katana::io::ImageSourceKind::DiscBootFile,
+            katana::io::ImageLoadPhase::Initial,
+            "synthetic-foreign-short-vector"});
+        fixture.first.add_immutable_range(
+            {foreign_base, 8u, "synthetic-foreign-short-vector-v1", 0u});
+        const auto cross_component_short_vector =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            std::none_of(
+                fixture.second.begin(), fixture.second.end(),
+                [&](const auto offset) {
+                    return find_function(cross_component_short_vector,
+                                         base + offset) != nullptr ||
+                           has_instruction(cross_component_short_vector,
+                                           base + offset);
+                }),
+            "Zwei kurze Codepointerpaare aus verschiedenen Source-"
+            "Komponenten wurden faelschlich als eine Vtable-Familie "
+            "zusammengefuehrt.");
+    }
+    {
+        constexpr std::uint32_t base = 0x8C010000u;
+        constexpr std::uint32_t table = base + 0x20u;
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::Initial, false, 2u);
+        const auto valid = base + fixture.second[0];
+        const auto invalid_delay_slot = base + fixture.second[1] + 2u;
+        for (const auto pair_offset : {0u, 0x10u}) {
+            fixture.first.write_u32_le(table + pair_offset, valid);
+            fixture.first.write_u32_le(table + pair_offset + 4u,
+                                       invalid_delay_slot);
+        }
+        const auto invalid_repeated_pair =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            find_function(invalid_repeated_pair, valid) == nullptr &&
+                !has_instruction(invalid_repeated_pair, valid) &&
+                find_guarded_aot_entry(invalid_repeated_pair, valid) ==
+                    nullptr &&
+                find_guarded_aot_entry(invalid_repeated_pair,
+                                       invalid_delay_slot) == nullptr,
+            "Ein wiederholtes kurzes Vtable-Paar mit strukturell "
+            "ungueltigem Mitglied wurde teilweise zugelassen.");
+    }
+    {
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::RuntimeModule, true, 4u);
+        const auto initial_only =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            std::none_of(fixture.second.begin(), fixture.second.end(),
+                         [&](const auto offset) {
+                             return find_function(initial_only,
+                                                  0x8088B000u + offset) != nullptr ||
+                                    has_instruction(initial_only,
+                                                    0x8088B000u + offset);
+                         }),
+            "Primary-Analyse importierte einen inaktiven Runtime-Modul-"
+            "Callbackvektor ueber eine fremde Load-Phase.");
+    }
+    {
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::Initial, true, 4u);
+        const auto initial_only =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            std::none_of(fixture.second.begin(), fixture.second.end(),
+                         [&](const auto offset) {
+                             return find_function(initial_only,
+                                                  0x8C020000u + offset) !=
+                                        nullptr ||
+                                    has_instruction(initial_only,
+                                                    0x8C020000u + offset);
+                         }),
+            "Primary-Analyse importierte einen inaktiven Callbackvektor "
+            "aus einer fremden Source-Komponente derselben Load-Phase.");
+    }
+    {
+        // The system bootstrap may carry a vector whose callbacks belong to
+        // the selected game image. Carrier ownership is intentionally
+        // separate; target ownership is the promotion boundary.
+        constexpr std::uint32_t target_base = 0x8C010000u;
+        constexpr std::uint32_t carrier_base = 0xAC008000u;
+        std::vector<std::uint8_t> target_bytes(0x90u, 0u);
+        target_bytes[0u] = 0x0Bu; // active root: rts
+        target_bytes[2u] = 0x09u; // nop (delay)
+        std::vector<std::uint8_t> carrier_bytes(16u, 0u);
+        for (std::size_t index = 0u; index < 4u; ++index) {
+            const auto callback = target_base + 0x80u +
+                                  static_cast<std::uint32_t>(index * 4u);
+            const auto slot = index * sizeof(std::uint32_t);
+            carrier_bytes[slot] = static_cast<std::uint8_t>(callback);
+            carrier_bytes[slot + 1u] =
+                static_cast<std::uint8_t>(callback >> 8u);
+            carrier_bytes[slot + 2u] =
+                static_cast<std::uint8_t>(callback >> 16u);
+            carrier_bytes[slot + 3u] =
+                static_cast<std::uint8_t>(callback >> 24u);
+            target_bytes[0x80u + index * 4u] = 0x0Bu; // rts
+            target_bytes[0x82u + index * 4u] = 0x09u; // nop
+        }
+        katana::io::ExecutableImage image;
+        image.set_guest_call_abi(katana::io::GuestCallAbi::Unknown);
+        image.set_initial_snapshot_policy(
+            katana::io::InitialSnapshotPolicy::ImmutableOnly);
+        image.set_address_model(
+            katana::io::ImageAddressModel::Sh4DirectMapped);
+        image.add_segment({".active-game",
+                           target_base,
+                           0u,
+                           target_bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(target_bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-game-image"});
+        image.add_segment({".bootstrap-carrier",
+                           carrier_base,
+                           0u,
+                           carrier_bytes.size(),
+                           katana::io::SegmentKind::Mixed,
+                           {true, true, true},
+                           std::move(carrier_bytes),
+                           katana::io::ImageSourceKind::DiscBootFile,
+                           katana::io::ImageLoadPhase::Initial,
+                           "synthetic-system-bootstrap"});
+        image.add_entry_point(target_base);
+        image.add_immutable_range(
+            {target_base, 0x90u, "synthetic-game-image-v1", 0u});
+        image.add_immutable_range(
+            {carrier_base, 16u, "synthetic-bootstrap-carrier-v1", 0u});
+        const auto cross_component =
+            katana::analysis::analyze_control_flow(image);
+        bool all_cross_component_callbacks = true;
+        for (std::size_t index = 0u; index < 4u; ++index) {
+            const auto callback = target_base + 0x80u +
+                                  static_cast<std::uint32_t>(index * 4u);
+            all_cross_component_callbacks =
+                all_cross_component_callbacks &&
+                find_function(cross_component, callback) != nullptr &&
+                has_instruction(cross_component, callback);
+        }
+        require(
+            all_cross_component_callbacks,
+            "Ein getrennter Bootstrap-Vektortraeger verlor seine Ziele in "
+            "der aktiven identity-gebundenen Spielkomponente.");
+    }
+    {
+        // P1/P2 are spellings of one physical SH-4 address, not separate AOT
+        // identities. A static vector may contain either spelling and scalar
+        // words which merely land on a delay slot or unknown opcode. Global
+        // ingress and recursive seeds retain conservative runtime evidence but
+        // use canonical addresses; positive native inventory must canonicalize
+        // the valid callback and discard structurally invalid speculation.
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::Initial, false, 6u);
+        constexpr std::uint32_t base = 0x8C010000u;
+        constexpr std::uint32_t table = base + 0x20u;
+        const auto valid = base + fixture.second[0];
+        const auto physical_delay_slot = valid + 2u;
+        const auto unknown = base + fixture.second[5];
+        const auto p2 = [](const std::uint32_t address) {
+            return address | 0x20000000u;
+        };
+        fixture.first.write_u32_le(table + 0u, p2(valid));
+        fixture.first.write_u32_le(
+            table + 4u, base + fixture.second[1]);
+        fixture.first.write_u32_le(
+            table + 8u, base + fixture.second[2]);
+        fixture.first.write_u32_le(
+            table + 12u, base + fixture.second[3]);
+        fixture.first.write_u32_le(
+            table + 16u, p2(physical_delay_slot));
+        fixture.first.write_u32_le(unknown, 0x0009FFFFu);
+        fixture.first.write_u32_le(table + 20u, p2(unknown));
+        const auto aliased =
+            katana::analysis::analyze_control_flow(fixture.first);
+        const auto alias_contract =
+            find_function(aliased, valid) != nullptr &&
+            find_function(aliased, p2(valid)) == nullptr &&
+            find_function(aliased, unknown) == nullptr &&
+            find_function(aliased, p2(unknown)) == nullptr &&
+            !has_instruction(aliased, unknown) &&
+            !has_instruction(aliased, p2(unknown)) &&
+            find_guarded_aot_entry(aliased, valid) != nullptr &&
+            find_guarded_aot_entry(aliased, p2(valid)) == nullptr &&
+            find_guarded_aot_entry(aliased, physical_delay_slot) == nullptr &&
+            find_guarded_aot_entry(aliased, p2(physical_delay_slot)) == nullptr &&
+            find_guarded_aot_entry(aliased, unknown) == nullptr &&
+            find_guarded_aot_entry(aliased, p2(unknown)) == nullptr &&
+            find_guarded_aot_entry_rejection(
+                aliased, physical_delay_slot) == nullptr &&
+            find_guarded_aot_entry_rejection(
+                aliased, p2(physical_delay_slot)) == nullptr &&
+            find_guarded_aot_entry_rejection(aliased, unknown) == nullptr &&
+            find_guarded_aot_entry_rejection(aliased, p2(unknown)) == nullptr;
+        require(
+            alias_contract,
+            "Direkt abgebildete P1/P2-Callbackkandidaten wurden nicht vor "
+            "globalem Ingress/Seedbildung kanonisiert oder vor Guarded-AOT-"
+            "Materialisierung strukturell gefiltert: function-p1=" +
+                std::to_string(find_function(aliased, valid) != nullptr) +
+                " function-p2=" +
+                std::to_string(find_function(aliased, p2(valid)) != nullptr) +
+                " unknown-function-p1=" +
+                std::to_string(find_function(aliased, unknown) != nullptr) +
+                " unknown-function-p2=" +
+                std::to_string(find_function(aliased, p2(unknown)) != nullptr) +
+                " unknown-instruction-p1=" +
+                std::to_string(has_instruction(aliased, unknown)) +
+                " unknown-instruction-p2=" +
+                std::to_string(has_instruction(aliased, p2(unknown))) +
+                " entry-p1=" +
+                std::to_string(find_guarded_aot_entry(aliased, valid) != nullptr) +
+                " entry-p2=" +
+                std::to_string(find_guarded_aot_entry(aliased, p2(valid)) != nullptr) +
+                " delay-reject-p1=" +
+                std::to_string(find_guarded_aot_entry_rejection(
+                                   aliased, physical_delay_slot) != nullptr) +
+                " delay-reject-p2=" +
+                std::to_string(find_guarded_aot_entry_rejection(
+                                   aliased, p2(physical_delay_slot)) != nullptr) +
+                " unknown-reject-p1=" +
+                std::to_string(find_guarded_aot_entry_rejection(
+                                   aliased, unknown) != nullptr) +
+                " unknown-reject-p2=" +
+                std::to_string(find_guarded_aot_entry_rejection(
+                                   aliased, p2(unknown)) != nullptr));
+    }
+    {
+        constexpr std::size_t large_vector_entries = 260u;
+        auto fixture = static_callback_vector_image(
+            katana::io::ImageLoadPhase::RuntimeModule, false,
+            large_vector_entries);
+        const auto large_vector =
+            katana::analysis::analyze_control_flow(fixture.first);
+        require(
+            fixture.second.size() == large_vector_entries &&
+                std::all_of(
+                    fixture.second.begin(), fixture.second.end(),
+                    [&](const auto offset) {
+                        const auto* callback =
+                            find_function(large_vector, 0x8088B000u + offset);
+                        return callback != nullptr &&
+                               callback->origins ==
+                                   std::vector{
+                                       katana::analysis::FunctionOrigin::
+                                           StoredCodeAddress} &&
+                               has_instruction(large_vector,
+                                               0x8088B000u + offset);
+                    }) &&
+                !large_vector.candidate_inventory_truncated,
+            "Ein identity-gebundener statischer Callbackvektor jenseits "
+            "des 256er Typed-Table-Limits wurde faelschlich als "
+            "Inventoryverlust abgewiesen.");
+    }
     const auto callback_registrar_call =
         std::find_if(stored_callback.indirect_control_flow.begin(),
                      stored_callback.indirect_control_flow.end(),
@@ -819,6 +1266,29 @@ int main() {
                 nullptr,
         "Ein gespeicherter Codepointer promovierte einen physischen "
         "Delay Slot ohne unabhaengigen Normal-Entry-Beweis.");
+
+    auto stored_unknown_callback_image = stored_callback_image;
+    stored_unknown_callback_image.write_u32_le(0x10u, 0x34u);
+    stored_unknown_callback_image.write_u32_le(
+        0x34u, 0x0009FFFFu); // unknown opcode followed by a harmless word
+    katana::analysis::AnalysisOverrides stored_unknown_callback_hint;
+    stored_unknown_callback_hint.mode =
+        katana::analysis::AnalysisDirectiveMode::Hint;
+    stored_unknown_callback_hint.source_path =
+        "stored-unknown-callback-hint.txt";
+    stored_unknown_callback_hint.function_entry_hints.push_back(
+        {0x34u, 2u});
+    const auto stored_unknown_callback =
+        katana::analysis::analyze_control_flow(
+            stored_unknown_callback_image,
+            &stored_unknown_callback_hint);
+    require(
+        find_function(stored_unknown_callback, 0x34u) == nullptr &&
+            !has_instruction(stored_unknown_callback, 0x34u) &&
+            find_guarded_aot_entry(stored_unknown_callback, 0x34u) ==
+                nullptr,
+        "Ein Non-Root-Entry-Hint umging die strukturelle Validierung eines "
+        "unbekannten Callback-Ziels.");
 
     auto dual_context_image = code_image(
         {0x2Bu, 0x41u, // jmp @r1
@@ -2821,7 +3291,8 @@ int main() {
     constexpr std::uint32_t relative_table_dispatch = relative_table_base + 0x0Eu;
     const auto relative_table_image = [](const katana::io::ImageSourceKind source_kind,
                                          const katana::io::ImageLoadPhase load_phase,
-                                         const katana::io::InitialSnapshotPolicy policy) {
+                                         const katana::io::InitialSnapshotPolicy policy,
+                                         const bool delay_slot_candidate = false) {
         std::vector<std::uint8_t> bytes(0x70u, 0u);
         const auto put_u16 = [&bytes](const std::size_t offset,
                                       const std::uint16_t value) {
@@ -2840,7 +3311,10 @@ int main() {
         put_u16(0x10u, 0x0009u); // delay slot
 
         // Beide Eintraege sind signed offsets relativ zu BRAF+4 (base+0x12).
-        put_u16(0x20u, 0x004Eu); // base+0x60
+        put_u16(0x20u,
+                delay_slot_candidate
+                    ? 0x0050u // base+0x62: physical RTS delay slot
+                    : 0x004Eu); // base+0x60
         put_u16(0x22u, 0x0052u); // base+0x64
         put_u16(0x50u, 0x000Bu);
         put_u16(0x52u, 0x0009u);
@@ -2886,6 +3360,28 @@ int main() {
                 relative_table_analysis->reason ==
                     "snapshot-signed-relative16-candidates",
             "RWX-Relative16-Tabelle wurde nicht als bewachte Snapshot-AOT-Menge erkannt.");
+    const auto relative_delay_slot_candidate =
+        katana::analysis::analyze_control_flow(relative_table_image(
+            katana::io::ImageSourceKind::DiscBootFile,
+            katana::io::ImageLoadPhase::Initial,
+            katana::io::InitialSnapshotPolicy::
+                EntryPointStraightLineQuiescent,
+            true));
+    const auto relative_delay_slot_ir =
+        katana::ir::lower_program(relative_delay_slot_candidate);
+    require(
+        find_guarded_aot_entry(relative_delay_slot_candidate,
+                               relative_table_base + 0x62u) == nullptr &&
+            find_guarded_aot_entry_rejection(
+                relative_delay_slot_candidate,
+                relative_table_base + 0x62u) == nullptr &&
+            !has_ir_block(relative_delay_slot_ir,
+                          relative_table_base + 0x62u) &&
+            has_ir_block(relative_delay_slot_ir,
+                         relative_table_base + 0x64u),
+        "Ein spekulativer Snapshot-Tabelleneintrag umging den zentralen "
+        "Guarded-AOT-Ingress oder blockierte das Lowering statt nur den "
+        "ungueltigen Kandidaten zu verwerfen.");
     const auto relative_table_resolution = std::find_if(
         relative_table.indirect_control_flow.begin(),
         relative_table.indirect_control_flow.end(),
@@ -3551,16 +4047,85 @@ int main() {
             "Ein entfernter direkter CFG-Vorgaenger hinter dem endlichen "
             "Index-Seed umging den globalen Ingressvertrag.");
 
+    // The classic CMP/HS + BT + SHLL recognizer used to skip the global
+    // ingress contract entirely. In addition, a resolved indirect edge is
+    // not present in the direct branch-target index. Both facts must now
+    // invalidate the same local producer proof.
+    katana::io::ExecutableImage classic_braf_image;
+    classic_braf_image.add_segment(
+        {".classic-braf",
+         0u,
+         0u,
+         0x30u,
+         katana::io::SegmentKind::Mixed,
+         {true, false, true},
+         {0x04u, 0xE2u, // mov #4,r2
+          0x22u, 0x31u, // cmp/hs r2,r1
+          0x14u, 0x89u, // bt 0x30 (outside dispatch path)
+          0x00u, 0x41u, // shll r1
+          0x03u, 0xC7u, // mova 0x18,r0
+          0x1Du, 0x01u, // mov.w @(r0,r1),r1
+          0x23u, 0x01u, // braf r1
+          0x09u, 0x00u, // nop (delay)
+          0x09u, 0x00u, 0x09u, 0x00u,
+          0x09u, 0x00u, 0x09u, 0x00u,
+          0x10u, 0x00u, 0x14u, 0x00u,
+          0x18u, 0x00u, 0x1Cu, 0x00u,
+          0x0Bu, 0x00u, 0x09u, 0x00u,
+          0x0Bu, 0x00u, 0x09u, 0x00u,
+          0x0Bu, 0x00u, 0x09u, 0x00u,
+          0x0Bu, 0x00u, 0x09u, 0x00u}});
+    classic_braf_image.add_segment(
+        {".indirect-ingress",
+         0x80u,
+         0x80u,
+         4u,
+         katana::io::SegmentKind::Code,
+         {true, false, true},
+         {0x2Bu, 0x43u, 0x09u, 0x00u}}); // jmp @r3 / nop
+    classic_braf_image.add_entry_point(0u);
+    classic_braf_image.add_entry_point(0x80u);
+    classic_braf_image.add_immutable_range(
+        {0u, 0x10u, "synthetic-classic-braf-producer", 0u});
+    classic_braf_image.add_immutable_range(
+        {0x18u, 8u, "synthetic-classic-braf-table", 0u});
+    katana::analysis::AnalysisOverrides classic_braf_override;
+    classic_braf_override.source_path = "classic-braf-table.txt";
+    katana::analysis::JumpTableOverride classic_braf_table{
+        0x0Cu,
+        0x18u,
+        4u,
+        1u,
+        sizeof(std::uint16_t),
+        0x10u,
+        katana::analysis::JumpTableOverrideEncoding::SignedRelative16,
+        katana::analysis::JumpTableOverrideTransfer::Jump};
+    classic_braf_table.identity_bound_complete = true;
+    classic_braf_override.jump_tables.push_back(classic_braf_table);
+    classic_braf_override.jumps.push_back({0x80u, 0x06u, 1u});
+    const auto classic_braf = katana::analysis::analyze_control_flow(
+        classic_braf_image, &classic_braf_override);
+    const auto classic_braf_result = std::find_if(
+        classic_braf.jump_tables.begin(), classic_braf.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x0Cu; });
+    require(classic_braf_result != classic_braf.jump_tables.end() &&
+                classic_braf_result->evidence ==
+                    katana::analysis::ControlFlowEvidence::ForcedOverride,
+            "Ein aufgeloester indirekter Einstieg hinter CMP/HS umging "
+            "den globalen Producervertrag.");
+
     const auto identity_bound_braf_lines = katana::sh4::disassemble(
         identity_bound_braf_image.segments().front().bytes, 0u);
     const auto identity_bound_braf_native =
         katana::analysis::recognize_bounded_relative_jump_table(
             identity_bound_braf_image, identity_bound_braf_lines, 11u);
     require(identity_bound_braf_native.has_value() &&
-                identity_bound_braf_native->resolved &&
+                !identity_bound_braf_native->resolved &&
+                identity_bound_braf_native->reason ==
+                    "global-ingress-proof-required" &&
                 identity_bound_braf_native->entries.size() == 4u,
-            "Der native BRAF-Recognizer leitete die endliche "
-            "branch-assemblierte Indexmenge nicht vollstaendig her.");
+            "Der oeffentliche BRAF-Recognizer gab lokalen Proof ohne "
+            "globalen Ingress als vollstaendig aus.");
 
     auto short_braf_override = identity_bound_braf_override;
     short_braf_override.jump_tables.front().entry_count = 3u;

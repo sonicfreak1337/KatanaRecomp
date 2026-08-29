@@ -33,17 +33,24 @@ struct Fixture {
     std::filesystem::path external =
         std::filesystem::current_path() /
         "katana-codegen-cache-external-fixture";
+    std::filesystem::path budget =
+        std::filesystem::current_path() /
+        "katana-codegen-cache-budget-fixture";
     Fixture() {
         std::error_code error;
         std::filesystem::remove_all(path, error);
         error.clear();
         std::filesystem::remove_all(external, error);
+        error.clear();
+        std::filesystem::remove_all(budget, error);
     }
     ~Fixture() {
         std::error_code error;
         std::filesystem::remove_all(path, error);
         error.clear();
         std::filesystem::remove_all(external, error);
+        error.clear();
+        std::filesystem::remove_all(budget, error);
     }
 };
 
@@ -161,6 +168,37 @@ int main() {
     using namespace katana::codegen;
     Fixture fixture;
     CodegenCache cache(fixture.path);
+    {
+        CodegenCache budget_cache(
+            fixture.budget,
+            CodegenCacheRootLimits{1024u, 16u, 256u});
+        const std::string budget_payload(64u, 'b');
+        for (std::size_t index = 0u; index < 16u; ++index) {
+            budget_cache.store(
+                "seed-" + std::to_string(index),
+                "unit.cpp",
+                budget_payload);
+        }
+        budget_cache.store(
+            "replacement-0", "unit.cpp", budget_payload);
+        require(
+            !budget_cache.load("seed-0", "unit.cpp") &&
+                !budget_cache.load("seed-1", "unit.cpp") &&
+                budget_cache.load("seed-2", "unit.cpp") ==
+                    std::optional<std::string>(budget_payload) &&
+                budget_cache.load("replacement-0", "unit.cpp") ==
+                    std::optional<std::string>(budget_payload),
+            "LRU-Budgetmiss erzeugte keinen begrenzten Headroom oder "
+            "verletzte die Eviction-Reihenfolge.");
+        budget_cache.store(
+            "replacement-1", "unit.cpp", budget_payload);
+        require(
+            budget_cache.load("seed-2", "unit.cpp") ==
+                std::optional<std::string>(budget_payload) &&
+                budget_cache.load("replacement-1", "unit.cpp") ==
+                    std::optional<std::string>(budget_payload),
+            "Headroom wurde nicht fuer den folgenden Publish erhalten.");
+    }
     CodegenCacheInputs inputs{"input-a",
                               "ir-a",
                               "opt-a",

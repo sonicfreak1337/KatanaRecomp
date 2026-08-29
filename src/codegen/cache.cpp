@@ -481,14 +481,27 @@ void enforce_root_budget(
     // Reconcile external writers only at the capacity boundary. Normal
     // partition publishing therefore remains O(N), not O(N^2).
     scan_root_accounting(accounting, root, limits);
+    if (root_budget_fits(
+            accounting, limits, reserved_bytes, reserved_artifacts))
+        return;
+
+    // Once a real capacity miss is confirmed, free a bounded burst of
+    // headroom. Evicting only enough for the current artifact would make a
+    // cold partition publish rescan the complete root before every write.
+    // The requested reservation remains the lower bound, including for
+    // limits too small to yield fractional headroom.
+    const auto eviction_reserved_bytes = std::max(
+        reserved_bytes, limits.maximum_bytes / 8u);
+    const auto eviction_reserved_artifacts = std::max(
+        reserved_artifacts, limits.maximum_artifacts / 8u);
     for (std::size_t reconciliation = 0u;
          reconciliation < 3u;
          ++reconciliation) {
         if (root_budget_fits(
                 accounting,
                 limits,
-                reserved_bytes,
-                reserved_artifacts))
+                eviction_reserved_bytes,
+                eviction_reserved_artifacts))
             return;
         std::vector<std::string> candidates;
         candidates.reserve(accounting.artifacts.size());
@@ -548,8 +561,8 @@ void enforce_root_budget(
             if (root_budget_fits(
                     accounting,
                     limits,
-                    reserved_bytes,
-                    reserved_artifacts))
+                    eviction_reserved_bytes,
+                    eviction_reserved_artifacts))
                 return;
         }
         if (!raced)

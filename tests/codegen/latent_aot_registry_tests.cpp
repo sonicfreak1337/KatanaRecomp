@@ -110,6 +110,87 @@ std::vector<std::uint8_t> fixture_iso() {
          {23u, "DATA.DAT;1", {0xFFu, 0xFFu, 0xFFu, 0xFFu}}});
 }
 
+std::vector<std::uint8_t> guarded_callback_vector_module() {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(0x120u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    put_u16(0x00u, 0x000Bu); // declared root: rts
+    put_u16(0x02u, 0x0009u); // nop (delay)
+    for (const auto offset : {0x80u, 0x88u, 0x90u, 0x98u}) {
+        put_u16(offset, 0x000Bu);      // callback: rts
+        put_u16(offset + 2u, 0x0009u); // nop (delay)
+    }
+    put_u16(0xA0u, 0xFFFFu); // structurally invalid candidate
+    put_u16(0xA2u, 0x0009u);
+
+    // One immutable vector mixes ordinary P1, P2 aliases, a physical delay
+    // slot and an unknown opcode. Only the three normal callback entries are
+    // eligible for the positive Guarded-AOT ingress family.
+    put_u32(0x20u, runtime_base + 0x80u);
+    put_u32(0x24u, runtime_base + 0x88u);
+    put_u32(0x28u, runtime_base + 0x90u);
+    put_u32(0x2Cu, runtime_base + 0x98u);
+    put_u32(0x30u, (runtime_base + 0x80u) | 0x20000000u);
+    put_u32(0x34u, (runtime_base + 0x92u) | 0x20000000u);
+    put_u32(0x38u, (runtime_base + 0xA0u) | 0x20000000u);
+    return bytes;
+}
+
+std::vector<std::uint8_t> loaded_aot_entry_family_module() {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    std::vector<std::uint8_t> bytes(0x580u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // Two identical immutable PC-literal -> indirect-call lanes model one
+    // loaded-AOT callback family.  The runtime spellings require the caller-
+    // proven P2 alias; no numeric module offset is special-cased.
+    put_u16(0x00u, 0xDE07u); // mov.l @(0x20,pc),r14
+    put_u16(0x02u, 0x4E0Bu); // jsr @r14
+    put_u16(0x04u, 0x0009u); // nop (delay)
+    put_u16(0x06u, 0xDE07u); // mov.l @(0x24,pc),r14
+    put_u16(0x08u, 0x4E0Bu); // jsr @r14
+    put_u16(0x0Au, 0x0009u); // nop (delay)
+    put_u16(0x0Cu, 0x000Bu); // rts
+    put_u16(0x0Eu, 0x0009u); // nop (delay)
+    put_u32(0x20u, runtime_base + 0x4E0u);
+    put_u32(0x24u, runtime_base + 0x560u);
+
+    const auto put_function = [&put_u16](const std::size_t offset) {
+        put_u16(offset + 0x00u, 0x2FE6u); // mov.l r14,@-r15
+        put_u16(offset + 0x02u, 0x4F22u); // sts.l pr,@-r15
+        put_u16(offset + 0x04u, 0x7FFCu); // add #-4,r15
+        put_u16(offset + 0x06u, 0x6E43u); // mov r4,r14
+        put_u16(offset + 0x08u, 0x000Bu); // rts
+        put_u16(offset + 0x0Au, 0x0009u); // nop (delay)
+    };
+    put_function(0x4E0u);
+    put_function(0x560u);
+    return bytes;
+}
+
 std::vector<std::uint8_t> indexed_call_table_module(
     const bool clobber_index = false,
     const bool noncontiguous = false) {
@@ -458,6 +539,46 @@ std::vector<std::uint8_t> registered_record_callback_module() {
 
     put_u32(0x300u, runtime_base + 0x40u);
     put_u32(0x304u, runtime_base + 0x100u);
+    return bytes;
+}
+
+std::vector<std::uint8_t> fallthrough_prologue_callback_module(
+    const bool valid_save_prefix) {
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    constexpr std::uint32_t registrar = 0x8C040000u;
+    std::vector<std::uint8_t> bytes(0x100u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // The declared module root passes one runtime-aliased local callback in
+    // r6 to an independently typed resident registrar.
+    put_u16(0x00u, 0xD303u); // mov.l @(0x10,pc),r3
+    put_u16(0x02u, 0xD604u); // mov.l @(0x14,pc),r6
+    put_u16(0x04u, 0x430Bu); // jsr @r3
+    put_u16(0x06u, 0xE402u); // mov #2,r4 (delay)
+    put_u16(0x08u, 0x000Bu); // rts
+    put_u16(0x0Au, 0x0009u); // nop (delay)
+    put_u32(0x10u, registrar);
+    put_u32(0x14u, runtime_base + 0x40u);
+
+    // +0x44 is already a proved inner owner. The exact callback starts two
+    // instructions earlier with the missing ABI save prefix. Arbitrary
+    // decodable padding in the same position must not be promoted.
+    put_u16(0x40u, valid_save_prefix ? 0x2FE6u : 0x0009u);
+    put_u16(0x42u, valid_save_prefix ? 0x4F22u : 0x0009u);
+    put_u16(0x44u, 0x4F26u); // lds.l @r15+,pr
+    put_u16(0x46u, 0x000Bu); // rts
+    put_u16(0x48u, 0x6EF6u); // mov.l @r15+,r14 (delay)
     return bytes;
 }
 
@@ -992,6 +1113,100 @@ int main() {
                    std::binary_search(audit.emitted_block_offsets.begin(),
                                       audit.emitted_block_offsets.end(), offset);
         };
+        const auto guarded_callback_vector =
+            katana::codegen::audit_latent_aot_module(
+                guarded_callback_vector_module(), 0x8088B000u,
+                indexed_table_roots, 0x8C900000u, indexed_table_options);
+        const std::vector<std::uint32_t> expected_guarded_entries{
+            0u, 0x80u, 0x88u, 0x90u, 0x98u};
+        require(
+            guarded_callback_vector.admitted &&
+                guarded_callback_vector.final_entry_offsets ==
+                    expected_guarded_entries &&
+                std::all_of(
+                    expected_guarded_entries.begin() + 1u,
+                    expected_guarded_entries.end(),
+                    [&](const auto offset) {
+                        return audit_has_entry(guarded_callback_vector,
+                                               offset);
+                    }) &&
+                !audit_has_entry(guarded_callback_vector, 0x92u) &&
+                !audit_has_entry(guarded_callback_vector, 0xA0u),
+            "Identity-gebundene Callback-/VTable-Blockentries wurden nicht "
+            "in die Loaded-AOT-Entry-Menge publiziert oder ein Delay-/"
+            "Unknown-Kandidat wurde faelschlich freigegeben: admitted=" +
+                std::to_string(guarded_callback_vector.admitted) +
+                " entries=" +
+                std::to_string(
+                    guarded_callback_vector.final_entry_offsets.size()) +
+                " e80=" +
+                std::to_string(audit_has_entry(guarded_callback_vector,
+                                               0x80u)) +
+                " e88=" +
+                std::to_string(audit_has_entry(guarded_callback_vector,
+                                               0x88u)) +
+                " e90=" +
+                std::to_string(audit_has_entry(guarded_callback_vector,
+                                               0x90u)) +
+                " e98=" +
+                std::to_string(audit_has_entry(guarded_callback_vector,
+                                               0x98u)) +
+                " delay=" +
+                std::to_string(audit_has_entry(guarded_callback_vector,
+                                               0x92u)) +
+                " unknown=" +
+                std::to_string(audit_has_entry(guarded_callback_vector,
+                                               0xA0u)));
+        const auto loaded_aot_entry_family =
+            katana::codegen::audit_latent_aot_module(
+                loaded_aot_entry_family_module(), 0x80000000u,
+                indexed_table_roots, 0x8C900000u, indexed_table_options);
+        require(
+            loaded_aot_entry_family.admitted &&
+                loaded_aot_entry_family.final_entry_offsets ==
+                    std::vector<std::uint32_t>{0u, 0x4E0u, 0x560u} &&
+                std::binary_search(
+                    loaded_aot_entry_family.final_entry_offsets.begin(),
+                    loaded_aot_entry_family.final_entry_offsets.end(),
+                    0x4E0u) &&
+                std::binary_search(
+                    loaded_aot_entry_family.final_entry_offsets.begin(),
+                    loaded_aot_entry_family.final_entry_offsets.end(),
+                    0x560u) &&
+                audit_has_entry(loaded_aot_entry_family, 0x4E0u) &&
+                audit_has_entry(loaded_aot_entry_family, 0x560u) &&
+                std::binary_search(
+                    loaded_aot_entry_family.emitted_function_offsets.begin(),
+                    loaded_aot_entry_family.emitted_function_offsets.end(),
+                    0x4E0u) &&
+                std::binary_search(
+                    loaded_aot_entry_family.emitted_function_offsets.begin(),
+                    loaded_aot_entry_family.emitted_function_offsets.end(),
+                    0x560u),
+            "Eine identity-bound P2-PC-Literal-Familie verlor den globalen "
+            "Loaded-AOT-Entry bei +0x4e0 oder materialisierte ihn nicht: "
+            "admitted=" +
+                std::to_string(loaded_aot_entry_family.admitted) +
+                " e4e0=" +
+                std::to_string(audit_has_entry(loaded_aot_entry_family,
+                                               0x4E0u)) +
+                " e560=" +
+                std::to_string(audit_has_entry(loaded_aot_entry_family,
+                                               0x560u)));
+        const auto loaded_aot_entry_family_without_binding =
+            katana::codegen::audit_latent_aot_module(
+                loaded_aot_entry_family_module(), 0x80000000u,
+                indexed_table_roots, indexed_table_options);
+        require(
+            loaded_aot_entry_family_without_binding.admitted &&
+                !std::binary_search(
+                    loaded_aot_entry_family_without_binding
+                        .final_entry_offsets.begin(),
+                    loaded_aot_entry_family_without_binding
+                        .final_entry_offsets.end(),
+                    0x4E0u),
+            "Ein P2-Codepointer wurde ohne identitaetsgebundene Runtime-Basis "
+            "als Loaded-AOT-Entry freigegeben.");
         const auto indexed_table_positive =
             katana::codegen::audit_latent_aot_module(
                 indexed_call_table_module(), 0x88000000u,
@@ -1288,6 +1503,52 @@ int main() {
                     0x100u),
             "Ein Callback-Sink ohne Record-ABI-Provenienz erfand einen "
             "lokalen Folgecallback.");
+
+        const std::array fallthrough_roots{0u, 0x44u};
+        const std::array fallthrough_external_targets{0x8C040000u};
+        const std::array fallthrough_sinks{
+            katana::codegen::LatentAotExternalCallbackSink{
+                0x8C040000u, 0x04u, 0x00u}};
+        katana::codegen::LatentAotDiscoveryOptions fallthrough_options;
+        fallthrough_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        fallthrough_options.completeness_policy =
+            katana::codegen::LatentAotCompletenessPolicy::
+                ExactRuntimeOnlyStopOnMiss;
+        fallthrough_options.external_code_targets =
+            fallthrough_external_targets;
+        fallthrough_options.external_callback_sinks = fallthrough_sinks;
+
+        const auto fallthrough_prologue =
+            katana::codegen::audit_latent_aot_module(
+                fallthrough_prologue_callback_module(true), 0x88000000u,
+                fallthrough_roots, 0x8C900000u, fallthrough_options);
+        require(
+            fallthrough_prologue.admitted &&
+                std::binary_search(
+                    fallthrough_prologue.final_entry_offsets.begin(),
+                    fallthrough_prologue.final_entry_offsets.end(), 0x40u) &&
+                std::binary_search(
+                    fallthrough_prologue.emitted_block_offsets.begin(),
+                    fallthrough_prologue.emitted_block_offsets.end(), 0x40u) &&
+                std::binary_search(
+                    fallthrough_prologue.emitted_function_offsets.begin(),
+                    fallthrough_prologue.emitted_function_offsets.end(),
+                    0x40u),
+            "Ein exakt registrierter Callback verlor seinen validierten "
+            "ABI-Save-Praefix vor einem bereits analysierten inneren Entry.");
+
+        const auto fallthrough_padding =
+            katana::codegen::audit_latent_aot_module(
+                fallthrough_prologue_callback_module(false), 0x88000000u,
+                fallthrough_roots, 0x8C900000u, fallthrough_options);
+        require(
+            fallthrough_padding.admitted &&
+                !std::binary_search(
+                    fallthrough_padding.final_entry_offsets.begin(),
+                    fallthrough_padding.final_entry_offsets.end(), 0x40u),
+            "Ein decodierbarer Nicht-Prolog vor einem bekannten Entry wurde "
+            "als Callback-Root akzeptiert.");
 
         const std::array mutual_record_external_targets{0x8C020000u};
         const std::array mutual_record_field_sinks{

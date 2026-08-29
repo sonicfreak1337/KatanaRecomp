@@ -524,11 +524,11 @@ struct PreparedLatentAotModule {
     // binding before admission or resume publication.
     std::vector<PreparedLatentAotPcLiteralEvidence> pc_literal_evidence;
     // Contains offset zero for a heuristic candidate, or exactly the accepted
-    // hash-bound offsets for an authoritative candidate. Authoritative roots
-    // are either explicit external hints or a complete bounded entry table
-    // derived from the transformed module bytes. The exporter must require a
-    // native source block for every listed offset before publishing a
-    // loaded-module template.
+    // hash-bound ingress offsets for an authoritative candidate. Ingresses
+    // include explicit roots, complete bounded entry tables and positive
+    // Guarded-AOT callback/vtable entries from the same immutable module
+    // generation. The exporter must require a native source block for every
+    // listed offset before publishing a loaded-module template.
     std::vector<std::uint32_t> entry_offsets;
     // Sorted, unique P1-normalized values which point outside the module's
     // synthetic AOT extent. Values come either from aligned pointer-width

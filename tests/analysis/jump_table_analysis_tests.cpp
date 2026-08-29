@@ -623,14 +623,14 @@ int main() {
     bt_lines[7].instruction.branch_register = 4u;
     const auto bt_table =
         katana::analysis::recognize_bounded_relative_jump_table(relative, bt_lines, 7u);
-    require(bt_table.has_value() && bt_table->resolved && !bt_table->aot_candidates_only &&
+    require(bt_table.has_value() && !bt_table->resolved && !bt_table->aot_candidates_only &&
                 bt_table->authority ==
                     katana::analysis::JumpTableAuthority::
-                        NativeImmutableBounded &&
+                        Unresolved &&
                 bt_table->evidence == katana::analysis::ControlFlowEvidence::Unresolved &&
-                bt_table->reason == "bounded-signed-relative-table" &&
+                bt_table->reason == "global-ingress-proof-required" &&
                 bt_table->entries.size() == 2u,
-            "BT-begrenzte relative Tabelle wurde nicht erkannt.");
+            "BT-begrenzte relative Tabelle wurde ohne globalen Ingress als vollstaendig ausgegeben.");
 
     auto bsrf_lines = bt_lines;
     bsrf_lines[7].instruction.kind =
@@ -638,11 +638,12 @@ int main() {
     const auto bsrf_table =
         katana::analysis::recognize_bounded_relative_jump_table(
             relative, bsrf_lines, 7u);
-    require(bsrf_table.has_value() && bsrf_table->resolved &&
+    require(bsrf_table.has_value() && !bsrf_table->resolved &&
                 bsrf_table->dispatch_kind ==
                     katana::analysis::JumpTableDispatchKind::Call &&
+                bsrf_table->reason == "global-ingress-proof-required" &&
                 bsrf_table->entries.size() == 2u,
-            "BSRF-verzweigte relative Call-Tabelle wurde nicht erkannt.");
+            "BSRF-Tabelle umging den globalen Ingressvertrag des oeffentlichen Helpers.");
 
     auto bf_lines = std::vector<katana::sh4::DisassemblyLine>{
         line(0u, katana::sh4::InstructionKind::MovImmediate, 0u, 1u),
@@ -662,8 +663,10 @@ int main() {
     bf_lines[9].instruction.branch_register = 4u;
     const auto bf_table =
         katana::analysis::recognize_bounded_relative_jump_table(relative, bf_lines, 9u);
-    require(bf_table.has_value() && bf_table->resolved && bf_table->entries.size() == 2u,
-            "BF-plus-BRA-begrenzte relative Tabelle wurde nicht erkannt.");
+    require(bf_table.has_value() && !bf_table->resolved &&
+                bf_table->reason == "global-ingress-proof-required" &&
+                bf_table->entries.size() == 2u,
+            "BF-plus-BRA-Tabelle umging den globalen Ingressvertrag.");
 
     katana::io::ExecutableImage mutable_relative;
     mutable_relative.add_segment({".rwx",
@@ -729,16 +732,16 @@ int main() {
     const auto snapshot_relative_table =
         katana::analysis::recognize_bounded_relative_jump_table(
             snapshot_relative, bt_lines, 7u);
-    require(snapshot_relative_table.has_value() && snapshot_relative_table->resolved &&
-                snapshot_relative_table->aot_candidates_only &&
+    require(snapshot_relative_table.has_value() && !snapshot_relative_table->resolved &&
+                !snapshot_relative_table->aot_candidates_only &&
                 snapshot_relative_table->authority ==
-                    katana::analysis::JumpTableAuthority::SnapshotCandidate &&
+                    katana::analysis::JumpTableAuthority::Unresolved &&
                 snapshot_relative_table->evidence ==
-                    katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                    katana::analysis::ControlFlowEvidence::Unresolved &&
                 snapshot_relative_table->encoding ==
                     katana::analysis::JumpTableEncoding::SignedRelative16 &&
                 snapshot_relative_table->reason ==
-                    "snapshot-signed-relative16-candidates" &&
+                    "global-ingress-proof-required" &&
                 snapshot_relative_table->entries.size() == 2u &&
                 snapshot_relative_table->entries[0].target == 0x40u &&
                 snapshot_relative_table->entries[1].target == 0x44u,
@@ -772,8 +775,10 @@ int main() {
     const auto aliased_relative_table =
         katana::analysis::recognize_bounded_relative_jump_table(
             aliased_relative, aliased_relative_lines, 7u);
-    require(aliased_relative_table.has_value() && aliased_relative_table->resolved &&
-                aliased_relative_table->aot_candidates_only &&
+    require(aliased_relative_table.has_value() && !aliased_relative_table->resolved &&
+                !aliased_relative_table->aot_candidates_only &&
+                aliased_relative_table->reason ==
+                    "global-ingress-proof-required" &&
                 aliased_relative_table->table_address == 0x8C000100u &&
                 aliased_relative_table->entries.size() == 2u &&
                 aliased_relative_table->entries[0].target == 0x8C000040u &&
@@ -806,11 +811,11 @@ int main() {
     const auto writable_data_table =
         katana::analysis::recognize_bounded_relative_jump_table(
             writable_data_relative, bt_lines, 7u);
-    require(writable_data_table.has_value() && writable_data_table->resolved &&
-                writable_data_table->aot_candidates_only &&
+    require(writable_data_table.has_value() && !writable_data_table->resolved &&
+                !writable_data_table->aot_candidates_only &&
                 writable_data_table->reason ==
-                    "snapshot-signed-relative16-candidates",
-            "Eine zulaessige beschreibbare Daten-Tabelle verlangte faelschlich Execute-Rechte.");
+                    "global-ingress-proof-required",
+            "Eine beschreibbare Daten-Tabelle umging den globalen Ingressvertrag.");
 
     for (const auto& [source_kind, load_phase, policy] :
          std::array{std::tuple{katana::io::ImageSourceKind::DiscBootFile,

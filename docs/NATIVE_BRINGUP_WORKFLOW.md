@@ -267,6 +267,16 @@ und Performancewerte stammen ausschliesslich aus nicht konkurrierenden
 Laeufen mit Grafikdiagnostik `Off`; Breadcrumbs werden nur fuer den ersten
 relevanten Grafikpfad aktiviert.
 
+Jeder Start eines unvollstaendigen Bring-up-Produkts bewaffnet im
+`game.exe` selbst genau eine persistente Crashsession unter `user-data`.
+Das gilt auch fuer den normalen Doppelklick; ein PowerShell-Wrapper ist kein
+Bestandteil dieses Vertrags. Die Sessiondatei wird vor Content-/Providerstart
+mit Epoch und Prozess-ID exklusiv angelegt und geflusht. Ein sauberer Lauf
+behaelt mindestens den `ARMED`-Marker, ein terminaler Fehler ergaenzt die
+allokationsfreien V1-/V4-/V5-Crashkapseln und flusht sie vor Prozessende.
+Auswertung, Symbolisierung und Taskableitung erfolgen erst nach dem
+ausdruecklichen Signal des Testers und veraendern die laufende Session nicht.
+
 ### Gekoppelte Produktruntime-Optimierung
 
 Die Optimierung wird aus dem bearbeiteten Cluster abgeleitet: Callback- oder
@@ -494,20 +504,59 @@ wird beim Import still zu `Proven` oder `RuntimeContract`.
 
 ### Generische Analyse oder private Titel-Evidence
 
-Nicht jede einmalige Sonic-Struktur braucht eine neue allgemeine Heuristik.
-Die Entscheidungsregel ist:
+Eine konkrete Guestadresse ist nur ein Witness. Vor jedem Edit wird das ganze
+verifizierte Primary Image sowie jedes gebundene Overlay-, Loaded-AOT- und
+sonstige Modul derselben Lifecycle-Generation nach derselben Producer-,
+Consumer-, Owner-, Provider-, Tabellen-, Callback-, VTable-, CFG- oder
+Datenflussfamilie durchsucht. Der Fixscope folgt der Familie, nicht der zuerst
+beobachteten Adresse. Die Entscheidungsregel ist:
 
 - wiederkehrendes, adressunabhaengiges SH-4-Muster: generischen Analyzer
   verbessern;
 - Sonic-spezifische, vollstaendig bekannte Tabelle, Grenze, Callback-,
   Objektmethoden-, Story-/Event-, Overlay-, Stage- oder Charakterstruktur:
-  private identity-bound `sad_disasm`-Evidence;
+  ein privater identity- und generationgebundener Familienvertrag fuer alle
+  bewiesenen Mitglieder;
 - wirklich dynamischer Callback: strikter RuntimeContract/RuntimeOnly.
+
+Ein einzelner Adressfix ist nur dann zulaessig, wenn weder eine generische
+Katana-Regel noch ein privater Familienvertrag sound moeglich ist. Der Befund
+muss dann die untersuchten Geschwister, die verworfenen Generalisierungen und
+den konkreten Unmoeglichkeitsbeweis festhalten. Adjazenz, gleiche
+Registerfamilie oder eine gemeinsame Replayroute allein reicht dafuer nicht.
 
 Private Evidence bindet mindestens Disc-/Image-SHA, Adressbereich,
 Tabellenbytes, Eintragszahl, Zielbytes, Function-Boundary, Modulidentitaet und
 Generation. Sie ist Titelwissen und darf keine Sonic-Adresse in den
 oeffentlichen Core verschieben.
+
+Der Whole-Game-Vertrag ist generationslokal. Primary Image und jedes Modul
+werden separat gegen ihre eigene Source-/Runtime-Basis, Bytes, SHA und aktive
+Generation analysiert. Ein Vector-, VTable-, Callback- oder Entry-Beweis darf
+nicht in ein anderes Image und nie in eine retired Generation diffundieren.
+Der Analyzer darf positive, exakt validierte Mitglieder inventarisieren, aber
+aus einer endlichen positiven Teilmenge keine Vollstaendigkeit einer
+dynamischen Zielmenge ableiten.
+
+`ImageLoadPhase` ist dabei nur Lifecycle-/Schedulingklasse und keine
+Source-Komponentenidentitaet. Ein statischer Vektor darf in einem getrennten
+lesbaren Traeger wie dem System-Bootstrap liegen und trotzdem auf Callbacks im
+aktiven Spielimage zeigen. Die Promotion wird deshalb am Ziel entschieden:
+Zielsegment und aktive Komponente muessen in derselben `ExecutableImage`-
+Generation `source_kind`, `load_phase` und eine nichtleere
+`local_source_name` teilen; ohne Sourceidentitaet gilt nur dasselbe exakte
+Segment. Traeger und Ziel muessen dieselbe Load-Phase besitzen. Weder gleiche
+Load-Phase noch eine physische P1/P2-Aliasgleichheit darf allein einen neuen
+Owner, Hook oder AOT-Entry erzeugen.
+
+FunctionMap, GDI, ProgramIndex, Tabellen- und CodeIdentity-Fakten werden aus
+der gebundenen Authority zentral materialisiert und von Analyzer, Export und
+Runtime ueber dieselbe Identitaet konsumiert. Wiederholte manuelle
+Adresslisten in mehreren Schichten sind kein zusaetzlicher Proof. Nach einer
+globalen Regel ist eine frische Whole-Game-Analyse Pflicht; Acceptance verlangt
+Family-Coverage, keine Proof-Downgrades, keine neuen ungebundenen Roots und
+eine explizite Klassifikation jedes gefundenen Familienmitglieds als
+geschlossen, streng dynamisch gebunden oder weiterhin fail-closed.
 
 ## Zielvertrag fuer Replay und First-Divergence
 

@@ -3833,11 +3833,21 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             runtime_dispatch.find("KATANA_CRASH_CAPSULE version=") !=
                 std::string::npos &&
+            generated_main.find(
+                "KATANA_CRASH_CAPSULE_ARMED version=1 epoch_ms=") !=
+                std::string::npos &&
+            generated_main.find("katana-crash-session-") !=
+                std::string::npos &&
+            generated_main.find(
+                "native_product_crash_session.arm(executable_path)") !=
+                std::string::npos &&
+            generated_main.find("native_product_flush_fault_file();") !=
+                std::string::npos &&
             generated_before.at("include/katana_port.hpp")
                     .find("katana::runtime::CrashCapsule& crash_capsule") !=
                 std::string::npos,
         "Der Produktport bindet die feste Crash Capsule nicht an Blockdispatch, MMIO, "
-        "Scheduler und terminale Fehlerausgabe.");
+        "Scheduler, persistente Bring-up-Session und terminale Fehlerausgabe.");
     require(
         runtime_dispatch.find(
             "active_diagnostics = detailed_dispatch_diagnostics_enabled()") !=

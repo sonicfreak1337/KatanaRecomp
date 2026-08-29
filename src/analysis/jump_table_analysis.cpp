@@ -464,9 +464,11 @@ std::optional<BoundedRelativeIndexProof>
 bounded_entry_count(const std::span<const katana::sh4::DisassemblyLine> lines,
                     const katana::io::ExecutableImage& image,
                     const std::size_t scale_index,
+                    const std::size_t load_index,
                     const std::size_t dispatch_index,
                     const std::uint8_t index_register) {
-    if (scale_index < 2u || dispatch_index <= scale_index ||
+    if (scale_index < 2u || load_index < scale_index ||
+        dispatch_index <= load_index ||
         dispatch_index >= lines.size())
         return std::nullopt;
     for (std::size_t distance = 2u; distance <= 16u && distance <= scale_index; ++distance) {
@@ -505,9 +507,19 @@ bounded_entry_count(const std::span<const katana::sh4::DisassemblyLine> lines,
             bound.instruction.immediate <= 0 ||
             static_cast<std::uint64_t>(bound.instruction.immediate) > maximum_jump_table_entries)
             return std::nullopt;
-        return BoundedRelativeIndexProof{
-            static_cast<std::size_t>(bound.instruction.immediate),
-            compare_index - 1u};
+        BoundedRelativeIndexProof proof;
+        proof.entry_count =
+            static_cast<std::size_t>(bound.instruction.immediate);
+        proof.first_instruction_index = compare_index - 1u;
+        proof.requires_global_ingress_proof = true;
+        proof.ingress_seed_address = bound.address;
+        proof.ingress_load_address = lines[load_index].address;
+        if (branch.instruction.kind ==
+            katana::sh4::InstructionKind::Bf) {
+            proof.internal_branch_edges.push_back(
+                {branch.address, lines[scale_index].address});
+        }
+        return proof;
     }
     return std::nullopt;
 }
@@ -783,6 +795,7 @@ std::optional<BoundedRelativeIndexProof> recognize_relative_index_proof(
                     lines,
                     image,
                     scale_line_index,
+                    load_index,
                     dispatch_index,
                     lines[scale_line_index].instruction.destination_register))
                 return classic;
@@ -1329,6 +1342,18 @@ recognize_bounded_relative_jump_table(
     auto recognition = detail::recognize_relative_jump_table(
         image, lines, dispatch_index, cache);
     if (!recognition.has_value()) return std::nullopt;
+    if (recognition->table.resolved &&
+        recognition->producer.requires_global_ingress_proof &&
+        !recognition->producer.global_ingress_proven) {
+        // This public shape-only helper has no authoritative whole-program
+        // predecessor universe. Preserve decoded entries for diagnostics,
+        // but never expose local guard dominance as complete CFG authority.
+        recognition->table.resolved = false;
+        recognition->table.aot_candidates_only = false;
+        recognition->table.authority = JumpTableAuthority::Unresolved;
+        recognition->table.evidence = ControlFlowEvidence::Unresolved;
+        recognition->table.reason = "global-ingress-proof-required";
+    }
     return std::move(recognition->table);
 }
 

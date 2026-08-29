@@ -6,6 +6,7 @@
 #include "katana/io/input_provenance.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/instruction.hpp"
+#include "global_entry_predecessor_index.hpp"
 #include "guarded_native_entry_shape.hpp"
 #include "jump_table_analysis_internal.hpp"
 #include "static_callback_inventory.hpp"
@@ -21,6 +22,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -222,13 +224,64 @@ bool add_seed(std::map<std::uint32_t, SeedEvidence>& seeds,
 
 bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
                           const IndirectControlFlowResolution& resolution,
+                          const std::function<std::optional<std::uint32_t>(
+                              std::uint32_t)>& canonical_code_address,
+                          const std::function<std::optional<std::uint32_t>(
+                              std::uint32_t)>& canonical_guarded_candidate,
                           SeedChangeTracker* const changes = nullptr,
                           SeedLedgerTelemetry* const telemetry = nullptr) {
-    auto targets = resolution.targets;
-    if (resolution.target.has_value()) targets.push_back(*resolution.target);
-    targets.insert(targets.end(),
-                   resolution.analysis_candidates.begin(),
-                   resolution.analysis_candidates.end());
+    const bool explicit_candidate_contract =
+        resolution.reason == "user-hint" ||
+        resolution.reason == "user-override" ||
+        std::find(resolution.evidence_origins.begin(),
+                  resolution.evidence_origins.end(),
+                  AnalysisEvidenceOrigin::UserHint) !=
+            resolution.evidence_origins.end() ||
+        std::find(resolution.evidence_origins.begin(),
+                  resolution.evidence_origins.end(),
+                  AnalysisEvidenceOrigin::UserOverride) !=
+            resolution.evidence_origins.end();
+    const auto canonical_seed_candidate =
+        [&](const std::uint32_t target) -> std::optional<std::uint32_t> {
+        if (explicit_candidate_contract ||
+            control_flow_evidence_requires_static_decode(
+                resolution.evidence)) {
+            const auto canonical = canonical_code_address(target);
+            return canonical.has_value()
+                       ? canonical
+                       : std::optional<std::uint32_t>{target};
+        }
+        return canonical_guarded_candidate(target);
+    };
+    std::vector<std::uint32_t> semantic_targets;
+    semantic_targets.reserve(resolution.targets.size() +
+                             (resolution.target.has_value() ? 1u : 0u));
+    const auto add_semantic_target = [&](const std::uint32_t target) {
+        const auto canonical = canonical_seed_candidate(target);
+        if (canonical.has_value()) semantic_targets.push_back(*canonical);
+    };
+    for (const auto target : resolution.targets) add_semantic_target(target);
+    if (resolution.target.has_value())
+        add_semantic_target(*resolution.target);
+    std::sort(semantic_targets.begin(), semantic_targets.end());
+    semantic_targets.erase(
+        std::unique(semantic_targets.begin(), semantic_targets.end()),
+        semantic_targets.end());
+
+    std::vector<std::uint32_t> analysis_candidates;
+    analysis_candidates.reserve(resolution.analysis_candidates.size());
+    for (const auto candidate : resolution.analysis_candidates) {
+        const auto canonical = canonical_seed_candidate(candidate);
+        if (canonical.has_value()) analysis_candidates.push_back(*canonical);
+    }
+    std::sort(analysis_candidates.begin(), analysis_candidates.end());
+    analysis_candidates.erase(
+        std::unique(analysis_candidates.begin(), analysis_candidates.end()),
+        analysis_candidates.end());
+
+    auto targets = semantic_targets;
+    targets.insert(targets.end(), analysis_candidates.begin(),
+                   analysis_candidates.end());
     std::sort(targets.begin(), targets.end());
     targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
     if (targets.empty()) return false;
@@ -247,15 +300,10 @@ bool add_resolution_seeds(std::map<std::uint32_t, SeedEvidence>& seeds,
         std::unique(evidence_callees.begin(), evidence_callees.end()),
         evidence_callees.end());
     for (const auto target : targets) {
-        const auto analysis_candidate =
-            std::find(resolution.analysis_candidates.begin(),
-                      resolution.analysis_candidates.end(),
-                      target) != resolution.analysis_candidates.end();
-        const auto resolved_target =
-            resolution.target == target ||
-            std::find(resolution.targets.begin(),
-                      resolution.targets.end(),
-                      target) != resolution.targets.end();
+        const auto analysis_candidate = std::binary_search(
+            analysis_candidates.begin(), analysis_candidates.end(), target);
+        const auto resolved_target = std::binary_search(
+            semantic_targets.begin(), semantic_targets.end(), target);
         std::vector<SeedCauseKind> cause_kinds;
         if (relative_call_island || analysis_candidate)
             cause_kinds.push_back(
@@ -491,6 +539,9 @@ class IncrementalCfaScanCache final {
         resolution_index_.clear();
         runtime_copy_index_.clear();
         continuation_index_.clear();
+        global_entry_predecessors_.clear();
+        dynamic_predecessor_fingerprint_ = {};
+        dynamic_predecessor_fingerprint_initialized_ = false;
         last_changed_runtime_copies_.clear();
         last_changed_continuations_.clear();
     }
@@ -499,6 +550,10 @@ class IncrementalCfaScanCache final {
                const katana::io::ExecutableImage& image,
                JumpTableSnapshotCache& jump_table_cache,
                const std::span<const std::uint32_t> external_entry_boundaries,
+               const detail::GlobalEntryPredecessorIndex&
+                   dynamic_predecessors,
+               const std::tuple<std::uint64_t, std::uint64_t, std::size_t>
+                   dynamic_predecessor_fingerprint,
                ControlFlowAnalysisResult& telemetry) {
         last_changed_dispatches_.clear();
         last_changed_runtime_copies_.clear();
@@ -585,6 +640,44 @@ class IncrementalCfaScanCache final {
                     std::numeric_limits<std::uint32_t>::max())
                     dirty_addresses.insert(
                         static_cast<std::uint32_t>(new_end));
+            }
+        }
+        detail::GlobalEntryPredecessorIndex next_global_predecessors;
+        for (const auto& [entry, function] : functions_) {
+            static_cast<void>(function);
+            next_global_predecessors.add_boundary(entry);
+        }
+        for (const auto entry : external_entry_boundaries)
+            next_global_predecessors.add_boundary(entry);
+        for (const auto& [target, sources] : direct_target_sources_) {
+            for (const auto source : sources)
+                next_global_predecessors.add_edge(source, target);
+        }
+        for (const auto& [key, continuation] : continuation_index_) {
+            static_cast<void>(key);
+            next_global_predecessors.add_edge(
+                continuation.instruction_address,
+                continuation.target_address);
+        }
+        const bool predecessor_universe_changed =
+            !(next_global_predecessors == global_entry_predecessors_) ||
+            !dynamic_predecessor_fingerprint_initialized_ ||
+            dynamic_predecessor_fingerprint !=
+                dynamic_predecessor_fingerprint_;
+        global_entry_predecessors_ =
+            std::move(next_global_predecessors);
+        dynamic_predecessor_fingerprint_ =
+            dynamic_predecessor_fingerprint;
+        dynamic_predecessor_fingerprint_initialized_ = true;
+        if (predecessor_universe_changed) {
+            for (const auto& [dispatch, recognition] :
+                 recognition_index_) {
+                if (!recognition.relative_table_producer.has_value() ||
+                    !recognition.relative_table_producer
+                         ->requires_global_ingress_proof)
+                    continue;
+                last_changed_dispatches_.insert(dispatch);
+                dirty_addresses.insert(dispatch);
             }
         }
         if (dirty_addresses.empty()) return;
@@ -737,8 +830,11 @@ class IncrementalCfaScanCache final {
                 auto& producer =
                     *recognition.relative_table_producer;
                 producer.global_ingress_proven =
-                    relative_table_global_ingress_closed(
-                        producer, external_entry_boundaries);
+                    global_entry_predecessors_.closes(
+                        producer.ingress_seed_address,
+                        producer.ingress_load_address,
+                        std::span{producer.internal_branch_edges},
+                        &dynamic_predecessors);
                 // A locally finite suffix is not complete CFG evidence until
                 // every global root and direct predecessor agrees that its
                 // seed dominates the indexed load. Retain the producer for
@@ -1059,49 +1155,6 @@ class IncrementalCfaScanCache final {
         components_.erase(component);
     }
 
-    [[nodiscard]] bool relative_table_global_ingress_closed(
-        const detail::RelativeJumpTableProducerEvidence& producer,
-        const std::span<const std::uint32_t> external_entry_boundaries) const {
-        if (!producer.requires_global_ingress_proof) return true;
-        if (producer.ingress_seed_address >= producer.ingress_load_address)
-            return false;
-
-        const auto is_interior = [&](const std::uint32_t address) {
-            return address > producer.ingress_seed_address &&
-                   address <= producer.ingress_load_address;
-        };
-        const auto function =
-            functions_.upper_bound(producer.ingress_seed_address);
-        if (function != functions_.end() && is_interior(function->first))
-            return false;
-        const auto boundary = std::upper_bound(
-            external_entry_boundaries.begin(),
-            external_entry_boundaries.end(),
-            producer.ingress_seed_address);
-        if (boundary != external_entry_boundaries.end() &&
-            is_interior(*boundary))
-            return false;
-
-        for (auto target = direct_target_sources_.upper_bound(
-                 producer.ingress_seed_address);
-             target != direct_target_sources_.end() &&
-             target->first <= producer.ingress_load_address;
-             ++target) {
-            for (const auto source : target->second) {
-                const auto allowed = std::find_if(
-                    producer.internal_branch_edges.begin(),
-                    producer.internal_branch_edges.end(),
-                    [&](const auto& edge) {
-                        return edge.source == source &&
-                               edge.target == target->first;
-                    });
-                if (allowed == producer.internal_branch_edges.end())
-                    return false;
-            }
-        }
-        return true;
-    }
-
     void decrement_target(const std::uint32_t address,
                           const std::uint32_t source) {
         const auto found = direct_target_references_.find(address);
@@ -1251,6 +1304,10 @@ class IncrementalCfaScanCache final {
         last_changed_runtime_copies_;
     std::set<std::pair<std::uint32_t, std::uint32_t>>
         last_changed_continuations_;
+    detail::GlobalEntryPredecessorIndex global_entry_predecessors_;
+    std::tuple<std::uint64_t, std::uint64_t, std::size_t>
+        dynamic_predecessor_fingerprint_{};
+    bool dynamic_predecessor_fingerprint_initialized_ = false;
 };
 
 const katana::sh4::DisassemblyLine* find_instruction(const RecursiveAnalysisResult& result,
@@ -2465,6 +2522,11 @@ struct FunctionEdgeFamilies final {
     std::vector<ResolvedControlFlowEdge> semantic;
     std::vector<ResolvedControlFlowEdge> candidate_calls;
     std::vector<ResolvedControlFlowEdge> candidate_tails;
+    // Potential executable targets which constrain global ingress but are not
+    // strong enough to become FunctionValue semantic/candidate edges. This is
+    // especially important for partial table-origin dispatches: omitting them
+    // would let one unresolved table enter another producer behind its guard.
+    std::vector<ResolvedControlFlowEdge> predecessor_only;
 
     bool operator==(const FunctionEdgeFamilies&) const = default;
 };
@@ -2500,6 +2562,7 @@ class FunctionEdgeJournal final {
         pending_semantic_.clear();
         pending_candidate_calls_.clear();
         pending_candidate_tails_.clear();
+        predecessor_index_.clear();
         state_root_.reset();
         fingerprint_a_ = 0u;
         fingerprint_b_ = 0u;
@@ -2510,6 +2573,8 @@ class FunctionEdgeJournal final {
         const std::map<std::uint32_t, IndirectControlFlowResolution>&
             resolutions,
         const std::map<std::uint32_t, JumpTableAnalysis>& tables,
+        const std::function<std::optional<std::uint32_t>(
+            std::uint32_t)>& canonical_code_address,
         ControlFlowAnalysisResult& telemetry) {
         std::map<std::uint32_t, std::optional<FunctionEdgeFamilies>>
             state_changes;
@@ -2519,9 +2584,18 @@ class FunctionEdgeJournal final {
             const auto resolution_index = resolutions.find(site);
             if (resolution_index != resolutions.end()) {
                 const auto& resolution = resolution_index->second;
-                auto targets = resolution.targets;
-                if (resolution.target.has_value())
-                    targets.push_back(*resolution.target);
+                std::vector<std::uint32_t> targets;
+                targets.reserve(
+                    resolution.targets.size() +
+                    (resolution.target.has_value() ? 1u : 0u));
+                for (const auto target : resolution.targets)
+                    targets.push_back(
+                        canonical_code_address(target).value_or(target));
+                if (resolution.target.has_value()) {
+                    const auto target = *resolution.target;
+                    targets.push_back(
+                        canonical_code_address(target).value_or(target));
+                }
                 std::sort(targets.begin(), targets.end());
                 targets.erase(std::unique(targets.begin(), targets.end()),
                               targets.end());
@@ -2548,10 +2622,29 @@ class FunctionEdgeJournal final {
                             : next.candidate_tails;
                     for (const auto target :
                          resolution.analysis_candidates) {
+                        const auto canonical =
+                            canonical_code_address(target).value_or(target);
                         candidates.push_back(
                             {site,
-                             target,
+                             canonical,
                              ResolvedControlFlowKind::Call,
+                             true,
+                             ControlFlowEvidence::GuardedPartial,
+                             resolution.evidence_origins,
+                             true});
+                    }
+                } else if (resolution.kind ==
+                               IndirectControlFlowKind::Jump &&
+                           resolution.origin_class ==
+                               IndirectControlFlowOriginClass::Table) {
+                    for (const auto target :
+                         resolution.analysis_candidates) {
+                        const auto canonical =
+                            canonical_code_address(target).value_or(target);
+                        next.predecessor_only.push_back(
+                            {site,
+                             canonical,
+                             ResolvedControlFlowKind::Jump,
                              true,
                              ControlFlowEvidence::GuardedPartial,
                              resolution.evidence_origins,
@@ -2564,9 +2657,11 @@ class FunctionEdgeJournal final {
                 const auto& table = table_index->second;
                 if (table.resolved && !table.aot_candidates_only) {
                 for (const auto& entry : table.entries) {
+                    const auto target = canonical_code_address(entry.target)
+                                            .value_or(entry.target);
                     next.semantic.push_back(
                         {site,
-                         entry.target,
+                         target,
                          table.dispatch_kind == JumpTableDispatchKind::Call
                              ? ResolvedControlFlowKind::Call
                              : ResolvedControlFlowKind::Jump,
@@ -2581,17 +2676,56 @@ class FunctionEdgeJournal final {
                               ? AnalysisEvidenceOrigin::UserOverride
                               : AnalysisEvidenceOrigin::JumpTable}});
                 }
+                } else {
+                    for (const auto& entry : table.entries) {
+                        if (!entry.accepted) continue;
+                        const auto target = canonical_code_address(entry.target)
+                                                .value_or(entry.target);
+                        next.predecessor_only.push_back(
+                            {site,
+                             target,
+                             table.dispatch_kind ==
+                                     JumpTableDispatchKind::Call
+                                 ? ResolvedControlFlowKind::Call
+                                 : ResolvedControlFlowKind::Jump,
+                             true,
+                             ControlFlowEvidence::GuardedPartial,
+                             {AnalysisEvidenceOrigin::JumpTable},
+                             true});
+                    }
                 }
             }
             canonicalize_function_edges(next.semantic);
             canonicalize_function_edges(next.candidate_calls);
             canonicalize_function_edges(next.candidate_tails);
+            canonicalize_function_edges(next.predecessor_only);
             const auto previous = families_.find(site);
             const FunctionEdgeFamilies empty;
             const auto& old = previous == families_.end()
                                   ? empty
                                   : previous->second;
             if (old == next) continue;
+            const auto update_predecessors = [&](const auto& family,
+                                                 const bool add) {
+                const auto update_edges = [&](const auto& edges) {
+                    for (const auto& edge : edges) {
+                        if (add)
+                            predecessor_index_.add_edge(
+                                edge.instruction_address,
+                                edge.target_address);
+                        else
+                            predecessor_index_.remove_edge(
+                                edge.instruction_address,
+                                edge.target_address);
+                    }
+                };
+                update_edges(family.semantic);
+                update_edges(family.candidate_calls);
+                update_edges(family.candidate_tails);
+                update_edges(family.predecessor_only);
+            };
+            update_predecessors(old, false);
+            update_predecessors(next, true);
             const auto old_token = state_token(site, old, telemetry);
             const auto next_token = state_token(site, next, telemetry);
             fingerprint_a_ ^= old_token.first ^ next_token.first;
@@ -2626,7 +2760,8 @@ class FunctionEdgeJournal final {
                     telemetry.function_edge_state_copy_items +=
                         value->semantic.size() +
                         value->candidate_calls.size() +
-                        value->candidate_tails.size();
+                        value->candidate_tails.size() +
+                        value->predecessor_only.size();
             }
             state_root_ = std::move(root);
         }
@@ -2681,6 +2816,11 @@ class FunctionEdgeJournal final {
     [[nodiscard]] auto state_fingerprint() const noexcept {
         return std::tuple{fingerprint_a_, fingerprint_b_,
                           state_entry_count_};
+    }
+
+    [[nodiscard]] const detail::GlobalEntryPredecessorIndex&
+    predecessor_index() const noexcept {
+        return predecessor_index_;
     }
 
     [[nodiscard]] static bool exact_state_equal(
@@ -2772,6 +2912,7 @@ class FunctionEdgeJournal final {
         append_family(family.semantic);
         append_family(family.candidate_calls);
         append_family(family.candidate_tails);
+        append_family(family.predecessor_only);
         const auto digest = katana::io::sha256_bytes(encoded);
         const auto parse = [&](const std::size_t offset) {
             std::uint64_t result = 0u;
@@ -2792,6 +2933,7 @@ class FunctionEdgeJournal final {
     DeltaMap pending_semantic_;
     DeltaMap pending_candidate_calls_;
     DeltaMap pending_candidate_tails_;
+    detail::GlobalEntryPredecessorIndex predecessor_index_;
     std::shared_ptr<const FunctionEdgeJournalStateRoot> state_root_;
     std::uint64_t fingerprint_a_ = 0u;
     std::uint64_t fingerprint_b_ = 0u;
@@ -2858,10 +3000,13 @@ guarded_aot_code_address_rejection_reason(
 
 GuardedAotEntryCollection
 collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
-                            const ControlFlowAnalysisResult& analysis,
-                            const GuardedCodeInventory& guarded_code_inventory,
-                            const std::span<const std::uint32_t>
-                                non_root_function_entry_hints) {
+                             const ControlFlowAnalysisResult& analysis,
+                             const GuardedCodeInventory& guarded_code_inventory,
+                             const std::span<const std::uint32_t>
+                                 non_root_function_entry_hints,
+                             const std::function<std::optional<std::uint32_t>(
+                                 std::uint32_t)>&
+                                 canonical_guarded_candidate) {
     std::map<std::uint32_t, GuardedAotEntry> entries;
     std::map<std::pair<std::uint32_t, GuardedAotEntryRejectionReason>,
              GuardedAotEntryRejection>
@@ -2913,12 +3058,13 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
             // boundary, symbol, entry point or statically authenticated call
             // target does.  Keep a purely contextual delay-slot decode
             // rejected even when metadata names the address.
-            if (line->is_delay_slot ||
-                (physical_delay_slot_owner &&
-                 !has_independent_normal_entry_evidence(
-                     analysis.recursive,
-                     non_root_function_entry_hints,
-                     resolved))) {
+            const auto independent_normal_entry =
+                has_independent_normal_entry_evidence(
+                    analysis.recursive,
+                    non_root_function_entry_hints,
+                    resolved);
+            if ((line->is_delay_slot || physical_delay_slot_owner) &&
+                !independent_normal_entry) {
                 reject(resolved,
                        GuardedAotEntryRejectionReason::DelaySlotEntry);
                 return;
@@ -2997,6 +3143,17 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
         };
 
     for (const auto& resolution : analysis.indirect_control_flow) {
+        const bool explicit_candidate_contract =
+            resolution.reason == "user-hint" ||
+            resolution.reason == "user-override" ||
+            std::find(resolution.evidence_origins.begin(),
+                      resolution.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::UserHint) !=
+                resolution.evidence_origins.end() ||
+            std::find(resolution.evidence_origins.begin(),
+                      resolution.evidence_origins.end(),
+                      AnalysisEvidenceOrigin::UserOverride) !=
+                resolution.evidence_origins.end();
         auto targets = resolution.analysis_candidates;
         if (!control_flow_evidence_proven(resolution.evidence)) {
             if (resolution.target.has_value())
@@ -3011,15 +3168,28 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
                 ? GuardedAotEntryOrigin::IndirectCall
                 : GuardedAotEntryOrigin::TailIngress;
         const std::array source_sites{resolution.instruction_address};
-        for (const auto target : targets)
-            add_entry(target, origin, source_sites);
+        for (const auto target : targets) {
+            if (explicit_candidate_contract) {
+                // User-declared edges are an explicit static contract.  Keep
+                // their typed materialization rejection instead of silently
+                // treating a malformed declaration as an optional AOT hint.
+                add_entry(target, origin, source_sites);
+                continue;
+            }
+            const auto canonical = canonical_guarded_candidate(target);
+            if (canonical.has_value())
+                add_entry(*canonical, origin, source_sites);
+        }
     }
     for (const auto& continuation : analysis.static_return_continuations) {
         if (!control_flow_evidence_proven(continuation.evidence)) {
             const std::array source_sites{continuation.instruction_address};
-            add_entry(continuation.target_address,
-                      GuardedAotEntryOrigin::StaticReturn,
-                      source_sites);
+            const auto canonical =
+                canonical_guarded_candidate(continuation.target_address);
+            if (canonical.has_value())
+                add_entry(*canonical,
+                          GuardedAotEntryOrigin::StaticReturn,
+                          source_sites);
         }
     }
     for (const auto& table : analysis.jump_tables) {
@@ -3027,14 +3197,35 @@ collect_guarded_aot_entries(const katana::io::ExecutableImage& image,
             (control_flow_evidence_proven(table.evidence) &&
              !table.aot_candidates_only))
             continue;
+        const bool binding_table_contract =
+            table.authority == JumpTableAuthority::NativeImmutableBounded ||
+            table.authority == JumpTableAuthority::IdentityBoundDeclared;
         for (const auto& entry : table.entries) {
             if (entry.accepted) {
                 const std::array source_sites{table.dispatch_address};
                 const std::array source_objects{table.table_address};
-                add_entry(entry.target,
-                          GuardedAotEntryOrigin::JumpTableTail,
-                          source_sites,
-                          source_objects);
+                if (binding_table_contract) {
+                    // A finite immutable or identity-bound declaration is a
+                    // static contract. Preserve a typed rejection when one of
+                    // its promised entries cannot be materialized.
+                    add_entry(entry.target,
+                              GuardedAotEntryOrigin::JumpTableTail,
+                              source_sites,
+                              source_objects);
+                    continue;
+                }
+                // Writable snapshot tables and other candidate-only scans are
+                // speculative inventory. They may contain scalar data, a P2
+                // spelling of a P1 entry, or a physical delay slot. Only the
+                // centralized structural ingress contract may turn such a
+                // value into executable AOT inventory.
+                const auto canonical =
+                    canonical_guarded_candidate(entry.target);
+                if (canonical.has_value())
+                    add_entry(*canonical,
+                              GuardedAotEntryOrigin::JumpTableTail,
+                              source_sites,
+                              source_objects);
             }
         }
     }
@@ -3864,14 +4055,45 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
     bool static_callback_contracts_materialized = false;
     auto& guarded_native_entry_shapes =
         *session_state.guarded_native_entry_shapes;
-    const auto guarded_callback_candidate_is_admissible =
+    const auto canonical_code_address =
         [&](const std::uint32_t address) {
-            return std::binary_search(
-                       non_root_function_entry_hints.begin(),
-                       non_root_function_entry_hints.end(), address) ||
-                   guarded_native_entry_shapes.classify(address) ==
-                       detail::GuardedNativeEntryShapeStatus::Valid;
+            const auto validation = validate_decode_candidate(image, address);
+            return validation.valid()
+                       ? std::optional<std::uint32_t>{
+                             validation.resolved_address}
+                       : std::nullopt;
         };
+    const auto canonical_guarded_candidate =
+        [&](const std::uint32_t address) {
+            const auto canonical = canonical_code_address(address);
+            if (!canonical.has_value()) return std::optional<std::uint32_t>{};
+            const auto independently_bound = std::binary_search(
+                non_root_function_entry_hints.begin(),
+                non_root_function_entry_hints.end(), *canonical);
+            const auto status = independently_bound
+                                    ? guarded_native_entry_shapes
+                                          .classify_independent_normal_entry(
+                                              *canonical)
+                                    : guarded_native_entry_shapes.classify(
+                                          *canonical);
+            return status == detail::GuardedNativeEntryShapeStatus::Valid
+                       ? canonical
+                       : std::optional<std::uint32_t>{};
+        };
+    const auto canonical_seed_candidate =
+        [&](const std::uint32_t address,
+            const ControlFlowEvidence evidence,
+            const bool explicit_contract = false)
+            -> std::optional<std::uint32_t> {
+        if (explicit_contract ||
+            control_flow_evidence_requires_static_decode(evidence)) {
+            const auto canonical = canonical_code_address(address);
+            return canonical.has_value()
+                       ? canonical
+                       : std::optional<std::uint32_t>{address};
+        }
+        return canonical_guarded_candidate(address);
+    };
     auto& function_value_session =
         *session_state.function_value_session;
     static_assert(
@@ -4754,10 +4976,13 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             pending_function_boundary_deltas.insert_or_assign(
                 entry, std::move(delta));
         }
-        cfa_scan_cache.apply(recursive_snapshot, image,
-                             jump_table_cache,
-                             external_entry_boundaries,
-                             analysis);
+        const auto cfa_dynamic_predecessor_fingerprint =
+            function_edge_journal.state_fingerprint();
+        cfa_scan_cache.apply(
+            recursive_snapshot, image, jump_table_cache,
+            external_entry_boundaries,
+            function_edge_journal.predecessor_index(),
+            cfa_dynamic_predecessor_fingerprint, analysis);
         for (const auto key : cfa_scan_cache.changed_runtime_copies()) {
             ++analysis.runtime_copy_result_entries_visited;
             if (const auto* copy = cfa_scan_cache.runtime_copy(key))
@@ -5410,23 +5635,31 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             const auto& copy = copy_entry->second;
             ++analysis.runtime_copy_result_entries_visited;
             const std::array origins{FunctionOrigin::RuntimeCopy};
-            changed = add_seed(seeds,
-                               copy.source_begin,
-                               origins,
-                               false,
-                               ControlFlowEvidence::GuardedPartial,
-                               0u,
-                               SeedCause{
-                                   SeedCauseKind::RuntimeCodeCopySource,
-                                   copy.loop_address,
-                                   copy.setup_address,
-                                   copy.source_begin},
-                               &pending_seed_changes,
-                               &seed_telemetry) ||
-                      changed;
-            for (const auto& candidate : copy.patch_candidates) {
+            const auto canonical_source = canonical_seed_candidate(
+                copy.source_begin, ControlFlowEvidence::GuardedPartial);
+            if (canonical_source.has_value()) {
                 changed = add_seed(seeds,
-                                   candidate.target_address,
+                                   *canonical_source,
+                                   origins,
+                                   false,
+                                   ControlFlowEvidence::GuardedPartial,
+                                   0u,
+                                   SeedCause{
+                                       SeedCauseKind::RuntimeCodeCopySource,
+                                       copy.loop_address,
+                                       copy.setup_address,
+                                       copy.source_begin},
+                                   &pending_seed_changes,
+                                   &seed_telemetry) ||
+                          changed;
+            }
+            for (const auto& candidate : copy.patch_candidates) {
+                const auto canonical_target = canonical_seed_candidate(
+                    candidate.target_address,
+                    ControlFlowEvidence::GuardedPartial);
+                if (!canonical_target.has_value()) continue;
+                changed = add_seed(seeds,
+                                   *canonical_target,
                                    origins,
                                    false,
                                    ControlFlowEvidence::GuardedPartial,
@@ -5448,8 +5681,11 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             if (continuation_entry == continuation_result_index.end()) continue;
             const auto& continuation = continuation_entry->second;
             ++analysis.local_control_flow_result_entries_visited;
+            const auto canonical_target = canonical_seed_candidate(
+                continuation.target_address, continuation.evidence);
+            if (!canonical_target.has_value()) continue;
             changed = add_seed(seeds,
-                               continuation.target_address,
+                               *canonical_target,
                                {},
                                false,
                                continuation.evidence,
@@ -5474,6 +5710,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             changed = add_resolution_seeds(
                           seeds,
                           resolution,
+                          canonical_code_address,
+                          canonical_guarded_candidate,
                           &pending_seed_changes,
                           &seed_telemetry) ||
                       changed;
@@ -5488,6 +5726,11 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             const bool is_call = table.dispatch_kind == JumpTableDispatchKind::Call;
             const bool directed = directive_dispatches.contains(table.dispatch_address);
             for (const auto& entry : table.entries) {
+                const auto canonical_target = canonical_seed_candidate(
+                    entry.target,
+                    table.evidence,
+                    directed && !hints);
+                if (!canonical_target.has_value()) continue;
                 if (is_call) {
                     std::vector<FunctionOrigin> origins{FunctionOrigin::JumpTableCall};
                     if (directed) {
@@ -5495,7 +5738,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                                 : FunctionOrigin::UserOverride);
                     }
                     changed = add_seed(seeds,
-                                       entry.target,
+                                       *canonical_target,
                                        origins,
                                        control_flow_evidence_proven(table.evidence),
                                        table.evidence,
@@ -5510,7 +5753,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                               changed;
                 } else {
                     changed = add_seed(seeds,
-                                       entry.target,
+                                       *canonical_target,
                                        {},
                                        control_flow_evidence_proven(table.evidence),
                                        table.evidence,
@@ -5636,14 +5879,18 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     callback_candidates.begin(),
                     callback_candidates.end(),
                     [&](const auto& candidate) {
-                        return !guarded_callback_candidate_is_admissible(
-                            candidate.target_address);
+                        return !canonical_guarded_candidate(
+                                    candidate.target_address)
+                                    .has_value();
                     }),
                 callback_candidates.end());
             static_callback_inventory.candidate_count =
                 callback_candidates.size();
             for (const auto& candidate :
                  callback_candidates) {
+                const auto canonical_candidate =
+                    canonical_guarded_candidate(candidate.target_address);
+                if (!canonical_candidate.has_value()) continue;
                 const std::array origins{
                     FunctionOrigin::StoredCodeAddress};
                 auto source_sites = candidate.store_instruction_addresses;
@@ -5677,7 +5924,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         changed =
                             add_seed(
                                 seeds,
-                                candidate.target_address,
+                                *canonical_candidate,
                                 origins,
                                 false,
                                 ControlFlowEvidence::GuardedPartial,
@@ -5742,6 +5989,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         function_edge_journal.refresh(
             pending_function_edge_sites, resolution_result_index,
             jump_table_result_index,
+            canonical_code_address,
             analysis);
         pending_function_edge_sites.clear();
         bool boundary_contracts_active = false;
@@ -6296,6 +6544,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     add_resolution_seeds(
                         seeds,
                         resolution->second,
+                        canonical_code_address,
+                        canonical_guarded_candidate,
                         &pending_seed_changes,
                         &seed_telemetry) ||
                     changed;
@@ -6341,6 +6591,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             function_edge_journal.refresh(
                 pending_function_edge_sites, resolution_result_index,
                 jump_table_result_index,
+                canonical_code_address,
                 analysis);
             pending_function_edge_sites.clear();
             if (!function_edge_journal.pending_delta_empty()) continue;
@@ -6350,8 +6601,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                 if (inventory == function_inventory_shards.end()) continue;
                 for (const auto& candidate :
                      inventory->second.stored_code_addresses) {
-                if (!guarded_callback_candidate_is_admissible(
-                        candidate.target_address))
+                const auto canonical_candidate =
+                    canonical_guarded_candidate(candidate.target_address);
+                if (!canonical_candidate.has_value())
                     continue;
                 const std::array origins{
                     FunctionOrigin::StoredCodeAddress};
@@ -6389,7 +6641,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     changed =
                         add_seed(
                             seeds,
-                            candidate.target_address,
+                            *canonical_candidate,
                             origins,
                             false,
                             ControlFlowEvidence::GuardedPartial,
@@ -6429,9 +6681,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                                 evidence_callees.end()),
                     evidence_callees.end());
                 for (const auto target : table.target_addresses) {
-                    if (guarded_native_entry_shapes.classify(target) !=
-                        detail::GuardedNativeEntryShapeStatus::Valid)
-                        continue;
+                    const auto canonical_target = canonical_seed_candidate(
+                        target, ControlFlowEvidence::GuardedPartial);
+                    if (!canonical_target.has_value()) continue;
                     auto source_sites =
                         table.load_instruction_addresses;
                     std::sort(source_sites.begin(),
@@ -6453,7 +6705,7 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                         changed =
                             add_seed(
                                 seeds,
-                                target,
+                                *canonical_target,
                                 origins,
                                 false,
                                 ControlFlowEvidence::GuardedPartial,
@@ -6499,6 +6751,19 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             // Product export rejects both an internal summary-budget loss and
             // a candidate-contract closure that cannot reach a fixed point.
             break;
+        }
+        if (!changed &&
+            function_edge_journal.state_fingerprint() !=
+                cfa_dynamic_predecessor_fingerprint) {
+            // Indirect/table/candidate contracts can become known after the
+            // incremental recognizer ran in this outer round. Their targets
+            // are part of the authoritative global predecessor universe for
+            // locally bounded producer proofs. Force one root-neutral CFA
+            // revalidation round instead of publishing a table against the
+            // previous edge epoch. The next round carries an empty recursive
+            // seed delta and therefore cannot manufacture reachability.
+            changed = true;
+            report_progress("global-entry-predecessors-changed");
         }
         report_progress("summary-seed-expansion");
         if (!changed && missing_override_dispatch && overrides != nullptr) {
@@ -6553,7 +6818,9 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         terminal_runtime_normalization_before;
     function_edge_journal.refresh(
         pending_function_edge_sites, resolution_result_index,
-        jump_table_result_index, analysis);
+        jump_table_result_index,
+        canonical_code_address,
+        analysis);
     pending_function_edge_sites.clear();
     if (!analysis.function_budget_exhausted &&
         (final_boundary_change ||
@@ -6729,7 +6996,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         image,
         analysis,
         final_guarded_code_inventory,
-        non_root_function_entry_hints);
+        non_root_function_entry_hints,
+        canonical_guarded_candidate);
     analysis.guarded_aot_entries =
         std::move(guarded_aot_entries.entries);
     analysis.guarded_aot_entry_rejections =

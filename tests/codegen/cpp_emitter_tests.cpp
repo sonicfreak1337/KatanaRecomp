@@ -66,10 +66,16 @@ std::string read_cpp_emitter_implementation() {
 } // namespace
 
 int main() {
-    require(katana::codegen::cpp_function_name(0x1000018Eu) == "fn_1000018E" &&
+    require(katana::codegen::cpp_function_name(0u) == "fn_00000000" &&
+                katana::codegen::cpp_function_name(0xFFFFFFFFu) ==
+                    "fn_FFFFFFFF" &&
+                katana::codegen::cpp_function_name(0x1000018Eu) == "fn_1000018E" &&
                 katana::codegen::cpp_service_function_name(0x1000018Eu) ==
-                    "fn_1000018E_with_services",
-            "Der oeffentliche C++-Funktionssymbolvertrag verliert hexadezimale Grossbuchstaben.");
+                    "fn_1000018E_with_services" &&
+                katana::codegen::cpp_runtime_block_function_name(0x0000000Au) ==
+                    "fn_0000000A_runtime_entry",
+            "Der oeffentliche C++-Funktionssymbolvertrag verliert feste Breite oder "
+            "hexadezimale Grossbuchstaben.");
 
     constexpr std::array<std::uint8_t, 16> bytes = {0x02,
                                                     0xB0,
@@ -709,6 +715,69 @@ int main() {
                 guarded_candidate_completion < guarded_candidate_dispatch,
             "Ein aufgeloester Guarded-Call betritt sein Ziel vor dem zentralen Blockabschluss.");
 
+    auto exact_guarded_single_program = guarded_candidate_program;
+    auto* exact_guarded_single_call =
+        make_dynamic(exact_guarded_single_program,
+                     katana::ir::DynamicTargetClass::ExactGuarded);
+    if (exact_guarded_single_call == nullptr) {
+        std::cerr << "TEST FEHLGESCHLAGEN: Exact-Guarded-Single-Block-Testcallsite fehlt.\n";
+        return EXIT_FAILURE;
+    }
+    exact_guarded_single_call->resolved_targets = {0x00001000u};
+    for (auto& function : exact_guarded_single_program)
+        if (std::find(function.indirect_call_sites.begin(),
+                      function.indirect_call_sites.end(),
+                      exact_guarded_single_call->source_address) !=
+                function.indirect_call_sites.end() &&
+            std::find(function.direct_callees.begin(),
+                      function.direct_callees.end(),
+                      0x00001000u) == function.direct_callees.end())
+            function.direct_callees.push_back(0x00001000u);
+    require(katana::ir::verify_program(exact_guarded_single_program).empty(),
+            "Exact-Guarded-Single-Block-Testcallsite besitzt inkonsistente Callee-Metadaten.");
+    katana::codegen::BackendRequest exact_guarded_single_request{
+        exact_guarded_single_program, 0u};
+    exact_guarded_single_request.single_block_execution = true;
+    exact_guarded_single_request.guarded_local_block_chaining = true;
+    exact_guarded_single_request.external_dynamic_dispatch = true;
+    exact_guarded_single_request.conservative_register_localization = true;
+    const auto exact_guarded_single_source =
+        katana::codegen::CppBackend{}
+            .emit(exact_guarded_single_request)
+            .joined_text();
+    const auto exact_guarded_case = exact_guarded_single_source.find(
+        "case 0x00001000u:");
+    const auto exact_guarded_case_call = exact_guarded_single_source.find(
+        "exact_guarded_call(cpu, call_target, 0x00001000u);",
+        exact_guarded_case);
+    const auto exact_guarded_case_return = exact_guarded_single_source.find(
+        "return;", exact_guarded_case_call);
+    const auto exact_guarded_default = exact_guarded_single_source.find(
+        "default:", exact_guarded_case_return);
+    const auto exact_guarded_default_call = exact_guarded_single_source.find(
+        "exact_guarded_call(cpu, call_target, 0x00001000u);",
+        exact_guarded_default);
+    const auto exact_guarded_default_return = exact_guarded_single_source.find(
+        "return;", exact_guarded_default_call);
+    const auto exact_guarded_continuation = exact_guarded_single_source.find(
+        "katana_block_00000006:", exact_guarded_default_return);
+    require(
+        exact_guarded_case != std::string::npos &&
+            exact_guarded_case_call != std::string::npos &&
+            exact_guarded_case_return != std::string::npos &&
+            exact_guarded_default != std::string::npos &&
+            exact_guarded_default_call != std::string::npos &&
+            exact_guarded_default_return != std::string::npos &&
+            exact_guarded_continuation != std::string::npos &&
+            exact_guarded_case < exact_guarded_case_call &&
+            exact_guarded_case_call < exact_guarded_case_return &&
+            exact_guarded_case_return < exact_guarded_default &&
+            exact_guarded_default < exact_guarded_default_call &&
+            exact_guarded_default_call < exact_guarded_default_return &&
+            exact_guarded_default_return < exact_guarded_continuation,
+        "Ein synchroner Exact-Guarded-Call faellt mit freigegebenen nativen Registern "
+        "in Defaultdispatch oder lokalen Fortsetzungsblock durch.");
+
     auto guarded_complete_program = indirect_call_program;
     auto* guarded_complete_call =
         make_dynamic(guarded_complete_program,
@@ -791,13 +860,15 @@ int main() {
                 unknown_raise < unknown_completion && unknown_completion < unknown_return,
             "Eine unbekannte Instruktion umgeht Attempt-Zeit und zentralen Blockabschluss.");
 
-    constexpr std::array<std::uint8_t, 10> delay_memory_bytes = {
+    constexpr std::array<std::uint8_t, 12> delay_memory_bytes = {
         0x01u,
         0xA0u, // BRA +1
         0x12u,
         0x62u, // MOV.L @R1,R2 (Delay Slot)
         0x09u,
         0x00u, // unerreichbarer Abstand
+        0x01u,
+        0x72u, // ADD #1,R2 (macht den Delay-Slot-Wert registerlokalisierbar)
         0x0Bu,
         0x00u, // RTS
         0x09u,
@@ -898,6 +969,7 @@ int main() {
     deferred_mmio_request.single_block_execution = true;
     deferred_mmio_request.guarded_local_block_chaining = true;
     deferred_mmio_request.external_dynamic_dispatch = true;
+    deferred_mmio_request.conservative_register_localization = true;
     const auto deferred_mmio_source =
         katana::codegen::CppBackend{}.emit(deferred_mmio_request).joined_text();
     const auto deferred_flag =
@@ -922,6 +994,9 @@ int main() {
         deferred_mmio_source.find("terminal_instruction_attempt.complete();", deferred_target);
     const auto deferred_finalize = deferred_mmio_source.find(
         "katana_commit_post_instruction_safepoint(", deferred_terminal_completion);
+    const auto deferred_reload = deferred_mmio_source.find(
+        "katana_registers.reload_acquire();", deferred_finalize);
+    const auto deferred_guard_close = deferred_mmio_source.find('}', deferred_finalize);
     const auto deferred_chain =
         deferred_mmio_source.find("services->can_chain_executable_block(cpu.pc)",
                                   deferred_finalize);
@@ -933,17 +1008,149 @@ int main() {
             deferred_target != std::string::npos &&
             deferred_terminal_completion != std::string::npos &&
             deferred_finalize != std::string::npos &&
+            deferred_reload != std::string::npos &&
+            deferred_guard_close != std::string::npos &&
             deferred_chain != std::string::npos &&
             deferred_flag < deferred_epoch && deferred_epoch < deferred_load &&
             deferred_load < deferred_assignment &&
             deferred_assignment < deferred_target &&
             deferred_target < deferred_terminal_completion &&
             deferred_terminal_completion < deferred_finalize &&
-            deferred_finalize < deferred_chain &&
+            deferred_finalize < deferred_reload &&
+            deferred_reload < deferred_guard_close &&
+            deferred_guard_close < deferred_chain &&
             count_occurrences(deferred_mmio_source,
                               "if (katana_commit_post_instruction_safepoint(") == 1u,
         "Ein tatsaechlicher MMIO-Kandidat im Delay Slot wird nicht erst nach Ziel-PC "
-        "und Terminal-Retirement genau einmal am Runtime-Safepoint abgeschlossen.");
+        "und Terminal-Retirement genau einmal am Runtime-Safepoint abgeschlossen oder "
+        "laedt Register ohne vorherigen Flush neu.");
+
+    // Emerald Coast's NINJA fog-table builders use FMOV.S stores in branch
+    // delay slots.  The FPU instruction must temporarily release localized
+    // GPRs because its raw body reads cpu.r[], but ordinary RAM does not raise
+    // the deferred MMIO flag.  Reacquire before publishing the branch target;
+    // otherwise the next loop block mutates a released cache whose destructor
+    // and later instruction boundaries can no longer flush those mutations.
+    constexpr std::array<std::uint8_t, 12> delay_fmov_store_bytes = {
+        0x01u,
+        0xA0u, // BRA +1
+        0x27u,
+        0xF4u, // FMOV.S FR2,@(R0,R4) (Delay Slot)
+        0x09u,
+        0x00u, // unerreichbarer Abstand
+        0x01u,
+        0x74u, // ADD #1,R4 (nutzt den lokalisierten Zielzeiger weiter)
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto delay_fmov_store_lines =
+        katana::sh4::disassemble(delay_fmov_store_bytes, 0x8C021000u);
+    constexpr std::array<std::uint32_t, 1> delay_fmov_store_seeds = {
+        0x8C021000u};
+    const auto delay_fmov_store_functions = katana::analysis::discover_functions(
+        delay_fmov_store_lines, delay_fmov_store_seeds);
+    const auto delay_fmov_store_program = katana::ir::lower_program(
+        delay_fmov_store_lines, delay_fmov_store_functions);
+    katana::codegen::BackendRequest delay_fmov_store_request{
+        delay_fmov_store_program, 0x8C021000u};
+    delay_fmov_store_request.single_block_execution = true;
+    delay_fmov_store_request.guarded_local_block_chaining = true;
+    delay_fmov_store_request.external_dynamic_dispatch = true;
+    delay_fmov_store_request.conservative_register_localization = true;
+    const auto delay_fmov_store_source = katana::codegen::CppBackend{}
+                                             .emit(delay_fmov_store_request)
+                                             .joined_text();
+    const auto delay_fmov_store_instruction =
+        emitted_instruction(delay_fmov_store_source, "0x8C021002u");
+    const auto delay_fmov_store_release = delay_fmov_store_instruction.find(
+        "katana_registers.flush_release();");
+    const auto delay_fmov_store_write = delay_fmov_store_instruction.find(
+        "const std::uint32_t address = cpu.r[0] + cpu.r[4];",
+        delay_fmov_store_release);
+    const auto delay_fmov_store_defer = delay_fmov_store_instruction.find(
+        "katana_deferred_safepoint_8C021002 = ", delay_fmov_store_write);
+    const auto delay_fmov_store_reacquire = delay_fmov_store_instruction.find(
+        "katana_registers.reload_acquire();", delay_fmov_store_defer);
+    const auto delay_fmov_store_target = delay_fmov_store_source.find(
+        "cpu.pc = katana::runtime::relocate_code_address(0x8C021006u);",
+        delay_fmov_store_reacquire);
+    require(
+        delay_fmov_store_release != std::string_view::npos &&
+            delay_fmov_store_write != std::string_view::npos &&
+            delay_fmov_store_defer != std::string_view::npos &&
+            delay_fmov_store_reacquire != std::string_view::npos &&
+            delay_fmov_store_target != std::string::npos &&
+            delay_fmov_store_release < delay_fmov_store_write &&
+            delay_fmov_store_write < delay_fmov_store_defer &&
+            delay_fmov_store_defer < delay_fmov_store_reacquire &&
+            delay_fmov_store_reacquire < delay_fmov_store_target,
+        "Ein FPU-Memory-Store im Delay Slot betritt den Folgeblock mit "
+        "freigegebenem lokalisiertem GPR-Satz.");
+
+    // Sonic Story reaches the complementary form: a conditional delayed
+    // branch whose FMOV.S load releases localized GPRs.  Normal RAM keeps the
+    // deferred MMIO flag clear, so the cache must still be reacquired before
+    // either the taken or fallthrough successor can observe it.
+    constexpr std::array<std::uint8_t, 14> delay_fmov_load_bytes = {
+        0x00u,
+        0x88u, // CMP/EQ #0,R0
+        0x01u,
+        0x8Du, // BT/S +1
+        0x18u,
+        0xF2u, // FMOV.S @R1,FR2 (Delay Slot)
+        0x09u,
+        0x00u, // Fallthrough NOP
+        0x01u,
+        0x71u, // ADD #1,R1 (Taken target)
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u // NOP (Delay Slot)
+    };
+    const auto delay_fmov_load_lines =
+        katana::sh4::disassemble(delay_fmov_load_bytes, 0x8C021100u);
+    constexpr std::array<std::uint32_t, 1> delay_fmov_load_seeds = {
+        0x8C021100u};
+    const auto delay_fmov_load_functions = katana::analysis::discover_functions(
+        delay_fmov_load_lines, delay_fmov_load_seeds);
+    const auto delay_fmov_load_program = katana::ir::lower_program(
+        delay_fmov_load_lines, delay_fmov_load_functions);
+    katana::codegen::BackendRequest delay_fmov_load_request{
+        delay_fmov_load_program, 0x8C021100u};
+    delay_fmov_load_request.single_block_execution = true;
+    delay_fmov_load_request.guarded_local_block_chaining = true;
+    delay_fmov_load_request.external_dynamic_dispatch = true;
+    delay_fmov_load_request.conservative_register_localization = true;
+    const auto delay_fmov_load_source = katana::codegen::CppBackend{}
+                                            .emit(delay_fmov_load_request)
+                                            .joined_text();
+    const auto delay_fmov_load_instruction =
+        emitted_instruction(delay_fmov_load_source, "0x8C021104u");
+    const auto delay_fmov_load_release = delay_fmov_load_instruction.find(
+        "katana_registers.flush_release();");
+    const auto delay_fmov_load_read = delay_fmov_load_instruction.find(
+        "const std::uint32_t address = cpu.r[1];", delay_fmov_load_release);
+    const auto delay_fmov_load_defer = delay_fmov_load_instruction.find(
+        "katana_deferred_safepoint_8C021104 = ", delay_fmov_load_read);
+    const auto delay_fmov_load_reacquire = delay_fmov_load_instruction.find(
+        "katana_registers.reload_acquire();", delay_fmov_load_defer);
+    const auto delay_fmov_load_target = delay_fmov_load_source.find(
+        "cpu.pc = take_branch ? katana::runtime::relocate_code_address(0x8C021108u) : katana::runtime::relocate_code_address(0x8C021106u);",
+        delay_fmov_load_reacquire);
+    require(
+        delay_fmov_load_release != std::string_view::npos &&
+            delay_fmov_load_read != std::string_view::npos &&
+            delay_fmov_load_defer != std::string_view::npos &&
+            delay_fmov_load_reacquire != std::string_view::npos &&
+            delay_fmov_load_target != std::string::npos &&
+            delay_fmov_load_release < delay_fmov_load_read &&
+            delay_fmov_load_read < delay_fmov_load_defer &&
+            delay_fmov_load_defer < delay_fmov_load_reacquire &&
+            delay_fmov_load_reacquire < delay_fmov_load_target,
+        "Ein FPU-Memory-Load im bedingten Delay Slot betritt einen Nachfolger "
+        "mit freigegebenem lokalisiertem GPR-Satz.");
 
     katana::codegen::BackendRequest proven_delay_request{
         proven_delay_memory_program, 0x8C020000u};

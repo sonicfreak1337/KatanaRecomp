@@ -1263,18 +1263,12 @@ std::vector<Function> lower_program(const katana::analysis::ControlFlowAnalysisR
     for (const auto& line : analysis.recursive.instructions)
         decoded_instruction_addresses.insert(line.address);
     std::vector<std::uint32_t> candidate_leaders;
-    for (const auto& table : analysis.jump_tables) {
-        if (!table.aot_candidates_only) continue;
-        for (const auto& entry : table.entries)
-            if (entry.accepted) candidate_leaders.push_back(entry.target);
-    }
-    for (const auto& continuation : analysis.static_return_continuations)
-        candidate_leaders.push_back(continuation.target_address);
-    for (const auto& resolution : analysis.indirect_control_flow) {
-        candidate_leaders.insert(candidate_leaders.end(),
-                                 resolution.analysis_candidates.begin(),
-                                 resolution.analysis_candidates.end());
-    }
+    // Raw table entries, return continuations and indirect analysis candidates
+    // are evidence, not native-materialization authority. CFA folds every
+    // structurally valid member of those sets into guarded_aot_entries after
+    // P1/P2 canonicalization, delay-slot validation and opcode validation.
+    // Consuming the raw vectors here would recreate a second, weaker ingress
+    // path and turn speculative data into external executable block roots.
     // A finite positive target can be carried as a partial/runtime analysis
     // edge without also appearing in `analysis_candidates`.  It is not a
     // complete CFG claim, but the validating dispatcher still needs an exact

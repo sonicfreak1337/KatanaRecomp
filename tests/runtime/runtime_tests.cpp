@@ -20,7 +20,7 @@ void require(const bool condition, const std::string& message) {
 int main() {
     static_assert(katana::runtime::abi_version == 126u);
     static_assert(katana::build_contract::aot_runtime_abi_version == 126u);
-    static_assert(katana::build_contract::runtime_abi_version == 128u);
+    static_assert(katana::build_contract::runtime_abi_version == 129u);
 
     katana::runtime::Memory memory(16u);
     require(memory.size() == 16u, "Die Runtime-Speichergroesse ist falsch.");

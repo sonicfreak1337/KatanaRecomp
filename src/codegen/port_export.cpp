@@ -2845,9 +2845,30 @@ std::optional<katana::analysis::AnalysisOverrides> port_analysis_overrides(
         if (katana::runtime::native_port_hook_is_executable(
                 hook.requirement) &&
             hook.code_source ==
-                katana::runtime::NativePortHookCodeSource::StaticImage)
+                katana::runtime::NativePortHookCodeSource::StaticImage) {
             overrides->external_entry_hints.push_back(
                 {hook.guest_address, 0u});
+            if (hook.kind ==
+                katana::runtime::NativePortHookKind::Instruction) {
+                if (hook.covered_size == 0u ||
+                    (hook.covered_size & 1u) != 0u ||
+                    hook.guest_address >
+                        std::numeric_limits<std::uint32_t>::max() -
+                            hook.covered_size)
+                    throw std::invalid_argument(
+                        "Instruction-Hook besitzt keine darstellbare "
+                        "Fortsetzungsgrenze.");
+                // Every replaced instruction word and the successful
+                // fallthrough are semantic entry boundaries. Publishing the
+                // complete covered halfword range prevents a local producer
+                // proof from spanning a ReplacesOriginal hook even when the
+                // hook begins before the finite seed or exactly on it.
+                for (std::uint32_t offset = 2u;
+                     offset <= hook.covered_size; offset += 2u)
+                    overrides->external_entry_hints.push_back(
+                        {hook.guest_address + offset, 0u});
+            }
+        }
     }
 
     // Required hooks are consumers of the post-bootstrap reachable graph,
@@ -16635,15 +16656,15 @@ std::string native_product_main(
            "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n"
            "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n"
            "#include <windows.h>\n"
-           "#else\n#include <unistd.h>\n#endif\n\n"
+           "#else\n#include <fcntl.h>\n#include <unistd.h>\n#endif\n\n"
            "namespace {\n"
            "std::atomic<std::uint32_t> native_product_crash_latch{0u};\n"
            "std::atomic<katana::runtime::CpuState*> native_product_cpu{nullptr};\n"
            "katana::runtime::CrashCapsule native_product_crash_capsule{};\n"
-           "void native_product_write_fault_bytes(\n"
-           "        std::string_view bytes) noexcept {\n"
            "#if defined(_WIN32)\n"
-           "    const auto handle = GetStdHandle(STD_ERROR_HANDLE);\n"
+           "std::atomic<HANDLE> native_product_crash_file{INVALID_HANDLE_VALUE};\n"
+           "void native_product_write_fault_handle(\n"
+           "        const HANDLE handle, std::string_view bytes) noexcept {\n"
            "    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) return;\n"
            "    while (!bytes.empty()) {\n"
            "        DWORD written = 0u;\n"
@@ -16654,10 +16675,15 @@ std::string native_product_main(
            "                FALSE || written == 0u) return;\n"
            "        bytes.remove_prefix(written);\n"
            "    }\n"
+           "}\n"
            "#else\n"
+           "std::atomic<int> native_product_crash_file{-1};\n"
+           "void native_product_write_fault_descriptor(\n"
+           "        const int descriptor, std::string_view bytes) noexcept {\n"
+           "    if (descriptor < 0) return;\n"
            "    while (!bytes.empty()) {\n"
            "        const auto written = ::write(\n"
-           "            STDERR_FILENO, bytes.data(), bytes.size());\n"
+           "            descriptor, bytes.data(), bytes.size());\n"
            "        if (written < 0) {\n"
            "            if (errno == EINTR) continue;\n"
            "            return;\n"
@@ -16665,8 +16691,105 @@ std::string native_product_main(
            "        if (written == 0) return;\n"
            "        bytes.remove_prefix(static_cast<std::size_t>(written));\n"
            "    }\n"
+           "}\n"
+           "#endif\n"
+           "void native_product_write_fault_bytes(\n"
+           "        std::string_view bytes) noexcept {\n"
+           "#if defined(_WIN32)\n"
+           "    native_product_write_fault_handle(\n"
+           "        GetStdHandle(STD_ERROR_HANDLE), bytes);\n"
+           "    native_product_write_fault_handle(\n"
+           "        native_product_crash_file.load(std::memory_order_acquire),\n"
+           "        bytes);\n"
+           "#else\n"
+           "    native_product_write_fault_descriptor(STDERR_FILENO, bytes);\n"
+           "    native_product_write_fault_descriptor(\n"
+           "        native_product_crash_file.load(std::memory_order_acquire),\n"
+           "        bytes);\n"
            "#endif\n"
            "}\n"
+           "void native_product_flush_fault_file() noexcept {\n"
+           "#if defined(_WIN32)\n"
+           "    const auto handle = native_product_crash_file.load(\n"
+           "        std::memory_order_acquire);\n"
+           "    if (handle != nullptr && handle != INVALID_HANDLE_VALUE)\n"
+           "        static_cast<void>(FlushFileBuffers(handle));\n"
+           "#else\n"
+           "    const auto descriptor = native_product_crash_file.load(\n"
+           "        std::memory_order_acquire);\n"
+           "    if (descriptor >= 0) static_cast<void>(::fsync(descriptor));\n"
+           "#endif\n"
+           "}\n"
+           "void native_product_write_fault_u64(\n"
+           "        std::uint64_t value) noexcept;\n"
+           "class NativeProductCrashSession final {\n"
+           "  public:\n"
+           "    void arm(const std::filesystem::path& executable_path) {\n"
+           "        const auto root = executable_path.parent_path() / \"user-data\";\n"
+           "        std::error_code directory_error;\n"
+           "        std::filesystem::create_directories(root, directory_error);\n"
+           "        if (directory_error)\n"
+           "            throw std::system_error(\n"
+           "                directory_error, \"bringup-crash-session-directory\");\n"
+           "        const auto epoch_milliseconds = static_cast<std::uint64_t>(\n"
+           "            std::chrono::duration_cast<std::chrono::milliseconds>(\n"
+           "                std::chrono::system_clock::now().time_since_epoch())\n"
+           "                .count());\n"
+           "#if defined(_WIN32)\n"
+           "        const auto process_id = static_cast<std::uint64_t>(\n"
+           "            GetCurrentProcessId());\n"
+           "#else\n"
+           "        const auto process_id = static_cast<std::uint64_t>(::getpid());\n"
+           "#endif\n"
+           "        path_ = root / (\"katana-crash-session-\" +\n"
+           "            std::to_string(epoch_milliseconds) + \"-\" +\n"
+           "            std::to_string(process_id) + \".log\");\n"
+           "#if defined(_WIN32)\n"
+           "        const auto handle = CreateFileW(\n"
+           "            path_.c_str(), GENERIC_WRITE,\n"
+           "            FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, CREATE_NEW,\n"
+           "            FILE_ATTRIBUTE_NORMAL, nullptr);\n"
+           "        if (handle == INVALID_HANDLE_VALUE)\n"
+           "            throw std::system_error(\n"
+           "                static_cast<int>(GetLastError()), std::system_category(),\n"
+           "                \"bringup-crash-session-open\");\n"
+           "        native_product_crash_file.store(handle, std::memory_order_release);\n"
+           "#else\n"
+           "        const auto descriptor = ::open(\n"
+           "            path_.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);\n"
+           "        if (descriptor < 0)\n"
+           "            throw std::system_error(\n"
+           "                errno, std::generic_category(),\n"
+           "                \"bringup-crash-session-open\");\n"
+           "        native_product_crash_file.store(\n"
+           "            descriptor, std::memory_order_release);\n"
+           "#endif\n"
+           "        native_product_write_fault_bytes(\n"
+           "            \"KATANA_CRASH_CAPSULE_ARMED version=1 epoch_ms=\");\n"
+           "        native_product_write_fault_u64(epoch_milliseconds);\n"
+           "        native_product_write_fault_bytes(\" pid=\");\n"
+           "        native_product_write_fault_u64(process_id);\n"
+           "        native_product_write_fault_bytes(\"\\n\");\n"
+           "        native_product_flush_fault_file();\n"
+           "        std::cerr << \"KATANA_CRASH_CAPSULE_PATH path=\"\n"
+           "                  << path_.string() << '\\n';\n"
+           "    }\n"
+           "    ~NativeProductCrashSession() noexcept {\n"
+           "        native_product_flush_fault_file();\n"
+           "#if defined(_WIN32)\n"
+           "        const auto handle = native_product_crash_file.exchange(\n"
+           "            INVALID_HANDLE_VALUE, std::memory_order_acq_rel);\n"
+           "        if (handle != nullptr && handle != INVALID_HANDLE_VALUE)\n"
+           "            static_cast<void>(CloseHandle(handle));\n"
+           "#else\n"
+           "        const auto descriptor = native_product_crash_file.exchange(\n"
+           "            -1, std::memory_order_acq_rel);\n"
+           "        if (descriptor >= 0) static_cast<void>(::close(descriptor));\n"
+           "#endif\n"
+           "    }\n"
+           "  private:\n"
+           "    std::filesystem::path path_;\n"
+           "};\n"
            "void native_product_write_fault_u64(\n"
            "        const std::uint64_t value) noexcept {\n"
            "    std::array<char, 32u> bytes{};\n"
@@ -16823,6 +16946,7 @@ std::string native_product_main(
            "        \"KATANA_CRASH_CAPSULE version=5 \" );\n"
            "    native_product_write_fault_bytes(line_v5.view());\n"
            "    native_product_write_fault_bytes(\"\\n\");\n"
+           "    native_product_flush_fault_file();\n"
            "}\n"
            "void native_product_emit_crash(\n"
            "        const std::uint32_t host_code,\n"
@@ -16896,6 +17020,7 @@ std::string native_product_main(
            "} // namespace\n\n"
            "int main(int argc, char** argv) {\n"
            "    std::optional<katana::runtime::NativePortMemory> diagnostic_memory;\n"
+           "    NativeProductCrashSession native_product_crash_session;\n"
            "#if defined(_WIN32)\n"
            "    NativeProductExceptionFilterScope native_product_seh_filter;\n"
            "#endif\n"
@@ -16982,6 +17107,8 @@ std::string native_product_main(
            "            std::filesystem::path(argv[0]), executable_error);\n"
            "        if (executable_error || executable_path.empty())\n"
            "            executable_path = std::filesystem::absolute(argv[0]);\n"
+           "        if (explicit_bringup)\n"
+           "            native_product_crash_session.arm(executable_path);\n"
            "        std::filesystem::path content_root;\n"
            "        if (direct_launch) {\n"
            "            const auto configuration_path =\n"
@@ -17193,6 +17320,75 @@ std::string native_product_main(
            "                    snapshot.input_polls,\n"
            "                    snapshot.input_connection_generation);\n"
            "            } catch (...) {}\n"
+           "            try {\n"
+           "                const auto snapshot = host.graphics().snapshot();\n"
+           "                const auto& witness = snapshot.last_contract_failure;\n"
+           "                if (witness.valid) {\n"
+           "                    std::string detail{\"graphics-contract\"};\n"
+           "                    const auto append = [&](\n"
+           "                            const std::string_view name,\n"
+           "                            const std::uint64_t value) {\n"
+           "                        detail.push_back(';');\n"
+           "                        detail.append(name);\n"
+           "                        detail.push_back('=');\n"
+           "                        detail.append(std::to_string(value));\n"
+           "                    };\n"
+           "                    append(\"failure\", static_cast<std::uint32_t>(\n"
+           "                        witness.failure));\n"
+           "                    append(\"frame\", witness.frame);\n"
+           "                    append(\"draw\", witness.draw_sequence);\n"
+           "                    append(\"batch\", witness.batch_identity);\n"
+           "                    append(\"order\", witness.submission_order);\n"
+           "                    append(\"batch_semantic\",\n"
+           "                        static_cast<std::uint32_t>(\n"
+           "                            witness.batch_semantic));\n"
+           "                    append(\"draw_class\",\n"
+           "                        static_cast<std::uint32_t>(\n"
+           "                            witness.draw_class));\n"
+           "                    append(\"logical_use\",\n"
+           "                        static_cast<std::uint32_t>(\n"
+           "                            witness.diagnostics.logical_use));\n"
+           "                    append(\"origin\",\n"
+           "                        static_cast<std::uint32_t>(\n"
+           "                            witness.diagnostics.origin));\n"
+           "                    append(\"intent\",\n"
+           "                        static_cast<std::uint32_t>(\n"
+           "                            witness.diagnostics.intent));\n"
+           "                    append(\"material\",\n"
+           "                        witness.diagnostics.material_identity);\n"
+           "                    append(\"origin_identity\",\n"
+           "                        witness.diagnostics.origin_identity);\n"
+           "                    append(\"model\",\n"
+           "                        witness.diagnostics.model_identity);\n"
+           "                    append(\"texture_list\",\n"
+           "                        witness.diagnostics.texture_list_index);\n"
+           "                    append(\"mesh\",\n"
+           "                        witness.diagnostics.mesh_index);\n"
+           "                    append(\"primitive\",\n"
+           "                        witness.diagnostics.primitive_index);\n"
+           "                    append(\"texture_list_identity\",\n"
+           "                        witness.diagnostics.texture_binding\n"
+           "                            .texture_list_identity);\n"
+           "                    append(\"texture_list_epoch\",\n"
+           "                        witness.diagnostics.texture_binding\n"
+           "                            .texture_list_epoch);\n"
+           "                    append(\"last_writer\",\n"
+           "                        witness.diagnostics.texture_binding\n"
+           "                            .last_writer_identity);\n"
+           "                    append(\"last_writer_sequence\",\n"
+           "                        witness.diagnostics.texture_binding\n"
+           "                            .last_writer_sequence);\n"
+           "                    append(\"expected_asset\",\n"
+           "                        witness.diagnostics.texture_binding\n"
+           "                            .expected_asset_identity);\n"
+           "                    append(\"resolver\",\n"
+           "                        static_cast<std::uint32_t>(\n"
+           "                            witness.diagnostics.texture_binding\n"
+           "                                .resolver));\n"
+           "                    native_product_crash_capsule\n"
+           "                        .note_v3_contract_detail(detail);\n"
+           "                }\n"
+           "            } catch (...) {}\n"
            "        };\n"
            "        try {\n"
            "            katana_native_bootstrap_dispatch(context);\n"
@@ -17255,6 +17451,17 @@ std::string native_product_main(
            "                  << \",\\\"attempted_guest_instructions\\\":\"\n"
            "                  << cpu.attempted_guest_instructions\n"
            "                  << \"}\\n\";\n"
+           "        return 1;\n"
+           "    } catch (const katana::runtime::NativePortGraphicsError& error) {\n"
+           "        native_product_emit_crash(\n"
+           "            2u, \"NativePortGraphicsError\",\n"
+           "            static_cast<std::uint32_t>(error.failure()),\n"
+           "            \"native-port-graphics\");\n"
+           "        try {\n"
+           "        std::cerr << \"KATANA_NATIVE_GRAPHICS_CONTRACT failure=\"\n"
+           "                  << static_cast<unsigned>(error.failure())\n"
+           "                  << \" detail=crash-capsule-v4\\n\";\n"
+           "        } catch (...) {}\n"
            "        return 1;\n"
            "    } catch (const katana::runtime::NativePortContractError& error) {\n"
            "        native_product_emit_crash(\n"
@@ -27701,6 +27908,19 @@ NativePortHardwareClosure evaluate_native_port_hardware_closure(
     result.provider_semantic_misses = missed_provider_hooks.size();
     result.provider_semantic_legacy_admissions =
         legacy_provider_hooks.size();
+    // DeclaredOnly is a bring-up compatibility mode: it may describe and run
+    // legacy replacements, but it must never certify that the native product
+    // has closed every hardware-visible provider contract.  Keep this gate in
+    // the closure result itself so fresh analysis, checkpoint reuse and every
+    // product-admission caller observe the same fail-closed state.
+    if (result.provider_semantic_coverage !=
+        katana::runtime::NativePortProviderSemanticCoverage::
+            RequiredForHardwareClosure)
+        result.gaps.push_back(
+            {0u, "provider-semantic-coverage-not-required"});
+    if (result.provider_semantic_legacy_admissions != 0u)
+        result.gaps.push_back(
+            {0u, "provider-semantic-legacy-admissions-present"});
     std::sort(
         result.gaps.begin(),
         result.gaps.end(),
@@ -32620,12 +32840,24 @@ native_disc_analysis_resume_manifest_identity(
     return identity;
 }
 
-bool validate_native_disc_primary_artifact(
+struct NativeDiscPrimaryArtifactSourceBindingValidation final {
+    bool valid = false;
+    std::string_view reason;
+    std::uint32_t address = 0u;
+};
+
+NativeDiscPrimaryArtifactSourceBindingValidation
+validate_native_disc_primary_artifact(
     const PreparedBootAnalysisArtifact& primary,
     const katana::io::ExecutableImage& image) noexcept {
+    const auto reject = [](const std::string_view reason,
+                           const std::uint32_t address = 0u) noexcept {
+        return NativeDiscPrimaryArtifactSourceBindingValidation{
+            false, reason, address};
+    };
     try {
         if (!boot_analysis_artifact_checkpointable(primary))
-            return false;
+            return reject("checkpoint-contract");
         katana::ir::require_valid_program(primary.lowered_program);
         std::set<std::uint32_t> program_instructions;
         std::set<std::uint32_t> program_blocks;
@@ -32640,29 +32872,44 @@ bool validate_native_disc_primary_artifact(
                             ? segment->byte_offset(
                                   instruction.source_address)
                             : std::optional<std::size_t>{};
-                    if (segment == nullptr || !offset.has_value() ||
-                        !segment->permissions.executable ||
+                    if (segment == nullptr)
+                        return reject(
+                            "program-instruction-segment-missing",
+                            instruction.source_address);
+                    if (!segment->permissions.executable)
+                        return reject(
+                            "program-instruction-segment-not-executable",
+                            instruction.source_address);
+                    if (!offset.has_value() ||
                         *offset > segment->bytes.size() ||
                         segment->bytes.size() - *offset < 2u)
-                        return false;
+                        return reject(
+                            "program-instruction-range",
+                            instruction.source_address);
                     const auto opcode = static_cast<std::uint16_t>(
                         static_cast<std::uint16_t>(
                             segment->bytes[*offset]) |
                         (static_cast<std::uint16_t>(
                              segment->bytes[*offset + 1u])
                          << 8u));
-                    if (opcode != instruction.original_opcode ||
-                        !katana::sh4::decode(opcode).is_known())
-                        return false;
+                    if (opcode != instruction.original_opcode)
+                        return reject(
+                            "program-instruction-opcode-drift",
+                            instruction.source_address);
+                    if (!katana::sh4::decode(opcode).is_known())
+                        return reject(
+                            "program-instruction-unknown",
+                            instruction.source_address);
                     program_instructions.insert(
                         instruction.source_address);
                 }
             }
         }
         if (program_instructions.empty() || program_blocks.empty())
-            return false;
+            return reject("program-empty");
         for (const auto entry : image.entry_points()) {
-            if (!program_blocks.contains(entry)) return false;
+            if (!program_blocks.contains(entry))
+                return reject("entry-point-not-block", entry);
         }
         for (const auto& line : primary.analysis.recursive.instructions) {
             const auto* segment = image.find_segment(line.address, 2u);
@@ -32670,25 +32917,37 @@ bool validate_native_disc_primary_artifact(
                 segment != nullptr
                     ? segment->byte_offset(line.address)
                     : std::optional<std::size_t>{};
-            if (segment == nullptr || !offset.has_value() ||
+            if (segment == nullptr)
+                return reject(
+                    "analysis-instruction-segment-missing",
+                    line.address);
+            if (!offset.has_value() ||
                 *offset > segment->bytes.size() ||
                 segment->bytes.size() - *offset < 2u)
-                return false;
+                return reject(
+                    "analysis-instruction-range", line.address);
             const auto opcode =
                 static_cast<std::uint16_t>(segment->bytes[*offset]) |
                 (static_cast<std::uint16_t>(
                      segment->bytes[*offset + 1u])
                  << 8u);
-            if (opcode != line.opcode ||
-                !program_instructions.contains(line.address))
-                return false;
+            if (opcode != line.opcode)
+                return reject(
+                    "analysis-instruction-opcode-drift",
+                    line.address);
+            if (!program_instructions.contains(line.address))
+                return reject(
+                    "analysis-instruction-not-in-program",
+                    line.address);
         }
-        return primary.control_flow_graph.kind ==
-                   katana::analysis::AnalysisGraphKind::ControlFlow &&
-               primary.call_graph.kind ==
-                   katana::analysis::AnalysisGraphKind::CallGraph;
+        if (primary.control_flow_graph.kind !=
+                katana::analysis::AnalysisGraphKind::ControlFlow ||
+            primary.call_graph.kind !=
+                katana::analysis::AnalysisGraphKind::CallGraph)
+            return reject("graph-kind");
+        return {true, {}, 0u};
     } catch (...) {
-        return false;
+        return reject("exception");
     }
 }
 
@@ -37049,6 +37308,13 @@ std::size_t revalidate_current_game_project_singleton_edges(
                    .provider_semantic_misses ==
                0u &&
            analyzed.admitted_state->native_hardware_closure
+                   .provider_semantic_coverage ==
+               katana::runtime::NativePortProviderSemanticCoverage::
+                   RequiredForHardwareClosure &&
+           analyzed.admitted_state->native_hardware_closure
+                   .provider_semantic_legacy_admissions ==
+               0u &&
+           analyzed.admitted_state->native_hardware_closure
                    .provider_semantic_contracts ==
                options.native_port_definition->provider_semantic_contracts
                    .size() &&
@@ -37345,9 +37611,14 @@ try_reuse_native_disc_analysis_artifact(
             options.analysis_cache_implementation_identity);
         if (image_key != artifact.identity.image_analysis_key)
             return reject("image-analysis-key");
-        if (!validate_native_disc_primary_artifact(
-                artifact.primary, image))
-            return reject("primary-image-source-binding");
+        const auto primary_source_binding =
+            validate_native_disc_primary_artifact(
+                artifact.primary, image);
+        if (!primary_source_binding.valid)
+            return reject(
+                "primary-image-source-binding:" +
+                std::string(primary_source_binding.reason) + ':' +
+                guarded_aot_address(primary_source_binding.address));
         const auto latent_source_validation =
             validate_native_disc_checkpoint_latent_source_binding(
                 disc.source, artifact.latent);

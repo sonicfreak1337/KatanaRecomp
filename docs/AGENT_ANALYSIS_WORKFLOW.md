@@ -17,6 +17,15 @@ Ohne neuen Analyzerlauf werden Runtime, Adapter, Renderer, Grafik, Audio,
 Movie, Eingabe, Save, Datei, Hosttiming und Diagnose gegen denselben AOT-Pack
 inkrementell gebaut und mit demselben Replay geprueft.
 
+Ein inkrementeller Build wird jedoch sofort als unvertrauenswuerdige Basis
+verworfen, sobald ein Befund auf verlorenen Register-/Cachezustand zwischen
+generierten Bloecken, inkonsistente Generationen oder manuell veraenderte
+generierte Units deutet. Dann folgt genau ein frischer `analyze-port`-Lauf,
+ein Export in einen neuen Output und ein vollstaendiger Hostbuild ohne
+Codegen-Cache-Hits. Erst nachdem die festgelegten Referenz-Replays auf dieser
+Basis sauber laufen, wird wieder inkrementell weitergearbeitet. Weitere
+lokale Patches am verdaechtigen generierten Output sind unzulaessig.
+
 Ein neuer beziehungsweise fortgesetzter `analyze-port`-Lauf ist erforderlich,
 wenn der Befund AOT-Abdeckung oder statische Welt tatsaechlich aendert:
 

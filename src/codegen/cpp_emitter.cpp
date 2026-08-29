@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <iomanip>
 #include <numeric>
 #include <optional>
 #include <sstream>
@@ -24,12 +23,29 @@
 
 namespace katana::codegen {
 
+namespace {
+
+std::string fixed_hex32(const std::string_view prefix,
+                        const std::uint32_t value,
+                        const std::string_view suffix = {}) {
+    static constexpr std::string_view digits = "0123456789ABCDEF";
+    constexpr std::size_t width = 8u;
+    std::string result(prefix);
+    result.resize(prefix.size() + width + suffix.size());
+    for (std::size_t index = 0u; index < width; ++index) {
+        const auto shift = static_cast<unsigned>((width - index - 1u) * 4u);
+        result[prefix.size() + index] = digits[(value >> shift) & 0xFu];
+    }
+    std::copy(suffix.begin(), suffix.end(), result.begin() +
+                                                static_cast<std::ptrdiff_t>(
+                                                    prefix.size() + width));
+    return result;
+}
+
+} // namespace
+
 std::string cpp_function_name(const std::uint32_t address) {
-    std::ostringstream output;
-
-    output << "fn_" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address;
-
-    return output.str();
+    return fixed_hex32("fn_", address);
 }
 
 std::string cpp_service_function_name(const std::uint32_t address) {
@@ -168,12 +184,7 @@ void emit_register_reload_acquire(std::ostringstream& output,
 }
 
 std::string hex32(const std::uint32_t value) {
-    std::ostringstream output;
-
-    output << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << value
-           << "u";
-
-    return output.str();
+    return fixed_hex32("0x", value, "u");
 }
 
 std::string relocated_code_address(const std::uint32_t value) {
@@ -205,12 +216,7 @@ std::string guarded_switch_address(
 }
 
 std::string cpp_block_label(const std::uint32_t address) {
-    std::ostringstream output;
-
-    output << "katana_block_" << std::hex << std::uppercase << std::setw(8)
-           << std::setfill('0') << address;
-
-    return output.str();
+    return fixed_hex32("katana_block_", address);
 }
 
 std::uint32_t fallthrough_address(const katana::ir::Instruction& instruction) {
@@ -553,10 +559,8 @@ void emit_direct_ram_read_helper(std::ostringstream& output,
 
 std::string guarded_linear_ram_access_flag(
     const katana::ir::Instruction& instruction) {
-    std::ostringstream output;
-    output << "katana_guarded_linear_access_" << std::hex << std::uppercase
-           << std::setw(8) << std::setfill('0') << instruction.source_address;
-    return output.str();
+    return fixed_hex32(
+        "katana_guarded_linear_access_", instruction.source_address);
 }
 
 std::optional<std::string> guarded_linear_ram_read_preflight_expression(
@@ -2944,10 +2948,8 @@ void emit_direct_write_instruction_exit(
 }
 
 std::string deferred_safepoint_flag(const katana::ir::Instruction& instruction) {
-    std::ostringstream output;
-    output << "katana_deferred_safepoint_" << std::hex << std::uppercase << std::setw(8)
-           << std::setfill('0') << instruction.source_address;
-    return output.str();
+    return fixed_hex32(
+        "katana_deferred_safepoint_", instruction.source_address);
 }
 
 void emit_post_instruction_safepoint(std::ostringstream& output,
@@ -3002,9 +3004,9 @@ void emit_deferred_post_instruction_safepoint(
     emit_indent(output, indent + 2);
     output << "cpu, *services, " << relocated_code_address(instruction.source_address)
            << ")) return;\n";
+    emit_register_reload_acquire(output, indent + 1, registers);
     emit_indent(output, indent);
     output << "}\n";
-    emit_register_reload_acquire(output, indent, registers);
 }
 
 void emit_guarded_simple_instruction(std::ostringstream& output,
@@ -3106,7 +3108,13 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                         track_mmio_boundary,
                                         defer_post_instruction_safepoint,
                                         registers);
-        if (register_boundary && !defer_post_instruction_safepoint &&
+        // A deferred architectural/MMIO safepoint postpones only the runtime
+        // commit until the terminal instruction has published its target PC.
+        // It does not extend raw cpu.r[] ownership across the remainder of
+        // the block.  Reacquire immediately after every released instruction
+        // boundary so a normal-RAM delay-slot access cannot enter its target
+        // block with a released (and therefore non-flushing) register cache.
+        if (register_boundary &&
             instruction.operation != katana::ir::Operation::Unknown)
             emit_register_reload_acquire(output, indent + 1, registers);
         if (instruction.operation == katana::ir::Operation::Unknown) {
@@ -3171,7 +3179,7 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                     track_mmio_boundary,
                                     defer_post_instruction_safepoint,
                                     registers);
-    if (register_boundary && !defer_post_instruction_safepoint)
+    if (register_boundary)
         emit_register_reload_acquire(output, indent + 1, registers);
     emit_indent(output, indent);
     output << "}\n";
@@ -4200,6 +4208,8 @@ void emit_terminal(std::ostringstream& output,
                             indent + 2,
                             instruction,
                             closure_probe_callsite);
+                        emit_indent(output, indent + 2);
+                        output << "return;\n";
                     } else {
                         output << "return;\n";
                     }
@@ -4221,6 +4231,8 @@ void emit_terminal(std::ostringstream& output,
                         indent + 2,
                         instruction,
                         closure_probe_callsite);
+                    emit_indent(output, indent + 2);
+                    output << "return;\n";
                 } else {
                     emit_indent(output, indent + 2);
                     output << "return;\n";

@@ -16,6 +16,7 @@
 #include "katana/ir/verifier.hpp"
 #include "katana/sh4/decoder.hpp"
 #include "katana/sh4/disassembler.hpp"
+#include "../analysis/global_entry_predecessor_index.hpp"
 #include "../analysis/jump_table_analysis_internal.hpp"
 
 #include <algorithm>
@@ -1681,6 +1682,14 @@ bool validate_boot_analysis_cache_source_binding(
             std::move(rebuilt_analysis.guarded_aot_entries);
         const auto cached_function_candidates =
             std::move(rebuilt_analysis.recursive.functions);
+        const auto cached_indirect_control_flow =
+            std::move(rebuilt_analysis.indirect_control_flow);
+        const auto cached_static_return_continuations =
+            std::move(rebuilt_analysis.static_return_continuations);
+        const auto cached_jump_tables =
+            std::move(rebuilt_analysis.jump_tables);
+        const auto cached_resolved_edges =
+            std::move(rebuilt_analysis.resolved_edges);
         rebuilt_analysis.recursive = {};
         rebuilt_analysis.runtime_code_copies = {};
         rebuilt_analysis.indirect_control_flow.clear();
@@ -1731,38 +1740,48 @@ bool validate_boot_analysis_cache_source_binding(
             for (const auto& hint : overrides->external_entry_hints)
                 global_entry_boundaries.insert(hint.address);
         }
-        const auto relative_table_global_ingress_closed =
-            [&](const katana::analysis::detail::
-                    RelativeJumpTableProducerEvidence& producer) {
-                if (!producer.requires_global_ingress_proof) return true;
-                if (producer.ingress_seed_address >=
-                    producer.ingress_load_address)
-                    return false;
-                const auto is_interior = [&](const std::uint32_t address) {
-                    return address > producer.ingress_seed_address &&
-                           address <= producer.ingress_load_address;
-                };
-                const auto entry = global_entry_boundaries.upper_bound(
-                    producer.ingress_seed_address);
-                if (entry != global_entry_boundaries.end() &&
-                    is_interior(*entry))
-                    return false;
-                for (const auto& line : current_lines) {
-                    if (!line.target_address.has_value() ||
-                        !is_interior(*line.target_address))
-                        continue;
-                    const auto allowed = std::find_if(
-                        producer.internal_branch_edges.begin(),
-                        producer.internal_branch_edges.end(),
-                        [&](const auto& edge) {
-                            return edge.source == line.address &&
-                                   edge.target == *line.target_address;
-                        });
-                    if (allowed == producer.internal_branch_edges.end())
-                        return false;
-                }
-                return true;
-            };
+        katana::analysis::detail::GlobalEntryPredecessorIndex
+            global_entry_predecessors;
+        for (const auto entry : global_entry_boundaries)
+            global_entry_predecessors.add_boundary(entry);
+        for (const auto& guarded : cached_guarded_entries) {
+            global_entry_predecessors.add_boundary(
+                guarded.guest_address);
+            global_entry_predecessors.add_boundary(
+                guarded.shared_body_address);
+        }
+        for (const auto& line : current_lines) {
+            if (line.target_address.has_value())
+                global_entry_predecessors.add_edge(
+                    line.address, *line.target_address);
+        }
+        for (const auto& edge : cached_resolved_edges)
+            global_entry_predecessors.add_edge(
+                edge.instruction_address, edge.target_address);
+        for (const auto& resolution : cached_indirect_control_flow) {
+            if (resolution.target.has_value())
+                global_entry_predecessors.add_edge(
+                    resolution.instruction_address,
+                    *resolution.target);
+            for (const auto target : resolution.targets)
+                global_entry_predecessors.add_edge(
+                    resolution.instruction_address, target);
+            for (const auto target : resolution.analysis_candidates)
+                global_entry_predecessors.add_edge(
+                    resolution.instruction_address, target);
+        }
+        for (const auto& continuation :
+             cached_static_return_continuations)
+            global_entry_predecessors.add_edge(
+                continuation.instruction_address,
+                continuation.target_address);
+        for (const auto& table : cached_jump_tables) {
+            for (const auto& entry : table.entries) {
+                if (entry.accepted)
+                    global_entry_predecessors.add_edge(
+                        table.dispatch_address, entry.target);
+            }
+        }
 
         std::map<std::uint32_t, std::uint32_t> exact_function_sizes;
         for (const auto& symbol : image.symbols()) {
@@ -2055,8 +2074,16 @@ bool validate_boot_analysis_cache_source_binding(
                         relative_producer =
                             std::move(recognition->producer);
                         relative_producer->global_ingress_proven =
-                            relative_table_global_ingress_closed(
-                                *relative_producer);
+                            !relative_producer
+                                 ->requires_global_ingress_proof ||
+                            global_entry_predecessors.closes(
+                                relative_producer
+                                    ->ingress_seed_address,
+                                relative_producer
+                                    ->ingress_load_address,
+                                std::span{
+                                    relative_producer
+                                        ->internal_branch_edges});
                     }
                 } else if (dispatch_instruction_kind ==
                                katana::sh4::InstructionKind::Jmp ||

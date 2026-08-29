@@ -204,6 +204,44 @@ native-bringup:
   adressunabhaengige SH-4-Muster gehoeren dagegen in den generischen Analyzer;
   wirklich dynamische Callbacks bleiben RuntimeContract/RuntimeOnly.
 
+### Global-first und Family-first sind Pflicht
+
+- Eine Guestadresse, Crash-PC, Callsite oder ein einzelner Frontier ist immer
+  nur Witness und niemals automatisch die Implementierungseinheit. Vor jedem
+  Sourceedit wird das vollstaendige verifizierte Primary Image sowie jedes
+  gebundene Overlay-, Loaded-AOT- und sonstige Modul derselben Lifecycle-
+  Generation nach demselben Producer-, Consumer-, Owner-, Provider-, Tabellen-,
+  Callback-, VTable-, CFG- oder Datenflussmuster durchsucht.
+- Wiederholt sich das Muster address- und titelunabhaengig, wird genau eine
+  generische, fail-closed Katana-Regel implementiert. Ist nur die Bedeutung
+  titelspezifisch, wird genau ein privater identity- und generationgebundener
+  Familienvertrag fuer alle bewiesenen Mitglieder implementiert. Einzelne
+  Adressfixes sind ausschliesslich zulaessig, wenn beide Wege nachweislich
+  unmoeglich sind; die verworfenen Generalisierungen und ihr Beweis muessen im
+  Handoff und in der Acceptance stehen.
+- Der globale Scan ist generationslokal: Erkenntnisse aus Primary Image,
+  Overlay oder Loaded-AOT duerfen nie roh zwischen Images oder retired
+  Generations uebernommen werden. Positiv inventarisierte Ziele bleiben an
+  Image-/Modul-SHA, Runtime-/Source-Basis, Bytebereich und aktive Generation
+  gebunden; unbekannte Mitglieder und dynamische Zielmengen bleiben offen.
+- Eine Load-Phase ist keine Source-Komponentenidentitaet. Bei statischen
+  Callback-/VTable-/Codepointer-Vektoren darf der lesbare Vektortraeger (zum
+  Beispiel ein System-Bootstrap) getrennt von der aktiven Spielkomponente
+  sein; promoviert werden aber nur Ziele, deren `source_kind`, `load_phase`
+  und nichtleere `local_source_name` einer bereits aktiven Komponente derselben
+  `ExecutableImage`-Generation entsprechen. Fehlt die Sourceidentitaet, gilt
+  fail-closed nur das exakte Segment. Gleiche Load-Phase oder ein P1/P2-Alias
+  allein ist niemals Owner-/Entry-Proof.
+- FunctionMap-, GDI-, ProgramIndex-, Tabellen-, Callback- und CodeIdentity-
+  Fakten werden zentral aus der gebundenen Authority materialisiert. Manuelle
+  Wiederholung derselben Adresse in mehreren privaten Listen ist kein
+  Ersatzbeweis. Eine frische Whole-Game-Analyse muss nach jeder globalen Regel
+  Family-Coverage, Null Proof-Downgrades und Null neue ungebundene Roots zeigen.
+- Replayprioritaet bestimmt die Reihenfolge, nicht den Scope. Ein Fix gilt erst
+  als Family-Close, wenn alle im Whole-Game-Scan gefundenen Mitglieder
+  klassifiziert sind: geschlossen, streng dynamisch gebunden oder mit exakt
+  benannter fehlender Evidence weiterhin fail-closed.
+
 ## Projektweiter Taskablauf
 
 Fuer jeden Task gilt ab sofort genau diese Reihenfolge:
