@@ -757,8 +757,14 @@ StepResult execute_one(CpuState& cpu,
     case Kind::Fmac: fpu_multiply_accumulate(cpu, m, n); return {};
     case Kind::Fneg: fpu_negate(cpu, n); return {};
     case Kind::Fsqrt: fpu_square_root(cpu, n); return {};
-    case Kind::Fsrra: fpu_reciprocal_square_root(cpu, n); return {};
-    case Kind::Fsca: fpu_sine_cosine(cpu, n); return {};
+    case Kind::Fsrra:
+        if (fpu_reciprocal_square_root(cpu, n, delay_owner))
+            return {true, BlockEndKind::Exception, 1u};
+        return {};
+    case Kind::Fsca:
+        if (fpu_sine_cosine(cpu, n, delay_owner))
+            return {true, BlockEndKind::Exception, 1u};
+        return {};
     case Kind::Fipr: fpu_inner_product(cpu, m, n); return {};
     case Kind::Ftrv: fpu_transform_vector(cpu, n); return {};
     case Kind::Ftrc: fpu_truncate_to_fpul(cpu, n); return {};

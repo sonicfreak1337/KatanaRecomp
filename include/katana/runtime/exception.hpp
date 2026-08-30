@@ -29,6 +29,9 @@ inline constexpr std::uint32_t event_illegal_instruction = 0x00000180u;
 inline constexpr std::uint32_t event_slot_illegal_instruction = 0x000001A0u;
 inline constexpr std::uint32_t event_fpu_disabled = 0x00000800u;
 inline constexpr std::uint32_t event_slot_fpu_disabled = 0x00000820u;
+// All arithmetic FPU exception sources share this SH-4 event. The source is
+// decoded from FPSCR.Cause/Flag by the exception handler.
+inline constexpr std::uint32_t event_fpu_exception = 0x00000120u;
 
 struct ExceptionRequest {
     ExceptionCause cause = ExceptionCause::None;

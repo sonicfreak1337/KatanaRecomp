@@ -1,5 +1,7 @@
 # KatanaRecomp
 
+**Aktuelle Version: 0.49.3**
+
 KatanaRecomp ist ein C++20-Framework fuer die statische Rekompilierung von
 Dreamcast-SH-4-Programmen in native PC-Ports. Das Projekt ist Pre-Alpha:
 Einzelne native Grafik-, Audio-, Eingabe-, Speicher- und Plattformpfade sind

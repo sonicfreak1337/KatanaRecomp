@@ -771,6 +771,7 @@ set(KATANA_RUNTIME_CORE_SOURCES
     src/runtime/native_port_identity.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
+    src/runtime/fpu_simd.cpp
     src/runtime/gdi.cpp
     src/runtime/gdrom_controller.cpp
     src/runtime/guest_buffer.cpp
@@ -817,12 +818,37 @@ set(KATANA_AOT_RUNTIME_SOURCES
     src/runtime/crash_report.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
+    src/runtime/fpu_simd.cpp
     src/runtime/guest_program_range.cpp
     src/runtime/memory.cpp
     src/runtime/native_bringup_dispatch.cpp
     src/runtime/native_port.cpp
     src/runtime/runtime.cpp
 )
+
+# The SIMD body lives in its own TU so baseline runtime dispatch can execute
+# CPUID/XGETBV before any AVX instruction. The exported entry remains noinline
+# under IPO, preserving that safety boundary on non-AVX2 hosts.
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" KATANA_SYSTEM_PROCESSOR_LOWER)
+if(KATANA_SYSTEM_PROCESSOR_LOWER MATCHES "^(amd64|x86_64|x86|i[3-6]86)$")
+    if(MSVC)
+        set_property(
+            SOURCE src/runtime/fpu_simd.cpp
+            APPEND PROPERTY COMPILE_OPTIONS /arch:AVX2
+        )
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            set_property(
+                SOURCE src/runtime/fpu_simd.cpp
+                APPEND PROPERTY COMPILE_OPTIONS /clang:-mfma
+            )
+        endif()
+    else()
+        set_property(
+            SOURCE src/runtime/fpu_simd.cpp
+            APPEND PROPERTY COMPILE_OPTIONS -mavx2 -mfma
+        )
+    endif()
+endif()
 
 # Keep the installed native product SDK deliberately smaller than the
 # build-tree diagnostic runtime surface.  Historical Dreamcast device,

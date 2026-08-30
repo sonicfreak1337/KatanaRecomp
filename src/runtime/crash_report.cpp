@@ -226,6 +226,8 @@ const char* exception_cause_name(const ExceptionCause cause) noexcept {
         return "bus-error-write";
     case ExceptionCause::Interrupt:
         return "interrupt";
+    case ExceptionCause::FpuException:
+        return "fpu-exception";
     }
     return "unknown";
 }

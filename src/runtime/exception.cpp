@@ -61,9 +61,13 @@ constexpr std::array exception_table = {
                       general_exception_vector,
                       false},
     ExceptionMetadata{ExceptionCause::Interrupt, 0u, interrupt_vector, true},
+    ExceptionMetadata{ExceptionCause::FpuException,
+                      event_fpu_exception,
+                      general_exception_vector,
+                      false},
 };
 
-static_assert(exception_table.size() == static_cast<std::size_t>(ExceptionCause::Interrupt) + 1u);
+static_assert(exception_table.size() == static_cast<std::size_t>(ExceptionCause::FpuException) + 1u);
 
 std::uint32_t instruction_physical_pc(const CpuState& cpu,
                                       const std::uint32_t instruction_pc) noexcept {

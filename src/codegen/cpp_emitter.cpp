@@ -3016,6 +3016,41 @@ void emit_deferred_post_instruction_safepoint(
     output << "}\n";
 }
 
+[[nodiscard]] bool can_raise_precise_fpu_exception(
+    const katana::ir::Instruction& instruction) noexcept {
+    return instruction.operation == katana::ir::Operation::Fsrra ||
+           instruction.operation == katana::ir::Operation::Fsca;
+}
+
+void emit_precise_fpu_instruction(std::ostringstream& output,
+                                  const katana::ir::Instruction& instruction,
+                                  const int indent,
+                                  const bool single_block,
+                                  const NativeRegisterEmission& registers) {
+    emit_indent(output, indent);
+    output << "if (katana::runtime::"
+           << (instruction.operation == katana::ir::Operation::Fsrra
+                   ? "fpu_reciprocal_square_root"
+                   : "fpu_sine_cosine")
+           << "(cpu, "
+           << static_cast<unsigned>(instruction.destination_register) << "u, ";
+    if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
+        instruction.delay_slot.counterpart_address.has_value()) {
+        output << "std::optional<std::uint32_t>{"
+               << relocated_code_address(*instruction.delay_slot.counterpart_address)
+               << "}";
+    } else {
+        output << "std::nullopt";
+    }
+    output << ")) {\n";
+    emit_multi_block_completion(
+        output, indent + 1, single_block, true, registers);
+    emit_indent(output, indent + 1);
+    output << "return;\n";
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
 void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const katana::ir::Instruction& instruction,
                                      const int indent,
@@ -3120,11 +3155,20 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     // memory effect intentionally stays empty, so keep the architectural exception boundary
     // explicit here instead of misclassifying every PREF as an unconditional store.
     if (!may_raise_memory_error) {
-        emit_simple_instruction(output,
-                                instruction,
-                                indent + 1,
-                                register_boundary ? unlocalized_registers
-                                                  : registers);
+        if (can_raise_precise_fpu_exception(instruction)) {
+            emit_precise_fpu_instruction(
+                output,
+                instruction,
+                indent + 1,
+                single_block,
+                register_boundary ? unlocalized_registers : registers);
+        } else {
+            emit_simple_instruction(output,
+                                    instruction,
+                                    indent + 1,
+                                    register_boundary ? unlocalized_registers
+                                                      : registers);
+        }
         emit_indent(output, indent + 1);
         output << "guest_instruction_attempt.complete();\n";
         emit_direct_write_instruction_exit(
@@ -4913,6 +4957,51 @@ bool can_batch_instruction_accounting(
            pure_timing && !timing.requires_cycle_flush;
 }
 
+std::uint8_t host_fpu_execution_epoch_mode_mask(
+    const katana::ir::Instruction& instruction) noexcept {
+    using Operation = katana::ir::Operation;
+
+    constexpr std::uint8_t valid_pr_zero = 1u;
+    constexpr std::uint8_t valid_pr_one = 2u;
+    switch (instruction.operation) {
+    case Operation::Fadd:
+    case Operation::Fsub:
+    case Operation::Fmul:
+    case Operation::Fdiv:
+        return (instruction.source_register & 1u) == 0u &&
+                       (instruction.destination_register & 1u) == 0u
+                   ? valid_pr_zero | valid_pr_one
+                   : valid_pr_zero;
+    case Operation::FloatFromFpul:
+    case Operation::Fsqrt:
+        return (instruction.destination_register & 1u) == 0u
+                   ? valid_pr_zero | valid_pr_one
+                   : valid_pr_zero;
+    case Operation::Fmac:
+    case Operation::Fsrra:
+    case Operation::Fsca:
+    case Operation::Fipr:
+    case Operation::Ftrv:
+        return valid_pr_zero;
+    case Operation::FcnvDoubleToSingle:
+        return (instruction.source_register & 1u) == 0u ? valid_pr_one : 0u;
+    default:
+        return 0u;
+    }
+}
+
+bool can_share_host_fpu_execution_epoch(
+    const katana::ir::Instruction& instruction,
+    const katana::sh4::InstructionTiming& timing,
+    const bool external_instruction_observer) {
+    const auto mode_mask = host_fpu_execution_epoch_mode_mask(instruction);
+
+    return mode_mask != 0u && !external_instruction_observer &&
+           instruction.delay_slot.role == katana::ir::DelaySlotRole::None &&
+           instruction.memory_effects == katana::ir::MemoryEffects{} &&
+           !instruction.is_privileged && !timing.requires_cycle_flush;
+}
+
 NativeRegisterEmission make_native_register_emission(
     const katana::ir::Function& function,
     const bool requested,
@@ -4934,6 +5023,38 @@ void emit_non_faulting_simple_instruction(std::ostringstream& output,
     output << "{\n";
     emit_indent(output, indent + 1);
     output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_simple_instruction(output, instruction, indent + 1, registers);
+    emit_indent(output, indent);
+    output << "}\n";
+}
+
+void emit_non_faulting_fpu_epoch_instruction(
+    std::ostringstream& output,
+    const katana::ir::Instruction& instruction,
+    const int indent,
+    const NativeRegisterEmission& registers) {
+    emit_indent(output, indent);
+    output << "{\n";
+    emit_indent(output, indent + 1);
+    output << "// katana-guest " << hex32(instruction.source_address) << "\n";
+    emit_indent(output, indent + 1);
+    output << "cpu.active_instruction_pc = "
+           << relocated_code_address(instruction.source_address) << ";\n";
+    emit_indent(output, indent + 1);
+    output << "const auto katana_fpu_block_offset = "
+              "cpu.active_instruction_pc - cpu.active_block_virtual_start;\n";
+    emit_indent(output, indent + 1);
+    output << "cpu.active_instruction_physical_pc =\n";
+    emit_indent(output, indent + 2);
+    output << "cpu.active_block_size != 0u &&\n";
+    emit_indent(output, indent + 3);
+    output << "katana_fpu_block_offset < cpu.active_block_size\n";
+    emit_indent(output, indent + 2);
+    output << "? cpu.active_block_physical_start + katana_fpu_block_offset\n";
+    emit_indent(output, indent + 2);
+    output << ": katana::runtime::canonical_physical_address_inline(\n";
+    emit_indent(output, indent + 3);
+    output << "cpu.active_instruction_pc);\n";
     emit_simple_instruction(output, instruction, indent + 1, registers);
     emit_indent(output, indent);
     output << "}\n";
@@ -5123,6 +5244,107 @@ void emit_block(std::ostringstream& output,
         }
 
         const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+        if (can_share_host_fpu_execution_epoch(
+                instruction, timing, external_instruction_observer)) {
+            const auto epoch_mode_mask =
+                host_fpu_execution_epoch_mode_mask(instruction);
+            std::size_t epoch_end = index + 1u;
+            while (epoch_end < block.instructions.size()) {
+                const auto& candidate = block.instructions[epoch_end];
+                if (candidate.delay_slot.role == katana::ir::DelaySlotRole::Slot ||
+                    is_control_flow(candidate.operation) ||
+                    std::binary_search(resume_entries.begin(),
+                                       resume_entries.end(),
+                                       candidate.source_address)) {
+                    break;
+                }
+                const auto candidate_timing =
+                    katana::sh4::instruction_timing(candidate.original_opcode);
+                if (!can_share_host_fpu_execution_epoch(
+                        candidate,
+                        candidate_timing,
+                        external_instruction_observer) ||
+                    host_fpu_execution_epoch_mode_mask(candidate) !=
+                        epoch_mode_mask) {
+                    break;
+                }
+                ++epoch_end;
+            }
+
+            if (epoch_end - index >= 2u) {
+                emit_pending_accounting_region();
+                emit_indent(output, 4);
+                output << "if ((cpu.fpscr & (katana::runtime::"
+                          "fpscr_exception_enable_mask | "
+                          "katana::runtime::fpscr_dn_mask)) == "
+                          "katana::runtime::fpscr_dn_mask) {\n";
+                emit_indent(output, 5);
+                output << "katana::runtime::HostFpuExecutionEpoch "
+                          "katana_host_fpu_epoch(cpu);\n";
+                // The first instruction retains the complete architectural
+                // attempt and both FPU guards. Every following instruction
+                // has the identical FPSCR validity predicate. The runtime
+                // predicate above additionally proves that all maskable FPU
+                // traps are disabled and DN=1 excludes the unmaskable
+                // denormal-input FPU error, so the remaining operations can
+                // share one accounting region without hiding a fault edge.
+                emit_guarded_simple_instruction(
+                    output,
+                    instruction,
+                    5,
+                    single_block,
+                    external_instruction_observer,
+                    false,
+                    registers,
+                    has_direct_ram_writes,
+                    table_compatible_function_entries,
+                    guarded_local_block_chaining);
+                std::uint64_t region_guest_cycles = 0u;
+                for (std::size_t epoch_index = index + 1u;
+                     epoch_index < epoch_end;
+                     ++epoch_index) {
+                    const auto& epoch_instruction =
+                        block.instructions[epoch_index];
+                    emit_non_faulting_fpu_epoch_instruction(
+                        output, epoch_instruction, 5, registers);
+                    region_guest_cycles +=
+                        katana::sh4::instruction_timing(
+                            epoch_instruction.original_opcode)
+                            .guest_cycles;
+                }
+                emit_instruction_accounting_region(
+                    output,
+                    5,
+                    epoch_end - index - 1u,
+                    region_guest_cycles);
+                emit_indent(output, 4);
+                output << "} else {\n";
+                // Preserve the pre-optimization instruction boundary for
+                // every FPSCR state that can trap. This fallback deliberately
+                // retains one attempt/guard/accounting transaction per guest
+                // instruction rather than weakening architectural ordering.
+                for (std::size_t epoch_index = index;
+                     epoch_index < epoch_end;
+                     ++epoch_index) {
+                    emit_guarded_simple_instruction(
+                        output,
+                        block.instructions[epoch_index],
+                        5,
+                        single_block,
+                        external_instruction_observer,
+                        false,
+                        registers,
+                        has_direct_ram_writes,
+                        table_compatible_function_entries,
+                        guarded_local_block_chaining);
+                }
+                emit_indent(output, 4);
+                output << "}\n";
+                index = epoch_end - 1u;
+                continue;
+            }
+        }
+
         if (can_batch_instruction_accounting(
                 instruction, timing, external_instruction_observer)) {
             emit_non_faulting_simple_instruction(output, instruction, 4, registers);

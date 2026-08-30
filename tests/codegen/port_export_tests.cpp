@@ -4881,6 +4881,49 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos,
         "Diagnoseexport verliert seinen typisierten Diagnosepfad oder der "
         "Produktport ist nicht interpreterfrei.");
+    const auto& generated_port_cmake = generated_before.at("katana-port.cmake");
+    const auto generated_root_cmake = read_text(output / "CMakeLists.txt");
+    require(
+        generated_root_cmake.find(
+            "set(KATANA_PORT_PGO_MODE \"$ENV{KATANA_PORT_PGO_MODE}\" CACHE STRING") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "KATANA_PORT_BUILD_PROFILE STREQUAL \"performance\" OR") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "Performance/gate build requires IPO") != std::string::npos,
+        "Performanceexport verliert Profilwahl oder verpflichtendes IPO.");
+    require(
+        generated_port_cmake.find("KATANA_PORT_OPTIMIZATION_TARGETS") !=
+                std::string::npos &&
+            generated_port_cmake.find("katana_aot_runtime_objects") !=
+                std::string::npos &&
+            generated_port_cmake.find("katana_native_port_audio_domain_objects") !=
+                std::string::npos &&
+            generated_port_cmake.find("katana_native_title_adapter") !=
+                std::string::npos,
+        "Performanceexport verliert lokale AOT-/Runtime-/Adapter-IPO-Owner.");
+    require(
+        generated_port_cmake.find("/clang:-fprofile-instr-generate") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "/clang:-fprofile-instr-use=${KATANA_PORT_PGO_PROFILE_NORMALIZED}") !=
+                std::string::npos,
+        "Performanceexport verliert clang-cl PGO-Generate/Use-Flags.");
+    require(
+        generated_port_cmake.find(
+                "file(SHA256 \"${KATANA_PORT_PGO_PROFILE}\"") !=
+                std::string::npos &&
+            generated_port_cmake.find("PGO profile SHA-256 mismatch") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "KATANA_PORT_PGO_PROFILE_SHA256_NAME") != std::string::npos,
+        "Performanceexport verliert die genaue PGO-Profilidentitaet.");
+    require(
+        explicit_static_main.find("#define KATANA_PORT_PGO_MODE_NAME \"off\"") !=
+                std::string::npos &&
+            explicit_static_main.find("pgo_profile_sha256=") != std::string::npos,
+        "Produkt-Main protokolliert PGO-Modus oder Profilidentitaet nicht.");
     require(
             runtime_dispatch_shards
                     .find("generated-block-AC008300") != std::string::npos &&

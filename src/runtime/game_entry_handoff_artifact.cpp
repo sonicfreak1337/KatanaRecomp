@@ -578,7 +578,7 @@ bool valid_completeness(
 
 bool valid_exception_cause(const ExceptionCause value) noexcept {
     return static_cast<std::uint32_t>(value) <=
-           static_cast<std::uint32_t>(ExceptionCause::Interrupt);
+           static_cast<std::uint32_t>(ExceptionCause::FpuException);
 }
 
 bool valid_memory_region(const GameEntryMemoryRegion value) noexcept {

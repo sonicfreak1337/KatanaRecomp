@@ -27,6 +27,31 @@ inline constexpr std::uint32_t sr_md_mask = 0x40000000u;
 inline constexpr std::uint32_t sr_writable_mask = 0x700083F3u;
 
 inline constexpr std::uint32_t fpscr_rounding_mode_mask = 0x00000003u;
+// FPSCR exception fields. The six sources are ordered as the SH-4 defines
+// them: I, U, O, Z, V in the flag/enable fields and I, U, O, Z, V, E in the
+// cause field. E has no flag or enable bit and is therefore unmaskable.
+inline constexpr std::uint32_t fpscr_flag_inexact_mask = 0x00000004u;
+inline constexpr std::uint32_t fpscr_flag_underflow_mask = 0x00000008u;
+inline constexpr std::uint32_t fpscr_flag_overflow_mask = 0x00000010u;
+inline constexpr std::uint32_t fpscr_flag_divide_by_zero_mask = 0x00000020u;
+inline constexpr std::uint32_t fpscr_flag_invalid_mask = 0x00000040u;
+inline constexpr std::uint32_t fpscr_enable_inexact_mask = 0x00000080u;
+inline constexpr std::uint32_t fpscr_enable_underflow_mask = 0x00000100u;
+inline constexpr std::uint32_t fpscr_enable_overflow_mask = 0x00000200u;
+inline constexpr std::uint32_t fpscr_enable_divide_by_zero_mask = 0x00000400u;
+inline constexpr std::uint32_t fpscr_enable_invalid_mask = 0x00000800u;
+inline constexpr std::uint32_t fpscr_cause_inexact_mask = 0x00001000u;
+inline constexpr std::uint32_t fpscr_cause_underflow_mask = 0x00002000u;
+inline constexpr std::uint32_t fpscr_cause_overflow_mask = 0x00004000u;
+inline constexpr std::uint32_t fpscr_cause_divide_by_zero_mask = 0x00008000u;
+inline constexpr std::uint32_t fpscr_cause_invalid_mask = 0x00010000u;
+inline constexpr std::uint32_t fpscr_cause_fpu_error_mask = 0x00020000u;
+inline constexpr std::uint32_t fpscr_flag_mask = 0x0000007Cu;
+inline constexpr std::uint32_t fpscr_cause_mask = 0x0003F000u;
+inline constexpr std::uint32_t fpscr_exception_enable_mask =
+    fpscr_enable_inexact_mask | fpscr_enable_underflow_mask |
+    fpscr_enable_overflow_mask | fpscr_enable_divide_by_zero_mask |
+    fpscr_enable_invalid_mask;
 inline constexpr std::uint32_t fpscr_dn_mask = 0x00040000u;
 inline constexpr std::uint32_t fpscr_pr_mask = 0x00080000u;
 inline constexpr std::uint32_t fpscr_sz_mask = 0x00100000u;
@@ -54,7 +79,10 @@ enum class ExceptionCause : std::uint8_t {
     TlbMultipleHit,
     BusErrorRead,
     BusErrorWrite,
-    Interrupt
+    Interrupt,
+    // All arithmetic FPU sources share SH-4 event 0x120; the precise source
+    // remains in FPSCR.Cause/Flag and is not conflated with FPU-disabled.
+    FpuException
 };
 
 class RuntimeAddressSpace;

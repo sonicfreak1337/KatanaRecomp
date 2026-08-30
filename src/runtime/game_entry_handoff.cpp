@@ -86,6 +86,7 @@ bool valid_exception_cause(const ExceptionCause cause) noexcept {
     case ExceptionCause::BusErrorRead:
     case ExceptionCause::BusErrorWrite:
     case ExceptionCause::Interrupt:
+    case ExceptionCause::FpuException:
         return true;
     }
     return false;

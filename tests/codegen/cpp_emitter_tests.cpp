@@ -1706,6 +1706,102 @@ int main() {
             "FMOV.S erzeugt fuer 32-/64-Bit-Pfade nicht 1/2 Events mit "
             "FPU-Writequelle oder behaelt out-of-line FPU-Statusabfragen.");
 
+    constexpr std::array<std::uint8_t, 14> fpu_epoch_bytes = {
+        0x00u, 0xF1u, // FADD FR0,FR1
+        0x02u, 0xF1u, // FMUL FR0,FR1
+        0xFDu, 0xF3u, // FSCHG: hard epoch boundary
+        0x00u, 0xF1u, // FADD FR0,FR1
+        0x02u, 0xF1u, // FMUL FR0,FR1
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    const auto fpu_epoch_lines =
+        katana::sh4::disassemble(fpu_epoch_bytes, 0x8C060100u);
+    constexpr std::array<std::uint32_t, 1> fpu_epoch_seeds = {0x8C060100u};
+    const auto fpu_epoch_functions =
+        katana::analysis::discover_functions(fpu_epoch_lines, fpu_epoch_seeds);
+    const auto fpu_epoch_program =
+        katana::ir::lower_program(fpu_epoch_lines, fpu_epoch_functions);
+    const auto fpu_epoch_source =
+        katana::codegen::emit_cpp_program(fpu_epoch_program, 0x8C060100u);
+    require(count_occurrences(
+                fpu_epoch_source,
+                "katana::runtime::HostFpuExecutionEpoch katana_host_fpu_epoch(cpu);") == 2u,
+            "AOT fasst FPU-Instruktionen nicht in zwei durch FSCHG getrennte Epochen.");
+    require(count_occurrences(fpu_epoch_source,
+                              "katana::runtime::fpu_binary(cpu,") == 8u,
+            "FPU-Epoche und exakter Fault-Fallback enthalten nicht jeweils "
+            "jede Guest-Operation.");
+    require(count_occurrences(
+                fpu_epoch_source,
+                "katana::runtime::fpscr_exception_enable_mask") == 2u &&
+                count_occurrences(
+                    fpu_epoch_source,
+                    "katana::runtime::fpscr_dn_mask") == 4u,
+            "FPU-Epoche ist nicht an maskierte Exceptions plus DN=1 gebunden.");
+    const auto fpu_epoch_attempt_count = count_occurrences(
+        fpu_epoch_source,
+        "katana::runtime::ExplicitGuestInstructionAttempt "
+        "guest_instruction_attempt(");
+    require(fpu_epoch_attempt_count == 8u,
+            "FPU-Region behaelt eine falsche Anzahl vollstaendiger Attempts: " +
+                std::to_string(fpu_epoch_attempt_count));
+    require(count_occurrences(
+                fpu_epoch_source,
+                "cpu.attempted_guest_instructions += 1u;") == 2u &&
+                count_occurrences(
+                    fpu_epoch_source,
+                    "cpu.retired_guest_instructions += 1u;") == 2u,
+            "FPU-Region verliert das gebuendelte Attempt-/Retire-Accounting.");
+
+    katana::codegen::BackendRequest observed_fpu_epoch_request{
+        fpu_epoch_program, 0x8C060100u};
+    observed_fpu_epoch_request.external_instruction_observer = true;
+    const auto observed_fpu_epoch_source =
+        katana::codegen::CppBackend{}
+            .emit(observed_fpu_epoch_request)
+            .joined_text();
+    require(observed_fpu_epoch_source.find("HostFpuExecutionEpoch") ==
+                std::string::npos,
+            "Externer Instruktionsobserver wird von einer FPU-Epoche umspannt.");
+
+    constexpr std::array<std::uint8_t, 12> precise_fpu_exception_bytes = {
+        0x7Du, 0xF4u, // FSRRA FR4
+        0x01u, 0xA0u, // BRA +1 -> 0x8C060208
+        0xFDu, 0xF2u, // FSCA FPUL,DR2 (Delay Slot)
+        0x09u, 0x00u, // unreachable padding
+        0x0Bu, 0x00u, // RTS
+        0x09u, 0x00u  // NOP (Delay Slot)
+    };
+    const auto precise_fpu_exception_lines =
+        katana::sh4::disassemble(precise_fpu_exception_bytes, 0x8C060200u);
+    constexpr std::array<std::uint32_t, 1> precise_fpu_exception_seeds = {
+        0x8C060200u};
+    const auto precise_fpu_exception_functions = katana::analysis::discover_functions(
+        precise_fpu_exception_lines, precise_fpu_exception_seeds);
+    const auto precise_fpu_exception_program = katana::ir::lower_program(
+        precise_fpu_exception_lines, precise_fpu_exception_functions);
+    const auto precise_fpu_exception_source = katana::codegen::emit_cpp_program(
+        precise_fpu_exception_program, 0x8C060200u);
+    const auto emitted_fsrra =
+        emitted_instruction(precise_fpu_exception_source, "0x8C060200");
+    const auto fsrra_checked_call = emitted_fsrra.find(
+        "if (katana::runtime::fpu_reciprocal_square_root(cpu, 4u, "
+        "std::nullopt))");
+    const auto fsrra_retire =
+        emitted_fsrra.find("guest_instruction_attempt.complete();");
+    require(fsrra_checked_call != std::string::npos &&
+                fsrra_retire != std::string::npos &&
+                fsrra_checked_call < fsrra_retire,
+            "AOT erkennt einen FSRRA-Trap nicht vor dem Guest-Retirement.");
+    const auto emitted_fsca_delay =
+        emitted_instruction(precise_fpu_exception_source, "0x8C060204");
+    require(emitted_fsca_delay.find(
+                "fpu_sine_cosine(cpu, 2u, std::optional<std::uint32_t>{"
+                "katana::runtime::relocate_code_address(0x8C060202u)})") !=
+                std::string::npos,
+            "AOT bindet eine FSCA-Exception im Delay-Slot nicht an den Branch-Owner.");
+
     constexpr std::array<std::uint8_t, 8> mac_memory_bytes = {
         0x1Fu,
         0x42u, // MAC.W @R1+,@R2+
