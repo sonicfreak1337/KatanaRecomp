@@ -4,10 +4,12 @@
 #include "katana/analysis/owner_semantic_summary.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/ir/verifier.hpp"
+#include "../../src/analysis/global_entry_predecessor_index.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <span>
 #include <stdexcept>
@@ -4046,6 +4048,307 @@ int main() {
                     katana::analysis::ControlFlowEvidence::ForcedOverride,
             "Ein entfernter direkter CFG-Vorgaenger hinter dem endlichen "
             "Index-Seed umging den globalen Ingressvertrag.");
+
+    // Preserve one analysis session while only the root set grows.  The
+    // producer and table bytes remain unchanged, so this exercises the exact
+    // reverse dependency from the global entry universe to a retained
+    // relative-table recognition instead of obtaining the right answer from
+    // a cold recognizer run.
+    auto incremental_root_braf_image = identity_bound_braf_image;
+    katana::analysis::ControlFlowAnalysisSession incremental_root_session;
+    const auto incremental_root_baseline = incremental_root_session.analyze(
+        incremental_root_braf_image, &identity_bound_braf_override);
+    const auto incremental_root_baseline_table = std::find_if(
+        incremental_root_baseline.jump_tables.begin(),
+        incremental_root_baseline.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(
+        incremental_root_baseline_table !=
+                incremental_root_baseline.jump_tables.end() &&
+            incremental_root_baseline_table->resolved &&
+            incremental_root_baseline_table->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedComplete,
+        "Der inkrementelle Ingress-Test besitzt keinen geschlossenen "
+        "Ausgangsproducer.");
+    incremental_root_braf_image.add_entry_point(0x0Au);
+    const auto incremental_root_added = incremental_root_session.analyze(
+        incremental_root_braf_image, &identity_bound_braf_override);
+    const auto incremental_root_added_table = std::find_if(
+        incremental_root_added.jump_tables.begin(),
+        incremental_root_added.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(
+        incremental_root_added.recursive_incremental_passes != 0u &&
+            incremental_root_added.recursive_full_recompute_fallbacks == 0u &&
+            incremental_root_added_table !=
+                incremental_root_added.jump_tables.end() &&
+            incremental_root_added_table->evidence ==
+                katana::analysis::ControlFlowEvidence::ForcedOverride,
+        "Ein spaeterer Function-/StaticEntry-Root invalidierte einen "
+        "unveraenderten relativen Producer im Warmzustand nicht.");
+    const std::array original_root{0u};
+    incremental_root_braf_image.replace_entry_points(original_root);
+    const auto incremental_root_removed = incremental_root_session.analyze(
+        incremental_root_braf_image, &identity_bound_braf_override);
+    const auto incremental_root_removed_table = std::find_if(
+        incremental_root_removed.jump_tables.begin(),
+        incremental_root_removed.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(
+        incremental_root_removed_table !=
+                incremental_root_removed.jump_tables.end() &&
+            incremental_root_removed_table->resolved &&
+            incremental_root_removed_table->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedComplete,
+        "Ein entfernter Entry-Root hinterliess einen stale negativen "
+        "Ingressbeweis im wiederverwendeten Sessionobjekt.");
+
+    const auto root_projection = [](const auto& result) {
+        std::vector<std::tuple<std::uint32_t, std::uint32_t,
+                               katana::analysis::ControlFlowEvidence>>
+            projection;
+        projection.reserve(result.recursive.functions.size());
+        for (const auto& function : result.recursive.functions)
+            projection.emplace_back(function.address, function.size,
+                                    function.evidence);
+        return projection;
+    };
+    const auto fresh_root_removed =
+        katana::analysis::analyze_control_flow(
+            incremental_root_braf_image,
+            &identity_bound_braf_override);
+    require(root_projection(incremental_root_removed) ==
+                root_projection(fresh_root_removed) &&
+                incremental_root_removed.recursive_full_recompute_fallbacks ==
+                    1u &&
+                incremental_root_removed.persistent_analysis_bypass_reason ==
+                    katana::analysis::PersistentAnalysisBypassReason::None,
+            "Root-Removal war nicht warm==fresh oder verwarf unabhaengige "
+            "FunctionProgram-Shards statt eines einzelnen Reachability-"
+            "Rebase.");
+
+    incremental_root_braf_image.add_entry_point(0x0Au);
+    const auto incremental_root_readded = incremental_root_session.analyze(
+        incremental_root_braf_image, &identity_bound_braf_override);
+    const auto fresh_root_readded = katana::analysis::analyze_control_flow(
+        incremental_root_braf_image, &identity_bound_braf_override);
+    require(root_projection(incremental_root_readded) ==
+                root_projection(fresh_root_readded) &&
+                incremental_root_readded.recursive_incremental_passes != 0u,
+            "Root-Re-Add wich vom frischen kanonischen RootDomain-Ergebnis "
+            "ab oder verlor den Warm-Pfad.");
+
+    // Exact StaticEntry carriers are ordinary typed root-domain members, not
+    // a reason to discard every disconnected CFA/FVA shard.  Removing and
+    // re-adding the function directive must match a fresh analysis in both
+    // directions.
+    auto exact_root_image = identity_bound_braf_image;
+    exact_root_image.add_segment(
+        {".disconnected-root",
+         0x100u,
+         0x100u,
+         4u,
+         katana::io::SegmentKind::Code,
+         {true, false, true},
+         {0x0Bu, 0x00u, 0x09u, 0x00u}});
+    exact_root_image.add_entry_point(0x100u);
+    exact_root_image.add_immutable_range(
+        {0u, 0x1Au, "synthetic-braf-producer-v3", 0u});
+    exact_root_image.add_immutable_range(
+        {0x1Cu, 8u, "synthetic-braf-table-v3", 0u});
+    exact_root_image.add_immutable_range(
+        {0x100u, 4u, "synthetic-disconnected-root-v1", 0u});
+    auto exact_root_override = identity_bound_braf_override;
+    exact_root_override.functions.push_back({0x0Au, 2u, 4u});
+    katana::analysis::ControlFlowAnalysisSession exact_root_session;
+    static_cast<void>(exact_root_session.analyze(
+        exact_root_image, &identity_bound_braf_override));
+    const auto exact_root_added = exact_root_session.analyze(
+        exact_root_image, &exact_root_override);
+    const auto exact_root_added_fresh =
+        katana::analysis::analyze_control_flow(
+            exact_root_image, &exact_root_override);
+    const auto exact_root_removed = exact_root_session.analyze(
+        exact_root_image, &identity_bound_braf_override);
+    const auto exact_root_removed_fresh =
+        katana::analysis::analyze_control_flow(
+            exact_root_image, &identity_bound_braf_override);
+    const auto exact_root_readded = exact_root_session.analyze(
+        exact_root_image, &exact_root_override);
+    const bool exact_add_matches =
+        root_projection(exact_root_added) ==
+        root_projection(exact_root_added_fresh);
+    const bool exact_remove_matches =
+        root_projection(exact_root_removed) ==
+        root_projection(exact_root_removed_fresh);
+    const bool exact_readd_matches =
+        root_projection(exact_root_readded) ==
+        root_projection(exact_root_added_fresh);
+    require(exact_add_matches && exact_remove_matches &&
+                exact_readd_matches &&
+                exact_root_removed.persistent_analysis_bypass_reason ==
+                    katana::analysis::PersistentAnalysisBypassReason::None &&
+                exact_root_removed
+                        .decode_boundary_normalization_full_scans <
+                    exact_root_removed_fresh
+                        .decode_boundary_normalization_full_scans,
+            "Exact StaticEntry add/remove/re-add war nicht warm==fresh oder "
+            "invalidierte den gesamten FunctionProgram-Graphen: add=" +
+                std::to_string(exact_add_matches) +
+                " remove=" + std::to_string(exact_remove_matches) +
+                " readd=" + std::to_string(exact_readd_matches) +
+                " bypass=" +
+                std::to_string(static_cast<int>(
+                    exact_root_removed.persistent_analysis_bypass_reason)) +
+                " warm_full_scans=" +
+                std::to_string(
+                    exact_root_removed
+                        .decode_boundary_normalization_full_scans) +
+                " fresh_full_scans=" +
+                std::to_string(exact_root_removed_fresh
+                                   .decode_boundary_normalization_full_scans));
+
+    // Boundary and predecessor ownership is counted. Withdrawing one typed
+    // carrier may not open a relative producer while an identical carrier
+    // remains; only the final withdrawal changes interval closure.
+    katana::analysis::detail::GlobalEntryPredecessorIndex duplicate_carriers;
+    duplicate_carriers.add_boundary(0x0Au);
+    duplicate_carriers.add_boundary(0x0Au);
+    katana::analysis::detail::GlobalEntryPredecessorIndex one_carrier;
+    one_carrier.add_boundary(0x0Au);
+    const auto duplicate_withdrawal =
+        duplicate_carriers.difference(one_carrier);
+    const std::array<katana::analysis::detail::GlobalEntryEdge, 0u>
+        no_internal_edges{};
+    require(duplicate_withdrawal.empty() &&
+                !one_carrier.closes(0u, 0x10u,
+                                    std::span{no_internal_edges}),
+            "Duplicate Carrier Withdrawal verlor den verbleibenden "
+            "GlobalEntry-Owner.");
+    katana::analysis::detail::GlobalEntryPredecessorIndex no_carrier;
+    const auto final_withdrawal = one_carrier.difference(no_carrier);
+    require(!final_withdrawal.empty() &&
+                final_withdrawal.affects_interval(0u, 0x10u) &&
+                no_carrier.closes(0u, 0x10u,
+                                  std::span{no_internal_edges}),
+            "Finaler Carrier-Entzug invalidierte den betroffenen "
+            "Producer-Intervall nicht exakt.");
+    katana::analysis::detail::GlobalEntryPredecessorIndex duplicate_edges;
+    duplicate_edges.add_edge(0x20u, 0x0Au);
+    duplicate_edges.add_edge(0x20u, 0x0Au);
+    katana::analysis::detail::GlobalEntryPredecessorIndex one_edge;
+    one_edge.add_edge(0x20u, 0x0Au);
+    require(duplicate_edges.difference(one_edge).empty() &&
+                !one_edge.closes(0u, 0x10u,
+                                 std::span{no_internal_edges}),
+            "Duplicate Predecessor Withdrawal verlor die verbleibende "
+            "Edge-Multiplizitaet.");
+    const auto final_edge_withdrawal = one_edge.difference(no_carrier);
+    require(final_edge_withdrawal.affects_interval(0u, 0x10u),
+            "Finaler Predecessor-Entzug invalidierte den betroffenen "
+            "Producer-Intervall nicht.");
+
+    // A root/override binding that cannot be represented within the retained
+    // session contract is never resumed from a partial artifact. It performs
+    // one ordinary cold analysis per request and publishes no warm epoch.
+    auto unrepresentable_root_override = identity_bound_braf_override;
+    unrepresentable_root_override.source_path = std::filesystem::path{
+        std::string(16u * 1024u * 1024u + 1u, 'x')};
+    katana::analysis::ControlFlowAnalysisSession unrepresentable_root_session;
+    const auto unrepresentable_first = unrepresentable_root_session.analyze(
+        identity_bound_braf_image, &unrepresentable_root_override);
+    const auto unrepresentable_second = unrepresentable_root_session.analyze(
+        identity_bound_braf_image, &unrepresentable_root_override);
+    require(root_projection(unrepresentable_first) ==
+                root_projection(unrepresentable_second) &&
+                unrepresentable_first.recursive_physical_work
+                        .decoded_work_items != 0u &&
+                unrepresentable_first.recursive_physical_work
+                        .decoded_work_items ==
+                    unrepresentable_second.recursive_physical_work
+                        .decoded_work_items &&
+                unrepresentable_second
+                        .recursive_full_recompute_fallbacks == 0u,
+            "Unrepresentable RootDomain wurde partiell resumed oder mehr als "
+            "einmal innerhalb desselben Analyseaufrufs kalt aufgebaut: "
+            "incremental=" +
+                std::to_string(
+                    unrepresentable_second.recursive_incremental_passes) +
+                " fallback=" +
+                std::to_string(unrepresentable_second
+                                   .recursive_full_recompute_fallbacks) +
+                " epochs=" +
+                std::to_string(
+                    unrepresentable_second.recursive_snapshot_epochs));
+
+    // The second warm case introduces no explicit interior root.  Activating
+    // a previously unreachable owner reveals a resolved indirect jump into
+    // the producer interval.  That edge lives only in FunctionEdgeJournal,
+    // so its epoch must invalidate the retained recognition as well.
+    auto incremental_indirect_braf_image = identity_bound_braf_image;
+    incremental_indirect_braf_image.add_segment(
+        {".incremental-indirect-ingress",
+         0x80u,
+         0x80u,
+         6u,
+         katana::io::SegmentKind::Code,
+         {true, false, true},
+         {0x0Au, 0xE3u, // mov #0x0A,r3
+          0x2Bu, 0x43u, // jmp @r3
+          0x09u, 0x00u}}); // nop
+    // Adding a segment intentionally invalidates all prior immutable-range
+    // proofs. Rebind the unchanged producer/table bytes before establishing
+    // the test baseline.
+    incremental_indirect_braf_image.add_immutable_range(
+        {0u, 0x1Au, "synthetic-braf-producer-v2", 0u});
+    incremental_indirect_braf_image.add_immutable_range(
+        {0x1Cu, 8u, "synthetic-braf-table-v2", 0u});
+    katana::analysis::ControlFlowAnalysisSession incremental_indirect_session;
+    const auto incremental_indirect_baseline =
+        incremental_indirect_session.analyze(
+            incremental_indirect_braf_image,
+            &identity_bound_braf_override);
+    const auto incremental_indirect_baseline_table = std::find_if(
+        incremental_indirect_baseline.jump_tables.begin(),
+        incremental_indirect_baseline.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(
+        incremental_indirect_baseline_table !=
+                incremental_indirect_baseline.jump_tables.end() &&
+            incremental_indirect_baseline_table->resolved &&
+            incremental_indirect_baseline_table->evidence ==
+                katana::analysis::ControlFlowEvidence::GuardedComplete,
+        "Der inkrementelle Indirect-Ingress-Test besitzt keinen "
+        "geschlossenen Ausgangsproducer: tables=" +
+            std::to_string(incremental_indirect_baseline.jump_tables.size()) +
+            (incremental_indirect_baseline_table ==
+                     incremental_indirect_baseline.jump_tables.end()
+                 ? std::string{}
+                 : " resolved=" +
+                       std::to_string(
+                           incremental_indirect_baseline_table->resolved) +
+                       " evidence=" +
+                       std::to_string(static_cast<int>(
+                           incremental_indirect_baseline_table->evidence)) +
+                       " reason=" +
+                       incremental_indirect_baseline_table->reason));
+    incremental_indirect_braf_image.add_entry_point(0x80u);
+    const auto incremental_indirect_added =
+        incremental_indirect_session.analyze(
+            incremental_indirect_braf_image,
+            &identity_bound_braf_override);
+    const auto incremental_indirect_added_table = std::find_if(
+        incremental_indirect_added.jump_tables.begin(),
+        incremental_indirect_added.jump_tables.end(),
+        [](const auto& table) { return table.dispatch_address == 0x16u; });
+    require(
+        incremental_indirect_added.recursive_incremental_passes != 0u &&
+            incremental_indirect_added_table !=
+                incremental_indirect_added.jump_tables.end() &&
+            incremental_indirect_added_table->evidence ==
+                katana::analysis::ControlFlowEvidence::ForcedOverride,
+        "Ein spaeter aufgeloester indirekter Vorgaenger invalidierte einen "
+        "unveraenderten relativen Producer im Warmzustand nicht.");
 
     // The classic CMP/HS + BT + SHLL recognizer used to skip the global
     // ingress contract entirely. In addition, a resolved indirect edge is

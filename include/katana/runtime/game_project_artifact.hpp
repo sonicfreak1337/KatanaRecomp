@@ -10,7 +10,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t game_project_artifact_format_version = 6u;
+inline constexpr std::uint32_t game_project_artifact_format_version = 7u;
 inline constexpr std::uint64_t game_project_artifact_maximum_size =
     96u * 1024u * 1024u;
 
@@ -71,6 +71,7 @@ class GameProjectArtifact final {
     std::vector<std::string> code_identity_values_;
     std::vector<std::string> code_identity_image_ids_;
     std::vector<GameProjectCodeIdentity> code_identities_;
+    std::vector<std::uint32_t> static_entries_;
     std::vector<std::string> runtime_image_ids_;
     std::vector<std::string> runtime_image_byte_identities_;
     std::vector<std::vector<std::uint32_t>> runtime_image_entry_offsets_;

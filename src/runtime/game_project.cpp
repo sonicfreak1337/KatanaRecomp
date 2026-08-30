@@ -848,6 +848,26 @@ void validate_game_project_definition(
             static_cast<std::uint64_t>(identity.address) + identity.size;
     }
 
+    require_strictly_sorted(
+        definition.static_entries,
+        [](const auto value) { return value; },
+        "game-project-static-entries-not-strictly-sorted");
+    for (const auto entry : definition.static_entries) {
+        const auto* const boundary = find_exact(
+            definition.function_boundaries,
+            entry,
+            [](const auto& value) { return value.start; });
+        const auto* const identity = find_exact(
+            definition.code_identities,
+            entry,
+            [](const auto& value) { return value.address; });
+        if (boundary == nullptr || identity == nullptr ||
+            boundary->size != identity->size ||
+            boundary->image_id != identity->image_id)
+            throw std::invalid_argument(
+                "game-project-static-entry-exact-identity-missing");
+    }
+
     if (definition.game_entry_handoff.has_value() &&
         !definition.boot_config.has_value())
         throw std::invalid_argument(
@@ -894,7 +914,7 @@ std::string game_project_definition_identity(
     validate_game_project_definition(definition);
     GameProjectIdentityMaterial material;
     material.text("katana.game-project-definition.identity");
-    material.u32(2u);
+    material.u32(3u);
     material.u32(definition.contract_version);
     material.text(definition.project_id);
     material.text(definition.project_version);
@@ -1012,6 +1032,10 @@ std::string game_project_definition_identity(
         material.text(identity.byte_identity);
         material.text(identity.image_id);
     }
+
+    material.count(definition.static_entries.size());
+    for (const auto entry : definition.static_entries)
+        material.u32(entry);
 
     material.boolean(definition.boot_config.has_value());
     if (definition.boot_config.has_value()) {

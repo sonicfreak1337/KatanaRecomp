@@ -183,6 +183,19 @@ int main() {
     artifact_project.project_version = "1";
     artifact_project.identity = game_project.identity;
     artifact_project.runtime_images = runtime_images;
+    const std::array artifact_static_boundaries{
+        runtime::GameProjectFunctionBoundary{
+            0x8C010000u, 8u, "artifact_static_entry"}};
+    const std::array artifact_static_identities{
+        runtime::GameProjectCodeIdentity{
+            0x8C010000u,
+            8u,
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111"}};
+    const std::array<std::uint32_t, 1u> artifact_static_entries{
+        0x8C010000u};
+    artifact_project.function_boundaries = artifact_static_boundaries;
+    artifact_project.code_identities = artifact_static_identities;
+    artifact_project.static_entries = artifact_static_entries;
     const auto definition_identity =
         runtime::game_project_definition_identity(artifact_project);
     const auto artifact_path =
@@ -206,10 +219,32 @@ int main() {
                     roundtrip_images.front().entry_offsets.end(),
                     runtime_image_entries.begin(),
                     runtime_image_entries.end()) &&
+                artifact->definition().static_entries.size() == 1u &&
+                artifact->definition().static_entries.front() ==
+                    artifact_static_entries.front() &&
                 runtime::game_project_definition_identity(
                     artifact->definition()) == definition_identity,
-            "Runtime-Image verliert Groesse, Entries oder v5-Identitaet beim "
+            "Runtime-Image verliert Groesse, Entries oder versionierte "
+            "Identitaet beim "
             "Artifact-Roundtrip.");
+
+    auto missing_static_identity_project = artifact_project;
+    missing_static_identity_project.code_identities = {};
+    require(throws<std::invalid_argument>([&] {
+                runtime::validate_game_project_definition(
+                    missing_static_identity_project);
+            }),
+            "Expliziter StaticEntry ohne exakte CodeIdentity wird akzeptiert.");
+    const std::array<std::uint32_t, 2u> duplicate_static_entries{
+        0x8C010000u, 0x8C010000u};
+    auto duplicate_static_entry_project = artifact_project;
+    duplicate_static_entry_project.static_entries =
+        duplicate_static_entries;
+    require(throws<std::invalid_argument>([&] {
+                runtime::validate_game_project_definition(
+                    duplicate_static_entry_project);
+            }),
+            "Doppelter expliziter StaticEntry wird akzeptiert.");
     std::ifstream artifact_input(artifact_path, std::ios::binary);
     require(static_cast<bool>(artifact_input),
             "Runtime-Image-Artifact kann nicht erneut gelesen werden.");

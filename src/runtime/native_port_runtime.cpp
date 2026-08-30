@@ -300,6 +300,50 @@ std::uint8_t NativePortImmutableWriteGuard::range_kind_mask(
     return result;
 }
 
+bool NativePortImmutableWriteGuard::fixed_tracks_address(
+    const std::uint32_t address,
+    const std::size_t size) const noexcept {
+    if (size == 0u) return false;
+    if (size > std::numeric_limits<std::uint32_t>::max()) return true;
+    const auto physical = native_port_backing_address(address);
+    const auto access_end = static_cast<std::uint64_t>(physical) + size;
+    if (access_end >
+        static_cast<std::uint64_t>(
+            std::numeric_limits<std::uint32_t>::max()) +
+            1u)
+        return true;
+    const auto final_virtual =
+        address + static_cast<std::uint32_t>(size - 1u);
+    if (final_virtual < address ||
+        native_port_backing_address(final_virtual) != access_end - 1u)
+        return true;
+    const auto found = std::lower_bound(
+        fixed_ranges_.begin(), fixed_ranges_.end(), physical,
+        [](const NativePortImmutableRange& range,
+           const std::uint32_t candidate) {
+            return static_cast<std::uint64_t>(range.physical_address) +
+                       range.byte_size <=
+                   candidate;
+        });
+    return found != fixed_ranges_.end() &&
+           found->physical_address < access_end;
+}
+
+bool NativePortImmutableWriteGuard::
+acknowledge_retired_runtime_executable_write() noexcept {
+    constexpr auto executable_kind = native_port_immutable_range_mask(
+        NativePortImmutableRangeKind::Executable);
+    if (!write_detected_ || first_write_kind_mask_ != executable_kind ||
+        fixed_tracks_address(first_write_address_, first_write_size_) ||
+        range_kind_mask(first_write_address_, first_write_size_) != 0u)
+        return false;
+    write_detected_ = false;
+    first_write_address_ = 0u;
+    first_write_size_ = 0u;
+    first_write_kind_mask_ = 0u;
+    return true;
+}
+
 bool NativePortImmutableWriteGuard::tracks_address(
     const std::uint32_t address,
     const std::size_t size) const noexcept {
@@ -319,6 +363,15 @@ void NativePortImmutableWriteGuard::observe_write(
         first_write_size_ = event.size;
         first_write_kind_mask_ = kind_mask;
         write_detected_ = true;
+    } else {
+        // The generated integrity boundary may flush several scalar stores as
+        // one batch. One retained address cannot prove that every changed
+        // executable byte belongs to the same dynamic owner, so poison the
+        // reconcilable exact-kind state while preserving the sticky failure.
+        first_write_kind_mask_ |= native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::Executable);
+        first_write_kind_mask_ |= native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::ReadOnlyImage);
     }
     if (generation_ != std::numeric_limits<std::uint64_t>::max())
         ++generation_;
@@ -527,6 +580,13 @@ NativePortAotServices::first_immutable_write_kind_mask() const noexcept {
     return immutable_guard_ != nullptr
                ? immutable_guard_->first_write_kind_mask()
                : 0u;
+}
+
+bool NativePortAotServices::reconcile_runtime_executable_write() noexcept {
+    return aot_contract_valid() && context_ != nullptr &&
+           immutable_guard_ != nullptr &&
+           reconcile_native_port_runtime_executable_write(
+               *context_, *immutable_guard_);
 }
 
 void NativePortAotServices::observe_guest_block_completion(

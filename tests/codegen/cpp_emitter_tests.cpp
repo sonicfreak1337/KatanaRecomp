@@ -889,18 +889,26 @@ int main() {
     const auto delay_load_attempt =
         delay_load.find(
             "katana::runtime::ExplicitGuestInstructionAttempt guest_instruction_attempt");
+    const auto delay_load_runtime_pc = delay_load.find(
+        "const auto katana_instruction_runtime_pc = "
+        "katana::runtime::relocate_code_address(0x8C020002u);");
     require(delay_memory_source.find("catch (const katana::runtime::MemoryAccessError& error)") !=
                     std::string::npos &&
+                delay_load_runtime_pc != std::string_view::npos &&
+                delay_load.find(
+                    "cpu, katana_instruction_runtime_pc, 2u);") !=
+                    std::string_view::npos &&
                 delay_load.find(
                     "const katana::runtime::GuestInstructionOrigin "
                     "guest_origin{0x8C020002u, "
-                    "katana::runtime::relocate_code_address(0x8C020002u), true}") !=
+                    "katana_instruction_runtime_pc, true}") !=
                     std::string_view::npos &&
                 delay_load.find("katana_direct_ram_read_u32(guest_origin, cpu.r[1],") !=
                     std::string_view::npos &&
                 delay_load_flush != std::string_view::npos &&
                 delay_load_attempt != std::string_view::npos &&
-                delay_load_flush < delay_load_attempt &&
+                delay_load_flush < delay_load_runtime_pc &&
+                delay_load_runtime_pc < delay_load_attempt &&
                 delay_memory_source.find(
                     "enter_memory_exception_with_provenance(cpu, error, "
                                          "katana::runtime::relocate_code_address(0x8C020002u), "
@@ -970,14 +978,36 @@ int main() {
     deferred_mmio_request.guarded_local_block_chaining = true;
     deferred_mmio_request.external_dynamic_dispatch = true;
     deferred_mmio_request.conservative_register_localization = true;
+
+    auto generic_mmio_request = deferred_mmio_request;
+    generic_mmio_request.guarded_local_block_chaining = false;
+    const auto generic_mmio_source =
+        katana::codegen::CppBackend{}.emit(generic_mmio_request).joined_text();
+    const auto generic_mmio_load =
+        emitted_instruction(generic_mmio_source, "0x8C020002");
+    require(
+        generic_mmio_load.find(
+            "const auto katana_mmio_boundary_epoch_before = "
+            "cpu.memory.mmio_boundary_epoch();") != std::string_view::npos &&
+            generic_mmio_load.find("katana_guarded_linear_access_8C020002") ==
+                std::string_view::npos &&
+            generic_mmio_load.find(
+                "katana_deferred_safepoint_8C020002 = "
+                "cpu.memory.mmio_boundary_epoch() != "
+                "katana_mmio_boundary_epoch_before;") != std::string_view::npos,
+        "Der generische Speicherpfad darf seine bestehende MMIO-Epoch-Pruefung "
+        "nicht durch einen Guard-spezifischen Kurzschluss verlieren.");
+
     const auto deferred_mmio_source =
         katana::codegen::CppBackend{}.emit(deferred_mmio_request).joined_text();
     const auto deferred_flag =
         deferred_mmio_source.find("bool katana_deferred_safepoint_8C020002 = false;");
     const auto deferred_epoch = deferred_mmio_source.find(
-        "const auto katana_mmio_boundary_epoch_before = "
-        "cpu.memory.mmio_boundary_epoch();",
+        "std::uint64_t katana_mmio_boundary_epoch_before = 0u;",
         deferred_flag);
+    const auto deferred_epoch_guard = deferred_mmio_source.find(
+        "if (!katana_guarded_linear_access_8C020002) {",
+        deferred_epoch);
     const auto deferred_load =
         deferred_mmio_source.find(
             "katana_direct_ram_read_u32(guest_origin, cpu.r[1], "
@@ -985,6 +1015,7 @@ int main() {
                                   deferred_epoch);
     const auto deferred_assignment = deferred_mmio_source.find(
         "katana_deferred_safepoint_8C020002 = "
+        "!katana_guarded_linear_access_8C020002 && "
         "cpu.memory.mmio_boundary_epoch() != katana_mmio_boundary_epoch_before;",
         deferred_load);
     const auto deferred_target = deferred_mmio_source.find(
@@ -1003,6 +1034,7 @@ int main() {
     require(
         deferred_flag != std::string::npos &&
             deferred_epoch != std::string::npos &&
+            deferred_epoch_guard != std::string::npos &&
             deferred_load != std::string::npos &&
             deferred_assignment != std::string::npos &&
             deferred_target != std::string::npos &&
@@ -1011,7 +1043,8 @@ int main() {
             deferred_reload != std::string::npos &&
             deferred_guard_close != std::string::npos &&
             deferred_chain != std::string::npos &&
-            deferred_flag < deferred_epoch && deferred_epoch < deferred_load &&
+            deferred_flag < deferred_epoch && deferred_epoch < deferred_epoch_guard &&
+            deferred_epoch_guard < deferred_load &&
             deferred_load < deferred_assignment &&
             deferred_assignment < deferred_target &&
             deferred_target < deferred_terminal_completion &&
@@ -1019,6 +1052,8 @@ int main() {
             deferred_finalize < deferred_reload &&
             deferred_reload < deferred_guard_close &&
             deferred_guard_close < deferred_chain &&
+            count_occurrences(deferred_mmio_source,
+                              "cpu.memory.mmio_boundary_epoch()") == 2u &&
             count_occurrences(deferred_mmio_source,
                               "if (katana_commit_post_instruction_safepoint(") == 1u,
         "Ein tatsaechlicher MMIO-Kandidat im Delay Slot wird nicht erst nach Ziel-PC "
@@ -1193,7 +1228,7 @@ int main() {
     require(pc_relative_source.find(
                 "const katana::runtime::GuestInstructionOrigin "
                 "guest_origin{0x8C030000u, "
-                "katana::runtime::relocate_code_address(0x8C030000u), true}") !=
+                "katana_instruction_runtime_pc, true}") !=
                     std::string::npos &&
                 pc_relative_source.find(
                     "katana_direct_ram_read_s16(guest_origin, "
@@ -1296,6 +1331,113 @@ int main() {
         "Der funktionsgebundene direkte RAM-Guard wird an einer reinen nativen "
         "Labelgrenze unerwartet erneut validiert.");
 
+    // The resolver itself trusts the guard snapshot acquired from this exact
+    // Memory instance; the range helper still owns generation/pointer/span
+    // validation.  A dynamic transfer after the same direct-RAM prefix is a
+    // separate boundary and must retain its explicit can-chain guard rather
+    // than inheriting the resolver shortcut.
+    const auto guarded_linear_resolver_begin = guarded_linear_source.find(
+        "const auto katana_direct_ram_resolve =");
+    const auto guarded_linear_resolver_end = guarded_linear_source.find(
+        "    };", guarded_linear_resolver_begin);
+    require(
+        guarded_linear_resolver_begin != std::string::npos &&
+            guarded_linear_resolver_end != std::string::npos &&
+            guarded_linear_source
+                    .substr(guarded_linear_resolver_begin,
+                            guarded_linear_resolver_end - guarded_linear_resolver_begin)
+                    .find("direct_linear_memory_guard_current") == std::string::npos &&
+            guarded_linear_source.find(
+                "katana::runtime::direct_linear_guard_offset(") != std::string::npos &&
+            guarded_linear_source.find(
+                "katana::runtime::direct_linear_guard_read_u32(") != std::string::npos,
+        "Der lokale Direct-RAM-Resolver umgeht die Guard-Range-Pruefung oder "
+        "verliert den stale-/Cross-Memory-sicheren Runtime-Readvertrag.");
+
+    constexpr std::array<std::uint8_t, 16> guarded_chain_bytes = {
+        0x12u,
+        0x62u, // MOV.L @R1,R2 (direct-RAM prefix)
+        0x0Bu,
+        0x41u, // JSR @R1
+        0x09u,
+        0x00u, // Delay Slot
+        0x0Bu,
+        0x00u, // RTS
+        0x09u,
+        0x00u, // Delay Slot
+        0x09u,
+        0x00u, // unreachable gap
+        0x0Bu,
+        0x00u, // target function at 0x8C03000C
+        0x09u,
+        0x00u // Delay Slot
+    };
+    const auto guarded_chain_lines =
+        katana::sh4::disassemble(guarded_chain_bytes, 0x8C030000u);
+    constexpr std::array<std::uint32_t, 1> guarded_chain_seeds = {0x8C030000u};
+    const std::array<katana::analysis::ResolvedControlFlowEdge, 1>
+        guarded_chain_edges = {katana::analysis::ResolvedControlFlowEdge{
+            0x8C030002u,
+            0x8C03000Cu,
+            katana::analysis::ResolvedControlFlowKind::Call}};
+    const auto guarded_chain_functions = katana::analysis::discover_functions(
+        guarded_chain_lines, guarded_chain_seeds, guarded_chain_edges);
+    auto guarded_chain_program = katana::ir::lower_program(
+        guarded_chain_lines, guarded_chain_functions, guarded_chain_edges);
+    for (auto& function : guarded_chain_program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (instruction.source_address == 0x8C030000u)
+                    instruction.memory_effects.region =
+                        katana::ir::MemoryRegionKind::NormalRam;
+            }
+        }
+    }
+    katana::ir::Instruction* guarded_chain_call = nullptr;
+    for (auto& function : guarded_chain_program) {
+        for (auto& block : function.blocks) {
+            for (auto& instruction : block.instructions) {
+                if (instruction.source_address != 0x8C030002u)
+                    continue;
+                instruction.resolved_targets.clear();
+                instruction.dynamic_target_class =
+                    katana::ir::DynamicTargetClass::RuntimeOnly;
+                block.has_indirect_successor = true;
+                function.direct_callees.erase(
+                    std::remove(function.direct_callees.begin(),
+                                function.direct_callees.end(),
+                                0x8C03000Cu),
+                    function.direct_callees.end());
+                guarded_chain_call = &instruction;
+            }
+        }
+    }
+    require(guarded_chain_call != nullptr,
+            "Direct-RAM-Chain-Regressionsfall besitzt keine Registercallsite.");
+    katana::codegen::BackendRequest guarded_chain_request{
+        guarded_chain_program, 0x8C030000u};
+    guarded_chain_request.single_block_execution = true;
+    guarded_chain_request.guarded_local_block_chaining = true;
+    guarded_chain_request.external_dynamic_dispatch = true;
+    const auto guarded_chain_source =
+        katana::codegen::CppBackend{}.emit(guarded_chain_request).joined_text();
+    const auto guarded_chain_dispatch = guarded_chain_source.find(
+        "runtime_only_call(cpu, call_target);");
+    const auto guarded_chain_check = guarded_chain_source.find(
+        "services->can_chain_executable_block(cpu.pc) && "
+        "cpu.memory.direct_linear_memory_guard_current(katana_direct_ram, false)",
+        guarded_chain_dispatch);
+    const auto guarded_chain_target = guarded_chain_source.find(
+        "goto katana_block_8C030006;", guarded_chain_check);
+    require(
+        guarded_chain_dispatch != std::string::npos &&
+            guarded_chain_check != std::string::npos &&
+            guarded_chain_target != std::string::npos &&
+            guarded_chain_dispatch < guarded_chain_check &&
+            guarded_chain_check < guarded_chain_target,
+        "Der dynamische Transfer verliert nach dem Direct-RAM-Prefix seinen "
+        "expliziten can-chain-/aktuellen-Guard.");
+
     constexpr std::array<std::uint8_t, 6> read_modify_write_bytes = {
         0x0Fu,
         0xCDu, // AND.B #15,@(R0,GBR)
@@ -1318,7 +1460,7 @@ int main() {
     require(count_occurrences(
                 read_modify_write,
                 "GuestInstructionOrigin guest_origin{0x8C050000u, "
-                "katana::runtime::relocate_code_address(0x8C050000u), true}") == 1u &&
+                "katana_instruction_runtime_pc, true}") == 1u &&
                 count_occurrences(
                     read_modify_write, "guest_read_u8_at(cpu, guest_origin, address)") == 1u &&
                 count_occurrences(
@@ -1662,7 +1804,11 @@ int main() {
                     "ExplicitGuestInstructionAttempt guest_instruction_attempt") !=
                     std::string_view::npos &&
                 faulting_timing_source.find(
-                    "katana::runtime::relocate_code_address(0x00003004u), 2u);") !=
+                    "const auto katana_instruction_runtime_pc = "
+                    "katana::runtime::relocate_code_address(0x00003004u);") !=
+                    std::string_view::npos &&
+                faulting_timing_source.find(
+                    "cpu, katana_instruction_runtime_pc, 2u);") !=
                     std::string_view::npos &&
                 batched_cycles < timing_source.find("// katana-guest 0x00003004u") &&
                 timing_source.find("katana::runtime::finalize_guest_block(") !=

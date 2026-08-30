@@ -8,6 +8,14 @@
 #include <limits>
 #include <string>
 
+#if defined(__SSE__) || defined(_M_X64) || \
+    (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+#include <xmmintrin.h>
+#define KATANA_TEST_HAS_SSE_MXCSR 1
+#else
+#define KATANA_TEST_HAS_SSE_MXCSR 0
+#endif
+
 namespace {
 
 void require(const bool condition, const std::string& message) {
@@ -187,6 +195,24 @@ int main() {
     cpu.fr[1] = 0x3F800000u;
     fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 1u);
     require(cpu.fr[1] == 0x00000001u, "DN=0 erhaelt ein Single-Denormalergebnis nicht.");
+#if KATANA_TEST_HAS_SSE_MXCSR
+    constexpr std::uint32_t host_denormals_are_zero_mask = 0x00000040u;
+    constexpr std::uint32_t host_flush_to_zero_mask = 0x00008000u;
+    const auto original_mxcsr = _mm_getcsr();
+    const auto poisoned_mxcsr =
+        original_mxcsr | host_denormals_are_zero_mask | host_flush_to_zero_mask;
+    _mm_setcsr(poisoned_mxcsr);
+    cpu.fr[0] = 0x00800000u;
+    cpu.fr[1] = 0x3F000000u;
+    fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 1u);
+    const auto ambient_result = cpu.fr[1];
+    const auto restored_mxcsr = _mm_getcsr();
+    _mm_setcsr(original_mxcsr);
+    require(ambient_result == 0x00400000u,
+            "Ambient MXCSR.FTZ/DAZ verletzt FPSCR.DN=0.");
+    require(restored_mxcsr == poisoned_mxcsr,
+            "FPU-Operation stellt den ambienten Host-MXCSR nicht wieder her.");
+#endif
     cpu.write_fpscr(fpscr_dn_mask);
     cpu.fr[0] = 0x80000001u;
     cpu.fr[1] = 0x3F800000u;

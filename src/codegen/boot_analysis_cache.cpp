@@ -1317,6 +1317,19 @@ std::string make_boot_analysis_cache_key(
         append_key_value(canonical, alias.runtime_start);
         append_key_value(canonical, alias.size);
     }
+    // Immutable ranges are semantic analysis authority, not redundant byte
+    // metadata. Adding one can turn a writable snapshot candidate into a
+    // complete relative-table or Guarded-AOT proof without changing segment
+    // bytes. Bind both the canonical range inventory and its image-local
+    // generation so a cache artifact can never cross that proof epoch.
+    append_key_value(canonical, image.immutable_generation());
+    append_key_value(canonical, image.immutable_ranges().size());
+    for (const auto& range : image.immutable_ranges()) {
+        append_key_value(canonical, range.address);
+        append_key_value(canonical, range.size);
+        append_key_field(canonical, range.identity);
+        append_key_value(canonical, range.generation);
+    }
     append_key_value(
         canonical,
         static_cast<std::underlying_type_t<katana::io::GuestCallAbi>>(

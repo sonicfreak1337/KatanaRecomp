@@ -216,7 +216,15 @@ template <std::size_t Size>
     const NativePortTranslucencyPolicy policy) noexcept {
     return policy == NativePortTranslucencyPolicy::NotApplicable ||
            policy == NativePortTranslucencyPolicy::AuthoredUnsorted ||
-           policy == NativePortTranslucencyPolicy::StableDepthSorted;
+           policy == NativePortTranslucencyPolicy::StableDepthSorted ||
+           policy == NativePortTranslucencyPolicy::Type2AutoSorted;
+}
+
+[[nodiscard]] bool valid_type2_autosort_contract(
+    const NativePortType2AutosortContract& contract) noexcept {
+    return contract.contract_version ==
+               native_port_type2_autosort_contract_version &&
+           contract.presort == 0u;
 }
 
 [[nodiscard]] bool valid_draw_logical_use(
@@ -638,6 +646,34 @@ template <std::size_t Size>
                 NativePortTranslucencyPolicy::NotApplicable)
             return false;
         if (packet.translucency ==
+            NativePortTranslucencyPolicy::Type2AutoSorted) {
+            // The first executable Type-2 contract deliberately supports only
+            // the PVR source-alpha-over destination-alpha family.  Keeping
+            // every other blend equation out of the gather/resolve pass is
+            // correctness-critical: the resolve shader must not guess a
+            // generic fixed-function blend operation.
+            return packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
+                   packet.depth.test_enabled &&
+                   !packet.depth.write_enabled &&
+                   packet.depth.compare ==
+                       NativePortCompareOperation::GreaterEqual &&
+                   reciprocal_depth_mode(packet.depth_mapping.mode) &&
+                   packet.blend.source_color ==
+                       NativePortBlendFactor::SourceAlpha &&
+                   packet.blend.destination_color ==
+                       NativePortBlendFactor::InverseSourceAlpha &&
+                   packet.blend.source_alpha ==
+                       NativePortBlendFactor::SourceAlpha &&
+                   packet.blend.destination_alpha ==
+                       NativePortBlendFactor::InverseSourceAlpha &&
+                   packet.blend.color_operation ==
+                       NativePortBlendOperation::Add &&
+                   packet.blend.alpha_operation ==
+                       NativePortBlendOperation::Add &&
+                   packet.blend.color_write_mask == 0x0Fu &&
+                   valid_type2_autosort_contract(packet.type2_autosort);
+        }
+        if (packet.translucency ==
             NativePortTranslucencyPolicy::StableDepthSorted)
             return packet.depth.test_enabled &&
                    !packet.depth.write_enabled &&
@@ -679,6 +715,8 @@ void validate_graphics_config(const NativePortGraphicsConfig& config) {
         config.maximum_transient_indices < 3u ||
         config.maximum_pipeline_states == 0u ||
         config.maximum_pipeline_states > 65'536u ||
+        config.maximum_type2_fragment_nodes == 0u ||
+        config.maximum_type2_fragment_nodes > 67'108'864u ||
         config.maximum_transient_vertices >
             std::numeric_limits<std::uint32_t>::max() /
                 sizeof(NativePortVertex) ||
@@ -962,8 +1000,20 @@ constexpr std::uint32_t draw_flag_texture_present = 1u << 17u;
 constexpr std::uint32_t draw_flag_pvr_screen_gouraud = 1u << 18u;
 constexpr std::uint32_t draw_flag_clip_homogeneous = 1u << 19u;
 constexpr std::uint32_t draw_flag_color_clamp = 1u << 20u;
+constexpr std::uint32_t draw_flag_type_two_autosort_capture = 1u << 21u;
+// Type-2 autosort is deliberately bounded.  The counter is a resource cap,
+// while the per-pixel traversal bound is fixed in the resolve shader so a
+// malformed scene cannot turn one pixel into an unbounded linked-list walk.
+constexpr std::uint32_t type_two_fragment_capacity = 1u << 20u;
+constexpr std::uint32_t type_two_fragment_layers_per_pixel = 16u;
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
+[[nodiscard]] ComPtr<ID3DBlob> compile_shader_source(
+    const char* source,
+    std::size_t source_size,
+    const char* entry,
+    const char* target,
+    const char* source_name);
 [[nodiscard]] std::wstring utf8_to_wide(std::string_view value);
 [[nodiscard]] DXGI_FORMAT texture_format(
     NativePortTextureFormat format) noexcept;
@@ -1083,6 +1133,15 @@ class NativePortGraphicsDevice::Impl final {
         std::uint32_t index_count = 0u;
         std::uint32_t generation = 0u;
         bool live = false;
+    };
+
+    // Type-2 packets may be assembled from adapter-owned temporary spans.
+    // Retain a private copy until the scene resolve so the public draw call
+    // remains safe even when those spans have automatic storage duration.
+    struct Type2QueuedDraw final {
+        NativePortDrawPacket packet;
+        std::vector<NativePortVertex> vertices;
+        std::vector<std::uint32_t> indices;
     };
 
   public:
@@ -1485,6 +1544,33 @@ class NativePortGraphicsDevice::Impl final {
 
     void draw(const NativePortDrawPacket& packet) {
         require_owner_thread();
+        const bool type2 = packet.translucency ==
+            NativePortTranslucencyPolicy::Type2AutoSorted;
+        // The first non-Type-2 phase after a Scene3D list is its explicit
+        // scene boundary. A second translucent policy in the same batch is
+        // forbidden: two independently resolved runs are not equivalent to
+        // one PVR Type-2 list.
+        if (!type2 && type2_subpass_active_) {
+            if (packet.batch.identity == type2_batch_identity_ &&
+                packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
+                packet.draw_class == NativePortDrawClass::Translucent) {
+                try {
+                    fail(NativePortGraphicsFailure::InvalidDraw,
+                         0u,
+                         "type2-policy-mix");
+                } catch (const NativePortGraphicsError& error) {
+                    record_graphics_contract_failure(packet, error.failure());
+                    throw;
+                }
+            }
+            flush_type2_translucency();
+        }
+        draw_immediate(packet, type2);
+    }
+
+    void draw_immediate(const NativePortDrawPacket& packet,
+                        const bool type2_gather) {
+        require_owner_thread();
         try {
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidDraw, 0u, "draw-outside-frame");
@@ -1496,6 +1582,7 @@ class NativePortGraphicsDevice::Impl final {
             ? &resolve_texture(packet.texture)
             : nullptr;
         validate_draw_batch_sequence(packet);
+        if (type2_gather) validate_type2_scene_admission(packet);
 
         auto vertices = packet.vertices;
         auto indices = packet.indices;
@@ -1856,10 +1943,29 @@ class NativePortGraphicsDevice::Impl final {
         }
     }
 
+    void flush_type2_translucency() {
+        require_owner_thread();
+        if (!frame_open_)
+            fail(NativePortGraphicsFailure::InvalidFrame,
+                 0u,
+                 "type2-flush-outside-frame");
+        if (!type2_subpass_active_) return;
+        resolve_type2_subpass();
+        type2_subpass_active_ = false;
+        type2_closed_batch_identity_ = type2_batch_identity_;
+        type2_closed_batch_valid_ = true;
+        type2_batch_identity_ = 0u;
+        type2_fragment_count_ = 0u;
+        type2_max_fragments_per_pixel_ = 0u;
+        type2_gather_active_ = false;
+        invalidate_draw_state_shadow();
+    }
+
     void present() {
         require_owner_thread();
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "present-without-frame");
+        flush_type2_translucency();
         frame_open_ = false;
         completed_frame_available_ = true;
         snapshot_.frame_open = false;
@@ -2061,9 +2167,27 @@ class NativePortGraphicsDevice::Impl final {
         std::array<float, 4u> depth_parameters{};
         std::array<float, 4u> material_parameters{};
         std::array<std::uint32_t, 4u> pipeline_flags{};
+        // x: packed source/destination color+alpha factors; y: packed
+        // operations and color-write mask; z: stable submission sequence;
+        // w: bounded fragment capacity.  These values are consumed only by
+        // the Type-2 capture shader; ordinary draws keep them zero.
+        std::array<std::uint32_t, 4u> type_two_parameters{};
     };
 
     static_assert(sizeof(DrawConstants) % 16u == 0u);
+
+    struct TypeTwoFragmentGpu final {
+        std::array<float, 4u> color{};
+        float depth = 0.0f;
+        std::uint32_t sequence = 0u;
+        std::uint32_t next = 0xFFFFFFFFu;
+        std::uint32_t blend_factors = 0u;
+        std::uint32_t blend_operations = 0u;
+        std::uint32_t reserved_0 = 0u;
+        std::uint32_t reserved_1 = 0u;
+    };
+
+    static_assert(sizeof(TypeTwoFragmentGpu) == 48u);
 
     struct FogTableConstants final {
         std::array<std::array<float, 4u>,
@@ -2251,6 +2375,7 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::HardwareDeviceUnavailable,
                  static_cast<std::uint32_t>(result),
                  "d3d11-device");
+        feature_level_ = selected;
         ComPtr<IDXGIDevice1> dxgi_device;
         if (SUCCEEDED(device_.As(&dxgi_device)))
             static_cast<void>(dxgi_device->SetMaximumFrameLatency(1u));
@@ -5342,6 +5467,7 @@ cbuffer DrawConstants : register(b0) {
     float4 depth_parameters;
     float4 material_parameters;
     uint4 pipeline_flags;
+    uint4 type_two_parameters;
 };
 
 cbuffer FogTableConstants : register(b1) {
@@ -5623,6 +5749,411 @@ SamplerState composite_sampler : register(s0);
 
 float4 composite_pixel_main(CompositeVertexOutput input) : SV_Target {
     return composite_texture.Sample(composite_sampler, input.texcoord);
+}
+)";
+
+// This is a separate shader source so the ordinary ps_4_0 draw path remains
+// byte-for-byte independent of UAV support.  Type-2 autosort is enabled only
+// on feature-level 11 devices and therefore never changes the Opaque,
+// PunchThrough, UI, or authored translucent shader contract.
+constexpr char native_graphics_type_two_capture_shader_source[] = R"(
+cbuffer DrawConstants : register(b0) {
+    row_major float4x4 draw_transform;
+    row_major float4x4 draw_normal_transform;
+    float4 material_diffuse;
+    float4 material_ambient;
+    float4 material_specular;
+    float4 material_emission;
+    float4 scene_ambient;
+    float4 fog_color;
+    float4 color_clamp_minimum;
+    float4 color_clamp_maximum;
+    float4 light_directions[4];
+    float4 light_colors[4];
+    float4 fog_parameters;
+    float4 depth_parameters;
+    float4 material_parameters;
+    uint4 pipeline_flags;
+    uint4 type_two_parameters;
+};
+
+cbuffer FogTableConstants : register(b1) {
+    float4 fog_lookup_table[32];
+};
+
+struct DrawVertexOutput {
+    float4 position : SV_Position;
+    float2 texcoord : TEXCOORD0;
+    float4 color : COLOR0;
+    float3 normal : NORMAL0;
+    float4 secondary_color : COLOR1;
+    float fog_coordinate : TEXCOORD1;
+    noperspective float depth_coordinate : TEXCOORD2;
+    noperspective float2 reciprocal_texcoord : TEXCOORD3;
+    noperspective float4 pvr_screen_color : TEXCOORD4;
+    noperspective float4 pvr_screen_secondary_color : TEXCOORD5;
+    noperspective float pvr_screen_fog_coordinate : TEXCOORD6;
+    float homogeneous_clip_w : TEXCOORD7;
+};
+
+struct DrawPixelOutput {
+    float4 color : SV_Target;
+    float depth : SV_Depth;
+};
+
+struct TypeTwoFragment {
+    float4 color;
+    float depth;
+    uint sequence;
+    uint next;
+    uint blend_factors;
+    uint blend_operations;
+    uint reserved_0;
+    uint reserved_1;
+};
+
+Texture2D draw_texture : register(t0);
+SamplerState draw_sampler : register(s0);
+RWTexture2D<uint> type_two_heads : register(u0);
+RWStructuredBuffer<TypeTwoFragment> type_two_fragments : register(u1);
+
+bool alpha_test_passes(float alpha, uint operation, float reference) {
+    if (operation == 0u) return false;
+    if (operation == 1u) return alpha < reference;
+    if (operation == 2u) return alpha == reference;
+    if (operation == 3u) return alpha <= reference;
+    if (operation == 4u) return alpha > reference;
+    if (operation == 5u) return alpha != reference;
+    if (operation == 6u) return alpha >= reference;
+    return true;
+}
+
+float fog_lookup_value(uint index) {
+    const uint bounded_index = min(index, 127u);
+    const uint vector_index = bounded_index >> 2u;
+    const uint component = bounded_index & 3u;
+    const float4 coefficients = fog_lookup_table[vector_index];
+    if (component == 0u) return coefficients.x;
+    if (component == 1u) return coefficients.y;
+    if (component == 2u) return coefficients.z;
+    return coefficients.w;
+}
+
+float lookup_table_fog(float coordinate, float density) {
+    const float z = clamp(density * coordinate, 1.0, 255.9999);
+    const float exponent = floor(log2(z));
+    const float mantissa = z * 16.0 / exp2(exponent) - 16.0;
+    const uint index = (uint)floor(mantissa + exponent * 16.0);
+    const float fraction = mantissa - floor(mantissa);
+    return saturate(lerp(fog_lookup_value(index),
+                         fog_lookup_value(index + 1u),
+                         fraction));
+}
+
+DrawPixelOutput draw_type_two_capture_main(DrawVertexOutput input) {
+    const uint flags = pipeline_flags.x;
+    const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
+    const bool screen_space_reciprocal =
+        (flags & 0x20u) != 0u && !homogeneous_reciprocal_clip;
+    const float reciprocal_coordinate = homogeneous_reciprocal_clip
+        ? rcp(input.homogeneous_clip_w)
+        : input.depth_coordinate;
+    const bool pvr_screen_gouraud = (flags & 0x40000u) != 0u;
+    const float pvr_screen_weight = input.depth_coordinate;
+    const float4 interpolated_color = pvr_screen_gouraud
+        ? input.pvr_screen_color / pvr_screen_weight
+        : input.color;
+    const float4 interpolated_secondary_color = pvr_screen_gouraud
+        ? input.pvr_screen_secondary_color / pvr_screen_weight
+        : input.secondary_color;
+    const float interpolated_fog_coordinate = pvr_screen_gouraud
+        ? input.pvr_screen_fog_coordinate / pvr_screen_weight
+        : input.fog_coordinate;
+    const bool vertex_color_enabled = (flags & 0x01u) != 0u;
+    const bool secondary_color_enabled = (flags & 0x02u) != 0u;
+    const bool lighting_enabled = (flags & 0x04u) != 0u;
+    const bool specular_enabled = (flags & 0x08u) != 0u;
+    const bool primary_alpha_enabled = (flags & 0x40u) != 0u;
+    const bool texture_alpha_enabled = (flags & 0x80u) != 0u;
+    const bool texture_present = (flags & 0x20000u) != 0u;
+    float4 primary = material_diffuse;
+    float3 post_color = material_emission.rgb;
+    if (lighting_enabled) {
+        const float3 normal = normalize(input.normal);
+        float3 diffuse_light = scene_ambient.rgb * material_ambient.rgb;
+        float3 specular_light = 0.0;
+        [unroll]
+        for (uint index = 0u; index < 4u; ++index) {
+            if (index >= pipeline_flags.y) break;
+            const float3 direction = normalize(light_directions[index].xyz);
+            const float diffuse_amount = saturate(dot(normal, direction));
+            diffuse_light += light_colors[index].rgb * diffuse_amount;
+            if (specular_enabled && diffuse_amount > 0.0) {
+                const float3 half_vector =
+                    normalize(direction + float3(0.0, 0.0, 1.0));
+                const float specular_amount = pow(
+                    saturate(dot(normal, half_vector)),
+                    max(material_parameters.x, 0.0001));
+                specular_light += light_colors[index].rgb *
+                                  material_specular.rgb * specular_amount;
+            }
+        }
+        primary.rgb = material_diffuse.rgb * diffuse_light;
+        post_color += specular_light;
+    }
+    if (vertex_color_enabled) primary *= interpolated_color;
+    if (!primary_alpha_enabled) primary.a = 1.0;
+
+    if (pipeline_flags.z == 6u) {
+        const float primary_fog = lookup_table_fog(
+            homogeneous_reciprocal_clip
+                ? reciprocal_coordinate
+                : interpolated_fog_coordinate,
+            fog_parameters.z);
+        primary = float4(fog_color.rgb, primary_fog);
+    }
+
+    float4 result = primary;
+    if (texture_present) {
+        const float2 texture_coordinate = screen_space_reciprocal
+            ? input.reciprocal_texcoord / input.depth_coordinate
+            : input.texcoord;
+        float4 texture_color =
+            draw_texture.Sample(draw_sampler, texture_coordinate);
+        if (!texture_alpha_enabled) texture_color.a = 1.0;
+        const uint texture_combine = (flags >> 8u) & 0xffu;
+        result = primary * texture_color;
+        if (texture_combine == 1u) {
+            result = texture_color;
+        } else if (texture_combine == 2u) {
+            result.rgb = lerp(primary.rgb, texture_color.rgb, texture_color.a);
+            result.a = primary.a;
+        } else if (texture_combine == 3u) {
+            result = primary + texture_color;
+        } else if (texture_combine == 4u) {
+            result.rgb = primary.rgb * texture_color.rgb;
+            result.a = texture_color.a;
+        }
+    }
+    result.rgb += post_color;
+    if (secondary_color_enabled)
+        result.rgb += interpolated_secondary_color.rgb;
+    if ((flags & 0x100000u) != 0u)
+        result = clamp(result, color_clamp_minimum, color_clamp_maximum);
+
+    float fog_amount = 0.0;
+    if (pipeline_flags.z == 1u) {
+        fog_amount = saturate(interpolated_fog_coordinate);
+    } else if (pipeline_flags.z == 2u) {
+        fog_amount = saturate(
+            (interpolated_fog_coordinate - fog_parameters.x) /
+            (fog_parameters.y - fog_parameters.x));
+    } else if (pipeline_flags.z == 3u) {
+        fog_amount = saturate(
+            1.0 - exp(-fog_parameters.z * interpolated_fog_coordinate));
+    } else if (pipeline_flags.z == 4u) {
+        const float fog_distance =
+            fog_parameters.z * interpolated_fog_coordinate;
+        fog_amount = saturate(1.0 - exp(-(fog_distance * fog_distance)));
+    } else if (pipeline_flags.z == 5u) {
+        fog_amount = lookup_table_fog(
+            homogeneous_reciprocal_clip
+                ? reciprocal_coordinate
+                : interpolated_fog_coordinate,
+            fog_parameters.z);
+    }
+    result.rgb = lerp(result.rgb, fog_color.rgb, fog_amount);
+
+    const uint alpha_test = pipeline_flags.w;
+    if ((alpha_test & 0x100u) != 0u) {
+        if ((alpha_test & 0x200u) != 0u) {
+            const float alpha_8bit = round(result.a * 255.0);
+            const float reference_8bit =
+                (float)((alpha_test >> 16u) & 0xffu);
+            if (alpha_8bit < reference_8bit) discard;
+            result.a = 1.0;
+        } else if (!alpha_test_passes(
+                       result.a, alpha_test & 0xffu,
+                       material_parameters.y)) {
+            discard;
+        }
+    }
+
+    float final_depth = input.position.z;
+    if ((flags & 0x20u) != 0u) {
+        final_depth =
+            log2(1.0 + depth_parameters.x * reciprocal_coordinate) /
+            depth_parameters.y;
+    }
+    const uint fragment_index = type_two_fragments.IncrementCounter();
+    if (fragment_index >= type_two_parameters.w) discard;
+    const uint2 pixel = uint2(input.position.xy);
+    TypeTwoFragment fragment;
+    fragment.color = result;
+    fragment.depth = final_depth;
+    fragment.sequence = type_two_parameters.z;
+    fragment.next = 0xFFFFFFFFu;
+    fragment.blend_factors = type_two_parameters.x;
+    fragment.blend_operations = type_two_parameters.y;
+    fragment.reserved_0 = 0u;
+    fragment.reserved_1 = 0u;
+    uint previous;
+    InterlockedExchange(type_two_heads[pixel], fragment_index, previous);
+    fragment.next = previous;
+    type_two_fragments[fragment_index] = fragment;
+
+    DrawPixelOutput output;
+    // The capture blend state masks the color target.  Keep the exact native
+    // depth output for the packet's depth test, but never write scene depth.
+    output.color = float4(0.0, 0.0, 0.0, 0.0);
+    output.depth = final_depth;
+    return output;
+}
+)";
+
+constexpr char native_graphics_type_two_resolve_shader_source[] = R"(
+Texture2D type_two_base_texture : register(t1);
+Texture2D<uint> type_two_head_texture : register(t2);
+SamplerState type_two_sampler : register(s1);
+
+struct TypeTwoFragment {
+    float4 color;
+    float depth;
+    uint sequence;
+    uint next;
+    uint blend_factors;
+    uint blend_operations;
+    uint reserved_0;
+    uint reserved_1;
+};
+StructuredBuffer<TypeTwoFragment> type_two_fragments : register(t3);
+
+struct CompositeVertexOutput {
+    float4 position : SV_Position;
+    float2 texcoord : TEXCOORD0;
+};
+
+float3 type_two_color_factor(
+    uint factor, float4 source, float4 destination) {
+    if (factor == 0u) return 0.0;
+    if (factor == 1u) return 1.0;
+    if (factor == 2u) return source.rgb;
+    if (factor == 3u) return 1.0 - source.rgb;
+    if (factor == 4u) return destination.rgb;
+    if (factor == 5u) return 1.0 - destination.rgb;
+    if (factor == 6u) return source.aaa;
+    if (factor == 7u) return 1.0 - source.aaa;
+    if (factor == 8u) return destination.aaa;
+    if (factor == 9u) return 1.0 - destination.aaa;
+    return 0.0;
+}
+
+float type_two_alpha_factor(
+    uint factor, float4 source, float4 destination) {
+    if (factor == 0u) return 0.0;
+    if (factor == 1u) return 1.0;
+    if (factor == 2u) return source.a;
+    if (factor == 3u) return 1.0 - source.a;
+    if (factor == 4u) return destination.a;
+    if (factor == 5u) return 1.0 - destination.a;
+    if (factor == 6u) return source.a;
+    if (factor == 7u) return 1.0 - source.a;
+    if (factor == 8u) return destination.a;
+    if (factor == 9u) return 1.0 - destination.a;
+    return 0.0;
+}
+
+float3 type_two_color_operation(
+    uint operation, float3 source, float3 destination) {
+    if (operation == 0u) return source + destination;
+    if (operation == 1u) return source - destination;
+    if (operation == 2u) return destination - source;
+    if (operation == 3u) return min(source, destination);
+    if (operation == 4u) return max(source, destination);
+    return destination;
+}
+
+float type_two_alpha_operation(
+    uint operation, float source, float destination) {
+    if (operation == 0u) return source + destination;
+    if (operation == 1u) return source - destination;
+    if (operation == 2u) return destination - source;
+    if (operation == 3u) return min(source, destination);
+    if (operation == 4u) return max(source, destination);
+    return destination;
+}
+
+float4 type_two_blend(
+    TypeTwoFragment fragment, float4 destination) {
+    const uint factors = fragment.blend_factors;
+    const uint operations = fragment.blend_operations;
+    const uint source_color_factor = factors & 0xFu;
+    const uint destination_color_factor = (factors >> 4u) & 0xFu;
+    const uint source_alpha_factor = (factors >> 8u) & 0xFu;
+    const uint destination_alpha_factor = (factors >> 12u) & 0xFu;
+    const uint color_operation = operations & 0x7u;
+    const uint alpha_operation = (operations >> 3u) & 0x7u;
+    const uint write_mask = (operations >> 6u) & 0xFu;
+    const float3 source_color_term = fragment.color.rgb *
+        type_two_color_factor(
+            source_color_factor, fragment.color, destination);
+    const float3 destination_color_term = destination.rgb *
+        type_two_color_factor(
+            destination_color_factor, fragment.color, destination);
+    const float source_alpha_term = fragment.color.a *
+        type_two_alpha_factor(
+            source_alpha_factor, fragment.color, destination);
+    const float destination_alpha_term = destination.a *
+        type_two_alpha_factor(
+            destination_alpha_factor, fragment.color, destination);
+    float4 result = float4(
+        type_two_color_operation(
+            color_operation, source_color_term, destination_color_term),
+        type_two_alpha_operation(
+            alpha_operation, source_alpha_term, destination_alpha_term));
+    if ((write_mask & 0x1u) == 0u) result.r = destination.r;
+    if ((write_mask & 0x2u) == 0u) result.g = destination.g;
+    if ((write_mask & 0x4u) == 0u) result.b = destination.b;
+    if ((write_mask & 0x8u) == 0u) result.a = destination.a;
+    return result;
+}
+
+float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
+    const uint2 pixel = uint2(input.position.xy);
+    float4 result = type_two_base_texture.Load(int3(pixel, 0));
+    uint node = type_two_head_texture.Load(int3(pixel, 0));
+    float depths[16];
+    uint sequences[16];
+    TypeTwoFragment fragments[16];
+    uint count = 0u;
+    uint steps = 0u;
+    [loop]
+    while (node != 0xFFFFFFFFu && steps < 16u) {
+        const TypeTwoFragment fragment = type_two_fragments[node];
+        uint insert = count;
+        if (count < 16u) {
+            [loop]
+            while (insert > 0u &&
+                   (depths[insert - 1u] > fragment.depth ||
+                    (depths[insert - 1u] == fragment.depth &&
+                     sequences[insert - 1u] > fragment.sequence))) {
+                depths[insert] = depths[insert - 1u];
+                sequences[insert] = sequences[insert - 1u];
+                fragments[insert] = fragments[insert - 1u];
+                --insert;
+            }
+            depths[insert] = fragment.depth;
+            sequences[insert] = fragment.sequence;
+            fragments[insert] = fragment;
+            ++count;
+        }
+        node = fragment.next;
+        ++steps;
+    }
+    [loop]
+    for (uint index = 0u; index < count; ++index)
+        result = type_two_blend(fragments[index], result);
+    return result;
 }
 )";
 

@@ -67,7 +67,24 @@ struct FixtureFile {
 
 std::vector<std::uint8_t>
 fixture_iso_with_files(const std::vector<FixtureFile>& files) {
-    std::size_t image_sectors = 24u;
+    const auto record_bytes = [](const std::size_t name_bytes) {
+        return 33u + name_bytes + (name_bytes % 2u == 0u ? 1u : 0u);
+    };
+    std::size_t directory_bytes =
+        record_bytes(1u) + record_bytes(1u);
+    for (const auto& file : files) {
+        const auto bytes = record_bytes(file.name.size());
+        const auto sector_remaining =
+            sector_size - (directory_bytes % sector_size);
+        if (bytes > sector_remaining)
+            directory_bytes += sector_remaining;
+        directory_bytes += bytes;
+    }
+    const auto directory_sectors =
+        std::max<std::size_t>(1u,
+            (directory_bytes + sector_size - 1u) / sector_size);
+    const auto directory_extent_bytes = directory_sectors * sector_size;
+    std::size_t image_sectors = 20u + directory_sectors;
     for (const auto& file : files) {
         image_sectors = std::max(
             image_sectors,
@@ -79,14 +96,25 @@ fixture_iso_with_files(const std::vector<FixtureFile>& files) {
     std::copy_n("CD001", 5u, image.begin() + static_cast<std::ptrdiff_t>(pvd + 1u));
     image[pvd + 6u] = 1u;
     static_cast<void>(
-        record(image, pvd + 156u, 20u, sector_size, std::string(1u, '\0'), true));
+        record(image, pvd + 156u, 20u,
+               static_cast<std::uint32_t>(directory_extent_bytes),
+               std::string(1u, '\0'), true));
 
     auto directory = 20u * sector_size;
     directory +=
-        record(image, directory, 20u, sector_size, std::string(1u, '\0'), true);
+        record(image, directory, 20u,
+               static_cast<std::uint32_t>(directory_extent_bytes),
+               std::string(1u, '\0'), true);
     directory +=
-        record(image, directory, 20u, sector_size, std::string(1u, '\1'), true);
+        record(image, directory, 20u,
+               static_cast<std::uint32_t>(directory_extent_bytes),
+               std::string(1u, '\1'), true);
     for (const auto& file : files) {
+        const auto bytes = record_bytes(file.name.size());
+        const auto sector_remaining =
+            sector_size - (directory % sector_size);
+        if (bytes > sector_remaining)
+            directory += sector_remaining;
         directory += record(image,
                             directory,
                             file.lba,
@@ -1670,6 +1698,9 @@ int main() {
             std::chrono::milliseconds(1000));
         cached_options.analysis_cache_root =
             analysis_cache_fixture.path;
+        // Keep the legacy positive-IR rejection matrix isolated from the new
+        // completeness-bearing module-static cache tested below.
+        cached_options.module_static_cache_enabled = false;
         const auto unproven_cache_disabled =
             katana::codegen::discover_latent_aot_modules(
                 source, 0u, 0u, {}, cached_options);
@@ -1945,6 +1976,512 @@ int main() {
                 cache_corrupt.analysis_full_pipeline_runs == 1u,
             "Korrupter Latent-AOT-Analysecache wurde nicht fail-closed "
             "als Miss neu analysiert und begrenzt repariert.");
+
+        // Cross-process module-static cache: 250 immutable modules establish
+        // the production-scale delta contract. Two new exact roots must not
+        // force the other 248 modules back through CFA/FVA.
+        AnalysisCacheFixture module_static_fixture{"-module-static"};
+        std::vector<FixtureFile> static_files;
+        static_files.reserve(250u);
+        std::vector<std::vector<std::uint8_t>> static_module_bytes;
+        static_module_bytes.reserve(250u);
+        for (std::size_t index = 0u; index < 250u; ++index) {
+            std::vector<std::uint8_t> bytes{
+                0x0Bu, 0x00u, 0x09u, 0x00u,
+                static_cast<std::uint8_t>(index), 0xE0u,
+                0x0Bu, 0x00u, 0x09u, 0x00u};
+            static_module_bytes.push_back(bytes);
+            static_files.push_back(
+                {static_cast<std::uint32_t>(32u + index),
+                 "M" + std::to_string(index) + ".BIN;1",
+                 std::move(bytes)});
+        }
+        auto module_static_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(static_files),
+                "synthetic-latent-aot-module-static-disc");
+        katana::codegen::LatentAotDiscoveryOptions module_static_options;
+        module_static_options.analysis_cache_root = module_static_fixture.path;
+        module_static_options.analysis_implementation_identity =
+            "latent-registry-module-static-analysis-v1";
+        module_static_options.analysis_cache_implementation_identity =
+            "latent-registry-module-static-codec-v1";
+        module_static_options.ir_product_implementation_identity =
+            "latent-registry-module-static-product-v1";
+        module_static_options.mode =
+            katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+        module_static_options.maximum_candidate_files = 250u;
+        module_static_options.maximum_workers = 12u;
+        std::vector<katana::codegen::LatentAotEntryHint>
+            module_static_base_hints;
+        module_static_base_hints.reserve(250u);
+        for (std::size_t module_index = 0u; module_index < 250u;
+             ++module_index) {
+            const auto& bytes = static_module_bytes[module_index];
+            module_static_base_hints.push_back(
+                {byte_identity(bytes),
+                 static_cast<std::uint64_t>(32u + module_index) * sector_size,
+                 static_cast<std::uint32_t>(bytes.size()),
+                 0u});
+        }
+        const auto module_static_cold =
+            katana::codegen::discover_latent_aot_modules(
+                module_static_source, 0u, 0u, {}, module_static_options,
+                {}, module_static_base_hints);
+        require(
+            module_static_cold.modules.size() == 250u &&
+                module_static_cold.module_static_cache_hits == 0u &&
+                module_static_cold.module_static_cache_misses == 250u &&
+                module_static_cold.module_static_cache_stores == 250u &&
+                module_static_cold.analysis_full_pipeline_runs == 250u,
+            "Kalter Modul-Static-Cache erzeugte nicht exakt 250 "
+            "vollstaendige Modulprodukte: modules=" +
+                std::to_string(module_static_cold.modules.size()) +
+                " hits=" +
+                std::to_string(module_static_cold.module_static_cache_hits) +
+                " misses=" +
+                std::to_string(module_static_cold.module_static_cache_misses) +
+                " stores=" +
+                std::to_string(module_static_cold.module_static_cache_stores) +
+                " pipelines=" +
+                std::to_string(module_static_cold.analysis_full_pipeline_runs));
+
+        constexpr std::array changed_module_indices{17u, 211u};
+        auto two_module_hint_delta = module_static_base_hints;
+        two_module_hint_delta.reserve(252u);
+        for (std::size_t hint_index = 0u;
+             hint_index < changed_module_indices.size(); ++hint_index) {
+            const auto module_index = changed_module_indices[hint_index];
+            const auto& bytes = static_module_bytes[module_index];
+            two_module_hint_delta.push_back({
+                byte_identity(bytes),
+                static_cast<std::uint64_t>(32u + module_index) * sector_size,
+                static_cast<std::uint32_t>(bytes.size()),
+                4u});
+        }
+        const auto module_static_delta =
+            katana::codegen::discover_latent_aot_modules(
+                module_static_source, 0u, 0u, {}, module_static_options,
+                {}, two_module_hint_delta);
+        require(
+            module_static_delta.modules.size() == 250u &&
+                module_static_delta.module_static_cache_hits == 248u &&
+                module_static_delta.module_static_cache_misses == 2u &&
+                module_static_delta.module_static_cache_cold_fallbacks == 0u &&
+                module_static_delta.module_static_cache_corrupt_entries == 0u &&
+                module_static_delta.module_static_cache_stores == 2u &&
+                module_static_delta.analysis_full_pipeline_runs == 2u,
+            "Zwei Hint-Owner invalidierten nicht exakt zwei von 250 "
+            "Modul-Static-Produkten: hits=" +
+                std::to_string(module_static_delta.module_static_cache_hits) +
+                " misses=" +
+                std::to_string(module_static_delta.module_static_cache_misses) +
+                " fallbacks=" +
+                std::to_string(module_static_delta.module_static_cache_cold_fallbacks) +
+                " corrupt=" +
+                std::to_string(module_static_delta.module_static_cache_corrupt_entries) +
+                " stores=" +
+                std::to_string(module_static_delta.module_static_cache_stores) +
+                " pipelines=" +
+                std::to_string(module_static_delta.analysis_full_pipeline_runs));
+
+        std::vector<std::filesystem::path> module_static_artifacts;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                 module_static_fixture.path))
+            if (entry.is_regular_file() &&
+                entry.path().filename() == "module-static.bin")
+                module_static_artifacts.push_back(entry.path());
+        std::sort(module_static_artifacts.begin(), module_static_artifacts.end());
+        require(module_static_artifacts.size() == 252u,
+                "Modul-Static-Cache publizierte nicht die 250 Basis- plus "
+                "zwei Delta-Keys.");
+
+        // Checksum-consistent subset forge: remove the sole configured entry
+        // from one embedded static key and recompute the payload SHA. The
+        // outer cache path remains unchanged, so exact-key revalidation must
+        // reject only this owner and repair it cold.
+        {
+            std::ifstream input(module_static_artifacts.front(), std::ios::binary);
+            std::vector<std::uint8_t> artifact{
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+            require(artifact.size() > 260u,
+                    "Modul-Static-Forge-Fixture ist unerwartet klein.");
+            const auto write_u32 = [&](const std::size_t offset,
+                                       const std::uint32_t value) {
+                for (std::size_t byte = 0u; byte < 4u; ++byte)
+                    artifact[offset + byte] =
+                        static_cast<std::uint8_t>(value >> (byte * 8u));
+            };
+            const auto write_u64 = [&](const std::size_t offset,
+                                       const std::uint64_t value) {
+                for (std::size_t byte = 0u; byte < 8u; ++byte)
+                    artifact[offset + byte] =
+                        static_cast<std::uint8_t>(value >> (byte * 8u));
+            };
+            constexpr std::size_t body_size_offset = 148u;
+            constexpr std::size_t body_offset = 156u;
+            constexpr std::size_t entry_count_offset = body_offset + 83u;
+            write_u32(entry_count_offset, 0u);
+            artifact.erase(
+                artifact.begin() + static_cast<std::ptrdiff_t>(entry_count_offset + 4u),
+                artifact.begin() + static_cast<std::ptrdiff_t>(entry_count_offset + 8u));
+            write_u64(body_size_offset, artifact.size() - body_offset);
+            const auto body_sha = katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(artifact.data() + body_offset),
+                artifact.size() - body_offset));
+            std::copy(body_sha.begin(), body_sha.end(), artifact.begin() + 84u);
+            std::ofstream output(
+                module_static_artifacts.front(),
+                std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(artifact.data()),
+                         static_cast<std::streamsize>(artifact.size()));
+            output.close();
+            require(static_cast<bool>(output),
+                    "Checksum-konsistenter Modul-Static-Subset-Forge konnte "
+                    "nicht geschrieben werden.");
+        }
+        const auto module_static_subset_forge =
+            katana::codegen::discover_latent_aot_modules(
+                module_static_source, 0u, 0u, {}, module_static_options,
+                {}, two_module_hint_delta);
+        require(
+            module_static_subset_forge.modules.size() == 250u &&
+                module_static_subset_forge.module_static_cache_hits == 249u &&
+                module_static_subset_forge.module_static_cache_misses == 1u &&
+                module_static_subset_forge.module_static_cache_corrupt_entries == 1u &&
+                module_static_subset_forge.analysis_full_pipeline_runs == 1u,
+            "Checksum-konsistenter Modul-Static-Subset-Forge wurde nicht "
+            "owner-lokal kalt repariert.");
+
+        enum class StaticArtifactDamage : std::uint8_t {
+            Corrupt,
+            Truncated,
+            Noncanonical,
+            Oversized,
+        };
+        const auto require_one_static_fallback =
+            [&](const std::string_view fixture_suffix,
+                const StaticArtifactDamage damage) {
+                AnalysisCacheFixture damaged_fixture{
+                    std::string(fixture_suffix)};
+                const std::vector<FixtureFile> one_file{
+                    static_files.front()};
+                auto damaged_source =
+                    std::make_shared<katana::runtime::MemoryDiscSource>(
+                        fixture_iso_with_files(one_file),
+                        "synthetic-latent-aot-damaged-static-disc");
+                auto damaged_options = module_static_options;
+                damaged_options.analysis_cache_root = damaged_fixture.path;
+                damaged_options.maximum_candidate_files = 1u;
+                damaged_options.maximum_workers = 1u;
+                const std::array one_hint{module_static_base_hints.front()};
+                const auto cold =
+                    katana::codegen::discover_latent_aot_modules(
+                        damaged_source, 0u, 0u, {}, damaged_options, {},
+                        one_hint);
+                require(cold.modules.size() == 1u &&
+                            cold.module_static_cache_misses == 1u &&
+                            cold.module_static_cache_stores == 1u &&
+                            cold.analysis_full_pipeline_runs == 1u,
+                        std::string(fixture_suffix) +
+                            " konnte sein kaltes Basisartefakt nicht erzeugen.");
+
+                std::vector<std::filesystem::path> artifacts;
+                for (const auto& entry :
+                     std::filesystem::recursive_directory_iterator(
+                         damaged_fixture.path))
+                    if (entry.is_regular_file() &&
+                        entry.path().filename() == "module-static.bin")
+                        artifacts.push_back(entry.path());
+                require(artifacts.size() == 1u,
+                        std::string(fixture_suffix) +
+                            " besitzt kein eindeutiges Modul-Static-Artefakt.");
+                const auto key =
+                    artifacts.front().parent_path().filename().string();
+                katana::codegen::CodegenCache cache(damaged_fixture.path);
+                const auto current = cache.load_bounded(
+                    key, "module-static.bin",
+                    katana::codegen::
+                        maximum_latent_aot_module_static_cache_artifact_bytes);
+                require(current.has_value() && current->size() > 2u,
+                        std::string(fixture_suffix) +
+                            " konnte das Modul-Static-Artefakt nicht lesen.");
+                if (damage == StaticArtifactDamage::Corrupt) {
+                    auto replacement = *current;
+                    replacement.back() =
+                        static_cast<char>(replacement.back() ^ 0x5Au);
+                    require(cache.replace_bounded_if_matches(
+                                key, "module-static.bin", *current,
+                                replacement,
+                                katana::codegen::
+                                    maximum_latent_aot_module_static_cache_artifact_bytes),
+                            std::string(fixture_suffix) +
+                                " konnte das Artefakt nicht atomar korrumpieren.");
+                } else if (damage == StaticArtifactDamage::Truncated) {
+                    const auto replacement =
+                        current->substr(0u, current->size() / 2u);
+                    require(cache.replace_bounded_if_matches(
+                                key, "module-static.bin", *current,
+                                replacement,
+                                katana::codegen::
+                                    maximum_latent_aot_module_static_cache_artifact_bytes),
+                            std::string(fixture_suffix) +
+                                " konnte das Artefakt nicht atomar trunkieren.");
+                } else if (damage == StaticArtifactDamage::Noncanonical) {
+                    std::vector<std::uint8_t> replacement(
+                        current->begin(), current->end());
+                    require(replacement.size() > 156u,
+                            std::string(fixture_suffix) +
+                                " besitzt kein vollstaendiges Envelope.");
+                    constexpr std::size_t body_size_offset = 148u;
+                    constexpr std::size_t body_offset = 156u;
+                    replacement.push_back(0u);
+                    const auto body_size = replacement.size() - body_offset;
+                    for (std::size_t byte = 0u; byte < 8u; ++byte)
+                        replacement[body_size_offset + byte] =
+                            static_cast<std::uint8_t>(
+                                static_cast<std::uint64_t>(body_size) >>
+                                (byte * 8u));
+                    const auto body_sha = katana::io::sha256_bytes(
+                        std::string_view(
+                            reinterpret_cast<const char*>(
+                                replacement.data() + body_offset),
+                            body_size));
+                    std::copy(body_sha.begin(), body_sha.end(),
+                              replacement.begin() + 84u);
+                    const std::string replacement_string(
+                        reinterpret_cast<const char*>(replacement.data()),
+                        replacement.size());
+                    require(cache.replace_bounded_if_matches(
+                                key, "module-static.bin", *current,
+                                replacement_string,
+                                katana::codegen::
+                                    maximum_latent_aot_module_static_cache_artifact_bytes),
+                            std::string(fixture_suffix) +
+                                " konnte das checksum-konsistente, "
+                                "nichtkanonische Artefakt nicht schreiben.");
+                } else {
+                    require(cache.erase_bounded_if_matches(
+                                key, "module-static.bin", *current,
+                                katana::codegen::
+                                    maximum_latent_aot_module_static_cache_artifact_bytes),
+                            std::string(fixture_suffix) +
+                                " konnte das alte Artefakt nicht entfernen.");
+                    std::filesystem::create_directories(
+                        artifacts.front().parent_path());
+                    std::ofstream output(
+                        artifacts.front(), std::ios::binary | std::ios::trunc);
+                    output.seekp(static_cast<std::streamoff>(
+                        katana::codegen::
+                            maximum_latent_aot_module_static_cache_artifact_bytes));
+                    output.put('\0');
+                    output.close();
+                    require(static_cast<bool>(output),
+                            std::string(fixture_suffix) +
+                                " konnte das Oversize-Artefakt nicht schreiben.");
+                }
+
+                const auto result =
+                    katana::codegen::discover_latent_aot_modules(
+                        damaged_source, 0u, 0u, {}, damaged_options, {},
+                        one_hint);
+                require(
+                    result.modules.size() == 1u &&
+                        result.module_static_cache_hits == 0u &&
+                        result.module_static_cache_misses == 1u &&
+                        result.module_static_cache_corrupt_entries == 1u &&
+                        result.module_static_cache_stores == 1u &&
+                        result.analysis_full_pipeline_runs == 1u,
+                    std::string(fixture_suffix) +
+                        " fiel nicht exakt fuer einen Owner kalt zurueck: hits=" +
+                        std::to_string(result.module_static_cache_hits) +
+                        " misses=" +
+                        std::to_string(result.module_static_cache_misses) +
+                        " corrupt=" +
+                        std::to_string(result.module_static_cache_corrupt_entries) +
+                        " stores=" +
+                        std::to_string(result.module_static_cache_stores) +
+                        " pipelines=" +
+                        std::to_string(result.analysis_full_pipeline_runs));
+                const auto repaired_replay =
+                    katana::codegen::discover_latent_aot_modules(
+                        damaged_source, 0u, 0u, {}, damaged_options, {},
+                        one_hint);
+                require(repaired_replay.modules.size() == 1u &&
+                            repaired_replay.module_static_cache_hits == 1u &&
+                            repaired_replay.analysis_full_pipeline_runs == 0u,
+                        std::string(fixture_suffix) +
+                            " blieb nach der owner-lokalen Reparatur kalt.");
+            };
+        require_one_static_fallback(
+            "-module-static-corrupt", StaticArtifactDamage::Corrupt);
+        require_one_static_fallback(
+            "-module-static-truncated", StaticArtifactDamage::Truncated);
+        require_one_static_fallback(
+            "-module-static-noncanonical",
+            StaticArtifactDamage::Noncanonical);
+        require_one_static_fallback(
+            "-module-static-oversized", StaticArtifactDamage::Oversized);
+
+        // A changed decoded module generation invalidates only its exact
+        // source/epoch key. The other 249 modules retain their authority.
+        auto changed_static_files = static_files;
+        constexpr std::size_t changed_generation_index = 42u;
+        changed_static_files[changed_generation_index].bytes[5u] ^= 0x01u;
+        auto changed_generation_hints = two_module_hint_delta;
+        changed_generation_hints[changed_generation_index].byte_identity =
+            byte_identity(changed_static_files[changed_generation_index].bytes);
+        auto changed_generation_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(changed_static_files),
+                "synthetic-latent-aot-module-static-disc");
+        const auto changed_generation =
+            katana::codegen::discover_latent_aot_modules(
+                changed_generation_source, 0u, 0u, {},
+                module_static_options, {}, changed_generation_hints);
+        require(
+            changed_generation.modules.size() == 250u &&
+                changed_generation.module_static_cache_hits == 249u &&
+                changed_generation.module_static_cache_misses == 1u &&
+                changed_generation.module_static_cache_corrupt_entries == 0u &&
+                changed_generation.analysis_full_pipeline_runs == 1u,
+            "Geaenderte Decoded-/Source-Generation invalidierte nicht exakt "
+            "ihren einen Modul-Owner: modules=" +
+                std::to_string(changed_generation.modules.size()) +
+                " hits=" +
+                std::to_string(changed_generation.module_static_cache_hits) +
+                " misses=" +
+                std::to_string(changed_generation.module_static_cache_misses) +
+                " corrupt=" +
+                std::to_string(
+                    changed_generation.module_static_cache_corrupt_entries) +
+                " pipelines=" +
+                std::to_string(changed_generation.analysis_full_pipeline_runs));
+
+        // Removing exact roots is the inverse delta and must invalidate the
+        // same owners. Start from a fresh cache that has only the enlarged
+        // entry sets so the two removed-root owners cannot hit an older base
+        // artifact by accident.
+        {
+            AnalysisCacheFixture removed_hint_fixture{
+                "-module-static-removed-hints"};
+            std::vector<FixtureFile> removal_files(
+                static_files.begin(), static_files.begin() + 4);
+            auto removal_source =
+                std::make_shared<katana::runtime::MemoryDiscSource>(
+                    fixture_iso_with_files(removal_files),
+                    "synthetic-latent-aot-removed-hint-disc");
+            auto removal_options = module_static_options;
+            removal_options.analysis_cache_root = removed_hint_fixture.path;
+            removal_options.maximum_candidate_files = 4u;
+            removal_options.maximum_workers = 4u;
+            std::vector<katana::codegen::LatentAotEntryHint> base_hints(
+                module_static_base_hints.begin(),
+                module_static_base_hints.begin() + 4);
+            auto enlarged_hints = base_hints;
+            for (const auto module_index : std::array{1u, 3u}) {
+                enlarged_hints.push_back(
+                    {byte_identity(static_module_bytes[module_index]),
+                     static_cast<std::uint64_t>(32u + module_index) *
+                         sector_size,
+                     static_cast<std::uint32_t>(
+                         static_module_bytes[module_index].size()),
+                     4u});
+            }
+            const auto enlarged_cold =
+                katana::codegen::discover_latent_aot_modules(
+                    removal_source, 0u, 0u, {}, removal_options, {},
+                    enlarged_hints);
+            require(enlarged_cold.modules.size() == 4u &&
+                        enlarged_cold.module_static_cache_misses == 4u &&
+                        enlarged_cold.analysis_full_pipeline_runs == 4u,
+                    "Removed-Hint-Fixture konnte seinen vergroesserten "
+                    "Ausgangszustand nicht kalt erzeugen.");
+            const auto removed_delta =
+                katana::codegen::discover_latent_aot_modules(
+                    removal_source, 0u, 0u, {}, removal_options, {},
+                    base_hints);
+            require(removed_delta.modules.size() == 4u &&
+                        removed_delta.module_static_cache_hits == 2u &&
+                        removed_delta.module_static_cache_misses == 2u &&
+                        removed_delta.analysis_full_pipeline_runs == 2u,
+                    "Zwei entfernte Hint-Roots invalidierten nicht exakt "
+                    "dieselben zwei Modul-Owner: hits=" +
+                        std::to_string(
+                            removed_delta.module_static_cache_hits) +
+                        " misses=" +
+                        std::to_string(
+                            removed_delta.module_static_cache_misses) +
+                        " pipelines=" +
+                        std::to_string(
+                            removed_delta.analysis_full_pipeline_runs));
+        }
+
+        // Archive/authority mode stages complete module-static products in
+        // the in-process session but must not publish a shared artifact until
+        // the outer authority gate explicitly commits them.
+        {
+            AnalysisCacheFixture publication_fixture{
+                "-module-static-deferred-publication"};
+            const std::vector<FixtureFile> publication_files{
+                static_files.front()};
+            auto publication_source =
+                std::make_shared<katana::runtime::MemoryDiscSource>(
+                    fixture_iso_with_files(publication_files),
+                    "synthetic-latent-aot-deferred-publication-disc");
+            auto publication_options = module_static_options;
+            publication_options.analysis_cache_root =
+                publication_fixture.path;
+            publication_options.maximum_candidate_files = 1u;
+            publication_options.maximum_workers = 1u;
+            publication_options.persistent_cache_writes_enabled = false;
+            const std::array publication_hint{
+                module_static_base_hints.front()};
+            katana::codegen::LatentAotDiscoverySession publication_session;
+            const auto staged_discovery =
+                katana::codegen::discover_latent_aot_modules(
+                    publication_source, 0u, 0u, {}, publication_options, {},
+                    publication_hint, {}, publication_session);
+            require(staged_discovery.modules.size() == 1u &&
+                        staged_discovery.module_static_cache_stores == 0u &&
+                        staged_discovery.analysis_full_pipeline_runs == 1u,
+                    "Deferred-Publication-Fixture wurde nicht ohne Shared-Write "
+                    "analysiert.");
+            std::size_t artifacts_before_publish = 0u;
+            if (std::filesystem::exists(publication_fixture.path))
+                for (const auto& entry :
+                     std::filesystem::recursive_directory_iterator(
+                         publication_fixture.path))
+                    if (entry.is_regular_file() &&
+                        entry.path().filename() == "module-static.bin")
+                        ++artifacts_before_publish;
+            require(artifacts_before_publish == 0u,
+                    "Modul-Static-Artefakt wurde vor dem Authority-Gate "
+                    "publiziert.");
+            auto pending =
+                katana::codegen::
+                    stage_latent_aot_module_static_cache_publications(
+                        publication_session, publication_options);
+            require(pending.size() == 1u,
+                    "Authority-Gate erhielt nicht exakt ein vollstaendiges "
+                    "Modul-Static-Artefakt.");
+            require(katana::codegen::
+                        publish_latent_aot_module_static_cache_publications(
+                            pending) &&
+                        pending.empty(),
+                    "Authority-Gate konnte das Modul-Static-Artefakt nicht "
+                    "atomar publizieren.");
+            const auto published_replay =
+                katana::codegen::discover_latent_aot_modules(
+                    publication_source, 0u, 0u, {}, publication_options, {},
+                    publication_hint);
+            require(published_replay.modules.size() == 1u &&
+                        published_replay.module_static_cache_hits == 1u &&
+                        published_replay.analysis_full_pipeline_runs == 0u,
+                    "Publiziertes Authority-Artefakt wurde nicht exakt "
+                    "revalidiert wiederverwendet.");
+        }
 
         auto exact_only_options =
             katana::codegen::LatentAotDiscoveryOptions{};

@@ -1965,6 +1965,93 @@ NativePortExecutableRetirement deactivate_native_port_executable_overlaps(
         context, expanded.runtime_start, expanded.byte_size);
 }
 
+bool reconcile_native_port_runtime_executable_write(
+    NativePortContext& context,
+    NativePortImmutableWriteGuard& immutable_guard) noexcept {
+    try {
+        constexpr auto executable_kind = native_port_immutable_range_mask(
+            NativePortImmutableRangeKind::Executable);
+        if (!immutable_guard.write_detected_ ||
+            immutable_guard.first_write_kind_mask_ != executable_kind ||
+            immutable_guard.fixed_tracks_address(
+                immutable_guard.first_write_address_,
+                immutable_guard.first_write_size_) ||
+            context.cpu == nullptr || context.runtime_images == nullptr ||
+            context.loaded_aot == nullptr ||
+            !context.runtime_images->impl_ || !context.loaded_aot->impl_ ||
+            &context.runtime_images->impl_->cpu != context.cpu ||
+            &context.loaded_aot->impl_->cpu != context.cpu ||
+            &context.runtime_images->impl_->immutable_guard !=
+                &immutable_guard ||
+            &context.loaded_aot->impl_->immutable_guard !=
+                &immutable_guard)
+            return false;
+
+        const auto write_begin = canonical_native_port_runtime_alias(
+            immutable_guard.first_write_address_);
+        const auto write_size = immutable_guard.first_write_size_;
+        if (write_size == 0u ||
+            write_size > std::numeric_limits<std::uint32_t>::max())
+            return false;
+        const auto write_end =
+            static_cast<std::uint64_t>(write_begin) + write_size;
+        if (write_end > 0x1'0000'0000ull) return false;
+
+        std::size_t owner_count = 0u;
+        const auto consider_owner =
+            [&](const std::uint32_t owner_address,
+                const std::size_t owner_size) noexcept {
+                const auto owner_begin =
+                    canonical_native_port_runtime_alias(owner_address);
+                const auto owner_end =
+                    static_cast<std::uint64_t>(owner_begin) + owner_size;
+                if (write_begin >= owner_end || owner_begin >= write_end)
+                    return true;
+                if (write_begin < owner_begin || write_end > owner_end)
+                    return false;
+                ++owner_count;
+                return owner_count <= 1u;
+            };
+        for (const auto& active : context.runtime_images->impl_->active) {
+            const auto& image = context.runtime_images->impl_->images[
+                active.image_index];
+            if (!consider_owner(image.runtime_start, image.byte_size))
+                return false;
+        }
+        for (const auto& active : context.loaded_aot->impl_->active) {
+            const auto& module = context.loaded_aot->impl_->modules[
+                active.module_index];
+            if (!consider_owner(active.runtime_start, module.byte_size))
+                return false;
+        }
+        if (owner_count != 1u) return false;
+
+        // The scalar/batch write is already committed and the generated
+        // helper has forced a precise block exit. Expand from that write to
+        // the one proven owner, then use the existing atomic two-domain
+        // validation/retirement transaction. Live PC/PR/instruction/block
+        // continuations therefore remain fail-closed.
+        const auto retired = deactivate_native_port_executable_overlaps(
+            context, write_begin, write_size);
+        if (retired.runtime_images + retired.loaded_aot_modules != 1u ||
+            !immutable_guard
+                 .acknowledge_retired_runtime_executable_write())
+            return false;
+
+        // The guard generation is global. The reconciled write touched only
+        // the now-retired owner, so surviving disjoint bindings can safely
+        // adopt the post-write generation without re-hashing their code.
+        const auto current_generation = immutable_guard.generation();
+        for (auto& active : context.runtime_images->impl_->active)
+            active.code_generation = current_generation;
+        for (auto& active : context.loaded_aot->impl_->active)
+            active.code_generation = current_generation;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 std::vector<std::uint8_t>
 capture_native_port_main_memory(const CpuState& cpu) {
     const auto guard = cpu.memory.direct_linear_memory_guard(false);

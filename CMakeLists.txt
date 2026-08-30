@@ -768,6 +768,7 @@ set(KATANA_RUNTIME_CORE_SOURCES
     # product closure because it serializes title-project metadata only.
     src/runtime/native_bringup_artifact.cpp
     src/runtime/native_port_artifact.cpp
+    src/runtime/native_port_identity.cpp
     src/runtime/exception.cpp
     src/runtime/fpu.cpp
     src/runtime/gdi.cpp

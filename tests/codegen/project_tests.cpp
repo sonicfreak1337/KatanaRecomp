@@ -1,4 +1,5 @@
 #include "katana/codegen/project.hpp"
+#include "katana/io/input_provenance.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 #ifdef _WIN32
@@ -126,6 +128,18 @@ int main() {
             "Der Artefaktmanifest v2 fehlt die gebundene Generation.");
     require(serial_snapshot.at("CMakeLists.txt").find("code/unit-00000.cpp") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/bigobj") != std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_GENERATED_EXCEPTION_SOURCES") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("^code/unit-v[^/]+\\\\.cpp$") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("code/native-port-dispatch.cpp") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("PROPERTY COMPILE_OPTIONS /EHsc") !=
+                    std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("KATANA_AOT_COMPILE_JOBS") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("JOB_POOL_COMPILE") !=
@@ -162,6 +176,175 @@ int main() {
                 serial_snapshot.at("compile_commands.json").find("\"directory\":\".\"") !=
                     std::string::npos,
             "CMake-, Ninja- oder Compile-Commands-Integration fehlt.");
+
+    const auto refresh_root = fixture.root / "refresh";
+    static_cast<void>(write_codegen_project(
+        refresh_root,
+        {{"code/native-port-dispatch.cpp", "provider-before\n"},
+         {"code/aot-partition.cpp", "aot-unchanged\n"},
+         {"tools/native-port-link-audit.cpp", "marker-before\n"}}));
+    const auto refresh_before = snapshot(refresh_root);
+    const auto refreshed = rewrite_codegen_project_artifacts(
+        refresh_root,
+        {{"code/native-port-dispatch.cpp",
+          "sha256:" + katana::io::sha256_bytes("provider-before\n"),
+          "provider-after\n"},
+         {"tools/native-port-link-audit.cpp",
+          "sha256:" + katana::io::sha256_bytes("marker-before\n"),
+          "marker-after\n"}});
+    const auto refresh_after = snapshot(refresh_root);
+    require(
+        refresh_after.at("code/native-port-dispatch.cpp") ==
+                "provider-after\n" &&
+            refresh_after.at("tools/native-port-link-audit.cpp") ==
+                "marker-after\n" &&
+            refresh_after.at("code/aot-partition.cpp") ==
+                refresh_before.at("code/aot-partition.cpp") &&
+            refresh_after.at("CMakeLists.txt") ==
+                refresh_before.at("CMakeLists.txt") &&
+            refresh_after.at("build.ninja") ==
+                refresh_before.at("build.ninja") &&
+            refresh_after.at("compile_commands.json") ==
+                refresh_before.at("compile_commands.json") &&
+            refresh_after.at(".katana-generated-artifacts") !=
+                refresh_before.at(".katana-generated-artifacts") &&
+            refreshed.written_files.size() == 3u &&
+            refreshed.removed_files.empty(),
+        "Der gebundene Consumer-Refresh veraendert AOT/Buildgraph oder "
+        "publiziert sein Manifest nicht.");
+    bool stale_refresh_rejected = false;
+    try {
+        static_cast<void>(rewrite_codegen_project_artifacts(
+            refresh_root,
+            {{"code/native-port-dispatch.cpp",
+              "sha256:" + katana::io::sha256_bytes("provider-before\n"),
+              "provider-stale\n"}}));
+    } catch (const std::runtime_error&) {
+        stale_refresh_rejected = true;
+    }
+    require(stale_refresh_rejected &&
+                snapshot(refresh_root).at("code/native-port-dispatch.cpp") ==
+                    "provider-after\n",
+            "Der Consumer-Refresh akzeptiert eine stale Quellbindung.");
+    {
+        std::ofstream mutate_unselected(
+            refresh_root / "code/aot-partition.cpp",
+            std::ios::binary | std::ios::trunc);
+        mutate_unselected << "aot-tampered!\n";
+    }
+    bool generation_refresh_rejected = false;
+    try {
+        static_cast<void>(rewrite_codegen_project_artifacts(
+            refresh_root,
+            {{"code/native-port-dispatch.cpp",
+              "sha256:" + katana::io::sha256_bytes("provider-after\n"),
+              "provider-next\n"}}));
+    } catch (const std::runtime_error&) {
+        generation_refresh_rejected = true;
+    }
+    require(generation_refresh_rejected &&
+                snapshot(refresh_root).at("code/native-port-dispatch.cpp") ==
+                    "provider-after\n",
+            "Der Consumer-Refresh akzeptiert eine fremd veraenderte AOT-Generation.");
+
+    const auto same_size_tamper_root = fixture.root / "same-size-tamper";
+    static_cast<void>(write_codegen_project(
+        same_size_tamper_root,
+        {{"code/native-port-dispatch.cpp", "dispatch-before\n"},
+         {"code/aot-partition.cpp", "aot-unchanged\n"}}));
+    {
+        std::ofstream mutate_same_size(
+            same_size_tamper_root / "code/aot-partition.cpp",
+            std::ios::binary | std::ios::trunc);
+        mutate_same_size << "aot-corrupted\n";
+    }
+    bool same_size_generation_rejected = false;
+    try {
+        static_cast<void>(rewrite_codegen_project_artifacts(
+            same_size_tamper_root,
+            {{"code/native-port-dispatch.cpp",
+              "sha256:" + katana::io::sha256_bytes("dispatch-before\n"),
+              "dispatch-after\n"}}));
+    } catch (const std::runtime_error&) {
+        same_size_generation_rejected = true;
+    }
+    require(
+        same_size_generation_rejected,
+        "Der Consumer-Refresh akzeptiert eine gleich grosse AOT-Manipulation.");
+
+    const auto manifest_mismatch_root = fixture.root / "manifest-mismatch";
+    static_cast<void>(write_codegen_project(
+        manifest_mismatch_root,
+        {{"code/native-port-dispatch.cpp", "manifest-before\n"},
+         {"code/aot-partition.cpp", "aot-stable\n"}}));
+    {
+        const auto manifest_path =
+            manifest_mismatch_root / ".katana-generated-artifacts";
+        std::ifstream input(manifest_path, std::ios::binary);
+        std::ostringstream content;
+        content << input.rdbuf();
+        auto document = content.str();
+        const auto marker = document.find("katana-codegen-artifacts-v2");
+        require(marker != std::string::npos,
+                "Das Manifest-Mismatch-Fixture besitzt keinen Header.");
+        document[marker] = document[marker] == 'k' ? 'l' : 'k';
+        std::ofstream output(manifest_path,
+                             std::ios::binary | std::ios::trunc);
+        output.write(document.data(),
+                     static_cast<std::streamsize>(document.size()));
+    }
+    bool manifest_mismatch_rejected = false;
+    try {
+        static_cast<void>(rewrite_codegen_project_artifacts(
+            manifest_mismatch_root,
+            {{"code/native-port-dispatch.cpp",
+              "sha256:" + katana::io::sha256_bytes("manifest-before\n"),
+              "manifest-after\n"}}));
+    } catch (const std::runtime_error&) {
+        manifest_mismatch_rejected = true;
+    }
+    require(manifest_mismatch_rejected,
+            "Der Consumer-Refresh akzeptiert ein inkonsistentes Manifest.");
+
+    const auto structural_mismatch_root = fixture.root / "structural-mismatch";
+    static_cast<void>(write_codegen_project(
+        structural_mismatch_root,
+        {{"code/native-port-dispatch.cpp", "structure-before\n"}}));
+    bool buildgraph_replacement_rejected = false;
+    try {
+        static_cast<void>(rewrite_codegen_project_artifacts(
+            structural_mismatch_root,
+            {{"build.ninja",
+              "sha256:" + katana::io::sha256_bytes(
+                                snapshot(structural_mismatch_root).at(
+                                    "build.ninja")),
+              "do-not-replace-buildgraph\n"}}));
+    } catch (const std::invalid_argument&) {
+        buildgraph_replacement_rejected = true;
+    }
+    require(buildgraph_replacement_rejected,
+            "Der Consumer-Refresh ersetzt unberechtigt den Buildgraphen.");
+
+    const auto idempotent_root = fixture.root / "idempotent";
+    static_cast<void>(write_codegen_project(
+        idempotent_root,
+        {{"code/native-port-dispatch.cpp", "idempotent-before\n"},
+         {"code/aot-partition.cpp", "aot-stable\n"}}));
+    static_cast<void>(rewrite_codegen_project_artifacts(
+        idempotent_root,
+        {{"code/native-port-dispatch.cpp",
+          "sha256:" + katana::io::sha256_bytes("idempotent-before\n"),
+          "idempotent-after\n"}}));
+    const auto idempotent_before = snapshot(idempotent_root);
+    const auto idempotent_result = rewrite_codegen_project_artifacts(
+        idempotent_root,
+        {{"code/native-port-dispatch.cpp",
+          "sha256:" + katana::io::sha256_bytes("idempotent-after\n"),
+          "idempotent-after\n"}});
+    require(idempotent_result.written_files.empty() &&
+                idempotent_result.removed_files.empty() &&
+                snapshot(idempotent_root) == idempotent_before,
+            "Ein idempotenter Consumer-Refresh schreibt erneut Dateien.");
 
 #ifdef _WIN32
     require(_putenv_s("KATANA_RUNTIME_ROOT", KATANA_SOURCE_DIR) == 0,

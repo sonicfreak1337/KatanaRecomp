@@ -390,6 +390,9 @@ serialize_definition(const GameProjectDefinition& definition) {
     writer.boolean(definition.boot_config.has_value());
     if (definition.boot_config.has_value())
         write_boot_config(writer, *definition.boot_config);
+    writer.u32(checked_count(definition.static_entries.size()));
+    for (const auto entry : definition.static_entries)
+        writer.u32(entry);
     auto bytes = std::move(writer).finish();
     if (bytes.size() >
         game_project_artifact_maximum_size - artifact_header_size)
@@ -635,6 +638,7 @@ void GameProjectArtifact::rebuild_definition() {
     definition_.code_identities = code_identities_;
     definition_.runtime_images = runtime_images_;
     definition_.boot_config = boot_config_;
+    definition_.static_entries = static_entries_;
     validate_game_project_definition(definition_);
 }
 
@@ -843,6 +847,10 @@ GameProjectArtifact::load(const std::filesystem::path& path) {
 
     if (reader.boolean())
         result->boot_config_ = read_boot_config(reader);
+    const auto static_entry_count = reader.count();
+    result->static_entries_.reserve(static_entry_count);
+    for (std::uint32_t index = 0u; index < static_entry_count; ++index)
+        result->static_entries_.push_back(reader.u32());
     if (!reader.empty())
         artifact_error(
             "Game-project artifact has unexpected trailing data.");

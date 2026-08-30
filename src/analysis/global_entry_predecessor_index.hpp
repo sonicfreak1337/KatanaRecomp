@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <span>
+#include <utility>
 
 namespace katana::analysis::detail {
 
@@ -16,6 +17,37 @@ struct GlobalEntryEdge final {
     [[nodiscard]] friend bool operator==(
         const GlobalEntryEdge&,
         const GlobalEntryEdge&) noexcept = default;
+};
+
+struct GlobalEntryPredecessorDelta final {
+    std::set<std::uint32_t> changed_boundaries;
+    std::set<std::uint32_t> changed_predecessor_targets;
+
+    [[nodiscard]] bool empty() const noexcept {
+        return changed_boundaries.empty() &&
+               changed_predecessor_targets.empty();
+    }
+
+    [[nodiscard]] bool affects_interval(
+        const std::uint32_t seed,
+        const std::uint32_t load) const noexcept {
+        if (seed >= load) return true;
+        const auto boundary = changed_boundaries.upper_bound(seed);
+        if (boundary != changed_boundaries.end() && *boundary <= load)
+            return true;
+        const auto predecessor =
+            changed_predecessor_targets.upper_bound(seed);
+        return predecessor != changed_predecessor_targets.end() &&
+               *predecessor <= load;
+    }
+
+    void merge(const GlobalEntryPredecessorDelta& other) {
+        changed_boundaries.insert(other.changed_boundaries.begin(),
+                                  other.changed_boundaries.end());
+        changed_predecessor_targets.insert(
+            other.changed_predecessor_targets.begin(),
+            other.changed_predecessor_targets.end());
+    }
 };
 
 // Whole-program predecessor universe for locally bounded producer proofs.
@@ -29,7 +61,13 @@ class GlobalEntryPredecessorIndex final {
     }
 
     void add_boundary(const std::uint32_t address) {
-        boundaries_.insert(address);
+        ++boundaries_[address];
+    }
+
+    void remove_boundary(const std::uint32_t address) noexcept {
+        const auto found = boundaries_.find(address);
+        if (found == boundaries_.end()) return;
+        if (--found->second == 0u) boundaries_.erase(found);
     }
 
     void add_edge(const std::uint32_t source,
@@ -49,6 +87,75 @@ class GlobalEntryPredecessorIndex final {
             predecessors_.erase(target_entry);
     }
 
+    [[nodiscard]] GlobalEntryPredecessorDelta difference(
+        const GlobalEntryPredecessorIndex& next) const {
+        GlobalEntryPredecessorDelta delta;
+        const auto collect_membership_changes = [](
+            const auto& previous,
+            const auto& current,
+            auto&& changed) {
+            auto left = previous.begin();
+            auto right = current.begin();
+            while (left != previous.end() || right != current.end()) {
+                if (right == current.end() ||
+                    (left != previous.end() && left->first < right->first)) {
+                    changed(left->first);
+                    ++left;
+                } else if (left == previous.end() ||
+                           right->first < left->first) {
+                    changed(right->first);
+                    ++right;
+                } else {
+                    ++left;
+                    ++right;
+                }
+            }
+        };
+        collect_membership_changes(
+            boundaries_, next.boundaries_, [&](const auto address) {
+                delta.changed_boundaries.insert(address);
+            });
+
+        auto previous_target = predecessors_.begin();
+        auto next_target = next.predecessors_.begin();
+        while (previous_target != predecessors_.end() ||
+               next_target != next.predecessors_.end()) {
+            if (next_target == next.predecessors_.end() ||
+                (previous_target != predecessors_.end() &&
+                 previous_target->first < next_target->first)) {
+                delta.changed_predecessor_targets.insert(
+                    previous_target->first);
+                ++previous_target;
+                continue;
+            }
+            if (previous_target == predecessors_.end() ||
+                next_target->first < previous_target->first) {
+                delta.changed_predecessor_targets.insert(
+                    next_target->first);
+                ++next_target;
+                continue;
+            }
+            bool membership_changed = false;
+            collect_membership_changes(
+                previous_target->second,
+                next_target->second,
+                [&](const auto) { membership_changed = true; });
+            if (membership_changed)
+                delta.changed_predecessor_targets.insert(
+                    previous_target->first);
+            ++previous_target;
+            ++next_target;
+        }
+        return delta;
+    }
+
+    [[nodiscard]] GlobalEntryPredecessorDelta replace(
+        GlobalEntryPredecessorIndex next) {
+        auto delta = difference(next);
+        *this = std::move(next);
+        return delta;
+    }
+
     template <typename Edge, std::size_t Extent>
     [[nodiscard]] bool closes(
         const std::uint32_t seed,
@@ -57,7 +164,7 @@ class GlobalEntryPredecessorIndex final {
         const GlobalEntryPredecessorIndex* const additional = nullptr) const {
         if (seed >= load) return false;
         const auto boundary = boundaries_.upper_bound(seed);
-        if (boundary != boundaries_.end() && *boundary <= load)
+        if (boundary != boundaries_.end() && boundary->first <= load)
             return false;
         if (!predecessors_close(seed, load, allowed_internal_edges))
             return false;
@@ -94,7 +201,7 @@ class GlobalEntryPredecessorIndex final {
         return true;
     }
 
-    std::set<std::uint32_t> boundaries_;
+    std::map<std::uint32_t, std::size_t> boundaries_;
     std::map<std::uint32_t,
              std::map<std::uint32_t, std::size_t>> predecessors_;
 };

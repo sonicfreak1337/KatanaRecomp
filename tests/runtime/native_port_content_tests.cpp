@@ -262,6 +262,28 @@ int main(const int argc, char** const argv) {
     require(!immutable_guard.tracks_address(0x8C900200u, 2u),
             "Letztes Runtime-Range-Retirement liess den Page-Index stale.");
 
+    {
+        katana::runtime::NativePortImmutableWriteGuard multiple_write_guard(
+            immutable_ranges);
+        multiple_write_guard.reserve_additional_runtime_executable_ranges(2u);
+        multiple_write_guard.add_runtime_executable_range(
+            0x0C900000u, 4u);
+        multiple_write_guard.add_runtime_executable_range(
+            0x0C910000u, 4u);
+        multiple_write_guard.observe_write(
+            {0x0C900000u, 2u,
+             katana::runtime::CodeWriteSource::Cpu, true});
+        multiple_write_guard.observe_write(
+            {0x0C910000u, 2u,
+             katana::runtime::CodeWriteSource::Cpu, true});
+        require(
+            multiple_write_guard.first_write_kind_mask() !=
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::NativePortImmutableRangeKind::Executable),
+            "Mehrere Executable-Stores wurden als einzelner Ownerbeweis "
+            "beibehalten.");
+    }
+
     katana::runtime::NativePortExecutableLifecycleLedger lifecycle_ledger(2u);
     const auto first_lifecycle = lifecycle_ledger.acquire(0x8C900000u, 0x1000u);
     require(first_lifecycle != 0u,
@@ -353,6 +375,162 @@ int main(const int argc, char** const argv) {
                 "Retired geladenes AOT-Entry blieb dispatchbar.");
     } catch (const std::exception& error) {
         require(false, std::string("Aktive Modulidentitaet warf: ") +
+                           error.what());
+    }
+
+    // An ordinary guest store may retire one exact dynamic executable owner
+    // after the store has completed. A disjoint active module remains valid
+    // at the new observer generation, and the retired placement can later be
+    // staged and identity-checked again.
+    try {
+        constexpr std::uint32_t first_source_start = 0x80820000u;
+        constexpr std::uint32_t second_source_start = 0x80830000u;
+        constexpr std::uint32_t first_runtime_start = 0x8C920000u;
+        constexpr std::uint32_t second_runtime_start = 0x8C930000u;
+        constexpr std::string_view identity =
+            "sha256:7af85194466a76bee16168ca8152d4560bd9bec17ade2525f267ed49a54f36a9";
+        const std::array<std::uint8_t, 4u> bytes{
+            0x09u, 0x00u, 0x0Bu, 0x00u};
+        const std::array first_source_bindings{
+            katana::runtime::NativePortLoadedAotSourceBindingView{
+                katana::runtime::NativePortLoadedAotSourceTransform::Identity,
+                identity, 0u, static_cast<std::uint32_t>(bytes.size()), 0u}};
+        const std::array second_source_bindings{
+            katana::runtime::NativePortLoadedAotSourceBindingView{
+                katana::runtime::NativePortLoadedAotSourceTransform::Identity,
+                identity, 4u, static_cast<std::uint32_t>(bytes.size()), 0u}};
+        const std::array blocks{
+            katana::runtime::NativePortLoadedAotBlockIdentityView{
+                0u, static_cast<std::uint32_t>(bytes.size()), identity}};
+        const std::array modules{
+            katana::runtime::NativePortLoadedAotModuleView{
+                first_source_start, static_cast<std::uint32_t>(bytes.size()),
+                identity, first_source_bindings, blocks},
+            katana::runtime::NativePortLoadedAotModuleView{
+                second_source_start, static_cast<std::uint32_t>(bytes.size()),
+                identity, second_source_bindings, blocks}};
+        const std::array<katana::runtime::NativePortRuntimeImageView, 0u>
+            no_images{};
+        katana::runtime::NativePortMemory memory;
+        auto& cpu = memory.cpu();
+        cpu.memory.write_bytes(
+            0x0C920000u, bytes,
+            katana::runtime::CodeWriteSource::Copy);
+        cpu.memory.write_bytes(
+            0x0C930000u, bytes,
+            katana::runtime::CodeWriteSource::Copy);
+        katana::runtime::NativePortImmutableWriteGuard module_guard(
+            immutable_ranges);
+        katana::runtime::NativePortExecutableLifecycleLedger module_ledger(2u);
+        katana::runtime::NativePortRuntimeImageBindings runtime_images(
+            cpu, no_images, module_guard, module_ledger);
+        katana::runtime::NativePortLoadedAotBinder binder(
+            cpu, modules, module_guard, module_ledger);
+        const auto initial_owner_lifecycle = binder.stage_runtime_module(
+            {identity, first_source_start, first_runtime_start,
+             static_cast<std::uint32_t>(bytes.size())});
+        const auto second_lifecycle = binder.stage_runtime_module(
+            {identity, second_source_start, second_runtime_start,
+             static_cast<std::uint32_t>(bytes.size())});
+        require(binder.bind_entry(first_runtime_start) &&
+                    binder.bind_entry(second_runtime_start),
+                "Dynamische Executable-Write-Fixture aktiviert ihre Owner nicht.");
+
+        ChainGuardHost host;
+        katana::runtime::NativePortContext context;
+        context.cpu = &cpu;
+        context.host = &host;
+        context.runtime_images = &runtime_images;
+        context.loaded_aot = &binder;
+        katana::runtime::NativePortAotServices services(
+            context, chain_guard_static_entry, module_guard);
+        cpu.memory.write_u16(
+            0x0C920000u, 0u,
+            katana::runtime::CodeWriteSource::Cpu);
+        require(services.immutable_write_detected() &&
+                    services.reconcile_runtime_executable_write() &&
+                    !services.immutable_write_detected() &&
+                    !binder.validate_bound_entry(first_runtime_start) &&
+                    binder.validate_bound_entry(second_runtime_start),
+                "Post-Store-Retirement schloss nicht genau einen dynamischen "
+                "Owner oder invalidierte einen disjunkten Survivor.");
+        const auto surviving = binder.active_module_for_address(
+            second_runtime_start);
+        require(surviving.has_value() &&
+                    surviving->lifecycle_generation == second_lifecycle,
+                "Generation-Rebase veraenderte den Lifecycle des Survivors.");
+
+        cpu.memory.write_bytes(
+            0x0C920000u, bytes,
+            katana::runtime::CodeWriteSource::Copy);
+        const auto replacement_lifecycle = binder.stage_runtime_module(
+            {identity, first_source_start, first_runtime_start,
+             static_cast<std::uint32_t>(bytes.size())});
+        require(replacement_lifecycle > initial_owner_lifecycle &&
+                    replacement_lifecycle > second_lifecycle &&
+                    binder.bind_entry(first_runtime_start) &&
+                    binder.validate_bound_entry(first_runtime_start),
+                "Retired dynamischer Owner konnte nicht identity-bound "
+                "reacquired werden.");
+
+        cpu.pr = first_runtime_start + 2u;
+        cpu.memory.write_u16(
+            0x0C920000u, 0u,
+            katana::runtime::CodeWriteSource::Cpu);
+        require(services.immutable_write_detected() &&
+                    !services.reconcile_runtime_executable_write() &&
+                    services.immutable_write_detected(),
+                "Live Continuation wurde nach Executable-Write nicht "
+                "fail-closed gehalten.");
+        cpu.pr = 0u;
+    } catch (const std::exception& error) {
+        require(false, std::string("Executable-Write-Reconciliation warf: ") +
+                           error.what());
+    }
+
+    // A fixed immutable executable range is never converted into a dynamic
+    // lifecycle retirement, even when empty runtime owners are bound.
+    try {
+        constexpr std::uint32_t fixed_address = 0x0C940000u;
+        const std::array fixed_ranges{
+            katana::runtime::NativePortImmutableRange{
+                fixed_address, 4u,
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::NativePortImmutableRangeKind::Executable)}};
+        const std::array<katana::runtime::NativePortRuntimeImageView, 0u>
+            no_images{};
+        const std::array<katana::runtime::NativePortLoadedAotModuleView, 0u>
+            no_modules{};
+        katana::runtime::NativePortMemory memory;
+        auto& cpu = memory.cpu();
+        cpu.memory.write_u16(
+            fixed_address, 0x0009u,
+            katana::runtime::CodeWriteSource::Copy);
+        katana::runtime::NativePortImmutableWriteGuard fixed_guard(
+            fixed_ranges);
+        katana::runtime::NativePortExecutableLifecycleLedger fixed_ledger(0u);
+        katana::runtime::NativePortRuntimeImageBindings runtime_images(
+            cpu, no_images, fixed_guard, fixed_ledger);
+        katana::runtime::NativePortLoadedAotBinder binder(
+            cpu, no_modules, fixed_guard, fixed_ledger);
+        ChainGuardHost host;
+        katana::runtime::NativePortContext context;
+        context.cpu = &cpu;
+        context.host = &host;
+        context.runtime_images = &runtime_images;
+        context.loaded_aot = &binder;
+        katana::runtime::NativePortAotServices services(
+            context, chain_guard_static_entry, fixed_guard);
+        cpu.memory.write_u16(
+            fixed_address, 0u,
+            katana::runtime::CodeWriteSource::Cpu);
+        require(services.immutable_write_detected() &&
+                    !services.reconcile_runtime_executable_write() &&
+                    services.immutable_write_detected(),
+                "Fixed immutable Executable-Write wurde als dynamischer "
+                "Lifecycle akzeptiert.");
+    } catch (const std::exception& error) {
+        require(false, std::string("Fixed-Write-Negativtest warf: ") +
                            error.what());
     }
 

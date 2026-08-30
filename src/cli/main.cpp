@@ -6420,6 +6420,85 @@ bool remove_relocated_port_host_build_state(
 }
 
 #ifdef _WIN32
+struct MsvcOptimizationFlags {
+    bool enabled = false;
+    bool disabled = false;
+};
+
+[[nodiscard]] MsvcOptimizationFlags inspect_msvc_optimization_flags(
+    std::string flags) {
+    std::transform(flags.begin(), flags.end(), flags.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::toupper(value));
+    });
+    MsvcOptimizationFlags result;
+    std::istringstream tokens(flags);
+    std::string token;
+    while (tokens >> token) {
+        while (!token.empty() && (token.front() == '"' || token.front() == '\''))
+            token.erase(token.begin());
+        while (!token.empty() && (token.back() == '"' || token.back() == '\''))
+            token.pop_back();
+        result.disabled = result.disabled || token == "/OD" || token == "-O0";
+        result.enabled = result.enabled || token == "/O1" || token == "/O2" ||
+                         token == "/OX" || token == "-O1" || token == "-O2" ||
+                         token == "-O3" || token == "-OFAST";
+    }
+    return result;
+}
+
+[[nodiscard]] bool optimized_ninja_generated_target(
+    const std::filesystem::path& build_root,
+    const std::string_view configuration) {
+    std::ifstream ninja(build_root / "build.ninja", std::ios::binary);
+    if (!ninja) return false;
+
+    std::uint64_t compile_edges = 0u;
+    bool pending_edge = false;
+    bool pending_configuration = false;
+    bool pending_flags = false;
+    const auto finish_edge = [&]() {
+        if (!pending_edge) return true;
+        const bool complete = pending_configuration && pending_flags;
+        pending_edge = false;
+        pending_configuration = false;
+        pending_flags = false;
+        return complete;
+    };
+
+    std::string line;
+    while (std::getline(ninja, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.starts_with("build ")) {
+            if (!finish_edge()) return false;
+            auto normalized = line;
+            std::replace(normalized.begin(), normalized.end(), '\\', '/');
+            pending_edge =
+                normalized.find(
+                    "generated/CMakeFiles/katana_generated.dir/code/") !=
+                    std::string::npos &&
+                normalized.find(
+                    ": CXX_COMPILER__katana_generated_") !=
+                    std::string::npos;
+            if (pending_edge) ++compile_edges;
+            continue;
+        }
+        if (!pending_edge) continue;
+        if (line.starts_with("  CONFIG = ")) {
+            pending_configuration =
+                line.substr(std::string_view("  CONFIG = ").size()) ==
+                configuration;
+            continue;
+        }
+        if (line.starts_with("  FLAGS = ")) {
+            const auto state = inspect_msvc_optimization_flags(
+                line.substr(std::string_view("  FLAGS = ").size()));
+            if (state.disabled || !state.enabled) return false;
+            pending_flags = true;
+        }
+    }
+    return finish_edge() && compile_edges != 0u;
+}
+
 void require_optimized_msvc_configuration(
     const std::filesystem::path& build_root,
     const std::string_view configuration) {
@@ -6434,29 +6513,34 @@ void require_optimized_msvc_configuration(
                    [](const unsigned char value) {
                        return static_cast<char>(std::toupper(value));
                    });
-    const auto entry = "CMAKE_CXX_FLAGS_" + configuration_upper + ':';
-    std::string flags;
+    const auto configuration_entry =
+        "CMAKE_CXX_FLAGS_" + configuration_upper + ':';
+    constexpr std::string_view base_entry = "CMAKE_CXX_FLAGS:";
+    constexpr std::string_view generator_entry = "CMAKE_GENERATOR:";
+    std::string base_flags;
+    std::string configuration_flags;
+    std::string generator;
     std::string line;
     while (std::getline(cache, line)) {
-        if (!line.starts_with(entry)) continue;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         const auto assignment = line.find('=');
-        if (assignment != std::string::npos) flags = line.substr(assignment + 1u);
-        break;
+        if (assignment == std::string::npos) continue;
+        if (line.starts_with(base_entry))
+            base_flags = line.substr(assignment + 1u);
+        else if (line.starts_with(configuration_entry))
+            configuration_flags = line.substr(assignment + 1u);
+        else if (line.starts_with(generator_entry))
+            generator = line.substr(assignment + 1u);
     }
-    std::transform(flags.begin(), flags.end(), flags.begin(), [](const unsigned char value) {
-        return static_cast<char>(std::toupper(value));
-    });
-    const auto contains = [&flags](const std::string_view option) {
-        return flags.find(option) != std::string::npos;
-    };
-    const bool disabled = contains("/OD") || contains("-O0");
-    const bool enabled = contains("/O1") || contains("/O2") || contains("/OX") ||
-                         contains("-O1") || contains("-O2") || contains("-O3") ||
-                         contains("-OFAST");
-    if (flags.empty() || disabled || !enabled)
-        throw std::runtime_error(
-            "MSVC-" + std::string(configuration) +
-            "-Configure besitzt keine wirksame Optimierung.");
+    const auto cache_flags = inspect_msvc_optimization_flags(
+        base_flags + ' ' + configuration_flags);
+    if (!cache_flags.disabled && cache_flags.enabled) return;
+    if (!cache_flags.disabled && generator == "Ninja" &&
+        optimized_ninja_generated_target(build_root, configuration))
+        return;
+    throw std::runtime_error(
+        "MSVC-" + std::string(configuration) +
+        "-Configure besitzt keine wirksame Optimierung.");
 }
 #endif
 

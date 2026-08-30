@@ -224,6 +224,10 @@ class NativePortRuntimeImageBindings final {
     active_entry_for_address(std::uint32_t address) const;
 
   private:
+    friend bool reconcile_native_port_runtime_executable_write(
+        NativePortContext& context,
+        NativePortImmutableWriteGuard& immutable_guard) noexcept;
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -289,6 +293,10 @@ class NativePortLoadedAotBinder final {
         std::size_t byte_size);
 
   private:
+    friend bool reconcile_native_port_runtime_executable_write(
+        NativePortContext& context,
+        NativePortImmutableWriteGuard& immutable_guard) noexcept;
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -317,6 +325,13 @@ deactivate_native_port_executable_overlaps(
     NativePortContext& context,
     std::uint32_t runtime_start,
     std::size_t byte_size);
+
+// Cold post-store transition for ordinary guest writes into one exact active
+// dynamic executable owner. Fixed immutable ranges, ambiguous ownership and
+// live continuations remain hard failures at the generated integrity gate.
+[[nodiscard]] bool reconcile_native_port_runtime_executable_write(
+    NativePortContext& context,
+    NativePortImmutableWriteGuard& immutable_guard) noexcept;
 
 // Bootstrap validation deliberately observes the complete aliased 16-MiB
 // backing rather than only Memory API calls: a private adapter may use a raw

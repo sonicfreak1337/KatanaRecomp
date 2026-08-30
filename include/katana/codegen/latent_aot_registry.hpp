@@ -193,6 +193,11 @@ struct LatentAotDiscoveryOptions {
     // must not mutate them until their complete candidate generation has
     // passed the outer session publication gate.
     bool persistent_cache_writes_enabled = true;
+    // Completeness-bearing per-module static artifacts are a separate cache
+    // family from the deliberately disabled positive IR cache.  The switch is
+    // exposed for codec/fallback tests and diagnostics; production keeps it
+    // enabled and still revalidates every hit through the cached finalizer.
+    bool module_static_cache_enabled = true;
     katana::ProgressReporter progress;
     std::size_t maximum_directory_entries = 4096u;
     std::size_t maximum_directory_bytes = 4u * 1024u * 1024u;
@@ -605,6 +610,30 @@ struct LatentAotDiscovery {
     // source-shape-derived negative rejection or an exact in-session terminal
     // candidate-value-inventory rejection may bypass it.
     std::size_t analysis_full_pipeline_runs = 0u;
+    // Completeness-bearing module-static cache telemetry.  These counters are
+    // deliberately separate from the older negative/IR codec above: a hit is
+    // reported only after the persisted state passed the exact static key,
+    // source, inventory and cached-finalization gates.
+    std::size_t module_static_cache_hits = 0u;
+    std::size_t module_static_cache_misses = 0u;
+    std::size_t module_static_cache_cold_fallbacks = 0u;
+    std::size_t module_static_cache_corrupt_entries = 0u;
+    std::size_t module_static_cache_stores = 0u;
+};
+
+inline constexpr std::size_t
+    maximum_latent_aot_module_static_cache_artifact_bytes =
+        64u * 1024u * 1024u;
+
+// One authority-gated cache mutation.  Payloads are already bounded and
+// canonical, but remain untrusted until CodegenCache rechecks the exact
+// observed bytes during publication.  Agent analysis keeps these records in
+// memory and publishes them only after the outer World/Ledger authority gate.
+struct LatentAotModuleStaticCachePublication final {
+    std::filesystem::path cache_root;
+    std::string cache_key;
+    std::string observed_payload;
+    std::string validated_payload;
 };
 
 // In-process state for one analyze-port discovery run.  The session owns the
@@ -645,7 +674,24 @@ class LatentAotDiscoverySession final {
         std::span<const LatentAotEntryHint> entry_hints,
         std::span<const std::string> prioritized_file_references,
         LatentAotDiscoverySession& session);
+    friend std::vector<LatentAotModuleStaticCachePublication>
+    stage_latent_aot_module_static_cache_publications(
+        const LatentAotDiscoverySession& session,
+        const LatentAotDiscoveryOptions& options);
 };
+
+// Serializes only complete positive session states.  It never writes the
+// shared cache; the caller owns the outer authority publication decision.
+[[nodiscard]] std::vector<LatentAotModuleStaticCachePublication>
+stage_latent_aot_module_static_cache_publications(
+    const LatentAotDiscoverySession& session,
+    const LatentAotDiscoveryOptions& options);
+
+// Publishes every still-pending record through bounded exact-content
+// compare/replace semantics. Successful records are erased from `pending`;
+// failures remain retryable and return false.
+[[nodiscard]] bool publish_latent_aot_module_static_cache_publications(
+    std::vector<LatentAotModuleStaticCachePublication>& pending) noexcept;
 
 // Every address that the native backend relocates must stay inside the exact
 // byte-identity extent. Otherwise a synthetic export-time base could leak into

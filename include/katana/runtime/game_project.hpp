@@ -16,7 +16,7 @@ namespace katana::runtime {
 
 class PlatformServices;
 
-inline constexpr std::uint32_t game_project_contract_version = 9u;
+inline constexpr std::uint32_t game_project_contract_version = 10u;
 
 enum class RequiredProductMilestone : std::uint8_t {
     BootExecutableEntry,
@@ -183,6 +183,10 @@ struct GameProjectDefinition {
     // Declarative and identity-bound only. The provider that owns any private
     // descriptor or slice bytes is attached separately at runtime.
     std::optional<GameEntryHandoffBinding> game_entry_handoff;
+    // Explicit native-product compile roots. Each address must name an exact
+    // FunctionBoundary with an exact, same-image CodeIdentity. Ordinary
+    // function metadata remains descriptive and is never promoted implicitly.
+    std::span<const std::uint32_t> static_entries;
 };
 
 struct GameProjectRuntimeProviders {

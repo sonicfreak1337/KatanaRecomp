@@ -1263,6 +1263,7 @@ katana::runtime::GameProjectDefinition game_project_runtime_definition(
     runtime_definition.symbols = {};
     runtime_definition.code_identities = {};
     runtime_definition.runtime_images = {};
+    runtime_definition.static_entries = {};
     return runtime_definition;
 }
 
@@ -2573,6 +2574,25 @@ katana::analysis::AnalysisOverrides game_project_analysis_overrides(
                     {symbol.address, 0u});
         }
     }
+    // Only explicitly declared, exact-boundary and exact-CodeIdentity-backed
+    // static entries are native-product roots. Definition validation has
+    // already rejected missing, partial, cross-image or ambiguous proofs.
+    for (const auto entry : definition.static_entries) {
+        const auto boundary = std::lower_bound(
+            definition.function_boundaries.begin(),
+            definition.function_boundaries.end(),
+            entry,
+            [](const auto& candidate, const auto address) {
+                return candidate.start < address;
+            });
+        if (boundary == definition.function_boundaries.end() ||
+            boundary->start != entry ||
+            !game_project_metadata_is_active(
+                native_port, boundary->image_id))
+            continue;
+        overrides.functions.push_back(
+            {boundary->start, 0u, boundary->size});
+    }
     // Callback tables are external invocation surfaces, not descriptive
     // symbols. Their identity-bound targets remain native product roots even
     // when ordinary GameProject function metadata is non-root.
@@ -3343,7 +3363,7 @@ void validate_game_project_image_contract(
 std::string game_project_metadata(
     const katana::runtime::GameProjectDefinition& definition) {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-game-project-v5\",\"contract_version\":"
+    output << "{\"schema\":\"katana-game-project-v6\",\"contract_version\":"
            << definition.contract_version << ",\"project_id\":"
            << katana::io::quote_json(definition.project_id)
            << ",\"project_version\":"
@@ -3437,6 +3457,12 @@ std::string game_project_metadata(
                << static_cast<unsigned>(table.transfer)
                << ",\"image_id\":"
                << katana::io::quote_json(table.image_id) << '}';
+    }
+    output << "],\"static_entries\":[";
+    for (std::size_t index = 0u;
+         index < definition.static_entries.size(); ++index) {
+        if (index != 0u) output << ',';
+        output << definition.static_entries[index];
     }
     output << "],\"runtime_code_templates\":"
            << definition.runtime_code_templates.size()
@@ -13456,7 +13482,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                 bindings.end())
                 bindings.push_back(binding);
         };
-    if (!diagnostic_interpreter) {
+    {
+        // Diagnostic ports keep exact, inert fastpath proof descriptors so
+        // their product candidates remain inspectable and regression-tested.
+        // Native execution stays disabled by the generated
+        // !diagnostic_partial_port runtime gates.
         for (std::size_t index = 0u;
              index < composite_callback_emission.size();
              ++index)
@@ -15178,11 +15208,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
                   "            cpu.pc, katana::runtime::canonical_physical_address(cpu.pc)});\n"
                   "}\n";
     const auto emitted_composite_callback_batch_count =
-        diagnostic_interpreter ? std::size_t{0u} : composite_callback_batches.size();
+        composite_callback_batches.size();
     output << "constexpr std::array<CompositeCallbackBatchDescriptor, "
            << emitted_composite_callback_batch_count
            << "u> composite_callback_batch_descriptors{{\n";
-    if (!diagnostic_interpreter) {
+    {
         for (const auto* proof : composite_callback_emission) {
             const auto& descriptor = proof->descriptor;
             const auto kind =
@@ -15247,12 +15277,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         }
     }
     output << "}};\n";
-    const auto emitted_memory_fill_loop_count =
-        diagnostic_interpreter ? std::size_t{0u} : memory_fill_loops.size();
+    const auto emitted_memory_fill_loop_count = memory_fill_loops.size();
     output << "constexpr std::array<MemoryFillLoopBatchDescriptor, "
            << emitted_memory_fill_loop_count
            << "u> memory_fill_loop_batch_descriptors{{\n";
-    if (!diagnostic_interpreter) {
+    {
         for (const auto& proof : memory_fill_loops) {
             const auto& descriptor = proof.descriptor;
             const auto kind = descriptor.kind ==
@@ -15291,12 +15320,11 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         }
     }
     output << "}};\n";
-    const auto emitted_mmio_wait_loop_count =
-        diagnostic_interpreter ? std::size_t{0u} : mmio_wait_loops.size();
+    const auto emitted_mmio_wait_loop_count = mmio_wait_loops.size();
     output << "constexpr std::array<MmioWaitLoopBatchDescriptor, "
            << emitted_mmio_wait_loop_count
            << "u> mmio_wait_loop_batch_descriptors{{\n";
-    if (!diagnostic_interpreter) {
+    {
         for (const auto& proof : mmio_wait_loops) {
             const auto& descriptor = proof.descriptor;
             output << "    {0x" << symbol(descriptor.loop_header) << "u, 0x"
@@ -15322,11 +15350,10 @@ std::vector<ProjectArtifact> runtime_dispatch_artifacts(
         }
     }
     output << "}};\n";
-    const auto emitted_counted_loop_count =
-        diagnostic_interpreter ? std::size_t{0u} : counted_loops.size();
+    const auto emitted_counted_loop_count = counted_loops.size();
     output << "constexpr std::array<CountedLoopBatchDescriptor, " << emitted_counted_loop_count
            << "u> counted_loop_batch_descriptors{{\n";
-    if (!diagnostic_interpreter) {
+    {
         for (const auto& proof : counted_loops) {
             const auto& descriptor = proof.descriptor;
             output << "    {0x" << symbol(descriptor.guard_address) << "u, 0x"
@@ -17397,6 +17424,28 @@ std::string native_product_main(
            "            throw;\n"
            "        }\n"
            "        capture_product_state();\n"
+           "        const auto frame_pacing_snapshot =\n"
+           "            host.frame_pacing_snapshot();\n"
+           "        std::cout << \"KATANA_NATIVE_FRAME_PACING_SNAPSHOT {\\\"schema\\\":1\"\n"
+           "                  << \",\\\"simulation_frames\\\":\"\n"
+           "                  << frame_pacing_snapshot.simulation_frames\n"
+           "                  << \",\\\"presentation_frames\\\":\"\n"
+           "                  << frame_pacing_snapshot.presentation_frames\n"
+           "                  << \",\\\"repeated_presentations\\\":\"\n"
+           "                  << frame_pacing_snapshot.repeated_presentations\n"
+           "                  << \",\\\"late_simulation_frames\\\":\"\n"
+           "                  << frame_pacing_snapshot.late_simulation_frames\n"
+           "                  << \",\\\"missed_presentation_deadlines\\\":\"\n"
+           "                  << frame_pacing_snapshot\n"
+           "                         .missed_presentation_deadlines\n"
+           "                  << \",\\\"simulation_rate_hz\\\":\"\n"
+           "                  << frame_pacing_snapshot.simulation_rate_hz\n"
+           "                  << \",\\\"presentation_rate_hz\\\":\"\n"
+           "                  << frame_pacing_snapshot.presentation_rate_hz\n"
+           "                  << \",\\\"enabled\\\":\"\n"
+           "                  << (frame_pacing_snapshot.enabled\n"
+           "                          ? \"true\" : \"false\")\n"
+           "                  << \"}\\n\";\n"
            "        const bool normal_stop =\n"
            "            context.stop_reason ==\n"
            "                katana::runtime::NativePortStopReason::None ||\n"
@@ -17836,6 +17885,36 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    << " weitere)";
         throw std::runtime_error(reason.str());
     }
+    struct StaticReturnNopCallback {
+        std::uint32_t source_address;
+        std::uint64_t return_guest_cycles;
+        std::uint64_t delay_guest_cycles;
+    };
+    std::vector<StaticReturnNopCallback> static_return_nop_callbacks;
+    static_return_nop_callbacks.reserve(emitted.size());
+    for (const auto& [address, emitted_block] : emitted) {
+        if (!is_exact_return_nop_callback(*emitted_block.block)) continue;
+        const auto& terminal = emitted_block.block->instructions[0];
+        const auto& delay = emitted_block.block->instructions[1];
+        const auto terminal_timing =
+            katana::sh4::instruction_timing(terminal.original_opcode);
+        const auto delay_timing =
+            katana::sh4::instruction_timing(delay.original_opcode);
+        if (terminal_timing.guest_cycles == 0u ||
+            delay_timing.guest_cycles == 0u ||
+            terminal_timing.requires_cycle_flush ||
+            delay_timing.requires_cycle_flush)
+            throw std::runtime_error(
+                "Exakter nativer RTS/NOP-Callback besitzt keinen rein "
+                "lokalen Timingvertrag.");
+        static_return_nop_callbacks.push_back(
+            {address, terminal_timing.guest_cycles, delay_timing.guest_cycles});
+    }
+    std::sort(static_return_nop_callbacks.begin(),
+              static_return_nop_callbacks.end(),
+              [](const auto& left, const auto& right) {
+                  return left.source_address < right.source_address;
+              });
     // Make the whole-function replacement guarantee observable at the final
     // product-dispatch boundary: the hook entry remains dispatchable, while
     // no address strictly inside its covered interval may survive. This is
@@ -18589,7 +18668,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         << "#include \"katana/runtime/native_port_content.hpp\"\n"
         << "#include <algorithm>\n#include <array>\n#include <atomic>\n"
            "#include <cerrno>\n#include <charconv>\n#include <chrono>\n"
-           "#include <cstdint>\n"
+           "#include <cstdint>\n#include <cstdlib>\n"
            "#include <iostream>\n#include <optional>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <limits>\n#include <string>\n#include <string_view>\n"
            "#include <system_error>\n#include <thread>\n#include <tuple>\n"
@@ -18832,9 +18911,82 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "active_exit_site_class =\n"
               "    katana::runtime::DynamicDispatchSiteClass::NotDynamic;\n"
            << "thread_local bool tail_dispatch_completed = false;\n"
-           << "bool try_static_return_nop_callback(\n"
-              "    katana::runtime::CpuState&, std::uint32_t) noexcept {\n"
-              "    return false;\n"
+           << "struct StaticReturnNopCallbackProof {\n"
+              "    std::uint32_t source_address;\n"
+              "    std::uint64_t return_guest_cycles;\n"
+              "    std::uint64_t delay_guest_cycles;\n"
+              "};\n"
+           << "inline constexpr std::array<StaticReturnNopCallbackProof, "
+           << static_return_nop_callbacks.size()
+           << "u> static_return_nop_callbacks{{\n";
+    for (const auto& proof : static_return_nop_callbacks) {
+        output << "    {0x" << symbol(proof.source_address) << "u, "
+               << proof.return_guest_cycles << "u, "
+               << proof.delay_guest_cycles << "u},\n";
+    }
+    output << "}};\n"
+              "[[nodiscard]] bool static_return_nop_callback_fastpath_enabled() noexcept {\n"
+              "    static const bool enabled = [] {\n"
+              "        const auto* disabled = std::getenv(\n"
+              "            \"KATANA_PORT_DISABLE_STATIC_RETURN_NOP_CALLBACK\");\n"
+              "        return disabled == nullptr || std::string_view(disabled) != \"1\";\n"
+              "    }();\n"
+              "    return enabled;\n"
+              "}\n"
+              "[[nodiscard]] const StaticReturnNopCallbackProof*\n"
+              "find_static_return_nop_callback(const std::uint32_t source) noexcept {\n"
+              "    const auto find_exact = [](const std::uint32_t address) noexcept {\n"
+              "        const auto found = std::lower_bound(\n"
+              "            static_return_nop_callbacks.begin(),\n"
+              "            static_return_nop_callbacks.end(), address,\n"
+              "            [](const auto& proof, const std::uint32_t value) {\n"
+              "                return proof.source_address < value;\n"
+              "            });\n"
+              "        return found != static_return_nop_callbacks.end() &&\n"
+              "                found->source_address == address\n"
+              "            ? &*found : nullptr;\n"
+              "    };\n"
+              "    if (const auto* exact = find_exact(source)) return exact;\n"
+              "    const auto segment = source >> 29u;\n"
+              "    if (segment == 4u || segment == 5u)\n"
+              "        return find_exact(source ^ 0x20000000u);\n"
+              "    return nullptr;\n"
+              "}\n"
+              "bool try_static_return_nop_callback(\n"
+              "        katana::runtime::CpuState& cpu,\n"
+              "        const std::uint32_t target) noexcept {\n"
+              "    if (!static_return_nop_callback_fastpath_enabled() ||\n"
+              "        active_services == nullptr)\n"
+              "        return false;\n"
+              "    auto canonical_target = target;\n"
+              "    if ((canonical_target >> 29u) < 6u)\n"
+              "        canonical_target =\n"
+              "            katana::runtime::canonical_physical_address(canonical_target) |\n"
+              "            0x80000000u;\n"
+              "    const auto source =\n"
+              "        katana::runtime::unrelocate_code_address(canonical_target);\n"
+              "    thread_local std::uint32_t cached_source = 0u;\n"
+              "    thread_local const StaticReturnNopCallbackProof* cached_proof = nullptr;\n"
+              "    if (cached_proof == nullptr || cached_source != source) {\n"
+              "        cached_source = source;\n"
+              "        cached_proof = find_static_return_nop_callback(source);\n"
+              "    }\n"
+              "    if (cached_proof == nullptr ||\n"
+              "        !active_services->can_chain_executable_block(target))\n"
+              "        return false;\n"
+              "    const auto instruction_pc = katana::runtime::relocate_code_address(\n"
+              "        cached_proof->source_address);\n"
+              "    katana::runtime::ExplicitGuestInstructionAttempt return_attempt(\n"
+              "        cpu, instruction_pc, cached_proof->return_guest_cycles);\n"
+              "    const auto return_target = cpu.pr;\n"
+              "    {\n"
+              "        katana::runtime::ExplicitGuestInstructionAttempt delay_attempt(\n"
+              "            cpu, instruction_pc + 2u, cached_proof->delay_guest_cycles);\n"
+              "        delay_attempt.complete();\n"
+              "    }\n"
+              "    cpu.pc = return_target;\n"
+              "    return_attempt.complete();\n"
+              "    return true;\n"
               "}\n";
     output << "const std::vector<"
               "katana::runtime::NativePortLoadedAotModuleView>&\n"
@@ -20008,7 +20160,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "}\n"
               "void require_native_aot_integrity(\n"
               "    katana::runtime::NativePortContext& context,\n"
-              "    const katana::runtime::NativePortAotServices& services) {\n"
+              "    katana::runtime::NativePortAotServices& services) {\n"
               "    if (!services.aot_contract_valid()) {\n"
               "        context.stop_reason =\n"
               "            katana::runtime::NativePortStopReason::\n"
@@ -20018,7 +20170,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "                AotContractViolation,\n"
               "            \"native-aot-write-observer-replaced\");\n"
               "    }\n"
-              "    if (services.immutable_write_detected())\n"
+              "    if (services.immutable_write_detected() &&\n"
+              "        !services.reconcile_runtime_executable_write())\n"
               "        fail_immutable_write(context, services);\n"
               "}\n"
               "bool parse_native_closure_probe_sites(\n"
@@ -22561,6 +22714,10 @@ std::string port_cmake(const std::string& target_name) {
            "target_compile_features(" +
            target_name +
            " PRIVATE cxx_std_20)\n"
+           "if(MSVC)\n"
+           "  set_property(SOURCE \"${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp\" APPEND\n"
+           "    PROPERTY COMPILE_OPTIONS /EHsc)\n"
+           "endif()\n"
            "target_compile_definitions(" +
            target_name +
            " PRIVATE KATANA_PORT_BUILD_PROFILE_NAME=\\\"${KATANA_PORT_BUILD_PROFILE}\\\")\n"
@@ -24611,6 +24768,7 @@ void validate_analysis_generation_game_project_delta(
     current_without_delta.code_identities = baseline.code_identities;
     current_without_delta.function_boundaries =
         baseline.function_boundaries;
+    current_without_delta.static_entries = baseline.static_entries;
     if (katana::runtime::game_project_definition_identity(
             current_without_delta) !=
         katana::runtime::game_project_definition_identity(baseline))
@@ -24678,6 +24836,43 @@ void validate_analysis_generation_game_project_delta(
             throw std::invalid_argument(
                 "Additive Analyse-FunctionBoundary braucht einen exakten "
                 "Base-Image-CodeIdentity-Beweis.");
+    }
+
+    for (const auto entry : baseline.static_entries) {
+        if (!std::binary_search(
+                current.static_entries.begin(),
+                current.static_entries.end(), entry))
+            throw std::invalid_argument(
+                "Aktuelles GameProject entfernt einen gebundenen "
+                "StaticEntry-Root.");
+    }
+    for (const auto entry : current.static_entries) {
+        if (std::binary_search(
+                baseline.static_entries.begin(),
+                baseline.static_entries.end(), entry))
+            continue;
+        const auto boundary = std::lower_bound(
+            current.function_boundaries.begin(),
+            current.function_boundaries.end(),
+            entry,
+            [](const auto& candidate, const auto address) {
+                return candidate.start < address;
+            });
+        const auto identity = std::lower_bound(
+            current.code_identities.begin(),
+            current.code_identities.end(),
+            entry,
+            [](const auto& candidate, const auto address) {
+                return candidate.address < address;
+            });
+        if (boundary == current.function_boundaries.end() ||
+            boundary->start != entry || !boundary->image_id.empty() ||
+            identity == current.code_identities.end() ||
+            identity->address != entry || !identity->image_id.empty() ||
+            boundary->size != identity->size)
+            throw std::invalid_argument(
+                "Additiver Analyse-StaticEntry braucht einen exakten "
+                "Base-Image-Boundary-/CodeIdentity-Beweis.");
     }
 }
 
@@ -29880,6 +30075,8 @@ struct NativeDiscAnalysisState {
     // later one-shot publication an atomic compare-and-replace operation.
     std::optional<DeferredLatentPrimaryRootSeedPublication>
         deferred_latent_primary_root_seed_publication;
+    std::vector<LatentAotModuleStaticCachePublication>
+        deferred_latent_aot_module_static_cache_publications;
     // True only when the same state would pass the product backend gates.
     // analyze-port may retain a non-admitted state solely to publish a
     // bounded, authoritative agent frontier; product export never consumes
@@ -32611,13 +32808,14 @@ prepare_dreamcast_port_project_impl(
     const auto wait_loop_descriptors = runtime_wait_loop_descriptors(hardware_audit);
     const auto mmio_wait_loops =
         mmio_wait_loop_batch_proofs(emitted_program, hardware_audit);
-    std::vector<CompositeCallbackBatchProof> composite_callback_batches;
-    if (!options.diagnostic_partial && backend_admitted) {
-        composite_callback_batches = composite_callback_batch_proofs(
-            emitted_program,
-            prepared.analysis.indirect_control_flow,
-            prepared.analysis.recursive.functions);
-    }
+    // Keep exact composite proofs in diagnostic artifacts as inert audit
+    // evidence. Generated diagnostic runtimes still hard-disable every batch
+    // fastpath through diagnostic_partial_port; product execution additionally
+    // remains subject to normal backend admission.
+    auto composite_callback_batches = composite_callback_batch_proofs(
+        emitted_program,
+        prepared.analysis.indirect_control_flow,
+        prepared.analysis.recursive.functions);
     // Composite admission belongs to the product dispatcher and matches the
     // original indirect Call source. Treating its continuation as an
     // architectural boundary prevents local singleton or nested dispatch from
@@ -40598,6 +40796,21 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         latent_primary_root_seed_cache_published;
     result.latent_primary_root_seed_cache_publish_missed =
         latent_primary_root_seed_cache_publish_missed;
+    std::vector<LatentAotModuleStaticCachePublication>
+        deferred_latent_aot_module_static_cache_publications;
+    if (options.analysis_artifact_archive_requested &&
+        !options.analysis_cache_root.empty()) {
+        LatentAotDiscoveryOptions static_cache_options;
+        static_cache_options.analysis_cache_root =
+            options.analysis_cache_root / "latent";
+        static_cache_options.analysis_implementation_identity =
+            options.analysis_implementation_identity;
+        static_cache_options.analysis_cache_implementation_identity =
+            options.analysis_cache_implementation_identity;
+        deferred_latent_aot_module_static_cache_publications =
+            stage_latent_aot_module_static_cache_publications(
+                latent_aot_discovery_session, static_cache_options);
+    }
     result.admitted_state = prepare_dreamcast_port_project_impl(
         {result.image,
          result.analysis,
@@ -40627,6 +40840,9 @@ NativeDiscAnalysisResult analyze_native_disc_port(
         true);
     result.admitted_state->deferred_latent_primary_root_seed_publication =
         std::move(deferred_latent_primary_root_seed_publication);
+    result.admitted_state
+        ->deferred_latent_aot_module_static_cache_publications =
+        std::move(deferred_latent_aot_module_static_cache_publications);
     populate_native_disc_analysis_summary(result);
     analysis_artifact_identity.image_analysis_key =
         make_boot_analysis_cache_key(
@@ -40652,8 +40868,10 @@ NativeDiscAnalysisResult analyze_native_disc_port(
 bool has_deferred_native_disc_analysis_hints(
     const NativeDiscAnalysisResult& analyzed) noexcept {
     return analyzed.admitted_state &&
-        analyzed.admitted_state
-            ->deferred_latent_primary_root_seed_publication.has_value();
+        (analyzed.admitted_state
+             ->deferred_latent_primary_root_seed_publication.has_value() ||
+         !analyzed.admitted_state
+              ->deferred_latent_aot_module_static_cache_publications.empty());
 }
 
 NativeDiscAnalysisHintPublicationResult
@@ -40665,6 +40883,15 @@ publish_committed_native_disc_analysis_hints(
     auto& deferred_publication =
         analyzed.admitted_state
             ->deferred_latent_primary_root_seed_publication;
+    auto& deferred_module_publications =
+        analyzed.admitted_state
+            ->deferred_latent_aot_module_static_cache_publications;
+    if (!deferred_publication.has_value()) {
+        return publish_latent_aot_module_static_cache_publications(
+                   deferred_module_publications)
+            ? NativeDiscAnalysisHintPublicationResult::Published
+            : NativeDiscAnalysisHintPublicationResult::Missed;
+    }
     const auto& publication = *deferred_publication;
     const char* failure_stage = "cache-construct";
     const auto missed = [&](const std::string_view reason) noexcept {
@@ -40729,6 +40956,9 @@ publish_committed_native_disc_analysis_hints(
         deferred_publication.reset();
         analyzed.latent_primary_root_seed_cache_published = true;
         analyzed.latent_primary_root_seed_cache_publish_missed = false;
+        if (!publish_latent_aot_module_static_cache_publications(
+                deferred_module_publications))
+            return NativeDiscAnalysisHintPublicationResult::Missed;
         return NativeDiscAnalysisHintPublicationResult::Published;
     } catch (const std::bad_alloc&) {
         return missed("allocation-failure");

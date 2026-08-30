@@ -186,7 +186,7 @@ std::vector<std::uint8_t> boot_track(
 
 std::vector<std::uint8_t> stored_unknown_candidate_boot_track() {
     auto bytes = boot_track();
-    constexpr std::uint32_t boot_size = 0x34u;
+    constexpr std::uint32_t boot_size = 0x38u;
     auto directory = payload_offset(20u);
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
@@ -222,8 +222,20 @@ std::vector<std::uint8_t> stored_unknown_candidate_boot_track() {
     program[0x25u] = 0x00u; // rts
     program[0x26u] = 0x09u;
     program[0x27u] = 0x00u; // nop (delay)
+    program[0x28u] = 0x0Bu;
+    program[0x29u] = 0x00u; // identity-bound explicit static entry: rts
+    program[0x2Au] = 0x09u;
+    program[0x2Bu] = 0x00u; // delay-slot nop
+    program[0x2Cu] = 0x0Bu;
+    program[0x2Du] = 0x00u; // descriptive-only function boundary: rts
+    program[0x2Eu] = 0x09u;
+    program[0x2Fu] = 0x00u; // delay-slot nop
     program[0x30u] = 0xFFu;
     program[0x31u] = 0xFFu; // speculative unknown opcode
+    program[0x34u] = 0x0Bu;
+    program[0x35u] = 0x00u; // identity-bound negative callback: rts
+    program[0x36u] = 0x08u;
+    program[0x37u] = 0x00u; // non-nop delay slot: clrt
     std::copy(program.begin(),
               program.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(21u)));
@@ -1205,13 +1217,17 @@ int run_test(const int argc, char* argv[]) {
     require(has_asic_event(katana::runtime::SystemAsicEvent::AicaInterrupt),
             "Produktiver AICA-Interrupt erreicht das System-ASIC nicht.");
     const auto output = fixture.root / "port";
-    const PortExportOptions options{"synthetic_game",
-                                    "0.37.0-dev",
-                                    {1u, 4096u},
-                                    {},
-                                    false,
-                                    "japan-ntsc",
-                                    observe_progress};
+    PortExportOptions options{"synthetic_game",
+                              "0.37.0-dev",
+                              {1u, 4096u},
+                              {},
+                              true,
+                              "japan-ntsc",
+                              observe_progress};
+    options.analysis_implementation_identity = std::string(64u, '1');
+    options.analysis_cache_implementation_identity = std::string(64u, '2');
+    options.ir_product_implementation_identity = std::string(64u, '3');
+    options.codegen_implementation_identity = std::string(64u, '4');
 
     const auto external_boundary_disc =
         katana::platform::load_dreamcast_gdi_boot(gdi);
@@ -1348,7 +1364,7 @@ int run_test(const int argc, char* argv[]) {
                     .find("\"start\":2348875792,\"size\":2") !=
                 std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
-                    .find("\"schema\":\"katana-game-project-v4\"") !=
+                    .find("\"schema\":\"katana-game-project-v6\"") !=
                 std::string::npos &&
             external_boundary_sources.at("metadata/game-project.json")
                     .find("\"required_product_milestone\":"
@@ -1433,11 +1449,177 @@ int run_test(const int argc, char* argv[]) {
     require(stored_unknown_units.find("katana-guest 0x8C010030") == std::string::npos,
             "Guarded-Partial-Unknown blieb als dispatchbares AOT-Inventar erhalten.");
     require(stored_unknown_sources.at("metadata/port-project.json")
-                    .find("\"diagnostic_partial\":false") != std::string::npos,
+                    .find("\"diagnostic_partial\":true") != std::string::npos,
             "Guarded-Partial-Unknown markierte den erfolgreichen Port als partiell.");
     require(stored_unknown_sources.at("code/runtime-dispatch.cpp")
-                    .find("dynamic_interpreter.hpp") == std::string::npos,
-            "Guarded-Partial-Unknown aktivierte einen Interpreterpfad.");
+                    .find("dynamic_interpreter.hpp") != std::string::npos,
+            "Expliziter Diagnoseexport verlor seinen typisierten "
+            "Interpreter-Diagnosepfad.");
+
+    constexpr auto explicit_static_entry =
+        katana::platform::dreamcast_disc_boot_address + 0x28u;
+    constexpr auto descriptive_only_entry =
+        katana::platform::dreamcast_disc_boot_address + 0x2Cu;
+    constexpr auto wrong_delay_static_entry =
+        katana::platform::dreamcast_disc_boot_address + 0x34u;
+    constexpr std::array explicit_static_boundaries{
+        katana::runtime::GameProjectFunctionBoundary{
+            explicit_static_entry, 4u, "explicit_static_entry"},
+        katana::runtime::GameProjectFunctionBoundary{
+            descriptive_only_entry, 4u, "descriptive_only_entry"},
+        katana::runtime::GameProjectFunctionBoundary{
+            wrong_delay_static_entry, 4u, "wrong_delay_static_entry"}};
+    const auto explicit_static_code_identity =
+        "sha256:" + katana::io::sha256_bytes(
+            std::string_view("\x0b\x00\x09\x00", 4u));
+    const auto wrong_delay_static_code_identity =
+        "sha256:" + katana::io::sha256_bytes(
+            std::string_view("\x0b\x00\x08\x00", 4u));
+    const std::array explicit_static_identities{
+        katana::runtime::GameProjectCodeIdentity{
+            explicit_static_entry,
+            4u,
+            explicit_static_code_identity},
+        katana::runtime::GameProjectCodeIdentity{
+            descriptive_only_entry,
+            4u,
+            explicit_static_code_identity},
+        katana::runtime::GameProjectCodeIdentity{
+            wrong_delay_static_entry,
+            4u,
+            wrong_delay_static_code_identity}};
+    constexpr std::array<std::uint32_t, 2u> explicit_static_entries{
+        explicit_static_entry, wrong_delay_static_entry};
+    katana::runtime::GameProjectDefinition explicit_static_project;
+    explicit_static_project.project_id = "katana.test.explicit-static-entry";
+    explicit_static_project.project_version = "1";
+    const auto explicit_static_content_identity =
+        katana::runtime::packed_disc_content_identity(
+            *stored_unknown_disc.source);
+    const auto explicit_static_boot_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                stored_unknown_disc.boot_file.data()),
+            stored_unknown_disc.boot_file.size()));
+    explicit_static_project.identity = {
+        explicit_static_content_identity,
+        stored_unknown_disc.metadata.boot_file_name,
+        explicit_static_boot_identity};
+    require(katana::runtime::valid_game_project_sha256_identity(
+                explicit_static_project.identity.boot_byte_identity),
+            "StaticEntry-Fixture erzeugt eine ungueltige Bootbyteidentitaet: " +
+                std::string(explicit_static_project.identity.boot_byte_identity));
+    explicit_static_project.function_boundaries =
+        explicit_static_boundaries;
+    explicit_static_project.code_identities = explicit_static_identities;
+    explicit_static_project.static_entries = explicit_static_entries;
+    const auto explicit_static_bootstrap_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                stored_unknown_disc.system_bootstrap.data()),
+            stored_unknown_disc.system_bootstrap.size()));
+    const auto explicit_static_hook_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                stored_unknown_disc.boot_file.data()),
+            4u));
+    constexpr std::array<std::uint32_t, 1u>
+        explicit_static_post_aot_roots{
+            katana::platform::dreamcast_disc_boot_address};
+    const std::array explicit_static_native_images{
+        katana::runtime::NativePortImageBinding{
+            "explicit-static-system-bootstrap",
+            "IP.BIN",
+            explicit_static_bootstrap_identity,
+            0u,
+            katana::platform::dreamcast_system_bootstrap_address,
+            static_cast<std::uint32_t>(
+                stored_unknown_disc.system_bootstrap.size()),
+            false},
+        katana::runtime::NativePortImageBinding{
+            "explicit-static-boot-executable",
+            stored_unknown_disc.metadata.boot_file_name,
+            explicit_static_boot_identity,
+            0u,
+            katana::platform::dreamcast_disc_boot_address,
+            static_cast<std::uint32_t>(stored_unknown_disc.boot_file.size()),
+            false}};
+    const std::array explicit_static_native_hooks{
+        katana::runtime::NativePortHookBinding{
+            katana::platform::dreamcast_disc_boot_address,
+            4u,
+            katana::runtime::NativePortHookKind::Instruction,
+            katana::runtime::NativePortHookRequirement::Required,
+            katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal,
+            "explicit_static_acceptance_hook",
+            explicit_static_hook_identity}};
+    katana::runtime::NativePortDefinition explicit_static_native_port;
+    explicit_static_native_port.project_id =
+        "katana.test.explicit-static-native-port";
+    explicit_static_native_port.project_version = "1";
+    explicit_static_native_port.executable = {
+        explicit_static_content_identity,
+        stored_unknown_disc.metadata.boot_file_name,
+        explicit_static_boot_identity};
+    explicit_static_native_port.bootstrap.entry_point =
+        katana::platform::dreamcast_system_bootstrap_entry_address;
+    explicit_static_native_port.bootstrap.post_entry_point =
+        katana::platform::dreamcast_disc_boot_address;
+    explicit_static_native_port.bootstrap.post_aot_roots =
+        explicit_static_post_aot_roots;
+    explicit_static_native_port.bootstrap.symbol =
+        "explicit_static_native_bootstrap";
+    explicit_static_native_port.bootstrap.post_cpu_state_identity =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    explicit_static_native_port.acceptance = {
+        katana::runtime::required_product_milestone_name(
+            explicit_static_project.required_product_milestone),
+        katana::platform::dreamcast_disc_boot_address};
+    explicit_static_native_port.images = explicit_static_native_images;
+    explicit_static_native_port.hooks = explicit_static_native_hooks;
+    auto explicit_static_options = options;
+    explicit_static_options.diagnostic_partial = false;
+    explicit_static_options.analysis_implementation_identity =
+        std::string(64u, '1');
+    explicit_static_options.analysis_cache_implementation_identity =
+        std::string(64u, '2');
+    explicit_static_options.ir_product_implementation_identity =
+        std::string(64u, '3');
+    explicit_static_options.codegen_implementation_identity =
+        std::string(64u, '4');
+    explicit_static_options.game_project = &explicit_static_project;
+    explicit_static_options.native_port_definition =
+        &explicit_static_native_port;
+    const auto explicit_static_output =
+        fixture.root / "explicit-static-entry-port";
+    try {
+        static_cast<void>(export_dreamcast_port_project(
+            stored_unknown_gdi,
+            explicit_static_output,
+            explicit_static_options));
+    } catch (const std::exception& error) {
+        throw std::runtime_error(
+            std::string("explicit StaticEntry product export: ") +
+            error.what());
+    }
+    const auto explicit_static_sources =
+        snapshot(explicit_static_output / "generated");
+    std::string explicit_static_units;
+    for (const auto& [path, content] : explicit_static_sources)
+        if (path.starts_with("code/unit-"))
+            explicit_static_units += content;
+    require(
+        explicit_static_units.find("fn_8C010028_runtime_entry") !=
+                std::string::npos &&
+            explicit_static_units.find("fn_8C01002C_runtime_entry") ==
+                std::string::npos &&
+            explicit_static_units.find("fn_8C010034_runtime_entry") !=
+                std::string::npos &&
+            explicit_static_sources.at("metadata/game-project.json")
+                    .find("\"static_entries\":[2348875816,2348875828]") !=
+                std::string::npos,
+        "Expliziter identity-bound StaticEntry wird nicht materialisiert "
+        "oder descriptive FunctionBoundary wurde implizit zum Root.");
 
     auto proven_unknown_image = stored_unknown_image;
     proven_unknown_image.add_entry_point(stored_unknown_candidate);
@@ -1456,25 +1638,57 @@ int run_test(const int argc, char* argv[]) {
                 katana::analysis::analysis_diagnostic_blocks_codegen(
                     *proven_unknown_diagnostic),
             "Bewiesener BOOT.BIN-Unknown verlor seinen Codegen-Blocker.");
-    const auto proven_unknown_program = katana::ir::lower_program(proven_unknown_analysis);
-    const std::vector<katana::io::InputProvenance> proven_unknown_inputs;
+    constexpr std::array proven_unknown_boundaries{
+        katana::runtime::GameProjectFunctionBoundary{
+            stored_unknown_candidate, 2u, "proven_unknown_entry"}};
+    const auto proven_unknown_code_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                stored_unknown_disc.boot_file.data() + 0x30u),
+            2u));
+    const std::array proven_unknown_code_identities{
+        katana::runtime::GameProjectCodeIdentity{
+            stored_unknown_candidate,
+            2u,
+            proven_unknown_code_identity}};
+    constexpr std::array<std::uint32_t, 1u>
+        proven_unknown_static_entries{stored_unknown_candidate};
+    auto proven_unknown_project = explicit_static_project;
+    proven_unknown_project.project_id =
+        "katana.test.proven-unknown-product";
+    proven_unknown_project.function_boundaries =
+        proven_unknown_boundaries;
+    proven_unknown_project.code_identities =
+        proven_unknown_code_identities;
+    proven_unknown_project.static_entries =
+        proven_unknown_static_entries;
+    constexpr std::array<std::uint32_t, 2u>
+        proven_unknown_post_aot_roots{
+            katana::platform::dreamcast_disc_boot_address,
+            stored_unknown_candidate};
+    auto proven_unknown_native_port = explicit_static_native_port;
+    proven_unknown_native_port.project_id =
+        "katana.test.proven-unknown-native-port";
+    proven_unknown_native_port.bootstrap.post_aot_roots =
+        proven_unknown_post_aot_roots;
+    auto proven_unknown_options = explicit_static_options;
+    proven_unknown_options.game_project = &proven_unknown_project;
+    proven_unknown_options.native_port_definition =
+        &proven_unknown_native_port;
     bool proven_unknown_rejected = false;
     try {
         static_cast<void>(export_dreamcast_port_project(
-            {proven_unknown_image,
-             proven_unknown_analysis,
-             proven_unknown_program,
-             proven_unknown_inputs,
-             katana::platform::dreamcast_system_bootstrap_entry_address,
-             katana::platform::dreamcast_disc_boot_address,
-             stored_unknown_disc.boot_file.size(),
-             "proven-unknown-fixture"},
+            stored_unknown_gdi,
             fixture.root / "proven-unknown-port",
-            options));
+            proven_unknown_options));
     } catch (const std::runtime_error& error) {
+        const auto message = std::string_view(error.what());
         proven_unknown_rejected =
-            std::string_view(error.what()).find("unbekannte Instruktionen") !=
-            std::string_view::npos;
+            message.find("unbekannte Instruktionen") !=
+                std::string_view::npos ||
+            message.find(
+                "nicht durch Replacement-Hooks geschlossene Instruktionsstellen") !=
+                std::string_view::npos;
     }
     require(proven_unknown_rejected,
             "Bewiesener unbekannter Opcode wurde vom Produktport akzeptiert.");
@@ -1531,7 +1745,7 @@ int run_test(const int argc, char* argv[]) {
     const std::vector<std::string> expected_progress = {"disc-load",
                                                         "boot-image",
                                                         "control-flow-analysis",
-                                                        "ir-lowering",
+                                                        "ir-lowering-final",
                                                         "ir-optimization",
                                                         "input-provenance",
                                                         "program-validation",
@@ -1556,7 +1770,57 @@ int run_test(const int argc, char* argv[]) {
                             }),
             "Portexport verliert budgetierte Kontrollfluss-Fixpunktzaehler.");
 
+    const auto analysis_cache_bootstrap_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                external_boundary_disc.system_bootstrap.data()),
+            external_boundary_disc.system_bootstrap.size()));
+    const auto analysis_cache_hook_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                external_boundary_disc.boot_file.data()),
+            4u));
+    const std::array analysis_cache_native_images{
+        katana::runtime::NativePortImageBinding{
+            "analysis-cache-system-bootstrap",
+            "IP.BIN",
+            analysis_cache_bootstrap_identity,
+            0u,
+            katana::platform::dreamcast_system_bootstrap_address,
+            static_cast<std::uint32_t>(
+                external_boundary_disc.system_bootstrap.size()),
+            false},
+        katana::runtime::NativePortImageBinding{
+            "analysis-cache-boot-executable",
+            external_boundary_disc.metadata.boot_file_name,
+            external_boundary_boot_identity,
+            0u,
+            katana::platform::dreamcast_disc_boot_address,
+            static_cast<std::uint32_t>(
+                external_boundary_disc.boot_file.size()),
+            false}};
+    const std::array analysis_cache_native_hooks{
+        katana::runtime::NativePortHookBinding{
+            katana::platform::dreamcast_disc_boot_address,
+            4u,
+            katana::runtime::NativePortHookKind::Instruction,
+            katana::runtime::NativePortHookRequirement::Required,
+            katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal,
+            "analysis_cache_acceptance_hook",
+            analysis_cache_hook_identity}};
+    auto analysis_cache_native_port = explicit_static_native_port;
+    analysis_cache_native_port.project_id =
+        "katana.test.analysis-cache-native-port";
+    analysis_cache_native_port.executable = {
+        external_boundary_content_identity,
+        external_boundary_disc.metadata.boot_file_name,
+        external_boundary_boot_identity};
+    analysis_cache_native_port.images = analysis_cache_native_images;
+    analysis_cache_native_port.hooks = analysis_cache_native_hooks;
     auto analysis_cache_options = options;
+    analysis_cache_options.diagnostic_partial = false;
+    analysis_cache_options.native_port_definition =
+        &analysis_cache_native_port;
     analysis_cache_options.analysis_cache_root =
         fixture.root / "global-analysis-cache";
     analysis_cache_options.codegen_cache_root =
@@ -1800,7 +2064,62 @@ int run_test(const int argc, char* argv[]) {
             4u,
             0u},
     };
+    const auto latent_gdi = katana::runtime::GdiDiscSource::open(latent_gdi_path);
+    const auto latent_boot =
+        katana::platform::load_dreamcast_gdi_boot(latent_gdi_path);
+    const auto latent_content_identity =
+        katana::runtime::packed_disc_content_identity(*latent_gdi);
+    const auto latent_boot_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(latent_boot.boot_file.data()),
+            latent_boot.boot_file.size()));
+    const auto latent_bootstrap_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(latent_boot.system_bootstrap.data()),
+            latent_boot.system_bootstrap.size()));
+    const auto latent_hook_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(latent_boot.boot_file.data()), 4u));
+    const std::array latent_native_images{
+        katana::runtime::NativePortImageBinding{
+            "latent-system-bootstrap",
+            "IP.BIN",
+            latent_bootstrap_identity,
+            0u,
+            katana::platform::dreamcast_system_bootstrap_address,
+            static_cast<std::uint32_t>(latent_boot.system_bootstrap.size()),
+            false},
+        katana::runtime::NativePortImageBinding{
+            "latent-boot-executable",
+            latent_boot.metadata.boot_file_name,
+            latent_boot_identity,
+            0u,
+            katana::platform::dreamcast_disc_boot_address,
+            static_cast<std::uint32_t>(latent_boot.boot_file.size()),
+            false}};
+    const std::array latent_native_hooks{
+        katana::runtime::NativePortHookBinding{
+            katana::platform::dreamcast_disc_boot_address,
+            4u,
+            katana::runtime::NativePortHookKind::Instruction,
+            katana::runtime::NativePortHookRequirement::Required,
+            katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal,
+            "latent_acceptance_hook",
+            latent_hook_identity}};
+    auto latent_native_port = explicit_static_native_port;
+    latent_native_port.project_id = "katana.test.latent-native-port";
+    latent_native_port.executable = {
+        latent_content_identity,
+        latent_boot.metadata.boot_file_name,
+        latent_boot_identity};
+    latent_native_port.images = latent_native_images;
+    latent_native_port.hooks = latent_native_hooks;
     auto latent_options = options;
+    latent_options.diagnostic_partial = false;
+    latent_options.native_port_definition = &latent_native_port;
     latent_options.latent_aot_entry_hints = latent_entry_hints;
     latent_options.latent_aot_discovery_mode =
         katana::codegen::LatentAotDiscoveryMode::ExactOnly;
@@ -1819,22 +2138,19 @@ int run_test(const int argc, char* argv[]) {
         "Latent-AOT-Modulanalyse meldet keine deterministisch "
         "gesammelte Einzelmodulzeit.");
     const auto latent_generated = snapshot(latent_output / "generated");
-    const auto& latent_dispatch = latent_generated.at("code/runtime-dispatch.cpp");
+    const auto& latent_dispatch = latent_generated.at("code/native-port-dispatch.cpp");
+    std::string latent_units;
+    for (const auto& [path, content] : latent_generated)
+        if (path.starts_with("code/unit-") && path.ends_with(".cpp"))
+            latent_units += content;
     const auto& latent_dispatch_shard =
-        latent_generated.at("code/runtime-dispatch-shard-00000.cpp");
+        latent_generated.at("code/native-port-dispatch-shard-00000.cpp");
+    const auto& latent_loaded_aot_shard =
+        latent_generated.at("code/native-port-loaded-aot-shard-00000.cpp");
     const auto latent_metadata = latent_generated.at("metadata/port-project.json");
     const auto latent_main = read_text(latent_output / "src" / "main.cpp");
     const auto latent_recipe =
         katana::runtime::parse_disc_install_recipe(latent_result.disc_install_recipe);
-    const auto latent_gdi = katana::runtime::GdiDiscSource::open(latent_gdi_path);
-    const auto latent_boot =
-        katana::platform::load_dreamcast_gdi_boot(latent_gdi_path);
-    const auto latent_boot_identity =
-        std::string("sha256:") +
-        katana::io::sha256_bytes(std::string_view(
-            reinterpret_cast<const char*>(
-                latent_boot.boot_file.data()),
-            latent_boot.boot_file.size()));
     const auto latent_template_id =
         std::string("latent-aot-") +
         latent_block_identity.substr(7u) + "-4";
@@ -1883,33 +2199,7 @@ int run_test(const int argc, char* argv[]) {
         "teurem Partition-Codegen abgelehnt.");
     const auto representation_specific_identity =
         katana::runtime::gdi_content_identity(latent_gdi->descriptor());
-    const std::string latent_descriptor_marker{
-        "descriptors.push_back({\"latent-aot-source-"};
-    const auto first_latent_descriptor =
-        latent_dispatch.find(latent_descriptor_marker);
-    const auto second_latent_descriptor =
-        first_latent_descriptor == std::string::npos
-            ? std::string::npos
-            : latent_dispatch.find(
-                  latent_descriptor_marker,
-                  first_latent_descriptor + latent_descriptor_marker.size());
-    const auto third_latent_descriptor =
-        second_latent_descriptor == std::string::npos
-            ? std::string::npos
-            : latent_dispatch.find(
-                  latent_descriptor_marker,
-                  second_latent_descriptor + latent_descriptor_marker.size());
-    constexpr std::string_view latent_template_marker{
-        "NativeAotTemplateDestination::LoadedModule"};
-    const auto first_latent_template =
-        latent_dispatch.find(latent_template_marker);
-    const auto second_latent_template =
-        first_latent_template == std::string::npos
-            ? std::string::npos
-            : latent_dispatch.find(
-                  latent_template_marker,
-                  first_latent_template + latent_template_marker.size());
-    require(latent_result.functions == first.functions + 1u &&
+    require(latent_result.functions == first.functions &&
                 std::find(latent_result.checkpoints.begin(),
                           latent_result.checkpoints.end(),
                           "latent-aot-registry-written") != latent_result.checkpoints.end() &&
@@ -1919,39 +2209,48 @@ int run_test(const int argc, char* argv[]) {
                 latent_metadata.find("\"latent_aot_modules\":1") != std::string::npos &&
                 latent_metadata.find(
                     "\"latent_aot_source_bindings\":2") !=
+                    std::string::npos,
+            "Latent-AOT-Ergebnis vermischte Primary- und Loaded-AOT-Inventar "
+            "oder verlor Modul-/Source-Metadaten (" +
+                std::to_string(latent_result.functions) + "/" +
+                std::to_string(first.functions) + ").");
+    require(latent_loaded_aot_shard.find(
+                    "NativePortLoadedAotSourceBindingView, 2u") !=
                     std::string::npos &&
-                latent_dispatch.find("register_latent_aot_modules") != std::string::npos &&
-                latent_dispatch.find(
-                    "NativeAotTemplateDestination::LoadedModule") != std::string::npos &&
-                first_latent_descriptor != std::string::npos &&
-                second_latent_descriptor != std::string::npos &&
-                third_latent_descriptor == std::string::npos &&
-                first_latent_template != std::string::npos &&
-                second_latent_template == std::string::npos &&
-                latent_dispatch.find(
+                latent_loaded_aot_shard.find(
+                    "NativePortLoadedAotBlockIdentityView, 1u") !=
+                    std::string::npos &&
+                latent_loaded_aot_shard.find(
                     std::to_string(
                         static_cast<std::uint64_t>(data_lba + 22u) *
                         payload_size) +
                     "ull, 4u") != std::string::npos &&
-                latent_dispatch.find(
+                latent_loaded_aot_shard.find(
                     std::to_string(
                         static_cast<std::uint64_t>(data_lba + 23u) *
                         payload_size) +
                     "ull, 4u") != std::string::npos &&
-                latent_dispatch.find(
-                    "{0u,4u,\"" +
+                latent_loaded_aot_shard.find(
+                    "{0u, 4u, \"" +
                     latent_block_identity +
                     "\"}") != std::string::npos &&
-                latent_dispatch.find(
-                    "NativeAotTemplateValidationMode::RuntimeBlock") !=
+                latent_loaded_aot_shard.find(
+                    "modules.push_back({0x80000000u, 4u, \"" +
+                    latent_block_identity + "\"") !=
                     std::string::npos &&
                 latent_dispatch_shard.find(
-                    "append_static_block(fixed_source_blocks, 0x88000000u") != std::string::npos &&
+                    "entries.push_back({0x80000000u, "
+                    "&fn_80000000_runtime_entry})") != std::string::npos &&
                 latent_dispatch_shard.find(
-                    "register_executable_block(table, services, 0x88000000u") == std::string::npos &&
-                latent_dispatch.find("set_aot_module_descriptors") != std::string::npos &&
+                    "entries.push_back({0x88000000u") == std::string::npos &&
+                occurrences(latent_loaded_aot_shard, latent_block_identity) == 4u,
+            "Latentes natives Disc-AOT wurde nicht als ein Byte-Modul mit "
+            "zwei exakten SourceBindings exportiert.");
+    require(latent_dispatch.find("native_loaded_aot_module_views()") !=
+                    std::string::npos &&
                 latent_dispatch.find(
-                    "class NativeLoadedAotSourceIndex final") != std::string::npos &&
+                    "class NativeLoadedAotSourceIndex final") !=
+                    std::string::npos &&
                 latent_dispatch.find(
                     "std::vector<std::uint16_t> slots_") != std::string::npos &&
                 latent_dispatch.find(
@@ -1965,27 +2264,19 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 latent_dispatch.find(latent_recipe.content_identity) != std::string::npos &&
                 latent_main.find(
-                    "packed->info().tracks.size(), packed->info().content_identity,\n"
-                    "                    runtime_startup_progress);") !=
+                    "definition.executable.content_identity, 1u, 0u") !=
                     std::string::npos &&
-                latent_main.find(
-                    "auto gdi = katana::runtime::GdiDiscSource::open(\n"
-                    "                    source, runtime_startup_progress);") !=
-                    std::string::npos &&
-                latent_main.find(
-                    "gdi->descriptor().tracks.size(), "
-                    "std::string(expected_content_identity),\n"
-                    "                    runtime_startup_progress);") !=
+                latent_main.find("GdiDiscSource::open(") ==
                     std::string::npos &&
                 latent_dispatch.find("ENGINE.BIN") == std::string::npos &&
                 latent_dispatch.find("ENGINE_COPY.BIN") == std::string::npos &&
                 latent_dispatch.find("UNHINTED.BIN") == std::string::npos &&
                 latent_dispatch.find(latent_disc_directory.string()) == std::string::npos,
-            "Latentes natives Disc-AOT wurde nicht als ein Byte-Template "
-            "mit zwei exakten Disc-Deskriptoren exportiert.");
-    require(latent_main.find("start_byte_transfer(") != std::string::npos &&
+            "Nativer Loaded-AOT-Dispatcher verlor Index, Contentbindung oder "
+            "Quellpfadisolation.");
+    require(latent_main.find("start_byte_transfer(") == std::string::npos &&
                 latent_main.find("0x00005400u") == std::string::npos,
-            "Exportierter Produkt-DMA verwendet nicht den expliziten Bytevertrag.");
+            "Nativer Produktport bindet erneut den generischen Disc-DMA-Pfad ein.");
     require(representation_specific_identity != latent_recipe.content_identity &&
                 katana::runtime::packed_disc_content_identity(*latent_gdi) ==
                     latent_recipe.content_identity &&
@@ -2425,9 +2716,11 @@ int run_test(const int argc, char* argv[]) {
     const auto memory_fill_port_cmake =
         read_text(memory_fill_output / "generated" / "katana-port.cmake");
     constexpr std::string_view memory_fill_descriptor =
-        "{0x8C01000Eu, 0x8C01000Au, 0x8C010014u, 0x8C01000Au, "
+        "{MemoryLoopBatchKind::Fill, 0x8C01000Eu, 0x8C01000Au, "
+        "0x8C010014u, 0x8C01000Au, "
         "0x8C01000Cu, 0x8C01000Eu, 0x8C010010u, 0x8C010012u, 6u, 4u, "
         "5u, 4u, 3u, 6u, 1u, 1u, 5u, 3u, 2u, 5u, 8u, "
+        "0x00000000u, 0x00000000u, 0u, 0u, 0u, "
         "\"generated-block-8C01000E\", \"generated-block-8C01000A\"}";
     const auto memory_fill_method_begin =
         memory_fill_main.find("bool try_memory_fill_loop_batch(");
@@ -2696,21 +2989,42 @@ int run_test(const int argc, char* argv[]) {
         katana::platform::load_dreamcast_gdi_boot(composite_gdi);
     const auto composite_image =
         katana::platform::make_dreamcast_disc_executable(composite_disc);
-    const auto composite_analysis =
+    const auto composite_runtime_analysis =
         katana::analysis::analyze_control_flow(composite_image);
+    auto composite_authoritative_image = composite_image;
+    composite_authoritative_image.add_entry_point(composite_kernel);
+    const auto composite_analysis =
+        katana::analysis::analyze_control_flow(composite_authoritative_image);
     const auto composite_program = katana::ir::lower_program(composite_analysis);
     const auto composite_resolution = std::find_if(
+        composite_runtime_analysis.indirect_control_flow.begin(),
+        composite_runtime_analysis.indirect_control_flow.end(),
+        [](const auto& resolution) {
+            return resolution.instruction_address == composite_callsite;
+        });
+    const auto composite_candidate = std::find_if(
+        composite_runtime_analysis.recursive.functions.begin(),
+        composite_runtime_analysis.recursive.functions.end(),
+        [](const auto& candidate) { return candidate.address == composite_kernel; });
+    const auto composite_authoritative_candidate = std::find_if(
+        composite_analysis.recursive.functions.begin(),
+        composite_analysis.recursive.functions.end(),
+        [](const auto& candidate) { return candidate.address == composite_kernel; });
+    const auto composite_authoritative_resolution = std::find_if(
         composite_analysis.indirect_control_flow.begin(),
         composite_analysis.indirect_control_flow.end(),
         [](const auto& resolution) {
             return resolution.instruction_address == composite_callsite;
         });
-    const auto composite_candidate = std::find_if(
-        composite_analysis.recursive.functions.begin(),
-        composite_analysis.recursive.functions.end(),
-        [](const auto& candidate) { return candidate.address == composite_kernel; });
+    std::string composite_candidate_origins;
+    if (composite_candidate !=
+        composite_runtime_analysis.recursive.functions.end())
+        for (const auto origin : composite_candidate->origins)
+            composite_candidate_origins +=
+                (composite_candidate_origins.empty() ? "" : ",") +
+                std::to_string(static_cast<int>(origin));
     require(
-        composite_resolution != composite_analysis.indirect_control_flow.end() &&
+        composite_resolution != composite_runtime_analysis.indirect_control_flow.end() &&
             composite_resolution->kind ==
                 katana::analysis::IndirectControlFlowKind::Call &&
             composite_resolution->evidence ==
@@ -2719,22 +3033,83 @@ int run_test(const int argc, char* argv[]) {
             composite_resolution->targets.empty() &&
             composite_resolution->analysis_candidates ==
                 std::vector<std::uint32_t>{composite_kernel} &&
-            composite_candidate != composite_analysis.recursive.functions.end() &&
+            composite_candidate != composite_runtime_analysis.recursive.functions.end() &&
             composite_candidate->evidence ==
-                katana::analysis::ControlFlowEvidence::GuardedPartial &&
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
             std::find(composite_candidate->origins.begin(),
                       composite_candidate->origins.end(),
-                      katana::analysis::FunctionOrigin::GuardedSnapshot) !=
+                      katana::analysis::FunctionOrigin::IndirectCall) !=
                 composite_candidate->origins.end() &&
             std::none_of(
-                composite_analysis.resolved_edges.begin(),
-                composite_analysis.resolved_edges.end(),
+                composite_runtime_analysis.resolved_edges.begin(),
+                composite_runtime_analysis.resolved_edges.end(),
                 [](const auto& edge) {
                     return edge.instruction_address == composite_callsite &&
                            edge.target_address == composite_kernel;
                 }),
         "Composite-Callback-Fixture verliert Returned-Table-Provenienz oder erfindet eine "
-        "feste CFG-Kante.");
+        "feste CFG-Kante (resolution=" +
+            std::to_string(composite_resolution !=
+                           composite_runtime_analysis.indirect_control_flow.end()) +
+            "/" +
+            (composite_resolution != composite_runtime_analysis.indirect_control_flow.end()
+                 ? std::to_string(static_cast<int>(composite_resolution->kind)) +
+                       "/" +
+                       std::to_string(static_cast<int>(composite_resolution->evidence)) +
+                       "/" +
+                       std::to_string(composite_resolution->target.has_value()) +
+                       "/" + std::to_string(composite_resolution->targets.size()) +
+                       "/" +
+                       std::to_string(composite_resolution->analysis_candidates.size())
+                 : std::string{"-"}) +
+            ", candidate=" +
+            std::to_string(composite_candidate !=
+                           composite_runtime_analysis.recursive.functions.end()) +
+            "/" +
+            (composite_candidate != composite_runtime_analysis.recursive.functions.end()
+                 ? std::to_string(static_cast<int>(composite_candidate->evidence)) +
+                       "/" +
+                       std::to_string(std::find(
+                           composite_candidate->origins.begin(),
+                           composite_candidate->origins.end(),
+                           katana::analysis::FunctionOrigin::IndirectCall) !=
+                                      composite_candidate->origins.end())
+                 : std::string{"-"}) +
+            ", edge=" +
+            std::to_string(std::any_of(
+                composite_runtime_analysis.resolved_edges.begin(),
+                composite_runtime_analysis.resolved_edges.end(),
+                [](const auto& edge) {
+                    return edge.instruction_address == composite_callsite &&
+                           edge.target_address == composite_kernel;
+                })) + ", origins=" + composite_candidate_origins +
+            ").");
+    require(
+        composite_authoritative_candidate !=
+                composite_analysis.recursive.functions.end() &&
+            composite_authoritative_candidate->evidence ==
+                katana::analysis::ControlFlowEvidence::ProvenComplete &&
+            std::find(composite_authoritative_candidate->origins.begin(),
+                      composite_authoritative_candidate->origins.end(),
+                      katana::analysis::FunctionOrigin::EntryPoint) !=
+                composite_authoritative_candidate->origins.end() &&
+            composite_authoritative_resolution !=
+                composite_analysis.indirect_control_flow.end() &&
+            composite_authoritative_resolution->evidence ==
+                katana::analysis::ControlFlowEvidence::RuntimeOnly &&
+            composite_authoritative_resolution->analysis_candidates ==
+                std::vector<std::uint32_t>{composite_kernel},
+        "Expliziter Composite-Kernelroot erreicht die Fastpath-Analyse nicht "
+        "als autoritativer Root (resolution=" +
+            (composite_authoritative_resolution !=
+                     composite_analysis.indirect_control_flow.end()
+                 ? std::to_string(static_cast<int>(
+                       composite_authoritative_resolution->evidence)) +
+                       "/" + std::to_string(
+                           composite_authoritative_resolution
+                               ->analysis_candidates.size())
+                 : std::string{"-"}) +
+            ").");
     std::vector<katana::io::InputProvenance> composite_inputs;
     const auto& composite_source_descriptor = composite_disc.source->descriptor();
     composite_inputs.push_back(katana::io::capture_input_provenance(
@@ -2747,7 +3122,7 @@ int run_test(const int argc, char* argv[]) {
             const std::vector<katana::ir::Function>& program) {
             const auto output_directory = fixture.root / (identity + "-port");
             static_cast<void>(export_dreamcast_port_project(
-                {composite_image,
+                {composite_authoritative_image,
                  composite_analysis,
                  program,
                  composite_inputs,
@@ -2775,7 +3150,8 @@ int run_test(const int argc, char* argv[]) {
     const auto composite_method_begin =
         composite_main.find("bool try_composite_callback_batch(");
     const auto composite_method_end =
-        composite_main.find("bool try_memory_fill_loop_batch(", composite_method_begin);
+        composite_main.find("bool try_direct_memory_copy_loop_batch(",
+                            composite_method_begin);
     const auto composite_method =
         composite_method_begin == std::string::npos ||
                 composite_method_end == std::string::npos ||
@@ -2811,7 +3187,8 @@ int run_test(const int argc, char* argv[]) {
             "std::array<CompositeCallbackBatchDescriptor, 1u> "
             "composite_callback_batch_descriptors") != std::string::npos &&
             composite_dispatch.find("0x8C010018u, 0x8C01001Cu, 0x8C010020u, "
-                                    "0x8C010028u, 0x8C010090u, 0x8C01009Cu") !=
+                                    "0x8C010028u, 0x8C010090u, 0x00000000u, "
+                                    "0x8C01009Cu") !=
                 std::string::npos &&
             composite_dispatch.find(
                 "case 0x8C010090u: return {\n"
@@ -2845,8 +3222,7 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             composite_method.find("*target_backing < *source_backing + 4u") !=
                 std::string::npos &&
-            composite_method.find(
-                "dreamcast_main_ram_backing_is_executable(") !=
+            composite_method.find("const auto overlaps_synthetic_code") !=
                 std::string::npos &&
             composite_method.find("may_overlap_active_physical(") !=
                 std::string::npos &&
@@ -3061,8 +3437,8 @@ int run_test(const int argc, char* argv[]) {
             "composite-callback-divergent-overlap", divergent_overlap_program));
     } catch (const std::runtime_error& error) {
         divergent_overlap_rejected =
-            std::string_view(error.what()) ==
-            "IR-Basic-Block besitzt abweichende Funktionsbesitzer.";
+            std::string_view(error.what()).starts_with(
+                "IR-Basic-Block besitzt abweichende Funktionsbesitzer");
     }
     require(divergent_overlap_rejected,
             "Semantisch abweichender Kernel-Overlap wurde nicht typisiert verworfen.");
@@ -3556,11 +3932,21 @@ int run_test(const int argc, char* argv[]) {
         counted_loop_gdi, counted_loop_diagnostic_output, counted_loop_diagnostic_options));
     const auto counted_loop_diagnostic_dispatch =
         read_text(counted_loop_diagnostic_output / "generated" / "code" / "runtime-dispatch.cpp");
-    require(counted_loop_diagnostic_dispatch.find("std::array<CountedLoopBatchDescriptor, 0u> "
+    const auto counted_loop_diagnostic_main =
+        read_text(counted_loop_diagnostic_output / "src" / "main.cpp");
+    require(counted_loop_diagnostic_dispatch.find("std::array<CountedLoopBatchDescriptor, 1u> "
                                                   "counted_loop_batch_descriptors") !=
                     std::string::npos &&
-                counted_loop_diagnostic_dispatch.find(counted_loop_descriptor) == std::string::npos,
-            "Diagnose-/Interpreterports enthalten einen Produkt-Counted-Loop-Fastpath.");
+                counted_loop_diagnostic_dispatch.find(counted_loop_descriptor) !=
+                    std::string::npos &&
+                counted_loop_diagnostic_main.find(
+                    "constexpr bool diagnostic_partial_port = true;") !=
+                    std::string::npos &&
+                counted_loop_diagnostic_main.find(
+                    "counted_loop_batching_enabled_ = !diagnostic_partial_port &&") !=
+                    std::string::npos,
+            "Diagnoseport verliert seinen inerten Counted-Loop-Proof oder kann "
+            "ihn trotz Diagnostic-Gate ausfuehren.");
 
     const auto counted_loop_disc =
         katana::platform::load_dreamcast_gdi_boot(counted_loop_gdi);
@@ -3782,7 +4168,6 @@ int run_test(const int argc, char* argv[]) {
                              "metadata/cfg.dot",
                              "metadata/callgraph.json",
                              "metadata/callgraph.dot",
-                             "verify-native-port-link.cmake",
                              "katana-port.cmake"}) {
         require(generated_before.contains(path),
                 "Portexport verliert Artefakt: " + std::string(path));
@@ -3814,11 +4199,62 @@ int run_test(const int argc, char* argv[]) {
                     "        return {};") != std::string::npos &&
                 occurrences(runtime_dispatch_shards,
                             "BlockExit fn_8C010000_runtime_entry(") == 1u &&
-                occurrences(runtime_dispatch_shards, "&fn_8C010000_runtime_entry") == 3u &&
+                occurrences(runtime_dispatch_shards, "&fn_8C010000_runtime_entry") == 4u &&
                 runtime_dispatch_shards.find("dispatch_owner_") == std::string::npos,
             "Runtime-Dispatch ist nicht deterministisch geshardet, bindet Bloecke nicht direkt "
             "an ihren Owner-Entry oder koppelt neue Exceptionkanten an einen persistenten "
             "Trapzustand.");
+    const auto explicit_static_main =
+        read_text(explicit_static_output / "src" / "main.cpp");
+    const auto native_diagnostic_timeout = explicit_static_main.find(
+        "KATANA_NATIVE_DIAGNOSTIC_TIMEOUT_MS");
+    const auto native_bootstrap_dispatch = explicit_static_main.find(
+        "katana_native_bootstrap_dispatch(context);", native_diagnostic_timeout);
+    const auto native_product_state_capture = explicit_static_main.find(
+        "capture_product_state();\n"
+        "        const auto frame_pacing_snapshot =");
+    const auto native_frame_pacing_snapshot = explicit_static_main.find(
+        "KATANA_NATIVE_FRAME_PACING_SNAPSHOT {\\\"schema\\\":1");
+    const auto native_product_gate = explicit_static_main.find(
+        "const bool normal_stop =", native_frame_pacing_snapshot);
+    require(
+        native_diagnostic_timeout != std::string::npos &&
+            native_bootstrap_dispatch != std::string::npos &&
+            native_product_state_capture != std::string::npos &&
+            native_frame_pacing_snapshot != std::string::npos &&
+            native_product_gate != std::string::npos &&
+            native_diagnostic_timeout < native_bootstrap_dispatch &&
+            native_bootstrap_dispatch < native_product_state_capture &&
+            native_product_state_capture < native_frame_pacing_snapshot &&
+            native_frame_pacing_snapshot < native_product_gate &&
+            occurrences(explicit_static_main,
+                        "KATANA_NATIVE_FRAME_PACING_SNAPSHOT") == 1u &&
+            explicit_static_main.find("\\\"simulation_frames\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos &&
+            explicit_static_main.find("\\\"presentation_frames\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos &&
+            explicit_static_main.find("\\\"repeated_presentations\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos &&
+            explicit_static_main.find("\\\"late_simulation_frames\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos &&
+            explicit_static_main.find(
+                "\\\"missed_presentation_deadlines\\\":",
+                native_frame_pacing_snapshot) != std::string::npos &&
+            explicit_static_main.find("\\\"simulation_rate_hz\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos &&
+            explicit_static_main.find("\\\"presentation_rate_hz\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos &&
+            explicit_static_main.find("\\\"enabled\\\":",
+                                      native_frame_pacing_snapshot) !=
+                std::string::npos,
+        "Nativer Produktport verliert seinen terminalen maschinenlesbaren "
+        "Frame-Pacing-Snapshot oder gibt ihn vor dem Laufende aus.");
     require(
         generated_main.find("#include \"katana/runtime/crash_capsule.hpp\"") !=
                 std::string::npos &&
@@ -3833,15 +4269,15 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             runtime_dispatch.find("KATANA_CRASH_CAPSULE version=") !=
                 std::string::npos &&
-            generated_main.find(
+            explicit_static_main.find(
                 "KATANA_CRASH_CAPSULE_ARMED version=1 epoch_ms=") !=
                 std::string::npos &&
-            generated_main.find("katana-crash-session-") !=
+            explicit_static_main.find("katana-crash-session-") !=
                 std::string::npos &&
-            generated_main.find(
+            explicit_static_main.find(
                 "native_product_crash_session.arm(executable_path)") !=
                 std::string::npos &&
-            generated_main.find("native_product_flush_fault_file();") !=
+            explicit_static_main.find("native_product_flush_fault_file();") !=
                 std::string::npos &&
             generated_before.at("include/katana_port.hpp")
                     .find("katana::runtime::CrashCapsule& crash_capsule") !=
@@ -3880,7 +4316,7 @@ int run_test(const int argc, char* argv[]) {
     const auto runtime_probe_function =
         generated_main.find("int run_deterministic_runtime_probe(");
     const auto runtime_probe_function_end =
-        generated_main.find("\nstd::string redact_source(", runtime_probe_function);
+        generated_main.find("\n} // namespace\n", runtime_probe_function);
     const auto runtime_probe_replay_attach =
         generated_main.find("state.scheduler->attach_replay_log(replay)", runtime_probe_function);
     const auto runtime_probe_scheduler_coverage =
@@ -3915,7 +4351,7 @@ int run_test(const int argc, char* argv[]) {
         "catch (const katana::runtime::RuntimeProbeBudgetReached& reached)",
         runtime_probe_dispatch);
     const auto runtime_probe_dispatch_miss_catch = generated_main.find(
-        "catch (const katana::runtime::IndirectDispatchError&)",
+        "catch (const katana::runtime::IndirectDispatchError& error)",
         runtime_probe_budget_catch);
     const auto runtime_probe_std_exception_catch = generated_main.find(
         "catch (const std::exception&)", runtime_probe_dispatch_miss_catch);
@@ -3949,7 +4385,7 @@ int run_test(const int argc, char* argv[]) {
                             runtime_probe_branch_call);
     const auto normal_controller_attach =
         generated_main.find("katana::runtime::MapleControllerDevice>(\n"
-                            "                controller_input)",
+                            "                maple_input)",
                             normal_controller_timeline);
     const auto normal_native_video =
         generated_main.find("katana::runtime::native_video_available()",
@@ -4230,7 +4666,9 @@ int run_test(const int argc, char* argv[]) {
             normal_runtime_dispatch != std::string::npos &&
             generated_main.find("#include \"katana/runtime/host_input.hpp\"") !=
                 std::string::npos &&
-            generated_main.find("else if (lifecycle_test.empty() &&\n"
+            generated_main.find("else if (maple_live_input_enabled &&\n"
+                                "            !controller_input_replay_enabled && "
+                                "lifecycle_test.empty() &&\n"
                                 "            katana::runtime::"
                                 "native_gamepad_input_available())") !=
                 std::string::npos &&
@@ -4278,6 +4716,87 @@ int run_test(const int argc, char* argv[]) {
             ? std::string_view{}
             : std::string_view{generated_main}.substr(memory_probe_begin,
                                                       memory_probe_end - memory_probe_begin);
+    const auto& generated_native_dispatch =
+        explicit_static_sources.at("code/native-port-dispatch.cpp");
+    const auto native_proof_table_begin = generated_native_dispatch.find(
+        "inline constexpr std::array<StaticReturnNopCallbackProof,");
+    const auto native_proof_table_end = generated_native_dispatch.find(
+        "}};\n", native_proof_table_begin);
+    const auto native_proof_table =
+        native_proof_table_begin == std::string::npos ||
+                native_proof_table_end == std::string::npos
+            ? std::string_view{}
+            : std::string_view(generated_native_dispatch).substr(
+                  native_proof_table_begin,
+                  native_proof_table_end - native_proof_table_begin);
+    const auto latent_proof_table_begin = latent_dispatch.find(
+        "inline constexpr std::array<StaticReturnNopCallbackProof,");
+    const auto latent_proof_table_end = latent_dispatch.find(
+        "}};\n", latent_proof_table_begin);
+    const auto latent_proof_table =
+        latent_proof_table_begin == std::string::npos ||
+                latent_proof_table_end == std::string::npos
+            ? std::string_view{}
+            : std::string_view(latent_dispatch).substr(
+                  latent_proof_table_begin,
+                  latent_proof_table_end - latent_proof_table_begin);
+    require(
+        native_proof_table.find("{0x8C010028u, 2u, 1u}") !=
+                std::string_view::npos &&
+            native_proof_table.find("0x8C010034u") ==
+                std::string_view::npos &&
+            latent_proof_table.find("{0x80000000u, 2u, 1u}") !=
+                std::string_view::npos &&
+            latent_proof_table.find("0x88000000u") ==
+                std::string_view::npos,
+        "Native RTS/NOP-Proofs sind nicht EmittedBlock-/Timing-gebunden "
+        "oder akzeptieren einen CLRT-Delay bzw. unhinted Modulbytes.");
+    require(
+        generated_native_dispatch.find(
+            "KATANA_PORT_DISABLE_STATIC_RETURN_NOP_CALLBACK") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "active_services == nullptr)\n"
+                "        return false;") != std::string::npos &&
+            generated_native_dispatch.find(
+                "!active_services->can_chain_executable_block(target)") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "katana::runtime::ExplicitGuestInstructionAttempt "
+                "return_attempt(") != std::string::npos &&
+            generated_native_dispatch.find(
+                "katana::runtime::ExplicitGuestInstructionAttempt "
+                "delay_attempt(") != std::string::npos &&
+            generated_native_dispatch.find(
+                "return !native_hook_address(address) &&\n"
+                "               find_entry(address) != nullptr;") !=
+                std::string::npos &&
+            latent_dispatch.find(
+                "active_loaded_aot_binder->validate_bound_entry(address)") !=
+                std::string::npos &&
+            latent_dispatch.find(
+                "active_loaded_aot_binder->bind_entry(address)") !=
+                std::string::npos,
+        "Native RTS/NOP-Fastpath umgeht Kill-Switch, Service-, Hook-, "
+        "Loaded-AOT-/Generation- oder Instruktionsaccounting-Gates.");
+    require(
+        latent_units.find("if (katana_guest_write_exit_requested) {") !=
+                std::string::npos &&
+            generated_units.find(
+                "runtime_dispatch_detail::try_static_return_nop_callback("
+                "cpu, call_target)") == std::string::npos,
+        "Native Callsite verliert Write-Exit-Gates oder ein "
+        "Diagnostic-Observer emittiert den Fastpath.");
+    require(
+        generated_native_dispatch.find(
+            "katana::runtime::NativePortAotServices& services) {\n") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "services.immutable_write_detected() &&\n"
+                "        !services.reconcile_runtime_executable_write()") !=
+                std::string::npos,
+        "Generierter Integrity-Gate reconciled keinen exakt beweisbaren "
+        "dynamischen Executable-Write vor dem fail-closed Abort.");
     require(
         generated_before.at("katana-port.cmake").find("add_executable(synthetic_game") !=
                 std::string::npos &&
@@ -4287,16 +4806,16 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("execute_dynamic_sh4_block(cpu, *active_services, 1u)") ==
+                    .find("execute_dynamic_sh4_block(cpu, *active_services, 1u)") !=
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("dynamic_interpreter.hpp") == std::string::npos &&
+                    .find("dynamic_interpreter.hpp") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("dispatch_dynamic_interpreter") == std::string::npos &&
+                    .find("dispatch_dynamic_interpreter") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("runtime-sh4-interpreter") == std::string::npos &&
+                    .find("runtime-sh4-interpreter") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("materialization_policy.enabled = false") != std::string::npos &&
+                    .find("materialization_policy.enabled = true") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("native_aot_template.hpp") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
@@ -4310,32 +4829,61 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp").find("count < 64u") ==
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp")
-                    .find("candidate.instructions = 1u") == std::string::npos &&
+                    .find("candidate.instructions = 1u") != std::string::npos &&
+            generated_native_dispatch.find("dynamic_interpreter.hpp") ==
+                std::string::npos &&
+            generated_native_dispatch.find("dispatch_dynamic_interpreter") ==
+                std::string::npos &&
+            generated_native_dispatch.find("runtime-sh4-interpreter") ==
+                std::string::npos,
+        "Diagnoseexport verliert seinen typisierten Diagnosepfad oder der "
+        "Produktport ist nicht interpreterfrei.");
+    require(
             runtime_dispatch_shards
                     .find("generated-block-AC008300") != std::string::npos &&
             p2_registration.find(
                 "katana::runtime::ExecutableBlockTimingClass::LinearRamOnly") !=
-                std::string::npos &&
+                std::string::npos,
+        "Portprojekt verliert seinen P2-Alias-/Timingvertrag.");
+    require(
             generated_before.at("metadata/port-project.json")
                     .find("\"execution_coverage_contract\":"
-                          "\"native-aot-or-typed-abort-v1\"") !=
+                          "\"diagnostic-validated-demand-v1\"") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"dispatch_paths_without_validation\":0") != std::string::npos &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"execution_profile\":\"native-aot-runtime-selectable\"") !=
+                    .find("\"execution_profile\":\"diagnostic-interpreter\"") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"runtime_profile_default\":\"native-port\"") !=
+                    .find("\"runtime_profile_default\":\"diagnostic-interpreter\"") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"legacy_device_runtime_product_allowed\":false") !=
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"runtime_interpreter_enabled\":false") != std::string::npos &&
+                    .find("\"runtime_interpreter_enabled\":true") != std::string::npos &&
             generated_before.at("metadata/port-project.json")
-                    .find("\"unbound_code_policy\":\"typed-materialization-error\"") !=
+                    .find("\"unbound_code_policy\":\"diagnostic-interpreter\"") !=
                 std::string::npos &&
+            explicit_static_sources.at("metadata/port-project.json")
+                    .find("\"execution_coverage_contract\":"
+                          "\"native-aot-or-typed-abort-v1\"") !=
+                std::string::npos &&
+            explicit_static_sources.at("metadata/port-project.json")
+                    .find("\"execution_profile\":\"native-aot-runtime-selectable\"") !=
+                std::string::npos &&
+            explicit_static_sources.at("metadata/port-project.json")
+                    .find("\"runtime_profile_default\":\"native-port\"") !=
+                std::string::npos &&
+            explicit_static_sources.at("metadata/port-project.json")
+                    .find("\"runtime_interpreter_enabled\":false") !=
+                std::string::npos &&
+            explicit_static_sources.at("metadata/port-project.json")
+                    .find("\"unbound_code_policy\":\"typed-materialization-error\"") !=
+                std::string::npos,
+        "Diagnose- und Produktport verlieren ihre getrennten Ausfuehrungsprofile.");
+    require(
             generated_before.at("metadata/port-project.json")
                     .find("\"function_budget_exhausted\":false") !=
                 std::string::npos &&
@@ -4368,7 +4916,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("metadata/port-project.json")
                     .find("\"guarded_code_shape_budget_exceeded_candidates\":0") !=
-                std::string::npos &&
+                std::string::npos,
+        "Portprojekt verliert seinen Analyse-/Materialisierungsvertrag.");
+    require(
             runtime_dispatch_shards.find("generated-block-8C010000") !=
                 std::string::npos &&
             runtime_dispatch_shards
@@ -4388,7 +4938,9 @@ int run_test(const int argc, char* argv[]) {
                     .find("if (const auto registered_handle = table.lookup(0x8C010000u") ==
                 std::string::npos &&
             runtime_dispatch_shards
-                    .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos &&
+                    .find("6u, katana::runtime::BlockEndKind::Call") != std::string::npos,
+        "Portprojekt verliert seine statisch registrierten Runtime-Bloecke.");
+    require(
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("SLEEP besitzt kein Wakeup-Ereignis") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("Schedulerbudget erschoepft") !=
@@ -4430,7 +4982,9 @@ int run_test(const int argc, char* argv[]) {
             generated_before.at("code/runtime-dispatch.cpp")
                     .find("KATANA_RUNTIME_DISPATCH_EVENTS") != std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("serialize_json(true)") !=
-                std::string::npos &&
+                std::string::npos,
+        "Portprojekt verliert seinen typisierten Runtime-Dispatchvertrag.");
+    require(
             std::filesystem::exists(output / "CMakeLists.txt") &&
             read_text(output / "CMakeLists.txt").find("katana_core") == std::string::npos &&
             read_text(output / "CMakeLists.txt")
@@ -4464,14 +5018,24 @@ int run_test(const int argc, char* argv[]) {
                           "\"${CMAKE_BINARY_DIR}/katana-runtime\" EXCLUDE_FROM_ALL)") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
-                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"86\")") !=
+                    .find("set(KATANA_PORT_EXPECTED_RUNTIME_ABI_VERSION \"" +
+                          std::to_string(
+                              katana::build_contract::runtime_abi_version) +
+                          "\")") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
-                    .find("set(KATANA_PORT_EXPECTED_BLOCK_ABI_VERSION \"5\")") !=
+                    .find("set(KATANA_PORT_EXPECTED_BLOCK_ABI_VERSION \"" +
+                          std::to_string(
+                              katana::build_contract::block_abi_version) +
+                          "\")") !=
                 std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_PLATFORM_SERVICES_ABI_VERSION "
-                          "\"13\")") != std::string::npos &&
+                          "\"" +
+                          std::to_string(
+                              katana::build_contract::
+                                  platform_services_abi_version) +
+                          "\")") != std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("set(KATANA_PORT_EXPECTED_PROJECT_CONTRACT_VERSION "
                           "\"" +
@@ -4492,9 +5056,18 @@ int run_test(const int argc, char* argv[]) {
                     .find("katana_require_runtime_contract("
                           "\"${KATANA_PORT_RUNTIME_TARGET}\")") !=
                 std::string::npos &&
+            read_text(output / "generated" / "katana-port.cmake")
+                    .find("set_property(SOURCE "
+                          "\"${CMAKE_CURRENT_LIST_DIR}/../src/main.cpp\" APPEND") !=
+                std::string::npos &&
+            read_text(output / "generated" / "katana-port.cmake")
+                    .find("PROPERTY COMPILE_OPTIONS /EHsc") !=
+                std::string::npos &&
             read_text(output / "CMakeLists.txt")
                     .find("KatanaRecomp runtime contract mismatch") !=
-                std::string::npos &&
+                std::string::npos,
+        "Portprojekt verliert seinen eigenstaendigen Build-/ABI-Vertrag.");
+    require(
             std::filesystem::exists(output / "src" / "main.cpp") &&
             read_text(output / "src" / "main.cpp")
                     .find("DreamcastRuntimeFirmwareMode::HleBiosAbi") != std::string::npos &&
@@ -4628,7 +5201,9 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "src" / "main.cpp").find("cpu.read_fpscr()") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("framebuffer.configure(640u") ==
-                std::string::npos &&
+                std::string::npos,
+        "Portprojekt verliert seinen nativen Boot-, Memory- oder Hostbackend-Vertrag.");
+    require(
             read_text(output / "src" / "main.cpp").find("pump_guest_frame") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("result.frame_presented") !=
@@ -4737,7 +5312,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp")
                     .find("const bool terminal_problem =") != std::string::npos &&
-            normal_frame_proof < normal_runtime_dispatch &&
+            normal_frame_proof < normal_runtime_dispatch,
+        "Portprojekt verliert seinen Frame-, Fortschritts- oder Terminalvertrag.");
+    require(
             read_text(output / "src" / "main.cpp").find("HostRuntimeSession") !=
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("DreamcastMutableStorage::open") !=
@@ -4799,7 +5376,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             read_text(output / "src" / "main.cpp").find("weakly_canonical") != std::string::npos &&
             read_text(output / "src" / "main.cpp").find("source.parent_path().string()") ==
-                std::string::npos &&
+                std::string::npos,
+        "Portprojekt verliert seine native Host-, Storage- oder Quellbindung.");
+    require(
             read_text(output / "run-product-gate.ps1")
                     .find("EnvironmentVariables['KATANA_GUEST_CYCLE_BUDGET'] = "
                           "'600000000'") !=
@@ -4809,7 +5388,7 @@ int run_test(const int argc, char* argv[]) {
             read_text(output / "run-product-gate.ps1")
                     .find("status=host-watchdog-hang") != std::string::npos &&
             read_text(output / "run-product-gate.ps1")
-                    .find("[ValidateRange(1, 840)]") != std::string::npos &&
+                    .find("[ValidateRange(1, 1200)]") != std::string::npos &&
             read_text(output / "run-product-gate.ps1")
                     .find("[ValidateRange(1, 3600)]") == std::string::npos &&
             read_text(output / "run-product-gate.ps1")
@@ -4820,10 +5399,10 @@ int run_test(const int argc, char* argv[]) {
         generated_main.find("KATANA_HOST_PROCESS_CPU_PERCENT") !=
                 std::string::npos &&
             generated_main.find(
-                "// Keep one runaway guest thread below a permanently busy\n"
-                "            // logical CPU even when guest-time pacing is already late.\n"
+                "// This is a percentage of worker capacity, not one thread.\n"
+                "            // Keep the default unthrottled; the env remains opt-in.\n"
                 "            if (text == nullptr || *text == '\\0')\n"
-                "                return std::uint32_t{85u};") !=
+                "                return std::uint32_t{100u};") !=
                 std::string::npos &&
             generated_main.find(
                 "configured_process_cpu_percent,\n"
@@ -5058,6 +5637,8 @@ int run_test(const int argc, char* argv[]) {
         generated_main.find("if (direct_p1_p2_target) {", chain_method_begin);
     const auto chain_slow_begin = generated_main.find(
         "const auto found = executable_blocks_.find(address);", chain_direct_begin);
+    const auto chain_static_begin = generated_main.find(
+        "if (!registration->chainable)", chain_direct_begin);
     const auto chain_method_end =
         generated_main.find("last_executable_chain_rejection() const", chain_slow_begin);
     const auto prepare_guard_begin =
@@ -5073,6 +5654,8 @@ int run_test(const int argc, char* argv[]) {
     require(chain_method_begin != std::string::npos &&
                 chain_direct_begin != std::string::npos &&
                 chain_slow_begin != std::string::npos &&
+                chain_static_begin != std::string::npos &&
+                chain_static_begin < chain_slow_begin &&
                 chain_method_end != std::string::npos &&
                 prepare_guard_begin != std::string::npos &&
                 prepare_guard_end != std::string::npos &&
@@ -5082,6 +5665,8 @@ int run_test(const int argc, char* argv[]) {
             "Static-AOT-Chain-Guard oder Fast-/Slow-Tier wurde nicht erzeugt.");
     const auto direct_chain = std::string_view(generated_main).substr(
         chain_direct_begin, chain_slow_begin - chain_direct_begin);
+    const auto direct_static_chain = std::string_view(generated_main).substr(
+        chain_static_begin, chain_slow_begin - chain_static_begin);
     const auto slow_chain = std::string_view(generated_main).substr(
         chain_slow_begin, chain_method_end - chain_slow_begin);
     const auto prepared_guard = std::string_view(generated_main).substr(
@@ -5089,31 +5674,32 @@ int run_test(const int argc, char* argv[]) {
     const auto direct_defer = std::string_view(generated_main).substr(
         defer_direct_begin, defer_method_end - defer_direct_begin);
     const auto direct_target_generation =
-        direct_chain.find("registration->validated_code_generation !=");
+        direct_static_chain.find("registration->validated_code_generation !=");
     const auto direct_target_revalidation =
-        direct_chain.find("revalidate_dispatchable(");
+        direct_static_chain.find("revalidate_dispatchable(");
     const auto direct_target_rejection =
-        direct_chain.find("return reject(Rejection::CodeGeneration);");
+        direct_static_chain.find("return reject(Rejection::CodeGeneration);");
     require(
         direct_chain.find("executable_chain_pages_") != std::string_view::npos &&
-            direct_chain.find("static_aot_chain_guard_rejection(address)") !=
+            direct_static_chain.find("static_aot_chain_guard_rejection(address)") !=
                 std::string_view::npos &&
             direct_target_generation != std::string_view::npos &&
             direct_target_revalidation != std::string_view::npos &&
             direct_target_rejection != std::string_view::npos &&
             direct_target_generation < direct_target_revalidation &&
             direct_target_revalidation < direct_target_rejection &&
-            direct_chain.find("guard.chain_pending_cycle_limit") !=
+            direct_static_chain.find("guard.chain_pending_cycle_limit") !=
                 std::string_view::npos &&
-            direct_chain.find("executable_blocks_.find(address)") ==
+            direct_static_chain.find("executable_blocks_.find(address)") ==
                 std::string_view::npos &&
-            direct_chain.find("direct_p1_p2_instruction_guard") ==
+            direct_static_chain.find("direct_p1_p2_instruction_guard") ==
                 std::string_view::npos &&
-            direct_chain.find("block_variant_key(") == std::string_view::npos &&
-            direct_chain.find("current_cycle()") == std::string_view::npos &&
-            direct_chain.find("remaining_guest_cycles()") == std::string_view::npos &&
-            direct_chain.find("next_event_cycle()") == std::string_view::npos &&
-            direct_chain.find("synchronize_interrupt_sources_if_needed") ==
+            direct_static_chain.find("block_variant_key(") == std::string_view::npos &&
+            direct_static_chain.find("current_cycle()") == std::string_view::npos &&
+            direct_static_chain.find("remaining_guest_cycles()") ==
+                std::string_view::npos &&
+            direct_static_chain.find("next_event_cycle()") == std::string_view::npos &&
+            direct_static_chain.find("synchronize_interrupt_sources_if_needed") ==
                 std::string_view::npos &&
             slow_chain.find("inspect_translation(") != std::string_view::npos &&
             slow_chain.find("prove_instruction_mapping(") != std::string_view::npos &&
@@ -5263,11 +5849,11 @@ int run_test(const int argc, char* argv[]) {
         const auto registration =
             "services.allow_executable_block_chaining(" + address + "u)";
         require((runtime_dispatch_shards.find(registration) != std::string::npos) == expected,
-                "Lokales Chaining behandelt Endklasse " + std::string(end_kind) +
-                    " nicht als Hostgrenze.");
+                "Lokales Chaining behandelt den Eintritt in Endklasse " +
+                    std::string(end_kind) + " nicht gemaess Vertrag.");
     };
     require_chain_registration("Call", true);
-    require_chain_registration("Return", false);
+    require_chain_registration("Return", true);
     std::string portable_content;
     for (const auto& [path, content] : generated_before) {
         static_cast<void>(path);

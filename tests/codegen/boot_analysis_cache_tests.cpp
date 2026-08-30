@@ -141,6 +141,57 @@ int main() {
             external_entry_key != key,
             "Ein nicht-rootender externer Entry fehlte in der "
             "Bootcache-Quellbindung.");
+        auto additional_root_image = image;
+        additional_root_image.add_entry_point(image_base + 2u);
+        const auto additional_root_key =
+            katana::codegen::make_boot_analysis_cache_key(
+                additional_root_image,
+                nullptr,
+                "test-contract",
+                std::string(64u, 'a'));
+        require(
+            additional_root_key != key,
+            "Eine Function-/StaticEntry-Rooterweiterung fehlte in der "
+            "Bootcache-Quellbindung.");
+        auto generation_bound_image = image;
+        generation_bound_image.add_immutable_range(
+            {image_base,
+             4u,
+             "sha256:" +
+                 katana::io::sha256_bytes(std::string_view(
+                     reinterpret_cast<const char*>(
+                         image.segments().front().bytes.data()),
+                     image.segments().front().bytes.size())),
+             0u});
+        const auto generation_bound_key =
+            katana::codegen::make_boot_analysis_cache_key(
+                generation_bound_image,
+                nullptr,
+                "test-contract",
+                std::string(64u, 'a'));
+        require(
+            generation_bound_key != key,
+            "Eine identity-/generationgebundene Moduleinstanz fehlte in "
+            "der Bootcache-Quellbindung.");
+        auto rebound_generation_image = generation_bound_image;
+        rebound_generation_image.write_u32_le(
+            image_base,
+            rebound_generation_image.read_u32_le(image_base));
+        rebound_generation_image.add_immutable_range(
+            {image_base,
+             4u,
+             generation_bound_image.immutable_ranges().front().identity,
+             0u});
+        const auto rebound_generation_key =
+            katana::codegen::make_boot_analysis_cache_key(
+                rebound_generation_image,
+                nullptr,
+                "test-contract",
+                std::string(64u, 'a'));
+        require(
+            rebound_generation_key != generation_bound_key,
+            "Eine neue Immutable-Range-Generation erbte den Bootcache der "
+            "vorherigen Proofepoche.");
 
         artifact.analysis.guarded_code_inventory_walk
             .forwarded_store_evaluation_cache_hits = 7u;
@@ -266,6 +317,21 @@ int main() {
                         .state ==
                     katana::codegen::BootAnalysisCacheState::Miss,
             "Cache-Key blieb an veraenderte Quellbytes gebunden.");
+        require(
+            katana::codegen::parse_boot_analysis_cache(
+                additional_root_key, canonical)
+                    .state ==
+                katana::codegen::BootAnalysisCacheState::Miss &&
+                katana::codegen::parse_boot_analysis_cache(
+                    generation_bound_key, canonical)
+                    .state ==
+                katana::codegen::BootAnalysisCacheState::Miss &&
+                katana::codegen::parse_boot_analysis_cache(
+                    rebound_generation_key, canonical)
+                    .state ==
+                katana::codegen::BootAnalysisCacheState::Miss,
+            "Ein alter Bootcache ueberlebte ein neues Entryuniversum oder "
+            "eine neue identity-/generationgebundene Moduleinstanz.");
 
         std::cout
             << "Boot-Analysecache-Rebinding-Regressions bestanden.\n";

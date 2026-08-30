@@ -15,8 +15,14 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 15u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 16u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
+// Type-2 translucent packets are admitted only when the adapter and renderer
+// agree on this small, address-agnostic contract.  The renderer owns the
+// per-pixel ordering subpass; the adapter only identifies an auto-sorted
+// Scene3D list and its scene boundary.
+inline constexpr std::uint32_t
+    native_port_type2_autosort_contract_version = 1u;
 
 struct NativePortExtent final {
     std::uint32_t width = 0u;
@@ -84,6 +90,10 @@ struct NativePortGraphicsConfig final {
     // sampler objects. The title supplies semantic state, never backend
     // handles; this budget keeps hostile or corrupt state churn fail-closed.
     std::uint32_t maximum_pipeline_states = 4'096u;
+    // Upper bound for the transient Type-2 per-pixel fragment pool. It is
+    // allocated lazily only when a Type2AutoSorted Scene3D packet arrives;
+    // overflow is detected before resolve and fails the frame closed.
+    std::uint32_t maximum_type2_fragment_nodes = 4'194'304u;
 };
 
 // Native game time and host presentation cadence are deliberately separate.
@@ -340,6 +350,20 @@ enum class NativePortTranslucencyPolicy : std::uint8_t {
     // The adapter has already produced stable depth order.  The host color
     // pass therefore uses GEQUAL against opaque/punch depth without writing.
     StableDepthSorted,
+    // Dreamcast/PVR Type-2 translucent list semantics.  The renderer gathers
+    // qualifying fragments and resolves them per pixel from far to near.
+    Type2AutoSorted,
+};
+
+struct NativePortType2AutosortContract final {
+    std::uint32_t contract_version =
+        native_port_type2_autosort_contract_version;
+    // Zero is the only executable value: it means the source list is not
+    // presorted and the renderer must perform Type-2 per-pixel autosort.
+    // Other values are reserved and fail closed.
+    std::uint32_t presort = 0u;
+    friend bool operator==(const NativePortType2AutosortContract&,
+                           const NativePortType2AutosortContract&) = default;
 };
 
 struct NativePortDrawBatch final {
@@ -759,6 +783,7 @@ struct NativePortDrawPacket final {
     NativePortDrawBatch batch;
     NativePortTranslucencyPolicy translucency =
         NativePortTranslucencyPolicy::NotApplicable;
+    NativePortType2AutosortContract type2_autosort;
     NativePortDrawDiagnostics diagnostics;
     NativePortInterpolationMode interpolation =
         NativePortInterpolationMode::PerspectiveCorrect;
@@ -860,6 +885,11 @@ class NativePortGraphicsDevice final {
 
     void begin_frame(const NativePortFrameConfig& config = {});
     void draw(const NativePortDrawPacket& packet);
+    // Resolve and composite the currently queued Type-2 Scene3D packets.
+    // The call is a scene boundary: after flushing, another Type-2 packet
+    // must use a new batch identity. present() performs the same flush before
+    // closing the frame.
+    void flush_type2_translucency();
     void present();
     // Re-composite and present the last completed native GPU frame.  This is
     // presentation-only: it never opens a title frame or advances game state.

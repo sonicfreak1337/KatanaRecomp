@@ -61,6 +61,15 @@ class NativePortImmutableWriteGuard final {
     [[nodiscard]] std::uint8_t range_kind_mask(
         std::uint32_t address,
         std::size_t size) const noexcept;
+    [[nodiscard]] bool fixed_tracks_address(
+        std::uint32_t address,
+        std::size_t size) const noexcept;
+    [[nodiscard]] bool
+    acknowledge_retired_runtime_executable_write() noexcept;
+
+    friend bool reconcile_native_port_runtime_executable_write(
+        NativePortContext& context,
+        NativePortImmutableWriteGuard& immutable_guard) noexcept;
 
     std::vector<NativePortImmutableRange> fixed_ranges_;
     std::vector<NativePortImmutableRange> runtime_ranges_;
@@ -136,6 +145,9 @@ class NativePortAotServices final {
     [[nodiscard]] std::size_t first_immutable_write_size() const noexcept;
     [[nodiscard]] std::uint8_t
     first_immutable_write_kind_mask() const noexcept;
+    // Converts one completed guest write into a dynamic executable-lifecycle
+    // retirement only when its exact owner can be proven safely retired.
+    [[nodiscard]] bool reconcile_runtime_executable_write() noexcept;
     void observe_guest_block_completion(std::uint32_t checkpoint,
                                         std::uint64_t retired_instructions,
                                         bool new_exception,

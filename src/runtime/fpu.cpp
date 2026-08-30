@@ -32,15 +32,20 @@ class ScopedHostRounding final {
   public:
     explicit ScopedHostRounding(const CpuState& cpu) noexcept {
 #if KATANA_RUNTIME_HAS_SSE_ROUNDING
-        const std::uint32_t current = _mm_getcsr();
-        previous_ = current & _MM_ROUND_MASK;
+        constexpr std::uint32_t host_denormals_are_zero_mask = 0x00000040u;
+        constexpr std::uint32_t host_flush_to_zero_mask = 0x00008000u;
+        previous_ = _mm_getcsr();
         const std::uint32_t requested =
             (cpu.fpscr & fpscr_rounding_mode_mask) == 1u
                 ? _MM_ROUND_TOWARD_ZERO
                 : _MM_ROUND_NEAREST;
-        changed_ = requested != previous_;
+        const std::uint32_t scoped =
+            (previous_ & ~(_MM_ROUND_MASK | host_denormals_are_zero_mask |
+                           host_flush_to_zero_mask)) |
+            requested;
+        changed_ = scoped != previous_;
         if (changed_) {
-            _mm_setcsr((current & ~_MM_ROUND_MASK) | requested);
+            _mm_setcsr(scoped);
         }
 #else
         previous_ = std::fegetround();
@@ -58,8 +63,7 @@ class ScopedHostRounding final {
             return;
         }
 #if KATANA_RUNTIME_HAS_SSE_ROUNDING
-        const std::uint32_t current = _mm_getcsr();
-        _mm_setcsr((current & ~_MM_ROUND_MASK) | previous_);
+        _mm_setcsr(previous_);
 #else
         static_cast<void>(std::fesetround(previous_));
 #endif

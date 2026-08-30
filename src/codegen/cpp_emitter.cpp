@@ -2957,7 +2957,9 @@ void emit_post_instruction_safepoint(std::ostringstream& output,
                                      const int indent,
                                      const bool track_mmio_boundary,
                                      const bool defer_until_terminal,
-                                     const NativeRegisterEmission& registers) {
+                                     const NativeRegisterEmission& registers,
+                                     const std::optional<std::string>&
+                                         guarded_linear_access_flag = std::nullopt) {
     const bool architectural =
         requires_post_instruction_architectural_safepoint(instruction);
     if ((!architectural && !track_mmio_boundary) ||
@@ -2965,11 +2967,16 @@ void emit_post_instruction_safepoint(std::ostringstream& output,
          !defer_until_terminal))
         return;
 
-    const auto condition =
-        architectural
-            ? std::string{"true"}
-            : std::string{"cpu.memory.mmio_boundary_epoch() != "
-                          "katana_mmio_boundary_epoch_before"};
+    const auto condition = [&] {
+        if (architectural) return std::string{"true"};
+        std::string result;
+        if (guarded_linear_access_flag.has_value()) {
+            result = "!" + *guarded_linear_access_flag + " && ";
+        }
+        result += "cpu.memory.mmio_boundary_epoch() != "
+                  "katana_mmio_boundary_epoch_before";
+        return result;
+    }();
     if (defer_until_terminal) {
         emit_indent(output, indent);
         output << deferred_safepoint_flag(instruction) << " = " << condition << ";\n";
@@ -3020,6 +3027,14 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                      const bool direct_block_exit_metadata = false,
                                      const bool guarded_unknown_ram_accesses = false) {
     const auto timing = katana::sh4::instruction_timing(instruction.original_opcode);
+    // Memory/PREF instructions consume the same runtime PC for the explicit
+    // attempt and the immediately following GuestInstructionOrigin.  Resolve
+    // it once after every preceding observer/cycle boundary, but deliberately
+    // do not reuse it in the fault handler or post-instruction safepoint: a
+    // provider or fault may have changed the active CodeAddressMapping stack.
+    const bool may_raise_memory_error =
+        instruction.memory_effects.access != katana::ir::MemoryAccessKind::None ||
+        instruction.operation == katana::ir::Operation::Prefetch;
     auto guarded_linear_access =
         guarded_unknown_ram_accesses && !external_instruction_observer
             ? guarded_linear_ram_access_preflight_expression(instruction)
@@ -3065,14 +3080,35 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     }
     if (track_mmio_boundary) {
         emit_indent(output, indent + 1);
-        output << "const auto katana_mmio_boundary_epoch_before = "
-                  "cpu.memory.mmio_boundary_epoch();\n";
+        if (guarded_linear_access) {
+            output << "std::uint64_t katana_mmio_boundary_epoch_before = 0u;\n";
+            emit_indent(output, indent + 1);
+            output << "if (!" << guarded_linear_ram_access_flag(instruction)
+                   << ") {\n";
+            emit_indent(output, indent + 2);
+            output << "katana_mmio_boundary_epoch_before = "
+                      "cpu.memory.mmio_boundary_epoch();\n";
+            emit_indent(output, indent + 1);
+            output << "}\n";
+        } else {
+            output << "const auto katana_mmio_boundary_epoch_before = "
+                      "cpu.memory.mmio_boundary_epoch();\n";
+        }
+    }
+    if (may_raise_memory_error) {
+        emit_indent(output, indent + 1);
+        output << "const auto katana_instruction_runtime_pc = "
+               << relocated_code_address(instruction.source_address) << ";\n";
     }
     emit_indent(output, indent + 1);
     output << "katana::runtime::ExplicitGuestInstructionAttempt "
               "guest_instruction_attempt(\n";
     emit_indent(output, indent + 2);
-    output << "cpu, " << relocated_code_address(instruction.source_address) << ", "
+    output << "cpu, "
+           << (may_raise_memory_error
+                   ? std::string{"katana_instruction_runtime_pc"}
+                   : relocated_code_address(instruction.source_address))
+           << ", "
            << timing.guest_cycles << "u);\n";
     emit_privileged_guard(output, instruction, indent + 1, single_block);
     emit_fpu_disabled_guard(output, instruction, indent + 1, single_block);
@@ -3083,9 +3119,6 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     // privilege and alignment faults as an ordinary guest memory access. Its conservative IR
     // memory effect intentionally stays empty, so keep the architectural exception boundary
     // explicit here instead of misclassifying every PREF as an unconditional store.
-    const auto may_raise_memory_error =
-        instruction.memory_effects.access != katana::ir::MemoryAccessKind::None ||
-        instruction.operation == katana::ir::Operation::Prefetch;
     if (!may_raise_memory_error) {
         emit_simple_instruction(output,
                                 instruction,
@@ -3107,7 +3140,12 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                         indent + 1,
                                         track_mmio_boundary,
                                         defer_post_instruction_safepoint,
-                                        registers);
+                                        registers,
+                                        guarded_linear_access
+                                            ? std::optional<std::string>{
+                                                  guarded_linear_ram_access_flag(
+                                                      instruction)}
+                                            : std::nullopt);
         // A deferred architectural/MMIO safepoint postpones only the runtime
         // commit until the terminal instruction has published its target PC.
         // It does not extend raw cpu.r[] ownership across the remainder of
@@ -3139,7 +3177,7 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
     // state.
     output << "const katana::runtime::GuestInstructionOrigin guest_origin{"
            << hex32(instruction.source_address) << ", "
-           << relocated_code_address(instruction.source_address)
+           << "katana_instruction_runtime_pc"
            << ", true};\n";
     emit_simple_instruction(output,
                             instruction,
@@ -3178,7 +3216,12 @@ void emit_guarded_simple_instruction(std::ostringstream& output,
                                     indent + 1,
                                     track_mmio_boundary,
                                     defer_post_instruction_safepoint,
-                                    registers);
+                                    registers,
+                                    guarded_linear_access
+                                        ? std::optional<std::string>{
+                                              guarded_linear_ram_access_flag(
+                                                  instruction)}
+                                        : std::nullopt);
     if (register_boundary)
         emit_register_reload_acquire(output, indent + 1, registers);
     emit_indent(output, indent);
@@ -5771,9 +5814,6 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "            std::uint32_t& katana_direct_address) noexcept {\n"
                 << "        if (!katana_direct_ram_translate(\n"
                 << "                katana_virtual_address, katana_direct_address))\n"
-                << "            return false;\n"
-                << "        if (!cpu.memory.direct_linear_memory_guard_current(\n"
-                << "                katana_direct_ram, false))\n"
                 << "            return false;\n"
                 << "        std::uint32_t katana_ignored_ram_offset = 0u;\n"
                 << "        return katana::runtime::direct_linear_guard_offset(\n"

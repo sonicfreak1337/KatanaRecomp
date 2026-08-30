@@ -35,6 +35,8 @@ thread_local std::array<CodeAddressLookupCacheEntry,
 thread_local std::array<CodeAddressLookupCacheEntry,
                         code_address_lookup_cache_size>
     unrelocate_code_address_cache;
+thread_local CodeAddressLookupCacheEntry relocate_code_address_recent;
+thread_local CodeAddressLookupCacheEntry unrelocate_code_address_recent;
 
 constexpr std::uint64_t guest_address_space_extent =
     static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
@@ -58,21 +60,36 @@ void invalidate_code_address_lookup_cache() noexcept {
     // writes to the cached range/delta fields.
     for (auto& cached : relocate_code_address_cache) cached.end = 0u;
     for (auto& cached : unrelocate_code_address_cache) cached.end = 0u;
+    relocate_code_address_recent.end = 0u;
+    unrelocate_code_address_recent.end = 0u;
 }
 
+#if defined(_MSC_VER)
+#define KATANA_BLOCK_ABI_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define KATANA_BLOCK_ABI_NOINLINE __attribute__((noinline))
+#else
+#define KATANA_BLOCK_ABI_NOINLINE
+#endif
+
 template <bool Reverse>
-std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
+KATANA_BLOCK_ABI_NOINLINE std::uint32_t
+lookup_code_address_slow(const std::uint32_t address) noexcept {
     auto& cache = Reverse ? unrelocate_code_address_cache
                           : relocate_code_address_cache;
+    auto& recent = Reverse ? unrelocate_code_address_recent
+                           : relocate_code_address_recent;
     const auto cache_index =
         ((static_cast<std::size_t>(address) >> 12u) ^
          (static_cast<std::size_t>(address) >> 20u)) &
         (code_address_lookup_cache_size - 1u);
     auto& cached = cache[cache_index];
     if (static_cast<std::uint64_t>(address) >= cached.begin &&
-        static_cast<std::uint64_t>(address) < cached.end)
+        static_cast<std::uint64_t>(address) < cached.end) {
+        recent = cached;
         return static_cast<std::uint32_t>(
             static_cast<std::int64_t>(address) + cached.delta);
+    }
 
     std::uint64_t begin = 0u;
     std::uint64_t end = guest_address_space_extent;
@@ -118,9 +135,23 @@ std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
             constrain_gap(mapping.mapping);
     }
     cached = {begin, end, delta};
+    recent = cached;
     return static_cast<std::uint32_t>(
         static_cast<std::int64_t>(address) + delta);
 }
+
+template <bool Reverse>
+std::uint32_t lookup_code_address(const std::uint32_t address) noexcept {
+    auto& recent = Reverse ? unrelocate_code_address_recent
+                           : relocate_code_address_recent;
+    if (static_cast<std::uint64_t>(address) >= recent.begin &&
+        static_cast<std::uint64_t>(address) < recent.end)
+        return static_cast<std::uint32_t>(
+            static_cast<std::int64_t>(address) + recent.delta);
+    return lookup_code_address_slow<Reverse>(address);
+}
+
+#undef KATANA_BLOCK_ABI_NOINLINE
 
 bool requires_target(const BlockEndKind kind) noexcept {
     switch (kind) {

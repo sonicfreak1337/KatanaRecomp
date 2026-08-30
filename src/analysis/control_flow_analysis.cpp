@@ -506,6 +506,23 @@ struct RecursiveWorkingIndex final {
     }
 };
 
+[[nodiscard]] bool same_recursive_line(
+    const katana::sh4::DisassemblyLine& left,
+    const katana::sh4::DisassemblyLine& right) noexcept {
+    return left.address == right.address && left.opcode == right.opcode &&
+           left.is_delay_slot == right.is_delay_slot &&
+           left.target_address == right.target_address;
+}
+
+[[nodiscard]] bool same_recursive_function(
+    const FunctionCandidate& left,
+    const FunctionCandidate& right) noexcept {
+    return left.address == right.address &&
+           left.confidence == right.confidence &&
+           left.evidence == right.evidence &&
+           left.origins == right.origins && left.size == right.size;
+}
+
 void classify_dynamic_sites(
     std::span<const katana::sh4::DisassemblyLine> lines,
     const katana::io::ExecutableImage& image,
@@ -540,8 +557,7 @@ class IncrementalCfaScanCache final {
         runtime_copy_index_.clear();
         continuation_index_.clear();
         global_entry_predecessors_.clear();
-        dynamic_predecessor_fingerprint_ = {};
-        dynamic_predecessor_fingerprint_initialized_ = false;
+        dynamic_predecessors_.clear();
         last_changed_runtime_copies_.clear();
         last_changed_continuations_.clear();
     }
@@ -552,8 +568,7 @@ class IncrementalCfaScanCache final {
                const std::span<const std::uint32_t> external_entry_boundaries,
                const detail::GlobalEntryPredecessorIndex&
                    dynamic_predecessors,
-               const std::tuple<std::uint64_t, std::uint64_t, std::size_t>
-                   dynamic_predecessor_fingerprint,
+               const RecursiveWorkingIndex* const complete_rebase,
                ControlFlowAnalysisResult& telemetry) {
         last_changed_dispatches_.clear();
         last_changed_runtime_copies_.clear();
@@ -565,7 +580,7 @@ class IncrementalCfaScanCache final {
             if (found != components_.end())
                 dirty_component_starts.insert(found->first);
         };
-        for (const auto& line : snapshot.changed_instructions()) {
+        const auto apply_line = [&](const katana::sh4::DisassemblyLine& line) {
             dirty_addresses.insert(line.address);
             retain_old_component(line.address);
             const auto previous = lines_.find(line.address);
@@ -587,10 +602,73 @@ class IncrementalCfaScanCache final {
                     line.address);
                 dirty_addresses.insert(*line.target_address);
             }
+        };
+        if (complete_rebase != nullptr) {
+            for (auto previous = lines_.begin(); previous != lines_.end();) {
+                const auto next = complete_rebase->lines.find(previous->first);
+                if (next != complete_rebase->lines.end() &&
+                    same_recursive_line(previous->second, next->second)) {
+                    ++previous;
+                    continue;
+                }
+                const auto address = previous->first;
+                retain_old_component(address);
+                if (is_indirect_dispatch(previous->second.instruction.kind))
+                    last_changed_dispatches_.insert(address);
+                if (previous->second.target_address.has_value()) {
+                    retain_old_component(*previous->second.target_address);
+                    decrement_target(*previous->second.target_address,
+                                     address);
+                    dirty_addresses.insert(
+                        *previous->second.target_address);
+                }
+                dirty_addresses.insert(address);
+                previous = lines_.erase(previous);
+            }
+            for (const auto& [address, line] : complete_rebase->lines) {
+                const auto previous = lines_.find(address);
+                if (previous != lines_.end() &&
+                    same_recursive_line(previous->second, line))
+                    continue;
+                apply_line(line);
+            }
+        } else {
+            for (const auto& line : snapshot.changed_instructions())
+                apply_line(line);
+        }
+        std::vector<std::uint32_t> complete_changed_function_entries;
+        std::vector<FunctionCandidate> complete_changed_functions;
+        if (complete_rebase != nullptr) {
+            for (const auto& [entry, function] : functions_) {
+                const auto next = complete_rebase->functions.find(entry);
+                if (next == complete_rebase->functions.end()) {
+                    complete_changed_function_entries.push_back(entry);
+                    auto removed = function;
+                    removed.evidence = ControlFlowEvidence::Unresolved;
+                    complete_changed_functions.push_back(
+                        std::move(removed));
+                } else if (!same_recursive_function(function,
+                                                    next->second)) {
+                    complete_changed_function_entries.push_back(entry);
+                    complete_changed_functions.push_back(next->second);
+                }
+            }
+            for (const auto& [entry, function] : complete_rebase->functions) {
+                if (functions_.contains(entry)) continue;
+                complete_changed_function_entries.push_back(entry);
+                complete_changed_functions.push_back(function);
+            }
         }
         const auto changed_function_entries =
-            snapshot.changed_function_entries();
-        const auto changed_functions = snapshot.changed_functions();
+            complete_rebase == nullptr
+                ? snapshot.changed_function_entries()
+                : std::span<const std::uint32_t>{
+                      complete_changed_function_entries};
+        const auto changed_functions =
+            complete_rebase == nullptr
+                ? snapshot.changed_functions()
+                : std::span<const FunctionCandidate>{
+                      complete_changed_functions};
         if (changed_function_entries.size() != changed_functions.size())
             throw std::logic_error(
                 "Recursive-Funktionsdelta besitzt inkonsistente Shards.");
@@ -659,22 +737,29 @@ class IncrementalCfaScanCache final {
                 continuation.instruction_address,
                 continuation.target_address);
         }
-        const bool predecessor_universe_changed =
-            !(next_global_predecessors == global_entry_predecessors_) ||
-            !dynamic_predecessor_fingerprint_initialized_ ||
-            dynamic_predecessor_fingerprint !=
-                dynamic_predecessor_fingerprint_;
-        global_entry_predecessors_ =
-            std::move(next_global_predecessors);
-        dynamic_predecessor_fingerprint_ =
-            dynamic_predecessor_fingerprint;
-        dynamic_predecessor_fingerprint_initialized_ = true;
-        if (predecessor_universe_changed) {
+        auto next_dynamic_predecessors = dynamic_predecessors;
+        auto predecessor_delta =
+            global_entry_predecessors_.difference(
+                next_global_predecessors);
+        predecessor_delta.merge(
+            dynamic_predecessors_.difference(
+                next_dynamic_predecessors));
+        static_cast<void>(global_entry_predecessors_.replace(
+            std::move(next_global_predecessors)));
+        static_cast<void>(dynamic_predecessors_.replace(
+            std::move(next_dynamic_predecessors)));
+        if (!predecessor_delta.empty()) {
             for (const auto& [dispatch, recognition] :
                  recognition_index_) {
                 if (!recognition.relative_table_producer.has_value() ||
                     !recognition.relative_table_producer
                          ->requires_global_ingress_proof)
+                    continue;
+                const auto& producer =
+                    *recognition.relative_table_producer;
+                if (!predecessor_delta.affects_interval(
+                        producer.ingress_seed_address,
+                        producer.ingress_load_address))
                     continue;
                 last_changed_dispatches_.insert(dispatch);
                 dirty_addresses.insert(dispatch);
@@ -771,6 +856,46 @@ class IncrementalCfaScanCache final {
         }
 
         refresh_runtime_copy_dependencies(image, telemetry);
+
+        // Component rebuilds replace the derived continuation index. Rebind
+        // the canonical predecessor universe before publishing any positive
+        // relative-table closure; otherwise a removed return continuation
+        // could survive one warm epoch.
+        detail::GlobalEntryPredecessorIndex refreshed_predecessors;
+        for (const auto& [entry, function] : functions_) {
+            static_cast<void>(function);
+            refreshed_predecessors.add_boundary(entry);
+        }
+        for (const auto entry : external_entry_boundaries)
+            refreshed_predecessors.add_boundary(entry);
+        for (const auto& [target, sources] : direct_target_sources_) {
+            for (const auto source : sources)
+                refreshed_predecessors.add_edge(source, target);
+        }
+        for (const auto& [key, continuation] : continuation_index_) {
+            static_cast<void>(key);
+            refreshed_predecessors.add_edge(
+                continuation.instruction_address,
+                continuation.target_address);
+        }
+        const auto derived_predecessor_delta =
+            global_entry_predecessors_.replace(
+                std::move(refreshed_predecessors));
+        if (!derived_predecessor_delta.empty()) {
+            for (const auto& [dispatch, recognition] : recognition_index_) {
+                if (!recognition.relative_table_producer.has_value() ||
+                    !recognition.relative_table_producer
+                         ->requires_global_ingress_proof)
+                    continue;
+                const auto& producer =
+                    *recognition.relative_table_producer;
+                if (!derived_predecessor_delta.affects_interval(
+                        producer.ingress_seed_address,
+                        producer.ingress_load_address))
+                    continue;
+                last_changed_dispatches_.insert(dispatch);
+            }
+        }
 
         const auto dirty_dispatches = last_changed_dispatches_;
         for (const auto address : dirty_dispatches) {
@@ -1305,9 +1430,7 @@ class IncrementalCfaScanCache final {
     std::set<std::pair<std::uint32_t, std::uint32_t>>
         last_changed_continuations_;
     detail::GlobalEntryPredecessorIndex global_entry_predecessors_;
-    std::tuple<std::uint64_t, std::uint64_t, std::size_t>
-        dynamic_predecessor_fingerprint_{};
-    bool dynamic_predecessor_fingerprint_initialized_ = false;
+    detail::GlobalEntryPredecessorIndex dynamic_predecessors_;
 };
 
 const katana::sh4::DisassemblyLine* find_instruction(const RecursiveAnalysisResult& result,
@@ -3376,8 +3499,12 @@ make_control_flow_session_options_binding(
 
 void merge_retained_seed_evidence(
     std::map<std::uint32_t, SeedEvidence>& destination,
-    const std::map<std::uint32_t, SeedEvidence>& retained) {
+    const std::map<std::uint32_t, SeedEvidence>& retained,
+    const std::set<std::uint32_t>* const excluded_addresses = nullptr) {
     for (const auto& [address, evidence] : retained) {
+        if (excluded_addresses != nullptr &&
+            excluded_addresses->contains(address))
+            continue;
         std::vector<FunctionOrigin> origins(
             evidence.origins.begin(), evidence.origins.end());
         if (evidence.causes.empty()) {
@@ -3401,13 +3528,15 @@ void merge_retained_seed_evidence(
 
 [[nodiscard]] bool same_analysis_overrides(
     const std::optional<AnalysisOverrides>& left,
-    const AnalysisOverrides* const right) {
+    const AnalysisOverrides* const right,
+    const bool compare_function_roots = true) {
     if (!left.has_value() || right == nullptr)
         return left.has_value() == (right != nullptr);
     if (left->version != right->version ||
         left->mode != right->mode ||
         left->source_path != right->source_path ||
-        left->functions.size() != right->functions.size() ||
+        (compare_function_roots &&
+         left->functions.size() != right->functions.size()) ||
         left->function_boundaries.size() !=
             right->function_boundaries.size() ||
         left->function_entry_hints.size() !=
@@ -3417,13 +3546,15 @@ void merge_retained_seed_evidence(
         left->jumps.size() != right->jumps.size() ||
         left->jump_tables.size() != right->jump_tables.size())
         return false;
-    const auto same_functions = std::equal(
-        left->functions.begin(), left->functions.end(),
-        right->functions.begin(), right->functions.end(),
-        [](const auto& a, const auto& b) {
-            return std::tie(a.address, a.line, a.size) ==
-                   std::tie(b.address, b.line, b.size);
-        });
+    const auto same_functions =
+        !compare_function_roots ||
+        std::equal(
+            left->functions.begin(), left->functions.end(),
+            right->functions.begin(), right->functions.end(),
+            [](const auto& a, const auto& b) {
+                return std::tie(a.address, a.line, a.size) ==
+                       std::tie(b.address, b.line, b.size);
+            });
     const auto same_boundaries = std::equal(
         left->function_boundaries.begin(),
         left->function_boundaries.end(),
@@ -3475,6 +3606,116 @@ void merge_retained_seed_evidence(
         });
     return same_functions && same_boundaries && same_entry_hints &&
            same_external_entry_hints && same_jumps && same_tables;
+}
+
+struct PrimaryRootCarrier final {
+    SeedCauseKind kind = SeedCauseKind::EntryPoint;
+    std::uint32_t target_address = 0u;
+    std::uint32_t function_size = 0u;
+    std::optional<std::uint32_t> source_address;
+    std::optional<std::uint32_t> source_object;
+    std::optional<std::uint32_t> owner_address;
+
+    bool operator==(const PrimaryRootCarrier&) const = default;
+
+    bool operator<(const PrimaryRootCarrier& other) const noexcept {
+        return std::tie(kind, target_address, function_size,
+                        source_address, source_object, owner_address) <
+               std::tie(other.kind, other.target_address,
+                        other.function_size, other.source_address,
+                        other.source_object, other.owner_address);
+    }
+};
+
+struct PrimaryRootDomain final {
+    std::map<std::uint32_t, SeedEvidence> entries;
+    std::map<PrimaryRootCarrier, std::size_t> carriers;
+
+    [[nodiscard]] static PrimaryRootDomain from(
+        const std::map<std::uint32_t, SeedEvidence>& seeds) {
+        PrimaryRootDomain domain;
+        domain.entries = seeds;
+        for (const auto& [address, evidence] : seeds) {
+            if (evidence.causes.empty()) {
+                ++domain.carriers[{SeedCauseKind::EntryPoint, address,
+                                   evidence.function_size, address,
+                                   std::nullopt, std::nullopt}];
+                continue;
+            }
+            for (const auto& cause : evidence.causes) {
+                ++domain.carriers[{cause.kind, address,
+                                   evidence.function_size,
+                                   cause.source_address,
+                                   cause.source_object,
+                                   cause.owner_address}];
+            }
+        }
+        return domain;
+    }
+};
+
+struct PrimaryRootDomainDelta final {
+    bool session_reused = false;
+    bool requires_recursive_rebase = false;
+    bool exact_boundary_changed = false;
+    std::set<std::uint32_t> changed_targets;
+    std::set<std::uint32_t> removed_targets;
+};
+
+[[nodiscard]] bool same_recursive_seed_contract(
+    const SeedEvidence& left, const SeedEvidence& right) {
+    return left.origins == right.origins &&
+           left.proven == right.proven &&
+           left.evidence == right.evidence &&
+           left.function_size == right.function_size;
+}
+
+[[nodiscard]] PrimaryRootDomainDelta primary_root_domain_delta(
+    const PrimaryRootDomain& previous,
+    const PrimaryRootDomain& next) {
+    PrimaryRootDomainDelta delta;
+    for (const auto& [address, evidence] : previous.entries) {
+        const auto found = next.entries.find(address);
+        if (found == next.entries.end()) {
+            delta.changed_targets.insert(address);
+            delta.removed_targets.insert(address);
+            delta.requires_recursive_rebase = true;
+            delta.exact_boundary_changed =
+                delta.exact_boundary_changed ||
+                evidence.function_size != 0u;
+            continue;
+        }
+        if (same_seed_evidence(evidence, found->second)) continue;
+        delta.changed_targets.insert(address);
+        if (!same_recursive_seed_contract(evidence, found->second))
+            delta.requires_recursive_rebase = true;
+        delta.exact_boundary_changed =
+            delta.exact_boundary_changed ||
+            evidence.function_size != found->second.function_size;
+    }
+    for (const auto& [address, evidence] : next.entries) {
+        if (previous.entries.contains(address)) continue;
+        delta.changed_targets.insert(address);
+        delta.exact_boundary_changed =
+            delta.exact_boundary_changed || evidence.function_size != 0u;
+    }
+    // Carrier multiplicity is part of the canonical domain even when its
+    // effective decode seed remains unchanged. Such a withdrawal must update
+    // the retained ledger, but does not revoke reachability while another
+    // carrier still owns the same target.
+    if (previous.carriers != next.carriers) {
+        for (const auto& [carrier, count] : previous.carriers) {
+            const auto found = next.carriers.find(carrier);
+            if (found == next.carriers.end() || found->second != count)
+                delta.changed_targets.insert(carrier.target_address);
+        }
+        for (const auto& [carrier, count] : next.carriers) {
+            const auto found = previous.carriers.find(carrier);
+            if (found == previous.carriers.end() || found->second != count)
+                delta.changed_targets.insert(carrier.target_address);
+        }
+    }
+    return delta;
 }
 
 [[nodiscard]] bool control_flow_session_binding_is_bounded(
@@ -3537,6 +3778,8 @@ struct ControlFlowAnalysisSession::Impl final {
     std::vector<katana::io::ImageImmutableRange> image_immutable_ranges;
     std::optional<AnalysisOverrides> overrides;
     ControlFlowSessionOptionsBinding options;
+    PrimaryRootDomain root_domain_baseline;
+    PrimaryRootDomain candidate_root_domain;
     std::map<std::uint32_t, SeedEvidence> root_seed_baseline;
     std::map<std::uint32_t, SeedEvidence> working_seed_baseline;
     std::map<std::uint32_t, SeedEvidence> candidate_root_seed_baseline;
@@ -3621,7 +3864,7 @@ struct ControlFlowAnalysisSession::Impl final {
         snapshot_candidate_dispatch_index.clear();
     }
 
-    [[nodiscard]] bool prepare(
+    [[nodiscard]] PrimaryRootDomainDelta prepare(
         const katana::io::ExecutableImage& image,
         const AnalysisOverrides* const next_overrides,
         const ControlFlowAnalysisOptions& next_options,
@@ -3633,43 +3876,43 @@ struct ControlFlowAnalysisSession::Impl final {
             control_flow_session_seed_binding_is_bounded(next_seeds) &&
             control_flow_session_binding_is_bounded(
                 image, next_overrides);
-        bool seed_extension =
-            root_seed_baseline.size() <= next_seeds.size();
-        if (seed_extension) {
-            for (const auto& [address, evidence] : root_seed_baseline) {
-                const auto found = next_seeds.find(address);
-                if (found == next_seeds.end() ||
-                    !same_seed_evidence(evidence, found->second)) {
-                    seed_extension = false;
-                    break;
-                }
-            }
-        }
+        const auto next_root_domain =
+            bounded ? PrimaryRootDomain::from(next_seeds)
+                    : PrimaryRootDomain{};
         const bool immutable_binding_matches =
             image_immutable_ranges.size() == immutable_ranges.size() &&
             std::equal(image_immutable_ranges.begin(),
                        image_immutable_ranges.end(),
                        immutable_ranges.begin(), immutable_ranges.end());
-        const bool root_only_reuse =
+        const bool root_domain_reuse =
             reusable && bounded &&
             image_identity == image.analysis_instance_identity() &&
             image_immutable_generation == image.immutable_generation() &&
             immutable_binding_matches &&
-            same_analysis_overrides(overrides, next_overrides) &&
-            options == next_options_binding && seed_extension &&
+            same_analysis_overrides(overrides, next_overrides, false) &&
+            options == next_options_binding &&
             next_options.persistent_function_analysis_epoch_import_blob.empty();
+        auto root_delta = root_domain_reuse
+                              ? primary_root_domain_delta(
+                                    root_domain_baseline,
+                                    next_root_domain)
+                              : PrimaryRootDomainDelta{};
+        root_delta.session_reused = root_domain_reuse;
 
-        if (!root_only_reuse)
+        if (!root_domain_reuse)
             clear_working_state(image, next_options);
         else
             guarded_native_entry_shapes->bind(image);
 
         reusable = false;
         candidate_binding_is_bounded = bounded;
-        if (bounded)
+        if (bounded) {
             candidate_root_seed_baseline = next_seeds;
-        else
+            candidate_root_domain = next_root_domain;
+        } else {
             candidate_root_seed_baseline.clear();
+            candidate_root_domain = {};
+        }
         candidate_working_seed_baseline.clear();
         image_identity = image.analysis_instance_identity();
         image_revision = image.analysis_revision();
@@ -3686,7 +3929,7 @@ struct ControlFlowAnalysisSession::Impl final {
         }
         options = next_options_binding;
         function_value_full_program_required = false;
-        return root_only_reuse;
+        return root_delta;
     }
 
     void stage_terminal_seeds(
@@ -3709,6 +3952,7 @@ struct ControlFlowAnalysisSession::Impl final {
         if (reusable) {
             root_seed_baseline =
                 std::move(candidate_root_seed_baseline);
+            root_domain_baseline = std::move(candidate_root_domain);
             working_seed_baseline =
                 std::move(candidate_working_seed_baseline);
         } else {
@@ -3726,8 +3970,10 @@ struct ControlFlowAnalysisSession::Impl final {
         overrides.reset();
         options = {};
         root_seed_baseline.clear();
+        root_domain_baseline = {};
         working_seed_baseline.clear();
         candidate_root_seed_baseline.clear();
+        candidate_root_domain = {};
         candidate_working_seed_baseline.clear();
         recursive_session.reset();
         recursive_index.clear();
@@ -3976,26 +4222,33 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
                     external_entry_boundaries.end()),
         external_entry_boundaries.end());
 
-    const bool root_only_session_reuse = session_state.prepare(
+    const auto root_domain_transition = session_state.prepare(
         image, overrides, options, seeds);
+    const bool root_only_session_reuse =
+        root_domain_transition.session_reused;
     if (root_only_session_reuse) {
-        // The ordinary seed builder starts from an empty ledger and therefore
-        // labels every retained root as new. A warm session must publish only
-        // the exact root extension to RecursiveAnalysisSession; removals or
-        // changed contracts were already rejected by prepare().
+        // The ordinary seed builder starts from an empty ledger. Publish the
+        // typed root-domain delta instead of relabelling every retained root
+        // as new. Removed roots are excluded from the discovered-seed ledger:
+        // if another producer still owns the address it will be rediscovered
+        // by the complete recursive rebase below.
         pending_seed_changes = {};
-        for (const auto& [address, evidence] : seeds) {
-            if (session_state.root_seed_baseline.contains(address)) continue;
+        for (const auto address : root_domain_transition.changed_targets) {
             pending_seed_changes.changed_targets.insert(address);
             pending_seed_changes.decode_targets.insert(address);
             pending_seed_changes.metadata_targets.insert(address);
-            pending_seed_changes.exact_boundary_changed =
-                pending_seed_changes.exact_boundary_changed ||
-                evidence.function_size != 0u;
-            pending_seed_changes.facts_added += evidence.causes.size();
+            if (const auto found = seeds.find(address);
+                found != seeds.end())
+                pending_seed_changes.facts_added +=
+                    found->second.causes.size();
         }
+        pending_seed_changes.exact_boundary_changed =
+            root_domain_transition.exact_boundary_changed;
         merge_retained_seed_evidence(
-            seeds, session_state.working_seed_baseline);
+            seeds, session_state.working_seed_baseline,
+            root_domain_transition.changed_targets.empty()
+                ? nullptr
+                : &root_domain_transition.changed_targets);
     }
 
     ControlFlowAnalysisResult analysis;
@@ -4752,6 +5005,10 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         };
     bool signed_relative_baseline_reproof_pending =
         root_only_session_reuse;
+    bool root_domain_rebase_pending =
+        root_only_session_reuse &&
+        (root_domain_transition.requires_recursive_rebase ||
+         root_domain_transition.exact_boundary_changed);
     for (;;) {
         if (analysis.fixpoint_iterations >=
             options.maximum_fixpoint_iterations) {
@@ -4776,18 +5033,23 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         ++analysis.fixpoint_iterations;
         const bool has_recursive_baseline =
             recursive_snapshot.valid() || root_only_session_reuse;
+        const bool root_domain_rebase =
+            std::exchange(root_domain_rebase_pending, false);
         const bool recursive_full_recompute =
             has_recursive_baseline &&
-            active_round_seed_changes.exact_boundary_changed;
+            (active_round_seed_changes.exact_boundary_changed ||
+             root_domain_rebase);
         if (recursive_full_recompute) {
             ++analysis.recursive_full_recompute_fallbacks;
             active_round_full_cpu_fallbacks = 1u;
-            mark_persistent_bypass(
-                PersistentAnalysisBypassReason::FunctionBoundaryChanged);
-            function_value_session
-                .ensure_all_persistent_analysis_state_bypassed_once(
+            if (!root_domain_rebase) {
+                mark_persistent_bypass(
                     PersistentAnalysisBypassReason::FunctionBoundaryChanged);
-            function_value_full_program_required = true;
+                function_value_session
+                    .ensure_all_persistent_analysis_state_bypassed_once(
+                        PersistentAnalysisBypassReason::FunctionBoundaryChanged);
+                function_value_full_program_required = true;
+            }
         }
         report_progress("iteration-start");
         const bool recursive_cold_contract =
@@ -4877,7 +5139,14 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             has_recursive_baseline &&
             recursive_snapshot.baseline_status() !=
                 RecursiveAnalysisBaselineStatus::Reused;
-        if (recursive_returned_cold) {
+        std::optional<RecursiveWorkingIndex> previous_recursive_index;
+        const bool selective_root_rebase =
+            recursive_returned_cold && root_domain_rebase;
+        if (selective_root_rebase) {
+            previous_recursive_index.emplace(
+                std::move(recursive_index));
+            recursive_index.clear();
+        } else if (recursive_returned_cold) {
             recursive_index.clear();
             cfa_scan_cache.clear();
             function_boundary_index.clear();
@@ -4941,40 +5210,124 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
         if (reached_exact_boundary_promoted) {
             report_progress("reached-exact-boundary-promoted");
         }
-        for (const auto& line : recursive_snapshot.changed_instructions()) {
-            detail::FunctionProgramLineDelta delta;
-            delta.address = line.address;
-            delta.value = line;
-            pending_function_line_deltas.insert_or_assign(line.address,
-                                                          std::move(delta));
-        }
-        const auto changed_function_entries =
-            recursive_snapshot.changed_function_entries();
-        const auto changed_functions = recursive_snapshot.changed_functions();
-        for (std::size_t index = 0u;
-             index < changed_function_entries.size(); ++index) {
-            ++analysis.function_boundary_entries_visited;
-            const auto entry = changed_function_entries[index];
-            const auto& function = changed_functions[index];
-            detail::FunctionProgramBoundaryDelta delta;
-            delta.entry_address = entry;
-            if (function.evidence == ControlFlowEvidence::Unresolved) {
-                if (function_boundary_index.erase(entry) == 0u) continue;
-            } else {
-                const FunctionBoundary boundary{function.address,
-                                                function.size};
-                const auto previous = function_boundary_index.find(entry);
-                if (previous != function_boundary_index.end() &&
-                    previous->second.entry_address ==
-                        boundary.entry_address &&
-                    previous->second.size == boundary.size)
-                    continue;
-                function_boundary_index.insert_or_assign(entry, boundary);
-                delta.value = boundary;
+        if (previous_recursive_index.has_value()) {
+            auto previous = previous_recursive_index->lines.begin();
+            auto current = recursive_index.lines.begin();
+            while (previous != previous_recursive_index->lines.end() ||
+                   current != recursive_index.lines.end()) {
+                detail::FunctionProgramLineDelta delta;
+                if (current == recursive_index.lines.end() ||
+                    (previous != previous_recursive_index->lines.end() &&
+                     previous->first < current->first)) {
+                    delta.address = previous->first;
+                    pending_function_line_deltas.insert_or_assign(
+                        delta.address, std::move(delta));
+                    ++previous;
+                } else if (previous ==
+                               previous_recursive_index->lines.end() ||
+                           current->first < previous->first) {
+                    delta.address = current->first;
+                    delta.value = current->second;
+                    pending_function_line_deltas.insert_or_assign(
+                        delta.address, std::move(delta));
+                    ++current;
+                } else {
+                    if (!same_recursive_line(previous->second,
+                                             current->second)) {
+                        delta.address = current->first;
+                        delta.value = current->second;
+                        pending_function_line_deltas.insert_or_assign(
+                            delta.address, std::move(delta));
+                    }
+                    ++previous;
+                    ++current;
+                }
             }
-            ++analysis.function_boundary_entries_rebuilt;
-            pending_function_boundary_deltas.insert_or_assign(
-                entry, std::move(delta));
+
+            std::map<std::uint32_t, FunctionBoundary> next_boundaries;
+            for (const auto& [entry, function] : recursive_index.functions) {
+                if (function.evidence == ControlFlowEvidence::Unresolved)
+                    continue;
+                next_boundaries.insert_or_assign(
+                    entry,
+                    FunctionBoundary{function.address, function.size});
+            }
+            auto previous_boundary = function_boundary_index.begin();
+            auto next_boundary = next_boundaries.begin();
+            while (previous_boundary != function_boundary_index.end() ||
+                   next_boundary != next_boundaries.end()) {
+                ++analysis.function_boundary_entries_visited;
+                detail::FunctionProgramBoundaryDelta delta;
+                if (next_boundary == next_boundaries.end() ||
+                    (previous_boundary != function_boundary_index.end() &&
+                     previous_boundary->first < next_boundary->first)) {
+                    delta.entry_address = previous_boundary->first;
+                    pending_function_boundary_deltas.insert_or_assign(
+                        delta.entry_address, std::move(delta));
+                    ++analysis.function_boundary_entries_rebuilt;
+                    ++previous_boundary;
+                } else if (previous_boundary ==
+                               function_boundary_index.end() ||
+                           next_boundary->first < previous_boundary->first) {
+                    delta.entry_address = next_boundary->first;
+                    delta.value = next_boundary->second;
+                    pending_function_boundary_deltas.insert_or_assign(
+                        delta.entry_address, std::move(delta));
+                    ++analysis.function_boundary_entries_rebuilt;
+                    ++next_boundary;
+                } else {
+                    if (previous_boundary->second.entry_address !=
+                            next_boundary->second.entry_address ||
+                        previous_boundary->second.size !=
+                            next_boundary->second.size) {
+                        delta.entry_address = next_boundary->first;
+                        delta.value = next_boundary->second;
+                        pending_function_boundary_deltas.insert_or_assign(
+                            delta.entry_address, std::move(delta));
+                        ++analysis.function_boundary_entries_rebuilt;
+                    }
+                    ++previous_boundary;
+                    ++next_boundary;
+                }
+            }
+            function_boundary_index = std::move(next_boundaries);
+        } else {
+            for (const auto& line : recursive_snapshot.changed_instructions()) {
+                detail::FunctionProgramLineDelta delta;
+                delta.address = line.address;
+                delta.value = line;
+                pending_function_line_deltas.insert_or_assign(
+                    line.address, std::move(delta));
+            }
+            const auto changed_function_entries =
+                recursive_snapshot.changed_function_entries();
+            const auto changed_functions =
+                recursive_snapshot.changed_functions();
+            for (std::size_t index = 0u;
+                 index < changed_function_entries.size(); ++index) {
+                ++analysis.function_boundary_entries_visited;
+                const auto entry = changed_function_entries[index];
+                const auto& function = changed_functions[index];
+                detail::FunctionProgramBoundaryDelta delta;
+                delta.entry_address = entry;
+                if (function.evidence == ControlFlowEvidence::Unresolved) {
+                    if (function_boundary_index.erase(entry) == 0u) continue;
+                } else {
+                    const FunctionBoundary boundary{function.address,
+                                                    function.size};
+                    const auto previous = function_boundary_index.find(entry);
+                    if (previous != function_boundary_index.end() &&
+                        previous->second.entry_address ==
+                            boundary.entry_address &&
+                        previous->second.size == boundary.size)
+                        continue;
+                    function_boundary_index.insert_or_assign(entry, boundary);
+                    delta.value = boundary;
+                }
+                ++analysis.function_boundary_entries_rebuilt;
+                pending_function_boundary_deltas.insert_or_assign(
+                    entry, std::move(delta));
+            }
         }
         const auto cfa_dynamic_predecessor_fingerprint =
             function_edge_journal.state_fingerprint();
@@ -4982,7 +5335,8 @@ ControlFlowAnalysisResult analyze_control_flow_session_impl(
             recursive_snapshot, image, jump_table_cache,
             external_entry_boundaries,
             function_edge_journal.predecessor_index(),
-            cfa_dynamic_predecessor_fingerprint, analysis);
+            selective_root_rebase ? &recursive_index : nullptr,
+            analysis);
         for (const auto key : cfa_scan_cache.changed_runtime_copies()) {
             ++analysis.runtime_copy_result_entries_visited;
             if (const auto* copy = cfa_scan_cache.runtime_copy(key))

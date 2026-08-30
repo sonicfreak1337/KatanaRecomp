@@ -85,6 +85,7 @@ int main() {
         const ScopedCodeAddressMapping outer({0x8C100000u, 0x8C200000u, 0x100u});
         require(relocate_code_address(0x8C100000u) == 0x8C200000u &&
                     relocate_code_address(0x8C1000FFu) == 0x8C2000FFu &&
+                    relocate_code_address(0x8C100020u) == 0x8C200020u &&
                     relocate_code_address(0x8C100100u) == 0x8C100100u &&
                     unrelocate_code_address(0x8C200040u) == 0x8C100040u,
                 "Codeadressvertrag verliert Grenzen oder inverse Abbildung.");

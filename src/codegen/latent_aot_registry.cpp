@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdio>
 #include <deque>
@@ -41,6 +42,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace katana::codegen {
@@ -106,6 +108,11 @@ constexpr std::uint64_t latent_aot_module_analysis_reserve_bytes =
     latent_aot_module_analysis_structural_reserve_bytes;
 constexpr std::string_view latent_aot_analysis_cache_artifact{
     "module-analysis.bin"};
+constexpr std::string_view latent_aot_module_static_cache_artifact{
+    "module-static.bin"};
+constexpr std::uint32_t latent_aot_module_static_cache_schema_version = 1u;
+constexpr std::array<std::uint8_t, 8u> latent_aot_module_static_cache_magic{
+    'K', 'L', 'A', 'T', 'S', 'T', 'A', '1'};
 
 [[nodiscard]] constexpr bool
 latent_aot_module_transient_bytes_overflow(
@@ -5223,10 +5230,847 @@ struct LatentAotStaticCandidateState final {
     // replacement/complete-entry removal can update the aggregate without
     // walking another thread's graph.
     std::size_t retained_bytes = 0u;
+    // Exact raw artifact observed while importing this state.  A changed
+    // resolver wave may replace it only through CodegenCache's bounded
+    // compare-and-replace operation; authority-gated runs retain it until the
+    // outer publish transaction commits.
+    std::string persistent_cache_key;
+    std::string persistent_observed_payload;
+    bool imported_from_persistent_cache = false;
 };
 
 using LatentAotStaticCandidateCache =
     std::vector<std::shared_ptr<LatentAotStaticCandidateState>>;
+
+class StaticCandidateCodecError final : public std::runtime_error {
+  public:
+    StaticCandidateCodecError() : std::runtime_error(
+        "invalid latent AOT module-static cache") {}
+};
+
+class StaticCandidateWriter final {
+  public:
+    explicit StaticCandidateWriter(const std::size_t limit) : limit_(limit) {}
+    void u8(const std::uint8_t value) { append(value); }
+    void u16(const std::uint16_t value) { append(value); }
+    void u32(const std::uint32_t value) { append(value); }
+    void u64(const std::uint64_t value) { append(value); }
+    void boolean(const bool value) { u8(value ? 1u : 0u); }
+    template <typename Enum> void enumeration(const Enum value) {
+        using U = std::underlying_type_t<Enum>;
+        static_assert(sizeof(U) <= sizeof(std::uint32_t));
+        u32(static_cast<std::uint32_t>(static_cast<U>(value)));
+    }
+    void raw(const std::span<const std::uint8_t> value) {
+        require(value.size());
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    void text(const std::string_view value) {
+        if (value.size() > std::numeric_limits<std::uint32_t>::max())
+            throw StaticCandidateCodecError{};
+        u32(static_cast<std::uint32_t>(value.size()));
+        raw({reinterpret_cast<const std::uint8_t*>(value.data()), value.size()});
+    }
+    void blob(const std::span<const std::uint8_t> value) {
+        u64(value.size());
+        raw(value);
+    }
+    [[nodiscard]] const std::vector<std::uint8_t>& bytes() const noexcept {
+        return bytes_;
+    }
+    [[nodiscard]] std::vector<std::uint8_t> finish() && {
+        return std::move(bytes_);
+    }
+
+  private:
+    template <typename T> void append(const T value) {
+        require(sizeof(T));
+        using U = std::make_unsigned_t<T>;
+        const auto bits = static_cast<U>(value);
+        for (std::size_t index = 0u; index < sizeof(T); ++index)
+            bytes_.push_back(static_cast<std::uint8_t>(bits >> (index * 8u)));
+    }
+    void require(const std::size_t count) const {
+        if (count > limit_ || bytes_.size() > limit_ - count)
+            throw StaticCandidateCodecError{};
+    }
+    std::size_t limit_;
+    std::vector<std::uint8_t> bytes_;
+};
+
+class StaticCandidateReader final {
+  public:
+    explicit StaticCandidateReader(const std::span<const std::uint8_t> bytes)
+        : bytes_(bytes) {}
+    std::uint8_t u8() { return read<std::uint8_t>(); }
+    std::uint16_t u16() { return read<std::uint16_t>(); }
+    std::uint32_t u32() { return read<std::uint32_t>(); }
+    std::uint64_t u64() { return read<std::uint64_t>(); }
+    bool boolean() {
+        const auto value = u8();
+        if (value > 1u) throw StaticCandidateCodecError{};
+        return value != 0u;
+    }
+    template <typename Enum> Enum enumeration(const Enum maximum) {
+        const auto value = u32();
+        if (value > static_cast<std::uint32_t>(maximum))
+            throw StaticCandidateCodecError{};
+        return static_cast<Enum>(value);
+    }
+    std::string text(const std::size_t maximum = 16u * 1024u * 1024u) {
+        const auto count = static_cast<std::size_t>(u32());
+        if (count > maximum) throw StaticCandidateCodecError{};
+        const auto value = take(count);
+        return {reinterpret_cast<const char*>(value.data()), value.size()};
+    }
+    std::span<const std::uint8_t> blob(const std::size_t maximum) {
+        const auto count64 = u64();
+        if (count64 > maximum ||
+            count64 > std::numeric_limits<std::size_t>::max())
+            throw StaticCandidateCodecError{};
+        return take(static_cast<std::size_t>(count64));
+    }
+    std::size_t size(const std::size_t maximum) {
+        const auto value = u64();
+        if (value > maximum ||
+            value > std::numeric_limits<std::size_t>::max())
+            throw StaticCandidateCodecError{};
+        return static_cast<std::size_t>(value);
+    }
+    std::span<const std::uint8_t> raw(const std::size_t count) {
+        return take(count);
+    }
+    [[nodiscard]] bool empty() const noexcept { return cursor_ == bytes_.size(); }
+
+  private:
+    template <typename T> T read() {
+        const auto value = take(sizeof(T));
+        std::make_unsigned_t<T> bits = 0u;
+        for (std::size_t index = 0u; index < sizeof(T); ++index)
+            bits |= static_cast<std::make_unsigned_t<T>>(value[index]) <<
+                    (index * 8u);
+        return static_cast<T>(bits);
+    }
+    std::span<const std::uint8_t> take(const std::size_t count) {
+        if (count > bytes_.size() || cursor_ > bytes_.size() - count)
+            throw StaticCandidateCodecError{};
+        const auto value = bytes_.subspan(cursor_, count);
+        cursor_ += count;
+        return value;
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
+template <typename T, typename Write>
+void write_static_vector(StaticCandidateWriter& output,
+                         const std::vector<T>& values,
+                         Write&& write) {
+    if (values.size() > std::numeric_limits<std::uint32_t>::max())
+        throw StaticCandidateCodecError{};
+    output.u32(static_cast<std::uint32_t>(values.size()));
+    for (const auto& value : values) write(value);
+}
+
+template <typename T, typename Read>
+std::vector<T> read_static_vector(StaticCandidateReader& input,
+                                  const std::size_t maximum,
+                                  Read&& read) {
+    const auto count = static_cast<std::size_t>(input.u32());
+    if (count > maximum) throw StaticCandidateCodecError{};
+    std::vector<T> values;
+    values.reserve(count);
+    for (std::size_t index = 0u; index < count; ++index)
+        values.push_back(read());
+    return values;
+}
+
+void write_static_u32s(StaticCandidateWriter& output,
+                       const std::vector<std::uint32_t>& values) {
+    write_static_vector(output, values,
+                        [&](const auto value) { output.u32(value); });
+}
+
+std::vector<std::uint32_t> read_static_u32s(
+    StaticCandidateReader& input,
+    const std::size_t maximum = maximum_prepared_latent_aot_block_identities) {
+    return read_static_vector<std::uint32_t>(
+        input, maximum, [&] { return input.u32(); });
+}
+
+void write_static_key(StaticCandidateWriter& output,
+                      const LatentAotStaticCandidateKey& key) {
+    output.text(key.byte_identity);
+    output.u32(key.byte_size);
+    output.u32(key.source_address);
+    write_static_u32s(output, key.entry_offsets);
+    write_static_u32s(output, key.explicit_entry_offsets);
+    output.boolean(key.exact_candidate);
+    output.boolean(key.inferred_authoritative_entry_table);
+    output.boolean(key.proven_runtime_base.has_value());
+    if (key.proven_runtime_base) output.u32(*key.proven_runtime_base);
+    output.u8(key.mode);
+    output.u8(key.completeness_policy);
+    output.u32(key.analyzer_abi);
+    output.u64(key.maximum_entry_scan_instructions);
+    output.u64(key.maximum_native_instructions);
+    output.u64(key.maximum_blocks);
+    output.u64(key.maximum_functions);
+    output.u64(key.maximum_analysis_iterations);
+    output.u64(key.maximum_analysis_contexts);
+    output.text(key.analysis_implementation_identity);
+    output.text(key.analysis_cache_implementation_identity);
+    output.text(key.ir_product_implementation_identity);
+    output.text(key.persistent_epoch_identity);
+    write_static_vector(output, key.source_bindings, [&](const auto& binding) {
+        output.text(binding.id);
+        output.enumeration(binding.transform);
+        output.text(binding.byte_identity);
+        output.u64(binding.disc_byte_offset);
+        output.u32(binding.byte_size);
+    });
+}
+
+LatentAotStaticCandidateKey read_static_key(StaticCandidateReader& input) {
+    LatentAotStaticCandidateKey key;
+    key.byte_identity = input.text(96u);
+    key.byte_size = input.u32();
+    key.source_address = input.u32();
+    key.entry_offsets = read_static_u32s(input);
+    key.explicit_entry_offsets = read_static_u32s(input);
+    key.exact_candidate = input.boolean();
+    key.inferred_authoritative_entry_table = input.boolean();
+    if (input.boolean()) key.proven_runtime_base = input.u32();
+    key.mode = input.u8();
+    key.completeness_policy = input.u8();
+    key.analyzer_abi = input.u32();
+    key.maximum_entry_scan_instructions = input.size(
+        maximum_prepared_latent_aot_instructions_per_module);
+    key.maximum_native_instructions = input.size(
+        maximum_prepared_latent_aot_instructions_per_module);
+    key.maximum_blocks = input.size(
+        maximum_prepared_latent_aot_blocks_per_module);
+    key.maximum_functions = input.size(
+        maximum_prepared_latent_aot_functions_per_module);
+    key.maximum_analysis_iterations = input.size(
+        std::numeric_limits<std::size_t>::max());
+    key.maximum_analysis_contexts = input.size(
+        std::numeric_limits<std::size_t>::max());
+    key.analysis_implementation_identity = input.text(4096u);
+    key.analysis_cache_implementation_identity = input.text(4096u);
+    key.ir_product_implementation_identity = input.text(4096u);
+    key.persistent_epoch_identity = input.text(96u);
+    key.source_bindings = read_static_vector<PreparedLatentAotSourceBinding>(
+        input, maximum_prepared_latent_aot_source_bindings, [&] {
+            PreparedLatentAotSourceBinding binding;
+            binding.id = input.text(4096u);
+            binding.transform = input.enumeration(LatentAotSourceTransform::SegaPrs);
+            binding.byte_identity = input.text(96u);
+            binding.disc_byte_offset = input.u64();
+            binding.byte_size = input.u32();
+            return binding;
+        });
+    return key;
+}
+
+void write_static_resolver_contract(
+    StaticCandidateWriter& output,
+    const LatentAotResolverContract& contract) {
+    write_static_u32s(output, contract.external_code_targets);
+    write_static_u32s(output, contract.external_data_targets);
+    write_static_vector(output, contract.external_callback_sinks,
+                        [&](const auto& sink) {
+                            output.u32(sink.function_address);
+                            output.u8(sink.argument_mask);
+                            output.u8(sink.record_argument_mask);
+                        });
+    write_static_vector(output, contract.external_persistent_pointer_sinks,
+                        [&](const auto& sink) {
+                            output.u32(sink.function_address);
+                            output.u8(sink.argument_mask);
+                        });
+    write_static_vector(output, contract.external_callback_field_sinks,
+                        [&](const auto& sink) {
+                            output.u32(sink.function_address);
+                            output.u32(sink.call_instruction_address);
+                            output.u32(sink.load_instruction_address);
+                            output.u32(std::bit_cast<std::uint32_t>(sink.displacement));
+                            output.u8(sink.width);
+                            output.boolean(sink.call);
+                            output.u8(sink.receiver_argument_mask);
+                        });
+    write_static_vector(output, contract.external_callback_record_tables,
+                        [&](const auto& table) {
+                            output.u32(table.function_address);
+                            output.u32(table.call_instruction_address);
+                            output.u32(table.callback_load_instruction_address);
+                            output.u32(table.callback_sink_address);
+                            output.u32(std::bit_cast<std::uint32_t>(
+                                table.header_table_pointer_displacement));
+                            output.u32(table.record_stride);
+                            output.u32(std::bit_cast<std::uint32_t>(
+                                table.callback_displacement));
+                            output.u8(table.callback_argument);
+                            output.u8(table.width);
+                        });
+}
+
+LatentAotResolverContract read_static_resolver_contract(
+    StaticCandidateReader& input) {
+    LatentAotResolverContract contract;
+    contract.external_code_targets = read_static_u32s(input);
+    contract.external_data_targets = read_static_u32s(input);
+    contract.external_callback_sinks =
+        read_static_vector<LatentAotExternalCallbackSink>(
+            input, maximum_prepared_latent_aot_entry_hints, [&] {
+                LatentAotExternalCallbackSink sink;
+                sink.function_address = input.u32();
+                sink.argument_mask = input.u8();
+                sink.record_argument_mask = input.u8();
+                return sink;
+            });
+    contract.external_persistent_pointer_sinks =
+        read_static_vector<LatentAotExternalPersistentPointerSink>(
+            input, maximum_prepared_latent_aot_entry_hints, [&] {
+                LatentAotExternalPersistentPointerSink sink;
+                sink.function_address = input.u32();
+                sink.argument_mask = input.u8();
+                return sink;
+            });
+    contract.external_callback_field_sinks =
+        read_static_vector<LatentAotExternalCallbackFieldSink>(
+            input, maximum_prepared_latent_aot_entry_hints, [&] {
+                LatentAotExternalCallbackFieldSink sink;
+                sink.function_address = input.u32();
+                sink.call_instruction_address = input.u32();
+                sink.load_instruction_address = input.u32();
+                sink.displacement = std::bit_cast<std::int32_t>(input.u32());
+                sink.width = input.u8();
+                sink.call = input.boolean();
+                sink.receiver_argument_mask = input.u8();
+                return sink;
+            });
+    contract.external_callback_record_tables =
+        read_static_vector<LatentAotExternalCallbackRecordTable>(
+            input, maximum_prepared_latent_aot_entry_hints, [&] {
+                LatentAotExternalCallbackRecordTable table;
+                table.function_address = input.u32();
+                table.call_instruction_address = input.u32();
+                table.callback_load_instruction_address = input.u32();
+                table.callback_sink_address = input.u32();
+                table.header_table_pointer_displacement =
+                    std::bit_cast<std::int32_t>(input.u32());
+                table.record_stride = input.u32();
+                table.callback_displacement =
+                    std::bit_cast<std::int32_t>(input.u32());
+                table.callback_argument = input.u8();
+                table.width = input.u8();
+                return table;
+            });
+    return contract;
+}
+
+void write_static_hardware_loop(
+    StaticCandidateWriter& output,
+    const katana::analysis::HardwareNaturalLoop& loop) {
+    output.u32(loop.header_address);
+    output.u32(loop.latch_address);
+    output.u32(loop.backedge_instruction_address);
+    output.enumeration(loop.classification);
+    output.boolean(loop.unresolved_guard_access);
+    write_static_u32s(output, loop.unresolved_guard_read_instruction_addresses);
+    write_static_u32s(output, loop.block_addresses);
+    write_static_u32s(output, loop.counter_instruction_addresses);
+    write_static_vector(output, loop.local_progress_evidence, [&](const auto& value) {
+        output.u32(value.condition_instruction_address);
+        output.u32(value.progress_instruction_address);
+        output.u8(value.register_index);
+        output.enumeration(value.kind);
+    });
+    write_static_vector(output, loop.accesses, [&](const auto& value) {
+        output.u32(value.instruction_address);
+        output.u32(value.guest_address);
+        output.u32(value.canonical_address);
+        output.enumeration(value.region);
+        output.enumeration(value.kind);
+        output.u8(value.width);
+        output.boolean(value.linear_memory);
+        output.boolean(value.aperture_mapped);
+        output.enumeration(value.runtime_support);
+        output.boolean(value.guards_loop);
+    });
+    write_static_vector(output, loop.matching_write_candidates, [&](const auto& value) {
+        output.u32(value.instruction_address);
+        output.u32(value.guest_address);
+        output.u32(value.canonical_address);
+        output.u8(value.width);
+    });
+    output.boolean(loop.matching_write_candidates_truncated);
+}
+
+katana::analysis::HardwareNaturalLoop read_static_hardware_loop(
+    StaticCandidateReader& input) {
+    using namespace katana::analysis;
+    HardwareNaturalLoop loop;
+    loop.header_address = input.u32();
+    loop.latch_address = input.u32();
+    loop.backedge_instruction_address = input.u32();
+    loop.classification = input.enumeration(HardwareLoopClassification::Unknown);
+    loop.unresolved_guard_access = input.boolean();
+    loop.unresolved_guard_read_instruction_addresses = read_static_u32s(input);
+    loop.block_addresses = read_static_u32s(input);
+    loop.counter_instruction_addresses = read_static_u32s(input);
+    loop.local_progress_evidence =
+        read_static_vector<HardwareLoopLocalProgressEvidence>(
+            input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+                HardwareLoopLocalProgressEvidence value;
+                value.condition_instruction_address = input.u32();
+                value.progress_instruction_address = input.u32();
+                value.register_index = input.u8();
+                value.kind = input.enumeration(
+                    HardwareLoopLocalProgressKind::PointerTraversal);
+                return value;
+            });
+    loop.accesses = read_static_vector<HardwareLoopAccessEvidence>(
+        input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+            HardwareLoopAccessEvidence value;
+            value.instruction_address = input.u32();
+            value.guest_address = input.u32();
+            value.canonical_address = input.u32();
+            value.region = input.enumeration(DreamcastHardwareRegion::Unknown);
+            value.kind = input.enumeration(HardwareAccessKind::Prefetch);
+            value.width = input.u8();
+            value.linear_memory = input.boolean();
+            value.aperture_mapped = input.boolean();
+            value.runtime_support = input.enumeration(HardwareRuntimeSupport::Unmapped);
+            value.guards_loop = input.boolean();
+            return value;
+        });
+    loop.matching_write_candidates =
+        read_static_vector<HardwareLoopWriteCandidate>(
+            input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+                HardwareLoopWriteCandidate value;
+                value.instruction_address = input.u32();
+                value.guest_address = input.u32();
+                value.canonical_address = input.u32();
+                value.width = input.u8();
+                return value;
+            });
+    loop.matching_write_candidates_truncated = input.boolean();
+    return loop;
+}
+
+void write_static_hardware_audit(
+    StaticCandidateWriter& output,
+    const katana::analysis::DreamcastHardwareAudit& audit) {
+    output.text(audit.scope);
+    output.u64(audit.image_bytes);
+    output.u64(audit.reachable_instructions);
+    output.u64(audit.reachable_functions);
+    output.u64(audit.unknown_instructions);
+    output.u64(audit.memory_access_sites);
+    output.u64(audit.resolved_memory_access_sites);
+    output.u64(audit.unresolved_memory_access_sites);
+    write_static_vector(output, audit.unresolved_memory_instruction_sites,
+                        [&](const auto& value) {
+                            output.u32(value.instruction_address);
+                            output.u8(value.access_mask);
+                            output.u8(value.width_mask);
+                        });
+    output.u64(audit.implemented_addresses);
+    output.u64(audit.partial_addresses);
+    output.u64(audit.known_gap_addresses);
+    output.u64(audit.rejected_addresses);
+    output.u64(audit.unmapped_addresses);
+    output.u64(audit.unresolved_poll_guard_loops);
+    write_static_vector(output, audit.instruction_diagnostics,
+                        [&](const auto& value) {
+                            output.u32(value.address);
+                            output.u16(value.opcode);
+                            output.text(value.reason);
+                            output.enumeration(value.evidence);
+                            write_static_u32s(output, value.incoming_addresses);
+                            write_static_u32s(output, value.delay_slot_owners);
+                        });
+    write_static_vector(output, audit.references, [&](const auto& value) {
+        output.u32(value.instruction_address);
+        output.u32(value.guest_address);
+        output.u32(value.canonical_address);
+        output.boolean(value.canonical_address_known);
+        output.text(value.address_expression);
+        output.enumeration(value.region);
+        output.enumeration(value.kind);
+        output.u8(value.width);
+        output.boolean(value.aperture_mapped);
+        output.enumeration(value.runtime_support);
+        output.text(value.support_reason);
+        output.text(value.register_name);
+    });
+    write_static_vector(output, audit.addresses, [&](const auto& value) {
+        output.u32(value.guest_address);
+        output.u32(value.canonical_address);
+        output.enumeration(value.region);
+        output.boolean(value.aperture_mapped);
+        output.enumeration(value.runtime_support);
+        output.text(value.support_reason);
+        output.text(value.register_name);
+        output.u64(value.reads);
+        output.u64(value.writes);
+        output.u64(value.prefetches);
+        write_static_vector(output, value.widths,
+                            [&](const auto width) { output.u8(width); });
+        write_static_u32s(output, value.instruction_addresses);
+    });
+    write_static_vector(output, audit.loops,
+                        [&](const auto& loop) {
+                            write_static_hardware_loop(output, loop);
+                        });
+}
+
+katana::analysis::DreamcastHardwareAudit read_static_hardware_audit(
+    StaticCandidateReader& input) {
+    using namespace katana::analysis;
+    DreamcastHardwareAudit audit;
+    audit.scope = input.text(4096u);
+    audit.image_bytes = input.u64();
+    audit.reachable_instructions = input.u64();
+    audit.reachable_functions = input.u64();
+    audit.unknown_instructions = input.u64();
+    audit.memory_access_sites = input.u64();
+    audit.resolved_memory_access_sites = input.u64();
+    audit.unresolved_memory_access_sites = input.u64();
+    audit.unresolved_memory_instruction_sites =
+        read_static_vector<UnresolvedMemoryInstructionSite>(
+            input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+                UnresolvedMemoryInstructionSite value;
+                value.instruction_address = input.u32();
+                value.access_mask = input.u8();
+                value.width_mask = input.u8();
+                return value;
+            });
+    audit.implemented_addresses = input.u64();
+    audit.partial_addresses = input.u64();
+    audit.known_gap_addresses = input.u64();
+    audit.rejected_addresses = input.u64();
+    audit.unmapped_addresses = input.u64();
+    audit.unresolved_poll_guard_loops = input.u64();
+    audit.instruction_diagnostics =
+        read_static_vector<HardwareInstructionDiagnostic>(
+            input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+                HardwareInstructionDiagnostic value;
+                value.address = input.u32();
+                value.opcode = input.u16();
+                value.reason = input.text(4096u);
+                value.evidence = input.enumeration(ControlFlowEvidence::Unresolved);
+                value.incoming_addresses = read_static_u32s(input);
+                value.delay_slot_owners = read_static_u32s(input);
+                return value;
+            });
+    audit.references = read_static_vector<HardwareAccessReference>(
+        input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+            HardwareAccessReference value;
+            value.instruction_address = input.u32();
+            value.guest_address = input.u32();
+            value.canonical_address = input.u32();
+            value.canonical_address_known = input.boolean();
+            value.address_expression = input.text(4096u);
+            value.region = input.enumeration(DreamcastHardwareRegion::Unknown);
+            value.kind = input.enumeration(HardwareAccessKind::Prefetch);
+            value.width = input.u8();
+            value.aperture_mapped = input.boolean();
+            value.runtime_support = input.enumeration(HardwareRuntimeSupport::Unmapped);
+            value.support_reason = input.text(4096u);
+            value.register_name = input.text(4096u);
+            return value;
+        });
+    audit.addresses = read_static_vector<HardwareAddressSummary>(
+        input, maximum_prepared_latent_aot_instructions_per_module, [&] {
+            HardwareAddressSummary value;
+            value.guest_address = input.u32();
+            value.canonical_address = input.u32();
+            value.region = input.enumeration(DreamcastHardwareRegion::Unknown);
+            value.aperture_mapped = input.boolean();
+            value.runtime_support = input.enumeration(HardwareRuntimeSupport::Unmapped);
+            value.support_reason = input.text(4096u);
+            value.register_name = input.text(4096u);
+            value.reads = input.u64();
+            value.writes = input.u64();
+            value.prefetches = input.u64();
+            value.widths = read_static_vector<std::uint8_t>(
+                input, 32u, [&] { return input.u8(); });
+            value.instruction_addresses = read_static_u32s(input);
+            return value;
+        });
+    audit.loops = read_static_vector<HardwareNaturalLoop>(
+        input, maximum_prepared_latent_aot_blocks_per_module,
+        [&] { return read_static_hardware_loop(input); });
+    if (audit.unresolved_poll_guard_loops !=
+        katana::analysis::count_unresolved_poll_guard_loops(audit.loops))
+        throw StaticCandidateCodecError{};
+    return audit;
+}
+
+constexpr IrProgramCacheLimits module_static_ir_limits{
+    48u * 1024u * 1024u,
+    maximum_prepared_latent_aot_functions_per_module,
+    maximum_prepared_latent_aot_blocks_per_module,
+    maximum_prepared_latent_aot_instructions_per_module,
+    maximum_latent_aot_analysis_cache_successors,
+    maximum_latent_aot_analysis_cache_targets,
+    maximum_latent_aot_analysis_cache_callsites,
+    maximum_latent_aot_analysis_cache_parser_depth,
+    maximum_latent_aot_session_static_cache_bytes};
+
+std::string static_candidate_cache_key(
+    const LatentAotStaticCandidateKey& key) {
+    StaticCandidateWriter material(4u * 1024u * 1024u);
+    material.raw(latent_aot_module_static_cache_magic);
+    material.u32(latent_aot_module_static_cache_schema_version);
+    write_static_key(material, key);
+    return katana::io::sha256_bytes(std::string_view(
+        reinterpret_cast<const char*>(material.bytes().data()),
+        material.bytes().size()));
+}
+
+bool sorted_unique_u32(const std::vector<std::uint32_t>& values) noexcept {
+    return std::adjacent_find(values.begin(), values.end(),
+                              std::greater_equal<>{}) == values.end();
+}
+
+template <typename T, typename Less>
+bool sorted_unique_static_values(const std::vector<T>& values,
+                                 Less less) noexcept {
+    if (!std::is_sorted(values.begin(), values.end(), less)) return false;
+    return std::adjacent_find(
+               values.begin(), values.end(), [&](const auto& left,
+                                                   const auto& right) {
+                   return !less(left, right) && !less(right, left);
+               }) == values.end();
+}
+
+bool canonical_static_resolver_contract(
+    const LatentAotResolverContract& contract) noexcept {
+    const auto sink_less = [](const auto& left, const auto& right) {
+        return left.function_address < right.function_address;
+    };
+    const auto field_less = [](const auto& left, const auto& right) {
+        return std::tie(left.function_address,
+                        left.call_instruction_address,
+                        left.load_instruction_address,
+                        left.displacement,
+                        left.width,
+                        left.call) <
+               std::tie(right.function_address,
+                        right.call_instruction_address,
+                        right.load_instruction_address,
+                        right.displacement,
+                        right.width,
+                        right.call);
+    };
+    const auto table_less = [](const auto& left, const auto& right) {
+        return std::tie(left.function_address,
+                        left.call_instruction_address,
+                        left.callback_load_instruction_address,
+                        left.callback_sink_address,
+                        left.header_table_pointer_displacement,
+                        left.record_stride,
+                        left.callback_displacement,
+                        left.callback_argument,
+                        left.width) <
+               std::tie(right.function_address,
+                        right.call_instruction_address,
+                        right.callback_load_instruction_address,
+                        right.callback_sink_address,
+                        right.header_table_pointer_displacement,
+                        right.record_stride,
+                        right.callback_displacement,
+                        right.callback_argument,
+                        right.width);
+    };
+    return sorted_unique_u32(contract.external_code_targets) &&
+           sorted_unique_u32(contract.external_data_targets) &&
+           sorted_unique_static_values(
+               contract.external_callback_sinks, sink_less) &&
+           sorted_unique_static_values(
+               contract.external_persistent_pointer_sinks, sink_less) &&
+           sorted_unique_static_values(
+               contract.external_callback_field_sinks, field_less) &&
+           sorted_unique_static_values(
+               contract.external_callback_record_tables, table_less);
+}
+
+bool canonical_static_candidate_state(
+    const LatentAotStaticCandidateState& state) {
+    if (state.program.empty() || state.terminal_inventory_candidate_values ||
+        state.key.byte_size == 0u ||
+        state.published_entry_offsets.empty() ||
+        !sorted_unique_u32(state.key.entry_offsets) ||
+        !sorted_unique_u32(state.key.explicit_entry_offsets) ||
+        !sorted_unique_u32(state.published_entry_offsets) ||
+        !sorted_unique_u32(state.analysis_entry_offsets) ||
+        !sorted_unique_u32(state.non_function_entry_offsets) ||
+        !sorted_unique_u32(state.authoritative_tail_roots) ||
+        !canonical_static_resolver_contract(state.resolver_contract) ||
+        !std::includes(state.published_entry_offsets.begin(),
+                       state.published_entry_offsets.end(),
+                       state.key.entry_offsets.begin(),
+                       state.key.entry_offsets.end()))
+        return false;
+    if (!std::is_sorted(state.key.source_bindings.begin(),
+                        state.key.source_bindings.end(), source_binding_less) ||
+        std::adjacent_find(state.key.source_bindings.begin(),
+                           state.key.source_bindings.end()) !=
+            state.key.source_bindings.end())
+        return false;
+    std::set<std::uint32_t> functions;
+    std::set<std::uint32_t> blocks;
+    for (const auto& function : state.program) {
+        if (!functions.insert(function.entry_address).second) return false;
+        for (const auto& block : function.blocks)
+            if (!blocks.insert(block.start_address).second) return false;
+    }
+    for (const auto offset : state.analysis_entry_offsets)
+        if (!functions.contains(state.key.source_address + offset)) return false;
+    for (const auto offset : state.published_entry_offsets)
+        if (!blocks.contains(state.key.source_address + offset)) return false;
+    if (!std::is_sorted(
+            state.external_dispatch_entries.begin(),
+            state.external_dispatch_entries.end(),
+            [](const auto& left, const auto& right) {
+                return std::tie(left.address, left.kind) <
+                       std::tie(right.address, right.kind);
+            }) ||
+        std::adjacent_find(
+            state.external_dispatch_entries.begin(),
+            state.external_dispatch_entries.end(),
+            [](const auto& left, const auto& right) {
+                return left.address == right.address && left.kind == right.kind;
+            }) != state.external_dispatch_entries.end())
+        return false;
+    for (const auto offset : state.published_entry_offsets) {
+        const auto address = state.key.source_address + offset;
+        if (std::none_of(state.external_dispatch_entries.begin(),
+                         state.external_dispatch_entries.end(),
+                         [&](const auto& entry) {
+                             return entry.address == address &&
+                                    entry.kind == katana::ir::
+                                        ExternalDispatchEntryKind::BlockEntry;
+                         }))
+            return false;
+    }
+    return true;
+}
+
+std::vector<std::uint8_t> serialize_static_candidate_state(
+    const LatentAotStaticCandidateState& state) {
+    if (!canonical_static_candidate_state(state))
+        throw StaticCandidateCodecError{};
+    StaticCandidateWriter body(
+        maximum_latent_aot_module_static_cache_artifact_bytes);
+    write_static_key(body, state.key);
+    write_static_resolver_contract(body, state.resolver_contract);
+    const auto ir_payload = serialize_ir_program_cache_payload(
+        state.program, module_static_ir_limits);
+    body.blob(ir_payload);
+    write_static_u32s(body, state.published_entry_offsets);
+    write_static_u32s(body, state.analysis_entry_offsets);
+    write_static_u32s(body, state.non_function_entry_offsets);
+    write_static_u32s(body, state.authoritative_tail_roots);
+    write_static_vector(body, state.external_dispatch_entries,
+                        [&](const auto& entry) {
+                            body.u32(entry.address);
+                            body.enumeration(entry.kind);
+                        });
+    write_static_hardware_audit(body, state.hardware_audit);
+    body.boolean(state.preferred_runtime_base.has_value());
+    if (state.preferred_runtime_base)
+        body.u32(*state.preferred_runtime_base);
+    body.boolean(state.preferred_runtime_base_identity_consistent);
+
+    const auto key = static_candidate_cache_key(state.key);
+    const auto body_view = std::string_view(
+        reinterpret_cast<const char*>(body.bytes().data()), body.bytes().size());
+    StaticCandidateWriter artifact(
+        maximum_latent_aot_module_static_cache_artifact_bytes);
+    artifact.raw(latent_aot_module_static_cache_magic);
+    artifact.u32(latent_aot_module_static_cache_schema_version);
+    artifact.text(key);
+    artifact.text(katana::io::sha256_bytes(body_view));
+    artifact.blob(body.bytes());
+    return std::move(artifact).finish();
+}
+
+struct ParsedStaticCandidateState final {
+    std::shared_ptr<LatentAotStaticCandidateState> state;
+    bool corrupt = false;
+};
+
+ParsedStaticCandidateState parse_static_candidate_state(
+    const std::string_view expected_key,
+    const std::string_view artifact) {
+    if (artifact.empty() || artifact.size() >
+                                maximum_latent_aot_module_static_cache_artifact_bytes)
+        return {nullptr, true};
+    try {
+        StaticCandidateReader envelope({
+            reinterpret_cast<const std::uint8_t*>(artifact.data()),
+            artifact.size()});
+        const auto magic = envelope.raw(latent_aot_module_static_cache_magic.size());
+        if (magic.size() != latent_aot_module_static_cache_magic.size() ||
+            !std::equal(magic.begin(), magic.end(),
+                        latent_aot_module_static_cache_magic.begin()))
+            return {nullptr, false};
+        if (envelope.u32() != latent_aot_module_static_cache_schema_version)
+            return {nullptr, false};
+        const auto stored_key = envelope.text(64u);
+        if (stored_key != expected_key) return {nullptr, false};
+        const auto stored_sha = envelope.text(64u);
+        const auto body = envelope.blob(
+            maximum_latent_aot_module_static_cache_artifact_bytes);
+        if (!envelope.empty() ||
+            stored_sha != katana::io::sha256_bytes(std::string_view(
+                reinterpret_cast<const char*>(body.data()), body.size())))
+            throw StaticCandidateCodecError{};
+        StaticCandidateReader input(body);
+        auto state = std::make_shared<LatentAotStaticCandidateState>();
+        state->key = read_static_key(input);
+        if (static_candidate_cache_key(state->key) != expected_key)
+            throw StaticCandidateCodecError{};
+        state->resolver_contract = read_static_resolver_contract(input);
+        state->program = parse_ir_program_cache_payload(
+            input.blob(module_static_ir_limits.maximum_payload_bytes),
+            module_static_ir_limits);
+        state->published_entry_offsets = read_static_u32s(input);
+        state->analysis_entry_offsets = read_static_u32s(input);
+        state->non_function_entry_offsets = read_static_u32s(input);
+        state->authoritative_tail_roots = read_static_u32s(input);
+        state->external_dispatch_entries =
+            read_static_vector<katana::ir::ExternalDispatchEntry>(
+                input, maximum_prepared_latent_aot_block_identities, [&] {
+                    katana::ir::ExternalDispatchEntry entry;
+                    entry.address = input.u32();
+                    entry.kind = input.enumeration(
+                        katana::ir::ExternalDispatchEntryKind::
+                            InstructionContinuation);
+                    return entry;
+                });
+        state->hardware_audit = read_static_hardware_audit(input);
+        if (input.boolean()) state->preferred_runtime_base = input.u32();
+        state->preferred_runtime_base_identity_consistent = input.boolean();
+        if (!input.empty() || !canonical_static_candidate_state(*state))
+            throw StaticCandidateCodecError{};
+        const auto canonical = serialize_static_candidate_state(*state);
+        if (canonical.size() != artifact.size() ||
+            !std::equal(canonical.begin(), canonical.end(),
+                        reinterpret_cast<const std::uint8_t*>(artifact.data())))
+            throw StaticCandidateCodecError{};
+        return {std::move(state), false};
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception&) {
+        return {nullptr, true};
+    }
+}
 
 LatentAotResolverContract resolver_contract_from_options(
     const LatentAotDiscoveryOptions& options) {
@@ -5432,6 +6276,8 @@ std::size_t estimate_static_candidate_state_bytes(
     add_string(state.key.ir_product_implementation_identity);
     add_string(state.key.persistent_epoch_identity);
     add_string(state.terminal_rejection_detail);
+    add_string(state.persistent_cache_key);
+    add_string(state.persistent_observed_payload);
     add_count(state.key.entry_offsets.capacity(), sizeof(std::uint32_t));
     add_count(state.key.explicit_entry_offsets.capacity(),
               sizeof(std::uint32_t));
@@ -5569,7 +6415,48 @@ struct CandidateAnalysisCacheCounters {
     std::atomic_size_t session_terminal_negative_hits = 0u;
     std::atomic_size_t session_cold_fallbacks = 0u;
     std::atomic_size_t session_cache_budget_skips = 0u;
+    std::atomic_size_t module_static_hits = 0u;
+    std::atomic_size_t module_static_misses = 0u;
+    std::atomic_size_t module_static_cold_fallbacks = 0u;
+    std::atomic_size_t module_static_corrupt_entries = 0u;
+    std::atomic_size_t module_static_stores = 0u;
 };
+
+bool publish_static_candidate_state_now(
+    CodegenCache& cache,
+    LatentAotStaticCandidateState& state,
+    CandidateAnalysisCacheCounters& counters) {
+    if (state.terminal_inventory_candidate_values || state.program.empty())
+        return false;
+    const auto serialized_bytes = serialize_static_candidate_state(state);
+    const std::string serialized(
+        reinterpret_cast<const char*>(serialized_bytes.data()),
+        serialized_bytes.size());
+    bool published = false;
+    if (serialized == state.persistent_observed_payload) {
+        return true;
+    } else if (!state.persistent_observed_payload.empty()) {
+        published = cache.replace_bounded_if_matches(
+            state.persistent_cache_key,
+            latent_aot_module_static_cache_artifact,
+            state.persistent_observed_payload,
+            serialized,
+            maximum_latent_aot_module_static_cache_artifact_bytes);
+    } else {
+        cache.store_bounded(
+            state.persistent_cache_key,
+            latent_aot_module_static_cache_artifact,
+            serialized,
+            maximum_latent_aot_module_static_cache_artifact_bytes);
+        published = true;
+    }
+    if (published) {
+        state.persistent_observed_payload = serialized;
+        counters.module_static_stores.fetch_add(
+            1u, std::memory_order_relaxed);
+    }
+    return published;
+}
 
 CandidateAnalysisOutcome reject_candidate(
     const LatentAotAnalysisRejection rejection,
@@ -7742,10 +8629,68 @@ CandidateAnalysisOutcome analyze_candidate(
             "sha256:" + katana::io::sha256_bytes(epoch_import_blob);
     const auto static_key = make_static_candidate_key(
         candidate, options, persistent_epoch_identity);
-    if (static_cache != nullptr && static_cache_mutex != nullptr &&
-        !candidate_source_shape_rejection(candidate, options)) {
-        if (auto state = find_static_candidate_state(
-                *static_cache, *static_cache_mutex, static_key)) {
+    std::string persistent_static_key;
+    std::string persistent_static_observed_payload;
+    if (!candidate_source_shape_rejection(candidate, options)) {
+        std::shared_ptr<LatentAotStaticCandidateState> state;
+        if (static_cache != nullptr && static_cache_mutex != nullptr)
+            state = find_static_candidate_state(
+                *static_cache, *static_cache_mutex, static_key);
+        if (state == nullptr && cache != nullptr &&
+            options.module_static_cache_enabled) {
+            try {
+                persistent_static_key =
+                    static_candidate_cache_key(static_key);
+                const auto loaded = cache->load_bounded_state(
+                    persistent_static_key,
+                    latent_aot_module_static_cache_artifact,
+                    maximum_latent_aot_module_static_cache_artifact_bytes);
+                if (loaded.state == CodegenCacheLoadState::Hit) {
+                    persistent_static_observed_payload = loaded.content;
+                    auto parsed = parse_static_candidate_state(
+                        persistent_static_key, loaded.content);
+                    if (parsed.state != nullptr &&
+                        parsed.state->key == static_key) {
+                        state = std::move(parsed.state);
+                        state->persistent_cache_key =
+                            persistent_static_key;
+                        state->persistent_observed_payload =
+                            persistent_static_observed_payload;
+                        state->imported_from_persistent_cache = true;
+                        if (static_cache != nullptr &&
+                            static_cache_mutex != nullptr &&
+                            static_cache_retained_bytes != nullptr) {
+                            store_static_candidate_state(
+                                *static_cache, *static_cache_mutex, state,
+                                *static_cache_retained_bytes,
+                                static_cache_budget_skips);
+                        }
+                    } else {
+                        counters.module_static_misses.fetch_add(
+                            1u, std::memory_order_relaxed);
+                        if (parsed.corrupt)
+                            counters.module_static_corrupt_entries.fetch_add(
+                                1u, std::memory_order_relaxed);
+                    }
+                } else {
+                    counters.module_static_misses.fetch_add(
+                        1u, std::memory_order_relaxed);
+                    if (loaded.state != CodegenCacheLoadState::Missing)
+                        counters.module_static_corrupt_entries.fetch_add(
+                            1u, std::memory_order_relaxed);
+                }
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (const std::exception&) {
+                counters.module_static_misses.fetch_add(
+                    1u, std::memory_order_relaxed);
+                counters.module_static_corrupt_entries.fetch_add(
+                    1u, std::memory_order_relaxed);
+            }
+        }
+        if (state != nullptr) {
+            const bool persistent_replay =
+                state->imported_from_persistent_cache;
             const auto current_contract =
                 resolver_contract_from_options(options);
             if (state->terminal_inventory_candidate_values &&
@@ -7766,9 +8711,15 @@ CandidateAnalysisOutcome analyze_candidate(
                 auto replayed = finalize_cached_static_candidate(
                     candidate, options, *state, *expansion);
                 if (replayed.module) {
-                    counters.session_reuse_hits.fetch_add(
-                        1u, std::memory_order_relaxed);
-                    std::scoped_lock lock(*static_cache_mutex);
+                    if (persistent_replay)
+                        counters.module_static_hits.fetch_add(
+                            1u, std::memory_order_relaxed);
+                    else
+                        counters.session_reuse_hits.fetch_add(
+                            1u, std::memory_order_relaxed);
+                    std::unique_lock<std::mutex> lock;
+                    if (static_cache_mutex != nullptr)
+                        lock = std::unique_lock<std::mutex>(*static_cache_mutex);
                     state->resolver_contract = current_contract;
                     merge_entry_offsets(
                         state->published_entry_offsets,
@@ -7801,7 +8752,17 @@ CandidateAnalysisOutcome analyze_candidate(
                             }),
                         state->external_dispatch_entries.end());
 
-                    if (static_cache_retained_bytes != nullptr) {
+                    if (static_cache != nullptr &&
+                        static_cache_retained_bytes != nullptr) {
+                        const auto retained_state = std::find_if(
+                            static_cache->begin(), static_cache->end(),
+                            [&](const auto& candidate_state) {
+                                return candidate_state.get() == state.get();
+                            });
+                        if (retained_state == static_cache->end()) {
+                            if (lock.owns_lock()) lock.unlock();
+                            return replayed;
+                        }
                         const auto previous_retained =
                             state->retained_bytes;
                         const auto updated_retained =
@@ -7851,11 +8812,28 @@ CandidateAnalysisOutcome analyze_candidate(
                                     1u, std::memory_order_relaxed);
                         }
                     }
+                    if (lock.owns_lock()) lock.unlock();
+                    if (options.persistent_cache_writes_enabled &&
+                        cache != nullptr) {
+                        try {
+                            static_cast<void>(publish_static_candidate_state_now(
+                                *cache, *state, counters));
+                        } catch (const std::bad_alloc&) {
+                            throw;
+                        } catch (const std::exception&) {
+                            // A cache publication failure cannot invalidate
+                            // the freshly revalidated replay product.
+                        }
+                    }
                     return replayed;
                 }
             }
-            counters.session_cold_fallbacks.fetch_add(
-                1u, std::memory_order_relaxed);
+            if (persistent_replay)
+                counters.module_static_cold_fallbacks.fetch_add(
+                    1u, std::memory_order_relaxed);
+            else
+                counters.session_cold_fallbacks.fetch_add(
+                    1u, std::memory_order_relaxed);
         }
     }
 
@@ -7972,7 +8950,8 @@ CandidateAnalysisOutcome analyze_candidate(
             };
     }
     std::shared_ptr<LatentAotStaticCandidateState> generated_static_state;
-    if (static_cache != nullptr && static_cache_mutex != nullptr) {
+    if ((static_cache != nullptr && static_cache_mutex != nullptr) ||
+        (cache != nullptr && options.module_static_cache_enabled)) {
         generated_static_state =
             std::make_shared<LatentAotStaticCandidateState>();
         generated_static_state->key = static_key;
@@ -7998,6 +8977,18 @@ CandidateAnalysisOutcome analyze_candidate(
         !published_epoch_identity.empty())
         generated_static_state->key.persistent_epoch_identity =
             std::move(published_epoch_identity);
+    if (generated_static_state != nullptr) {
+        const bool same_persistent_key =
+            generated_static_state->key == static_key &&
+            !persistent_static_key.empty();
+        generated_static_state->persistent_cache_key =
+            same_persistent_key
+                ? persistent_static_key
+                : static_candidate_cache_key(generated_static_state->key);
+        if (same_persistent_key)
+            generated_static_state->persistent_observed_payload =
+                std::move(persistent_static_observed_payload);
+    }
     if (generated_static_state != nullptr &&
         analyzed.terminal_inventory_candidate_values) {
         generated_static_state->resolver_contract =
@@ -8009,12 +9000,26 @@ CandidateAnalysisOutcome analyze_candidate(
     if ((analyzed.module ||
          analyzed.terminal_inventory_candidate_values) &&
         generated_static_state != nullptr &&
+        static_cache != nullptr && static_cache_mutex != nullptr &&
         static_cache_retained_bytes != nullptr)
         store_static_candidate_state(
             *static_cache, *static_cache_mutex,
-            std::move(generated_static_state),
+            generated_static_state,
             *static_cache_retained_bytes,
             static_cache_budget_skips);
+    if (analyzed.module && generated_static_state != nullptr &&
+        options.module_static_cache_enabled &&
+        options.persistent_cache_writes_enabled && cache != nullptr) {
+        try {
+            static_cast<void>(publish_static_candidate_state_now(
+                *cache, *generated_static_state, counters));
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception&) {
+            // The authoritative cold result remains valid; cache publication
+            // is an optimization and is retried by a later complete run.
+        }
+    }
     if (!options.persistent_cache_writes_enabled ||
         cache == nullptr || cache_key.empty() ||
         !cache_entry_absent || !analyzed.deterministic)
@@ -8104,6 +9109,128 @@ LatentAotDiscoverySession& LatentAotDiscoverySession::operator=(
 
 void LatentAotDiscoverySession::reset() noexcept {
     if (impl_ != nullptr) impl_->clear();
+}
+
+std::vector<LatentAotModuleStaticCachePublication>
+stage_latent_aot_module_static_cache_publications(
+    const LatentAotDiscoverySession& session,
+    const LatentAotDiscoveryOptions& options) {
+    std::vector<LatentAotModuleStaticCachePublication> publications;
+    if (session.impl_ == nullptr || !options.module_static_cache_enabled ||
+        options.analysis_cache_root.empty() ||
+        (options.analysis_implementation_identity.empty() &&
+         options.analysis_cache_implementation_identity.empty()))
+        return publications;
+    if (session.impl_->static_candidates.size() >
+        maximum_latent_aot_session_static_cache_entries)
+        throw std::runtime_error(
+            "Latent-AOT-Modulcache ueberschreitet sein Publikationsbudget.");
+    publications.reserve(session.impl_->static_candidates.size());
+    for (const auto& state : session.impl_->static_candidates) {
+        if (state == nullptr || state->program.empty() ||
+            state->terminal_inventory_candidate_values)
+            continue;
+        std::vector<std::uint8_t> bytes;
+        try {
+            bytes = serialize_static_candidate_state(*state);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::exception& error) {
+            // Module-static persistence is an optimization over an already
+            // completed, source-bound cold analysis.  The immediate-write
+            // path follows the same rule: an owner whose complete state is
+            // not representable by the bounded cache codec remains a cold
+            // owner and must not invalidate the authoritative analysis
+            // product.  Keep global publication invariants (entry budget and
+            // duplicate keys) fail-closed below.
+            std::fprintf(
+                stderr,
+                "KATANA_LATENT_AOT_MODULE_STATIC_STAGE_SKIP "
+                "identity=%s byte_size=%u retained_bytes=%zu "
+                "functions=%zu reason=%s\n",
+                state->key.byte_identity.c_str(),
+                state->key.byte_size,
+                state->retained_bytes,
+                state->program.size(),
+                error.what());
+            continue;
+        }
+        std::string validated(
+            reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        if (validated == state->persistent_observed_payload) continue;
+        publications.push_back(
+            {options.analysis_cache_root,
+             state->persistent_cache_key.empty()
+                 ? static_candidate_cache_key(state->key)
+                 : state->persistent_cache_key,
+             state->persistent_observed_payload,
+             std::move(validated)});
+    }
+    std::sort(publications.begin(), publications.end(),
+              [](const auto& left, const auto& right) {
+                  return left.cache_key < right.cache_key;
+              });
+    if (std::adjacent_find(
+            publications.begin(), publications.end(),
+            [](const auto& left, const auto& right) {
+                return left.cache_key == right.cache_key;
+            }) != publications.end())
+        throw std::runtime_error(
+            "Latent-AOT-Modulcache besitzt doppelte Publikationskeys.");
+    return publications;
+}
+
+bool publish_latent_aot_module_static_cache_publications(
+    std::vector<LatentAotModuleStaticCachePublication>& pending) noexcept {
+    bool complete = true;
+    auto current = pending.begin();
+    while (current != pending.end()) {
+        bool published = false;
+        try {
+            CodegenCache cache(current->cache_root);
+            const auto observed = cache.load_bounded_state(
+                current->cache_key,
+                latent_aot_module_static_cache_artifact,
+                maximum_latent_aot_module_static_cache_artifact_bytes);
+            if (observed.state == CodegenCacheLoadState::Hit &&
+                observed.content == current->validated_payload) {
+                published = true;
+            } else if (!current->observed_payload.empty()) {
+                if (observed.state == CodegenCacheLoadState::Hit &&
+                    observed.content == current->observed_payload)
+                    published = cache.replace_bounded_if_matches(
+                        current->cache_key,
+                        latent_aot_module_static_cache_artifact,
+                        current->observed_payload,
+                        current->validated_payload,
+                        maximum_latent_aot_module_static_cache_artifact_bytes);
+            } else if (observed.state != CodegenCacheLoadState::Hit) {
+                cache.store_bounded(
+                    current->cache_key,
+                    latent_aot_module_static_cache_artifact,
+                    current->validated_payload,
+                    maximum_latent_aot_module_static_cache_artifact_bytes);
+                published = true;
+            }
+            if (published) {
+                const auto verified = cache.load_bounded(
+                    current->cache_key,
+                    latent_aot_module_static_cache_artifact,
+                    maximum_latent_aot_module_static_cache_artifact_bytes);
+                published = verified.has_value() &&
+                            *verified == current->validated_payload;
+            }
+        } catch (const std::exception&) {
+            published = false;
+        }
+        if (published)
+            current = pending.erase(current);
+        else {
+            complete = false;
+            ++current;
+        }
+    }
+    return complete;
 }
 
 std::string_view latent_aot_loader_tail_audit_status_name(
@@ -9754,11 +10881,26 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
     result.analysis_full_pipeline_runs =
         cache_counters.full_pipeline_runs.load(
             std::memory_order_relaxed);
+    result.module_static_cache_hits =
+        cache_counters.module_static_hits.load(std::memory_order_relaxed);
+    result.module_static_cache_misses =
+        cache_counters.module_static_misses.load(std::memory_order_relaxed);
+    result.module_static_cache_cold_fallbacks =
+        cache_counters.module_static_cold_fallbacks.load(
+            std::memory_order_relaxed);
+    result.module_static_cache_corrupt_entries =
+        cache_counters.module_static_corrupt_entries.load(
+            std::memory_order_relaxed);
+    result.module_static_cache_stores =
+        cache_counters.module_static_stores.load(std::memory_order_relaxed);
     if (session != nullptr)
         std::fprintf(
             stderr,
             "KATANA_LATENT_AOT_SESSION_STATS reuse=%zu cold-fallback=%zu "
             "terminal-negative=%zu full-pipeline=%zu candidates=%zu "
+            "module-static-hits=%zu module-static-misses=%zu "
+            "module-static-cold-fallbacks=%zu module-static-corrupt=%zu "
+            "module-static-stores=%zu "
             "cache-entries=%zu "
             "cache-bytes=%zu cache-entry-cap=%zu cache-byte-cap=%zu "
             "cache-budget-skips=%zu\n",
@@ -9770,6 +10912,11 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                 std::memory_order_relaxed),
             result.analysis_full_pipeline_runs,
             candidates.size(),
+            result.module_static_cache_hits,
+            result.module_static_cache_misses,
+            result.module_static_cache_cold_fallbacks,
+            result.module_static_cache_corrupt_entries,
+            result.module_static_cache_stores,
             static_cache->size(),
             session->static_candidate_cache_retained_bytes,
             maximum_latent_aot_session_static_cache_entries,

@@ -684,6 +684,20 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "endif()\n"
            << "add_library(katana_generated STATIC ${KATANA_GENERATED_SOURCES})\n"
            << "target_compile_features(katana_generated PUBLIC cxx_std_20)\n"
+           << "set(KATANA_GENERATED_EXCEPTION_SOURCES \"\")\n"
+           << "foreach(KATANA_GENERATED_SOURCE IN LISTS KATANA_GENERATED_SOURCES)\n"
+           << "  if(KATANA_GENERATED_SOURCE MATCHES \"^code/unit-v[^/]+\\\\.cpp$\" OR\n"
+           << "     KATANA_GENERATED_SOURCE STREQUAL \"code/native-port-dispatch.cpp\")\n"
+           << "    list(APPEND KATANA_GENERATED_EXCEPTION_SOURCES\n"
+           << "      \"${KATANA_GENERATED_SOURCE}\")\n"
+           << "  endif()\n"
+           << "endforeach()\n"
+           << "list(LENGTH KATANA_GENERATED_EXCEPTION_SOURCES\n"
+           << "  KATANA_GENERATED_EXCEPTION_SOURCE_COUNT)\n"
+           << "if(MSVC AND KATANA_GENERATED_EXCEPTION_SOURCE_COUNT GREATER 0)\n"
+           << "  set_property(SOURCE ${KATANA_GENERATED_EXCEPTION_SOURCES} APPEND\n"
+           << "    PROPERTY COMPILE_OPTIONS /EHsc)\n"
+           << "endif()\n"
            << "if(CMAKE_GENERATOR MATCHES \"Ninja\")\n"
            << "  set_property(GLOBAL APPEND PROPERTY JOB_POOLS\n"
            << "    katana_aot_compile_pool=${KATANA_AOT_COMPILE_JOBS})\n"
@@ -1090,6 +1104,153 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
     counters.cache_misses = result.cache_misses;
     write_progress.update(std::move(counters));
     write_progress.complete();
+    return result;
+}
+
+ProjectWriteResult rewrite_codegen_project_artifacts(
+    const std::filesystem::path& output_root,
+    std::vector<ProjectArtifactReplacement> replacements) {
+    if (output_root.empty() || replacements.empty())
+        throw std::invalid_argument(
+            "Codegen-Projektrefresh braucht Ziel und Ersetzungen.");
+    for (auto& replacement : replacements) {
+        replacement.relative_path =
+            validate_relative_path(replacement.relative_path);
+        if (!valid_digest(replacement.expected_sha256) ||
+            replacement.content.size() > maximum_project_cache_artifact_bytes)
+            throw std::invalid_argument(
+                "Codegen-Projektrefresh besitzt eine ungueltige Bindung.");
+    }
+    std::sort(
+        replacements.begin(), replacements.end(),
+        [](const auto& left, const auto& right) {
+            return left.relative_path.generic_string() <
+                   right.relative_path.generic_string();
+        });
+    for (std::size_t index = 1u; index < replacements.size(); ++index) {
+        if (replacements[index - 1u].relative_path ==
+            replacements[index].relative_path)
+            throw std::invalid_argument(
+                "Codegen-Projektrefresh enthaelt einen doppelten Pfad.");
+    }
+
+    const auto absolute_root =
+        std::filesystem::absolute(output_root).lexically_normal();
+    std::error_code root_error;
+    const auto root_status =
+        std::filesystem::symlink_status(absolute_root, root_error);
+    if (root_error || !std::filesystem::is_directory(root_status) ||
+        unsafe_project_link(absolute_root, root_status))
+        throw std::runtime_error(
+            "Codegen-Projektrefresh braucht ein kanonisches Ausgabeziel.");
+    const auto root = std::filesystem::canonical(absolute_root, root_error);
+    if (root_error)
+        throw std::runtime_error(
+            "Codegen-Projektrefresh konnte sein Ziel nicht kanonisieren.");
+
+    auto manifest = read_artifact_manifest(root);
+    if (!manifest.trusted_v2 || manifest.entries.empty() ||
+        !manifest_is_still_bound(root, manifest))
+        throw std::runtime_error(
+            "Codegen-Projektrefresh braucht ein gebundenes v2-Manifest.");
+
+    // The manifest binding is a cheap race check, not content authority: a
+    // same-size in-place mutation can retain the same metadata token on both
+    // Windows and POSIX. Authenticate every manifest entry's bytes before
+    // touching any selected consumer artifact. This is deliberately a full
+    // generation preflight so a refresh can never publish over a partially
+    // tampered generated project.
+    for (const auto& entry : manifest.entries) {
+        const auto current = hash_file_stably(
+            secure_artifact_path(root, entry.relative_path), entry.size);
+        if (!current || current->binding != entry.binding ||
+            current->sha256 != entry.sha256)
+            throw std::runtime_error(
+                "Codegen-Projektrefresh fand eine veraenderte Generation.");
+    }
+    if (!manifest_is_still_bound(root, manifest))
+        throw std::runtime_error(
+            "Codegen-Projektmanifest aenderte sich waehrend des Refreshs.");
+
+    constexpr std::array<std::string_view, 3u> generated_build_files{
+        "CMakeLists.txt", "build.ninja", "compile_commands.json"};
+    for (const auto& replacement : replacements) {
+        const auto portable = replacement.relative_path.generic_string();
+        if (std::ranges::find(generated_build_files, portable) !=
+            generated_build_files.end())
+            throw std::invalid_argument(
+                "Codegen-Projektrefresh darf den Buildgraph nicht ersetzen.");
+        const auto* const previous =
+            find_manifest_entry(manifest, replacement.relative_path);
+        if (previous == nullptr ||
+            previous->sha256 != replacement.expected_sha256)
+            throw std::runtime_error(
+                "Codegen-Projektrefresh verlor die erwartete Quellbindung.");
+        // The full-generation preflight above already authenticated this
+        // entry. Keep the selected check as a second, narrow race check just
+        // before any write so a mutation between the two phases fails closed.
+        const auto current = hash_file_stably(
+            secure_artifact_path(root, replacement.relative_path),
+            previous->size);
+        if (!current || current->binding != previous->binding ||
+            current->sha256 != previous->sha256)
+            throw std::runtime_error(
+                "Codegen-Projektrefresh fand veraenderte Quelldaten.");
+    }
+
+    // A canonical second invocation must be a true no-op. In particular it
+    // must not rewrite files or the manifest merely because the caller still
+    // carries the old expected SHA from the first invocation. The caller is
+    // expected to pass the current generation's previous identities; an
+    // already published replacement therefore satisfies the same idempotent
+    // operation only when its expected SHA matches the current manifest.
+    bool all_replacements_are_current = true;
+    for (const auto& replacement : replacements) {
+        const auto* const current =
+            find_manifest_entry(manifest, replacement.relative_path);
+        const auto expected_current_sha =
+            "sha256:" + katana::io::sha256_bytes(replacement.content);
+        if (current == nullptr || current->sha256 != expected_current_sha) {
+            all_replacements_are_current = false;
+            break;
+        }
+    }
+    if (all_replacements_are_current) return {};
+
+    auto next_entries = manifest.entries;
+    ProjectWriteResult result;
+    result.written_files.reserve(replacements.size() + 1u);
+    for (const auto& replacement : replacements) {
+        auto next = write_file(root,
+                               replacement.relative_path,
+                               replacement.content,
+                               manifest);
+        const auto found = std::lower_bound(
+            next_entries.begin(), next_entries.end(),
+            replacement.relative_path,
+            [](const ArtifactManifestEntry& entry,
+               const std::filesystem::path& path) {
+                return entry.relative_path.generic_string() <
+                       path.generic_string();
+            });
+        if (found == next_entries.end() ||
+            found->relative_path != replacement.relative_path)
+            throw std::runtime_error(
+                "Codegen-Projektrefresh verlor einen Manifestpfad.");
+        *found = std::move(next);
+        result.written_files.push_back(replacement.relative_path);
+    }
+    const auto manifest_content = artifact_manifest(next_entries);
+    const auto manifest_sha256 =
+        "sha256:" + katana::io::sha256_bytes(manifest_content);
+    if (!atomic_write_file(root,
+                           artifact_manifest_name,
+                           manifest_content,
+                           manifest_sha256))
+        throw std::runtime_error(
+            "Codegen-Projektrefresh konnte sein Manifest nicht publizieren.");
+    result.written_files.emplace_back(artifact_manifest_name);
+    std::sort(result.written_files.begin(), result.written_files.end());
     return result;
 }
 
