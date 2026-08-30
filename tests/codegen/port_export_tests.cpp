@@ -4206,6 +4206,49 @@ int run_test(const int argc, char* argv[]) {
             "Trapzustand.");
     const auto explicit_static_main =
         read_text(explicit_static_output / "src" / "main.cpp");
+    const auto native_telemetry_include = explicit_static_main.find(
+        "#include \"katana/runtime/native_port_telemetry.hpp\"");
+    const auto native_telemetry_owner = explicit_static_main.find(
+        "katana::runtime::NativePortTelemetry native_performance_telemetry;");
+    const auto graphics_telemetry_binding = explicit_static_main.find(
+        "graphics_config.telemetry = &native_performance_telemetry;",
+        native_telemetry_owner);
+    const auto graphics_host_construction = explicit_static_main.find(
+        "katana::runtime::NativePortDesktopHost host(",
+        graphics_telemetry_binding);
+    const auto simulation_writer_construction = explicit_static_main.find(
+        "native_performance_writer.emplace(", graphics_host_construction);
+    const auto telemetry_host_construction = explicit_static_main.find(
+        "katana::runtime::NativePortTelemetryHostProxy telemetry_host(",
+        simulation_writer_construction);
+    const auto context_telemetry_binding = explicit_static_main.find(
+        "context.telemetry = &native_performance_telemetry;",
+        telemetry_host_construction);
+    const auto context_writer_binding = explicit_static_main.find(
+        "context.telemetry_writer = native_performance_writer",
+        context_telemetry_binding);
+    const auto terminal_performance_snapshot = explicit_static_main.find(
+        "emit_native_performance_snapshot();", context_writer_binding);
+    require(
+        native_telemetry_include != std::string::npos &&
+            native_telemetry_owner != std::string::npos &&
+            graphics_telemetry_binding != std::string::npos &&
+            graphics_host_construction != std::string::npos &&
+            simulation_writer_construction != std::string::npos &&
+            telemetry_host_construction != std::string::npos &&
+            context_telemetry_binding != std::string::npos &&
+            context_writer_binding != std::string::npos &&
+            terminal_performance_snapshot != std::string::npos &&
+            native_telemetry_owner < graphics_telemetry_binding &&
+            graphics_telemetry_binding < graphics_host_construction &&
+            graphics_host_construction < simulation_writer_construction &&
+            simulation_writer_construction < telemetry_host_construction &&
+            telemetry_host_construction < context_telemetry_binding &&
+            context_telemetry_binding < context_writer_binding &&
+            context_writer_binding < terminal_performance_snapshot,
+        "Nativer Produktport verliert die getrennte Render-/"
+        "Simulationstelemetrie, deren Owner-Lebensdauer oder die terminale "
+        "Publikationsreihenfolge.");
     const auto native_diagnostic_timeout = explicit_static_main.find(
         "KATANA_NATIVE_DIAGNOSTIC_TIMEOUT_MS");
     const auto native_bootstrap_dispatch = explicit_static_main.find(

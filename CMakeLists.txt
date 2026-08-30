@@ -968,6 +968,8 @@ set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
     src/runtime/native_port_content.cpp
     src/runtime/native_port_cpu_control.cpp
     ${KATANA_NATIVE_PORT_FFMPEG_SOURCE}
+    src/runtime/native_port_frame_queue.cpp
+    src/runtime/native_port_graphics_command_stream.cpp
     src/runtime/native_port_graphics.cpp
     src/runtime/native_port_telemetry.cpp
     src/runtime/native_port_movie.cpp
@@ -2329,6 +2331,41 @@ add_test(
     COMMAND katana-native-port-content-tests
 )
 
+add_executable(
+    katana-native-port-frame-queue-tests
+    tests/runtime/native_port_frame_queue_tests.cpp
+    src/runtime/native_port_frame_queue.cpp
+    src/runtime/native_port_graphics_command_stream.cpp
+)
+target_include_directories(
+    katana-native-port-frame-queue-tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+)
+target_link_libraries(
+    katana-native-port-frame-queue-tests
+    PRIVATE Threads::Threads
+)
+katana_enable_warnings(katana-native-port-frame-queue-tests)
+add_test(
+    NAME katana-native-port-frame-queue-tests
+    COMMAND katana-native-port-frame-queue-tests
+)
+set_tests_properties(
+    katana-native-port-frame-queue-tests
+    PROPERTIES ENVIRONMENT "KATANA_PORT_DISABLE_RENDER_THREAD=0"
+)
+add_test(
+    NAME katana-native-port-frame-queue-kill-switch-tests
+    COMMAND katana-native-port-frame-queue-tests --kill-switch-disabled
+)
+set_tests_properties(
+    katana-native-port-frame-queue-kill-switch-tests
+    PROPERTIES ENVIRONMENT "KATANA_PORT_DISABLE_RENDER_THREAD=1"
+)
+
 add_executable(katana-wait-loop-trace-tests
     tests/runtime/wait_loop_trace_tests.cpp
 )
@@ -2488,6 +2525,20 @@ katana_enable_warnings(katana-native-port-graphics-tests)
 add_test(
     NAME katana-native-port-graphics-tests
     COMMAND katana-native-port-graphics-tests
+)
+set_tests_properties(
+    katana-native-port-graphics-tests
+    PROPERTIES ENVIRONMENT
+        "KATANA_PORT_BACKGROUND_TEST=1;KATANA_PORT_DISABLE_RENDER_THREAD=0"
+)
+add_test(
+    NAME katana-native-port-graphics-serial-reference-tests
+    COMMAND katana-native-port-graphics-tests
+)
+set_tests_properties(
+    katana-native-port-graphics-serial-reference-tests
+    PROPERTIES ENVIRONMENT
+        "KATANA_PORT_BACKGROUND_TEST=1;KATANA_PORT_DISABLE_RENDER_THREAD=1"
 )
 
 add_executable(katana-host-runtime-tests tests/runtime/host_runtime_tests.cpp)

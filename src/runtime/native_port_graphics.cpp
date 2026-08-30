@@ -1,6 +1,9 @@
 #include "katana/runtime/native_port_graphics.hpp"
+#include "katana/runtime/native_port_telemetry.hpp"
+#include "native_port_graphics_command_stream.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -14,6 +17,8 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -43,7 +48,17 @@ constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
 constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
 constexpr std::uint32_t minimum_dynamic_vertex_buffer_bytes = 1u << 20u;
 constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
+constexpr std::uint32_t type_two_maximum_fragments_per_pixel = 16u;
 constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
+
+[[nodiscard]] constexpr bool type_two_status_within_bounds(
+    const std::uint32_t fragment_count,
+    const std::uint32_t maximum_fragments_per_pixel,
+    const std::uint32_t allocator_capacity) noexcept {
+    return fragment_count <= allocator_capacity &&
+           maximum_fragments_per_pixel <=
+               type_two_maximum_fragments_per_pixel;
+}
 
 [[nodiscard]] constexpr std::uint64_t mix_graphics_digest(
     std::uint64_t digest,
@@ -67,6 +82,13 @@ constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
         return value != nullptr && std::string_view(value) == "1";
     }();
     return requested;
+}
+
+[[nodiscard]] bool present_failure_test_requested() noexcept {
+    const auto* const value =
+        std::getenv("KATANA_PORT_TEST_PRESENT_FAILURE");
+    return background_test_mode_requested() && value != nullptr &&
+           std::string_view(value) == "1";
 }
 
 [[nodiscard]] std::string copy_validated_graphics_title(
@@ -692,6 +714,19 @@ template <std::size_t Size>
 }
 
 void validate_graphics_config(const NativePortGraphicsConfig& config) {
+    const auto maximum_draw_payload =
+        static_cast<std::uint64_t>(sizeof(NativePortGraphicsDrawPayload)) +
+        alignof(NativePortVertex) - 1u +
+        static_cast<std::uint64_t>(config.maximum_transient_vertices) *
+            sizeof(NativePortVertex) +
+        alignof(std::uint32_t) - 1u +
+        static_cast<std::uint64_t>(config.maximum_transient_indices) *
+            sizeof(std::uint32_t);
+    const auto configured_present_payload =
+        static_cast<std::uint64_t>(
+            sizeof(NativePortGraphicsPresentImagePayload)) +
+        static_cast<std::uint64_t>(config.output_extent.width) *
+            config.output_extent.height * 4u;
     if (config.contract_version != native_port_graphics_contract_version ||
         config.title.empty() ||
         config.title.size() > maximum_graphics_title_bytes ||
@@ -717,6 +752,20 @@ void validate_graphics_config(const NativePortGraphicsConfig& config) {
         config.maximum_pipeline_states > 65'536u ||
         config.maximum_type2_fragment_nodes == 0u ||
         config.maximum_type2_fragment_nodes > 67'108'864u ||
+        config.maximum_render_commands_per_frame < 2u ||
+        config.maximum_render_commands_per_frame > 1'048'576u ||
+        config.maximum_render_payload_bytes_per_frame == 0u ||
+        config.maximum_render_resource_payload_bytes_per_command == 0u ||
+        config.maximum_render_resource_payload_bytes_per_command >
+            config.maximum_render_payload_bytes_per_frame ||
+        maximum_draw_payload >
+            config.maximum_render_payload_bytes_per_frame ||
+        configured_present_payload >
+            config.maximum_render_payload_bytes_per_frame ||
+        config.maximum_transient_vertices >
+            native_port_graphics_command_stream_max_vertices ||
+        config.maximum_transient_indices >
+            native_port_graphics_command_stream_max_indices ||
         config.maximum_transient_vertices >
             std::numeric_limits<std::uint32_t>::max() /
                 sizeof(NativePortVertex) ||
@@ -1001,13 +1050,11 @@ constexpr std::uint32_t draw_flag_pvr_screen_gouraud = 1u << 18u;
 constexpr std::uint32_t draw_flag_clip_homogeneous = 1u << 19u;
 constexpr std::uint32_t draw_flag_color_clamp = 1u << 20u;
 constexpr std::uint32_t draw_flag_type_two_autosort_capture = 1u << 21u;
-// Type-2 autosort is deliberately bounded.  The counter is a resource cap,
-// while the per-pixel traversal bound is fixed in the resolve shader so a
-// malformed scene cannot turn one pixel into an unbounded linked-list walk.
-constexpr std::uint32_t type_two_fragment_capacity = 1u << 20u;
-constexpr std::uint32_t type_two_fragment_layers_per_pixel = 16u;
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
+[[nodiscard]] ComPtr<ID3DBlob> compile_type_two_shader(
+    const char* entry,
+    const char* target);
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader_source(
     const char* source,
     std::size_t source_size,
@@ -1033,7 +1080,7 @@ constexpr std::uint32_t type_two_fragment_layers_per_pixel = 16u;
 
 } // namespace
 
-class NativePortGraphicsDevice::Impl final {
+class NativePortGraphicsBackend final {
   private:
     struct GeometryCapabilities final {
         bool positive_depth_coordinates = true;
@@ -1135,20 +1182,12 @@ class NativePortGraphicsDevice::Impl final {
         bool live = false;
     };
 
-    // Type-2 packets may be assembled from adapter-owned temporary spans.
-    // Retain a private copy until the scene resolve so the public draw call
-    // remains safe even when those spans have automatic storage duration.
-    struct Type2QueuedDraw final {
-        NativePortDrawPacket packet;
-        std::vector<NativePortVertex> vertices;
-        std::vector<std::uint32_t> indices;
-    };
-
   public:
-    explicit Impl(const NativePortGraphicsConfig& config)
+    explicit NativePortGraphicsBackend(const NativePortGraphicsConfig& config)
         : title_storage_(copy_validated_graphics_title(config.title)),
           config_(config), owner_thread_(std::this_thread::get_id()) {
         config_.title = title_storage_;
+        inject_present_failure_once_ = present_failure_test_requested();
         validate_graphics_config(config_);
         initialize_frame_capture();
         initialize_graphics_diagnostics();
@@ -1163,11 +1202,15 @@ class NativePortGraphicsDevice::Impl final {
             destroy_window();
             throw;
         }
+        if (config_.telemetry != nullptr)
+            telemetry_writer_.emplace(config_.telemetry->make_writer());
         if (config_.initially_visible) show();
     }
 
-    ~Impl() noexcept {
+    ~NativePortGraphicsBackend() noexcept {
         if (std::this_thread::get_id() != owner_thread_) std::terminate();
+        stop_render_submit_telemetry();
+        flush_render_telemetry();
         flush_graphics_breadcrumbs();
         if (context_) {
             context_->ClearState();
@@ -1175,6 +1218,8 @@ class NativePortGraphicsDevice::Impl final {
         }
         destroy_window();
     }
+
+    void publish_telemetry() noexcept { flush_render_telemetry(); }
 
     void show() {
         require_owner_thread();
@@ -1519,6 +1564,7 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::InvalidFrame,
                  0u,
                  "frame-depth-contract");
+        start_render_submit_telemetry();
         context_->OMSetRenderTargets(
             1u, render_target_.GetAddressOf(), depth_view_.Get());
         context_->ClearRenderTargetView(render_target_.Get(),
@@ -1536,6 +1582,16 @@ class NativePortGraphicsDevice::Impl final {
         frame_batch_semantic_ = NativePortDrawBatchClass::Scene3D;
         frame_batch_phase_ = NativePortDrawClass::Opaque;
         frame_batch_submission_order_ = 0u;
+        type2_subpass_active_ = false;
+        type2_gather_active_ = false;
+        type2_batch_identity_ = 0u;
+        type2_closed_batch_valid_ = false;
+        type2_closed_batch_identity_ = 0u;
+        type2_non_type2_batch_valid_ = false;
+        type2_non_type2_batch_identity_ = 0u;
+        type2_fragment_count_ = 0u;
+        type2_max_fragments_per_pixel_ = 0u;
+        type_two_uavs_bound_ = false;
         graphics_frame_digest_ = graphics_digest_seed ^
             (snapshot_.presented_frames + 1u);
         frame_open_ = true;
@@ -1550,6 +1606,28 @@ class NativePortGraphicsDevice::Impl final {
         // scene boundary. A second translucent policy in the same batch is
         // forbidden: two independently resolved runs are not equivalent to
         // one PVR Type-2 list.
+        if (!type2 &&
+            packet.draw_class == NativePortDrawClass::Translucent &&
+            packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
+            type2_closed_batch_valid_ &&
+            packet.batch.identity == type2_closed_batch_identity_) {
+            try {
+                fail(NativePortGraphicsFailure::InvalidDraw,
+                     0u,
+                     "type2-policy-mix");
+            } catch (const NativePortGraphicsError& error) {
+                record_graphics_contract_failure(packet, error.failure());
+                throw;
+            }
+        }
+        if (type2 && type2_subpass_active_ &&
+            (packet.batch.identity != type2_batch_identity_ ||
+             packet.batch.semantic != NativePortDrawBatchClass::Scene3D)) {
+            // A new identity is an explicit scene boundary. Resolve the
+            // previous Type-2 list before admitting the next one; the normal
+            // batch-order validator still proves that the identity advances.
+            flush_type2_translucency();
+        }
         if (!type2 && type2_subpass_active_) {
             if (packet.batch.identity == type2_batch_identity_ &&
                 packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
@@ -1582,7 +1660,14 @@ class NativePortGraphicsDevice::Impl final {
             ? &resolve_texture(packet.texture)
             : nullptr;
         validate_draw_batch_sequence(packet);
-        if (type2_gather) validate_type2_scene_admission(packet);
+        if (type2_gather) {
+            validate_type2_scene_admission(packet);
+            if (!type2_subpass_active_) begin_type2_subpass(packet);
+        } else if (packet.draw_class == NativePortDrawClass::Translucent &&
+                   packet.batch.semantic == NativePortDrawBatchClass::Scene3D) {
+            type2_non_type2_batch_valid_ = true;
+            type2_non_type2_batch_identity_ = packet.batch.identity;
+        }
 
         auto vertices = packet.vertices;
         auto indices = packet.indices;
@@ -1770,6 +1855,8 @@ class NativePortGraphicsDevice::Impl final {
             material_flags |= draw_flag_clip_homogeneous;
         if (packet.color_clamp.enabled)
             material_flags |= draw_flag_color_clamp;
+        if (type2_gather)
+            material_flags |= draw_flag_type_two_autosort_capture;
         material_flags |=
             static_cast<std::uint32_t>(packet.material.texture_combine)
             << draw_texture_combine_shift;
@@ -1790,6 +1877,16 @@ class NativePortGraphicsDevice::Impl final {
             packet.lighting.light_count,
             static_cast<std::uint32_t>(packet.fog.mode),
             alpha_test_flags};
+        if (type2_gather) {
+            // The Type-2 resolve is restricted to the validated
+            // SourceAlpha/InverseSourceAlpha/Add/full-mask family, so the
+            // gather only needs the stable packet order and allocator cap.
+            constants.type_two_parameters = {
+                0u,
+                0u,
+                packet.batch.submission_order,
+                config_.maximum_type2_fragment_nodes};
+        }
         for (std::size_t index = 0u;
              index < packet.lighting.light_count; ++index) {
             const auto& light = packet.lighting.lights[index];
@@ -1840,6 +1937,10 @@ class NativePortGraphicsDevice::Impl final {
                 nullptr);
         set_viewport(viewport_rect);
 
+        // Type-2 capture uses the same hardware DSV GEQUAL/no-write state as
+        // the validated translucent packet. The color target is redirected
+        // to the PPLL UAVs while the DSV remains authoritative for
+        // opaque/punch visibility.
         auto* const blend = resolve_blend_state(packet.blend);
         auto* const depth = resolve_depth_state(packet.depth);
         auto host_rasterizer = packet.rasterizer;
@@ -1870,19 +1971,26 @@ class NativePortGraphicsDevice::Impl final {
             bound_rasterizer_ = rasterizer;
             bound_rasterizer_valid_ = true;
         }
-        if (!draw_pipeline_bound_) {
+        if (!draw_pipeline_bound_ || draw_pipeline_type_two_ != type2_gather) {
             context_->IASetInputLayout(input_layout_.Get());
             context_->VSSetShader(draw_vertex_shader_.Get(), nullptr, 0u);
             context_->VSSetConstantBuffers(
                 0u, 1u, draw_constants_.GetAddressOf());
-            context_->PSSetShader(draw_pixel_shader_.Get(), nullptr, 0u);
+            context_->PSSetShader(
+                type2_gather ? type_two_capture_pixel_shader_.Get()
+                             : draw_pixel_shader_.Get(),
+                nullptr,
+                0u);
             const std::array<ID3D11Buffer*, 2u> pixel_constant_buffers{
                 draw_constants_.Get(), fog_table_constants_.Get()};
             context_->PSSetConstantBuffers(
                 0u,
                 static_cast<UINT>(pixel_constant_buffers.size()),
                 pixel_constant_buffers.data());
+            ID3D11ShaderResourceView* no_resource = nullptr;
+            context_->PSSetShaderResources(1u, 1u, &no_resource);
             draw_pipeline_bound_ = true;
+            draw_pipeline_type_two_ = type2_gather;
         }
         const auto host_topology = primitive_topology(topology);
         if (!bound_topology_valid_ || bound_topology_ != host_topology) {
@@ -1950,7 +2058,22 @@ class NativePortGraphicsDevice::Impl final {
                  0u,
                  "type2-flush-outside-frame");
         if (!type2_subpass_active_) return;
-        resolve_type2_subpass();
+        try {
+            resolve_type2_subpass();
+        } catch (...) {
+            // A rejected/overflowed Type-2 list must never be followed by a
+            // second attempt using partially retained UAV state. The frame
+            // remains fail-closed and the original typed error is preserved.
+            unbind_type2_subpass();
+            context_->OMSetRenderTargets(
+                1u, render_target_.GetAddressOf(), depth_view_.Get());
+            type2_subpass_active_ = false;
+            type2_gather_active_ = false;
+            type2_batch_identity_ = 0u;
+            type_two_uavs_bound_ = false;
+            invalidate_draw_state_shadow();
+            throw;
+        }
         type2_subpass_active_ = false;
         type2_closed_batch_identity_ = type2_batch_identity_;
         type2_closed_batch_valid_ = true;
@@ -1958,6 +2081,7 @@ class NativePortGraphicsDevice::Impl final {
         type2_fragment_count_ = 0u;
         type2_max_fragments_per_pixel_ = 0u;
         type2_gather_active_ = false;
+        type_two_uavs_bound_ = false;
         invalidate_draw_state_shadow();
     }
 
@@ -1965,11 +2089,55 @@ class NativePortGraphicsDevice::Impl final {
         require_owner_thread();
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "present-without-frame");
-        flush_type2_translucency();
+        // Once a new frame enters the composite/present attempt, the previous
+        // completed surface is no longer a valid repeat candidate. Keep the
+        // frame open until DXGI (including minimized/occluded completion)
+        // succeeds so the shared rollback can clear every frame/Type-2 state.
+        completed_frame_available_ = false;
+        try {
+            flush_type2_translucency();
+            present_completed_frame("present");
+        } catch (...) {
+            abort_frame_after_command_failure();
+            throw;
+        }
         frame_open_ = false;
-        completed_frame_available_ = true;
         snapshot_.frame_open = false;
-        present_completed_frame("present");
+        completed_frame_available_ = true;
+    }
+
+    // A batched parallel frame is atomic at the facade boundary. Once one
+    // backend command fails, no later command from that frame may run and the
+    // partially rendered surface must never become repeat-presentable. This
+    // owner-thread rollback deliberately does not resolve Type-2 or present.
+    void abort_frame_after_command_failure() noexcept {
+        if (std::this_thread::get_id() != owner_thread_) std::terminate();
+        stop_render_submit_telemetry();
+        flush_render_telemetry();
+        if (!frame_open_) return;
+        unbind_type2_subpass();
+        if (context_)
+            context_->OMSetRenderTargets(
+                1u, render_target_.GetAddressOf(), depth_view_.Get());
+        frame_open_ = false;
+        completed_frame_available_ = false;
+        snapshot_.frame_open = false;
+        frame_batch_active_ = false;
+        frame_batch_identity_ = 0u;
+        frame_batch_semantic_ = NativePortDrawBatchClass::Scene3D;
+        frame_batch_phase_ = NativePortDrawClass::Opaque;
+        frame_batch_submission_order_ = 0u;
+        type2_subpass_active_ = false;
+        type2_gather_active_ = false;
+        type2_batch_identity_ = 0u;
+        type2_closed_batch_valid_ = false;
+        type2_closed_batch_identity_ = 0u;
+        type2_non_type2_batch_valid_ = false;
+        type2_non_type2_batch_identity_ = 0u;
+        type2_fragment_count_ = 0u;
+        type2_max_fragments_per_pixel_ = 0u;
+        type_two_uavs_bound_ = false;
+        invalidate_draw_state_shadow();
     }
 
     void repeat_present() {
@@ -1978,13 +2146,397 @@ class NativePortGraphicsDevice::Impl final {
             fail(NativePortGraphicsFailure::InvalidFrame,
                  0u,
                  "repeat-without-completed-frame");
+        start_render_submit_telemetry();
         present_completed_frame("repeat-present");
     }
 
   private:
+    void validate_type2_scene_admission(
+        const NativePortDrawPacket& packet) {
+        if (feature_level_ < D3D_FEATURE_LEVEL_11_0 ||
+            type_two_capture_pixel_shader_ == nullptr ||
+            type_two_resolve_pixel_shader_ == nullptr)
+            fail(NativePortGraphicsFailure::UnsupportedHost,
+                 0u,
+                 "type2-ppll-feature-level");
+        if (packet.batch.semantic != NativePortDrawBatchClass::Scene3D ||
+            packet.viewport != NativePortViewportTarget::Game ||
+            packet.draw_class != NativePortDrawClass::Translucent)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "type2-scene-contract");
+        if (type2_closed_batch_valid_ &&
+            packet.batch.identity == type2_closed_batch_identity_)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "type2-scene-reentry");
+        if (type2_non_type2_batch_valid_ &&
+            packet.batch.identity == type2_non_type2_batch_identity_)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "type2-policy-mix");
+        if (type2_subpass_active_ &&
+            packet.batch.identity != type2_batch_identity_)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "type2-scene-boundary");
+    }
+
+    void ensure_type2_resources() {
+        if (type2_resources_ready_) return;
+        if (feature_level_ < D3D_FEATURE_LEVEL_11_0)
+            fail(NativePortGraphicsFailure::UnsupportedHost,
+                 0u,
+                 "type2-ppll-feature-level");
+        const auto width = config_.render_extent.width;
+        const auto height = config_.render_extent.height;
+
+        D3D11_TEXTURE2D_DESC base_description{};
+        base_description.Width = width;
+        base_description.Height = height;
+        base_description.MipLevels = 1u;
+        base_description.ArraySize = 1u;
+        base_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        base_description.SampleDesc.Count = 1u;
+        base_description.Usage = D3D11_USAGE_DEFAULT;
+        base_description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        auto result = device_->CreateTexture2D(
+            &base_description, nullptr, type_two_base_texture_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-base-texture");
+        result = device_->CreateShaderResourceView(
+            type_two_base_texture_.Get(),
+            nullptr,
+            type_two_base_view_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-base-view");
+
+        const auto create_uint_texture = [&](ComPtr<ID3D11Texture2D>& texture,
+                                             ComPtr<ID3D11ShaderResourceView>*
+                                                 const shader_view,
+                                             ComPtr<ID3D11UnorderedAccessView>&
+                                                 unordered_view,
+                                             const char* const operation) {
+            D3D11_TEXTURE2D_DESC description{};
+            description.Width = width;
+            description.Height = height;
+            description.MipLevels = 1u;
+            description.ArraySize = 1u;
+            description.Format = DXGI_FORMAT_R32_UINT;
+            description.SampleDesc.Count = 1u;
+            description.Usage = D3D11_USAGE_DEFAULT;
+            description.BindFlags = D3D11_BIND_SHADER_RESOURCE |
+                                    D3D11_BIND_UNORDERED_ACCESS;
+            auto create_result = device_->CreateTexture2D(
+                &description, nullptr, texture.GetAddressOf());
+            if (FAILED(create_result))
+                fail(NativePortGraphicsFailure::ResourceCreation,
+                     static_cast<std::uint32_t>(create_result),
+                     operation);
+            D3D11_SHADER_RESOURCE_VIEW_DESC shader_description{};
+            shader_description.Format = DXGI_FORMAT_R32_UINT;
+            shader_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            shader_description.Texture2D.MostDetailedMip = 0u;
+            shader_description.Texture2D.MipLevels = 1u;
+            create_result = device_->CreateShaderResourceView(
+                texture.Get(), &shader_description, shader_view->GetAddressOf());
+            if (FAILED(create_result))
+                fail(NativePortGraphicsFailure::ResourceCreation,
+                     static_cast<std::uint32_t>(create_result),
+                     operation);
+            D3D11_UNORDERED_ACCESS_VIEW_DESC unordered_description{};
+            unordered_description.Format = DXGI_FORMAT_R32_UINT;
+            unordered_description.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            create_result = device_->CreateUnorderedAccessView(
+                texture.Get(),
+                &unordered_description,
+                unordered_view.GetAddressOf());
+            if (FAILED(create_result))
+                fail(NativePortGraphicsFailure::ResourceCreation,
+                     static_cast<std::uint32_t>(create_result),
+                     operation);
+        };
+        create_uint_texture(type_two_head_texture_, &type_two_head_view_,
+                            type_two_head_uav_, "type2-head-texture");
+        create_uint_texture(type_two_count_texture_, &type_two_count_view_,
+                            type_two_count_uav_, "type2-count-texture");
+
+        const auto node_bytes =
+            static_cast<std::uint64_t>(config_.maximum_type2_fragment_nodes) *
+            sizeof(TypeTwoFragmentGpu);
+        if (node_bytes > std::numeric_limits<UINT>::max())
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 0u,
+                 "type2-node-byte-budget");
+        D3D11_BUFFER_DESC node_description{};
+        node_description.ByteWidth = static_cast<UINT>(node_bytes);
+        node_description.Usage = D3D11_USAGE_DEFAULT;
+        node_description.BindFlags = D3D11_BIND_SHADER_RESOURCE |
+                                     D3D11_BIND_UNORDERED_ACCESS;
+        node_description.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        node_description.StructureByteStride = sizeof(TypeTwoFragmentGpu);
+        result = device_->CreateBuffer(
+            &node_description, nullptr, type_two_fragment_buffer_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-fragment-buffer");
+        D3D11_SHADER_RESOURCE_VIEW_DESC node_shader_description{};
+        node_shader_description.Format = DXGI_FORMAT_UNKNOWN;
+        node_shader_description.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        node_shader_description.Buffer.FirstElement = 0u;
+        node_shader_description.Buffer.NumElements =
+            config_.maximum_type2_fragment_nodes;
+        result = device_->CreateShaderResourceView(
+            type_two_fragment_buffer_.Get(),
+            &node_shader_description,
+            type_two_fragment_view_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-fragment-view");
+        D3D11_UNORDERED_ACCESS_VIEW_DESC node_unordered_description{};
+        node_unordered_description.Format = DXGI_FORMAT_UNKNOWN;
+        node_unordered_description.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        node_unordered_description.Buffer.FirstElement = 0u;
+        node_unordered_description.Buffer.NumElements =
+            config_.maximum_type2_fragment_nodes;
+        result = device_->CreateUnorderedAccessView(
+            type_two_fragment_buffer_.Get(),
+            &node_unordered_description,
+            type_two_fragment_uav_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-fragment-uav");
+
+        D3D11_BUFFER_DESC status_description{};
+        status_description.ByteWidth = sizeof(std::uint32_t) * 4u;
+        status_description.Usage = D3D11_USAGE_DEFAULT;
+        status_description.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+        status_description.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        status_description.StructureByteStride = sizeof(std::uint32_t);
+        result = device_->CreateBuffer(
+            &status_description, nullptr, type_two_status_buffer_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-status-buffer");
+        D3D11_UNORDERED_ACCESS_VIEW_DESC status_unordered_description{};
+        status_unordered_description.Format = DXGI_FORMAT_UNKNOWN;
+        status_unordered_description.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        status_unordered_description.Buffer.FirstElement = 0u;
+        status_unordered_description.Buffer.NumElements = 4u;
+        result = device_->CreateUnorderedAccessView(
+            type_two_status_buffer_.Get(),
+            &status_unordered_description,
+            type_two_status_uav_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-status-uav");
+        D3D11_BUFFER_DESC readback_description = status_description;
+        readback_description.Usage = D3D11_USAGE_STAGING;
+        readback_description.BindFlags = 0u;
+        readback_description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        readback_description.MiscFlags = 0u;
+        readback_description.StructureByteStride = 0u;
+        result = device_->CreateBuffer(
+            &readback_description,
+            nullptr,
+            type_two_status_readback_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-status-readback");
+        type2_resources_ready_ = true;
+    }
+
+    void begin_type2_subpass(const NativePortDrawPacket& packet) {
+        ensure_type2_resources();
+        // Preserve the opaque/punch result as the resolve destination before
+        // unbinding the render target.  Type-2 gathers never touch scene depth
+        // or the color target directly.
+        context_->OMSetRenderTargets(0u, nullptr, nullptr);
+        context_->CopyResource(type_two_base_texture_.Get(),
+                               render_texture_.Get());
+        // Resolve binds Type-2 resources through t1..t4. Clear the complete
+        // range before rebinding the same textures as UAVs on a later scene;
+        // leaving t2/t3/t4 live would rely on implicit hazard unbinding.
+        std::array<ID3D11ShaderResourceView*, 5u> no_resources{};
+        context_->PSSetShaderResources(
+            0u,
+            static_cast<UINT>(no_resources.size()),
+            no_resources.data());
+        bound_shader_resource_ = nullptr;
+        bound_shader_resource_valid_ = false;
+        constexpr std::array<std::uint32_t, 4u> empty_heads{
+            0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+        constexpr std::array<std::uint32_t, 4u> zero_values{
+            0u, 0u, 0u, 0u};
+        context_->ClearUnorderedAccessViewUint(
+            type_two_head_uav_.Get(), empty_heads.data());
+        context_->ClearUnorderedAccessViewUint(
+            type_two_count_uav_.Get(), zero_values.data());
+        context_->ClearUnorderedAccessViewUint(
+            type_two_status_uav_.Get(), zero_values.data());
+        std::array<ID3D11UnorderedAccessView*, 4u> unordered_views{
+            type_two_head_uav_.Get(),
+            type_two_fragment_uav_.Get(),
+            type_two_count_uav_.Get(),
+            type_two_status_uav_.Get()};
+        context_->OMSetRenderTargetsAndUnorderedAccessViews(
+            0u,
+            nullptr,
+            depth_view_.Get(),
+            1u,
+            static_cast<UINT>(unordered_views.size()),
+            unordered_views.data(),
+            nullptr);
+        type_two_uavs_bound_ = true;
+        type2_subpass_active_ = true;
+        type2_gather_active_ = true;
+        type2_batch_identity_ = packet.batch.identity;
+        type2_fragment_count_ = 0u;
+        type2_max_fragments_per_pixel_ = 0u;
+    }
+
+    void read_type2_status() {
+        context_->CopyResource(type_two_status_readback_.Get(),
+                               type_two_status_buffer_.Get());
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const auto result = context_->Map(type_two_status_readback_.Get(),
+                                          0u,
+                                          D3D11_MAP_READ,
+                                          0u,
+                                          &mapped);
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::DeviceLost,
+                 static_cast<std::uint32_t>(result),
+                 "type2-status-map");
+        std::array<std::uint32_t, 4u> status{};
+        std::memcpy(status.data(), mapped.pData, sizeof(status));
+        context_->Unmap(type_two_status_readback_.Get(), 0u);
+        type2_fragment_count_ = status[0];
+        type2_max_fragments_per_pixel_ = status[2];
+        if (status[1] != 0u ||
+            !type_two_status_within_bounds(
+                status[0], status[2],
+                config_.maximum_type2_fragment_nodes))
+            fail(NativePortGraphicsFailure::ResourceLimit,
+                 0u,
+                 "type2-fragment-overflow");
+    }
+
+    void unbind_type2_subpass() {
+        if (!type_two_uavs_bound_) return;
+        std::array<ID3D11UnorderedAccessView*, 4u> no_views{
+            nullptr, nullptr, nullptr, nullptr};
+        context_->OMSetRenderTargetsAndUnorderedAccessViews(
+            0u,
+            nullptr,
+            nullptr,
+            1u,
+            static_cast<UINT>(no_views.size()),
+            no_views.data(),
+            nullptr);
+        type_two_uavs_bound_ = false;
+    }
+
+    void resolve_type2_subpass() {
+        if (!type2_resources_ready_ || !type2_gather_active_)
+            fail(NativePortGraphicsFailure::InvalidFrame,
+                 0u,
+                 "type2-subpass-state");
+        // End the UAV output phase before copying the status buffer to its
+        // staging readback. This keeps the status resource unbound during
+        // the synchronization point and makes the overflow gate explicit.
+        unbind_type2_subpass();
+        read_type2_status();
+        if (type2_fragment_count_ == 0u) {
+            context_->OMSetRenderTargets(
+                1u, render_target_.GetAddressOf(), depth_view_.Get());
+            return;
+        }
+
+        context_->OMSetRenderTargets(
+            1u, render_target_.GetAddressOf(), nullptr);
+        set_viewport({0u,
+                      0u,
+                      config_.render_extent.width,
+                      config_.render_extent.height});
+        NativePortBlendState blend;
+        NativePortDepthState depth;
+        depth.test_enabled = false;
+        depth.write_enabled = false;
+        NativePortRasterizerState rasterizer;
+        rasterizer.cull = NativePortCullMode::None;
+        constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
+        context_->OMSetBlendState(
+            resolve_blend_state(blend), blend_factor.data(), 0xFFFFFFFFu);
+        context_->OMSetDepthStencilState(resolve_depth_state(depth), 0u);
+        context_->RSSetState(resolve_rasterizer_state(rasterizer));
+        context_->IASetInputLayout(nullptr);
+        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context_->VSSetShader(composite_vertex_shader_.Get(), nullptr, 0u);
+        context_->PSSetShader(type_two_resolve_pixel_shader_.Get(), nullptr, 0u);
+        TypeTwoResolveConstants constants;
+        constants.parameters = {
+            type_two_maximum_fragments_per_pixel,
+            type2_fragment_count_,
+            type2_max_fragments_per_pixel_,
+            config_.maximum_type2_fragment_nodes};
+        context_->UpdateSubresource(type_two_resolve_constants_.Get(),
+                                    0u,
+                                    nullptr,
+                                    &constants,
+                                    0u,
+                                    0u);
+        context_->PSSetConstantBuffers(
+            2u, 1u, type_two_resolve_constants_.GetAddressOf());
+        ID3D11ShaderResourceView* resources[4u]{
+            type_two_base_view_.Get(),
+            type_two_head_view_.Get(),
+            type_two_fragment_view_.Get(),
+            type_two_count_view_.Get()};
+        context_->PSSetShaderResources(1u, 4u, resources);
+        context_->Draw(3u, 0u);
+        std::array<ID3D11ShaderResourceView*, 5u> no_resources{};
+        context_->PSSetShaderResources(
+            0u,
+            static_cast<UINT>(no_resources.size()),
+            no_resources.data());
+        context_->OMSetRenderTargets(
+            1u, render_target_.GetAddressOf(), depth_view_.Get());
+    }
+
+    void start_render_submit_telemetry() noexcept {
+        stop_render_submit_telemetry();
+        if (telemetry_writer_.has_value())
+            render_submit_timer_.emplace(
+                *telemetry_writer_, NativePortTelemetryStage::RenderSubmit);
+    }
+
+    void stop_render_submit_telemetry() noexcept {
+        if (!render_submit_timer_.has_value()) return;
+        render_submit_timer_->stop();
+        render_submit_timer_.reset();
+    }
+
+    void flush_render_telemetry() noexcept {
+        if (telemetry_writer_.has_value() && config_.telemetry != nullptr)
+            config_.telemetry->publish(*telemetry_writer_);
+    }
+
     void present_completed_frame(const char* const operation) {
         poll_events();
         if (minimized_) {
+            stop_render_submit_telemetry();
+            flush_render_telemetry();
             snapshot_.occluded = true;
             return;
         }
@@ -2019,10 +2571,28 @@ class NativePortGraphicsDevice::Impl final {
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
         invalidate_draw_state_shadow();
+        stop_render_submit_telemetry();
+        std::optional<NativePortTelemetryTimer> present_wait_timer;
+        if (telemetry_writer_.has_value())
+            present_wait_timer.emplace(
+                *telemetry_writer_, NativePortTelemetryStage::PresentWait);
+        if (inject_present_failure_once_) {
+            inject_present_failure_once_ = false;
+            fail(NativePortGraphicsFailure::DeviceLost,
+                 static_cast<std::uint32_t>(E_FAIL),
+                 operation);
+        }
         const auto result = swap_chain_->Present(
             config_.synchronize_present ? 1u : 0u, 0u);
+        if (present_wait_timer.has_value()) present_wait_timer->stop();
+        flush_render_telemetry();
         if (result == DXGI_STATUS_OCCLUDED) {
             snapshot_.occluded = true;
+            // Explicit diagnostics must remain useful for bounded background
+            // gates even when DXGI declines presentation. The immutable
+            // render target is complete here; begun_frames is the logical
+            // native frame identity and does not advance on repeat_present.
+            capture_completed_frame(snapshot_.begun_frames);
             return;
         }
         if (FAILED(result)) {
@@ -2167,10 +2737,10 @@ class NativePortGraphicsDevice::Impl final {
         std::array<float, 4u> depth_parameters{};
         std::array<float, 4u> material_parameters{};
         std::array<std::uint32_t, 4u> pipeline_flags{};
-        // x: packed source/destination color+alpha factors; y: packed
-        // operations and color-write mask; z: stable submission sequence;
-        // w: bounded fragment capacity.  These values are consumed only by
-        // the Type-2 capture shader; ordinary draws keep them zero.
+        // x/y are reserved for a future admitted blend family; z is the
+        // stable packet submission sequence and w is the bounded allocator
+        // capacity. These values are consumed only by the Type-2 capture
+        // shader; ordinary draws keep them zero.
         std::array<std::uint32_t, 4u> type_two_parameters{};
     };
 
@@ -2180,14 +2750,17 @@ class NativePortGraphicsDevice::Impl final {
         std::array<float, 4u> color{};
         float depth = 0.0f;
         std::uint32_t sequence = 0u;
+        std::uint32_t primitive = 0u;
         std::uint32_t next = 0xFFFFFFFFu;
-        std::uint32_t blend_factors = 0u;
-        std::uint32_t blend_operations = 0u;
-        std::uint32_t reserved_0 = 0u;
-        std::uint32_t reserved_1 = 0u;
     };
 
-    static_assert(sizeof(TypeTwoFragmentGpu) == 48u);
+    static_assert(sizeof(TypeTwoFragmentGpu) == 32u);
+
+    struct TypeTwoResolveConstants final {
+        std::array<std::uint32_t, 4u> parameters{};
+    };
+
+    static_assert(sizeof(TypeTwoResolveConstants) == 16u);
 
     struct FogTableConstants final {
         std::array<std::array<float, 4u>,
@@ -2229,12 +2802,13 @@ class NativePortGraphicsDevice::Impl final {
                                         const UINT message,
                                         const WPARAM word,
                                         const LPARAM data) noexcept {
-        auto* self = reinterpret_cast<Impl*>(
+        auto* self = reinterpret_cast<NativePortGraphicsBackend*>(
             GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
             const auto* create =
                 reinterpret_cast<const CREATESTRUCTW*>(data);
-            self = static_cast<Impl*>(create->lpCreateParams);
+            self = static_cast<NativePortGraphicsBackend*>(
+                create->lpCreateParams);
             SetWindowLongPtrW(
                 window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         }
@@ -2269,7 +2843,8 @@ class NativePortGraphicsDevice::Impl final {
             FALSE) {
             WNDCLASSEXW window_class{};
             window_class.cbSize = sizeof(window_class);
-            window_class.lpfnWndProc = &Impl::window_proc;
+            window_class.lpfnWndProc =
+                &NativePortGraphicsBackend::window_proc;
             window_class.hInstance = instance;
             window_class.hCursor =
                 LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
@@ -2327,6 +2902,7 @@ class NativePortGraphicsDevice::Impl final {
             D3D_FEATURE_LEVEL_10_1,
             D3D_FEATURE_LEVEL_10_0,
         };
+        D3D_FEATURE_LEVEL selected = D3D_FEATURE_LEVEL_10_0;
         const auto attempt = [&](DXGI_SWAP_EFFECT effect,
                                  const UINT buffer_count,
                                  const bool include_11_1) {
@@ -2343,7 +2919,6 @@ class NativePortGraphicsDevice::Impl final {
             description.OutputWindow = window_;
             description.Windowed = TRUE;
             description.SwapEffect = effect;
-            D3D_FEATURE_LEVEL selected = D3D_FEATURE_LEVEL_10_0;
             const auto first = include_11_1 ? 0u : 1u;
             return D3D11CreateDeviceAndSwapChain(
                 nullptr,
@@ -2409,6 +2984,14 @@ class NativePortGraphicsDevice::Impl final {
             compile_shader("composite_vertex_main", "vs_4_0");
         const auto composite_pixel_bytecode =
             compile_shader("composite_pixel_main", "ps_4_0");
+        ComPtr<ID3DBlob> type_two_capture_bytecode;
+        ComPtr<ID3DBlob> type_two_resolve_bytecode;
+        if (feature_level_ >= D3D_FEATURE_LEVEL_11_0) {
+            type_two_capture_bytecode = compile_type_two_shader(
+                "draw_type_two_capture_main", "ps_5_0");
+            type_two_resolve_bytecode = compile_type_two_shader(
+                "type_two_resolve_pixel_main", "ps_5_0");
+        }
         auto check = [&](const HRESULT result, const char* operation) {
             if (FAILED(result))
                 fail(NativePortGraphicsFailure::ResourceCreation,
@@ -2439,6 +3022,20 @@ class NativePortGraphicsDevice::Impl final {
                   nullptr,
                   composite_pixel_shader_.GetAddressOf()),
               "composite-pixel-shader");
+        if (type_two_capture_bytecode) {
+            check(device_->CreatePixelShader(
+                      type_two_capture_bytecode->GetBufferPointer(),
+                      type_two_capture_bytecode->GetBufferSize(),
+                      nullptr,
+                      type_two_capture_pixel_shader_.GetAddressOf()),
+                  "type-two-capture-pixel-shader");
+            check(device_->CreatePixelShader(
+                      type_two_resolve_bytecode->GetBufferPointer(),
+                      type_two_resolve_bytecode->GetBufferSize(),
+                      nullptr,
+                      type_two_resolve_pixel_shader_.GetAddressOf()),
+                  "type-two-resolve-pixel-shader");
+        }
 
         constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 8u> elements{
             D3D11_INPUT_ELEMENT_DESC{
@@ -2500,6 +3097,18 @@ class NativePortGraphicsDevice::Impl final {
                                     &initial_fog_data,
                                     fog_table_constants_.GetAddressOf()),
               "fog-table-constants");
+        if (type_two_capture_bytecode) {
+            D3D11_BUFFER_DESC type_two_constant_description{};
+            type_two_constant_description.ByteWidth =
+                sizeof(TypeTwoResolveConstants);
+            type_two_constant_description.Usage = D3D11_USAGE_DEFAULT;
+            type_two_constant_description.BindFlags =
+                D3D11_BIND_CONSTANT_BUFFER;
+            check(device_->CreateBuffer(&type_two_constant_description,
+                                        nullptr,
+                                        type_two_resolve_constants_.GetAddressOf()),
+                  "type-two-resolve-constants");
+        }
     }
 
     [[nodiscard]] std::size_t pipeline_state_count() const noexcept {
@@ -3434,6 +4043,7 @@ class NativePortGraphicsDevice::Impl final {
         bound_sampler_valid_ = false;
         bound_shader_resource_valid_ = false;
         draw_pipeline_bound_ = false;
+        draw_pipeline_type_two_ = false;
     }
 
     void set_viewport(const NativePortPixelRect rect) {
@@ -4888,6 +5498,8 @@ class NativePortGraphicsDevice::Impl final {
     std::string title_storage_;
     NativePortGraphicsConfig config_;
     std::thread::id owner_thread_;
+    std::optional<NativePortTelemetryWriter> telemetry_writer_;
+    std::optional<NativePortTelemetryTimer> render_submit_timer_;
     HWND window_ = nullptr;
     NativePortExtent output_extent_;
     NativePortExtent pending_output_extent_;
@@ -4896,11 +5508,13 @@ class NativePortGraphicsDevice::Impl final {
     bool minimized_ = false;
     bool frame_open_ = false;
     bool completed_frame_available_ = false;
+    bool inject_present_failure_once_ = false;
     NativePortDepthBufferConvention frame_depth_buffer_ =
         NativePortDepthBufferConvention::Forward;
 
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
+    D3D_FEATURE_LEVEL feature_level_ = D3D_FEATURE_LEVEL_10_0;
     ComPtr<IDXGISwapChain> swap_chain_;
     ComPtr<ID3D11RenderTargetView> swap_chain_target_;
     ComPtr<ID3D11Texture2D> render_texture_;
@@ -4911,11 +5525,28 @@ class NativePortGraphicsDevice::Impl final {
     ComPtr<ID3D11DepthStencilView> depth_view_;
     ComPtr<ID3D11VertexShader> draw_vertex_shader_;
     ComPtr<ID3D11PixelShader> draw_pixel_shader_;
+    ComPtr<ID3D11PixelShader> type_two_capture_pixel_shader_;
     ComPtr<ID3D11VertexShader> composite_vertex_shader_;
     ComPtr<ID3D11PixelShader> composite_pixel_shader_;
+    ComPtr<ID3D11PixelShader> type_two_resolve_pixel_shader_;
     ComPtr<ID3D11InputLayout> input_layout_;
     ComPtr<ID3D11Buffer> draw_constants_;
     ComPtr<ID3D11Buffer> fog_table_constants_;
+    ComPtr<ID3D11Buffer> type_two_resolve_constants_;
+    ComPtr<ID3D11Texture2D> type_two_base_texture_;
+    ComPtr<ID3D11ShaderResourceView> type_two_base_view_;
+    ComPtr<ID3D11Texture2D> type_two_head_texture_;
+    ComPtr<ID3D11ShaderResourceView> type_two_head_view_;
+    ComPtr<ID3D11UnorderedAccessView> type_two_head_uav_;
+    ComPtr<ID3D11Texture2D> type_two_count_texture_;
+    ComPtr<ID3D11ShaderResourceView> type_two_count_view_;
+    ComPtr<ID3D11UnorderedAccessView> type_two_count_uav_;
+    ComPtr<ID3D11Buffer> type_two_fragment_buffer_;
+    ComPtr<ID3D11ShaderResourceView> type_two_fragment_view_;
+    ComPtr<ID3D11UnorderedAccessView> type_two_fragment_uav_;
+    ComPtr<ID3D11Buffer> type_two_status_buffer_;
+    ComPtr<ID3D11UnorderedAccessView> type_two_status_uav_;
+    ComPtr<ID3D11Buffer> type_two_status_readback_;
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> index_buffer_;
     UINT vertex_buffer_capacity_ = 0u;
@@ -4962,12 +5593,24 @@ class NativePortGraphicsDevice::Impl final {
     bool bound_shader_resource_valid_ = false;
     bool bound_topology_valid_ = false;
     bool draw_pipeline_bound_ = false;
+    bool draw_pipeline_type_two_ = false;
     bool frame_batch_active_ = false;
     std::uint64_t frame_batch_identity_ = 0u;
     NativePortDrawBatchClass frame_batch_semantic_ =
         NativePortDrawBatchClass::Scene3D;
     NativePortDrawClass frame_batch_phase_ = NativePortDrawClass::Opaque;
     std::uint32_t frame_batch_submission_order_ = 0u;
+    bool type2_resources_ready_ = false;
+    bool type2_subpass_active_ = false;
+    bool type2_gather_active_ = false;
+    bool type_two_uavs_bound_ = false;
+    std::uint64_t type2_batch_identity_ = 0u;
+    bool type2_closed_batch_valid_ = false;
+    std::uint64_t type2_closed_batch_identity_ = 0u;
+    bool type2_non_type2_batch_valid_ = false;
+    std::uint64_t type2_non_type2_batch_identity_ = 0u;
+    std::uint32_t type2_fragment_count_ = 0u;
+    std::uint32_t type2_max_fragments_per_pixel_ = 0u;
     std::vector<NativePortVertex> prepared_vertices_;
     std::vector<BlendStateSlot> blend_states_;
     std::vector<DepthStateSlot> depth_states_;
@@ -5023,9 +5666,9 @@ class NativePortGraphicsDevice::Impl final {
 
 #else
 
-class NativePortGraphicsDevice::Impl final {
+class NativePortGraphicsBackend final {
   public:
-    explicit Impl(const NativePortGraphicsConfig& config) {
+    explicit NativePortGraphicsBackend(const NativePortGraphicsConfig& config) {
         validate_graphics_config(config);
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::UnsupportedHost,
@@ -5059,7 +5702,10 @@ class NativePortGraphicsDevice::Impl final {
     void destroy_mesh(NativePortMeshHandle) {}
     void begin_frame(const NativePortFrameConfig&) {}
     void draw(const NativePortDrawPacket&) {}
+    void flush_type2_translucency() {}
     void present() {}
+    void abort_frame_after_command_failure() noexcept {}
+    void publish_telemetry() noexcept {}
     void repeat_present() {}
     void present_image(const NativePortImageView&,
                        NativePortViewportTarget,
@@ -5071,6 +5717,1139 @@ class NativePortGraphicsDevice::Impl final {
 
 #endif
 
+class NativePortGraphicsDevice::Impl final {
+  public:
+    explicit Impl(const NativePortGraphicsConfig& config)
+        : title_storage_(copy_validated_graphics_title(config.title)),
+          config_(config), producer_thread_(std::this_thread::get_id()),
+          requested_mode_(native_port_render_thread_enabled()
+                              ? NativePortGraphicsExecutionMode::Parallel
+                              : NativePortGraphicsExecutionMode::SerialReference),
+          active_mode_(requested_mode_) {
+        config_.title = title_storage_;
+        validate_graphics_config(config_);
+
+        NativePortFrameQueueConfig queue_config;
+        queue_config.maximum_commands_per_frame =
+            config_.maximum_render_commands_per_frame;
+        queue_config.maximum_payload_bytes_per_frame =
+            config_.maximum_render_payload_bytes_per_frame;
+        queue_config.enabled = true;
+        queue_config.threading_mode =
+            serial()
+                ? NativePortFrameQueueConfig::ThreadingMode::SerialReference
+                : NativePortFrameQueueConfig::ThreadingMode::ParallelSpsc;
+        queue_ = std::make_unique<NativePortFrameQueue>(queue_config);
+        if (!queue_->enabled())
+            fail_facade("render-command-queue-disabled");
+        observe_render_queue_depth();
+
+        if (serial()) {
+            serial_backend_ =
+                std::make_unique<NativePortGraphicsBackend>(config_);
+            cache_initial_backend(*serial_backend_);
+            bind_serial_queue_domains();
+            return;
+        }
+
+        consumer_thread_ = std::thread([this] { consumer_main(); });
+        wait_for_consumer_startup();
+        bind_parallel_producer_domain();
+    }
+
+    ~Impl() noexcept {
+        if (std::this_thread::get_id() != producer_thread_) std::terminate();
+        abort_open_batch();
+        producer_frame_open_ = false;
+        try {
+            wait_for_all_replies();
+        } catch (...) {
+        }
+        try {
+            if (queue_->snapshot().lifecycle ==
+                NativePortFrameQueueLifecycle::Running) {
+                submit_standalone_sync(
+                    [](NativePortGraphicsCommandWriter& writer) {
+                        return writer.shutdown();
+                    },
+                    NativePortGraphicsFailure::RenderThreadContract,
+                    "render-shutdown-encode");
+            }
+        } catch (...) {
+        }
+        queue_->request_shutdown();
+        if (consumer_thread_.joinable()) consumer_thread_.join();
+        serial_backend_.reset();
+    }
+
+    void show() {
+        submit_control(
+            [](NativePortGraphicsCommandWriter& writer) {
+                return writer.show();
+            },
+            NativePortGraphicsFailure::RenderThreadContract,
+            "render-show-encode");
+    }
+
+    void poll_events() {
+        submit_control(
+            [](NativePortGraphicsCommandWriter& writer) {
+                return writer.poll_events();
+            },
+            NativePortGraphicsFailure::RenderThreadContract,
+            "render-poll-encode");
+    }
+
+    [[nodiscard]] NativePortLifecycleState lifecycle_state() {
+        require_producer_thread();
+        retire_available_replies();
+        require_queue_healthy();
+        return cached_lifecycle_;
+    }
+
+    [[nodiscard]] NativePortGraphicsLayout layout() {
+        require_producer_thread();
+        retire_available_replies();
+        require_queue_healthy();
+        return cached_layout_;
+    }
+
+    [[nodiscard]] NativePortTextureHandle create_texture(
+        const NativePortTextureConfig& config,
+        const std::span<const NativePortImageView> initial_mip_levels) {
+        require_producer_thread();
+        require_resource_payload(
+            native_port_graphics_encoded_create_texture_size(
+                config, initial_mip_levels));
+        const NativePortTextureHandle logical{next_logical_handle(
+            next_texture_handle_, "texture-handle-exhausted")};
+        submit_resource_sync(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.create_texture(
+                    logical, config, initial_mip_levels);
+            },
+            NativePortGraphicsFailure::InvalidResource,
+            "texture-command-encode");
+        return logical;
+    }
+
+    void update_texture(const NativePortTextureHandle texture,
+                        const NativePortImageView& pixels) {
+        update_texture(
+            texture, std::span<const NativePortImageView>(&pixels, 1u));
+    }
+
+    void update_texture(
+        const NativePortTextureHandle texture,
+        const std::span<const NativePortImageView> mip_levels) {
+        require_resource_payload(
+            native_port_graphics_encoded_update_texture_size(mip_levels));
+        submit_resource_sync(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.update_texture(texture, mip_levels);
+            },
+            NativePortGraphicsFailure::InvalidResource,
+            "texture-update-command-encode");
+    }
+
+    void destroy_texture(const NativePortTextureHandle texture) {
+        submit_resource_sync(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.destroy_texture(texture);
+            },
+            NativePortGraphicsFailure::InvalidResource,
+            "texture-destroy-command-encode");
+    }
+
+    [[nodiscard]] NativePortMeshHandle create_mesh(
+        const NativePortMeshConfig& config) {
+        require_producer_thread();
+        require_resource_payload(
+            native_port_graphics_encoded_create_mesh_size(config));
+        const NativePortMeshHandle logical{next_logical_handle(
+            next_mesh_handle_, "mesh-handle-exhausted")};
+        submit_resource_sync(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.create_mesh(logical, config);
+            },
+            NativePortGraphicsFailure::InvalidResource,
+            "mesh-command-encode");
+        return logical;
+    }
+
+    void destroy_mesh(const NativePortMeshHandle mesh) {
+        submit_resource_sync(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.destroy_mesh(mesh);
+            },
+            NativePortGraphicsFailure::InvalidResource,
+            "mesh-destroy-command-encode");
+    }
+
+    void begin_frame(const NativePortFrameConfig& config) {
+        require_producer_thread();
+        if (producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "frame-already-open");
+
+        begin_batch();
+        try {
+            append_open(
+                [&](NativePortGraphicsCommandWriter& writer) {
+                    return writer.begin_frame(config);
+                },
+                NativePortGraphicsFailure::InvalidFrame,
+                "frame-command-encode");
+            producer_frame_open_ = true;
+        } catch (...) {
+            producer_frame_open_ = false;
+            throw;
+        }
+    }
+
+    void draw(const NativePortDrawPacket& packet) {
+        require_producer_thread();
+        if (!producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidDraw,
+                1u,
+                "draw-outside-frame");
+        append_open(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.draw(packet);
+            },
+            NativePortGraphicsFailure::InvalidDraw,
+            "draw-command-encode");
+    }
+
+    void flush_type2_translucency() {
+        require_producer_thread();
+        if (!producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "type2-flush-outside-frame");
+        append_open(
+            [](NativePortGraphicsCommandWriter& writer) {
+                return writer.flush_type2_translucency();
+            },
+            NativePortGraphicsFailure::InvalidFrame,
+            "type2-flush-command-encode");
+    }
+
+    void present() {
+        require_producer_thread();
+        if (!producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "present-without-frame");
+        try {
+            append_open(
+                [](NativePortGraphicsCommandWriter& writer) {
+                    return writer.present();
+                },
+                NativePortGraphicsFailure::InvalidFrame,
+                "present-command-encode");
+            // Retire the preceding submitted frame before publishing this one.
+            // The just-published frame remains asynchronous, so simulation can
+            // build the next frame while the consumer renders it. This admits
+            // at most one waiting frame with the depth-2 queue.
+            publish_open_batch(false);
+            producer_frame_open_ = false;
+        } catch (...) {
+            producer_frame_open_ = false;
+            throw;
+        }
+    }
+
+    void repeat_present() {
+        require_producer_thread();
+        if (producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "repeat-present-with-open-frame");
+        submit_standalone_sync(
+            [](NativePortGraphicsCommandWriter& writer) {
+                return writer.repeat_present();
+            },
+            NativePortGraphicsFailure::InvalidFrame,
+            "repeat-present-command-encode");
+    }
+
+    void present_image(const NativePortImageView& image,
+                       const NativePortViewportTarget viewport,
+                       const NativePortImageFit fit) {
+        require_producer_thread();
+        if (producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "present-image-with-open-frame");
+        require_resource_payload(
+            native_port_graphics_encoded_present_image_size(image));
+        submit_standalone_sync(
+            [&](NativePortGraphicsCommandWriter& writer) {
+                return writer.present_image(image, viewport, fit);
+            },
+            NativePortGraphicsFailure::InvalidFrame,
+            "present-image-command-encode");
+    }
+
+    [[nodiscard]] NativePortGraphicsSnapshot snapshot() {
+        require_producer_thread();
+        if (!producer_frame_open_)
+            wait_for_all_replies();
+        else
+            retire_available_replies();
+        require_queue_healthy();
+        auto result = cached_snapshot_;
+        if (producer_frame_open_) result.frame_open = true;
+        decorate_snapshot(result);
+        return result;
+    }
+
+    [[nodiscard]] std::uint64_t
+    presented_frames_nonblocking() const noexcept {
+        return published_presented_frames_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool frame_recording_open_nonblocking() const noexcept {
+        return producer_frame_open_;
+    }
+
+  private:
+    enum class StartupState : std::uint8_t { Pending, Ready, Failed };
+
+    struct BackendError final {
+        bool valid = false;
+        NativePortGraphicsFailure failure =
+            NativePortGraphicsFailure::RenderThreadContract;
+        std::uint32_t platform_error_code = 0u;
+        std::uint64_t operation_id = 0u;
+    };
+    static_assert(std::is_trivially_copyable_v<BackendError>);
+
+    struct ReplySlot final {
+        std::atomic<std::uint64_t> ready_sequence{0u};
+        BackendError error;
+        NativePortGraphicsSnapshot snapshot;
+        NativePortGraphicsLayout layout;
+        NativePortLifecycleState lifecycle =
+            NativePortLifecycleState::Running;
+        std::uint32_t failed_ordinal = 0u;
+    };
+
+    [[nodiscard]] bool serial() const noexcept {
+        return active_mode_ ==
+               NativePortGraphicsExecutionMode::SerialReference;
+    }
+
+    static void saturating_atomic_add(
+        std::atomic<std::uint64_t>& value,
+        const std::uint64_t amount = 1u) noexcept {
+        auto current = value.load(std::memory_order_relaxed);
+        for (;;) {
+            const auto next =
+                amount > std::numeric_limits<std::uint64_t>::max() - current
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : current + amount;
+            if (value.compare_exchange_weak(
+                    current, next, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return;
+        }
+    }
+
+    [[nodiscard]] static std::uint64_t next_logical_handle(
+        std::uint64_t& next,
+        const char* const operation) {
+        if (next == 0u || next == std::numeric_limits<std::uint64_t>::max())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::ResourceLimit, 1u, operation);
+        return next++;
+    }
+
+    [[nodiscard]] static bool is_resource_command(
+        const NativePortGraphicsCommandKind kind) noexcept {
+        switch (kind) {
+        case NativePortGraphicsCommandKind::CreateTexture:
+        case NativePortGraphicsCommandKind::UpdateTexture:
+        case NativePortGraphicsCommandKind::DestroyTexture:
+        case NativePortGraphicsCommandKind::CreateMesh:
+        case NativePortGraphicsCommandKind::DestroyMesh:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    void require_resource_payload(
+        const std::optional<NativePortGraphicsCommandPayloadRequirement>&
+            requirement) const {
+        const auto capacity = requirement.has_value()
+                                  ? requirement->capacity_from(0u)
+                                  : std::nullopt;
+        if (!capacity.has_value() ||
+            *capacity >
+                config_.maximum_render_resource_payload_bytes_per_command)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::ResourceLimit, 1u,
+                "render-resource-command-capacity");
+    }
+
+    [[noreturn]] static void fail_facade(const char* const operation) {
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::RenderThreadContract, 1u, operation);
+    }
+
+    [[nodiscard]] static BackendError facade_error(
+        const char* const operation) noexcept {
+        return {true, NativePortGraphicsFailure::RenderThreadContract, 1u,
+                native_port_graphics_operation_id(operation)};
+    }
+
+    [[nodiscard]] static BackendError capture_backend_error(
+        const NativePortGraphicsError& error) noexcept {
+        return {true, error.failure(), error.platform_error_code(),
+                error.operation_id()};
+    }
+
+    [[noreturn]] static void throw_backend_error(const BackendError error) {
+        throw NativePortGraphicsError(error.failure,
+                                      error.platform_error_code,
+                                      error.operation_id);
+    }
+
+    void require_producer_thread() const {
+        if (std::this_thread::get_id() != producer_thread_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::ThreadViolation,
+                1u,
+                "render-producer-thread");
+    }
+
+    void cache_initial_backend(NativePortGraphicsBackend& backend) {
+        cached_snapshot_ = backend.snapshot();
+        cached_layout_ = backend.layout();
+        cached_lifecycle_ = backend.lifecycle_state();
+        published_presented_frames_.store(
+            cached_snapshot_.presented_frames, std::memory_order_release);
+    }
+
+    void bind_serial_queue_domains() {
+        auto producer = queue_->try_begin_produce();
+        if (!producer.has_value()) throw_queue_failure("serial-producer-bind");
+        producer->abort();
+        static_cast<void>(queue_->try_begin_consume());
+        const auto queue_snapshot = queue_->snapshot();
+        if (queue_snapshot.producer_thread_identity == 0u ||
+            queue_snapshot.consumer_thread_identity == 0u ||
+            queue_snapshot.producer_thread_identity !=
+                queue_snapshot.consumer_thread_identity)
+            fail_facade("serial-render-thread-domains");
+    }
+
+    void bind_parallel_producer_domain() {
+        auto producer = queue_->try_begin_produce();
+        if (!producer.has_value()) {
+            queue_->request_shutdown();
+            consumer_thread_.join();
+            throw_queue_failure("render-producer-bind");
+        }
+        producer->abort();
+        const auto queue_snapshot = queue_->snapshot();
+        if (queue_snapshot.producer_thread_identity == 0u ||
+            queue_snapshot.consumer_thread_identity == 0u ||
+            queue_snapshot.producer_thread_identity ==
+                queue_snapshot.consumer_thread_identity) {
+            queue_->report_producer_error(
+                NativePortFrameQueueError::ThreadDomainOverlap, 0u);
+            queue_->request_shutdown();
+            consumer_thread_.join();
+            fail_facade("render-thread-domains");
+        }
+    }
+
+    void wait_for_consumer_startup() {
+        auto state = startup_state_.load(std::memory_order_acquire);
+        while (state == StartupState::Pending) {
+            startup_state_.wait(state, std::memory_order_acquire);
+            state = startup_state_.load(std::memory_order_acquire);
+        }
+        if (state == StartupState::Failed) {
+            consumer_thread_.join();
+            if (startup_error_.valid) throw_backend_error(startup_error_);
+            fail_facade("render-consumer-startup");
+        }
+        cached_snapshot_ = startup_snapshot_;
+        cached_layout_ = startup_layout_;
+        cached_lifecycle_ = startup_lifecycle_;
+        published_presented_frames_.store(
+            cached_snapshot_.presented_frames, std::memory_order_release);
+    }
+
+    void consumer_main() noexcept {
+        std::unique_ptr<NativePortGraphicsBackend> backend;
+        try {
+            backend = std::make_unique<NativePortGraphicsBackend>(config_);
+            static_cast<void>(queue_->try_begin_consume());
+            startup_snapshot_ = backend->snapshot();
+            startup_layout_ = backend->layout();
+            startup_lifecycle_ = backend->lifecycle_state();
+            startup_state_.store(StartupState::Ready,
+                                 std::memory_order_release);
+            startup_state_.notify_all();
+        } catch (const NativePortGraphicsError& error) {
+            startup_error_ = capture_backend_error(error);
+            startup_state_.store(StartupState::Failed,
+                                 std::memory_order_release);
+            startup_state_.notify_all();
+            return;
+        } catch (...) {
+            startup_error_ = facade_error("render-consumer-startup");
+            startup_state_.store(StartupState::Failed,
+                                 std::memory_order_release);
+            startup_state_.notify_all();
+            return;
+        }
+
+        for (;;) {
+            auto lease = queue_->wait_begin_consume();
+            if (!lease.has_value()) break;
+            if (consume_lease(*backend, *lease)) break;
+        }
+        queue_->request_shutdown();
+        backend.reset();
+    }
+
+    [[nodiscard]] bool consume_lease(
+        NativePortGraphicsBackend& backend,
+        NativePortFrameReadLease& lease) noexcept {
+        const auto sequence = lease.sequence();
+        observe_render_queue_depth();
+        NativePortGraphicsCommandReader reader(lease);
+        if (!reader.valid() || reader.size() == 0u) {
+            const auto error = facade_error("render-command-frame");
+            lease.fail(NativePortFrameQueueError::InvalidCommandRange);
+            observe_render_queue_depth();
+            publish_backend_reply(backend, sequence, error, 0u);
+            return true;
+        }
+
+        BackendError first_error;
+        std::uint32_t first_failed_ordinal = 0u;
+        bool shutdown = false;
+        bool terminal = false;
+        const auto command_count = reader.size();
+        saturating_atomic_add(consumed_commands_, command_count);
+        last_consumed_sequence_.store(sequence, std::memory_order_release);
+        while (auto command = reader.next()) {
+            const auto ordinal = command->ordinal;
+            try {
+                shutdown = execute_command(backend, *command) || shutdown;
+                saturating_atomic_add(executed_commands_);
+                last_executed_sequence_.store(sequence,
+                                              std::memory_order_release);
+            } catch (const NativePortGraphicsError& error) {
+                if (!first_error.valid) {
+                    first_error = capture_backend_error(error);
+                    first_failed_ordinal = ordinal;
+                }
+                saturating_atomic_add(failed_commands_);
+                last_failed_sequence_.store(sequence,
+                                            std::memory_order_release);
+                last_failed_ordinal_.store(ordinal,
+                                           std::memory_order_release);
+                const auto skipped = command_count -
+                    (static_cast<std::size_t>(ordinal) + 1u);
+                saturating_atomic_add(skipped_commands_, skipped);
+                if (!is_resource_command(command->kind))
+                    backend.abort_frame_after_command_failure();
+                break;
+            } catch (...) {
+                first_error = facade_error("render-consumer-exception");
+                first_failed_ordinal = ordinal;
+                saturating_atomic_add(failed_commands_);
+                last_failed_sequence_.store(sequence,
+                                            std::memory_order_release);
+                last_failed_ordinal_.store(ordinal,
+                                           std::memory_order_release);
+                const auto skipped = command_count -
+                    (static_cast<std::size_t>(ordinal) + 1u);
+                saturating_atomic_add(skipped_commands_, skipped);
+                backend.abort_frame_after_command_failure();
+                terminal = true;
+                break;
+            }
+        }
+
+        if (terminal) {
+            lease.fail(NativePortFrameQueueError::ConsumerException);
+            observe_render_queue_depth();
+            publish_backend_reply(
+                backend, sequence, first_error, first_failed_ordinal);
+            return true;
+        }
+        if (!lease.complete()) {
+            observe_render_queue_depth();
+            publish_backend_reply(
+                backend, sequence,
+                facade_error("render-command-complete"),
+                first_failed_ordinal);
+            return true;
+        }
+        observe_render_queue_depth();
+        publish_backend_reply(
+            backend, sequence, first_error, first_failed_ordinal);
+        if (shutdown) queue_->request_shutdown();
+        return shutdown;
+    }
+
+    void publish_backend_reply(
+        NativePortGraphicsBackend& backend,
+        const std::uint64_t sequence,
+        BackendError error,
+        const std::uint32_t failed_ordinal) noexcept {
+        auto& slot = reply_slots_[
+            static_cast<std::size_t>((sequence - 1u) %
+                                     reply_slots_.size())];
+        auto ready = slot.ready_sequence.load(std::memory_order_acquire);
+        while (ready != 0u) {
+            slot.ready_sequence.wait(ready, std::memory_order_acquire);
+            ready = slot.ready_sequence.load(std::memory_order_acquire);
+        }
+        backend.publish_telemetry();
+        try {
+            slot.snapshot = backend.snapshot();
+            slot.layout = backend.layout();
+            slot.lifecycle = backend.lifecycle_state();
+        } catch (const NativePortGraphicsError& snapshot_error) {
+            error = capture_backend_error(snapshot_error);
+        } catch (...) {
+            error = facade_error("render-backend-snapshot");
+        }
+        slot.error = error;
+        slot.failed_ordinal = failed_ordinal;
+        published_presented_frames_.store(
+            slot.snapshot.presented_frames, std::memory_order_release);
+        slot.ready_sequence.store(sequence, std::memory_order_release);
+        slot.ready_sequence.notify_all();
+    }
+
+    void consume_reply(const std::uint64_t sequence, const bool wait) {
+        auto& slot = reply_slots_[
+            static_cast<std::size_t>((sequence - 1u) %
+                                     reply_slots_.size())];
+        auto ready = slot.ready_sequence.load(std::memory_order_acquire);
+        while (wait && ready == 0u) {
+            slot.ready_sequence.wait(ready, std::memory_order_acquire);
+            ready = slot.ready_sequence.load(std::memory_order_acquire);
+        }
+        if (ready == 0u) return;
+        if (ready != sequence)
+            fail_facade("render-command-reply-sequence");
+
+        cached_snapshot_ = slot.snapshot;
+        cached_layout_ = slot.layout;
+        cached_lifecycle_ = slot.lifecycle;
+        cached_backend_reply_sequence_ = sequence;
+        const auto error = slot.error;
+        slot.error = {};
+        slot.failed_ordinal = 0u;
+        slot.ready_sequence.store(0u, std::memory_order_release);
+        slot.ready_sequence.notify_all();
+        last_retired_sequence_ = sequence;
+        if (error.valid) throw_backend_error(error);
+    }
+
+    void retire_available_replies() {
+        while (last_retired_sequence_ < last_submitted_sequence_) {
+            const auto sequence = last_retired_sequence_ + 1u;
+            auto& slot = reply_slots_[
+                static_cast<std::size_t>((sequence - 1u) %
+                                         reply_slots_.size())];
+            if (slot.ready_sequence.load(std::memory_order_acquire) != sequence)
+                return;
+            consume_reply(sequence, false);
+        }
+    }
+
+    void wait_for_all_replies() {
+        while (last_retired_sequence_ < last_submitted_sequence_)
+            consume_reply(last_retired_sequence_ + 1u, true);
+    }
+
+    void require_queue_healthy() const {
+        if (queue_->snapshot().lifecycle ==
+            NativePortFrameQueueLifecycle::Failed)
+            throw_queue_failure("render-command-queue");
+    }
+
+    void begin_batch() {
+        require_producer_thread();
+        retire_available_replies();
+        require_queue_healthy();
+        auto lease = queue_->wait_begin_produce();
+        if (!lease.has_value()) {
+            retire_available_replies();
+            throw_queue_failure("render-command-begin");
+        }
+        batch_lease_.emplace(std::move(*lease));
+        batch_writer_.emplace(*batch_lease_);
+        batch_sequence_ = batch_lease_->sequence();
+        batch_command_count_ = 0u;
+    }
+
+    template <typename Encoder>
+    void append_open(Encoder&& encode,
+                     const NativePortGraphicsFailure source_failure,
+                     const char* const source_operation) {
+        if (!batch_writer_.has_value()) fail_facade("render-command-batch");
+        if (!std::forward<Encoder>(encode)(*batch_writer_)) {
+            const auto queue_snapshot = queue_->snapshot();
+            abort_open_batch();
+            producer_frame_open_ = false;
+            if (queue_snapshot.lifecycle ==
+                NativePortFrameQueueLifecycle::Failed)
+                throw_queue_failure("render-command-capacity");
+            throw NativePortGraphicsError(
+                source_failure, 1u, source_operation);
+        }
+        ++batch_command_count_;
+    }
+
+    void publish_open_batch(const bool wait_current) {
+        if (!batch_writer_.has_value() || batch_command_count_ == 0u)
+            fail_facade("render-command-empty-batch");
+        try {
+            // One prior submitted frame may execute while this arena is
+            // recorded. Retiring it before publication bounds the pipeline to
+            // one consumer frame plus one producer-owned frame.
+            wait_for_all_replies();
+        } catch (...) {
+            abort_open_batch();
+            throw;
+        }
+
+        const auto sequence = batch_sequence_;
+        const auto command_count = batch_command_count_;
+        if (!batch_writer_->publish()) {
+            abort_open_batch();
+            observe_render_queue_depth();
+            throw_queue_failure("render-command-publish");
+        }
+        observe_render_queue_depth();
+        batch_writer_.reset();
+        batch_lease_.reset();
+        batch_sequence_ = 0u;
+        batch_command_count_ = 0u;
+
+        saturating_atomic_add(recorded_commands_, command_count);
+        last_recorded_sequence_.store(sequence, std::memory_order_release);
+        last_submitted_sequence_ = sequence;
+
+        if (serial()) {
+            auto lease = queue_->wait_begin_consume();
+            if (!lease.has_value())
+                throw_queue_failure("serial-render-consume");
+            static_cast<void>(consume_lease(*serial_backend_, *lease));
+        }
+        if (serial() || wait_current) consume_reply(sequence, true);
+    }
+
+    void abort_open_batch() noexcept {
+        if (batch_writer_.has_value()) batch_writer_->abort();
+        batch_writer_.reset();
+        batch_lease_.reset();
+        batch_sequence_ = 0u;
+        batch_command_count_ = 0u;
+    }
+
+    void observe_render_queue_depth() const noexcept {
+        if (config_.telemetry == nullptr || queue_ == nullptr) return;
+        const auto snapshot = queue_->snapshot();
+        const auto depth =
+            snapshot.producer_queue_position >=
+                    snapshot.consumer_queue_position
+                ? snapshot.producer_queue_position -
+                      snapshot.consumer_queue_position
+                : 0u;
+        config_.telemetry->observe_render_queue_depth(depth);
+    }
+
+    template <typename Encoder>
+    void submit_standalone_sync(
+        Encoder&& encode,
+        const NativePortGraphicsFailure source_failure,
+        const char* const source_operation) {
+        require_producer_thread();
+        if (batch_writer_.has_value())
+            fail_facade("render-standalone-with-open-batch");
+        begin_batch();
+        append_open(std::forward<Encoder>(encode),
+                    source_failure, source_operation);
+        publish_open_batch(true);
+    }
+
+    template <typename Encoder>
+    void submit_control(
+        Encoder&& encode,
+        const NativePortGraphicsFailure source_failure,
+        const char* const source_operation) {
+        require_producer_thread();
+        if (producer_frame_open_) {
+            append_open(std::forward<Encoder>(encode),
+                        source_failure, source_operation);
+            return;
+        }
+        submit_standalone_sync(std::forward<Encoder>(encode),
+                               source_failure, source_operation);
+    }
+
+    template <typename Encoder>
+    void submit_resource_sync(
+        Encoder&& encode,
+        const NativePortGraphicsFailure source_failure,
+        const char* const source_operation) {
+        require_producer_thread();
+        if (!producer_frame_open_) {
+            submit_standalone_sync(std::forward<Encoder>(encode),
+                                   source_failure, source_operation);
+            return;
+        }
+
+        // Writer rejection invalidates an entire lease.  Retire the already
+        // recorded Begin/Draw prefix first, execute the synchronous resource
+        // operation in its own ordered lease, then continue the same backend
+        // frame in the other preallocated arena.  This preserves Sonic's
+        // historical lazy-resource error boundary without losing earlier
+        // draws or closing the frame.
+        try {
+            if (batch_command_count_ != 0u)
+                publish_open_batch(true);
+            else
+                abort_open_batch();
+        } catch (...) {
+            producer_frame_open_ = false;
+            throw;
+        }
+
+        try {
+            submit_standalone_sync(std::forward<Encoder>(encode),
+                                   source_failure, source_operation);
+        } catch (...) {
+            const auto resource_error = std::current_exception();
+            try {
+                begin_batch();
+            } catch (...) {
+                producer_frame_open_ = false;
+                throw;
+            }
+            producer_frame_open_ = true;
+            std::rethrow_exception(resource_error);
+        }
+
+        try {
+            begin_batch();
+        } catch (...) {
+            producer_frame_open_ = false;
+            throw;
+        }
+        producer_frame_open_ = true;
+    }
+
+    [[noreturn]] void throw_queue_failure(
+        const char* const operation) const {
+        const auto snapshot = queue_->snapshot();
+        const bool capacity =
+            snapshot.first_error ==
+                NativePortFrameQueueError::CommandCapacityExceeded ||
+            snapshot.first_error ==
+                NativePortFrameQueueError::PayloadCapacityExceeded;
+        throw NativePortGraphicsError(
+            capacity ? NativePortGraphicsFailure::ResourceLimit
+                     : NativePortGraphicsFailure::RenderThreadContract,
+            snapshot.first_error == NativePortFrameQueueError::None
+                ? 1u
+                : static_cast<std::uint32_t>(snapshot.first_error),
+            operation);
+    }
+
+    [[nodiscard]] NativePortTextureHandle resolve_texture_handle(
+        const NativePortTextureHandle logical) const {
+        const auto found = texture_handles_.find(logical.value);
+        if (!logical || found == texture_handles_.end())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidResource,
+                1u,
+                "texture-stale");
+        return found->second;
+    }
+
+    [[nodiscard]] NativePortMeshHandle resolve_mesh_handle(
+        const NativePortMeshHandle logical) const {
+        const auto found = mesh_handles_.find(logical.value);
+        if (!logical || found == mesh_handles_.end())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidResource,
+                1u,
+                "mesh-stale");
+        return found->second;
+    }
+
+    void create_texture_backend(
+        NativePortGraphicsBackend& backend,
+        const NativePortTextureHandle logical,
+        const NativePortTextureConfig& config,
+        const std::span<const NativePortImageView> initial_mip_levels) {
+        if (!logical || texture_handles_.contains(logical.value))
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidResource,
+                1u,
+                "texture-handle");
+        const auto actual = backend.create_texture(config, initial_mip_levels);
+        try {
+            const auto [ignored, inserted] =
+                texture_handles_.emplace(logical.value, actual);
+            static_cast<void>(ignored);
+            if (!inserted)
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidResource,
+                    1u,
+                    "texture-handle");
+        } catch (...) {
+            backend.destroy_texture(actual);
+            throw;
+        }
+    }
+
+    void destroy_texture_backend(NativePortGraphicsBackend& backend,
+                                 const NativePortTextureHandle logical) {
+        const auto actual = resolve_texture_handle(logical);
+        backend.destroy_texture(actual);
+        texture_handles_.erase(logical.value);
+    }
+
+    void create_mesh_backend(NativePortGraphicsBackend& backend,
+                             const NativePortMeshHandle logical,
+                             const NativePortMeshConfig& config) {
+        if (!logical || mesh_handles_.contains(logical.value))
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidResource,
+                1u,
+                "mesh-handle");
+        const auto actual = backend.create_mesh(config);
+        try {
+            const auto [ignored, inserted] =
+                mesh_handles_.emplace(logical.value, actual);
+            static_cast<void>(ignored);
+            if (!inserted)
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidResource,
+                    1u,
+                    "mesh-handle");
+        } catch (...) {
+            backend.destroy_mesh(actual);
+            throw;
+        }
+    }
+
+    void destroy_mesh_backend(NativePortGraphicsBackend& backend,
+                              const NativePortMeshHandle logical) {
+        const auto actual = resolve_mesh_handle(logical);
+        backend.destroy_mesh(actual);
+        mesh_handles_.erase(logical.value);
+    }
+
+    void draw_backend(NativePortGraphicsBackend& backend,
+                      const NativePortDrawPacket& source) {
+        auto packet = source;
+        if (packet.texture)
+            packet.texture = resolve_texture_handle(packet.texture);
+        if (packet.mesh) packet.mesh = resolve_mesh_handle(packet.mesh);
+        backend.draw(packet);
+    }
+
+    [[nodiscard]] bool execute_command(
+        NativePortGraphicsBackend& backend,
+        const NativePortGraphicsCommandView& command) {
+        switch (command.kind) {
+        case NativePortGraphicsCommandKind::Show:
+            backend.show();
+            return false;
+        case NativePortGraphicsCommandKind::PollEvents:
+            backend.poll_events();
+            return false;
+        case NativePortGraphicsCommandKind::CreateTexture: {
+            const auto& view =
+                std::get<NativePortGraphicsCreateTextureView>(command.payload);
+            std::array<NativePortImageView,
+                       native_port_graphics_command_stream_max_mip_levels>
+                images{};
+            for (std::size_t index = 0u;
+                 index < view.initial_mip_levels.size(); ++index)
+                images[index] = view.initial_mip_levels[index];
+            create_texture_backend(
+                backend, view.texture, view.config,
+                std::span<const NativePortImageView>(
+                    images.data(), view.initial_mip_levels.size()));
+            return false;
+        }
+        case NativePortGraphicsCommandKind::UpdateTexture: {
+            const auto& view =
+                std::get<NativePortGraphicsUpdateTextureView>(command.payload);
+            std::array<NativePortImageView,
+                       native_port_graphics_command_stream_max_mip_levels>
+                images{};
+            for (std::size_t index = 0u; index < view.mip_levels.size(); ++index)
+                images[index] = view.mip_levels[index];
+            backend.update_texture(
+                resolve_texture_handle(view.texture),
+                std::span<const NativePortImageView>(
+                    images.data(), view.mip_levels.size()));
+            return false;
+        }
+        case NativePortGraphicsCommandKind::DestroyTexture:
+            destroy_texture_backend(
+                backend,
+                std::get<NativePortGraphicsDestroyTextureView>(command.payload)
+                    .texture);
+            return false;
+        case NativePortGraphicsCommandKind::CreateMesh: {
+            const auto& view =
+                std::get<NativePortGraphicsCreateMeshView>(command.payload);
+            NativePortMeshConfig config;
+            config.vertices = view.vertices;
+            config.indices = view.indices;
+            config.topology = view.topology;
+            config.shading = view.shading;
+            config.small_triangle_area_threshold =
+                view.small_triangle_area_threshold;
+            create_mesh_backend(backend, view.mesh, config);
+            return false;
+        }
+        case NativePortGraphicsCommandKind::DestroyMesh:
+            destroy_mesh_backend(
+                backend,
+                std::get<NativePortGraphicsDestroyMeshView>(command.payload)
+                    .mesh);
+            return false;
+        case NativePortGraphicsCommandKind::BeginFrame:
+            backend.begin_frame(
+                std::get<NativePortGraphicsBeginFrameView>(command.payload)
+                    .config);
+            return false;
+        case NativePortGraphicsCommandKind::Draw:
+            draw_backend(
+                backend,
+                std::get<NativePortGraphicsDrawView>(command.payload).packet);
+            return false;
+        case NativePortGraphicsCommandKind::FlushType2:
+            backend.flush_type2_translucency();
+            return false;
+        case NativePortGraphicsCommandKind::Present:
+            backend.present();
+            return false;
+        case NativePortGraphicsCommandKind::RepeatPresent:
+            backend.repeat_present();
+            return false;
+        case NativePortGraphicsCommandKind::PresentImage: {
+            const auto& view =
+                std::get<NativePortGraphicsPresentImageView>(command.payload);
+            backend.present_image(view.image, view.viewport, view.fit);
+            return false;
+        }
+        case NativePortGraphicsCommandKind::Shutdown:
+            return true;
+        }
+        fail_facade("render-command-kind");
+    }
+
+    void decorate_snapshot(NativePortGraphicsSnapshot& result) const noexcept {
+        result.requested_execution_mode = requested_mode_;
+        result.active_execution_mode = active_mode_;
+        result.recorded_commands =
+            recorded_commands_.load(std::memory_order_acquire);
+        result.consumed_commands =
+            consumed_commands_.load(std::memory_order_acquire);
+        result.executed_commands =
+            executed_commands_.load(std::memory_order_acquire);
+        result.failed_commands =
+            failed_commands_.load(std::memory_order_acquire);
+        result.skipped_commands =
+            skipped_commands_.load(std::memory_order_acquire);
+        result.last_recorded_queue_sequence =
+            last_recorded_sequence_.load(std::memory_order_acquire);
+        result.last_consumed_queue_sequence =
+            last_consumed_sequence_.load(std::memory_order_acquire);
+        result.last_executed_queue_sequence =
+            last_executed_sequence_.load(std::memory_order_acquire);
+        result.last_failed_queue_sequence =
+            last_failed_sequence_.load(std::memory_order_acquire);
+        result.last_failed_command_ordinal =
+            last_failed_ordinal_.load(std::memory_order_acquire);
+        result.backend_reply_sequence = cached_backend_reply_sequence_;
+        const auto queue_snapshot = queue_->snapshot();
+        result.producer_thread_identity =
+            queue_snapshot.producer_thread_identity;
+        result.consumer_thread_identity =
+            queue_snapshot.consumer_thread_identity;
+        result.frame_queue_producer_position =
+            queue_snapshot.producer_queue_position;
+        result.frame_queue_consumer_position =
+            queue_snapshot.consumer_queue_position;
+    }
+
+    std::string title_storage_;
+    NativePortGraphicsConfig config_;
+    std::thread::id producer_thread_;
+    NativePortGraphicsExecutionMode requested_mode_ =
+        NativePortGraphicsExecutionMode::Parallel;
+    NativePortGraphicsExecutionMode active_mode_ =
+        NativePortGraphicsExecutionMode::Parallel;
+    std::unique_ptr<NativePortGraphicsBackend> serial_backend_;
+    std::unique_ptr<NativePortFrameQueue> queue_;
+    std::thread consumer_thread_;
+    std::atomic<StartupState> startup_state_{StartupState::Pending};
+    BackendError startup_error_;
+    NativePortGraphicsSnapshot startup_snapshot_;
+    NativePortGraphicsLayout startup_layout_;
+    NativePortLifecycleState startup_lifecycle_ =
+        NativePortLifecycleState::Running;
+    std::array<ReplySlot, native_port_frame_queue_depth> reply_slots_;
+    std::optional<NativePortFrameWriteLease> batch_lease_;
+    std::optional<NativePortGraphicsCommandWriter> batch_writer_;
+    std::uint64_t batch_sequence_ = 0u;
+    std::uint64_t batch_command_count_ = 0u;
+    bool producer_frame_open_ = false;
+    std::uint64_t last_submitted_sequence_ = 0u;
+    std::uint64_t last_retired_sequence_ = 0u;
+    std::uint64_t cached_backend_reply_sequence_ = 0u;
+    NativePortGraphicsSnapshot cached_snapshot_;
+    NativePortGraphicsLayout cached_layout_;
+    NativePortLifecycleState cached_lifecycle_ =
+        NativePortLifecycleState::Running;
+    std::atomic<std::uint64_t> published_presented_frames_{0u};
+    std::atomic<std::uint64_t> recorded_commands_{0u};
+    std::atomic<std::uint64_t> consumed_commands_{0u};
+    std::atomic<std::uint64_t> executed_commands_{0u};
+    std::atomic<std::uint64_t> failed_commands_{0u};
+    std::atomic<std::uint64_t> skipped_commands_{0u};
+    std::atomic<std::uint64_t> last_recorded_sequence_{0u};
+    std::atomic<std::uint64_t> last_consumed_sequence_{0u};
+    std::atomic<std::uint64_t> last_executed_sequence_{0u};
+    std::atomic<std::uint64_t> last_failed_sequence_{0u};
+    std::atomic<std::uint32_t> last_failed_ordinal_{0u};
+    std::uint64_t next_texture_handle_ = 1u;
+    std::uint64_t next_mesh_handle_ = 1u;
+    std::unordered_map<std::uint64_t, NativePortTextureHandle>
+        texture_handles_;
+    std::unordered_map<std::uint64_t, NativePortMeshHandle> mesh_handles_;
+};
 NativePortGraphicsDevice::NativePortGraphicsDevice(
     const NativePortGraphicsConfig& config)
     : impl_(std::make_unique<Impl>(config)) {}
@@ -5147,6 +6926,10 @@ void NativePortGraphicsDevice::draw(const NativePortDrawPacket& packet) {
     impl_->draw(packet);
 }
 
+void NativePortGraphicsDevice::flush_type2_translucency() {
+    impl_->flush_type2_translucency();
+}
+
 void NativePortGraphicsDevice::present() {
     impl_->present();
 }
@@ -5164,6 +6947,16 @@ void NativePortGraphicsDevice::present_image(
 
 NativePortGraphicsSnapshot NativePortGraphicsDevice::snapshot() const {
     return impl_->snapshot();
+}
+
+std::uint64_t
+NativePortGraphicsDevice::presented_frames_nonblocking() const noexcept {
+    return impl_->presented_frames_nonblocking();
+}
+
+bool NativePortGraphicsDevice::frame_recording_open_nonblocking()
+    const noexcept {
+    return impl_->frame_recording_open_nonblocking();
 }
 
 NativePortDesktopHost::NativePortDesktopHost(
@@ -5230,33 +7023,45 @@ void NativePortDesktopHost::present_frame(const std::uint64_t frame_index) {
 }
 
 std::uint64_t NativePortDesktopHost::presented_frames() const noexcept {
-    return graphics_.snapshot().presented_frames;
+    return graphics_.presented_frames_nonblocking();
 }
 
 NativePortFramePacingSnapshot
 NativePortDesktopHost::frame_pacing_snapshot() const noexcept {
+    reconcile_presentations(false);
     return frame_pacing_snapshot_;
+}
+
+void NativePortDesktopHost::reconcile_presentations(
+    const bool residual_repeated) const noexcept {
+    const auto completed = graphics_.presented_frames_nonblocking();
+    if (completed <= accounted_presented_frames_) return;
+    const auto delta = completed - accounted_presented_frames_;
+    const auto normal = std::min(delta, pending_normal_presentations_);
+    pending_normal_presentations_ -= normal;
+    saturating_add(frame_pacing_snapshot_.presentation_frames, delta);
+    if (residual_repeated && delta > normal)
+        saturating_add(frame_pacing_snapshot_.repeated_presentations,
+                       delta - normal);
+    accounted_presented_frames_ = completed;
 }
 
 void NativePortDesktopHost::paced_present() {
     const auto present_and_record = [this](const bool repeated) {
-        const auto before_state = graphics_.snapshot();
-        const auto before = before_state.presented_frames;
         const bool repeat_completed_frame =
-            repeated || !before_state.frame_open;
-        if (repeat_completed_frame)
+            repeated || !graphics_.frame_recording_open_nonblocking();
+        if (repeat_completed_frame) {
             graphics_.repeat_present();
-        else
+            reconcile_presentations(true);
+        } else {
+            if (pending_normal_presentations_ !=
+                std::numeric_limits<std::uint64_t>::max())
+                ++pending_normal_presentations_;
             graphics_.present();
-        const auto after = graphics_.snapshot().presented_frames;
-        if (after > before) {
-            const auto presented = after - before;
-            saturating_add(
-                frame_pacing_snapshot_.presentation_frames, presented);
-            if (repeat_completed_frame)
-                saturating_add(
-                    frame_pacing_snapshot_.repeated_presentations,
-                    presented);
+            // present() retires the preceding frame before publishing the
+            // current one. Account whichever FIFO completions are visible;
+            // the current asynchronous presentation remains pending.
+            reconcile_presentations(false);
         }
     };
 
@@ -5432,7 +7237,18 @@ NativePortGraphicsError::NativePortGraphicsError(
     : std::runtime_error(
           "native-port-graphics-" + std::string(operation) + ":" +
           std::to_string(platform_error_code)),
-      failure_(failure), platform_error_code_(platform_error_code) {}
+      failure_(failure), platform_error_code_(platform_error_code),
+      operation_id_(native_port_graphics_operation_id(operation)) {}
+
+NativePortGraphicsError::NativePortGraphicsError(
+    const NativePortGraphicsFailure failure,
+    const std::uint32_t platform_error_code,
+    const std::uint64_t operation_id)
+    : std::runtime_error(
+          "native-port-graphics-operation-" + std::to_string(operation_id) +
+          ":" + std::to_string(platform_error_code)),
+      failure_(failure), platform_error_code_(platform_error_code),
+      operation_id_(operation_id) {}
 
 NativePortGraphicsFailure NativePortGraphicsError::failure() const noexcept {
     return failure_;
@@ -5440,6 +7256,10 @@ NativePortGraphicsFailure NativePortGraphicsError::failure() const noexcept {
 
 std::uint32_t NativePortGraphicsError::platform_error_code() const noexcept {
     return platform_error_code_;
+}
+
+std::uint64_t NativePortGraphicsError::operation_id() const noexcept {
+    return operation_id_;
 }
 
 #ifdef _WIN32
@@ -5805,17 +7625,16 @@ struct TypeTwoFragment {
     float4 color;
     float depth;
     uint sequence;
+    uint primitive;
     uint next;
-    uint blend_factors;
-    uint blend_operations;
-    uint reserved_0;
-    uint reserved_1;
 };
 
 Texture2D draw_texture : register(t0);
 SamplerState draw_sampler : register(s0);
-RWTexture2D<uint> type_two_heads : register(u0);
-RWStructuredBuffer<TypeTwoFragment> type_two_fragments : register(u1);
+RWTexture2D<uint> type_two_heads : register(u1);
+RWStructuredBuffer<TypeTwoFragment> type_two_fragments : register(u2);
+RWTexture2D<uint> type_two_counts : register(u3);
+RWStructuredBuffer<uint> type_two_status : register(u4);
 
 bool alpha_test_passes(float alpha, uint operation, float reference) {
     if (operation == 0u) return false;
@@ -5850,7 +7669,9 @@ float lookup_table_fog(float coordinate, float density) {
                          fraction));
 }
 
-DrawPixelOutput draw_type_two_capture_main(DrawVertexOutput input) {
+DrawPixelOutput draw_type_two_capture_main(
+    DrawVertexOutput input,
+    uint primitive_id : SV_PrimitiveID) {
     const uint flags = pipeline_flags.x;
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
     const bool screen_space_reciprocal =
@@ -5985,18 +7806,23 @@ DrawPixelOutput draw_type_two_capture_main(DrawVertexOutput input) {
             log2(1.0 + depth_parameters.x * reciprocal_coordinate) /
             depth_parameters.y;
     }
-    const uint fragment_index = type_two_fragments.IncrementCounter();
-    if (fragment_index >= type_two_parameters.w) discard;
     const uint2 pixel = uint2(input.position.xy);
+    uint pixel_count;
+    InterlockedAdd(type_two_counts[pixel], 1u, pixel_count);
+    uint ignored;
+    InterlockedMax(type_two_status[2], pixel_count + 1u, ignored);
+    uint fragment_index;
+    InterlockedAdd(type_two_status[0], 1u, fragment_index);
+    if (fragment_index >= type_two_parameters.w) {
+        InterlockedExchange(type_two_status[1], 1u, ignored);
+        discard;
+    }
     TypeTwoFragment fragment;
     fragment.color = result;
     fragment.depth = final_depth;
     fragment.sequence = type_two_parameters.z;
+    fragment.primitive = primitive_id;
     fragment.next = 0xFFFFFFFFu;
-    fragment.blend_factors = type_two_parameters.x;
-    fragment.blend_operations = type_two_parameters.y;
-    fragment.reserved_0 = 0u;
-    fragment.reserved_1 = 0u;
     uint previous;
     InterlockedExchange(type_two_heads[pixel], fragment_index, previous);
     fragment.next = previous;
@@ -6012,19 +7838,20 @@ DrawPixelOutput draw_type_two_capture_main(DrawVertexOutput input) {
 )";
 
 constexpr char native_graphics_type_two_resolve_shader_source[] = R"(
+cbuffer TypeTwoResolveConstants : register(b2) {
+    uint4 type_two_parameters;
+};
+
 Texture2D type_two_base_texture : register(t1);
 Texture2D<uint> type_two_head_texture : register(t2);
-SamplerState type_two_sampler : register(s1);
+Texture2D<uint> type_two_count_texture : register(t4);
 
 struct TypeTwoFragment {
     float4 color;
     float depth;
     uint sequence;
+    uint primitive;
     uint next;
-    uint blend_factors;
-    uint blend_operations;
-    uint reserved_0;
-    uint reserved_1;
 };
 StructuredBuffer<TypeTwoFragment> type_two_fragments : register(t3);
 
@@ -6033,126 +7860,86 @@ struct CompositeVertexOutput {
     float2 texcoord : TEXCOORD0;
 };
 
-float3 type_two_color_factor(
-    uint factor, float4 source, float4 destination) {
-    if (factor == 0u) return 0.0;
-    if (factor == 1u) return 1.0;
-    if (factor == 2u) return source.rgb;
-    if (factor == 3u) return 1.0 - source.rgb;
-    if (factor == 4u) return destination.rgb;
-    if (factor == 5u) return 1.0 - destination.rgb;
-    if (factor == 6u) return source.aaa;
-    if (factor == 7u) return 1.0 - source.aaa;
-    if (factor == 8u) return destination.aaa;
-    if (factor == 9u) return 1.0 - destination.aaa;
-    return 0.0;
+bool type_two_key_after(TypeTwoFragment candidate,
+                        float depth,
+                        uint sequence,
+                        uint primitive) {
+    return candidate.depth > depth ||
+           (candidate.depth == depth &&
+            (candidate.sequence > sequence ||
+             (candidate.sequence == sequence &&
+              candidate.primitive > primitive)));
 }
 
-float type_two_alpha_factor(
-    uint factor, float4 source, float4 destination) {
-    if (factor == 0u) return 0.0;
-    if (factor == 1u) return 1.0;
-    if (factor == 2u) return source.a;
-    if (factor == 3u) return 1.0 - source.a;
-    if (factor == 4u) return destination.a;
-    if (factor == 5u) return 1.0 - destination.a;
-    if (factor == 6u) return source.a;
-    if (factor == 7u) return 1.0 - source.a;
-    if (factor == 8u) return destination.a;
-    if (factor == 9u) return 1.0 - destination.a;
-    return 0.0;
-}
-
-float3 type_two_color_operation(
-    uint operation, float3 source, float3 destination) {
-    if (operation == 0u) return source + destination;
-    if (operation == 1u) return source - destination;
-    if (operation == 2u) return destination - source;
-    if (operation == 3u) return min(source, destination);
-    if (operation == 4u) return max(source, destination);
-    return destination;
-}
-
-float type_two_alpha_operation(
-    uint operation, float source, float destination) {
-    if (operation == 0u) return source + destination;
-    if (operation == 1u) return source - destination;
-    if (operation == 2u) return destination - source;
-    if (operation == 3u) return min(source, destination);
-    if (operation == 4u) return max(source, destination);
-    return destination;
-}
-
-float4 type_two_blend(
-    TypeTwoFragment fragment, float4 destination) {
-    const uint factors = fragment.blend_factors;
-    const uint operations = fragment.blend_operations;
-    const uint source_color_factor = factors & 0xFu;
-    const uint destination_color_factor = (factors >> 4u) & 0xFu;
-    const uint source_alpha_factor = (factors >> 8u) & 0xFu;
-    const uint destination_alpha_factor = (factors >> 12u) & 0xFu;
-    const uint color_operation = operations & 0x7u;
-    const uint alpha_operation = (operations >> 3u) & 0x7u;
-    const uint write_mask = (operations >> 6u) & 0xFu;
-    const float3 source_color_term = fragment.color.rgb *
-        type_two_color_factor(
-            source_color_factor, fragment.color, destination);
-    const float3 destination_color_term = destination.rgb *
-        type_two_color_factor(
-            destination_color_factor, fragment.color, destination);
-    const float source_alpha_term = fragment.color.a *
-        type_two_alpha_factor(
-            source_alpha_factor, fragment.color, destination);
-    const float destination_alpha_term = destination.a *
-        type_two_alpha_factor(
-            destination_alpha_factor, fragment.color, destination);
-    float4 result = float4(
-        type_two_color_operation(
-            color_operation, source_color_term, destination_color_term),
-        type_two_alpha_operation(
-            alpha_operation, source_alpha_term, destination_alpha_term));
-    if ((write_mask & 0x1u) == 0u) result.r = destination.r;
-    if ((write_mask & 0x2u) == 0u) result.g = destination.g;
-    if ((write_mask & 0x4u) == 0u) result.b = destination.b;
-    if ((write_mask & 0x8u) == 0u) result.a = destination.a;
-    return result;
+bool type_two_key_before(TypeTwoFragment candidate,
+                         TypeTwoFragment selected) {
+    return candidate.depth < selected.depth ||
+           (candidate.depth == selected.depth &&
+            (candidate.sequence < selected.sequence ||
+             (candidate.sequence == selected.sequence &&
+              candidate.primitive < selected.primitive)));
 }
 
 float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
     const uint2 pixel = uint2(input.position.xy);
-    float4 result = type_two_base_texture.Load(int3(pixel, 0));
-    uint node = type_two_head_texture.Load(int3(pixel, 0));
-    float depths[16];
-    uint sequences[16];
-    TypeTwoFragment fragments[16];
-    uint count = 0u;
-    uint steps = 0u;
+    const float4 base = type_two_base_texture.Load(int3(pixel, 0));
+    float4 result = base;
+    const uint pixel_count = type_two_count_texture.Load(int3(pixel, 0));
+    // A count beyond the configured allocator capacity cannot be produced by
+    // an admitted gather. Treat malformed/stale UAV contents as a closed
+    // pixel instead of returning a partially composited list.
+    if (pixel_count > type_two_parameters.x) return base;
+    uint processed = 0u;
+    float previous_depth = 0.0;
+    uint previous_sequence = 0u;
+    uint previous_primitive = 0u;
+    bool has_previous = false;
+    // The count texture is populated by the same atomics that link every
+    // node. Repeated selection scans the chain and visits every admitted
+    // fragment without a fixed local array or silent truncation.
     [loop]
-    while (node != 0xFFFFFFFFu && steps < 16u) {
-        const TypeTwoFragment fragment = type_two_fragments[node];
-        uint insert = count;
-        if (count < 16u) {
-            [loop]
-            while (insert > 0u &&
-                   (depths[insert - 1u] > fragment.depth ||
-                    (depths[insert - 1u] == fragment.depth &&
-                     sequences[insert - 1u] > fragment.sequence))) {
-                depths[insert] = depths[insert - 1u];
-                sequences[insert] = sequences[insert - 1u];
-                fragments[insert] = fragments[insert - 1u];
-                --insert;
+    while (processed < pixel_count &&
+           processed < type_two_parameters.x) {
+        uint node = type_two_head_texture.Load(int3(pixel, 0));
+        bool found = false;
+        TypeTwoFragment selected;
+        [loop]
+        for (uint steps = 0u;
+             steps < type_two_parameters.x && node != 0xFFFFFFFFu;
+             ++steps) {
+            if (node >= type_two_parameters.y ||
+                node >= type_two_parameters.w) return
+                base;
+            const TypeTwoFragment candidate = type_two_fragments[node];
+            const bool after_previous =
+                !has_previous ||
+                type_two_key_after(candidate,
+                                   previous_depth,
+                                   previous_sequence,
+                                   previous_primitive);
+            if (after_previous) {
+                if (!found) {
+                    selected = candidate;
+                    found = true;
+                } else if (type_two_key_before(candidate, selected)) {
+                    selected = candidate;
+                }
             }
-            depths[insert] = fragment.depth;
-            sequences[insert] = fragment.sequence;
-            fragments[insert] = fragment;
-            ++count;
+            node = candidate.next;
         }
-        node = fragment.next;
-        ++steps;
+        if (!found) return base;
+        result = float4(
+            saturate(selected.color.rgb * selected.color.a +
+                     result.rgb * (1.0 - selected.color.a)),
+            saturate(selected.color.a * selected.color.a +
+                     result.a * (1.0 - selected.color.a)));
+        previous_depth = selected.depth;
+        previous_sequence = selected.sequence;
+        previous_primitive = selected.primitive;
+        has_previous = true;
+        ++processed;
     }
-    [loop]
-    for (uint index = 0u; index < count; ++index)
-        result = type_two_blend(fragments[index], result);
+    if (processed != pixel_count) return base;
     return result;
 }
 )";
@@ -6185,6 +7972,38 @@ struct ShaderCompilerApi final {
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(
     const char* entry,
     const char* target) {
+    return compile_shader_source(
+        native_graphics_shader_source,
+        sizeof(native_graphics_shader_source) - 1u,
+        entry,
+        target,
+        "katana-native-port-graphics");
+}
+
+[[nodiscard]] ComPtr<ID3DBlob> compile_type_two_shader(
+    const char* const entry,
+    const char* const target) {
+    const bool resolve = std::strcmp(entry, "type_two_resolve_pixel_main") == 0;
+    const auto* const source = resolve
+        ? native_graphics_type_two_resolve_shader_source
+        : native_graphics_type_two_capture_shader_source;
+    const auto source_size = resolve
+        ? sizeof(native_graphics_type_two_resolve_shader_source) - 1u
+        : sizeof(native_graphics_type_two_capture_shader_source) - 1u;
+    return compile_shader_source(
+        source,
+        source_size,
+        entry,
+        target,
+        "katana-native-port-graphics-type-two");
+}
+
+[[nodiscard]] ComPtr<ID3DBlob> compile_shader_source(
+    const char* const source,
+    const std::size_t source_size,
+    const char* const entry,
+    const char* const target,
+    const char* const source_name) {
     const auto compile = shader_compiler_api().compile;
     if (compile == nullptr)
         throw NativePortGraphicsError(
@@ -6193,9 +8012,9 @@ struct ShaderCompilerApi final {
             "shader-compiler");
     ComPtr<ID3DBlob> bytecode;
     ComPtr<ID3DBlob> diagnostics;
-    const auto result = compile(native_graphics_shader_source,
-                                sizeof(native_graphics_shader_source) - 1u,
-                                "katana-native-port-graphics",
+    const auto result = compile(source,
+                                source_size,
+                                source_name,
                                 nullptr,
                                 nullptr,
                                 entry,

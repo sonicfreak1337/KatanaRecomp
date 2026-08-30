@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 16u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 17u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
@@ -94,6 +94,22 @@ struct NativePortGraphicsConfig final {
     // allocated lazily only when a Type2AutoSorted Scene3D packet arrives;
     // overflow is detected before resolve and fails the frame closed.
     std::uint32_t maximum_type2_fragment_nodes = 4'194'304u;
+    // The render-thread command stream is atomic at command boundaries: an
+    // upload or draw is never split, redirected through a host pointer, or
+    // silently executed on the producer. These explicit budgets size both
+    // preallocated depth-2 arenas and must admit the largest command used by a
+    // title configuration. The default covers the maximum default transient
+    // vertex/index packet plus fixed command state.
+    std::uint32_t maximum_render_commands_per_frame = 32'768u;
+    std::uint32_t maximum_render_payload_bytes_per_frame =
+        128u * 1024u * 1024u;
+    // Resource uploads remain atomic and owning. This separate cap prevents a
+    // title-wide texture/mesh budget from forcing gigabyte frame arenas.
+    std::uint32_t maximum_render_resource_payload_bytes_per_command =
+        64u * 1024u * 1024u;
+    // Optional host-only aggregate telemetry owner. It must outlive the
+    // device; the backend owner thread creates and retains its own writer.
+    NativePortTelemetry* telemetry = nullptr;
 };
 
 // Native game time and host presentation cadence are deliberately separate.
@@ -147,19 +163,35 @@ enum class NativePortGraphicsFailure : std::uint8_t {
     DeviceLost,
     ThreadViolation,
     MissingRequiredTexture,
+    RenderThreadContract,
 };
+
+[[nodiscard]] constexpr std::uint64_t native_port_graphics_operation_id(
+    const std::string_view operation) noexcept {
+    std::uint64_t value = 1469598103934665603ull;
+    for (const auto character : operation) {
+        value ^= static_cast<std::uint8_t>(character);
+        value *= 1099511628211ull;
+    }
+    return value;
+}
 
 class NativePortGraphicsError final : public std::runtime_error {
   public:
     NativePortGraphicsError(NativePortGraphicsFailure failure,
+                             std::uint32_t platform_error_code,
+                             std::string_view operation);
+    NativePortGraphicsError(NativePortGraphicsFailure failure,
                             std::uint32_t platform_error_code,
-                            std::string_view operation);
+                            std::uint64_t operation_id);
     [[nodiscard]] NativePortGraphicsFailure failure() const noexcept;
     [[nodiscard]] std::uint32_t platform_error_code() const noexcept;
+    [[nodiscard]] std::uint64_t operation_id() const noexcept;
 
   private:
     NativePortGraphicsFailure failure_;
     std::uint32_t platform_error_code_;
+    std::uint64_t operation_id_;
 };
 
 enum class NativePortTextureFormat : std::uint8_t {
@@ -820,6 +852,11 @@ enum class NativePortGraphicsDiagnosticMode : std::uint8_t {
     ArmedCapture,
 };
 
+enum class NativePortGraphicsExecutionMode : std::uint8_t {
+    Parallel,
+    SerialReference,
+};
+
 struct NativePortGraphicsSnapshot final {
     std::uint64_t begun_frames = 0u;
     std::uint64_t presented_frames = 0u;
@@ -844,12 +881,36 @@ struct NativePortGraphicsSnapshot final {
     bool hardware_accelerated = false;
     bool frame_open = false;
     bool occluded = false;
+    NativePortGraphicsExecutionMode requested_execution_mode =
+        NativePortGraphicsExecutionMode::Parallel;
+    NativePortGraphicsExecutionMode active_execution_mode =
+        NativePortGraphicsExecutionMode::Parallel;
+    std::uint64_t producer_thread_identity = 0u;
+    std::uint64_t consumer_thread_identity = 0u;
+    std::uint64_t recorded_commands = 0u;
+    std::uint64_t consumed_commands = 0u;
+    std::uint64_t executed_commands = 0u;
+    std::uint64_t failed_commands = 0u;
+    std::uint64_t skipped_commands = 0u;
+    std::uint64_t last_recorded_queue_sequence = 0u;
+    std::uint64_t last_consumed_queue_sequence = 0u;
+    std::uint64_t last_executed_queue_sequence = 0u;
+    std::uint64_t last_failed_queue_sequence = 0u;
+    std::uint32_t last_failed_command_ordinal = 0u;
+    // Sequence of the backend-owned snapshot/layout/lifecycle reply most
+    // recently acquired by the producer. Zero denotes the startup snapshot.
+    std::uint64_t backend_reply_sequence = 0u;
+    std::uint64_t frame_queue_producer_position = 0u;
+    std::uint64_t frame_queue_consumer_position = 0u;
 };
 
 // Hardware-only native renderer used by title-side NINJA/Kamui/game-renderer
 // adapters. It consumes native vertices, textures and draw state; it has no
 // TA packet parser, PVR register model, framebuffer scanout or CPU rasterizer.
-// All operations and destruction are confined to the construction thread.
+// The public facade is confined to its construction/simulation-owner thread.
+// In Parallel mode the backend is constructed, operated and destroyed only
+// on the dedicated consumer thread; SerialReference uses the same codec on
+// the facade owner as a diagnostic kill-switch.
 class NativePortGraphicsDevice final {
   public:
     explicit NativePortGraphicsDevice(
@@ -906,6 +967,10 @@ class NativePortGraphicsDevice final {
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() const;
 
   private:
+    friend class NativePortDesktopHost;
+    [[nodiscard]] std::uint64_t
+    presented_frames_nonblocking() const noexcept;
+    [[nodiscard]] bool frame_recording_open_nonblocking() const noexcept;
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -938,10 +1003,13 @@ class NativePortDesktopHost final : public NativePortHostServices {
 
   private:
     void paced_present();
+    void reconcile_presentations(bool residual_repeated) const noexcept;
 
     NativePortGraphicsDevice graphics_;
     NativePortFramePacingConfig frame_pacing_config_;
-    NativePortFramePacingSnapshot frame_pacing_snapshot_;
+    mutable NativePortFramePacingSnapshot frame_pacing_snapshot_;
+    mutable std::uint64_t accounted_presented_frames_ = 0u;
+    mutable std::uint64_t pending_normal_presentations_ = 0u;
     std::uint64_t next_event_poll_nanoseconds_ = 0u;
     std::uint64_t next_simulation_deadline_nanoseconds_ = 0u;
     std::uint64_t next_presentation_deadline_nanoseconds_ = 0u;
