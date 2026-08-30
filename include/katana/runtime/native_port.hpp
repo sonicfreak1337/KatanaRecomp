@@ -20,6 +20,8 @@ class NativePortTextureRegistry;
 class NativePortCpuControl;
 class NativePortRuntimeImageBindings;
 class NativePortLoadedAotBinder;
+class NativePortTelemetry;
+class NativePortTelemetryWriter;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     abi_contract::native_port_profile_contract_version;
@@ -420,6 +422,14 @@ class NativePortContext final {
     std::uint32_t active_hook_guest_address_ = 0u;
     std::uint64_t acceptance_presented_frame_baseline_ = 0u;
     bool acceptance_reached_ = false;
+
+  public:
+    // Append-only v25 fields: keep all pre-v25 NativePortContext offsets
+    // stable for sealed AOT objects.  These are data-only service pointers;
+    // guest state, memory, and AOT capabilities never cross to worker
+    // threads through them.
+    NativePortTelemetry* telemetry = nullptr;
+    NativePortTelemetryWriter* telemetry_writer = nullptr;
 };
 
 enum class NativePortContractFailure : std::uint8_t {

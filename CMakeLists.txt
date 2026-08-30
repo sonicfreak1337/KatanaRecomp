@@ -857,6 +857,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/native_port_cpu_control.hpp
     include/katana/runtime/native_port_ffmpeg_codec.hpp
     include/katana/runtime/native_port_graphics.hpp
+    include/katana/runtime/native_port_telemetry.hpp
     include/katana/runtime/native_port_movie.hpp
     include/katana/runtime/native_port_platform.hpp
     include/katana/runtime/native_port_save.hpp
@@ -968,6 +969,7 @@ set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
     src/runtime/native_port_cpu_control.cpp
     ${KATANA_NATIVE_PORT_FFMPEG_SOURCE}
     src/runtime/native_port_graphics.cpp
+    src/runtime/native_port_telemetry.cpp
     src/runtime/native_port_movie.cpp
     src/runtime/native_port_platform.cpp
     src/runtime/native_port_save.cpp
