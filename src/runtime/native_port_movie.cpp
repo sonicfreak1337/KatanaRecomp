@@ -1,10 +1,12 @@
 #include "katana/runtime/native_port_movie.hpp"
 
 #include "katana/runtime/native_port.hpp"
+#include "native_port_audio_execution_domain.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -14,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -480,13 +483,218 @@ std::uint32_t NativePortMovieError::platform_error_code() const noexcept {
     return platform_error_code_;
 }
 
-class NativePortMovieSession::Impl final {
+namespace {
+
+// One worker command may decode a bounded batch before its owner-side ACK is
+// drained.  Leave room for that complete batch plus state transitions; a
+// smaller ring would turn a valid bounded decode into a false media failure.
+constexpr std::size_t native_port_movie_event_capacity = 4'104u;
+
+class NativePortMovieVideoMailboxBackpressure final : public std::exception {
   public:
-    ~Impl() {
-        close_backend();
+    [[nodiscard]] const char* what() const noexcept override {
+        return "native-port-movie-video-mailbox-backpressure";
+    }
+};
+
+enum class NativePortMovieMailboxEventKind : std::uint8_t {
+    State,
+    Video,
+};
+
+struct NativePortMovieMailboxEvent final {
+    NativePortMovieMailboxEventKind kind = NativePortMovieMailboxEventKind::State;
+    NativePortMovieState state = NativePortMovieState::Closed;
+    NativePortMovieFailure failure = NativePortMovieFailure::None;
+    std::uint32_t platform_error_code = 0u;
+    std::uint64_t timestamp_nanoseconds = 0u;
+    std::uint64_t duration_nanoseconds = 0u;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::uint32_t stride_bytes = 0u;
+    std::uint32_t display_aspect_numerator = 0u;
+    std::uint32_t display_aspect_denominator = 0u;
+    std::uint32_t storage_offset = 0u;
+    std::uint32_t storage_size = 0u;
+    bool bottom_up = false;
+};
+
+static_assert(std::is_trivially_copyable_v<NativePortMovieMailboxEvent>);
+static_assert(std::is_standard_layout_v<NativePortMovieMailboxEvent>);
+
+// The domain ACK only carries control results.  Video frames are transferred
+// through this bounded SPSC mailbox: the worker owns the write side, while
+// the public session drains it on its owner thread.  The byte arena is
+// allocated once per open, and is never resized from the worker pump path.
+class NativePortMovieVideoMailbox final {
+  public:
+    void prepare(const std::uint64_t byte_capacity) {
+        if (byte_capacity > std::numeric_limits<std::uint32_t>::max())
+            throw std::length_error("native-port-movie-video-mailbox-capacity");
+        storage_.clear();
+        storage_.resize(static_cast<std::size_t>(byte_capacity));
+        reset();
     }
 
-    void open(const NativePortMovieConfig& config) {
+    void reset() noexcept {
+        published_.store(0u, std::memory_order_release);
+        consumed_.store(0u, std::memory_order_release);
+        storage_cursor_ = 0u;
+        pending_consumed_ = 0u;
+        consumer_pending_ = false;
+        event_overflow_.store(false, std::memory_order_release);
+    }
+
+    [[nodiscard]] bool push_state(const NativePortMovieState state,
+                                  const NativePortMovieFailure failure,
+                                  const std::uint32_t platform_error_code) noexcept {
+        const auto index = reserve_event();
+        if (!index.has_value()) {
+            event_overflow_.store(true, std::memory_order_release);
+            return false;
+        }
+        auto& event = events_[*index % native_port_movie_event_capacity];
+        event = {};
+        event.kind = NativePortMovieMailboxEventKind::State;
+        event.state = state;
+        event.failure = failure;
+        event.platform_error_code = platform_error_code;
+        publish_event(*index);
+        return true;
+    }
+
+    [[nodiscard]] bool push_video(
+        const std::uint64_t timestamp_nanoseconds,
+        const std::uint64_t duration_nanoseconds,
+        const std::uint32_t width,
+        const std::uint32_t height,
+        const std::uint32_t stride_bytes,
+        const bool bottom_up,
+        const std::uint32_t display_aspect_numerator,
+        const std::uint32_t display_aspect_denominator,
+        const std::span<const std::byte> pixels) noexcept {
+        const auto index = reserve_event();
+        if (!index.has_value()) {
+            event_overflow_.store(true, std::memory_order_release);
+            return false;
+        }
+        if (pixels.size() > std::numeric_limits<std::uint32_t>::max()) {
+            event_overflow_.store(true, std::memory_order_release);
+            return false;
+        }
+        if (storage_cursor_ > storage_.size() ||
+            pixels.size() > storage_.size() - storage_cursor_) {
+            event_overflow_.store(true, std::memory_order_release);
+            return false;
+        }
+        const auto offset = storage_cursor_;
+        if (!pixels.empty())
+            std::memcpy(storage_.data() + offset, pixels.data(), pixels.size());
+        storage_cursor_ += pixels.size();
+        auto& event = events_[*index % native_port_movie_event_capacity];
+        event = {};
+        event.kind = NativePortMovieMailboxEventKind::Video;
+        event.timestamp_nanoseconds = timestamp_nanoseconds;
+        event.duration_nanoseconds = duration_nanoseconds;
+        event.width = width;
+        event.height = height;
+        event.stride_bytes = stride_bytes;
+        event.bottom_up = bottom_up;
+        event.display_aspect_numerator = display_aspect_numerator;
+        event.display_aspect_denominator = display_aspect_denominator;
+        event.storage_offset = static_cast<std::uint32_t>(offset);
+        event.storage_size = static_cast<std::uint32_t>(pixels.size());
+        publish_event(*index);
+        return true;
+    }
+
+    [[nodiscard]] bool pop(NativePortMovieMailboxEvent& event,
+                           std::span<const std::byte>& pixels) noexcept {
+        if (consumer_pending_) return false;
+        const auto consumed = consumed_.load(std::memory_order_relaxed);
+        const auto published = published_.load(std::memory_order_acquire);
+        if (consumed == published) return false;
+        event = events_[consumed % native_port_movie_event_capacity];
+        if (event.kind == NativePortMovieMailboxEventKind::Video) {
+            if (event.storage_offset > storage_.size() ||
+                event.storage_size > storage_.size() - event.storage_offset) {
+                pixels = {};
+                event_overflow_.store(true, std::memory_order_release);
+            } else {
+                pixels = std::span<const std::byte>(
+                    storage_.data() + event.storage_offset, event.storage_size);
+            }
+        } else {
+            pixels = {};
+        }
+        // Keep the consumer index unpublished while the caller owns the
+        // returned span.  The worker may append after this event, but cannot
+        // recycle the arena until release() runs after the callback returns.
+        pending_consumed_ = consumed;
+        consumer_pending_ = true;
+        return true;
+    }
+
+    // Release the one event returned by pop().  Publishing consumed before
+    // the callback finishes would let the worker overwrite the immutable
+    // video bytes still being observed by the caller.
+    void release() noexcept {
+        if (!consumer_pending_) return;
+        const auto consumed = pending_consumed_;
+        const auto published = published_.load(std::memory_order_acquire);
+        if (consumed + 1u == published) storage_cursor_ = 0u;
+        consumed_.store(consumed + 1u, std::memory_order_release);
+        consumer_pending_ = false;
+    }
+
+    void discard() noexcept {
+        NativePortMovieMailboxEvent event;
+        std::span<const std::byte> pixels;
+        while (pop(event, pixels)) release();
+    }
+
+    [[nodiscard]] bool has_error() const noexcept {
+        return event_overflow_.load(std::memory_order_acquire);
+    }
+
+  private:
+    [[nodiscard]] std::optional<std::uint64_t> reserve_event() const noexcept {
+        const auto published = published_.load(std::memory_order_relaxed);
+        const auto consumed = consumed_.load(std::memory_order_acquire);
+        if (published == std::numeric_limits<std::uint64_t>::max() ||
+            published - consumed >= native_port_movie_event_capacity)
+            return std::nullopt;
+        return published;
+    }
+
+    void publish_event(const std::uint64_t index) noexcept {
+        published_.store(index + 1u, std::memory_order_release);
+    }
+
+    std::array<NativePortMovieMailboxEvent, native_port_movie_event_capacity>
+        events_{};
+    std::vector<std::byte> storage_;
+    std::atomic<std::uint64_t> published_{0u};
+    std::atomic<std::uint64_t> consumed_{0u};
+    // Only the worker writes this during a command; the owner resets it after
+    // releasing the published range before the next command starts.
+    std::size_t storage_cursor_ = 0u;
+    std::uint64_t pending_consumed_ = 0u;
+    bool consumer_pending_ = false;
+    std::atomic<bool> event_overflow_{false};
+};
+
+} // namespace
+
+class NativePortMovieWorker final {
+  public:
+    explicit NativePortMovieWorker(NativePortMovieVideoMailbox& mailbox)
+        : mailbox_(&mailbox) {}
+    ~NativePortMovieWorker() = default;
+
+    void open_on_worker(const NativePortMovieConfig& config,
+                        const bool video_demand,
+                        const bool state_demand) {
         bind_or_require_owner_thread();
         require_not_callback();
         if (state_ != NativePortMovieState::Closed && state_ != NativePortMovieState::Stopped)
@@ -495,7 +703,12 @@ class NativePortMovieSession::Impl final {
         config_ = config;
         content_identity_.assign(config.source.byte_identity);
         config_.source.byte_identity = content_identity_;
-        callbacks_ = config.callbacks;
+        video_demand_ = video_demand;
+        state_demand_ = state_demand;
+        // Callback function/user pointers remain owner-thread state.  The
+        // worker only receives immutable demand bits and publishes events;
+        // it never retains or invokes a caller callback.
+        config_.callbacks = {};
         if (config.audio_sample_rate < 8'000u || config.audio_sample_rate > 192'000u ||
             config.maximum_audio_queue_frames == 0u ||
             config.maximum_audio_queue_frames > maximum_audio_queue_budget_frames ||
@@ -513,6 +726,12 @@ class NativePortMovieSession::Impl final {
             (!config.require_audio && !config.require_video))
             return fail_and_throw(NativePortMovieFailure::InvalidConfig, "config");
         try {
+            // The owner prepares the bounded delivery arena before publishing
+            // Open.  The worker only writes the preallocated SPSC storage;
+            // no allocation or resize is allowed in this path.
+            if (mailbox_ == nullptr)
+                return fail_and_throw(NativePortMovieFailure::InvalidConfig,
+                                      "video-mailbox");
             const auto verified = verified_media_path(config.source);
             content_root_path_ = verified.root;
             path_ = verified.file;
@@ -520,6 +739,7 @@ class NativePortMovieSession::Impl final {
             open_identity_locked_content();
             if (sha256_file_handle(content_handle_) != content_identity_)
                 return fail_and_throw(NativePortMovieFailure::ContentIdentity, "content-identity");
+            map_locked_content();
             if (config.codec_provider != nullptr)
                 initialize_codec_provider(*config.codec_provider);
             else
@@ -549,7 +769,7 @@ class NativePortMovieSession::Impl final {
         }
     }
 
-    void play(const std::uint64_t host_time) {
+    void play_on_worker(const std::uint64_t host_time) {
         require_owner_thread();
         require_not_callback();
         if (state_ == NativePortMovieState::Ready) {
@@ -579,7 +799,7 @@ class NativePortMovieSession::Impl final {
         apply_deferred_stop();
     }
 
-    void pump(const std::uint64_t host_time) {
+    void pump_on_worker(const std::uint64_t host_time) {
         require_owner_thread();
         require_not_callback();
         if (state_ == NativePortMovieState::Completed || state_ == NativePortMovieState::Stopped)
@@ -606,6 +826,11 @@ class NativePortMovieSession::Impl final {
             complete_if_drained();
             apply_deferred_stop();
 #ifdef _WIN32
+        } catch (const NativePortMovieVideoMailboxBackpressure&) {
+            // The current sample remains in provider_pending_/pending_ (or in
+            // video_queue_ until present_video succeeds).  Leave the decoder
+            // open and let the owner drain/retry this exact cursor.
+            throw;
         } catch (const PlatformError& error) {
             transition(NativePortMovieState::Failed,
                        map_media_foundation_failure(error.code()),
@@ -628,12 +853,12 @@ class NativePortMovieSession::Impl final {
         }
     }
 
-    void pause(const std::uint64_t host_time) {
+    void pause_on_worker(const std::uint64_t host_time) {
         require_owner_thread();
         require_not_callback();
         if (state_ != NativePortMovieState::Playing)
             throw std::logic_error("native-port-movie-not-playing");
-        pump(host_time);
+        pump_on_worker(host_time);
         if (state_ != NativePortMovieState::Playing) return;
         pause_host_time_ = host_time;
         if (audio_) {
@@ -647,7 +872,7 @@ class NativePortMovieSession::Impl final {
         apply_deferred_stop();
     }
 
-    void stop() {
+    void stop_on_worker() {
         require_owner_thread();
         if (callback_active_) {
             deferred_stop_ = true;
@@ -659,7 +884,7 @@ class NativePortMovieSession::Impl final {
         transition(NativePortMovieState::Stopped);
     }
 
-    [[nodiscard]] NativePortMovieSnapshot snapshot() const noexcept {
+    [[nodiscard]] NativePortMovieSnapshot snapshot_on_worker() const noexcept {
         return {state_,
                 duration_,
                 position_,
@@ -668,6 +893,12 @@ class NativePortMovieSession::Impl final {
                 presented_video_frames_,
                 failure_,
                 platform_error_code_};
+    }
+
+    void destroy_on_worker() noexcept { close_backend(); }
+
+    [[nodiscard]] bool event_overflowed() const noexcept {
+        return event_overflow_ || (mailbox_ != nullptr && mailbox_->has_error());
     }
 
   private:
@@ -707,7 +938,9 @@ class NativePortMovieSession::Impl final {
                                       FILE_SHARE_READ,
                                       nullptr,
                                       OPEN_EXISTING,
-                                      FILE_ATTRIBUTE_NORMAL,
+                                      FILE_ATTRIBUTE_NORMAL |
+                                          FILE_FLAG_OPEN_REPARSE_POINT |
+                                          FILE_FLAG_SEQUENTIAL_SCAN,
                                       nullptr);
         if (content_handle_ == INVALID_HANDLE_VALUE) {
             content_handle_ = nullptr;
@@ -748,36 +981,43 @@ class NativePortMovieSession::Impl final {
         content_size_ = static_cast<std::uint64_t>(size.QuadPart);
     }
 
+    void map_locked_content() {
+        // Decoder/provider reads run only on this worker, but both Media
+        // Foundation and a codec provider may issue independent offset reads.
+        // Bind them to one immutable mapping after the locked-handle identity
+        // check instead of serializing a shared file cursor through a mutex.
+        // The mapping is released by close_backend() on the same worker.
+        if (content_size_ == 0u) return;
+        content_mapping_ = CreateFileMappingW(content_handle_,
+                                              nullptr,
+                                              PAGE_READONLY,
+                                              0u,
+                                              0u,
+                                              nullptr);
+        if (content_mapping_ == nullptr)
+            throw_platform("content-map", GetLastError());
+        content_mapping_view_ = static_cast<const std::byte*>(
+            MapViewOfFile(content_mapping_, FILE_MAP_READ, 0u, 0u, 0u));
+        if (content_mapping_view_ == nullptr)
+            throw_platform("content-map-view", GetLastError());
+    }
+
     static std::uint32_t provider_read_at(void* const user,
                                           const std::uint64_t offset,
                                           void* const destination,
                                           const std::uint64_t byte_count) noexcept {
-        auto& self = *static_cast<Impl*>(user);
+        auto& self = *static_cast<NativePortMovieWorker*>(user);
         if (destination == nullptr || self.content_handle_ == nullptr ||
-            offset > self.content_size_ || byte_count > self.content_size_ - offset)
+            offset > self.content_size_ || byte_count > self.content_size_ - offset ||
+            offset > std::numeric_limits<std::size_t>::max() ||
+            byte_count > std::numeric_limits<std::size_t>::max() ||
+            (byte_count != 0u && self.content_mapping_view_ == nullptr))
             return false;
-        try {
-            const std::scoped_lock lock(self.content_mutex_);
-            LARGE_INTEGER position{};
-            position.QuadPart = static_cast<LONGLONG>(offset);
-            if (SetFilePointerEx(self.content_handle_, position, nullptr, FILE_BEGIN) == FALSE)
-                return false;
-            auto* cursor = static_cast<std::byte*>(destination);
-            auto remaining = byte_count;
-            while (remaining != 0u) {
-                const auto chunk = static_cast<DWORD>(
-                    std::min<std::uint64_t>(remaining, std::numeric_limits<DWORD>::max()));
-                DWORD read = 0u;
-                if (ReadFile(self.content_handle_, cursor, chunk, &read, nullptr) == FALSE ||
-                    read != chunk)
-                    return false;
-                cursor += read;
-                remaining -= read;
-            }
-            return 1u;
-        } catch (...) {
-            return 0u;
-        }
+        if (byte_count != 0u)
+            std::memcpy(destination,
+                        self.content_mapping_view_ + static_cast<std::size_t>(offset),
+                        static_cast<std::size_t>(byte_count));
+        return 1u;
     }
 
     [[nodiscard]] static NativePortMovieFailure
@@ -799,8 +1039,13 @@ class NativePortMovieSession::Impl final {
     }
 
     void create_audio_stream(const NativePortAudioFormat format) {
+        if (format.sample_rate < 8'000u || format.sample_rate > 192'000u ||
+            (format.channels != 1u && format.channels != 2u))
+            fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
+                           "audio-format");
+        provider_audio_format_ = format;
         try {
-            audio_ = std::make_unique<NativePortAudioStream>(
+            audio_ = make_native_port_movie_audio_stream(
                 NativePortAudioConfig{format, config_.maximum_audio_queue_frames});
         } catch (...) {
             transition(NativePortMovieState::Failed, NativePortMovieFailure::HostAudioFailure);
@@ -844,7 +1089,7 @@ class NativePortMovieSession::Impl final {
         if (!valid_native_port_codec_provider(provider))
             return fail_and_throw(NativePortMovieFailure::DecoderUnavailable,
                                   "codec-provider-contract");
-        const NativePortCodecOpenRequest request{{this, content_size_, &Impl::provider_read_at},
+        const NativePortCodecOpenRequest request{{this, content_size_, &NativePortMovieWorker::provider_read_at},
                                                  config_.audio_sample_rate,
                                                  config_.maximum_audio_queue_frames,
                                                  config_.maximum_video_queue_frames,
@@ -889,6 +1134,19 @@ class NativePortMovieSession::Impl final {
                 (provider_audio_format_.channels != 1u && provider_audio_format_.channels != 2u))
                 return fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
                                       "codec-provider-audio-format");
+            const auto maximum_batch_samples =
+                static_cast<std::uint64_t>(config_.maximum_audio_queue_frames) *
+                provider_audio_format_.channels;
+            if (maximum_batch_samples > std::numeric_limits<std::size_t>::max())
+                return fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
+                                      "codec-provider-audio-batch-size");
+            try {
+                provider_audio_batch_.reserve(
+                    static_cast<std::size_t>(maximum_batch_samples));
+            } catch (...) {
+                return fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
+                                      "codec-provider-audio-batch-reserve");
+            }
             create_audio_stream(provider_audio_format_);
         }
     }
@@ -907,7 +1165,7 @@ class NativePortMovieSession::Impl final {
                         "hardware-transforms");
         require_hresult(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE),
                         "video-processing");
-        const NativePortCodecByteSource source{this, content_size_, &Impl::provider_read_at};
+        const NativePortCodecByteSource source{this, content_size_, &NativePortMovieWorker::provider_read_at};
         source_stream_.Attach(new ReadOnlyByteStream(source));
         require_hresult(MFCreateMFByteStreamOnStreamEx(source_stream_.Get(), &byte_stream_),
                         "byte-stream");
@@ -1017,10 +1275,14 @@ class NativePortMovieSession::Impl final {
     void decode_until_position() {
         while (!video_queue_.empty() &&
                hundred_ns_to_ns(video_queue_.front().timestamp) <= position_) {
-            auto sample = std::move(video_queue_.front());
-            video_queue_.pop_front();
-            release_mf_video_budget(sample);
+            // Keep the queued sample until the caller-side mailbox has
+            // accepted it.  A full mailbox is backpressure, not a drop; the
+            // next pump retries the same decoder cursor after the owner has
+            // drained the published video events.
+            auto& sample = video_queue_.front();
             present_video(sample);
+            release_mf_video_budget(sample);
+            video_queue_.pop_front();
             if (state_ == NativePortMovieState::Stopped) return;
         }
         constexpr std::uint64_t audio_lead_nanoseconds = 100'000'000u;
@@ -1040,8 +1302,8 @@ class NativePortMovieSession::Impl final {
             } else if (has_video_ && pending_->sample && pending_->stream == video_stream_) {
                 if (timestamp > decode_horizon) break;
                 if (timestamp <= position_) {
-                    release_mf_video_budget(*pending_);
                     present_video(*pending_);
+                    release_mf_video_budget(*pending_);
                 } else if (video_queue_.size() < config_.maximum_video_queue_frames)
                     video_queue_.push_back(std::move(*pending_));
                 else
@@ -1104,6 +1366,9 @@ class NativePortMovieSession::Impl final {
         const auto maximum_batch_samples =
             static_cast<std::size_t>(config_.maximum_audio_queue_frames) *
             sample.audio_format.channels;
+        if (provider_audio_batch_.capacity() < maximum_batch_samples)
+            return fail_and_throw(NativePortMovieFailure::InvalidAudioBuffer,
+                                  "codec-provider-audio-batch-capacity");
         if (provider_audio_batch_.size() > maximum_batch_samples ||
             silence_samples > maximum_batch_samples - provider_audio_batch_.size() ||
             sample.audio_samples.size() > maximum_batch_samples -
@@ -1128,10 +1393,13 @@ class NativePortMovieSession::Impl final {
         if (!submit_provider_audio_batch(false)) return;
         while (!provider_video_queue_.empty() &&
                provider_video_queue_.front().timestamp <= position_) {
-            auto sample = std::move(provider_video_queue_.front());
+            auto& sample = provider_video_queue_.front();
+            // Keep the queued sample and its byte budget until the mailbox
+            // accepts it.  A full owner-side mailbox is retryable
+            // backpressure, not permission to drop a decoded frame.
+            present_provider_video(sample);
             provider_video_queue_bytes_ -= sample.video_pixels.size();
             provider_video_queue_.pop_front();
-            present_provider_video(sample);
             if (state_ == NativePortMovieState::Stopped) return;
         }
         constexpr std::uint64_t audio_lead_nanoseconds = 100'000'000u;
@@ -1298,7 +1566,7 @@ class NativePortMovieSession::Impl final {
 
     void present_provider_video(const ProviderSample& sample) {
         saturating_increment_counter(decoded_video_frames_);
-        if (callbacks_.video == nullptr) return;
+        if (!video_demand_) return;
         const auto display_numerator =
             config_.video_display_aspect_numerator != 0u
                 ? config_.video_display_aspect_numerator
@@ -1307,20 +1575,18 @@ class NativePortMovieSession::Impl final {
             config_.video_display_aspect_denominator != 0u
                 ? config_.video_display_aspect_denominator
                 : sample.video_display_aspect_denominator;
-        const NativePortMovieVideoFrame frame{sample.timestamp,
-                                              sample.duration,
-                                              sample.video_width,
-                                              sample.video_height,
-                                              sample.video_stride,
-                                              sample.video_bottom_up,
-                                              sample.video_pixels,
-                                              display_numerator,
-                                              display_denominator};
-        callback_active_ = true;
-        callbacks_.video(callbacks_.user, frame);
-        callback_active_ = false;
+        if (mailbox_ == nullptr || !mailbox_->push_video(
+                                      sample.timestamp,
+                                      sample.duration,
+                                      sample.video_width,
+                                      sample.video_height,
+                                      sample.video_stride,
+                                      sample.video_bottom_up,
+                                      display_numerator,
+                                      display_denominator,
+                                      sample.video_pixels))
+            throw NativePortMovieVideoMailboxBackpressure{};
         saturating_increment_counter(presented_video_frames_);
-        apply_deferred_stop();
     }
 
     void read_pending() {
@@ -1406,25 +1672,15 @@ class NativePortMovieSession::Impl final {
         BYTE* data = nullptr;
         DWORD bytes = 0u;
         require_hresult(buffer->Lock(&data, nullptr, &bytes), "video-lock");
-        std::vector<std::byte> pixels;
         LONGLONG duration = 0;
+        bool queued = false;
         try {
             const auto required =
                 static_cast<std::uint64_t>(pending.video_stride) * pending.video_height;
             if (required > bytes || required > config_.maximum_video_frame_bytes)
                 return fail_and_throw(NativePortMovieFailure::InvalidVideoBuffer,
                                       "video-buffer-size");
-            pixels.assign(reinterpret_cast<const std::byte*>(data),
-                          reinterpret_cast<const std::byte*>(data) +
-                              static_cast<std::size_t>(required));
             static_cast<void>(pending.sample->GetSampleDuration(&duration));
-        } catch (...) {
-            static_cast<void>(buffer->Unlock());
-            throw;
-        }
-        require_hresult(buffer->Unlock(), "video-unlock");
-        saturating_increment_counter(decoded_video_frames_);
-        if (callbacks_.video != nullptr) {
             const auto display_numerator =
                 config_.video_display_aspect_numerator != 0u
                     ? config_.video_display_aspect_numerator
@@ -1433,20 +1689,29 @@ class NativePortMovieSession::Impl final {
                 config_.video_display_aspect_denominator != 0u
                     ? config_.video_display_aspect_denominator
                     : pending.video_display_aspect_denominator;
-            const NativePortMovieVideoFrame frame{hundred_ns_to_ns(pending.timestamp),
-                                                  hundred_ns_to_ns(duration),
-                                                  pending.video_width,
-                                                  pending.video_height,
-                                                  pending.video_stride,
-                                                  pending.video_bottom_up,
-                                                  pixels,
-                                                  display_numerator,
-                                                  display_denominator};
-            callback_active_ = true;
-            callbacks_.video(callbacks_.user, frame);
-            callback_active_ = false;
+            queued = !video_demand_ ||
+                     (mailbox_ != nullptr && mailbox_->push_video(
+                          hundred_ns_to_ns(pending.timestamp),
+                          hundred_ns_to_ns(duration),
+                          pending.video_width,
+                          pending.video_height,
+                          pending.video_stride,
+                          pending.video_bottom_up,
+                          display_numerator,
+                          display_denominator,
+                          std::span<const std::byte>(
+                              reinterpret_cast<const std::byte*>(data),
+                              static_cast<std::size_t>(required))));
+        } catch (...) {
+            static_cast<void>(buffer->Unlock());
+            throw;
+        }
+        require_hresult(buffer->Unlock(), "video-unlock");
+        saturating_increment_counter(decoded_video_frames_);
+        if (video_demand_) {
+            if (!queued)
+                throw NativePortMovieVideoMailboxBackpressure{};
             saturating_increment_counter(presented_video_frames_);
-            apply_deferred_stop();
         }
     }
 
@@ -1521,6 +1786,9 @@ class NativePortMovieSession::Impl final {
         deferred_stop_ = false;
         audio_clock_started_ = false;
         audio_tail_clock_started_ = false;
+        event_overflow_ = false;
+        video_demand_ = false;
+        state_demand_ = false;
 #ifdef _WIN32
         pending_.reset();
         video_queue_.clear();
@@ -1585,6 +1853,14 @@ class NativePortMovieSession::Impl final {
             CoUninitialize();
             com_owned_ = false;
         }
+        if (content_mapping_view_ != nullptr) {
+            static_cast<void>(UnmapViewOfFile(content_mapping_view_));
+            content_mapping_view_ = nullptr;
+        }
+        if (content_mapping_ != nullptr) {
+            static_cast<void>(CloseHandle(content_mapping_));
+            content_mapping_ = nullptr;
+        }
         if (content_handle_ != nullptr) {
             if (content_lock_held_) {
                 static_cast<void>(UnlockFileEx(content_handle_,
@@ -1609,10 +1885,10 @@ class NativePortMovieSession::Impl final {
         state_ = state;
         failure_ = failure;
         platform_error_code_ = platform_error;
-        if (callbacks_.state != nullptr) {
-            callback_active_ = true;
-            callbacks_.state(callbacks_.user, state_, failure_, platform_error_code_);
-            callback_active_ = false;
+        if (state_demand_) {
+            if (mailbox_ == nullptr ||
+                !mailbox_->push_state(state_, failure_, platform_error_code_))
+                event_overflow_ = true;
         }
     }
 
@@ -1653,11 +1929,16 @@ class NativePortMovieSession::Impl final {
     bool deferred_stop_ = false;
     bool audio_clock_started_ = false;
     bool audio_tail_clock_started_ = false;
+    NativePortMovieVideoMailbox* mailbox_ = nullptr;
+    bool event_overflow_ = false;
+    bool video_demand_ = false;
+    bool state_demand_ = false;
 #ifdef _WIN32
     HANDLE content_handle_ = nullptr;
+    HANDLE content_mapping_ = nullptr;
+    const std::byte* content_mapping_view_ = nullptr;
     OVERLAPPED content_lock_{};
     std::uint64_t content_size_ = 0u;
-    std::mutex content_mutex_;
     const NativePortCodecProvider* codec_provider_ = nullptr;
     void* codec_decoder_ = nullptr;
     NativePortAudioFormat provider_audio_format_{};
@@ -1693,6 +1974,520 @@ class NativePortMovieSession::Impl final {
     bool mf_started_ = false;
     bool content_lock_held_ = false;
 #endif
+};
+
+namespace {
+
+enum class NativePortMovieWorkerOpcode : std::uint16_t {
+    Open = 1u,
+    Play = 2u,
+    Pump = 3u,
+    Pause = 4u,
+    Stop = 5u,
+    Destroy = 6u,
+};
+
+struct NativePortMovieHostTimePayload final {
+    std::uint64_t host_time_nanoseconds = 0u;
+};
+
+struct NativePortMovieWorkerError final {
+    std::uint32_t failure =
+        static_cast<std::uint32_t>(NativePortMovieFailure::HostMediaFailure);
+    std::uint32_t platform_error_code = 0u;
+};
+
+struct NativePortMovieWorkerResult final {
+    NativePortMovieSnapshot snapshot{};
+    NativePortMovieWorkerError error{};
+};
+
+static_assert(std::is_trivially_copyable_v<NativePortMovieHostTimePayload>);
+static_assert(std::is_standard_layout_v<NativePortMovieHostTimePayload>);
+static_assert(std::is_trivially_copyable_v<NativePortMovieWorkerError>);
+static_assert(std::is_standard_layout_v<NativePortMovieWorkerError>);
+static_assert(std::is_trivially_copyable_v<NativePortMovieSnapshot>);
+static_assert(std::is_standard_layout_v<NativePortMovieSnapshot>);
+static_assert(std::is_trivially_copyable_v<NativePortMovieWorkerResult>);
+static_assert(std::is_standard_layout_v<NativePortMovieWorkerResult>);
+static_assert(sizeof(NativePortMovieWorkerResult) <=
+              native_port_audio_command_queue_max_ack_result_bytes);
+
+} // namespace
+
+class NativePortMovieSession::Impl final {
+  public:
+    Impl() : domain_(acquire_native_port_audio_execution_domain()), mailbox_() {
+        const auto handle = domain_->register_target(
+            NativePortAudioExecutionDomainTarget::Movie,
+            this,
+            &Impl::execute_domain_command,
+            &Impl::cleanup_worker);
+        if (!handle.has_value())
+            throw NativePortMovieError(NativePortMovieFailure::HostMediaFailure,
+                                       0u,
+                                       "audio-worker-register");
+        target_handle_ = *handle;
+        target_registered_ = true;
+    }
+
+    ~Impl() noexcept {
+        require_owner_thread_noexcept();
+        if (target_registered_) {
+            const auto result = dispatch_noexcept(
+                NativePortMovieWorkerOpcode::Destroy, {},
+                NativePortAudioExecutionDomainStage::None);
+            target_registered_ = false;
+            if (result.completed()) {
+                if (!domain_->unregister_target(target_handle_, this))
+                    domain_->shutdown();
+            } else {
+                // A failed Destroy, including a typed executor failure, does
+                // not prove that every nested decoder/audio owner was
+                // released.  Keep cleanup armed and make the common domain
+                // drain/join its consumer before this facade can disappear.
+                domain_->shutdown();
+            }
+        }
+        // Healthy Destroy and terminal cleanup both clear worker-owned media
+        // on the domain consumer.  Returning with a live worker would hand
+        // its COM/decoder destruction to the producer thread, so fail closed
+        // instead of leaking or silently violating affinity.
+        if (worker_ != nullptr) std::terminate();
+    }
+
+    void open(const NativePortMovieConfig& config) {
+        require_owner_thread();
+        require_not_callback();
+        if (published_snapshot_.state != NativePortMovieState::Closed &&
+            published_snapshot_.state != NativePortMovieState::Stopped)
+            throw std::logic_error("native-port-movie-already-open");
+
+        pending_identity_.assign(config.source.byte_identity.data(),
+                                 config.source.byte_identity.size());
+        pending_config_ = config;
+        pending_config_.source.byte_identity = pending_identity_;
+        pending_config_.callbacks = {};
+        callbacks_ = config.callbacks;
+        video_demand_ = config.callbacks.video != nullptr;
+        state_demand_ = config.callbacks.state != nullptr;
+        // Allocate and reset the bounded delivery arena before publishing
+        // Open.  This is the only allocation for the video handoff; the
+        // worker receives only the already prepared SPSC storage and demand
+        // bits, so decoder/pump hotpaths cannot resize it.
+        try {
+            const auto video_queue_bytes =
+                video_demand_ && config.maximum_video_queue_bytes >= 4u &&
+                        config.maximum_video_queue_bytes <= maximum_video_queue_budget_bytes
+                    ? config.maximum_video_queue_bytes
+                    : 0u;
+            mailbox_.prepare(video_queue_bytes);
+        } catch (const std::exception&) {
+            mailbox_.reset();
+            throw NativePortMovieError(NativePortMovieFailure::InvalidConfig,
+                                       0u,
+                                       "video-mailbox-capacity");
+        } catch (...) {
+            mailbox_.reset();
+            throw NativePortMovieError(NativePortMovieFailure::InvalidConfig,
+                                       0u,
+                                       "video-mailbox-capacity");
+        }
+
+        const auto result = dispatch(NativePortMovieWorkerOpcode::Open, {},
+                                     NativePortAudioExecutionDomainStage::None);
+        drain_events();
+        require_completed(result, "open");
+    }
+
+    void play(const std::uint64_t host_time) {
+        require_owner_thread();
+        require_not_callback();
+        if (published_snapshot_.state != NativePortMovieState::Ready &&
+            published_snapshot_.state != NativePortMovieState::Paused)
+            throw std::logic_error("native-port-movie-not-playable");
+        const auto result = dispatch_host_time(NativePortMovieWorkerOpcode::Play,
+                                               host_time,
+                                               NativePortAudioExecutionDomainStage::None);
+        drain_events();
+        require_completed(result, "play");
+    }
+
+    void pump(const std::uint64_t host_time) {
+        require_owner_thread();
+        require_not_callback();
+        if (published_snapshot_.state == NativePortMovieState::Completed ||
+            published_snapshot_.state == NativePortMovieState::Stopped)
+            return;
+        if (published_snapshot_.state != NativePortMovieState::Playing)
+            throw std::logic_error("native-port-movie-not-playing");
+        const auto result = dispatch_host_time(
+            NativePortMovieWorkerOpcode::Pump,
+            host_time,
+            NativePortAudioExecutionDomainStage::AudioDecodeAndMix);
+        // A backpressured video sample remains pending in the worker.  Drain
+        // already-published frames before propagating the typed ACK so the
+        // caller can retry with the same decoder cursor.
+        drain_events();
+        require_completed(result, "pump");
+    }
+
+    void pause(const std::uint64_t host_time) {
+        require_owner_thread();
+        require_not_callback();
+        if (published_snapshot_.state != NativePortMovieState::Playing)
+            throw std::logic_error("native-port-movie-not-playing");
+        const auto result = dispatch_host_time(NativePortMovieWorkerOpcode::Pause,
+                                               host_time,
+                                               NativePortAudioExecutionDomainStage::AudioDecodeAndMix);
+        drain_events();
+        require_completed(result, "pause");
+    }
+
+    void stop() {
+        require_owner_thread();
+        if (callback_active_) {
+            deferred_stop_ = true;
+            return;
+        }
+        if (published_snapshot_.state == NativePortMovieState::Closed ||
+            published_snapshot_.state == NativePortMovieState::Stopped)
+            return;
+        const auto result = dispatch(NativePortMovieWorkerOpcode::Stop, {},
+                                     NativePortAudioExecutionDomainStage::None);
+        drain_events();
+        require_completed(result, "stop");
+    }
+
+    [[nodiscard]] NativePortMovieSnapshot snapshot() const noexcept {
+        return published_snapshot_;
+    }
+
+  private:
+    static void encode_error(
+        NativePortAudioCommandAckResult& result,
+        const NativePortMovieSnapshot& snapshot,
+        const NativePortMovieFailure failure,
+        const std::uint32_t platform_error_code) noexcept {
+        result = {};
+        result.status = NativePortAudioCommandAckStatus::Failed;
+        const NativePortMovieWorkerResult worker_result{
+            snapshot,
+            {static_cast<std::uint32_t>(failure), platform_error_code}};
+        result.result_size = sizeof(worker_result);
+        std::memcpy(result.bytes.data(), &worker_result,
+                    sizeof(worker_result));
+        result.error_code = platform_error_code;
+    }
+
+    static void encode_snapshot(
+        NativePortAudioCommandAckResult& result,
+        const NativePortMovieSnapshot& snapshot) noexcept {
+        result = {};
+        result.status = NativePortAudioCommandAckStatus::Completed;
+        const NativePortMovieWorkerResult worker_result{
+            snapshot,
+            {static_cast<std::uint32_t>(NativePortMovieFailure::None), 0u}};
+        result.result_size = sizeof(worker_result);
+        std::memcpy(result.bytes.data(), &worker_result,
+                    sizeof(worker_result));
+    }
+
+    // Called only by the execution-domain consumer during terminal cleanup.
+    // Decoder, COM, nested movie-audio and their backing allocations must all
+    // be released on that same worker before this target slot is retired.
+    static void cleanup_worker(void* const object) noexcept {
+        auto* const self = static_cast<Impl*>(object);
+        if (self == nullptr || self->worker_ == nullptr) return;
+        self->worker_->destroy_on_worker();
+        self->worker_.reset();
+    }
+
+    static void execute_domain_command(
+        void* const object,
+        const std::uint16_t opcode,
+        const std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept {
+        auto& self = *static_cast<Impl*>(object);
+        result = {};
+        try {
+            switch (static_cast<NativePortMovieWorkerOpcode>(opcode)) {
+            case NativePortMovieWorkerOpcode::Open:
+                if (!payload.empty())
+                    throw NativePortMovieError(NativePortMovieFailure::InvalidConfig,
+                                               0u,
+                                               "movie-open-payload");
+                if (self.worker_ == nullptr)
+                    self.worker_ = std::make_unique<NativePortMovieWorker>(
+                        self.mailbox_);
+                self.worker_->open_on_worker(
+                    self.pending_config_,
+                    self.video_demand_,
+                    self.state_demand_);
+                break;
+            case NativePortMovieWorkerOpcode::Play:
+                if (self.worker_ == nullptr)
+                    throw NativePortMovieError(NativePortMovieFailure::HostMediaFailure,
+                                               0u,
+                                               "movie-worker-missing");
+                self.worker_->play_on_worker(read_host_time(payload));
+                break;
+            case NativePortMovieWorkerOpcode::Pump:
+                if (self.worker_ == nullptr)
+                    throw NativePortMovieError(NativePortMovieFailure::HostMediaFailure,
+                                               0u,
+                                               "movie-worker-missing");
+                self.worker_->pump_on_worker(read_host_time(payload));
+                break;
+            case NativePortMovieWorkerOpcode::Pause:
+                if (self.worker_ == nullptr)
+                    throw NativePortMovieError(NativePortMovieFailure::HostMediaFailure,
+                                               0u,
+                                               "movie-worker-missing");
+                self.worker_->pause_on_worker(read_host_time(payload));
+                break;
+            case NativePortMovieWorkerOpcode::Stop:
+                if (!payload.empty())
+                    throw NativePortMovieError(NativePortMovieFailure::InvalidConfig,
+                                               0u,
+                                               "movie-stop-payload");
+                if (self.worker_ != nullptr) self.worker_->stop_on_worker();
+                break;
+            case NativePortMovieWorkerOpcode::Destroy:
+                if (!payload.empty())
+                    throw NativePortMovieError(NativePortMovieFailure::InvalidConfig,
+                                               0u,
+                                               "movie-destroy-payload");
+                if (self.worker_ != nullptr) {
+                    self.worker_->destroy_on_worker();
+                    self.worker_.reset();
+                }
+                break;
+            default:
+                throw NativePortMovieError(NativePortMovieFailure::HostMediaFailure,
+                                           0u,
+                                           "movie-worker-opcode");
+            }
+            if ((self.worker_ != nullptr && self.worker_->event_overflowed()) ||
+                self.mailbox_.has_error())
+                throw NativePortMovieVideoMailboxBackpressure{};
+            // The ACK is the only worker-to-owner publication boundary for
+            // control state.  Never let the producer inspect the worker
+            // object, even after a synchronous fence.
+            encode_snapshot(result,
+                            self.worker_ != nullptr
+                                ? self.worker_->snapshot_on_worker()
+                                : NativePortMovieSnapshot{});
+        } catch (const NativePortMovieVideoMailboxBackpressure&) {
+            encode_error(result,
+                         self.worker_ != nullptr
+                             ? self.worker_->snapshot_on_worker()
+                             : NativePortMovieSnapshot{},
+                         NativePortMovieFailure::HostMediaFailure, 0xE001u);
+        } catch (const NativePortMovieError& error) {
+            encode_error(result,
+                         self.worker_ != nullptr
+                             ? self.worker_->snapshot_on_worker()
+                             : NativePortMovieSnapshot{},
+                         error.failure(), error.platform_error_code());
+        } catch (...) {
+            encode_error(result,
+                         self.worker_ != nullptr
+                             ? self.worker_->snapshot_on_worker()
+                             : NativePortMovieSnapshot{},
+                         NativePortMovieFailure::HostMediaFailure, 0xE002u);
+        }
+    }
+
+    [[nodiscard]] static std::uint64_t read_host_time(
+        const std::span<const std::byte> payload) {
+        if (payload.size() != sizeof(NativePortMovieHostTimePayload))
+            throw NativePortMovieError(NativePortMovieFailure::InvalidConfig,
+                                       0u,
+                                       "movie-host-time-payload");
+        NativePortMovieHostTimePayload value;
+        std::memcpy(&value, payload.data(), sizeof(value));
+        return value.host_time_nanoseconds;
+    }
+
+    [[nodiscard]] NativePortAudioExecutionDomainDispatchResult dispatch(
+        const NativePortMovieWorkerOpcode opcode,
+        const std::span<const std::byte> payload,
+        const NativePortAudioExecutionDomainStage stage) {
+        const auto result = domain_->dispatch_sync(
+            target_handle_, static_cast<std::uint16_t>(opcode), payload,
+            next_frame_hint(), 0u, stage);
+        // Copy the worker-produced POD snapshot only from the completed ACK.
+        // This keeps snapshot() producer-owned without crossing the worker
+        // object's thread-affinity boundary.
+        if (result.has_ack &&
+            result.ack.result_size == sizeof(NativePortMovieWorkerResult)) {
+            NativePortMovieWorkerResult worker_result;
+            std::memcpy(&worker_result, result.ack.bytes.data(),
+                        sizeof(worker_result));
+            published_snapshot_ = worker_result.snapshot;
+        }
+        return result;
+    }
+
+    [[nodiscard]] NativePortAudioExecutionDomainDispatchResult dispatch_noexcept(
+        const NativePortMovieWorkerOpcode opcode,
+        const std::span<const std::byte> payload,
+        const NativePortAudioExecutionDomainStage stage) noexcept {
+        return dispatch(opcode, payload, stage);
+    }
+
+    [[nodiscard]] NativePortAudioExecutionDomainDispatchResult dispatch_host_time(
+        const NativePortMovieWorkerOpcode opcode,
+        const std::uint64_t host_time,
+        const NativePortAudioExecutionDomainStage stage) {
+        const NativePortMovieHostTimePayload payload{host_time};
+        return dispatch(opcode,
+                        std::span<const std::byte>(
+                            reinterpret_cast<const std::byte*>(&payload),
+                            sizeof(payload)),
+                        stage);
+    }
+
+    [[nodiscard]] std::uint64_t next_frame_hint() noexcept {
+        auto result = next_frame_hint_;
+        const auto domain_snapshot = domain_->snapshot();
+        if (domain_snapshot.has_last_frame_index)
+            result = std::max(result, domain_snapshot.last_frame_index);
+        next_frame_hint_ = result;
+        if (next_frame_hint_ != std::numeric_limits<std::uint64_t>::max())
+            ++next_frame_hint_;
+        return result;
+    }
+
+    void drain_events() {
+        NativePortMovieMailboxEvent event;
+        std::span<const std::byte> pixels;
+        while (mailbox_.pop(event, pixels)) {
+            if (event.kind == NativePortMovieMailboxEventKind::State) {
+                if (callbacks_.state != nullptr) {
+                    callback_active_ = true;
+                    try {
+                        callbacks_.state(callbacks_.user,
+                                         event.state,
+                                         event.failure,
+                                         event.platform_error_code);
+                    } catch (...) {
+                        callback_active_ = false;
+                        mailbox_.release();
+                        throw;
+                    }
+                    callback_active_ = false;
+                }
+            } else if (callbacks_.video != nullptr) {
+                const NativePortMovieVideoFrame frame{
+                    event.timestamp_nanoseconds,
+                    event.duration_nanoseconds,
+                    event.width,
+                    event.height,
+                    event.stride_bytes,
+                    event.bottom_up,
+                    pixels,
+                    event.display_aspect_numerator,
+                    event.display_aspect_denominator};
+                callback_active_ = true;
+                try {
+                    callbacks_.video(callbacks_.user, frame);
+                } catch (...) {
+                    callback_active_ = false;
+                    mailbox_.release();
+                    throw;
+                }
+                callback_active_ = false;
+            }
+            // The mailbox owns the frame bytes until the callback (if any)
+            // returns.  Always release skipped state/video events as well;
+            // otherwise one no-callback event permanently stalls the SPSC
+            // consumer and prevents the arena from being recycled.
+            mailbox_.release();
+        }
+        if (mailbox_.has_error())
+            throw NativePortMovieError(NativePortMovieFailure::HostMediaFailure,
+                                       0xE003u,
+                                       "video-mailbox");
+        if (deferred_stop_) {
+            deferred_stop_ = false;
+            const auto result = dispatch(NativePortMovieWorkerOpcode::Stop, {},
+                                         NativePortAudioExecutionDomainStage::None);
+            drain_events();
+            require_completed(result, "stop");
+        }
+    }
+
+    static NativePortMovieFailure map_domain_failure(
+        const NativePortAudioExecutionDomainFailure failure) noexcept {
+        switch (failure) {
+        case NativePortAudioExecutionDomainFailure::InvalidConfig:
+            return NativePortMovieFailure::InvalidConfig;
+        case NativePortAudioExecutionDomainFailure::InvalidPayload:
+            return NativePortMovieFailure::InvalidAudioBuffer;
+        case NativePortAudioExecutionDomainFailure::QueueFull:
+        case NativePortAudioExecutionDomainFailure::QueueFailed:
+        case NativePortAudioExecutionDomainFailure::QueueClosed:
+        case NativePortAudioExecutionDomainFailure::WorkerFailure:
+        case NativePortAudioExecutionDomainFailure::TargetExecutionFailed:
+            return NativePortMovieFailure::HostMediaFailure;
+        default:
+            return NativePortMovieFailure::HostMediaFailure;
+        }
+    }
+
+    void require_completed(
+        const NativePortAudioExecutionDomainDispatchResult& result,
+        const char* operation) {
+        if (result.completed()) return;
+        NativePortMovieFailure failure = map_domain_failure(result.failure);
+        std::uint32_t platform_error_code = result.ack.error_code;
+        if (result.has_ack &&
+            result.ack.result_size == sizeof(NativePortMovieWorkerResult)) {
+            NativePortMovieWorkerResult worker_result;
+            std::memcpy(&worker_result, result.ack.bytes.data(),
+                        sizeof(worker_result));
+            failure = static_cast<NativePortMovieFailure>(
+                worker_result.error.failure);
+            platform_error_code = worker_result.error.platform_error_code;
+        }
+        throw NativePortMovieError(failure, platform_error_code, operation);
+    }
+
+    void require_owner_thread() const {
+        if (std::this_thread::get_id() != owner_thread_)
+            throw NativePortMovieError(NativePortMovieFailure::ThreadViolation,
+                                       0u,
+                                       "thread-violation");
+    }
+
+    void require_owner_thread_noexcept() const noexcept {
+        if (std::this_thread::get_id() != owner_thread_) std::terminate();
+    }
+
+    void require_not_callback() const {
+        if (callback_active_)
+            throw NativePortMovieError(NativePortMovieFailure::CallbackReentry,
+                                       0u,
+                                       "callback-reentry");
+    }
+
+    std::shared_ptr<NativePortAudioExecutionDomain> domain_;
+    NativePortMovieVideoMailbox mailbox_;
+    std::unique_ptr<NativePortMovieWorker> worker_;
+    NativePortAudioExecutionDomainTargetHandle target_handle_{};
+    NativePortMovieConfig pending_config_{};
+    std::string pending_identity_;
+    NativePortMovieCallbacks callbacks_{};
+    NativePortMovieSnapshot published_snapshot_{};
+    std::thread::id owner_thread_ = std::this_thread::get_id();
+    std::uint64_t next_frame_hint_ = 0u;
+    bool target_registered_ = false;
+    bool callback_active_ = false;
+    bool deferred_stop_ = false;
+    bool video_demand_ = false;
+    bool state_demand_ = false;
 };
 
 NativePortMovieSession::NativePortMovieSession() : impl_(std::make_unique<Impl>()) {}

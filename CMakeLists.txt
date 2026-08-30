@@ -849,6 +849,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/native_port.hpp
     include/katana/runtime/native_port_semantics.hpp
     include/katana/runtime/native_port_audio.hpp
+    include/katana/runtime/native_port_audio_command_queue.hpp
     include/katana/runtime/native_port_audio_engine.hpp
     include/katana/runtime/native_port_sound_bank.hpp
     include/katana/runtime/native_port_aot_runtime.hpp
@@ -940,11 +941,23 @@ add_library(
     STATIC
     $<TARGET_OBJECTS:katana_aot_runtime_objects>
 )
+set(KATANA_NATIVE_PORT_AUDIO_DOMAIN_SOURCES
+    src/runtime/native_port_audio.cpp
+    src/runtime/native_port_audio_command_queue.cpp
+    src/runtime/native_port_audio_execution_domain.cpp
+    src/runtime/native_port_telemetry.cpp
+)
+add_library(
+    katana_native_port_audio_domain_objects
+    OBJECT
+    ${KATANA_NATIVE_PORT_AUDIO_DOMAIN_SOURCES}
+)
 add_library(
     katana_runtime_core
     STATIC
     $<TARGET_OBJECTS:katana_aot_runtime_objects>
     $<TARGET_OBJECTS:katana_historical_device_runtime_objects>
+    $<TARGET_OBJECTS:katana_native_port_audio_domain_objects>
 )
 add_library(
     katana_diagnostic_interpreter
@@ -959,9 +972,9 @@ add_library(
     $<TARGET_OBJECTS:katana_historical_device_runtime_objects>
     $<TARGET_OBJECTS:katana_sh4_decoder_objects>
     $<TARGET_OBJECTS:katana_diagnostic_interpreter_objects>
+    $<TARGET_OBJECTS:katana_native_port_audio_domain_objects>
 )
 set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
-    src/runtime/native_port_audio.cpp
     src/runtime/native_port_audio_engine.cpp
     src/runtime/native_port_sound_bank.cpp
     src/runtime/native_port_codec.cpp
@@ -971,7 +984,6 @@ set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
     src/runtime/native_port_frame_queue.cpp
     src/runtime/native_port_graphics_command_stream.cpp
     src/runtime/native_port_graphics.cpp
-    src/runtime/native_port_telemetry.cpp
     src/runtime/native_port_movie.cpp
     src/runtime/native_port_platform.cpp
     src/runtime/native_port_save.cpp
@@ -982,6 +994,7 @@ add_library(
     katana_native_port_runtime
     STATIC
     ${KATANA_NATIVE_PORT_RUNTIME_SOURCES}
+    $<TARGET_OBJECTS:katana_native_port_audio_domain_objects>
 )
 
 add_library(KatanaRecomp::aot_runtime ALIAS katana_aot_runtime)
@@ -1010,10 +1023,15 @@ list(
     KATANA_NATIVE_PORT_RUNTIME_SOURCES
     KATANA_NATIVE_PORT_RUNTIME_SOURCE_TU_COUNT
 )
+list(
+    LENGTH
+    KATANA_NATIVE_PORT_AUDIO_DOMAIN_SOURCES
+    KATANA_NATIVE_PORT_AUDIO_DOMAIN_SOURCE_TU_COUNT
+)
 math(
     EXPR
     KATANA_NATIVE_PORT_RUNTIME_TRANSITIVE_TU_COUNT
-    "${KATANA_AOT_RUNTIME_SOURCE_TU_COUNT} + ${KATANA_NATIVE_PORT_RUNTIME_SOURCE_TU_COUNT}"
+    "${KATANA_AOT_RUNTIME_SOURCE_TU_COUNT} + ${KATANA_NATIVE_PORT_RUNTIME_SOURCE_TU_COUNT} + ${KATANA_NATIVE_PORT_AUDIO_DOMAIN_SOURCE_TU_COUNT}"
 )
 # Generated native products use this build-tree-only property to make their
 # host-tool progress plan exact. Imported/prebuilt runtime targets contribute
@@ -1152,6 +1170,7 @@ endfunction()
 
 target_link_libraries(katana_diagnostic_interpreter PUBLIC katana_runtime_core)
 katana_configure_runtime_archive(katana_aot_runtime FALSE)
+katana_configure_runtime_objects(katana_native_port_audio_domain_objects FALSE)
 katana_configure_runtime_objects(katana_native_port_runtime FALSE)
 katana_configure_runtime_archive(katana_runtime_core TRUE)
 katana_configure_runtime_archive(katana_diagnostic_interpreter TRUE)
@@ -2329,6 +2348,20 @@ katana_enable_warnings(katana-native-port-content-tests)
 add_test(
     NAME katana-native-port-content-tests
     COMMAND katana-native-port-content-tests
+)
+
+add_executable(
+    katana-native-port-audio-command-queue-tests
+    tests/runtime/native_port_audio_command_queue_tests.cpp
+)
+target_link_libraries(
+    katana-native-port-audio-command-queue-tests
+    PRIVATE katana_native_port_runtime
+)
+katana_enable_warnings(katana-native-port-audio-command-queue-tests)
+add_test(
+    NAME katana-native-port-audio-command-queue-tests
+    COMMAND katana-native-port-audio-command-queue-tests
 )
 
 add_executable(

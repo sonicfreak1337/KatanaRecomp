@@ -3,7 +3,9 @@
 #include "katana/runtime/aica.hpp"
 #include "katana/runtime/maple.hpp"
 #include "katana/runtime/media_clock.hpp"
+#include "katana/runtime/native_port_audio_command_queue.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -13,7 +15,9 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_host_runtime_contract_version = 2u;
+class NativePortTelemetry;
+
+inline constexpr std::uint32_t native_host_runtime_contract_version = 3u;
 inline constexpr std::uint32_t host_pacing_contract_version = 1u;
 inline constexpr std::uint32_t host_workload_limiter_contract_version = 2u;
 inline constexpr std::uint64_t host_workload_limiter_maximum_wait_ceiling_ns =
@@ -164,6 +168,18 @@ class HostWorkloadLimiter final {
 class HostAudioOutput : public AicaAudioBackend {
   public:
     ~HostAudioOutput() override = default;
+    // Render one immutable AICA PCM snapshot and hand it to the host output.
+    // Dedicated implementations override this boundary so AICA writes
+    // directly into a pre-reserved command payload. The default remains a
+    // deterministic serial/reference path and never transfers live AICA or
+    // guest RAM ownership to another thread.
+    virtual void render_and_submit_aica(AicaRegisterFile& aica,
+                                        std::size_t frame_count,
+                                        std::uint32_t sample_rate);
+    // Simulation binds the current logical audio frame. The implementation
+    // assigns the strictly contiguous guest_sequence internally so callers
+    // cannot create duplicate or gapped command stamps.
+    virtual void bind_command_frame(std::uint64_t frame_index) noexcept = 0;
     virtual void pause() = 0;
     virtual void resume() = 0;
     virtual void shutdown() noexcept = 0;
@@ -172,11 +188,14 @@ class HostAudioOutput : public AicaAudioBackend {
     [[nodiscard]] virtual std::uint64_t submitted_buffers() const noexcept = 0;
     [[nodiscard]] virtual std::uint64_t submitted_frames() const noexcept = 0;
     [[nodiscard]] virtual std::uint64_t deterministic_hash() const noexcept = 0;
+    [[nodiscard]] virtual NativePortAudioCommandQueueSnapshot
+    command_queue_snapshot() const noexcept = 0;
 };
 
 class RecordingHostAudioOutput final : public HostAudioOutput {
   public:
     void submit(std::span<const std::int16_t> samples, std::uint32_t sample_rate) override;
+    void bind_command_frame(std::uint64_t frame_index) noexcept override;
     void pause() override;
     void resume() override;
     void shutdown() noexcept override;
@@ -185,6 +204,8 @@ class RecordingHostAudioOutput final : public HostAudioOutput {
     [[nodiscard]] std::uint64_t submitted_buffers() const noexcept override;
     [[nodiscard]] std::uint64_t submitted_frames() const noexcept override;
     [[nodiscard]] std::uint64_t deterministic_hash() const noexcept override;
+    [[nodiscard]] NativePortAudioCommandQueueSnapshot
+    command_queue_snapshot() const noexcept override;
 
   private:
     std::uint64_t hash_ = 1469598103934665603ull;
@@ -192,10 +213,12 @@ class RecordingHostAudioOutput final : public HostAudioOutput {
     std::uint64_t frames_ = 0u;
     bool paused_ = false;
     bool shutdown_ = false;
+    std::uint64_t command_frame_index_ = 0u;
 };
 
 [[nodiscard]] bool native_audio_available() noexcept;
-[[nodiscard]] std::unique_ptr<HostAudioOutput> create_native_audio_output();
+[[nodiscard]] std::unique_ptr<HostAudioOutput> create_native_audio_output(
+    NativePortTelemetry* telemetry = nullptr);
 
 class InjectedHostInput final : public HostInputBackend {
   public:

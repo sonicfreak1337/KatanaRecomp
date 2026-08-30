@@ -1,16 +1,22 @@
 #include "katana/runtime/host_runtime.hpp"
 
 #include "katana/io/json_report.hpp"
+#include "katana/runtime/native_port_audio.hpp"
+#include "native_port_audio_execution_domain.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
+#include <cstring>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -272,6 +278,10 @@ class Win32AudioOutput final : public HostAudioOutput {
         blocks_.push_back(std::move(block));
     }
 
+    void bind_command_frame(const std::uint64_t frame_index) noexcept override {
+        command_frame_index_ = std::max(command_frame_index_, frame_index);
+    }
+
     void pause() override {
         if (shutdown_ || paused_) return;
         if (device_ != nullptr && waveOutPause(device_) != MMSYSERR_NOERROR)
@@ -319,6 +329,21 @@ class Win32AudioOutput final : public HostAudioOutput {
     [[nodiscard]] std::uint64_t deterministic_hash() const noexcept override {
         return hash_;
     }
+    [[nodiscard]] NativePortAudioCommandQueueSnapshot
+    command_queue_snapshot() const noexcept override {
+        NativePortAudioCommandQueueSnapshot result;
+        result.mode = NativePortAudioCommandQueueMode::SerialReference;
+        result.lifecycle = shutdown_
+                               ? NativePortAudioCommandQueueLifecycle::Stopped
+                               : NativePortAudioCommandQueueLifecycle::Running;
+        result.submitted_commands = buffers_;
+        result.completed_commands = buffers_;
+        result.last_submitted_stamp.frame_index = command_frame_index_;
+        result.last_completed_stamp.frame_index = command_frame_index_;
+        result.has_last_submitted_stamp = buffers_ != 0u;
+        result.has_last_completed_stamp = buffers_ != 0u;
+        return result;
+    }
 
   private:
     struct Block {
@@ -364,8 +389,401 @@ class Win32AudioOutput final : public HostAudioOutput {
     std::uint64_t hash_ = 1469598103934665603ull;
     std::uint64_t buffers_ = 0u;
     std::uint64_t frames_ = 0u;
+    std::uint64_t command_frame_index_ = 0u;
     bool paused_ = false;
     bool shutdown_ = false;
+};
+
+enum class HostAudioCommandOpcode : std::uint16_t {
+    Construct = 1u,
+    Submit,
+    Pause,
+    Resume,
+    Destroy,
+};
+
+struct HostAudioSubmitCommand final {
+    std::uint32_t sample_rate = 0u;
+    std::uint32_t sample_count = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<HostAudioSubmitCommand>);
+
+class DomainHostAudioOutput final : public HostAudioOutput {
+  public:
+    explicit DomainHostAudioOutput(NativePortTelemetry* const telemetry)
+        : producer_thread_(std::this_thread::get_id()),
+          domain_(acquire_native_port_audio_execution_domain()),
+          telemetry_(telemetry) {
+        if (telemetry_ != nullptr) {
+            if (!domain_->bind_telemetry(telemetry_))
+                throw std::runtime_error(
+                    "Audio-Domain-Telemetrie konnte nicht gebunden werden.");
+            telemetry_bound_ = true;
+        }
+        const auto registered = domain_->register_target(
+            NativePortAudioExecutionDomainTarget::HostOutput,
+            this,
+            &DomainHostAudioOutput::execute_worker_command,
+            &DomainHostAudioOutput::cleanup_worker_state);
+        if (!registered.has_value()) {
+            release_telemetry();
+            throw std::runtime_error("Host-Audio-Domainziel konnte nicht registriert werden.");
+        }
+        handle_ = *registered;
+        const auto result = domain_->dispatch_sync(
+            handle_,
+            static_cast<std::uint16_t>(HostAudioCommandOpcode::Construct),
+            {},
+            0u);
+        if (!result.completed()) {
+            // Construct may have installed worker-owned output state before
+            // returning a failed ACK.  Keep terminal cleanup armed and join
+            // the sole consumer before this facade can unwind.
+            domain_->shutdown();
+            handle_ = {};
+            release_telemetry();
+            throw std::runtime_error("Host-Audio-Domainziel konnte nicht konstruiert werden.");
+        }
+    }
+
+    ~DomainHostAudioOutput() override { shutdown(); }
+
+    void submit(const std::span<const std::int16_t> samples,
+                const std::uint32_t sample_rate) override {
+        require_producer_thread();
+        require_accepting();
+        validate_audio(samples, sample_rate);
+        if (samples.size() > std::numeric_limits<std::uint32_t>::max() ||
+            samples.size_bytes() >
+                std::numeric_limits<std::uint32_t>::max() -
+                    sizeof(HostAudioSubmitCommand))
+            throw std::out_of_range("Host-Audiopuffer ist zu gross.");
+        const HostAudioSubmitCommand command{
+            sample_rate, static_cast<std::uint32_t>(samples.size())};
+        const std::array parts{
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(&command),
+                static_cast<std::uint32_t>(sizeof(command))},
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(samples.data()),
+                static_cast<std::uint32_t>(samples.size_bytes())}};
+        const auto result = domain_->dispatch_async_scatter(
+            handle_,
+            static_cast<std::uint16_t>(HostAudioCommandOpcode::Submit),
+            parts,
+            current_frame_index());
+        require_dispatch(result, "submit");
+    }
+
+    void render_and_submit_aica(
+        AicaRegisterFile& aica,
+        const std::size_t frame_count,
+        const std::uint32_t sample_rate) override {
+        require_producer_thread();
+        require_accepting();
+        if (sample_rate == 0u ||
+            frame_count > std::numeric_limits<std::uint32_t>::max() / 2u)
+            throw std::invalid_argument(
+                "AICA-Audioausgabe besitzt eine ungueltige Geometrie.");
+        const auto sample_count = static_cast<std::uint32_t>(frame_count * 2u);
+        const auto sample_bytes =
+            static_cast<std::uint64_t>(sample_count) * sizeof(std::int16_t);
+        if (sample_bytes >
+            std::numeric_limits<std::uint32_t>::max() -
+                sizeof(HostAudioSubmitCommand))
+            throw std::out_of_range("AICA-Audiopuffer ist zu gross.");
+        const auto payload_size = static_cast<std::uint32_t>(
+            sizeof(HostAudioSubmitCommand) + sample_bytes);
+        auto lease = domain_->begin_async_payload(
+            handle_,
+            static_cast<std::uint16_t>(HostAudioCommandOpcode::Submit),
+            payload_size,
+            current_frame_index());
+        if (!lease.valid())
+            throw std::runtime_error("Host-Audioqueue konnte AICA-PCM nicht reservieren.");
+        const HostAudioSubmitCommand command{sample_rate, sample_count};
+        auto payload = lease.payload();
+        std::memcpy(payload.data(), &command, sizeof(command));
+        auto* const samples = reinterpret_cast<std::int16_t*>(
+            payload.data() + sizeof(command));
+        try {
+            aica.render_audio_into(
+                std::span<std::int16_t>(samples, sample_count), sample_rate);
+        } catch (...) {
+            lease.abort();
+            throw;
+        }
+        if (!lease.publish())
+            throw std::runtime_error("Host-Audioqueue konnte AICA-PCM nicht publizieren.");
+    }
+
+    void bind_command_frame(const std::uint64_t frame_index) noexcept override {
+        auto current = bound_frame_index_.load(std::memory_order_acquire);
+        while (current < frame_index &&
+               !bound_frame_index_.compare_exchange_weak(
+                   current,
+                   frame_index,
+                   std::memory_order_acq_rel,
+                   std::memory_order_acquire)) {
+        }
+    }
+
+    void pause() override {
+        require_producer_thread();
+        if (shutdown_requested_.load(std::memory_order_acquire) ||
+            paused_.load(std::memory_order_acquire))
+            return;
+        require_dispatch(
+            domain_->dispatch_sync(
+                handle_,
+                static_cast<std::uint16_t>(HostAudioCommandOpcode::Pause),
+                {},
+                current_frame_index()),
+            "pause");
+    }
+
+    void resume() override {
+        require_producer_thread();
+        if (shutdown_requested_.load(std::memory_order_acquire))
+            throw std::logic_error("Host-Audio ist bereits heruntergefahren.");
+        if (!paused_.load(std::memory_order_acquire)) return;
+        require_dispatch(
+            domain_->dispatch_sync(
+                handle_,
+                static_cast<std::uint16_t>(HostAudioCommandOpcode::Resume),
+                {},
+                current_frame_index()),
+            "resume");
+    }
+
+    void shutdown() noexcept override {
+        if (shutdown_requested_.exchange(true, std::memory_order_acq_rel))
+            return;
+        bool destroyed = false;
+        if (domain_ != nullptr && handle_.valid()) {
+            const auto result = domain_->dispatch_sync(
+                handle_,
+                static_cast<std::uint16_t>(HostAudioCommandOpcode::Destroy),
+                {},
+                current_frame_index());
+            destroyed = result.completed();
+            if (destroyed &&
+                !domain_->unregister_target(handle_, this))
+                destroyed = false;
+        }
+        if (!destroyed && domain_ != nullptr) {
+            // A terminal domain failure cancels every queued command before
+            // target storage is released. Do not leave a live worker with a
+            // dangling facade identity.
+            domain_->shutdown();
+        }
+        handle_ = {};
+        release_telemetry();
+        domain_.reset();
+        paused_.store(false, std::memory_order_release);
+        shutdown_complete_.store(true, std::memory_order_release);
+    }
+
+    [[nodiscard]] bool paused() const noexcept override {
+        return paused_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool shutdown_complete() const noexcept override {
+        return shutdown_complete_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t submitted_buffers() const noexcept override {
+        return submitted_buffers_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t submitted_frames() const noexcept override {
+        return submitted_frames_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t deterministic_hash() const noexcept override {
+        return deterministic_hash_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] NativePortAudioCommandQueueSnapshot
+    command_queue_snapshot() const noexcept override {
+        return domain_ != nullptr ? domain_->snapshot().queue
+                                  : NativePortAudioCommandQueueSnapshot{};
+    }
+
+  private:
+    void release_telemetry() noexcept {
+        if (!telemetry_bound_ || domain_ == nullptr || telemetry_ == nullptr)
+            return;
+        if (!domain_->unbind_telemetry(telemetry_)) domain_->shutdown();
+        telemetry_bound_ = false;
+    }
+
+    static void execute_worker_command(
+        void* const target,
+        const std::uint16_t raw_opcode,
+        const std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept {
+        result = {};
+        auto* const self = static_cast<DomainHostAudioOutput*>(target);
+        if (self == nullptr) {
+            result.status = NativePortAudioCommandAckStatus::Failed;
+            result.error_code = 1u;
+            return;
+        }
+        try {
+            self->execute(
+                static_cast<HostAudioCommandOpcode>(raw_opcode),
+                payload);
+        } catch (...) {
+            result.status = NativePortAudioCommandAckStatus::Failed;
+            result.error_code = 1u;
+        }
+    }
+
+    static void cleanup_worker_state(void* const target) noexcept {
+        auto& self = *static_cast<DomainHostAudioOutput*>(target);
+        self.output_.reset();
+        self.worker_constructed_ = false;
+        self.paused_.store(false, std::memory_order_release);
+    }
+
+    void execute(const HostAudioCommandOpcode opcode,
+                 const std::span<const std::byte> payload) {
+        switch (opcode) {
+        case HostAudioCommandOpcode::Construct:
+            require_empty(payload);
+            if (worker_constructed_)
+                throw std::logic_error("Host-Audio wurde doppelt konstruiert.");
+            worker_constructed_ = true;
+            return;
+        case HostAudioCommandOpcode::Destroy:
+            require_empty(payload);
+            if (output_ != nullptr) {
+                output_->stop();
+                output_.reset();
+            }
+            worker_constructed_ = false;
+            paused_.store(false, std::memory_order_release);
+            return;
+        case HostAudioCommandOpcode::Submit:
+            execute_submit(payload);
+            return;
+        case HostAudioCommandOpcode::Pause:
+            require_empty(payload);
+            require_worker_constructed();
+            if (output_ != nullptr) output_->pause();
+            paused_.store(true, std::memory_order_release);
+            return;
+        case HostAudioCommandOpcode::Resume:
+            require_empty(payload);
+            require_worker_constructed();
+            if (output_ != nullptr) output_->resume();
+            paused_.store(false, std::memory_order_release);
+            return;
+        }
+        throw std::invalid_argument("Host-Audio Opcode.");
+    }
+
+    void execute_submit(const std::span<const std::byte> payload) {
+        require_worker_constructed();
+        if (payload.size() < sizeof(HostAudioSubmitCommand))
+            throw std::invalid_argument("Host-Audio Submit-Payload.");
+        HostAudioSubmitCommand command;
+        std::memcpy(&command, payload.data(), sizeof(command));
+        const auto sample_bytes =
+            static_cast<std::uint64_t>(command.sample_count) *
+            sizeof(std::int16_t);
+        if (command.sample_count == 0u || (command.sample_count & 1u) != 0u ||
+            sample_bytes > std::numeric_limits<std::size_t>::max() ||
+            sizeof(command) + sample_bytes != payload.size())
+            throw std::invalid_argument("Host-Audio Submit-Geometrie.");
+        const auto* const samples = reinterpret_cast<const std::int16_t*>(
+            payload.data() + sizeof(command));
+        const std::span<const std::int16_t> pcm(
+            samples, command.sample_count);
+        validate_audio(pcm, command.sample_rate);
+        if (output_ == nullptr) {
+            sample_rate_ = command.sample_rate;
+            output_ = std::make_unique<NativePortAudioStream>(
+                NativePortAudioConfig{{sample_rate_, 2u}, 44'100u});
+        } else if (sample_rate_ != command.sample_rate) {
+            throw std::invalid_argument(
+                "Host-Audio Samplerate darf nicht wechseln.");
+        }
+        while (!output_->submit_pcm_s16(pcm)) {
+            output_->poll();
+            std::this_thread::yield();
+        }
+        deterministic_hash_.store(
+            hash_audio(
+                deterministic_hash_.load(std::memory_order_relaxed),
+                pcm,
+                command.sample_rate),
+            std::memory_order_release);
+        submitted_buffers_.fetch_add(1u, std::memory_order_release);
+        submitted_frames_.fetch_add(
+            pcm.size() / 2u, std::memory_order_release);
+    }
+
+    void require_producer_thread() const {
+        if (std::this_thread::get_id() != producer_thread_)
+            throw std::logic_error("Host-Audio Producer-Thread verletzt.");
+    }
+
+    void require_accepting() const {
+        if (shutdown_requested_.load(std::memory_order_acquire))
+            throw std::logic_error("Host-Audio ist bereits heruntergefahren.");
+        if (paused_.load(std::memory_order_acquire))
+            throw std::logic_error(
+                "Host-Audio akzeptiert im Pausezustand keinen Puffer.");
+    }
+
+    void require_worker_constructed() const {
+        if (!worker_constructed_)
+            throw std::logic_error("Host-Audio Worker ist nicht konstruiert.");
+    }
+
+    static void require_empty(const std::span<const std::byte> payload) {
+        if (!payload.empty())
+            throw std::invalid_argument("Host-Audio Lifecycle-Payload.");
+    }
+
+    static void require_dispatch(
+        const NativePortAudioExecutionDomainDispatchResult& result,
+        const char* const operation) {
+        if (result.completed()) return;
+        throw std::runtime_error(
+            std::string("Host-Audio-Domainfehler:") + operation + ":" +
+            std::to_string(static_cast<unsigned>(result.failure)));
+    }
+
+    [[nodiscard]] std::uint64_t current_frame_index() const noexcept {
+        auto frame = bound_frame_index_.load(std::memory_order_acquire);
+        if (const auto media = current_media_audio_tick_evidence();
+            media.has_value())
+            frame = std::max(frame, media->frame_index);
+        const auto domain_snapshot = domain_->snapshot();
+        if (domain_snapshot.has_last_frame_index)
+            frame = std::max(frame, domain_snapshot.last_frame_index);
+        return frame;
+    }
+
+    std::thread::id producer_thread_;
+    std::shared_ptr<NativePortAudioExecutionDomain> domain_;
+    NativePortAudioExecutionDomainTargetHandle handle_{};
+    std::unique_ptr<NativePortAudioStream> output_;
+    NativePortTelemetry* telemetry_ = nullptr;
+    bool telemetry_bound_ = false;
+    std::atomic<std::uint64_t> bound_frame_index_{0u};
+    std::atomic<std::uint64_t> submitted_buffers_{0u};
+    std::atomic<std::uint64_t> submitted_frames_{0u};
+    std::atomic<std::uint64_t> deterministic_hash_{1469598103934665603ull};
+    std::atomic<bool> paused_{false};
+    std::atomic<bool> shutdown_requested_{false};
+    std::atomic<bool> shutdown_complete_{false};
+    std::uint32_t sample_rate_ = 0u;
+    bool worker_constructed_ = false;
 };
 #endif
 
@@ -778,6 +1196,23 @@ void HostWorkloadLimiter::rebase(const std::uint64_t wall_ns,
     initialized_ = true;
 }
 
+void HostAudioOutput::render_and_submit_aica(
+    AicaRegisterFile& aica,
+    const std::size_t frame_count,
+    const std::uint32_t sample_rate) {
+    if (sample_rate == 0u ||
+        frame_count > std::numeric_limits<std::size_t>::max() / 2u)
+        throw std::invalid_argument(
+            "AICA-Audioausgabe besitzt eine ungueltige Geometrie.");
+    // This fallback is intentionally limited to Recording/SerialReference.
+    // The dedicated implementation overrides the method and reserves its
+    // owning domain payload before AICA writes a single sample.
+    static thread_local std::vector<std::int16_t> serial_samples;
+    serial_samples.resize(frame_count * 2u);
+    aica.render_audio_into(serial_samples, sample_rate);
+    submit(serial_samples, sample_rate);
+}
+
 void RecordingHostAudioOutput::submit(const std::span<const std::int16_t> samples,
                                       const std::uint32_t sample_rate) {
     validate_audio(samples, sample_rate);
@@ -786,6 +1221,10 @@ void RecordingHostAudioOutput::submit(const std::span<const std::int16_t> sample
     hash_ = hash_audio(hash_, samples, sample_rate);
     ++buffers_;
     frames_ += samples.size() / 2u;
+}
+void RecordingHostAudioOutput::bind_command_frame(
+    const std::uint64_t frame_index) noexcept {
+    command_frame_index_ = std::max(command_frame_index_, frame_index);
 }
 void RecordingHostAudioOutput::pause() {
     if (!shutdown_) paused_ = true;
@@ -813,6 +1252,20 @@ std::uint64_t RecordingHostAudioOutput::submitted_frames() const noexcept {
 std::uint64_t RecordingHostAudioOutput::deterministic_hash() const noexcept {
     return hash_;
 }
+NativePortAudioCommandQueueSnapshot
+RecordingHostAudioOutput::command_queue_snapshot() const noexcept {
+    NativePortAudioCommandQueueSnapshot result;
+    result.mode = NativePortAudioCommandQueueMode::SerialReference;
+    result.lifecycle = shutdown_ ? NativePortAudioCommandQueueLifecycle::Stopped
+                                 : NativePortAudioCommandQueueLifecycle::Running;
+    result.submitted_commands = buffers_;
+    result.completed_commands = buffers_;
+    result.last_submitted_stamp.frame_index = command_frame_index_;
+    result.last_completed_stamp.frame_index = command_frame_index_;
+    result.has_last_submitted_stamp = buffers_ != 0u;
+    result.has_last_completed_stamp = buffers_ != 0u;
+    return result;
+}
 
 bool native_audio_available() noexcept {
 #ifdef _WIN32
@@ -822,10 +1275,14 @@ bool native_audio_available() noexcept {
 #endif
 }
 
-std::unique_ptr<HostAudioOutput> create_native_audio_output() {
+std::unique_ptr<HostAudioOutput> create_native_audio_output(
+    NativePortTelemetry* const telemetry) {
 #ifdef _WIN32
-    return std::make_unique<Win32AudioOutput>();
+    if (native_port_audio_serial_reference_requested())
+        return std::make_unique<Win32AudioOutput>();
+    return std::make_unique<DomainHostAudioOutput>(telemetry);
 #else
+    static_cast<void>(telemetry);
     throw std::runtime_error("Native Audioausgabe ist auf diesem Host nicht verfuegbar.");
 #endif
 }
@@ -878,6 +1335,7 @@ void HostRuntimeSession::inject(const HostRuntimeEvent& event) {
         }
         last_sequence_ = event.sequence;
         last_guest_cycle_ = event.guest_cycle;
+        audio_.bind_command_frame(media_clock_.audio_tick_count());
         switch (event.kind) {
         case HostRuntimeEventKind::Resume:
         case HostRuntimeEventKind::FocusGained:
@@ -914,6 +1372,7 @@ void HostRuntimeSession::shutdown() noexcept {
     if (state_ == HostRuntimeState::Shutdown) return;
     media_clock_.stop();
     scheduler_.clear();
+    audio_.bind_command_frame(media_clock_.audio_tick_count());
     audio_.shutdown();
     if (pacer_ != nullptr) pacer_->shutdown();
     state_ = HostRuntimeState::Shutdown;

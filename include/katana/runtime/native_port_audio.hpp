@@ -1,5 +1,7 @@
 #pragma once
 
+#include "katana/runtime/native_port_audio_command_queue.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -7,7 +9,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_audio_contract_version = 4u;
+inline constexpr std::uint32_t native_port_audio_contract_version = 6u;
 
 struct NativePortAudioFormat final {
     std::uint32_t sample_rate = 44'100u;
@@ -19,6 +21,10 @@ struct NativePortAudioConfig final {
     // Submission is non-blocking until this many frames are queued.  The
     // caller must pump/poll and retry after the host device consumes data.
     std::uint32_t maximum_queued_frames = 44'100u;
+    // Every facade in one process must acquire the same sealed audio domain.
+    // Worker-created nested endpoints therefore inherit their engine's exact
+    // queue contract rather than attempting a second default-domain acquire.
+    NativePortAudioCommandQueueConfig command_queue{};
 };
 
 enum class NativePortAudioState : std::uint8_t {
@@ -45,7 +51,7 @@ struct NativePortAudioSnapshot final {
 // Native PCM output for port-side decoders and title audio hooks.  This type
 // owns only a host audio endpoint; it has no AICA registers, command ring,
 // guest firmware, guest timing model or device fallback. Construction, use
-// and destruction are confined to one owner thread.
+// and destruction are confined to the process-wide audio-domain worker.
 class NativePortAudioStream final {
   public:
     explicit NativePortAudioStream(const NativePortAudioConfig& config = {});
@@ -58,6 +64,12 @@ class NativePortAudioStream final {
 
     [[nodiscard]] const NativePortAudioFormat& format() const noexcept;
     [[nodiscard]] bool submit_pcm_s16(std::span<const std::int16_t> interleaved_samples);
+    // Explicit frame binding for callers that already own the simulation
+    // frame. The legacy overload remains source-compatible and uses the
+    // process-local monotone audio frame cursor.
+    [[nodiscard]] bool submit_pcm_s16(
+        std::span<const std::int16_t> interleaved_samples,
+        std::uint64_t frame_index);
     // Retires completed host buffers only. This remains cheap when submit()
     // invokes it repeatedly while filling one outer audio/movie pump.
     void poll();
@@ -76,8 +88,19 @@ class NativePortAudioStream final {
     [[nodiscard]] std::uint64_t playback_position_frames() const noexcept;
 
   private:
+    struct MovieTargetTag final {};
     class Impl;
+    explicit NativePortAudioStream(const NativePortAudioConfig& config,
+                                   MovieTargetTag);
+    friend std::unique_ptr<NativePortAudioStream>
+    make_native_port_movie_audio_stream(const NativePortAudioConfig& config);
     std::unique_ptr<Impl> impl_;
 };
+
+// Internal product seam used by NativePortMovieSession. It deliberately does
+// not expose the execution-domain target enum in the installed audio header;
+// the implementation binds the returned stream to the Movie target.
+[[nodiscard]] std::unique_ptr<NativePortAudioStream>
+make_native_port_movie_audio_stream(const NativePortAudioConfig& config);
 
 } // namespace katana::runtime

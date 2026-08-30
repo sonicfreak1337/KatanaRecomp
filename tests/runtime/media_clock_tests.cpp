@@ -34,18 +34,29 @@ int main() {
     RecordingPvrRenderBackend video_backend;
     RecordingAicaAudioBackend audio_backend;
     std::vector<std::string> order;
+    std::vector<MediaAudioTickEvidence> audio_stamps;
     DreamcastMediaClock clock(
         scheduler,
         MediaClockConfig{600u, 60u, 120u, 4u},
         [&](const VideoTick& tick) {
+            require(!current_media_audio_tick_evidence().has_value(),
+                    "Audio-Stamp bleibt waehrend eines Video-Callbacks gebunden.");
             order.push_back("V" + std::to_string(tick.guest_cycle));
             video_backend.render(PvrTaFrame{}, {});
         },
         [&](const AudioTick& tick) {
+            const auto stamp = current_media_audio_tick_evidence();
+            require(stamp.has_value() &&
+                        stamp->frame_index == tick.buffer_index &&
+                        stamp->guest_cycle == tick.guest_cycle,
+                    "Audio-Callback sieht keinen exakten Medienuhr-Stamp.");
+            audio_stamps.push_back(*stamp);
             order.push_back("A" + std::to_string(tick.guest_cycle));
             std::vector<std::int16_t> silence(tick.frame_count * 2u, 0);
             audio_backend.submit(silence, 120u);
         });
+    require(!current_media_audio_tick_evidence().has_value(),
+            "Audio-Stamp ist ausserhalb eines Audio-Callbacks sichtbar.");
     clock.start();
     require(clock.running() && clock.next_video_cycle() == 10u && clock.next_audio_cycle() == 20u,
             "Medienuhr plant erste Video-/Audiofristen nicht deterministisch.");
@@ -64,6 +75,11 @@ int main() {
         order ==
             std::vector<std::string>{"V10", "A20", "V20", "V30", "A40", "V40", "V50", "A60", "V60"},
         "Gleiche Frame-/Audiofristen besitzen keine stabile Ereignisreihenfolge.");
+    require(audio_stamps ==
+                std::vector<MediaAudioTickEvidence>{{0u, 20u}, {1u, 40u}, {2u, 60u}},
+            "Audio-Callbacks verlieren Frame- oder Guest-Sequence-Stamps.");
+    require(!current_media_audio_tick_evidence().has_value(),
+            "Audio-Stamp bleibt nach dem Audio-Callback gebunden.");
 
     clock.stop();
     static_cast<void>(scheduler.advance_to(100u, 0u));
@@ -102,6 +118,74 @@ int main() {
                 [&] { static_cast<void>(failing_scheduler.advance_to(1u, 2u)); }) &&
                 !failing.running() && failing_scheduler.pending_event_count() == 0u,
             "Callbackfehler propagiert nicht oder laesst die Medienuhr halbaktiv.");
+
+    EventScheduler failing_audio_scheduler;
+    MediaAudioTickEvidence failing_audio_stamp;
+    bool failing_audio_stamp_seen = false;
+    DreamcastMediaClock failing_audio(
+        failing_audio_scheduler, MediaClockConfig{60u, 1u, 60u, 1u}, {},
+        [&](const AudioTick& tick) {
+            const auto stamp = current_media_audio_tick_evidence();
+            require(stamp.has_value() &&
+                        stamp->frame_index == tick.buffer_index &&
+                        stamp->guest_cycle == tick.guest_cycle,
+                    "Fehlerhafter Audio-Callback sieht keinen gueltigen Stamp.");
+            failing_audio_stamp = *stamp;
+            failing_audio_stamp_seen = true;
+            throw std::runtime_error("sichtbarer Audio-Callbackfehler");
+        });
+    failing_audio.start();
+    require(throws<std::runtime_error>(
+                [&] { static_cast<void>(failing_audio_scheduler.advance_to(1u, 1u)); }) &&
+                failing_audio_stamp_seen && failing_audio_stamp ==
+                    MediaAudioTickEvidence{0u, 1u} &&
+                !current_media_audio_tick_evidence().has_value() &&
+                !failing_audio.running() && failing_audio_scheduler.pending_event_count() == 0u,
+            "Audio-Stamp wird nach einer Callback-Exception nicht restauriert.");
+
+    EventScheduler nested_outer_scheduler;
+    EventScheduler nested_inner_scheduler;
+    static_cast<void>(nested_inner_scheduler.advance_to(10u, 0u));
+    MediaAudioTickEvidence nested_inner_stamp;
+    MediaAudioTickEvidence nested_outer_after_stamp;
+    bool nested_inner_seen = false;
+    bool nested_outer_after_seen = false;
+    DreamcastMediaClock nested_inner(
+        nested_inner_scheduler, MediaClockConfig{60u, 1u, 60u, 1u}, {},
+        [&](const AudioTick& tick) {
+            const auto stamp = current_media_audio_tick_evidence();
+            require(stamp.has_value() &&
+                        stamp->frame_index == tick.buffer_index &&
+                        stamp->guest_cycle == tick.guest_cycle,
+                    "Verschachtelter Audio-Callback sieht keinen exakten Stamp.");
+            nested_inner_stamp = *stamp;
+            nested_inner_seen = true;
+        });
+    DreamcastMediaClock nested_outer(
+        nested_outer_scheduler, MediaClockConfig{60u, 1u, 60u, 1u}, {},
+        [&](const AudioTick& tick) {
+            const auto stamp = current_media_audio_tick_evidence();
+            require(stamp.has_value() &&
+                        stamp->frame_index == tick.buffer_index &&
+                        stamp->guest_cycle == tick.guest_cycle,
+                    "Aeusserer Audio-Callback sieht keinen exakten Stamp.");
+            nested_inner.start();
+            static_cast<void>(nested_inner_scheduler.advance_to(11u, 1u));
+            const auto restored = current_media_audio_tick_evidence();
+            require(restored.has_value() && *restored == *stamp,
+                    "Verschachtelter Audio-Callback restauriert den aeusseren Stamp nicht.");
+            nested_outer_after_stamp = *restored;
+            nested_outer_after_seen = true;
+        });
+    nested_outer.start();
+    static_cast<void>(nested_outer_scheduler.advance_to(1u, 1u));
+    require(nested_inner_seen && nested_inner_stamp == MediaAudioTickEvidence{0u, 11u} &&
+                nested_outer_after_seen &&
+                nested_outer_after_stamp == MediaAudioTickEvidence{0u, 1u} &&
+                !current_media_audio_tick_evidence().has_value(),
+            "Verschachtelte Audio-Callbacks restaurieren TLS nicht korrekt.");
+    nested_outer.stop();
+    nested_inner.stop();
 
     require(throws<std::invalid_argument>([&] {
                 DreamcastMediaClock invalid(scheduler, MediaClockConfig{0u, 60u, 44'100u, 735u});
@@ -160,22 +244,46 @@ int main() {
     EventScheduler audio_reset_scheduler;
     DreamcastMediaClock* audio_reset_clock = nullptr;
     std::size_t audio_reset_callbacks = 0u;
+    std::vector<MediaAudioTickEvidence> audio_reset_stamps;
+    bool audio_reset_first_callback = true;
     DreamcastMediaClock audio_reset(
-        audio_reset_scheduler, MediaClockConfig{60u, 1u, 60u, 1u}, {}, [&](const AudioTick&) {
+        audio_reset_scheduler, MediaClockConfig{60u, 1u, 60u, 1u}, {}, [&](const AudioTick& tick) {
+            const auto stamp = current_media_audio_tick_evidence();
+            require(stamp.has_value() &&
+                        stamp->frame_index == tick.buffer_index &&
+                        stamp->guest_cycle == tick.guest_cycle,
+                    "Reset-Callback sieht keinen exakten Audio-Stamp.");
+            audio_reset_stamps.push_back(*stamp);
             ++audio_reset_callbacks;
-            audio_reset_clock->reset();
+            if (audio_reset_first_callback) {
+                audio_reset_first_callback = false;
+                audio_reset_clock->reset();
+            }
         });
     audio_reset_clock = &audio_reset;
     audio_reset.start();
     static_cast<void>(audio_reset_scheduler.advance_to(1u, 1u));
     require(audio_reset_callbacks == 1u && !audio_reset.running() &&
                 audio_reset.audio_tick_count() == 0u && audio_reset.emitted_audio_frames() == 0u &&
-                audio_reset_scheduler.pending_event_count() == 0u,
+                audio_reset_scheduler.pending_event_count() == 0u &&
+                audio_reset_stamps == std::vector<MediaAudioTickEvidence>{{0u, 1u}} &&
+                !current_media_audio_tick_evidence().has_value(),
             "Audio-Callback-Reset laesst Zaehler oder Ereignisse aus dem alten Lauf zurueck.");
+    audio_reset.start();
+    require(audio_reset.next_audio_cycle() == 2u,
+            "Audio-Neustart verankert den naechsten Stamp nicht am aktuellen Zyklus.");
+    static_cast<void>(audio_reset_scheduler.advance_to(2u, 1u));
+    require(audio_reset_callbacks == 2u && audio_reset.running() &&
+                audio_reset.audio_tick_count() == 1u &&
+                audio_reset.emitted_audio_frames() == 1u &&
+                audio_reset_stamps ==
+                    std::vector<MediaAudioTickEvidence>{{0u, 1u}, {0u, 2u}} &&
+                !current_media_audio_tick_evidence().has_value(),
+            "Audio-Reset/Neustart stellt den exakten Stamp nicht wieder her.");
     audio_reset.stop();
     static_cast<void>(audio_reset_scheduler.advance_to(100u, 0u));
-    require(audio_reset_callbacks == 1u,
-            "Audio-Callback-Reset hinterlaesst nach Stop einen Geistertick.");
+    require(audio_reset_callbacks == 2u,
+            "Audio-Reset/Neustart hinterlaesst nach Stop einen Geistertick.");
 
     std::cout << "KR-3105 Frame- und Audio-Taktung erfolgreich.\n";
     return 0;

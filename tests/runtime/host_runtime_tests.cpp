@@ -28,7 +28,7 @@ template <typename Exception, typename Callback> bool throws(Callback&& callback
 
 int main() {
     using namespace katana::runtime;
-    static_assert(native_host_runtime_contract_version == 2u);
+    static_assert(native_host_runtime_contract_version == 3u);
     static_assert(host_pacing_contract_version == 1u);
     static_assert(host_workload_limiter_contract_version == 2u);
     std::uint64_t host_now = 1'000u;
@@ -436,9 +436,11 @@ int main() {
         auto native = create_native_audio_output();
         const std::array<std::int16_t, 4u> silence{};
         native->submit(silence, 44'100u);
+        // Submit is intentionally asynchronous on the dedicated domain.
+        // The following synchronous pause is an ordered queue fence.
+        native->pause();
         require(native->submitted_buffers() == 1u && native->deterministic_hash() != 0u,
                 "WinMM-Hostaudio nimmt den synthetischen Puffer nicht an.");
-        native->pause();
         native->resume();
         native->shutdown();
         require(native->shutdown_complete(), "WinMM-Hostaudio wird nicht sauber beendet.");

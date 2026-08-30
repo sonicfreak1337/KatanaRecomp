@@ -11,7 +11,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_sound_bank_contract_version = 6u;
+inline constexpr std::uint32_t native_port_sound_bank_contract_version = 7u;
 inline constexpr std::uint32_t native_port_manatee_sound_layout_bytes =
     2u * 1024u * 1024u;
 
@@ -32,6 +32,8 @@ enum class NativePortSoundBankFailure : std::uint8_t {
     InvalidSample,
     ResourceLimit,
     AudioFeed,
+    CommandQueue,
+    WorkerFailure,
     ThreadViolation,
 };
 
@@ -230,9 +232,11 @@ struct NativePortSoundBankSnapshot final {
 // assets and renders directly to host PCM. It never exposes sound RAM, AICA
 // registers, ARM7 execution, command rings, DMA, interrupts or device timing.
 //
-// All methods are confined to the construction thread. Content is opened
-// through an identity-bound NativePortContentFileBinding and handles are
-// generation checked. Unknown formats/controllers/effects fail closed.
+// The public facade remains simulation-thread confined. Collection bytes are
+// opened and identity-verified there, then transferred as bounded immutable
+// command input. Parsing, decoding, sequencing, mixing and destruction run in
+// the same dedicated audio domain as NativePortAudioEngine. Handles are
+// generation checked and unknown formats/controllers/effects fail closed.
 class NativePortSoundBankEngine final {
   public:
     NativePortSoundBankEngine(
@@ -358,7 +362,13 @@ class NativePortSoundBankEngine final {
   private:
     static void pump_audio_with_cached_playback_position(
         NativePortAudioEngine& audio);
+    static void execute_worker_command(
+        void* target,
+        std::uint16_t opcode,
+        std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept;
 
+    class Core;
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -8,6 +8,27 @@ namespace katana::runtime {
 
 namespace {
 
+thread_local std::optional<MediaAudioTickEvidence>
+    current_audio_command_stamp;
+
+class AudioCommandStampScope final {
+  public:
+    explicit AudioCommandStampScope(const MediaAudioTickEvidence stamp) noexcept
+        : previous_(current_audio_command_stamp) {
+        current_audio_command_stamp = stamp;
+    }
+
+    ~AudioCommandStampScope() noexcept {
+        current_audio_command_stamp = previous_;
+    }
+
+    AudioCommandStampScope(const AudioCommandStampScope&) = delete;
+    AudioCommandStampScope& operator=(const AudioCommandStampScope&) = delete;
+
+  private:
+    std::optional<MediaAudioTickEvidence> previous_;
+};
+
 std::uint64_t checked_multiply(const std::uint64_t left, const std::uint64_t right) {
     if (right != 0u && left > std::numeric_limits<std::uint64_t>::max() / right) {
         throw std::overflow_error("Medienuhr-Kadenz ist uebergelaufen.");
@@ -23,6 +44,11 @@ std::uint64_t checked_add(const std::uint64_t left, const std::uint64_t right) {
 }
 
 } // namespace
+
+std::optional<MediaAudioTickEvidence>
+current_media_audio_tick_evidence() noexcept {
+    return current_audio_command_stamp;
+}
 
 DreamcastMediaClock::DreamcastMediaClock(EventScheduler& scheduler,
                                          const MediaClockConfig config,
@@ -199,6 +225,8 @@ void DreamcastMediaClock::handle_audio(const std::uint64_t generation) {
     emitted_audio_frames_ = checked_add(emitted_audio_frames_, config_.audio_frames_per_buffer);
     try {
         if (audio_callback_) {
+            const AudioCommandStampScope stamp_scope(
+                MediaAudioTickEvidence{tick.buffer_index, tick.guest_cycle});
             audio_callback_(tick);
         }
         if (generation == generation_ && running_ && !audio_event_) {

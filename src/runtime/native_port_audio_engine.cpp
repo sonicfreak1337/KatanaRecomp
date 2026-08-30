@@ -1,11 +1,14 @@
 #include "katana/runtime/native_port_audio_engine.hpp"
 
+#include "native_port_audio_execution_domain.hpp"
+
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
-#include <deque>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -19,6 +22,8 @@ namespace {
 constexpr std::uint32_t maximum_native_audio_voices = 4'096u;
 constexpr std::uint32_t maximum_mix_block_frames = 16'384u;
 constexpr std::uint32_t maximum_decoder_reads_per_pump = 1'048'576u;
+constexpr std::uint64_t maximum_codec_source_bytes =
+    1ull * 1024ull * 1024ull * 1024ull;
 
 [[nodiscard]] bool native_audio_signal_diagnostics_enabled() noexcept {
     static const bool enabled = [] {
@@ -65,10 +70,54 @@ void validate_engine_config(const NativePortAudioEngineConfig& config) {
             config.mix_block_frames ||
         config.maximum_decoder_reads_per_pump == 0u ||
         config.maximum_decoder_reads_per_pump >
-            maximum_decoder_reads_per_pump)
+            maximum_decoder_reads_per_pump ||
+        config.maximum_codec_source_bytes_per_voice == 0u ||
+        config.maximum_codec_source_bytes_per_voice >
+            maximum_codec_source_bytes)
         fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
                           0u,
                           "config");
+}
+
+[[nodiscard]] std::vector<std::byte> materialize_audio_content(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    const std::uint64_t maximum_bytes) {
+    if (binding.byte_size == 0u || binding.byte_size > maximum_bytes ||
+        binding.byte_size > std::numeric_limits<std::size_t>::max())
+        fail_audio_engine(NativePortAudioEngineFailure::ResourceLimit,
+                          0u,
+                          "content-budget");
+    std::unique_ptr<NativePortReadOnlyFile> file;
+    try {
+        file = platform.open_content_file(binding);
+    } catch (const NativePortPlatformError& error) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          error.platform_error_code(),
+                          "content-open");
+    } catch (...) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          0u,
+                          "content-open");
+    }
+    if (file == nullptr || file->byte_size() != binding.byte_size)
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          0u,
+                          "content-size");
+    std::vector<std::byte> bytes(
+        static_cast<std::size_t>(binding.byte_size));
+    try {
+        file->read_at(0u, bytes);
+    } catch (const NativePortPlatformError& error) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          error.platform_error_code(),
+                          "content-read");
+    } catch (...) {
+        fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
+                          0u,
+                          "content-read");
+    }
+    return bytes;
 }
 
 void validate_voice_config(const NativePortAudioVoiceConfig& config) {
@@ -154,6 +203,121 @@ void validate_voice_config(const NativePortAudioVoiceConfig& config) {
                           "adx-frame-overflow");
     return whole * output_rate +
            (remainder * output_rate + source_rate / 2u) / source_rate;
+}
+
+enum class AudioEngineOpcode : std::uint16_t {
+    Construct = 1u,
+    Destroy,
+    CreateVoice,
+    CreatePcmFeed,
+    SubmitPcm,
+    FinishPcmFeed,
+    Play,
+    Pause,
+    Resume,
+    Stop,
+    Release,
+    SetGainPan,
+    SetOutputPaused,
+    StopAll,
+    Pump,
+    PumpCached,
+    VoiceSnapshot,
+    Snapshot,
+};
+
+struct AudioHandleCommand final {
+    NativePortAudioVoiceHandle voice{};
+};
+
+struct AudioCreatePcmFeedCommand final {
+    NativePortAudioVoiceConfig config{};
+};
+
+struct AudioSubmitPcmCommand final {
+    NativePortAudioVoiceHandle voice{};
+    std::uint32_t sample_count = 0u;
+};
+
+struct AudioGainPanCommand final {
+    NativePortAudioVoiceHandle voice{};
+    float gain = 1.0f;
+    float pan = 0.0f;
+};
+
+struct AudioPauseOutputCommand final {
+    std::uint8_t paused = 0u;
+    std::array<std::uint8_t, 3u> reserved{};
+};
+
+struct AudioCreateVoiceCommand final {
+    NativePortAudioVoiceConfig config{};
+    std::uint64_t source_offset = 0u;
+    std::uint64_t byte_size = 0u;
+    std::uint32_t logical_id_size = 0u;
+    std::uint32_t path_size = 0u;
+    std::uint32_t byte_identity_size = 0u;
+    std::uint32_t reserved = 0u;
+};
+
+struct AudioEngineWireError final {
+    NativePortAudioEngineFailure failure =
+        NativePortAudioEngineFailure::WorkerFailure;
+    std::array<std::uint8_t, 3u> reserved{};
+    std::uint32_t provider_error_code = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<AudioHandleCommand>);
+static_assert(std::is_trivially_copyable_v<AudioCreatePcmFeedCommand>);
+static_assert(std::is_trivially_copyable_v<AudioSubmitPcmCommand>);
+static_assert(std::is_trivially_copyable_v<AudioGainPanCommand>);
+static_assert(std::is_trivially_copyable_v<AudioPauseOutputCommand>);
+static_assert(std::is_trivially_copyable_v<AudioCreateVoiceCommand>);
+static_assert(std::is_trivially_copyable_v<AudioEngineWireError>);
+
+template <typename Value>
+[[nodiscard]] std::span<const std::byte> object_bytes(
+    const Value& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    return {reinterpret_cast<const std::byte*>(std::addressof(value)),
+            sizeof(Value)};
+}
+
+template <typename Value>
+[[nodiscard]] bool read_object(const std::span<const std::byte> bytes,
+                               Value& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    if (bytes.size() != sizeof(Value)) return false;
+    std::memcpy(std::addressof(value), bytes.data(), sizeof(Value));
+    return true;
+}
+
+template <typename Value>
+void write_ack_value(NativePortAudioCommandAckResult& result,
+                     const Value& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    static_assert(sizeof(Value) <=
+                  native_port_audio_command_queue_max_ack_result_bytes);
+    result.status = NativePortAudioCommandAckStatus::Completed;
+    result.result_size = sizeof(Value);
+    std::memcpy(result.bytes.data(), std::addressof(value), sizeof(Value));
+}
+
+void write_engine_error(NativePortAudioCommandAckResult& result,
+                        const NativePortAudioEngineFailure failure,
+                        const std::uint32_t provider_error_code) noexcept {
+    const AudioEngineWireError error{failure, {}, provider_error_code};
+    result.status = NativePortAudioCommandAckStatus::Failed;
+    result.error_code = static_cast<std::uint32_t>(failure);
+    result.result_size = sizeof(error);
+    std::memcpy(result.bytes.data(), std::addressof(error), sizeof(error));
+}
+
+[[nodiscard]] bool checked_payload_sum(std::uint64_t& sum,
+                                       const std::uint64_t addend) noexcept {
+    if (addend > std::numeric_limits<std::uint64_t>::max() - sum) return false;
+    sum += addend;
+    return sum <= std::numeric_limits<std::uint32_t>::max();
 }
 
 } // namespace
@@ -316,13 +480,13 @@ NativePortAudioVoiceConfig native_port_adx_voice_config(
     return config;
 }
 
-class NativePortAudioEngine::Impl final {
+class NativePortAudioEngine::Core final {
   private:
     struct Voice;
 
     class PendingDecoderOwnership final {
       public:
-        PendingDecoderOwnership(Impl& owner, Voice& voice) noexcept
+        PendingDecoderOwnership(Core& owner, Voice& voice) noexcept
             : owner_(owner), voice_(voice) {}
 
         ~PendingDecoderOwnership() noexcept {
@@ -336,16 +500,15 @@ class NativePortAudioEngine::Impl final {
         void disarm() noexcept { armed_ = false; }
 
       private:
-        Impl& owner_;
+        Core& owner_;
         Voice& voice_;
         bool armed_ = true;
     };
 
   public:
-    Impl(NativePortPlatformServices& platform,
-         const NativePortCodecProvider& codec_provider,
+    Core(const NativePortCodecProvider& codec_provider,
          const NativePortAudioEngineConfig& config)
-        : platform_(platform), codec_provider_(codec_provider), config_(config),
+        : codec_provider_(codec_provider), config_(config),
           owner_thread_(std::this_thread::get_id()) {
         validate_engine_config(config_);
         if (!valid_native_port_codec_provider(codec_provider_))
@@ -355,7 +518,8 @@ class NativePortAudioEngine::Impl final {
         try {
             output_ = std::make_unique<NativePortAudioStream>(
                 NativePortAudioConfig{config_.output_format,
-                                      config_.maximum_output_queue_frames});
+                                      config_.maximum_output_queue_frames,
+                                      config_.command_queue});
         } catch (...) {
             fail_audio_engine(NativePortAudioEngineFailure::HostAudio,
                               0u,
@@ -366,9 +530,10 @@ class NativePortAudioEngine::Impl final {
         mixed_samples_.resize(
             static_cast<std::size_t>(config_.mix_block_frames) * 2u);
         pending_contributions_.reserve(config_.maximum_voices);
+        slots_.reserve(config_.maximum_voices);
     }
 
-    ~Impl() {
+    ~Core() {
         for (auto& slot : slots_) {
             if (slot.voice) close_decoder(*slot.voice);
         }
@@ -382,6 +547,7 @@ class NativePortAudioEngine::Impl final {
 
     [[nodiscard]] NativePortAudioVoiceHandle create_voice(
         const NativePortContentFileBinding& binding,
+        std::vector<std::byte> content,
         const NativePortAudioVoiceConfig& config) {
         require_owner_thread();
         validate_voice_config(config);
@@ -395,17 +561,12 @@ class NativePortAudioEngine::Impl final {
         voice->byte_identity = std::string(binding.byte_identity);
         voice->source_offset = binding.source_offset;
         voice->byte_size = binding.byte_size;
-        try {
-            voice->file = platform_.open_content_file(voice->binding());
-        } catch (const NativePortPlatformError& error) {
-            fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
-                              error.platform_error_code(),
-                              "content-open");
-        } catch (...) {
+        if (content.size() != binding.byte_size)
             fail_audio_engine(NativePortAudioEngineFailure::ContentOpen,
                               0u,
-                              "content-open");
-        }
+                              "content-snapshot");
+        voice->content = std::move(content);
+        reserve_voice_storage(*voice);
         open_decoder(*voice, voice->config.start_frame);
         // open_decoder() transfers the provider handle into Voice before the
         // slot vector may need to grow. Keep that handle guarded until the
@@ -431,6 +592,7 @@ class NativePortAudioEngine::Impl final {
         voice->source = NativePortAudioVoiceSource::PcmFeed;
         voice->config = config;
         voice->channels = 2u;
+        reserve_voice_storage(*voice);
         return insert_voice(std::move(voice));
     }
 
@@ -741,7 +903,7 @@ class NativePortAudioEngine::Impl final {
     };
 
     struct Voice final {
-        Impl* owner = nullptr;
+        Core* owner = nullptr;
         NativePortAudioVoiceSource source =
             NativePortAudioVoiceSource::Codec;
         std::string logical_id;
@@ -750,7 +912,7 @@ class NativePortAudioEngine::Impl final {
         std::uint64_t source_offset = 0u;
         std::uint64_t byte_size = 0u;
         NativePortAudioVoiceConfig config;
-        std::unique_ptr<NativePortReadOnlyFile> file;
+        std::vector<std::byte> content;
         void* decoder = nullptr;
         NativePortAudioVoiceState state = NativePortAudioVoiceState::Ready;
         NativePortAudioEngineFailure failure =
@@ -767,7 +929,9 @@ class NativePortAudioEngine::Impl final {
         std::uint64_t frames_since_restart = 0u;
         std::uint32_t consecutive_empty_loops = 0u;
         std::vector<std::int16_t> pcm;
-        std::deque<OutputSegment> output_segments;
+        std::vector<OutputSegment> output_segments;
+        std::size_t output_segment_head = 0u;
+        std::size_t output_segment_count = 0u;
         std::size_t read_frame = 0u;
         bool feed_finished = false;
 
@@ -790,13 +954,31 @@ class NativePortAudioEngine::Impl final {
         std::uint32_t frames = 0u;
     };
 
+    void reserve_voice_storage(Voice& voice) {
+        const auto maximum_frames = static_cast<std::size_t>(
+            config_.maximum_buffered_frames_per_voice);
+        if (maximum_frames >
+            std::numeric_limits<std::size_t>::max() / 2u)
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "voice-storage");
+        voice.pcm.reserve(maximum_frames * 2u);
+        // Each outstanding segment owns at least one output frame, therefore
+        // maximum_output_queue_frames is a strict upper bound on live segment
+        // records. Resize once at voice creation; mix/poll only move ring
+        // indices and never allocate.
+        voice.output_segments.resize(
+            config_.maximum_output_queue_frames);
+    }
+
     void retire_played_output_segments(
         const std::uint64_t playback_position) noexcept {
         for (auto& slot : slots_) {
             if (!slot.voice) continue;
             auto& voice = *slot.voice;
-            while (!voice.output_segments.empty()) {
-                auto& segment = voice.output_segments.front();
+            while (voice.output_segment_count != 0u) {
+                auto& segment = voice.output_segments[
+                    voice.output_segment_head];
                 if (playback_position <= segment.start_frame) break;
                 const auto consumed = static_cast<std::uint32_t>(
                     std::min<std::uint64_t>(
@@ -806,7 +988,10 @@ class NativePortAudioEngine::Impl final {
                 segment.start_frame += consumed;
                 segment.frames -= consumed;
                 if (segment.frames != 0u) break;
-                voice.output_segments.pop_front();
+                voice.output_segment_head =
+                    (voice.output_segment_head + 1u) %
+                    voice.output_segments.size();
+                --voice.output_segment_count;
             }
         }
     }
@@ -815,15 +1000,27 @@ class NativePortAudioEngine::Impl final {
         std::size_t staged = 0u;
         try {
             for (const auto& contribution : pending_contributions_) {
-                contribution.voice->output_segments.push_back(
-                    {output_start_frame, contribution.frames});
+                auto& voice = *contribution.voice;
+                if (voice.output_segment_count ==
+                    voice.output_segments.size())
+                    fail_audio_engine(
+                        NativePortAudioEngineFailure::ResourceLimit,
+                        0u,
+                        "output-segment-budget");
+                const auto tail =
+                    (voice.output_segment_head +
+                     voice.output_segment_count) %
+                    voice.output_segments.size();
+                voice.output_segments[tail] = {
+                    output_start_frame, contribution.frames};
+                ++voice.output_segment_count;
                 ++staged;
             }
         } catch (...) {
             while (staged != 0u) {
                 --staged;
-                pending_contributions_[staged]
-                    .voice->output_segments.pop_back();
+                --pending_contributions_[staged]
+                      .voice->output_segment_count;
             }
             pending_contributions_.clear();
             throw;
@@ -834,7 +1031,7 @@ class NativePortAudioEngine::Impl final {
         for (auto contribution = pending_contributions_.rbegin();
              contribution != pending_contributions_.rend();
              ++contribution)
-            contribution->voice->output_segments.pop_back();
+            --contribution->voice->output_segment_count;
         pending_contributions_.clear();
     }
 
@@ -883,20 +1080,14 @@ class NativePortAudioEngine::Impl final {
         void* const destination,
         const std::uint64_t byte_count) noexcept {
         auto& voice = *static_cast<Voice*>(user);
-        if (voice.file == nullptr || destination == nullptr ||
-            offset > voice.file->byte_size() ||
-            byte_count > voice.file->byte_size() - offset ||
+        if (destination == nullptr || offset > voice.content.size() ||
+            byte_count > voice.content.size() - offset ||
             byte_count > std::numeric_limits<std::size_t>::max())
             return 0u;
-        try {
-            voice.file->read_at(
-                offset,
-                std::span<std::byte>(static_cast<std::byte*>(destination),
-                                     static_cast<std::size_t>(byte_count)));
-            return 1u;
-        } catch (...) {
-            return 0u;
-        }
+        std::memcpy(destination,
+                    voice.content.data() + offset,
+                    static_cast<std::size_t>(byte_count));
+        return 1u;
     }
 
     void mark_voice_failure(Voice& voice,
@@ -914,7 +1105,8 @@ class NativePortAudioEngine::Impl final {
                               0u,
                               "decoder-already-open");
         NativePortCodecOpenRequest request;
-        request.source = {&voice, voice.file->byte_size(), &Impl::provider_read_at};
+        request.source = {
+            &voice, voice.content.size(), &Core::provider_read_at};
         request.requested_audio_sample_rate = config_.output_format.sample_rate;
         request.maximum_audio_queue_frames =
             config_.maximum_buffered_frames_per_voice;
@@ -1289,7 +1481,6 @@ class NativePortAudioEngine::Impl final {
         return frames;
     }
 
-    NativePortPlatformServices& platform_;
     const NativePortCodecProvider& codec_provider_;
     NativePortAudioEngineConfig config_;
     std::thread::id owner_thread_;
@@ -1312,6 +1503,703 @@ class NativePortAudioEngine::Impl final {
     std::uint32_t submitted_peak_sample_ = 0u;
     std::uint32_t pending_peak_sample_ = 0u;
     bool output_paused_ = false;
+};
+
+class NativePortAudioEngine::Impl final {
+  public:
+    Impl(NativePortPlatformServices& platform,
+         const NativePortCodecProvider& codec_provider,
+         const NativePortAudioEngineConfig& config)
+        : platform_(platform), codec_provider_(codec_provider), config_(config),
+          owner_thread_(std::this_thread::get_id()),
+          domain_(acquire_native_port_audio_execution_domain(
+              NativePortAudioExecutionDomainConfig{
+                  normalized_queue_config(config.command_queue)})) {
+        validate_engine_config(config_);
+        if (config_.telemetry != nullptr) {
+            if (!domain_->bind_telemetry(config_.telemetry))
+                fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                                  0u,
+                                  "telemetry-bind");
+            telemetry_bound_ = true;
+        }
+        const auto registered = domain_->register_target(
+            NativePortAudioExecutionDomainTarget::AudioEngine,
+            this,
+            &Impl::execute_worker_command,
+            &Impl::cleanup_worker_state);
+        if (!registered.has_value()) {
+            release_telemetry();
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "engine-register");
+        }
+        handle_ = *registered;
+        const auto result = domain_->dispatch_sync(
+            handle_, static_cast<std::uint16_t>(AudioEngineOpcode::Construct),
+            {}, 0u);
+        if (!result.completed()) {
+            // Construct can fail after Core acquired worker-only codec/output
+            // state.  Keep the cleanup armed and synchronously join the one
+            // consumer before this facade storage is unwound.
+            domain_->shutdown();
+            handle_ = {};
+            release_telemetry();
+            fail_audio_engine(NativePortAudioEngineFailure::WorkerFailure,
+                              result.ack.error_code,
+                              "engine-construct");
+        }
+    }
+
+    ~Impl() {
+        if (domain_ == nullptr || !handle_.valid()) return;
+        if (sound_bank_handle_.valid()) {
+            // Destruction order was violated while a dependent SoundBank is
+            // still registered.  Only the consumer can tear both Cores down
+            // safely; cleanup_registered_targets processes dependencies
+            // before the engine and retires every slot exactly once.
+            domain_->shutdown();
+            sound_bank_handle_ = {};
+            sound_bank_target_ = nullptr;
+            handle_ = {};
+            release_telemetry();
+            domain_.reset();
+            return;
+        }
+        const auto result = domain_->dispatch_sync(
+            handle_, static_cast<std::uint16_t>(AudioEngineOpcode::Destroy),
+            {}, current_frame_index_noexcept());
+        if (result.completed()) {
+            if (!domain_->unregister_target(handle_, this)) domain_->shutdown();
+        } else {
+            // Never destroy or leak worker-owned codec/mixer/endpoint state
+            // on the simulation thread.  Terminal shutdown drains/cancels,
+            // invokes cleanup_worker_state, and joins before returning.
+            domain_->shutdown();
+        }
+        handle_ = {};
+        release_telemetry();
+        domain_.reset();
+    }
+
+    [[nodiscard]] NativePortAudioVoiceHandle create_voice(
+        const NativePortContentFileBinding& binding,
+        const NativePortAudioVoiceConfig& voice_config) {
+        require_producer_thread();
+        const auto content = materialize_audio_content(
+            platform_, binding, config_.maximum_codec_source_bytes_per_voice);
+        const auto logical_id = std::string(binding.logical_id);
+        const auto path = binding.content_relative_path.generic_u8string();
+        const auto identity = std::string(binding.byte_identity);
+        std::uint64_t payload_size = sizeof(AudioCreateVoiceCommand);
+        if (!checked_payload_sum(payload_size, logical_id.size()) ||
+            !checked_payload_sum(payload_size, path.size()) ||
+            !checked_payload_sum(payload_size, identity.size()) ||
+            !checked_payload_sum(payload_size, content.size()))
+            fail_audio_engine(NativePortAudioEngineFailure::ResourceLimit,
+                              0u,
+                              "voice-command-size");
+        AudioCreateVoiceCommand header;
+        header.config = voice_config;
+        header.source_offset = binding.source_offset;
+        header.byte_size = binding.byte_size;
+        header.logical_id_size = static_cast<std::uint32_t>(logical_id.size());
+        header.path_size = static_cast<std::uint32_t>(path.size());
+        header.byte_identity_size =
+            static_cast<std::uint32_t>(identity.size());
+        const std::array parts{
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(&header),
+                static_cast<std::uint32_t>(sizeof(header))},
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(logical_id.data()),
+                static_cast<std::uint32_t>(logical_id.size())},
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(path.data()),
+                static_cast<std::uint32_t>(path.size())},
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(identity.data()),
+                static_cast<std::uint32_t>(identity.size())},
+            NativePortAudioExecutionDomainPayloadPart{
+                content.data(), static_cast<std::uint32_t>(content.size())}};
+        return read_ack_value<NativePortAudioVoiceHandle>(
+            dispatch_sync_scatter(AudioEngineOpcode::CreateVoice, parts,
+                                  NativePortAudioExecutionDomainStage::AudioDecode),
+            "create-voice");
+    }
+
+    [[nodiscard]] NativePortAudioVoiceHandle create_pcm_feed(
+        const NativePortAudioVoiceConfig& voice_config) {
+        const AudioCreatePcmFeedCommand command{voice_config};
+        return read_ack_value<NativePortAudioVoiceHandle>(
+            dispatch_sync(AudioEngineOpcode::CreatePcmFeed,
+                          object_bytes(command)),
+            "create-feed");
+    }
+
+    [[nodiscard]] bool submit_pcm_s16(
+        const NativePortAudioVoiceHandle voice,
+        const std::span<const std::int16_t> samples) {
+        require_producer_thread();
+        if (on_audio_thread())
+            return core_->submit_pcm_s16(voice, samples);
+        if (samples.size() > std::numeric_limits<std::uint32_t>::max())
+            fail_audio_engine(NativePortAudioEngineFailure::ResourceLimit,
+                              0u,
+                              "feed-command-size");
+        std::uint64_t payload_size = sizeof(AudioSubmitPcmCommand);
+        if (!checked_payload_sum(payload_size, samples.size_bytes()))
+            fail_audio_engine(NativePortAudioEngineFailure::ResourceLimit,
+                              0u,
+                              "feed-command-size");
+        const AudioSubmitPcmCommand command{
+            voice, static_cast<std::uint32_t>(samples.size())};
+        const std::array parts{
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(&command),
+                static_cast<std::uint32_t>(sizeof(command))},
+            NativePortAudioExecutionDomainPayloadPart{
+                reinterpret_cast<const std::byte*>(samples.data()),
+                static_cast<std::uint32_t>(samples.size_bytes())}};
+        const auto ack = dispatch_sync_scatter(
+            AudioEngineOpcode::SubmitPcm, parts,
+            NativePortAudioExecutionDomainStage::None);
+        return read_ack_value<std::uint8_t>(
+                   ack,
+                   "submit-feed") != 0u;
+    }
+
+    void handle_command(const AudioEngineOpcode opcode,
+                        const NativePortAudioVoiceHandle voice) {
+        const AudioHandleCommand command{voice};
+        static_cast<void>(dispatch_sync(
+            opcode,
+            object_bytes(command)));
+    }
+
+    void set_gain_pan(const NativePortAudioVoiceHandle voice,
+                      const float gain,
+                      const float pan) {
+        const AudioGainPanCommand command{voice, gain, pan};
+        static_cast<void>(dispatch_sync(
+            AudioEngineOpcode::SetGainPan,
+            object_bytes(command)));
+    }
+
+    void set_output_paused(const bool paused) {
+        const AudioPauseOutputCommand command{
+            static_cast<std::uint8_t>(paused ? 1u : 0u), {}};
+        static_cast<void>(dispatch_sync(
+            AudioEngineOpcode::SetOutputPaused,
+            object_bytes(command)));
+    }
+
+    void stop_all() {
+        static_cast<void>(dispatch_sync(
+            AudioEngineOpcode::StopAll,
+            {}));
+    }
+
+    void pump(const bool refresh_playback_position) {
+        dispatch_async(refresh_playback_position ? AudioEngineOpcode::Pump
+                                                 : AudioEngineOpcode::PumpCached,
+                       {},
+                       NativePortAudioExecutionDomainStage::AudioDecodeAndMix);
+    }
+
+    [[nodiscard]] NativePortAudioVoiceSnapshot voice_snapshot(
+        const NativePortAudioVoiceHandle voice) const {
+        const AudioHandleCommand command{voice};
+        return read_ack_value<NativePortAudioVoiceSnapshot>(
+            dispatch_sync(AudioEngineOpcode::VoiceSnapshot,
+                          object_bytes(command)),
+            "voice-snapshot");
+    }
+
+    [[nodiscard]] NativePortAudioEngineSnapshot snapshot() const {
+        auto result = read_ack_value<NativePortAudioEngineSnapshot>(
+            dispatch_sync(AudioEngineOpcode::Snapshot,
+                          {}),
+            "snapshot");
+        result.command_queue = domain_->snapshot().queue;
+        return result;
+    }
+
+    void bind_command_stamp(const NativePortAudioCommandStamp stamp) {
+        require_producer_thread();
+        bound_stamp_ = stamp;
+    }
+
+    [[nodiscard]] NativePortAudioCommandQueueSnapshot queue_snapshot()
+        const noexcept {
+        return domain_ != nullptr ? domain_->snapshot().queue
+                                  : NativePortAudioCommandQueueSnapshot{};
+    }
+
+    void bind_sound_bank_target(void* const target,
+                                const WorkerTargetExecutor executor,
+                                const WorkerTargetCleanup cleanup) {
+        require_producer_thread();
+        if (target == nullptr || executor == nullptr || cleanup == nullptr ||
+            sound_bank_handle_.valid())
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "sound-bank-bind");
+        const auto registered = domain_->register_target(
+            NativePortAudioExecutionDomainTarget::SoundBank,
+            target,
+            executor,
+            cleanup);
+        if (!registered.has_value())
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "sound-bank-register");
+        sound_bank_handle_ = *registered;
+        sound_bank_target_ = target;
+    }
+
+    void unbind_sound_bank_target(
+        void* const target, const bool destroy_acknowledged) noexcept {
+        if (target == nullptr || target != sound_bank_target_ ||
+            !sound_bank_handle_.valid())
+            return;
+        if (destroy_acknowledged) {
+            if (!domain_->unregister_target(sound_bank_handle_, target))
+                domain_->shutdown();
+        } else {
+            // Preserve the cleanup registration.  The consumer owns the
+            // terminal Core destruction and slot retirement.
+            domain_->shutdown();
+        }
+        sound_bank_handle_ = {};
+        sound_bank_target_ = nullptr;
+    }
+
+    [[nodiscard]] NativePortAudioCommandAck dispatch_sound_bank_sync(
+        const std::uint16_t opcode,
+        const std::span<const std::byte> payload) const {
+        require_producer_thread();
+        if (!sound_bank_handle_.valid())
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "sound-bank-unbound");
+        return checked_domain_ack(
+            domain_->dispatch_sync(sound_bank_handle_, opcode, payload,
+                                   current_frame_index()),
+            "sound-bank-command");
+    }
+
+    void dispatch_sound_bank_async(
+        const std::uint16_t opcode,
+        const std::span<const std::byte> payload) const {
+        require_producer_thread();
+        if (!sound_bank_handle_.valid())
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "sound-bank-unbound");
+        require_domain_accepted(
+            domain_->dispatch_async(
+                sound_bank_handle_, opcode, payload, current_frame_index(),
+                0u,
+                NativePortAudioExecutionDomainStage::AudioDecodeAndMix),
+            "sound-bank-async");
+    }
+
+    [[nodiscard]] bool on_audio_thread() const noexcept {
+        return domain_ != nullptr && domain_->on_audio_thread();
+    }
+
+  private:
+    void release_telemetry() noexcept {
+        if (!telemetry_bound_ || domain_ == nullptr ||
+            config_.telemetry == nullptr)
+            return;
+        if (!domain_->unbind_telemetry(config_.telemetry))
+            domain_->shutdown();
+        telemetry_bound_ = false;
+    }
+
+    [[nodiscard]] static NativePortAudioCommandQueueConfig
+    normalized_queue_config(NativePortAudioCommandQueueConfig config) {
+        if (!config.enabled)
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u,
+                              "command-queue-disabled");
+        if (native_port_audio_serial_reference_requested())
+            config.mode = NativePortAudioCommandQueueMode::SerialReference;
+        return config;
+    }
+
+    void require_producer_thread() const {
+        if (!on_audio_thread() && std::this_thread::get_id() != owner_thread_)
+            fail_audio_engine(NativePortAudioEngineFailure::ThreadViolation,
+                              0u,
+                              "producer-thread");
+    }
+
+    [[nodiscard]] std::uint64_t current_frame_index() const {
+        require_producer_thread();
+        // Nested worker suboperations inherit the outer domain command. They
+        // must not call a simulation-owned stamp callback or allocate a new
+        // sequence; dispatch_inline ignores this evidence value.
+        if (on_audio_thread()) return last_frame_index_;
+        auto source = bound_stamp_;
+        if (config_.command_stamp_source != nullptr)
+            source = config_.command_stamp_source(config_.command_stamp_user);
+        if (source.frame_index < last_frame_index_)
+            fail_audio_engine(NativePortAudioEngineFailure::CommandQueue,
+                              0u,
+                              "frame-regression");
+        auto frame_index = source.frame_index;
+        const auto domain_snapshot = domain_->snapshot();
+        if (domain_snapshot.has_last_frame_index)
+            frame_index = std::max(frame_index,
+                                   domain_snapshot.last_frame_index);
+        last_frame_index_ = frame_index;
+        return frame_index;
+    }
+
+    [[nodiscard]] std::uint64_t current_frame_index_noexcept() const noexcept {
+        return last_frame_index_;
+    }
+
+    [[nodiscard]] static NativePortAudioExecutionDomainStage engine_stage(
+        const AudioEngineOpcode opcode) noexcept {
+        switch (opcode) {
+        case AudioEngineOpcode::CreateVoice:
+            return NativePortAudioExecutionDomainStage::AudioDecode;
+        case AudioEngineOpcode::Pump:
+        case AudioEngineOpcode::PumpCached:
+            return NativePortAudioExecutionDomainStage::AudioDecodeAndMix;
+        default:
+            return NativePortAudioExecutionDomainStage::None;
+        }
+    }
+
+    [[nodiscard]] static NativePortAudioCommandAck checked_domain_ack(
+        const NativePortAudioExecutionDomainDispatchResult& result,
+        const char* const operation) {
+        if (result.has_ack) return result.ack;
+        fail_audio_engine(
+            result.failure ==
+                    NativePortAudioExecutionDomainFailure::ProducerThreadViolation
+                ? NativePortAudioEngineFailure::ThreadViolation
+                : NativePortAudioEngineFailure::CommandQueue,
+            static_cast<std::uint32_t>(result.failure), operation);
+    }
+
+    static void require_domain_accepted(
+        const NativePortAudioExecutionDomainDispatchResult& result,
+        const char* const operation) {
+        if (result.accepted()) return;
+        fail_audio_engine(
+            result.failure ==
+                    NativePortAudioExecutionDomainFailure::ProducerThreadViolation
+                ? NativePortAudioEngineFailure::ThreadViolation
+                : NativePortAudioEngineFailure::CommandQueue,
+            static_cast<std::uint32_t>(result.failure), operation);
+    }
+
+    [[nodiscard]] NativePortAudioCommandAck dispatch_sync(
+        const AudioEngineOpcode opcode,
+        const std::span<const std::byte> payload,
+        const NativePortAudioExecutionDomainStage stage =
+            NativePortAudioExecutionDomainStage::None) const {
+        require_producer_thread();
+        return checked_domain_ack(
+            domain_->dispatch_sync(
+                handle_, static_cast<std::uint16_t>(opcode), payload,
+                current_frame_index(), 0u,
+                stage == NativePortAudioExecutionDomainStage::None
+                    ? engine_stage(opcode)
+                    : stage),
+            "engine-command");
+    }
+
+    [[nodiscard]] NativePortAudioCommandAck dispatch_sync_scatter(
+        const AudioEngineOpcode opcode,
+        const std::span<const NativePortAudioExecutionDomainPayloadPart> parts,
+        const NativePortAudioExecutionDomainStage stage) const {
+        require_producer_thread();
+        return checked_domain_ack(
+            domain_->dispatch_sync_scatter(
+                handle_, static_cast<std::uint16_t>(opcode), parts,
+                current_frame_index(), 0u, stage),
+            "engine-scatter-command");
+    }
+
+    void dispatch_async(
+        const AudioEngineOpcode opcode,
+        const std::span<const std::byte> payload,
+        const NativePortAudioExecutionDomainStage stage =
+            NativePortAudioExecutionDomainStage::None) const {
+        require_producer_thread();
+        require_domain_accepted(
+            domain_->dispatch_async(
+                handle_, static_cast<std::uint16_t>(opcode), payload,
+                current_frame_index(), 0u,
+                stage == NativePortAudioExecutionDomainStage::None
+                    ? engine_stage(opcode)
+                    : stage),
+            "engine-async-command");
+    }
+
+    template <typename Value>
+    [[nodiscard]] static Value read_ack_value(
+        const NativePortAudioCommandAck& ack,
+        const char* operation) {
+        require_ack_success(ack, operation);
+        if (ack.result_size != sizeof(Value))
+            fail_audio_engine(NativePortAudioEngineFailure::WorkerFailure,
+                              0u,
+                              operation);
+        Value result{};
+        std::memcpy(&result, ack.bytes.data(), sizeof(Value));
+        return result;
+    }
+
+    static void require_ack_success(const NativePortAudioCommandAck& ack,
+                                    const char* operation) {
+        if (ack.status == NativePortAudioCommandAckStatus::Completed) return;
+        AudioEngineWireError error;
+        if (ack.result_size == sizeof(error)) {
+            std::memcpy(&error, ack.bytes.data(), sizeof(error));
+            throw NativePortAudioEngineError(error.failure,
+                                             error.provider_error_code,
+                                             operation);
+        }
+        fail_audio_engine(NativePortAudioEngineFailure::WorkerFailure,
+                          ack.error_code,
+                          operation);
+    }
+
+    static void execute_worker_command(
+        void* const target,
+        const std::uint16_t opcode,
+        const std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept {
+        result = {};
+        auto* const self = static_cast<Impl*>(target);
+        if (self == nullptr) {
+            write_engine_error(result,
+                               NativePortAudioEngineFailure::WorkerFailure,
+                               0u);
+            return;
+        }
+        try {
+            self->execute_engine(static_cast<AudioEngineOpcode>(opcode),
+                                 payload,
+                                 result);
+        } catch (const NativePortAudioEngineError& error) {
+            write_engine_error(result,
+                               error.failure(),
+                               error.provider_error_code());
+        } catch (...) {
+            write_engine_error(result,
+                               NativePortAudioEngineFailure::WorkerFailure,
+                               0u);
+        }
+    }
+
+    static void cleanup_worker_state(void* const target) noexcept {
+        auto& self = *static_cast<Impl*>(target);
+        self.core_.reset();
+    }
+
+    void execute_engine(const AudioEngineOpcode opcode,
+                        const std::span<const std::byte> payload,
+                        NativePortAudioCommandAckResult& result) const {
+        switch (opcode) {
+        case AudioEngineOpcode::Construct:
+            if (!payload.empty() || core_ != nullptr)
+                fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                                  0u,
+                                  "engine-construct");
+            core_ = std::make_unique<Core>(codec_provider_, config_);
+            return;
+        case AudioEngineOpcode::Destroy:
+            if (!payload.empty())
+                fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                                  0u,
+                                  "engine-destroy");
+            core_.reset();
+            return;
+        default:
+            break;
+        }
+        if (core_ == nullptr)
+            fail_audio_engine(NativePortAudioEngineFailure::WorkerFailure,
+                              0u,
+                              "worker-core");
+        switch (opcode) {
+        case AudioEngineOpcode::CreateVoice:
+            execute_create_voice(payload, result);
+            return;
+        case AudioEngineOpcode::CreatePcmFeed: {
+            AudioCreatePcmFeedCommand command;
+            if (!read_object(payload, command))
+                return invalid_payload(result);
+            write_ack_value(result, core_->create_pcm_feed(command.config));
+            return;
+        }
+        case AudioEngineOpcode::SubmitPcm:
+            execute_submit_pcm(payload, result);
+            return;
+        case AudioEngineOpcode::FinishPcmFeed:
+        case AudioEngineOpcode::Play:
+        case AudioEngineOpcode::Pause:
+        case AudioEngineOpcode::Resume:
+        case AudioEngineOpcode::Stop:
+        case AudioEngineOpcode::Release: {
+            AudioHandleCommand command;
+            if (!read_object(payload, command))
+                return invalid_payload(result);
+            switch (opcode) {
+            case AudioEngineOpcode::FinishPcmFeed:
+                core_->finish_pcm_feed(command.voice);
+                break;
+            case AudioEngineOpcode::Play:
+                core_->play(command.voice);
+                break;
+            case AudioEngineOpcode::Pause:
+                core_->pause(command.voice);
+                break;
+            case AudioEngineOpcode::Resume:
+                core_->resume(command.voice);
+                break;
+            case AudioEngineOpcode::Stop:
+                core_->stop(command.voice);
+                break;
+            case AudioEngineOpcode::Release:
+                core_->release(command.voice);
+                break;
+            default:
+                break;
+            }
+            return;
+        }
+        case AudioEngineOpcode::SetGainPan: {
+            AudioGainPanCommand command;
+            if (!read_object(payload, command))
+                return invalid_payload(result);
+            core_->set_gain_pan(command.voice, command.gain, command.pan);
+            return;
+        }
+        case AudioEngineOpcode::SetOutputPaused: {
+            AudioPauseOutputCommand command;
+            if (!read_object(payload, command) || command.paused > 1u)
+                return invalid_payload(result);
+            core_->set_output_paused(command.paused != 0u);
+            return;
+        }
+        case AudioEngineOpcode::StopAll:
+            if (!payload.empty()) return invalid_payload(result);
+            core_->stop_all();
+            return;
+        case AudioEngineOpcode::Pump:
+        case AudioEngineOpcode::PumpCached:
+            if (!payload.empty()) return invalid_payload(result);
+            core_->pump(opcode == AudioEngineOpcode::Pump);
+            return;
+        case AudioEngineOpcode::VoiceSnapshot: {
+            AudioHandleCommand command;
+            if (!read_object(payload, command))
+                return invalid_payload(result);
+            write_ack_value(result, core_->voice_snapshot(command.voice));
+            return;
+        }
+        case AudioEngineOpcode::Snapshot:
+            if (!payload.empty()) return invalid_payload(result);
+            write_ack_value(result, core_->snapshot());
+            return;
+        case AudioEngineOpcode::Construct:
+        case AudioEngineOpcode::Destroy:
+            break;
+        }
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                          0u,
+                          "engine-opcode");
+    }
+
+    void execute_create_voice(const std::span<const std::byte> payload,
+                              NativePortAudioCommandAckResult& result) const {
+        if (payload.size() < sizeof(AudioCreateVoiceCommand))
+            return invalid_payload(result);
+        AudioCreateVoiceCommand command;
+        std::memcpy(&command, payload.data(), sizeof(command));
+        std::uint64_t expected = sizeof(command);
+        if (!checked_payload_sum(expected, command.logical_id_size) ||
+            !checked_payload_sum(expected, command.path_size) ||
+            !checked_payload_sum(expected, command.byte_identity_size) ||
+            !checked_payload_sum(expected, command.byte_size) ||
+            expected != payload.size())
+            return invalid_payload(result);
+        std::size_t cursor = sizeof(command);
+        const std::string_view logical_id(
+            reinterpret_cast<const char*>(payload.data() + cursor),
+            command.logical_id_size);
+        cursor += command.logical_id_size;
+        const std::u8string path(
+            reinterpret_cast<const char8_t*>(payload.data() + cursor),
+            command.path_size);
+        cursor += command.path_size;
+        const std::string_view identity(
+            reinterpret_cast<const char*>(payload.data() + cursor),
+            command.byte_identity_size);
+        cursor += command.byte_identity_size;
+        std::vector<std::byte> content(command.byte_size);
+        std::memcpy(content.data(), payload.data() + cursor, content.size());
+        NativePortContentFileBinding binding{
+            logical_id,
+            std::filesystem::path(path),
+            identity,
+            command.source_offset,
+            command.byte_size};
+        write_ack_value(result,
+                        core_->create_voice(binding,
+                                            std::move(content),
+                                            command.config));
+    }
+
+    void execute_submit_pcm(const std::span<const std::byte> payload,
+                            NativePortAudioCommandAckResult& result) const {
+        if (payload.size() < sizeof(AudioSubmitPcmCommand))
+            return invalid_payload(result);
+        AudioSubmitPcmCommand command;
+        std::memcpy(&command, payload.data(), sizeof(command));
+        const auto samples_bytes =
+            static_cast<std::uint64_t>(command.sample_count) *
+            sizeof(std::int16_t);
+        if (samples_bytes > std::numeric_limits<std::size_t>::max() ||
+            sizeof(command) + samples_bytes != payload.size())
+            return invalid_payload(result);
+        const auto* samples = reinterpret_cast<const std::int16_t*>(
+            payload.data() + sizeof(command));
+        const auto accepted = core_->submit_pcm_s16(
+            command.voice,
+            std::span<const std::int16_t>(samples, command.sample_count));
+        write_ack_value(result,
+                        static_cast<std::uint8_t>(accepted ? 1u : 0u));
+    }
+
+    static void invalid_payload(NativePortAudioCommandAckResult&) {
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u,
+                          "command-payload");
+    }
+
+    NativePortPlatformServices& platform_;
+    const NativePortCodecProvider& codec_provider_;
+    NativePortAudioEngineConfig config_;
+    std::thread::id owner_thread_;
+    std::shared_ptr<NativePortAudioExecutionDomain> domain_;
+    NativePortAudioExecutionDomainTargetHandle handle_{};
+    NativePortAudioExecutionDomainTargetHandle sound_bank_handle_{};
+    mutable std::unique_ptr<Core> core_;
+    mutable NativePortAudioCommandStamp bound_stamp_{};
+    mutable std::uint64_t last_frame_index_ = 0u;
+    void* sound_bank_target_ = nullptr;
+    bool telemetry_bound_ = false;
 };
 
 NativePortAudioEngine::NativePortAudioEngine(
@@ -1341,27 +2229,27 @@ bool NativePortAudioEngine::submit_pcm_s16(
 
 void NativePortAudioEngine::finish_pcm_feed(
     const NativePortAudioVoiceHandle voice) {
-    impl_->finish_pcm_feed(voice);
+    impl_->handle_command(AudioEngineOpcode::FinishPcmFeed, voice);
 }
 
 void NativePortAudioEngine::play(const NativePortAudioVoiceHandle voice) {
-    impl_->play(voice);
+    impl_->handle_command(AudioEngineOpcode::Play, voice);
 }
 
 void NativePortAudioEngine::pause(const NativePortAudioVoiceHandle voice) {
-    impl_->pause(voice);
+    impl_->handle_command(AudioEngineOpcode::Pause, voice);
 }
 
 void NativePortAudioEngine::resume(const NativePortAudioVoiceHandle voice) {
-    impl_->resume(voice);
+    impl_->handle_command(AudioEngineOpcode::Resume, voice);
 }
 
 void NativePortAudioEngine::stop(const NativePortAudioVoiceHandle voice) {
-    impl_->stop(voice);
+    impl_->handle_command(AudioEngineOpcode::Stop, voice);
 }
 
 void NativePortAudioEngine::release(const NativePortAudioVoiceHandle voice) {
-    impl_->release(voice);
+    impl_->handle_command(AudioEngineOpcode::Release, voice);
 }
 
 void NativePortAudioEngine::set_gain_pan(
@@ -1375,16 +2263,22 @@ void NativePortAudioEngine::set_output_paused(const bool paused) {
     impl_->set_output_paused(paused);
 }
 
-void NativePortAudioEngine::stop_all() {
-    impl_->stop_all();
-}
+void NativePortAudioEngine::stop_all() { impl_->stop_all(); }
 
-void NativePortAudioEngine::pump() {
-    impl_->pump(true);
-}
+void NativePortAudioEngine::pump() { impl_->pump(true); }
 
 void NativePortAudioEngine::pump_with_cached_playback_position() {
     impl_->pump(false);
+}
+
+void NativePortAudioEngine::bind_command_stamp(
+    const NativePortAudioCommandStamp stamp) {
+    impl_->bind_command_stamp(stamp);
+}
+
+NativePortAudioCommandQueueSnapshot
+NativePortAudioEngine::command_queue_snapshot() const {
+    return impl_->queue_snapshot();
 }
 
 NativePortAudioVoiceSnapshot NativePortAudioEngine::voice_snapshot(
@@ -1394,6 +2288,34 @@ NativePortAudioVoiceSnapshot NativePortAudioEngine::voice_snapshot(
 
 NativePortAudioEngineSnapshot NativePortAudioEngine::snapshot() const {
     return impl_->snapshot();
+}
+
+void NativePortAudioEngine::bind_sound_bank_target(
+    void* const target,
+    const WorkerTargetExecutor executor,
+    const WorkerTargetCleanup cleanup) {
+    impl_->bind_sound_bank_target(target, executor, cleanup);
+}
+
+void NativePortAudioEngine::unbind_sound_bank_target(
+    void* const target, const bool destroy_acknowledged) noexcept {
+    impl_->unbind_sound_bank_target(target, destroy_acknowledged);
+}
+
+NativePortAudioCommandAck NativePortAudioEngine::dispatch_sound_bank_sync(
+    const std::uint16_t opcode,
+    const std::span<const std::byte> payload) const {
+    return impl_->dispatch_sound_bank_sync(opcode, payload);
+}
+
+void NativePortAudioEngine::dispatch_sound_bank_async(
+    const std::uint16_t opcode,
+    const std::span<const std::byte> payload) const {
+    impl_->dispatch_sound_bank_async(opcode, payload);
+}
+
+bool NativePortAudioEngine::on_audio_thread() const noexcept {
+    return impl_->on_audio_thread();
 }
 
 } // namespace katana::runtime

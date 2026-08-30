@@ -225,6 +225,163 @@ class BoundedBytes final {
            (static_cast<std::uint64_t>(bank) << 56u);
 }
 
+enum class SoundBankOpcode : std::uint16_t {
+    Construct = 1u,
+    Destroy,
+    LoadCollection,
+    UnloadCollection,
+    HasProgram,
+    HasSequence,
+    HasCollectionUnit,
+    BindPcmStreamRing,
+    ReleasePcmStreamRing,
+    PcmStreamRingSnapshot,
+    PredecodeCollectionSamples,
+    PlaySequence,
+    PauseSequence,
+    ResumeSequence,
+    StopSequence,
+    ReleaseSequence,
+    SetSequenceGainPan,
+    SetSequencePitchBend,
+    SetSequencePlaybackRate,
+    SetSequenceSendLevels,
+    NoteOn,
+    NoteOff,
+    ReleaseVoice,
+    SetVoiceGainPan,
+    SetVoicePitchBend,
+    SetVoiceSendLevels,
+    OpenMidiPort,
+    CloseMidiPort,
+    SetMidiProgram,
+    SetMidiGainPan,
+    SetMidiPitchBend,
+    SetMidiPlaybackRate,
+    SetMidiSendLevels,
+    MidiNoteOn,
+    MidiNoteOff,
+    MidiPlaySequence,
+    MidiPause,
+    MidiResume,
+    MidiStop,
+    CloseAllMidiPorts,
+    ReleaseAllSequences,
+    UnloadAllCollections,
+    StopAll,
+    Reset,
+    Pump,
+    SequenceSnapshot,
+    MidiPortSnapshot,
+    Snapshot,
+};
+
+struct SoundBankCommand final {
+    NativePortSoundCollectionHandle collection{};
+    NativePortSoundPcmStreamRingHandle ring{};
+    NativePortSoundSequenceHandle sequence{};
+    NativePortSoundVoiceHandle voice{};
+    NativePortSoundMidiPortHandle port{};
+    NativePortSoundPcmStreamRingConfig ring_config{};
+    NativePortSoundSequenceConfig sequence_config{};
+    NativePortSoundNoteConfig note_config{};
+    NativePortSoundMidiPortConfig midi_config{};
+    float value0 = 0.0f;
+    float value1 = 0.0f;
+    std::int16_t signed_value = 0;
+    std::uint16_t value16 = 0u;
+    std::uint8_t value8_0 = 0u;
+    std::uint8_t value8_1 = 0u;
+    std::uint8_t value8_2 = 0u;
+    std::uint8_t value8_3 = 0u;
+};
+
+struct SoundBankLoadCommand final {
+    std::uint64_t source_offset = 0u;
+    std::uint64_t byte_size = 0u;
+    std::uint32_t logical_id_size = 0u;
+    std::uint32_t path_size = 0u;
+    std::uint32_t byte_identity_size = 0u;
+    std::uint32_t reserved = 0u;
+};
+
+struct SoundBankWireError final {
+    NativePortSoundBankFailure failure =
+        NativePortSoundBankFailure::WorkerFailure;
+    std::array<std::uint8_t, 3u> reserved{};
+};
+
+static_assert(std::is_trivially_copyable_v<SoundBankCommand>);
+static_assert(std::is_trivially_copyable_v<SoundBankLoadCommand>);
+static_assert(std::is_trivially_copyable_v<SoundBankWireError>);
+
+template <typename Value>
+[[nodiscard]] std::span<const std::byte> sound_object_bytes(
+    const Value& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    return {reinterpret_cast<const std::byte*>(std::addressof(value)),
+            sizeof(Value)};
+}
+
+template <typename Value>
+[[nodiscard]] bool read_sound_object(
+    const std::span<const std::byte> bytes,
+    Value& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    if (bytes.size() != sizeof(Value)) return false;
+    std::memcpy(std::addressof(value), bytes.data(), sizeof(Value));
+    return true;
+}
+
+template <typename Value>
+void write_sound_ack(NativePortAudioCommandAckResult& result,
+                     const Value& value) noexcept {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    static_assert(sizeof(Value) <=
+                  native_port_audio_command_queue_max_ack_result_bytes);
+    result.status = NativePortAudioCommandAckStatus::Completed;
+    result.result_size = sizeof(Value);
+    std::memcpy(result.bytes.data(), std::addressof(value), sizeof(Value));
+}
+
+void write_sound_error(NativePortAudioCommandAckResult& result,
+                       const NativePortSoundBankFailure failure) noexcept {
+    const SoundBankWireError error{failure, {}};
+    result.status = NativePortAudioCommandAckStatus::Failed;
+    result.error_code = static_cast<std::uint32_t>(failure);
+    result.result_size = sizeof(error);
+    std::memcpy(result.bytes.data(), std::addressof(error), sizeof(error));
+}
+
+[[nodiscard]] std::vector<std::byte> materialize_sound_bank_content(
+    NativePortPlatformServices& platform,
+    const NativePortContentFileBinding& binding,
+    const NativePortSoundBankConfig& config) {
+    if (binding.byte_size < 32u ||
+        binding.byte_size > config.maximum_collection_bytes ||
+        binding.byte_size > std::numeric_limits<std::size_t>::max())
+        fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
+                        "collection-size");
+    std::unique_ptr<NativePortReadOnlyFile> file;
+    try {
+        file = platform.open_content_file(binding);
+    } catch (...) {
+        fail_sound_bank(NativePortSoundBankFailure::ContentOpen,
+                        "content-open");
+    }
+    if (file == nullptr || file->byte_size() != binding.byte_size)
+        fail_sound_bank(NativePortSoundBankFailure::ContentOpen,
+                        "content-size");
+    std::vector<std::byte> bytes(static_cast<std::size_t>(binding.byte_size));
+    try {
+        file->read_at(0u, bytes);
+    } catch (...) {
+        fail_sound_bank(NativePortSoundBankFailure::ContentRead,
+                        "content-read");
+    }
+    return bytes;
+}
+
 } // namespace
 
 NativePortSoundBankError::NativePortSoundBankError(
@@ -237,7 +394,7 @@ NativePortSoundBankFailure NativePortSoundBankError::failure() const noexcept {
     return failure_;
 }
 
-class NativePortSoundBankEngine::Impl final {
+class NativePortSoundBankEngine::Core final {
   private:
     enum class SampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
     enum class EventKind : std::uint8_t {
@@ -491,10 +648,9 @@ class NativePortSoundBankEngine::Impl final {
     };
 
   public:
-    Impl(NativePortPlatformServices& platform,
-         NativePortAudioEngine& audio,
+    Core(NativePortAudioEngine& audio,
          const NativePortSoundBankConfig& config)
-        : platform_(platform), audio_(audio), config_(config),
+        : audio_(audio), config_(config),
           owner_thread_(std::this_thread::get_id()) {
         validate_config(config_);
         feed_ = audio_.create_pcm_feed();
@@ -509,7 +665,7 @@ class NativePortSoundBankEngine::Impl final {
         output_.resize(static_cast<std::size_t>(config_.render_block_frames) * 2u);
     }
 
-    ~Impl() {
+    ~Core() {
         try {
             audio_.stop(feed_);
             audio_.release(feed_);
@@ -518,32 +674,23 @@ class NativePortSoundBankEngine::Impl final {
     }
 
     [[nodiscard]] NativePortSoundCollectionHandle load_collection(
-        const NativePortContentFileBinding& binding) {
+        const NativePortContentFileBinding& binding,
+        std::vector<std::byte> immutable_bytes) {
         require_owner_thread();
-        std::unique_ptr<NativePortReadOnlyFile> file;
-        try {
-            file = platform_.open_content_file(binding);
-        } catch (...) {
-            fail_sound_bank(NativePortSoundBankFailure::ContentOpen,
-                            "content-open");
-        }
-        if (file->byte_size() < 32u ||
-            file->byte_size() > config_.maximum_collection_bytes ||
-            file->byte_size() >
+        if (immutable_bytes.size() != binding.byte_size ||
+            immutable_bytes.size() < 32u ||
+            immutable_bytes.size() > config_.maximum_collection_bytes ||
+            immutable_bytes.size() >
                 config_.maximum_total_collection_bytes -
                     resident_collection_bytes_ ||
-            file->byte_size() > std::numeric_limits<std::size_t>::max())
+            immutable_bytes.size() >
+                std::numeric_limits<std::size_t>::max())
             fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
                             "collection-size");
         Collection collection;
-        collection.bytes.resize(static_cast<std::size_t>(file->byte_size()));
-        try {
-            file->read_at(0u, std::as_writable_bytes(
-                                  std::span(collection.bytes)));
-        } catch (...) {
-            fail_sound_bank(NativePortSoundBankFailure::ContentRead,
-                            "content-read");
-        }
+        collection.bytes.resize(immutable_bytes.size());
+        std::memcpy(collection.bytes.data(), immutable_bytes.data(),
+                    immutable_bytes.size());
         parse_collection(collection);
         const auto collection_bytes = collection.bytes.size();
         const auto handle = insert_collection(std::move(collection));
@@ -1340,7 +1487,7 @@ class NativePortSoundBankEngine::Impl final {
     }
 
     struct SequenceParser final {
-        Impl& owner;
+        Core& owner;
         BoundedBytes bytes;
         std::uint64_t current_tick = 0u;
         std::uint32_t gate_extension = 0u;
@@ -3689,7 +3836,6 @@ class NativePortSoundBankEngine::Impl final {
         saturating_add(effect_frames_, 1u);
     }
 
-    NativePortPlatformServices& platform_;
     NativePortAudioEngine& audio_;
     NativePortSoundBankConfig config_;
     std::thread::id owner_thread_;
@@ -3724,6 +3870,692 @@ class NativePortSoundBankEngine::Impl final {
     std::uint64_t rendered_frames_ = 0u;
     std::uint64_t effect_frames_ = 0u;
 };
+
+class NativePortSoundBankEngine::Impl final {
+  public:
+    Impl(NativePortPlatformServices& platform,
+         NativePortAudioEngine& audio,
+         const NativePortSoundBankConfig& config)
+        : platform_(platform), audio_(audio), config_(config),
+          owner_thread_(std::this_thread::get_id()) {
+        validate_config(config_);
+        audio_.bind_sound_bank_target(
+            this, &NativePortSoundBankEngine::execute_worker_command,
+            &Impl::cleanup_worker_state);
+        try {
+            call_void(SoundBankOpcode::Construct);
+        } catch (...) {
+            audio_.unbind_sound_bank_target(this, false);
+            throw;
+        }
+    }
+
+    ~Impl() {
+        bool destroyed = false;
+        try {
+            call_void(SoundBankOpcode::Destroy);
+            destroyed = true;
+        } catch (...) {
+        }
+        audio_.unbind_sound_bank_target(this, destroyed);
+    }
+
+    [[nodiscard]] NativePortSoundCollectionHandle load_collection(
+        const NativePortContentFileBinding& binding) {
+        require_owner_thread();
+        const auto content =
+            materialize_sound_bank_content(platform_, binding, config_);
+        const auto logical_id = std::string(binding.logical_id);
+        const auto path = binding.content_relative_path.generic_u8string();
+        const auto identity = std::string(binding.byte_identity);
+        std::uint64_t payload_size = sizeof(SoundBankLoadCommand);
+        const auto add = [&](const std::uint64_t value) {
+            if (value > std::numeric_limits<std::uint64_t>::max() - payload_size)
+                return false;
+            payload_size += value;
+            return payload_size <= std::numeric_limits<std::uint32_t>::max();
+        };
+        if (!add(logical_id.size()) || !add(path.size()) ||
+            !add(identity.size()) || !add(content.size()))
+            fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
+                            "load-command-size");
+        const SoundBankLoadCommand command{
+            binding.source_offset,
+            binding.byte_size,
+            static_cast<std::uint32_t>(logical_id.size()),
+            static_cast<std::uint32_t>(path.size()),
+            static_cast<std::uint32_t>(identity.size()),
+            0u};
+        std::vector<std::byte> payload(static_cast<std::size_t>(payload_size));
+        auto* cursor = payload.data();
+        std::memcpy(cursor, &command, sizeof(command));
+        cursor += sizeof(command);
+        std::memcpy(cursor, logical_id.data(), logical_id.size());
+        cursor += logical_id.size();
+        std::memcpy(cursor, path.data(), path.size());
+        cursor += path.size();
+        std::memcpy(cursor, identity.data(), identity.size());
+        cursor += identity.size();
+        std::memcpy(cursor, content.data(), content.size());
+        return call_payload<NativePortSoundCollectionHandle>(
+            SoundBankOpcode::LoadCollection, payload);
+    }
+
+    void unload_collection(const NativePortSoundCollectionHandle value) {
+        SoundBankCommand command;
+        command.collection = value;
+        call_void(SoundBankOpcode::UnloadCollection, command);
+    }
+    [[nodiscard]] bool has_program(
+        const NativePortSoundCollectionHandle collection,
+        const std::uint8_t bank,
+        const std::uint8_t program) const {
+        SoundBankCommand command;
+        command.collection = collection;
+        command.value8_0 = bank;
+        command.value8_1 = program;
+        return call<std::uint8_t>(SoundBankOpcode::HasProgram, command) != 0u;
+    }
+    [[nodiscard]] bool has_sequence(
+        const NativePortSoundCollectionHandle collection,
+        const std::uint8_t bank,
+        const std::uint16_t sequence) const {
+        SoundBankCommand command;
+        command.collection = collection;
+        command.value8_0 = bank;
+        command.value16 = sequence;
+        return call<std::uint8_t>(SoundBankOpcode::HasSequence, command) != 0u;
+    }
+    [[nodiscard]] bool has_collection_unit(
+        const NativePortSoundCollectionHandle collection,
+        const NativePortSoundCollectionUnitKind kind,
+        const std::uint8_t bank) const {
+        SoundBankCommand command;
+        command.collection = collection;
+        command.value8_0 = static_cast<std::uint8_t>(kind);
+        command.value8_1 = bank;
+        return call<std::uint8_t>(SoundBankOpcode::HasCollectionUnit,
+                                  command) != 0u;
+    }
+    [[nodiscard]] NativePortSoundPcmStreamRingHandle bind_pcm_stream_ring(
+        const NativePortSoundPcmStreamRingConfig& value) {
+        SoundBankCommand command;
+        command.ring_config = value;
+        return call<NativePortSoundPcmStreamRingHandle>(
+            SoundBankOpcode::BindPcmStreamRing, command);
+    }
+    void release_pcm_stream_ring(const NativePortSoundPcmStreamRingHandle value) {
+        SoundBankCommand command;
+        command.ring = value;
+        call_void(SoundBankOpcode::ReleasePcmStreamRing, command);
+    }
+    [[nodiscard]] NativePortSoundPcmStreamRingSnapshot
+    pcm_stream_ring_snapshot(const NativePortSoundPcmStreamRingHandle value) const {
+        SoundBankCommand command;
+        command.ring = value;
+        return call<NativePortSoundPcmStreamRingSnapshot>(
+            SoundBankOpcode::PcmStreamRingSnapshot, command);
+    }
+    void predecode_collection_samples(
+        const NativePortSoundCollectionHandle value) {
+        SoundBankCommand command;
+        command.collection = value;
+        call_void(SoundBankOpcode::PredecodeCollectionSamples, command);
+    }
+    [[nodiscard]] NativePortSoundSequenceHandle play_sequence(
+        const NativePortSoundCollectionHandle collection,
+        const NativePortSoundSequenceConfig& config) {
+        SoundBankCommand command;
+        command.collection = collection;
+        command.sequence_config = config;
+        return call<NativePortSoundSequenceHandle>(
+            SoundBankOpcode::PlaySequence, command);
+    }
+    void pause_sequence(const NativePortSoundSequenceHandle value) {
+        sequence_void(SoundBankOpcode::PauseSequence, value);
+    }
+    void resume_sequence(const NativePortSoundSequenceHandle value) {
+        sequence_void(SoundBankOpcode::ResumeSequence, value);
+    }
+    void stop_sequence(const NativePortSoundSequenceHandle value) {
+        sequence_void(SoundBankOpcode::StopSequence, value);
+    }
+    void release_sequence(const NativePortSoundSequenceHandle value) {
+        sequence_void(SoundBankOpcode::ReleaseSequence, value);
+    }
+    void set_sequence_gain_pan(const NativePortSoundSequenceHandle value,
+                               const float gain,
+                               const float pan) {
+        SoundBankCommand command;
+        command.sequence = value;
+        command.value0 = gain;
+        command.value1 = pan;
+        call_void(SoundBankOpcode::SetSequenceGainPan, command);
+    }
+    void set_sequence_pitch_bend(const NativePortSoundSequenceHandle value,
+                                 const std::int16_t bend) {
+        SoundBankCommand command;
+        command.sequence = value;
+        command.signed_value = bend;
+        call_void(SoundBankOpcode::SetSequencePitchBend, command);
+    }
+    void set_sequence_playback_rate(const NativePortSoundSequenceHandle value,
+                                    const float rate) {
+        SoundBankCommand command;
+        command.sequence = value;
+        command.value0 = rate;
+        call_void(SoundBankOpcode::SetSequencePlaybackRate, command);
+    }
+    void set_sequence_send_levels(const NativePortSoundSequenceHandle value,
+                                  const std::uint8_t direct,
+                                  const std::uint8_t effect) {
+        SoundBankCommand command;
+        command.sequence = value;
+        command.value8_0 = direct;
+        command.value8_1 = effect;
+        call_void(SoundBankOpcode::SetSequenceSendLevels, command);
+    }
+    [[nodiscard]] NativePortSoundVoiceHandle note_on(
+        const NativePortSoundCollectionHandle collection,
+        const NativePortSoundNoteConfig& config) {
+        SoundBankCommand command;
+        command.collection = collection;
+        command.note_config = config;
+        return call<NativePortSoundVoiceHandle>(SoundBankOpcode::NoteOn,
+                                                command);
+    }
+    void note_off(const NativePortSoundVoiceHandle value) {
+        voice_void(SoundBankOpcode::NoteOff, value);
+    }
+    void release_voice(const NativePortSoundVoiceHandle value) {
+        voice_void(SoundBankOpcode::ReleaseVoice, value);
+    }
+    void set_voice_gain_pan(const NativePortSoundVoiceHandle value,
+                            const float gain,
+                            const float pan) {
+        SoundBankCommand command;
+        command.voice = value;
+        command.value0 = gain;
+        command.value1 = pan;
+        call_void(SoundBankOpcode::SetVoiceGainPan, command);
+    }
+    void set_voice_pitch_bend(const NativePortSoundVoiceHandle value,
+                              const std::int16_t bend) {
+        SoundBankCommand command;
+        command.voice = value;
+        command.signed_value = bend;
+        call_void(SoundBankOpcode::SetVoicePitchBend, command);
+    }
+    void set_voice_send_levels(const NativePortSoundVoiceHandle value,
+                               const std::uint8_t direct,
+                               const std::uint8_t effect) {
+        SoundBankCommand command;
+        command.voice = value;
+        command.value8_0 = direct;
+        command.value8_1 = effect;
+        call_void(SoundBankOpcode::SetVoiceSendLevels, command);
+    }
+    [[nodiscard]] NativePortSoundMidiPortHandle open_midi_port(
+        const NativePortSoundCollectionHandle collection,
+        const NativePortSoundMidiPortConfig& config) {
+        SoundBankCommand command;
+        command.collection = collection;
+        command.midi_config = config;
+        return call<NativePortSoundMidiPortHandle>(
+            SoundBankOpcode::OpenMidiPort, command);
+    }
+    void close_midi_port(const NativePortSoundMidiPortHandle value) {
+        midi_void(SoundBankOpcode::CloseMidiPort, value);
+    }
+    void set_midi_program(const NativePortSoundMidiPortHandle value,
+                          const std::uint8_t bank,
+                          const std::uint8_t program) {
+        SoundBankCommand command;
+        command.port = value;
+        command.value8_0 = bank;
+        command.value8_1 = program;
+        call_void(SoundBankOpcode::SetMidiProgram, command);
+    }
+    void set_midi_gain_pan(const NativePortSoundMidiPortHandle value,
+                           const float gain,
+                           const float pan) {
+        SoundBankCommand command;
+        command.port = value;
+        command.value0 = gain;
+        command.value1 = pan;
+        call_void(SoundBankOpcode::SetMidiGainPan, command);
+    }
+    void set_midi_pitch_bend(const NativePortSoundMidiPortHandle value,
+                             const std::int16_t bend) {
+        SoundBankCommand command;
+        command.port = value;
+        command.signed_value = bend;
+        call_void(SoundBankOpcode::SetMidiPitchBend, command);
+    }
+    void set_midi_playback_rate(const NativePortSoundMidiPortHandle value,
+                                const float rate) {
+        SoundBankCommand command;
+        command.port = value;
+        command.value0 = rate;
+        call_void(SoundBankOpcode::SetMidiPlaybackRate, command);
+    }
+    void set_midi_send_levels(const NativePortSoundMidiPortHandle value,
+                              const std::uint8_t direct,
+                              const std::uint8_t effect) {
+        SoundBankCommand command;
+        command.port = value;
+        command.value8_0 = direct;
+        command.value8_1 = effect;
+        call_void(SoundBankOpcode::SetMidiSendLevels, command);
+    }
+    [[nodiscard]] NativePortSoundVoiceHandle midi_note_on(
+        const NativePortSoundMidiPortHandle port,
+        const std::uint8_t note,
+        const std::uint8_t velocity) {
+        SoundBankCommand command;
+        command.port = port;
+        command.value8_0 = note;
+        command.value8_1 = velocity;
+        return call<NativePortSoundVoiceHandle>(SoundBankOpcode::MidiNoteOn,
+                                                command);
+    }
+    void midi_note_off(const NativePortSoundMidiPortHandle port,
+                       const std::uint8_t note) {
+        SoundBankCommand command;
+        command.port = port;
+        command.value8_0 = note;
+        call_void(SoundBankOpcode::MidiNoteOff, command);
+    }
+    [[nodiscard]] NativePortSoundSequenceHandle midi_play_sequence(
+        const NativePortSoundMidiPortHandle port,
+        const std::uint8_t bank,
+        const std::uint16_t sequence,
+        const bool loops) {
+        SoundBankCommand command;
+        command.port = port;
+        command.value8_0 = bank;
+        command.value16 = sequence;
+        command.value8_1 = static_cast<std::uint8_t>(loops ? 1u : 0u);
+        return call<NativePortSoundSequenceHandle>(
+            SoundBankOpcode::MidiPlaySequence, command);
+    }
+    void midi_pause(const NativePortSoundMidiPortHandle value) {
+        midi_void(SoundBankOpcode::MidiPause, value);
+    }
+    void midi_resume(const NativePortSoundMidiPortHandle value) {
+        midi_void(SoundBankOpcode::MidiResume, value);
+    }
+    void midi_stop(const NativePortSoundMidiPortHandle value) {
+        midi_void(SoundBankOpcode::MidiStop, value);
+    }
+    void close_all_midi_ports() {
+        call_void(SoundBankOpcode::CloseAllMidiPorts);
+    }
+    void release_all_sequences() {
+        call_void(SoundBankOpcode::ReleaseAllSequences);
+    }
+    void unload_all_collections() {
+        call_void(SoundBankOpcode::UnloadAllCollections);
+    }
+    void stop_all() { call_void(SoundBankOpcode::StopAll); }
+    void reset() { call_void(SoundBankOpcode::Reset); }
+    void pump() {
+        require_owner_thread();
+        audio_.dispatch_sound_bank_async(
+            static_cast<std::uint16_t>(SoundBankOpcode::Pump), {});
+    }
+    [[nodiscard]] NativePortSoundSequenceSnapshot sequence_snapshot(
+        const NativePortSoundSequenceHandle value) const {
+        SoundBankCommand command;
+        command.sequence = value;
+        return call<NativePortSoundSequenceSnapshot>(
+            SoundBankOpcode::SequenceSnapshot, command);
+    }
+    [[nodiscard]] NativePortSoundMidiPortSnapshot midi_port_snapshot(
+        const NativePortSoundMidiPortHandle value) const {
+        SoundBankCommand command;
+        command.port = value;
+        return call<NativePortSoundMidiPortSnapshot>(
+            SoundBankOpcode::MidiPortSnapshot, command);
+    }
+    [[nodiscard]] NativePortSoundBankSnapshot snapshot() const {
+        return call_payload<NativePortSoundBankSnapshot>(
+            SoundBankOpcode::Snapshot, {});
+    }
+
+    static void execute_worker_command(
+        void* const target,
+        const std::uint16_t raw_opcode,
+        const std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept {
+        result = {};
+        auto* const self = static_cast<Impl*>(target);
+        if (self == nullptr) {
+            write_sound_error(result, NativePortSoundBankFailure::WorkerFailure);
+            return;
+        }
+        try {
+            self->execute(static_cast<SoundBankOpcode>(raw_opcode),
+                          payload,
+                          result);
+        } catch (const NativePortSoundBankError& error) {
+            write_sound_error(result, error.failure());
+        } catch (...) {
+            write_sound_error(result, NativePortSoundBankFailure::WorkerFailure);
+        }
+    }
+
+    static void cleanup_worker_state(void* const target) noexcept {
+        auto& self = *static_cast<Impl*>(target);
+        self.core_.reset();
+    }
+
+  private:
+    void require_owner_thread() const {
+        if (!audio_.on_audio_thread() &&
+            std::this_thread::get_id() != owner_thread_)
+            fail_sound_bank(NativePortSoundBankFailure::ThreadViolation,
+                            "producer-thread");
+    }
+
+    template <typename Value>
+    [[nodiscard]] Value call(const SoundBankOpcode opcode,
+                             const SoundBankCommand& command) const {
+        return call_payload<Value>(opcode, sound_object_bytes(command));
+    }
+
+    template <typename Value>
+    [[nodiscard]] Value call_payload(
+        const SoundBankOpcode opcode,
+        const std::span<const std::byte> payload) const {
+        require_owner_thread();
+        const auto ack = audio_.dispatch_sound_bank_sync(
+            static_cast<std::uint16_t>(opcode), payload);
+        require_success(ack);
+        if (ack.result_size != sizeof(Value))
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "ack-size");
+        Value result{};
+        std::memcpy(&result, ack.bytes.data(), sizeof(result));
+        return result;
+    }
+
+    void call_void(const SoundBankOpcode opcode) const {
+        call_void_payload(opcode, {});
+    }
+    void call_void(const SoundBankOpcode opcode,
+                   const SoundBankCommand& command) const {
+        call_void_payload(opcode, sound_object_bytes(command));
+    }
+    void call_void_payload(const SoundBankOpcode opcode,
+                           const std::span<const std::byte> payload) const {
+        require_owner_thread();
+        const auto ack = audio_.dispatch_sound_bank_sync(
+            static_cast<std::uint16_t>(opcode), payload);
+        require_success(ack);
+        if (ack.result_size != 0u)
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "void-ack-size");
+    }
+
+    static void require_success(const NativePortAudioCommandAck& ack) {
+        if (ack.status == NativePortAudioCommandAckStatus::Completed) return;
+        SoundBankWireError error;
+        if (ack.result_size == sizeof(error)) {
+            std::memcpy(&error, ack.bytes.data(), sizeof(error));
+            throw NativePortSoundBankError(error.failure, "worker-command");
+        }
+        fail_sound_bank(NativePortSoundBankFailure::CommandQueue,
+                        "command-ack");
+    }
+
+    void sequence_void(const SoundBankOpcode opcode,
+                       const NativePortSoundSequenceHandle value) {
+        SoundBankCommand command;
+        command.sequence = value;
+        call_void(opcode, command);
+    }
+    void voice_void(const SoundBankOpcode opcode,
+                    const NativePortSoundVoiceHandle value) {
+        SoundBankCommand command;
+        command.voice = value;
+        call_void(opcode, command);
+    }
+    void midi_void(const SoundBankOpcode opcode,
+                   const NativePortSoundMidiPortHandle value) {
+        SoundBankCommand command;
+        command.port = value;
+        call_void(opcode, command);
+    }
+
+    [[nodiscard]] SoundBankCommand require_command(
+        const std::span<const std::byte> payload) const {
+        SoundBankCommand command;
+        if (!read_sound_object(payload, command))
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "command-payload");
+        return command;
+    }
+
+    void require_empty(const std::span<const std::byte> payload) const {
+        if (!payload.empty())
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "command-payload");
+    }
+
+    void execute(const SoundBankOpcode opcode,
+                 const std::span<const std::byte> payload,
+                 NativePortAudioCommandAckResult& result) {
+        if (opcode == SoundBankOpcode::Construct) {
+            require_empty(payload);
+            if (core_ != nullptr)
+                fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                                "duplicate-construct");
+            core_ = std::make_unique<Core>(audio_, config_);
+            return;
+        }
+        if (opcode == SoundBankOpcode::Destroy) {
+            require_empty(payload);
+            core_.reset();
+            return;
+        }
+        if (core_ == nullptr)
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "worker-core");
+        if (opcode == SoundBankOpcode::LoadCollection) {
+            execute_load_collection(payload, result);
+            return;
+        }
+        if (opcode == SoundBankOpcode::CloseAllMidiPorts ||
+            opcode == SoundBankOpcode::ReleaseAllSequences ||
+            opcode == SoundBankOpcode::UnloadAllCollections ||
+            opcode == SoundBankOpcode::StopAll ||
+            opcode == SoundBankOpcode::Reset ||
+            opcode == SoundBankOpcode::Pump ||
+            opcode == SoundBankOpcode::Snapshot) {
+            require_empty(payload);
+            switch (opcode) {
+            case SoundBankOpcode::CloseAllMidiPorts:
+                core_->close_all_midi_ports();
+                return;
+            case SoundBankOpcode::ReleaseAllSequences:
+                core_->release_all_sequences();
+                return;
+            case SoundBankOpcode::UnloadAllCollections:
+                core_->unload_all_collections();
+                return;
+            case SoundBankOpcode::StopAll:
+                core_->stop_all();
+                return;
+            case SoundBankOpcode::Reset:
+                core_->reset();
+                return;
+            case SoundBankOpcode::Pump:
+                core_->pump();
+                return;
+            case SoundBankOpcode::Snapshot:
+                write_sound_ack(result, core_->snapshot());
+                return;
+            default:
+                break;
+            }
+        }
+        const auto command = require_command(payload);
+        execute_fixed(opcode, command, result);
+    }
+
+    void execute_load_collection(
+        const std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) {
+        if (payload.size() < sizeof(SoundBankLoadCommand))
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "load-payload");
+        SoundBankLoadCommand command;
+        std::memcpy(&command, payload.data(), sizeof(command));
+        std::uint64_t expected = sizeof(command);
+        const auto add = [&](const std::uint64_t value) {
+            if (value > std::numeric_limits<std::uint64_t>::max() - expected)
+                return false;
+            expected += value;
+            return expected <= std::numeric_limits<std::uint32_t>::max();
+        };
+        if (!add(command.logical_id_size) || !add(command.path_size) ||
+            !add(command.byte_identity_size) || !add(command.byte_size) ||
+            expected != payload.size())
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "load-payload");
+        std::size_t cursor = sizeof(command);
+        const std::string_view logical(
+            reinterpret_cast<const char*>(payload.data() + cursor),
+            command.logical_id_size);
+        cursor += command.logical_id_size;
+        const std::u8string path(
+            reinterpret_cast<const char8_t*>(payload.data() + cursor),
+            command.path_size);
+        cursor += command.path_size;
+        const std::string_view identity(
+            reinterpret_cast<const char*>(payload.data() + cursor),
+            command.byte_identity_size);
+        cursor += command.byte_identity_size;
+        std::vector<std::byte> bytes(command.byte_size);
+        std::memcpy(bytes.data(), payload.data() + cursor, bytes.size());
+        const NativePortContentFileBinding binding{
+            logical, std::filesystem::path(path), identity,
+            command.source_offset, command.byte_size};
+        write_sound_ack(result,
+                        core_->load_collection(binding, std::move(bytes)));
+    }
+
+    void execute_fixed(const SoundBankOpcode opcode,
+                       const SoundBankCommand& c,
+                       NativePortAudioCommandAckResult& result) {
+        switch (opcode) {
+        case SoundBankOpcode::UnloadCollection:
+            core_->unload_collection(c.collection); return;
+        case SoundBankOpcode::HasProgram:
+            write_sound_ack(result, static_cast<std::uint8_t>(
+                core_->has_program(c.collection, c.value8_0, c.value8_1))); return;
+        case SoundBankOpcode::HasSequence:
+            write_sound_ack(result, static_cast<std::uint8_t>(
+                core_->has_sequence(c.collection, c.value8_0, c.value16))); return;
+        case SoundBankOpcode::HasCollectionUnit:
+            write_sound_ack(result, static_cast<std::uint8_t>(
+                core_->has_collection_unit(c.collection,
+                    static_cast<NativePortSoundCollectionUnitKind>(c.value8_0),
+                    c.value8_1))); return;
+        case SoundBankOpcode::BindPcmStreamRing:
+            write_sound_ack(result, core_->bind_pcm_stream_ring(c.ring_config)); return;
+        case SoundBankOpcode::ReleasePcmStreamRing:
+            core_->release_pcm_stream_ring(c.ring); return;
+        case SoundBankOpcode::PcmStreamRingSnapshot:
+            write_sound_ack(result, core_->pcm_stream_ring_snapshot(c.ring)); return;
+        case SoundBankOpcode::PredecodeCollectionSamples:
+            core_->predecode_collection_samples(c.collection); return;
+        case SoundBankOpcode::PlaySequence:
+            write_sound_ack(result,
+                core_->play_sequence(c.collection, c.sequence_config)); return;
+        case SoundBankOpcode::PauseSequence:
+            core_->pause_sequence(c.sequence); return;
+        case SoundBankOpcode::ResumeSequence:
+            core_->resume_sequence(c.sequence); return;
+        case SoundBankOpcode::StopSequence:
+            core_->stop_sequence(c.sequence); return;
+        case SoundBankOpcode::ReleaseSequence:
+            core_->release_sequence(c.sequence); return;
+        case SoundBankOpcode::SetSequenceGainPan:
+            core_->set_sequence_gain_pan(c.sequence, c.value0, c.value1); return;
+        case SoundBankOpcode::SetSequencePitchBend:
+            core_->set_sequence_pitch_bend(c.sequence, c.signed_value); return;
+        case SoundBankOpcode::SetSequencePlaybackRate:
+            core_->set_sequence_playback_rate(c.sequence, c.value0); return;
+        case SoundBankOpcode::SetSequenceSendLevels:
+            core_->set_sequence_send_levels(c.sequence, c.value8_0, c.value8_1); return;
+        case SoundBankOpcode::NoteOn:
+            write_sound_ack(result, core_->note_on(c.collection, c.note_config)); return;
+        case SoundBankOpcode::NoteOff:
+            core_->note_off(c.voice); return;
+        case SoundBankOpcode::ReleaseVoice:
+            core_->release_voice(c.voice); return;
+        case SoundBankOpcode::SetVoiceGainPan:
+            core_->set_voice_gain_pan(c.voice, c.value0, c.value1); return;
+        case SoundBankOpcode::SetVoicePitchBend:
+            core_->set_voice_pitch_bend(c.voice, c.signed_value); return;
+        case SoundBankOpcode::SetVoiceSendLevels:
+            core_->set_voice_send_levels(c.voice, c.value8_0, c.value8_1); return;
+        case SoundBankOpcode::OpenMidiPort:
+            write_sound_ack(result, core_->open_midi_port(c.collection, c.midi_config)); return;
+        case SoundBankOpcode::CloseMidiPort:
+            core_->close_midi_port(c.port); return;
+        case SoundBankOpcode::SetMidiProgram:
+            core_->set_midi_program(c.port, c.value8_0, c.value8_1); return;
+        case SoundBankOpcode::SetMidiGainPan:
+            core_->set_midi_gain_pan(c.port, c.value0, c.value1); return;
+        case SoundBankOpcode::SetMidiPitchBend:
+            core_->set_midi_pitch_bend(c.port, c.signed_value); return;
+        case SoundBankOpcode::SetMidiPlaybackRate:
+            core_->set_midi_playback_rate(c.port, c.value0); return;
+        case SoundBankOpcode::SetMidiSendLevels:
+            core_->set_midi_send_levels(c.port, c.value8_0, c.value8_1); return;
+        case SoundBankOpcode::MidiNoteOn:
+            write_sound_ack(result, core_->midi_note_on(c.port, c.value8_0, c.value8_1)); return;
+        case SoundBankOpcode::MidiNoteOff:
+            core_->midi_note_off(c.port, c.value8_0); return;
+        case SoundBankOpcode::MidiPlaySequence:
+            if (c.value8_1 > 1u)
+                fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                                "midi-loop-flag");
+            write_sound_ack(result, core_->midi_play_sequence(
+                c.port, c.value8_0, c.value16, c.value8_1 != 0u)); return;
+        case SoundBankOpcode::MidiPause:
+            core_->midi_pause(c.port); return;
+        case SoundBankOpcode::MidiResume:
+            core_->midi_resume(c.port); return;
+        case SoundBankOpcode::MidiStop:
+            core_->midi_stop(c.port); return;
+        case SoundBankOpcode::SequenceSnapshot:
+            write_sound_ack(result, core_->sequence_snapshot(c.sequence)); return;
+        case SoundBankOpcode::MidiPortSnapshot:
+            write_sound_ack(result, core_->midi_port_snapshot(c.port)); return;
+        default:
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "opcode");
+        }
+    }
+
+    NativePortPlatformServices& platform_;
+    NativePortAudioEngine& audio_;
+    NativePortSoundBankConfig config_;
+    std::thread::id owner_thread_;
+    std::unique_ptr<Core> core_;
+};
+
+void NativePortSoundBankEngine::execute_worker_command(
+    void* const target,
+    const std::uint16_t opcode,
+    const std::span<const std::byte> payload,
+    NativePortAudioCommandAckResult& result) noexcept {
+    Impl::execute_worker_command(target, opcode, payload, result);
+}
 
 NativePortSoundBankEngine::NativePortSoundBankEngine(
     NativePortPlatformServices& platform,

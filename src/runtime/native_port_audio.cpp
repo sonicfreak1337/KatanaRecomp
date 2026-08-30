@@ -1,7 +1,11 @@
 #include "katana/runtime/native_port_audio.hpp"
 
+#include "native_port_audio_execution_domain.hpp"
+
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -53,14 +57,17 @@ void saturating_add(std::uint64_t& destination, const std::uint64_t value) noexc
 
 } // namespace
 
-class NativePortAudioStream::Impl final {
+// This is the old host endpoint implementation.  It deliberately remains a
+// single-thread owner, but its owner is now the process-wide audio domain
+// worker rather than the public NativePortAudioStream facade/caller.
+class NativePortAudioEndpointCore final {
 #ifdef _WIN32
     struct Block;
     struct PendingBlock;
 #endif
 
   public:
-    explicit Impl(const NativePortAudioConfig& config)
+    explicit NativePortAudioEndpointCore(const NativePortAudioConfig& config)
         : config_(config), owner_thread_(std::this_thread::get_id()) {
         validate_config(config_);
 #ifdef _WIN32
@@ -98,7 +105,7 @@ class NativePortAudioStream::Impl final {
 #endif
     }
 
-    ~Impl() {
+    ~NativePortAudioEndpointCore() {
         static_cast<void>(stop_unchecked());
     }
 
@@ -408,8 +415,321 @@ class NativePortAudioStream::Impl final {
     std::uint32_t error_code_ = 0u;
 };
 
-NativePortAudioStream::NativePortAudioStream(const NativePortAudioConfig& config)
-    : impl_(std::make_unique<Impl>(config)) {}
+namespace {
+
+enum class NativePortAudioStreamOpcode : std::uint16_t {
+    Construct = 1u,
+    SubmitPcmS16 = 2u,
+    Poll = 3u,
+    RefreshPlaybackPosition = 4u,
+    Pause = 5u,
+    Resume = 6u,
+    Stop = 7u,
+    Destroy = 8u,
+};
+
+std::atomic<std::uint64_t> next_legacy_audio_frame_index{0u};
+
+[[nodiscard]] std::uint64_t next_legacy_frame_index() noexcept {
+    return next_legacy_audio_frame_index.fetch_add(1u,
+                                                   std::memory_order_relaxed);
+}
+
+} // namespace
+
+class NativePortAudioStream::Impl final {
+  public:
+    Impl(const NativePortAudioConfig& config,
+         const NativePortAudioExecutionDomainTarget target)
+        : config_(config), target_(target),
+          domain_(NativePortAudioExecutionDomain::acquire(
+              NativePortAudioExecutionDomainConfig{
+                  normalized_queue_config(config.command_queue)})) {
+        validate_config(config_);
+        const auto registered = domain_->register_target(
+            target_, this, &NativePortAudioStream::Impl::execute,
+            &NativePortAudioStream::Impl::cleanup_worker_state);
+        if (!registered.has_value())
+            throw std::runtime_error("native-port-audio-target-register");
+        handle_ = *registered;
+        const auto result = dispatch(NativePortAudioStreamOpcode::Construct,
+                                     {}, compatible_frame_index(
+                                             next_legacy_frame_index()));
+        if (!result.completed()) {
+            // Construct may already have installed a worker-owned endpoint.
+            // A failed ACK therefore takes the same consumer-side cleanup
+            // path as every other terminal failure; unregistering here would
+            // disarm that cleanup while leaving Core owned by the producer.
+            domain_->shutdown();
+            handle_ = {};
+            throw NativePortAudioExecutionDomainError(
+                result.failure ==
+                        NativePortAudioExecutionDomainFailure::None
+                    ? NativePortAudioExecutionDomainFailure::TargetExecutionFailed
+                    : result.failure,
+                result.queue_failure, result.command_sequence);
+        }
+    }
+
+    ~Impl() {
+        if (!domain_ || !handle_.valid()) return;
+        const auto result = dispatch(NativePortAudioStreamOpcode::Destroy,
+                                     {}, compatible_frame_index(
+                                             next_legacy_frame_index()));
+        if (result.completed()) {
+            if (!domain_->unregister_target(handle_, this)) domain_->shutdown();
+        } else {
+            // The shared consumer drains/cancels, invokes the registered
+            // noexcept cleanup exactly once, and joins before this facade's
+            // storage can disappear.  Never leak or producer-destroy Core.
+            domain_->shutdown();
+        }
+        handle_ = {};
+    }
+
+    [[nodiscard]] const NativePortAudioFormat& format() const noexcept {
+        return config_.format;
+    }
+
+    [[nodiscard]] bool submit(
+        const std::span<const std::int16_t> samples,
+        const std::uint64_t frame_index) {
+        if (samples.empty() ||
+            samples.size() % config_.format.channels != 0u)
+            throw std::invalid_argument("native-port-audio-frame-layout");
+        if (samples.size_bytes() > std::numeric_limits<std::uint32_t>::max())
+            throw std::out_of_range("native-port-audio-buffer-size");
+        const auto result = dispatch(
+            NativePortAudioStreamOpcode::SubmitPcmS16,
+            std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(samples.data()),
+                samples.size_bytes()),
+            frame_index);
+        require_completed(result, "submit");
+        if (!result.has_ack || result.ack.result_size != 1u)
+            throw std::runtime_error("native-port-audio-submit-ack");
+        return std::to_integer<std::uint8_t>(result.ack.bytes[0]) != 0u;
+    }
+
+    void poll() { require_completed(dispatch(NativePortAudioStreamOpcode::Poll,
+                                             {}, next_legacy_frame_index()),
+                                     "poll"); }
+
+    void refresh_playback_position() {
+        require_completed(
+            dispatch(NativePortAudioStreamOpcode::RefreshPlaybackPosition, {},
+                     next_legacy_frame_index()),
+            "refresh-playback-position");
+    }
+
+    void pause() {
+        require_completed(dispatch(NativePortAudioStreamOpcode::Pause, {},
+                                   next_legacy_frame_index()),
+                          "pause");
+    }
+
+    void resume() {
+        require_completed(dispatch(NativePortAudioStreamOpcode::Resume, {},
+                                   next_legacy_frame_index()),
+                          "resume");
+    }
+
+    void stop() {
+        require_completed(dispatch(NativePortAudioStreamOpcode::Stop, {},
+                                   next_legacy_frame_index()),
+                          "stop");
+    }
+
+    [[nodiscard]] NativePortAudioSnapshot snapshot() const noexcept {
+        NativePortAudioSnapshot result;
+        result.state = state_.load(std::memory_order_acquire);
+        result.submitted_buffers = submitted_buffers_.load(std::memory_order_acquire);
+        result.submitted_frames = submitted_frames_.load(std::memory_order_acquire);
+        result.completed_frames = completed_frames_.load(std::memory_order_acquire);
+        result.queued_frames = queued_frames_.load(std::memory_order_acquire);
+        result.playback_position_frames =
+            playback_position_frames_.load(std::memory_order_acquire);
+        result.playback_position_queries =
+            playback_position_queries_.load(std::memory_order_acquire);
+        result.error_code = error_code_.load(std::memory_order_acquire);
+        return result;
+    }
+
+    [[nodiscard]] std::uint64_t playback_position_frames() const noexcept {
+        return playback_position_frames_.load(std::memory_order_acquire);
+    }
+
+  private:
+    [[nodiscard]] static NativePortAudioCommandQueueConfig
+    normalized_queue_config(NativePortAudioCommandQueueConfig config) {
+        if (native_port_audio_serial_reference_requested())
+            config.mode = NativePortAudioCommandQueueMode::SerialReference;
+        return config;
+    }
+
+    [[nodiscard]] std::uint64_t compatible_frame_index(
+        const std::uint64_t requested) const noexcept {
+        const auto snapshot = domain_->snapshot();
+        return snapshot.has_last_frame_index
+                   ? std::max(requested, snapshot.last_frame_index)
+                   : requested;
+    }
+    using AckResult = NativePortAudioCommandAckResult;
+
+    [[nodiscard]] NativePortAudioExecutionDomainDispatchResult dispatch(
+        const NativePortAudioStreamOpcode opcode,
+        const std::span<const std::byte> payload,
+        const std::uint64_t frame_index) const noexcept {
+        return domain_->dispatch_sync(
+            handle_, static_cast<std::uint16_t>(opcode), payload,
+            compatible_frame_index(frame_index));
+    }
+
+    static void execute(void* const object,
+                        const std::uint16_t raw_opcode,
+                        const std::span<const std::byte> payload,
+                        AckResult& result) noexcept {
+        auto& self = *static_cast<NativePortAudioStream::Impl*>(object);
+        try {
+            const auto opcode = static_cast<NativePortAudioStreamOpcode>(raw_opcode);
+            switch (opcode) {
+            case NativePortAudioStreamOpcode::Construct:
+                if (!payload.empty() || self.core_ != nullptr)
+                    throw std::logic_error("native-port-audio-construct");
+                self.core_ = std::make_unique<NativePortAudioEndpointCore>(self.config_);
+                self.publish_snapshot();
+                break;
+            case NativePortAudioStreamOpcode::SubmitPcmS16: {
+                if (self.core_ == nullptr || payload.empty() ||
+                    payload.size() % sizeof(std::int16_t) != 0u)
+                    throw std::invalid_argument("native-port-audio-submit-payload");
+                const auto sample_count = payload.size() / sizeof(std::int16_t);
+                if (reinterpret_cast<std::uintptr_t>(payload.data()) %
+                        alignof(std::int16_t) !=
+                    0u)
+                    throw std::invalid_argument("native-port-audio-payload-alignment");
+                const auto* const samples =
+                    reinterpret_cast<const std::int16_t*>(payload.data());
+                const auto accepted = self.core_->submit(
+                    std::span<const std::int16_t>(samples, sample_count));
+                result.bytes[0] = accepted ? std::byte{1u} : std::byte{0u};
+                result.result_size = 1u;
+                self.publish_snapshot();
+                break;
+            }
+            case NativePortAudioStreamOpcode::Poll:
+                if (self.core_ == nullptr || !payload.empty())
+                    throw std::logic_error("native-port-audio-poll");
+                self.core_->poll();
+                self.publish_snapshot();
+                break;
+            case NativePortAudioStreamOpcode::RefreshPlaybackPosition:
+                if (self.core_ == nullptr || !payload.empty())
+                    throw std::logic_error("native-port-audio-refresh");
+                self.core_->refresh_playback_position();
+                self.publish_snapshot();
+                break;
+            case NativePortAudioStreamOpcode::Pause:
+                if (self.core_ == nullptr || !payload.empty())
+                    throw std::logic_error("native-port-audio-pause");
+                self.core_->pause();
+                self.publish_snapshot();
+                break;
+            case NativePortAudioStreamOpcode::Resume:
+                if (self.core_ == nullptr || !payload.empty())
+                    throw std::logic_error("native-port-audio-resume");
+                self.core_->resume();
+                self.publish_snapshot();
+                break;
+            case NativePortAudioStreamOpcode::Stop:
+                if (self.core_ == nullptr || !payload.empty())
+                    throw std::logic_error("native-port-audio-stop");
+                self.core_->stop();
+                self.publish_snapshot();
+                break;
+            case NativePortAudioStreamOpcode::Destroy:
+                if (!payload.empty())
+                    throw std::logic_error("native-port-audio-destroy");
+                self.core_.reset();
+                self.state_.store(NativePortAudioState::Stopped,
+                                  std::memory_order_release);
+                self.queued_frames_.store(0u, std::memory_order_release);
+                break;
+            default:
+                throw std::invalid_argument("native-port-audio-opcode");
+            }
+            result.status = NativePortAudioCommandAckStatus::Completed;
+        } catch (...) {
+            result.status = NativePortAudioCommandAckStatus::Failed;
+            result.error_code = 1u;
+            self.state_.store(NativePortAudioState::Failed,
+                              std::memory_order_release);
+            self.error_code_.store(result.error_code, std::memory_order_release);
+        }
+    }
+
+    static void cleanup_worker_state(void* const object) noexcept {
+        auto& self = *static_cast<NativePortAudioStream::Impl*>(object);
+        self.core_.reset();
+        if (self.state_.load(std::memory_order_acquire) !=
+            NativePortAudioState::Stopped)
+            self.state_.store(NativePortAudioState::Failed,
+                              std::memory_order_release);
+        self.queued_frames_.store(0u, std::memory_order_release);
+    }
+
+    void publish_snapshot() noexcept {
+        if (core_ == nullptr) return;
+        const auto value = core_->snapshot();
+        state_.store(value.state, std::memory_order_release);
+        submitted_buffers_.store(value.submitted_buffers, std::memory_order_release);
+        submitted_frames_.store(value.submitted_frames, std::memory_order_release);
+        completed_frames_.store(value.completed_frames, std::memory_order_release);
+        queued_frames_.store(value.queued_frames, std::memory_order_release);
+        playback_position_frames_.store(value.playback_position_frames,
+                                        std::memory_order_release);
+        playback_position_queries_.store(value.playback_position_queries,
+                                         std::memory_order_release);
+        error_code_.store(value.error_code, std::memory_order_release);
+    }
+
+    static void require_completed(
+        const NativePortAudioExecutionDomainDispatchResult& result,
+        const char* operation) {
+        static_cast<void>(operation);
+        if (result.completed()) return;
+        throw NativePortAudioExecutionDomainError(
+            result.failure == NativePortAudioExecutionDomainFailure::None
+                ? NativePortAudioExecutionDomainFailure::TargetExecutionFailed
+                : result.failure,
+            result.queue_failure, result.command_sequence);
+    }
+
+    NativePortAudioConfig config_;
+    NativePortAudioExecutionDomainTarget target_;
+    std::shared_ptr<NativePortAudioExecutionDomain> domain_;
+    NativePortAudioExecutionDomainTargetHandle handle_{};
+    std::unique_ptr<NativePortAudioEndpointCore> core_;
+    std::atomic<NativePortAudioState> state_{NativePortAudioState::Ready};
+    std::atomic<std::uint64_t> submitted_buffers_{0u};
+    std::atomic<std::uint64_t> submitted_frames_{0u};
+    std::atomic<std::uint64_t> completed_frames_{0u};
+    std::atomic<std::uint64_t> queued_frames_{0u};
+    std::atomic<std::uint64_t> playback_position_frames_{0u};
+    std::atomic<std::uint64_t> playback_position_queries_{0u};
+    std::atomic<std::uint32_t> error_code_{0u};
+};
+
+NativePortAudioStream::NativePortAudioStream(
+    const NativePortAudioConfig& config)
+    : impl_(std::make_unique<Impl>(
+          config, NativePortAudioExecutionDomainTarget::HostOutput)) {}
+
+NativePortAudioStream::NativePortAudioStream(
+    const NativePortAudioConfig& config,
+    MovieTargetTag)
+    : impl_(std::make_unique<Impl>(
+          config, NativePortAudioExecutionDomainTarget::Movie)) {}
 
 NativePortAudioStream::~NativePortAudioStream() = default;
 
@@ -419,7 +739,13 @@ const NativePortAudioFormat& NativePortAudioStream::format() const noexcept {
 
 bool NativePortAudioStream::submit_pcm_s16(
     const std::span<const std::int16_t> interleaved_samples) {
-    return impl_->submit(interleaved_samples);
+    return impl_->submit(interleaved_samples, next_legacy_frame_index());
+}
+
+bool NativePortAudioStream::submit_pcm_s16(
+    const std::span<const std::int16_t> interleaved_samples,
+    const std::uint64_t frame_index) {
+    return impl_->submit(interleaved_samples, frame_index);
 }
 
 void NativePortAudioStream::poll() {
@@ -442,6 +768,13 @@ NativePortAudioSnapshot NativePortAudioStream::snapshot() const noexcept {
 }
 std::uint64_t NativePortAudioStream::playback_position_frames() const noexcept {
     return impl_->playback_position_frames();
+}
+
+std::unique_ptr<NativePortAudioStream>
+make_native_port_movie_audio_stream(const NativePortAudioConfig& config) {
+    return std::unique_ptr<NativePortAudioStream>(
+        new NativePortAudioStream(config,
+                                  NativePortAudioStream::MovieTargetTag{}));
 }
 
 } // namespace katana::runtime

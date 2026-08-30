@@ -28,8 +28,27 @@ struct AudioTick {
     std::uint32_t frame_count = 0u;
 };
 
+// Exact scheduler evidence exposed while an AudioTickCallback executes.
+// This is not an audio-domain command stamp: the shared domain assigns its
+// own globally contiguous guest_sequence at the producer boundary.
+struct MediaAudioTickEvidence final {
+    std::uint64_t frame_index = 0u;
+    // Scheduler-cycle evidence, not the contiguous audio-command sequence.
+    // Each audio facade assigns that sequence at its single producer edge.
+    std::uint64_t guest_cycle = 0u;
+
+    [[nodiscard]] constexpr bool operator==(
+        const MediaAudioTickEvidence&) const noexcept = default;
+};
+
 using VideoTickCallback = std::function<void(const VideoTick&)>;
 using AudioTickCallback = std::function<void(const AudioTick&)>;
+
+// Returns the stamp for the innermost AudioTickCallback on this thread, or
+// nullopt outside an audio callback. Nested callbacks restore their caller's
+// stamp when they return, including exception unwinding.
+[[nodiscard]] std::optional<MediaAudioTickEvidence>
+current_media_audio_tick_evidence() noexcept;
 
 class DreamcastMediaClock final {
   public:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/runtime/native_port_audio.hpp"
+#include "katana/runtime/native_port_audio_command_queue.hpp"
 #include "katana/runtime/native_port_codec.hpp"
 #include "katana/runtime/native_port_platform.hpp"
 
@@ -13,8 +14,9 @@
 namespace katana::runtime {
 
 class NativePortSoundBankEngine;
+class NativePortTelemetry;
 
-inline constexpr std::uint32_t native_port_audio_engine_contract_version = 5u;
+inline constexpr std::uint32_t native_port_audio_engine_contract_version = 6u;
 
 enum class NativePortAudioEngineFailure : std::uint8_t {
     None,
@@ -29,6 +31,8 @@ enum class NativePortAudioEngineFailure : std::uint8_t {
     UnexpectedVideo,
     ResourceLimit,
     HostAudio,
+    CommandQueue,
+    WorkerFailure,
     ThreadViolation,
 };
 
@@ -59,6 +63,22 @@ struct NativePortAudioEngineConfig final {
     std::uint32_t mix_block_frames = 256u;
     std::uint32_t maximum_buffered_frames_per_voice = 88'200u;
     std::uint32_t maximum_decoder_reads_per_pump = 4'096u;
+    // Codec content is materialized through the simulation-owned platform
+    // boundary before it becomes immutable audio-worker input. This keeps
+    // NativePortPlatformServices and NativePortReadOnlyFile single-writer
+    // confined while decoder construction and every decoder read remain on
+    // the dedicated audio thread.
+    std::uint64_t maximum_codec_source_bytes_per_voice =
+        64u * 1024u * 1024u;
+    NativePortAudioCommandQueueConfig command_queue;
+    // Optional aggregate owner shared by every facade in the process-wide
+    // audio execution domain. The domain creates and owns the worker-bound
+    // writer; facades never synthesize decode/mix timings themselves.
+    NativePortTelemetry* telemetry = nullptr;
+    using CommandStampSource = NativePortAudioCommandStamp (*)(
+        void* user) noexcept;
+    CommandStampSource command_stamp_source = nullptr;
+    void* command_stamp_user = nullptr;
 };
 
 struct NativePortAudioVoiceConfig final {
@@ -156,6 +176,7 @@ struct NativePortAudioEngineSnapshot final {
     std::uint32_t failed_voices = 0u;
     bool output_paused = false;
     NativePortAudioSnapshot output;
+    NativePortAudioCommandQueueSnapshot command_queue;
 };
 
 // Native title-audio service. Exact content ranges are identity-verified by
@@ -164,8 +185,11 @@ struct NativePortAudioEngineSnapshot final {
 // audio only: there is no AICA register surface, ARM7 execution, guest sound
 // RAM, command ring, interrupt, DMA or device-timing fallback.
 //
-// Construction, all calls and destruction are owner-thread confined. Voice
-// handles are generation checked; stale handles always fail closed.
+// The public facade is simulation-thread confined. It snapshots immutable
+// command inputs and submits them to one process-wide audio domain. The
+// endpoint, codec, mixer and voice core are constructed, used and destroyed
+// on that domain's dedicated thread. Voice handles remain generation checked;
+// stale handles always fail closed.
 class NativePortAudioEngine final {
   public:
     NativePortAudioEngine(NativePortPlatformServices& platform,
@@ -200,6 +224,13 @@ class NativePortAudioEngine final {
     void stop_all();
     void pump();
 
+    // Explicit tests and non-title clients may bind a stamp directly. Native
+    // title adapters should provide command_stamp_source in the constructor
+    // config so every top-level call samples the current frame/cycle pair.
+    void bind_command_stamp(NativePortAudioCommandStamp stamp);
+    [[nodiscard]] NativePortAudioCommandQueueSnapshot
+    command_queue_snapshot() const;
+
     [[nodiscard]] NativePortAudioVoiceSnapshot
     voice_snapshot(NativePortAudioVoiceHandle voice) const;
     [[nodiscard]] NativePortAudioEngineSnapshot snapshot() const;
@@ -212,6 +243,30 @@ class NativePortAudioEngine final {
     // refill passes retire buffers and mix against that same sample.
     void pump_with_cached_playback_position();
 
+    using WorkerTargetExecutor = void (*)(
+        void* target,
+        std::uint16_t opcode,
+        std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept;
+    using WorkerTargetCleanup = void (*)(void* target) noexcept;
+
+    // One sound-bank target may share this engine's worker. Registration is
+    // a synchronous lifecycle command; command slots themselves remain POD
+    // and never contain pointers or executable callbacks.
+    void bind_sound_bank_target(void* target,
+                                WorkerTargetExecutor executor,
+                                WorkerTargetCleanup cleanup);
+    void unbind_sound_bank_target(
+        void* target, bool destroy_acknowledged) noexcept;
+    [[nodiscard]] NativePortAudioCommandAck dispatch_sound_bank_sync(
+        std::uint16_t opcode,
+        std::span<const std::byte> payload) const;
+    void dispatch_sound_bank_async(
+        std::uint16_t opcode,
+        std::span<const std::byte> payload) const;
+    [[nodiscard]] bool on_audio_thread() const noexcept;
+
+    class Core;
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
