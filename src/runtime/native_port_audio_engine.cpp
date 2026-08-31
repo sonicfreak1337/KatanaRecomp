@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -24,6 +25,54 @@ constexpr std::uint32_t maximum_mix_block_frames = 16'384u;
 constexpr std::uint32_t maximum_decoder_reads_per_pump = 1'048'576u;
 constexpr std::uint64_t maximum_codec_source_bytes =
     1ull * 1024ull * 1024ull * 1024ull;
+
+class AudioEngineFrameCursor final {
+  public:
+    constexpr void observe_effective(const std::uint64_t frame_index) noexcept {
+        last_effective_frame_index_ =
+            std::max(last_effective_frame_index_, frame_index);
+    }
+
+    [[nodiscard]] constexpr bool resolve(
+        const std::uint64_t source_frame_index,
+        const std::optional<std::uint64_t> domain_frame_index,
+        std::uint64_t& effective_frame_index) noexcept {
+        if (has_source_frame_index_ &&
+            source_frame_index < last_source_frame_index_)
+            return false;
+        has_source_frame_index_ = true;
+        last_source_frame_index_ = source_frame_index;
+        observe_effective(source_frame_index);
+        if (domain_frame_index.has_value())
+            observe_effective(*domain_frame_index);
+        effective_frame_index = last_effective_frame_index_;
+        return true;
+    }
+
+    [[nodiscard]] constexpr std::uint64_t effective() const noexcept {
+        return last_effective_frame_index_;
+    }
+
+  private:
+    std::uint64_t last_source_frame_index_ = 0u;
+    std::uint64_t last_effective_frame_index_ = 0u;
+    bool has_source_frame_index_ = false;
+};
+
+consteval bool audio_engine_frame_cursor_contract() {
+    AudioEngineFrameCursor cursor;
+    cursor.observe_effective(20u);
+    std::uint64_t effective = 0u;
+    if (!cursor.resolve(4u, 20u, effective) || effective != 20u)
+        return false;
+    if (!cursor.resolve(4u, 21u, effective) || effective != 21u)
+        return false;
+    if (!cursor.resolve(5u, std::nullopt, effective) || effective != 21u)
+        return false;
+    return !cursor.resolve(3u, 21u, effective);
+}
+
+static_assert(audio_engine_frame_cursor_contract());
 
 [[nodiscard]] bool native_audio_signal_diagnostics_enabled() noexcept {
     static const bool enabled = [] {
@@ -1537,9 +1586,12 @@ class NativePortAudioEngine::Impl final {
                               "engine-register");
         }
         handle_ = *registered;
+        const auto construct_frame_index =
+            domain_->last_frame_index_nonblocking().value_or(0u);
+        frame_cursor_.observe_effective(construct_frame_index);
         const auto result = domain_->dispatch_sync(
             handle_, static_cast<std::uint16_t>(AudioEngineOpcode::Construct),
-            {}, 0u);
+            {}, construct_frame_index);
         if (!result.completed()) {
             // Construct can fail after Core acquired worker-only codec/output
             // state.  Keep the cleanup armed and synchronously join the one
@@ -1854,24 +1906,26 @@ class NativePortAudioEngine::Impl final {
         // Nested worker suboperations inherit the outer domain command. They
         // must not call a simulation-owned stamp callback or allocate a new
         // sequence; dispatch_inline ignores this evidence value.
-        if (on_audio_thread()) return last_frame_index_;
+        if (on_audio_thread())
+            return domain_->last_frame_index_nonblocking().value_or(0u);
         auto source = bound_stamp_;
         if (config_.command_stamp_source != nullptr)
             source = config_.command_stamp_source(config_.command_stamp_user);
-        if (source.frame_index < last_frame_index_)
+        std::uint64_t frame_index = 0u;
+        if (!frame_cursor_.resolve(source.frame_index,
+                                   domain_->last_frame_index_nonblocking(),
+                                   frame_index))
             fail_audio_engine(NativePortAudioEngineFailure::CommandQueue,
                               0u,
                               "frame-regression");
-        auto frame_index = source.frame_index;
-        if (const auto domain_frame = domain_->last_frame_index_nonblocking();
-            domain_frame.has_value())
-            frame_index = std::max(frame_index, *domain_frame);
-        last_frame_index_ = frame_index;
         return frame_index;
     }
 
     [[nodiscard]] std::uint64_t current_frame_index_noexcept() const noexcept {
-        return last_frame_index_;
+        const auto domain_frame = domain_->last_frame_index_nonblocking();
+        return domain_frame.has_value()
+                   ? std::max(frame_cursor_.effective(), *domain_frame)
+                   : frame_cursor_.effective();
     }
 
     [[nodiscard]] static NativePortAudioExecutionDomainStage engine_stage(
@@ -2225,7 +2279,7 @@ class NativePortAudioEngine::Impl final {
     NativePortAudioExecutionDomainTargetHandle sound_bank_handle_{};
     mutable std::unique_ptr<Core> core_;
     mutable NativePortAudioCommandStamp bound_stamp_{};
-    mutable std::uint64_t last_frame_index_ = 0u;
+    mutable AudioEngineFrameCursor frame_cursor_;
     void* sound_bank_target_ = nullptr;
     bool telemetry_bound_ = false;
 };
