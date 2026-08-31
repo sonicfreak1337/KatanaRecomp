@@ -1513,6 +1513,7 @@ int run_test(const int argc, char* argv[]) {
         explicit_static_boundaries;
     explicit_static_project.code_identities = explicit_static_identities;
     explicit_static_project.static_entries = explicit_static_entries;
+    explicit_static_project.runtime_images = external_runtime_images;
     const auto explicit_static_bootstrap_identity =
         "sha256:" + katana::io::sha256_bytes(std::string_view(
             reinterpret_cast<const char*>(
@@ -1571,10 +1572,32 @@ int run_test(const int argc, char* argv[]) {
         "explicit_static_native_bootstrap";
     explicit_static_native_port.bootstrap.post_cpu_state_identity =
         "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    constexpr std::array<std::uint8_t,
+                         external_runtime_image_bytes.size()>
+        explicit_static_runtime_image_pre_bytes{};
+    const auto explicit_static_runtime_image_pre_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                explicit_static_runtime_image_pre_bytes.data()),
+            explicit_static_runtime_image_pre_bytes.size()));
+    const std::array explicit_static_bootstrap_writes{
+        katana::runtime::NativePortBootstrapWriteBinding{
+            0x8C900000u,
+            static_cast<std::uint32_t>(external_runtime_image_bytes.size()),
+            explicit_static_runtime_image_pre_identity,
+            external_runtime_image_identity,
+            katana::runtime::NativePortBootstrapWritePolicy::
+                IdentityBoundImmutableMaterialization}};
+    explicit_static_native_port.bootstrap.writes =
+        explicit_static_bootstrap_writes;
     explicit_static_native_port.acceptance = {
         katana::runtime::required_product_milestone_name(
             explicit_static_project.required_product_milestone),
         katana::platform::dreamcast_disc_boot_address};
+    constexpr std::array<std::string_view, 1u>
+        explicit_static_runtime_image_ids{"external-runtime-image"};
+    explicit_static_native_port.checkpoint_runtime_image_ids =
+        explicit_static_runtime_image_ids;
     explicit_static_native_port.images = explicit_static_native_images;
     explicit_static_native_port.hooks = explicit_static_native_hooks;
     auto explicit_static_options = options;
@@ -1588,6 +1611,13 @@ int run_test(const int argc, char* argv[]) {
     explicit_static_options.codegen_implementation_identity =
         std::string(64u, '4');
     explicit_static_options.game_project = &explicit_static_project;
+    explicit_static_options.game_project_runtime_image_payloads =
+        external_runtime_image_payloads;
+    const std::array explicit_static_bootstrap_write_payloads{
+        NativePortBootstrapWritePayload{
+            0x8C900000u, external_runtime_image_bytes}};
+    explicit_static_options.native_port_bootstrap_write_payloads =
+        explicit_static_bootstrap_write_payloads;
     explicit_static_options.native_port_definition =
         &explicit_static_native_port;
     const auto explicit_static_output =
@@ -1605,9 +1635,12 @@ int run_test(const int argc, char* argv[]) {
     const auto explicit_static_sources =
         snapshot(explicit_static_output / "generated");
     std::string explicit_static_units;
+    std::string explicit_static_dispatch_shards;
     for (const auto& [path, content] : explicit_static_sources)
         if (path.starts_with("code/unit-"))
             explicit_static_units += content;
+        else if (path.starts_with("code/native-port-dispatch-shard-"))
+            explicit_static_dispatch_shards += content;
     require(
         explicit_static_units.find("fn_8C010028_runtime_entry") !=
                 std::string::npos &&
@@ -1617,9 +1650,14 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             explicit_static_sources.at("metadata/game-project.json")
                     .find("\"static_entries\":[2348875816,2348875828]") !=
+                std::string::npos &&
+            explicit_static_dispatch_shards.find(
+                "entries.push_back({0x89000000u, "
+                "&fn_89000000_runtime_entry, false})") !=
                 std::string::npos,
         "Expliziter identity-bound StaticEntry wird nicht materialisiert "
-        "oder descriptive FunctionBoundary wurde implizit zum Root.");
+        "oder descriptive/RuntimeImage-Entry wurde implizit zum statischen "
+        "Chain-Root.");
 
     auto proven_unknown_image = stored_unknown_image;
     proven_unknown_image.add_entry_point(stored_unknown_candidate);
@@ -1815,6 +1853,8 @@ int run_test(const int argc, char* argv[]) {
         external_boundary_content_identity,
         external_boundary_disc.metadata.boot_file_name,
         external_boundary_boot_identity};
+    analysis_cache_native_port.bootstrap.writes = {};
+    analysis_cache_native_port.checkpoint_runtime_image_ids = {};
     analysis_cache_native_port.images = analysis_cache_native_images;
     analysis_cache_native_port.hooks = analysis_cache_native_hooks;
     auto analysis_cache_options = options;
@@ -2115,6 +2155,8 @@ int run_test(const int argc, char* argv[]) {
         latent_content_identity,
         latent_boot.metadata.boot_file_name,
         latent_boot_identity};
+    latent_native_port.bootstrap.writes = {};
+    latent_native_port.checkpoint_runtime_image_ids = {};
     latent_native_port.images = latent_native_images;
     latent_native_port.hooks = latent_native_hooks;
     auto latent_options = options;
@@ -2240,7 +2282,8 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 latent_dispatch_shard.find(
                     "entries.push_back({0x80000000u, "
-                    "&fn_80000000_runtime_entry})") != std::string::npos &&
+                    "&fn_80000000_runtime_entry, false})") !=
+                    std::string::npos &&
                 latent_dispatch_shard.find(
                     "entries.push_back({0x88000000u") == std::string::npos &&
                 occurrences(latent_loaded_aot_shard, latent_block_identity) == 4u,
@@ -4963,6 +5006,12 @@ int run_test(const int argc, char* argv[]) {
                 "katana::runtime::ExplicitGuestInstructionAttempt "
                 "delay_attempt(") != std::string::npos &&
             generated_native_dispatch.find(
+                "class NativePortStaticChainIndex final") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "if (static_chainable_source_address(source)) return true;") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
                 "return !native_hook_address(address) &&\n"
                 "               find_entry(address) != nullptr;") !=
                 std::string::npos &&
@@ -5039,14 +5088,45 @@ int run_test(const int argc, char* argv[]) {
     const auto generated_root_cmake = read_text(output / "CMakeLists.txt");
     require(
         generated_root_cmake.find(
-            "set(KATANA_PORT_PGO_MODE \"$ENV{KATANA_PORT_PGO_MODE}\" CACHE STRING") !=
+            "set(KATANA_PORT_PGO_MODE \"$ENV{KATANA_PORT_PGO_MODE}\")") !=
+                std::string::npos &&
+            generated_root_cmake.find(
+                "set(KATANA_PORT_PGO_MODE \"${KATANA_PORT_PGO_MODE}\" CACHE STRING") !=
+                std::string::npos &&
+            generated_root_cmake.find(
+                "Merged LLVM .profdata used by a performance build\" FORCE)") !=
+                std::string::npos &&
+            generated_root_cmake.find(
+                "Required SHA-256 of KATANA_PORT_PGO_PROFILE\" FORCE)") !=
                 std::string::npos &&
             generated_port_cmake.find(
                 "KATANA_PORT_BUILD_PROFILE STREQUAL \"performance\" OR") !=
                 std::string::npos &&
             generated_port_cmake.find(
-                "Performance/gate build requires IPO") != std::string::npos,
-        "Performanceexport verliert Profilwahl oder verpflichtendes IPO.");
+                "Performance/gate build requires IPO") != std::string::npos &&
+            generated_port_cmake.find(
+                "CMAKE_LINKER MATCHES \"lld-link(\\\\.exe)?$\"") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "\"${KATANA_PORT_BUILD_PROFILE}/${KATANA_PORT_PGO_MODE}\"") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "string(SHA256 KATANA_PORT_THINLTO_PROFILE_CACHE_KEY") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "${CMAKE_BINARY_DIR}/.katana-thinlto-cache/"
+                "${CMAKE_CXX_COMPILER_VERSION}/"
+                "${KATANA_PORT_THINLTO_CACHE_VARIANT}") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "\"/lldltocache:${KATANA_PORT_THINLTO_CACHE_DIRECTORY}\"") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "\"/lldltocachepolicy:cache_size=0%:cache_size_bytes=8g:"
+                "prune_after=168h:prune_interval=20m\"") !=
+                std::string::npos,
+        "Performanceexport verliert Profilwahl, verpflichtendes IPO oder "
+        "den persistent begrenzten ThinLTO-Linkcache.");
     require(
         generated_port_cmake.find("KATANA_PORT_OPTIMIZATION_TARGETS") !=
                 std::string::npos &&
