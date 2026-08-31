@@ -239,6 +239,8 @@ struct AudioSubmitPcmCommand final {
     std::uint32_t sample_count = 0u;
 };
 
+static_assert(sizeof(AudioSubmitPcmCommand) % alignof(std::int16_t) == 0u);
+
 struct AudioGainPanCommand final {
     NativePortAudioVoiceHandle voice{};
     float gain = 1.0f;
@@ -1672,32 +1674,42 @@ class NativePortAudioEngine::Impl final {
     void handle_command(const AudioEngineOpcode opcode,
                         const NativePortAudioVoiceHandle voice) {
         const AudioHandleCommand command{voice};
-        static_cast<void>(dispatch_sync(
-            opcode,
-            object_bytes(command)));
+        switch (opcode) {
+        case AudioEngineOpcode::FinishPcmFeed:
+        case AudioEngineOpcode::Play:
+        case AudioEngineOpcode::Pause:
+        case AudioEngineOpcode::Resume:
+        case AudioEngineOpcode::Stop:
+            dispatch_async(opcode, object_bytes(command));
+            return;
+        case AudioEngineOpcode::Release:
+            // Release invalidates the generation-bound handle and therefore
+            // remains an acknowledged lifecycle boundary.
+            dispatch_sync_void(opcode, object_bytes(command),
+                               "voice-release");
+            return;
+        default:
+            fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
+                              0u, "voice-control-opcode");
+        }
     }
 
     void set_gain_pan(const NativePortAudioVoiceHandle voice,
                       const float gain,
-                      const float pan) {
+        const float pan) {
         const AudioGainPanCommand command{voice, gain, pan};
-        static_cast<void>(dispatch_sync(
-            AudioEngineOpcode::SetGainPan,
-            object_bytes(command)));
+        dispatch_async(AudioEngineOpcode::SetGainPan, object_bytes(command));
     }
 
     void set_output_paused(const bool paused) {
         const AudioPauseOutputCommand command{
             static_cast<std::uint8_t>(paused ? 1u : 0u), {}};
-        static_cast<void>(dispatch_sync(
-            AudioEngineOpcode::SetOutputPaused,
-            object_bytes(command)));
+        dispatch_async(AudioEngineOpcode::SetOutputPaused,
+                       object_bytes(command));
     }
 
     void stop_all() {
-        static_cast<void>(dispatch_sync(
-            AudioEngineOpcode::StopAll,
-            {}));
+        dispatch_async(AudioEngineOpcode::StopAll, {});
     }
 
     void pump(const bool refresh_playback_position) {
@@ -1851,10 +1863,9 @@ class NativePortAudioEngine::Impl final {
                               0u,
                               "frame-regression");
         auto frame_index = source.frame_index;
-        const auto domain_snapshot = domain_->snapshot();
-        if (domain_snapshot.has_last_frame_index)
-            frame_index = std::max(frame_index,
-                                   domain_snapshot.last_frame_index);
+        if (const auto domain_frame = domain_->last_frame_index_nonblocking();
+            domain_frame.has_value())
+            frame_index = std::max(frame_index, *domain_frame);
         last_frame_index_ = frame_index;
         return frame_index;
     }
@@ -1880,24 +1891,30 @@ class NativePortAudioEngine::Impl final {
         const NativePortAudioExecutionDomainDispatchResult& result,
         const char* const operation) {
         if (result.has_ack) return result.ack;
+        const auto error_code = result.has_target_failure
+                                    ? result.target_failure_error_code
+                                    : static_cast<std::uint32_t>(result.failure);
         fail_audio_engine(
             result.failure ==
                     NativePortAudioExecutionDomainFailure::ProducerThreadViolation
                 ? NativePortAudioEngineFailure::ThreadViolation
                 : NativePortAudioEngineFailure::CommandQueue,
-            static_cast<std::uint32_t>(result.failure), operation);
+            error_code, operation);
     }
 
     static void require_domain_accepted(
         const NativePortAudioExecutionDomainDispatchResult& result,
         const char* const operation) {
         if (result.accepted()) return;
+        const auto error_code = result.has_target_failure
+                                    ? result.target_failure_error_code
+                                    : static_cast<std::uint32_t>(result.failure);
         fail_audio_engine(
             result.failure ==
                     NativePortAudioExecutionDomainFailure::ProducerThreadViolation
                 ? NativePortAudioEngineFailure::ThreadViolation
                 : NativePortAudioEngineFailure::CommandQueue,
-            static_cast<std::uint32_t>(result.failure), operation);
+            error_code, operation);
     }
 
     [[nodiscard]] NativePortAudioCommandAck dispatch_sync(
@@ -1926,6 +1943,17 @@ class NativePortAudioEngine::Impl final {
                 handle_, static_cast<std::uint16_t>(opcode), parts,
                 current_frame_index(), 0u, stage),
             "engine-scatter-command");
+    }
+
+    void dispatch_sync_void(
+        const AudioEngineOpcode opcode,
+        const std::span<const std::byte> payload,
+        const char* const operation) const {
+        const auto ack = dispatch_sync(opcode, payload);
+        require_ack_success(ack, operation);
+        if (ack.result_size != 0u)
+            fail_audio_engine(NativePortAudioEngineFailure::WorkerFailure,
+                              0u, operation);
     }
 
     void dispatch_async(

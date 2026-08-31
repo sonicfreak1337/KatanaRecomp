@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 17u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 18u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
@@ -902,6 +902,13 @@ struct NativePortGraphicsSnapshot final {
     std::uint64_t backend_reply_sequence = 0u;
     std::uint64_t frame_queue_producer_position = 0u;
     std::uint64_t frame_queue_consumer_position = 0u;
+    // Cumulative producer-side blocking. These are measured at real queue,
+    // reply and open-frame resource fences; unavailable telemetry is never
+    // represented as nominal work.
+    std::uint64_t render_producer_wait_ns = 0u;
+    std::uint64_t render_resource_fence_wait_ns = 0u;
+    std::uint64_t resource_fence_count = 0u;
+    std::uint64_t frame_prefix_publications = 0u;
 };
 
 // Hardware-only native renderer used by title-side NINJA/Kamui/game-renderer
@@ -963,6 +970,12 @@ class NativePortGraphicsDevice final {
                        NativePortViewportTarget viewport =
                            NativePortViewportTarget::Game,
                        NativePortImageFit fit = NativePortImageFit::Contain);
+
+    // Explicit drain boundary for successful product termination. It rejects
+    // an unsealed producer frame, retires every published reply, propagates
+    // the final typed backend failure and acquires the final backend state.
+    // The noexcept destructor remains an emergency cleanup fallback only.
+    void finish();
 
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() const;
 

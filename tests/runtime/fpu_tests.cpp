@@ -213,9 +213,13 @@ int main() {
 #if KATANA_TEST_HAS_SSE_MXCSR
     constexpr std::uint32_t host_denormals_are_zero_mask = 0x00000040u;
     constexpr std::uint32_t host_flush_to_zero_mask = 0x00008000u;
+    constexpr std::uint32_t host_exception_status_mask = 0x0000003Fu;
+    constexpr std::uint32_t host_exception_mask_mask = 0x00001F80u;
     const auto original_mxcsr = _mm_getcsr();
     const auto poisoned_mxcsr =
-        original_mxcsr | host_denormals_are_zero_mask | host_flush_to_zero_mask;
+        (original_mxcsr | host_denormals_are_zero_mask |
+         host_flush_to_zero_mask) &
+        ~(host_exception_status_mask | host_exception_mask_mask);
     _mm_setcsr(poisoned_mxcsr);
     cpu.fr[0] = 0x00800000u;
     cpu.fr[1] = 0x3F000000u;
@@ -233,9 +237,13 @@ int main() {
     {
         const HostFpuExecutionEpoch epoch(cpu);
         const auto epoch_mxcsr = _mm_getcsr();
-        require((epoch_mxcsr & (_MM_ROUND_MASK | host_denormals_are_zero_mask |
-                                host_flush_to_zero_mask)) == _MM_ROUND_NEAREST,
-                "FPU-Epoche bindet FPSCR.RM oder DN nicht an den Hostzustand.");
+        require((epoch_mxcsr &
+                 (_MM_ROUND_MASK | host_denormals_are_zero_mask |
+                  host_flush_to_zero_mask | host_exception_status_mask |
+                  host_exception_mask_mask)) ==
+                    (_MM_ROUND_NEAREST | host_exception_mask_mask),
+                "FPU-Epoche bindet FPSCR.RM/DN oder die maskierte, saubere "
+                "Host-Exceptionumgebung nicht.");
         cpu.fr[0] = 0x00800000u;
         cpu.fr[1] = 0x3F000000u;
         fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 1u);
@@ -252,12 +260,12 @@ int main() {
     require(_mm_getcsr() == poisoned_mxcsr,
             "FPU-Epoche stellt den ambienten Host-MXCSR nicht exakt wieder her.");
 
-    constexpr std::uint32_t host_exception_status_mask = 0x0000003Fu;
     const auto matching_mxcsr =
         (original_mxcsr &
          ~(_MM_ROUND_MASK | host_denormals_are_zero_mask |
-           host_flush_to_zero_mask | host_exception_status_mask)) |
-        _MM_ROUND_NEAREST;
+           host_flush_to_zero_mask | host_exception_status_mask |
+           host_exception_mask_mask)) |
+        _MM_ROUND_NEAREST | host_exception_mask_mask;
     _mm_setcsr(matching_mxcsr);
     {
         const HostFpuExecutionEpoch epoch(cpu);
@@ -342,6 +350,21 @@ int main() {
                     cpu.fr[3] == fsca_cardinal_bits[quadrant * 2u + 1u],
                 "FSCA verliert einen exakten Quadrantenanker oder dessen Nullvorzeichen.");
     }
+
+    cpu.write_fpscr(0u);
+    cpu.fpul = 0u;
+    fpu_sine_cosine(cpu, 2u);
+    require((cpu.fpscr & fpscr_cause_inexact_mask) != 0u &&
+                (cpu.fpscr & fpscr_flag_inexact_mask) != 0u,
+            "FSCA erzeugt den erwarteten Cause-/Sticky-Inexact-Zustand nicht.");
+    write_fr_single(cpu, 0u, 1.0f);
+    write_fr_single(cpu, 1u, 2.0f);
+    fpu_binary(cpu, FpuBinaryOperation::Add, 0u, 1u);
+    require(read_fr_single(cpu, 1u) == 3.0f &&
+                (cpu.fpscr & fpscr_cause_mask) == 0u &&
+                (cpu.fpscr & fpscr_flag_inexact_mask) != 0u,
+            "Eine folgende exakte FADD-Operation loescht den alten Cause "
+            "nicht oder verliert das Sticky-Flag.");
 
     write_fr_single(cpu, 6u, 4.0f);
     fpu_reciprocal_square_root(cpu, 6u);
@@ -602,11 +625,15 @@ int main() {
     }
 
     CpuState nonfinite_simd_cpu;
+    nonfinite_simd_cpu.fpscr =
+        fpscr_cause_invalid_mask | fpscr_flag_invalid_mask;
     nonfinite_simd_cpu.fr[8u] =
         std::bit_cast<std::uint32_t>(std::numeric_limits<float>::infinity());
     const auto nonfinite_before = nonfinite_simd_cpu.fr;
+    const auto nonfinite_fpscr_before = nonfinite_simd_cpu.fpscr;
     require(!try_fpu_transform_vector_simd(nonfinite_simd_cpu, 8u) &&
-                nonfinite_simd_cpu.fr == nonfinite_before,
+                nonfinite_simd_cpu.fr == nonfinite_before &&
+                nonfinite_simd_cpu.fpscr == nonfinite_fpscr_before,
             "FTRV-SIMD-Pfad akzeptiert nicht-endliche Providerdaten.");
 
     std::cout << "SH-4-FPU-Runtime-Grundoperationen erfolgreich.\n";

@@ -2351,9 +2351,9 @@ class NativePortMovieSession::Impl final {
 
     [[nodiscard]] std::uint64_t next_frame_hint() noexcept {
         auto result = next_frame_hint_;
-        const auto domain_snapshot = domain_->snapshot();
-        if (domain_snapshot.has_last_frame_index)
-            result = std::max(result, domain_snapshot.last_frame_index);
+        if (const auto domain_frame = domain_->last_frame_index_nonblocking();
+            domain_frame.has_value())
+            result = std::max(result, *domain_frame);
         next_frame_hint_ = result;
         if (next_frame_hint_ != std::numeric_limits<std::uint64_t>::max())
             ++next_frame_hint_;

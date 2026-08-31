@@ -408,6 +408,12 @@ struct HostAudioSubmitCommand final {
 };
 
 static_assert(std::is_trivially_copyable_v<HostAudioSubmitCommand>);
+static_assert(sizeof(HostAudioSubmitCommand) % alignof(std::int16_t) == 0u);
+
+inline constexpr std::size_t host_audio_pending_frame_capacity = 44'100u;
+inline constexpr std::size_t host_audio_pending_sample_capacity =
+    host_audio_pending_frame_capacity * 2u;
+inline constexpr std::size_t host_audio_pending_block_capacity = 8u;
 
 class DomainHostAudioOutput final : public HostAudioOutput {
   public:
@@ -425,7 +431,8 @@ class DomainHostAudioOutput final : public HostAudioOutput {
             NativePortAudioExecutionDomainTarget::HostOutput,
             this,
             &DomainHostAudioOutput::execute_worker_command,
-            &DomainHostAudioOutput::cleanup_worker_state);
+            &DomainHostAudioOutput::cleanup_worker_state,
+            &DomainHostAudioOutput::service_worker_pending_output);
         if (!registered.has_value()) {
             release_telemetry();
             throw std::runtime_error("Host-Audio-Domainziel konnte nicht registriert werden.");
@@ -644,8 +651,27 @@ class DomainHostAudioOutput final : public HostAudioOutput {
     static void cleanup_worker_state(void* const target) noexcept {
         auto& self = *static_cast<DomainHostAudioOutput*>(target);
         self.output_.reset();
+        std::vector<std::int16_t>().swap(self.pending_pcm_);
+        self.pending_sample_counts_.fill(0u);
+        self.pending_sample_rates_.fill(0u);
+        self.pending_head_ = 0u;
+        self.pending_block_count_ = 0u;
         self.worker_constructed_ = false;
         self.paused_.store(false, std::memory_order_release);
+    }
+
+    static std::uint32_t
+    service_worker_pending_output(void* const target) noexcept {
+        auto& self = *static_cast<DomainHostAudioOutput*>(target);
+        if (!self.worker_constructed_ || self.pending_block_count_ == 0u ||
+            self.paused_.load(std::memory_order_acquire))
+            return 0u;
+        try {
+            self.service_pending_output();
+            return 0u;
+        } catch (...) {
+            return 1u;
+        }
     }
 
     void execute(const HostAudioCommandOpcode opcode,
@@ -655,14 +681,29 @@ class DomainHostAudioOutput final : public HostAudioOutput {
             require_empty(payload);
             if (worker_constructed_)
                 throw std::logic_error("Host-Audio wurde doppelt konstruiert.");
+            pending_pcm_.resize(host_audio_pending_block_capacity *
+                                host_audio_pending_sample_capacity);
+            pending_sample_counts_.fill(0u);
+            pending_sample_rates_.fill(0u);
+            pending_head_ = 0u;
+            pending_block_count_ = 0u;
             worker_constructed_ = true;
             return;
         case HostAudioCommandOpcode::Destroy:
             require_empty(payload);
+            service_pending_output();
+            if (pending_block_count_ != 0u)
+                throw std::runtime_error(
+                    "Host-Audio Destroy kann Pending-Ring nicht verlustfrei leeren.");
             if (output_ != nullptr) {
                 output_->stop();
                 output_.reset();
             }
+            std::vector<std::int16_t>().swap(pending_pcm_);
+            pending_sample_counts_.fill(0u);
+            pending_sample_rates_.fill(0u);
+            pending_head_ = 0u;
+            pending_block_count_ = 0u;
             worker_constructed_ = false;
             paused_.store(false, std::memory_order_release);
             return;
@@ -672,6 +713,7 @@ class DomainHostAudioOutput final : public HostAudioOutput {
         case HostAudioCommandOpcode::Pause:
             require_empty(payload);
             require_worker_constructed();
+            service_pending_output();
             if (output_ != nullptr) output_->pause();
             paused_.store(true, std::memory_order_release);
             return;
@@ -680,6 +722,7 @@ class DomainHostAudioOutput final : public HostAudioOutput {
             require_worker_constructed();
             if (output_ != nullptr) output_->resume();
             paused_.store(false, std::memory_order_release);
+            service_pending_output();
             return;
         }
         throw std::invalid_argument("Host-Audio Opcode.");
@@ -687,6 +730,7 @@ class DomainHostAudioOutput final : public HostAudioOutput {
 
     void execute_submit(const std::span<const std::byte> payload) {
         require_worker_constructed();
+        service_pending_output();
         if (payload.size() < sizeof(HostAudioSubmitCommand))
             throw std::invalid_argument("Host-Audio Submit-Payload.");
         HostAudioSubmitCommand command;
@@ -711,15 +755,56 @@ class DomainHostAudioOutput final : public HostAudioOutput {
             throw std::invalid_argument(
                 "Host-Audio Samplerate darf nicht wechseln.");
         }
-        while (!output_->submit_pcm_s16(pcm)) {
-            output_->poll();
-            std::this_thread::yield();
+        if (pending_block_count_ == 0u && output_->submit_pcm_s16(pcm)) {
+            publish_submission(pcm, command.sample_rate);
+            return;
         }
+        enqueue_pending_output(pcm, command.sample_rate);
+    }
+
+    void enqueue_pending_output(const std::span<const std::int16_t> pcm,
+                                const std::uint32_t sample_rate) {
+        if (pcm.size() > host_audio_pending_sample_capacity)
+            throw std::out_of_range(
+                "Host-Audio Pending-Block ist zu gross.");
+        if (pending_block_count_ == host_audio_pending_block_capacity)
+            throw std::runtime_error(
+                "Host-Audio Pending-Ring ist bounded voll.");
+        const auto slot =
+            (pending_head_ + pending_block_count_) %
+            host_audio_pending_block_capacity;
+        auto* const destination =
+            pending_pcm_.data() + slot * host_audio_pending_sample_capacity;
+        std::copy(pcm.begin(), pcm.end(), destination);
+        pending_sample_counts_[slot] = pcm.size();
+        pending_sample_rates_[slot] = sample_rate;
+        ++pending_block_count_;
+    }
+
+    void service_pending_output() {
+        while (pending_block_count_ != 0u && output_ != nullptr) {
+            const auto slot = pending_head_;
+            const std::span<const std::int16_t> pending(
+                pending_pcm_.data() +
+                    slot * host_audio_pending_sample_capacity,
+                pending_sample_counts_[slot]);
+            if (!output_->submit_pcm_s16(pending)) return;
+            publish_submission(pending, pending_sample_rates_[slot]);
+            pending_sample_counts_[slot] = 0u;
+            pending_sample_rates_[slot] = 0u;
+            pending_head_ =
+                (pending_head_ + 1u) % host_audio_pending_block_capacity;
+            --pending_block_count_;
+        }
+    }
+
+    void publish_submission(const std::span<const std::int16_t> pcm,
+                            const std::uint32_t sample_rate) noexcept {
         deterministic_hash_.store(
             hash_audio(
                 deterministic_hash_.load(std::memory_order_relaxed),
                 pcm,
-                command.sample_rate),
+                sample_rate),
             std::memory_order_release);
         submitted_buffers_.fetch_add(1u, std::memory_order_release);
         submitted_frames_.fetch_add(
@@ -753,9 +838,12 @@ class DomainHostAudioOutput final : public HostAudioOutput {
         const NativePortAudioExecutionDomainDispatchResult& result,
         const char* const operation) {
         if (result.completed()) return;
+        const auto detail = result.has_target_failure
+                                ? result.target_failure_error_code
+                                : static_cast<std::uint32_t>(result.failure);
         throw std::runtime_error(
             std::string("Host-Audio-Domainfehler:") + operation + ":" +
-            std::to_string(static_cast<unsigned>(result.failure)));
+            std::to_string(detail));
     }
 
     [[nodiscard]] std::uint64_t current_frame_index() const noexcept {
@@ -763,9 +851,9 @@ class DomainHostAudioOutput final : public HostAudioOutput {
         if (const auto media = current_media_audio_tick_evidence();
             media.has_value())
             frame = std::max(frame, media->frame_index);
-        const auto domain_snapshot = domain_->snapshot();
-        if (domain_snapshot.has_last_frame_index)
-            frame = std::max(frame, domain_snapshot.last_frame_index);
+        if (const auto domain_frame = domain_->last_frame_index_nonblocking();
+            domain_frame.has_value())
+            frame = std::max(frame, *domain_frame);
         return frame;
     }
 
@@ -773,6 +861,11 @@ class DomainHostAudioOutput final : public HostAudioOutput {
     std::shared_ptr<NativePortAudioExecutionDomain> domain_;
     NativePortAudioExecutionDomainTargetHandle handle_{};
     std::unique_ptr<NativePortAudioStream> output_;
+    std::vector<std::int16_t> pending_pcm_;
+    std::array<std::size_t, host_audio_pending_block_capacity>
+        pending_sample_counts_{};
+    std::array<std::uint32_t, host_audio_pending_block_capacity>
+        pending_sample_rates_{};
     NativePortTelemetry* telemetry_ = nullptr;
     bool telemetry_bound_ = false;
     std::atomic<std::uint64_t> bound_frame_index_{0u};
@@ -783,6 +876,8 @@ class DomainHostAudioOutput final : public HostAudioOutput {
     std::atomic<bool> shutdown_requested_{false};
     std::atomic<bool> shutdown_complete_{false};
     std::uint32_t sample_rate_ = 0u;
+    std::size_t pending_head_ = 0u;
+    std::size_t pending_block_count_ = 0u;
     bool worker_constructed_ = false;
 };
 #endif

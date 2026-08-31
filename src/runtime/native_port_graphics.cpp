@@ -1182,6 +1182,24 @@ class NativePortGraphicsBackend final {
         bool live = false;
     };
 
+    enum class GpuTimingState : std::uint8_t {
+        Free,
+        Recording,
+        Pending,
+        DiscardPending,
+    };
+
+    struct GpuTimingSlot final {
+        ComPtr<ID3D11Query> disjoint;
+        ComPtr<ID3D11Query> begin;
+        ComPtr<ID3D11Query> end;
+        GpuTimingState state = GpuTimingState::Free;
+    };
+
+    static constexpr std::size_t gpu_timing_query_count = 4u;
+    static constexpr std::size_t no_gpu_timing_query =
+        std::numeric_limits<std::size_t>::max();
+
   public:
     explicit NativePortGraphicsBackend(const NativePortGraphicsConfig& config)
         : title_storage_(copy_validated_graphics_title(config.title)),
@@ -1202,13 +1220,17 @@ class NativePortGraphicsBackend final {
             destroy_window();
             throw;
         }
-        if (config_.telemetry != nullptr)
+        if (config_.telemetry != nullptr) {
             telemetry_writer_.emplace(config_.telemetry->make_writer());
+            initialize_gpu_timing_queries();
+        }
         if (config_.initially_visible) show();
     }
 
     ~NativePortGraphicsBackend() noexcept {
         if (std::this_thread::get_id() != owner_thread_) std::terminate();
+        abandon_gpu_timing_frame();
+        retire_gpu_timing_queries_nonblocking();
         stop_render_submit_telemetry();
         flush_render_telemetry();
         flush_graphics_breadcrumbs();
@@ -1219,7 +1241,10 @@ class NativePortGraphicsBackend final {
         destroy_window();
     }
 
-    void publish_telemetry() noexcept { flush_render_telemetry(); }
+    void publish_telemetry() noexcept {
+        retire_gpu_timing_queries_nonblocking();
+        flush_render_telemetry();
+    }
 
     void show() {
         require_owner_thread();
@@ -1565,6 +1590,7 @@ class NativePortGraphicsBackend final {
                  0u,
                  "frame-depth-contract");
         start_render_submit_telemetry();
+        begin_gpu_timing_frame();
         context_->OMSetRenderTargets(
             1u, render_target_.GetAddressOf(), depth_view_.Get());
         context_->ClearRenderTargetView(render_target_.Get(),
@@ -2112,6 +2138,7 @@ class NativePortGraphicsBackend final {
     // owner-thread rollback deliberately does not resolve Type-2 or present.
     void abort_frame_after_command_failure() noexcept {
         if (std::this_thread::get_id() != owner_thread_) std::terminate();
+        abandon_gpu_timing_frame();
         stop_render_submit_telemetry();
         flush_render_telemetry();
         if (!frame_open_) return;
@@ -2147,6 +2174,7 @@ class NativePortGraphicsBackend final {
                  0u,
                  "repeat-without-completed-frame");
         start_render_submit_telemetry();
+        begin_gpu_timing_frame();
         present_completed_frame("repeat-present");
     }
 
@@ -2532,9 +2560,133 @@ class NativePortGraphicsBackend final {
             config_.telemetry->publish(*telemetry_writer_);
     }
 
+    void disable_gpu_timing() noexcept {
+        for (auto& slot : gpu_timing_queries_) {
+            slot.disjoint.Reset();
+            slot.begin.Reset();
+            slot.end.Reset();
+            slot.state = GpuTimingState::Free;
+        }
+        active_gpu_timing_query_ = no_gpu_timing_query;
+        gpu_timing_enabled_ = false;
+    }
+
+    void initialize_gpu_timing_queries() noexcept {
+        if (device_ == nullptr || context_ == nullptr ||
+            !telemetry_writer_.has_value())
+            return;
+        D3D11_QUERY_DESC disjoint_description{};
+        disjoint_description.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+        D3D11_QUERY_DESC timestamp_description{};
+        timestamp_description.Query = D3D11_QUERY_TIMESTAMP;
+        for (auto& slot : gpu_timing_queries_) {
+            if (FAILED(device_->CreateQuery(
+                    &disjoint_description, slot.disjoint.GetAddressOf())) ||
+                FAILED(device_->CreateQuery(
+                    &timestamp_description, slot.begin.GetAddressOf())) ||
+                FAILED(device_->CreateQuery(
+                    &timestamp_description, slot.end.GetAddressOf()))) {
+                disable_gpu_timing();
+                return;
+            }
+        }
+        gpu_timing_enabled_ = true;
+    }
+
+    void retire_gpu_timing_queries_nonblocking() noexcept {
+        if (!gpu_timing_enabled_ || context_ == nullptr ||
+            !telemetry_writer_.has_value())
+            return;
+        for (auto& slot : gpu_timing_queries_) {
+            if (slot.state != GpuTimingState::Pending &&
+                slot.state != GpuTimingState::DiscardPending)
+                continue;
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+            const auto disjoint_result = context_->GetData(
+                slot.disjoint.Get(), &disjoint, sizeof(disjoint),
+                D3D11_ASYNC_GETDATA_DONOTFLUSH);
+            if (disjoint_result == S_FALSE) continue;
+            if (FAILED(disjoint_result)) {
+                disable_gpu_timing();
+                return;
+            }
+            if (slot.state == GpuTimingState::DiscardPending) {
+                slot.state = GpuTimingState::Free;
+                continue;
+            }
+            UINT64 begin = 0u;
+            UINT64 end = 0u;
+            const auto begin_result = context_->GetData(
+                slot.begin.Get(), &begin, sizeof(begin),
+                D3D11_ASYNC_GETDATA_DONOTFLUSH);
+            const auto end_result = context_->GetData(
+                slot.end.Get(), &end, sizeof(end),
+                D3D11_ASYNC_GETDATA_DONOTFLUSH);
+            if (begin_result == S_FALSE || end_result == S_FALSE) continue;
+            if (FAILED(begin_result) || FAILED(end_result)) {
+                disable_gpu_timing();
+                return;
+            }
+            if (!disjoint.Disjoint && disjoint.Frequency != 0u &&
+                end >= begin) {
+                const auto elapsed =
+                    static_cast<long double>(end - begin) *
+                    static_cast<long double>(nanoseconds_per_second) /
+                    static_cast<long double>(disjoint.Frequency);
+                const auto maximum = static_cast<long double>(
+                    std::numeric_limits<std::uint64_t>::max());
+                const auto elapsed_ns = elapsed >= maximum
+                                            ? std::numeric_limits<
+                                                  std::uint64_t>::max()
+                                            : static_cast<std::uint64_t>(
+                                                  elapsed);
+                telemetry_writer_->add(
+                    NativePortTelemetryStage::GpuTime, elapsed_ns, 1u);
+            }
+            slot.state = GpuTimingState::Free;
+        }
+    }
+
+    void begin_gpu_timing_frame() noexcept {
+        retire_gpu_timing_queries_nonblocking();
+        if (!gpu_timing_enabled_ || context_ == nullptr ||
+            active_gpu_timing_query_ != no_gpu_timing_query)
+            return;
+        for (std::size_t offset = 0u; offset < gpu_timing_query_count;
+             ++offset) {
+            const auto index = (next_gpu_timing_query_ + offset) %
+                gpu_timing_query_count;
+            auto& slot = gpu_timing_queries_[index];
+            if (slot.state != GpuTimingState::Free) continue;
+            context_->Begin(slot.disjoint.Get());
+            context_->End(slot.begin.Get());
+            slot.state = GpuTimingState::Recording;
+            active_gpu_timing_query_ = index;
+            next_gpu_timing_query_ = (index + 1u) % gpu_timing_query_count;
+            return;
+        }
+    }
+
+    void end_gpu_timing_frame(const bool discard = false) noexcept {
+        if (!gpu_timing_enabled_ || context_ == nullptr ||
+            active_gpu_timing_query_ == no_gpu_timing_query)
+            return;
+        auto& slot = gpu_timing_queries_[active_gpu_timing_query_];
+        context_->End(slot.end.Get());
+        context_->End(slot.disjoint.Get());
+        slot.state = discard ? GpuTimingState::DiscardPending
+                             : GpuTimingState::Pending;
+        active_gpu_timing_query_ = no_gpu_timing_query;
+    }
+
+    void abandon_gpu_timing_frame() noexcept {
+        end_gpu_timing_frame(true);
+    }
+
     void present_completed_frame(const char* const operation) {
         poll_events();
         if (minimized_) {
+            end_gpu_timing_frame();
             stop_render_submit_telemetry();
             flush_render_telemetry();
             snapshot_.occluded = true;
@@ -2571,6 +2723,7 @@ class NativePortGraphicsBackend final {
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
         invalidate_draw_state_shadow();
+        end_gpu_timing_frame();
         stop_render_submit_telemetry();
         std::optional<NativePortTelemetryTimer> present_wait_timer;
         if (telemetry_writer_.has_value())
@@ -5500,6 +5653,10 @@ class NativePortGraphicsBackend final {
     std::thread::id owner_thread_;
     std::optional<NativePortTelemetryWriter> telemetry_writer_;
     std::optional<NativePortTelemetryTimer> render_submit_timer_;
+    std::array<GpuTimingSlot, gpu_timing_query_count> gpu_timing_queries_{};
+    std::size_t next_gpu_timing_query_ = 0u;
+    std::size_t active_gpu_timing_query_ = no_gpu_timing_query;
+    bool gpu_timing_enabled_ = false;
     HWND window_ = nullptr;
     NativePortExtent output_extent_;
     NativePortExtent pending_output_extent_;
@@ -5752,9 +5909,22 @@ class NativePortGraphicsDevice::Impl final {
             return;
         }
 
-        consumer_thread_ = std::thread([this] { consumer_main(); });
-        wait_for_consumer_startup();
-        bind_parallel_producer_domain();
+#ifdef _WIN32
+        consumer_wake_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (consumer_wake_event_ == nullptr)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::RenderThreadContract,
+                GetLastError(),
+                "render-consumer-wake-event");
+#endif
+        try {
+            consumer_thread_ = std::thread([this] { consumer_main(); });
+            wait_for_consumer_startup();
+            bind_parallel_producer_domain();
+        } catch (...) {
+            close_consumer_wake_event();
+            throw;
+        }
     }
 
     ~Impl() noexcept {
@@ -5777,8 +5947,9 @@ class NativePortGraphicsDevice::Impl final {
             }
         } catch (...) {
         }
-        queue_->request_shutdown();
+        request_consumer_shutdown();
         if (consumer_thread_.joinable()) consumer_thread_.join();
+        close_consumer_wake_event();
         serial_backend_.reset();
     }
 
@@ -5792,6 +5963,13 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     void poll_events() {
+        if (!serial()) {
+            require_producer_thread();
+            retire_available_replies();
+            acquire_consumer_state_mailbox();
+            require_queue_healthy();
+            return;
+        }
         submit_control(
             [](NativePortGraphicsCommandWriter& writer) {
                 return writer.poll_events();
@@ -5803,6 +5981,7 @@ class NativePortGraphicsDevice::Impl final {
     [[nodiscard]] NativePortLifecycleState lifecycle_state() {
         require_producer_thread();
         retire_available_replies();
+        acquire_consumer_state_mailbox();
         require_queue_healthy();
         return cached_lifecycle_;
     }
@@ -5810,6 +5989,7 @@ class NativePortGraphicsDevice::Impl final {
     [[nodiscard]] NativePortGraphicsLayout layout() {
         require_producer_thread();
         retire_available_replies();
+        acquire_consumer_state_mailbox();
         require_queue_healthy();
         return cached_layout_;
     }
@@ -5999,12 +6179,36 @@ class NativePortGraphicsDevice::Impl final {
             "present-image-command-encode");
     }
 
+    void finish() {
+        require_producer_thread();
+        if (producer_frame_open_ || batch_writer_.has_value())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "render-finish-open-frame");
+        wait_for_all_replies();
+        acquire_consumer_state_mailbox();
+        require_queue_healthy();
+        // This final ordered fence executes on the backend owner and returns
+        // a sequence-bound snapshot without changing the normal parallel
+        // lifecycle polling path.
+        submit_standalone_sync(
+            [](NativePortGraphicsCommandWriter& writer) {
+                return writer.poll_events();
+            },
+            NativePortGraphicsFailure::RenderThreadContract,
+            "render-finish-encode");
+        acquire_consumer_state_mailbox();
+        require_queue_healthy();
+    }
+
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() {
         require_producer_thread();
         if (!producer_frame_open_)
             wait_for_all_replies();
         else
             retire_available_replies();
+        acquire_consumer_state_mailbox();
         require_queue_healthy();
         auto result = cached_snapshot_;
         if (producer_frame_open_) result.frame_open = true;
@@ -6033,6 +6237,16 @@ class NativePortGraphicsDevice::Impl final {
     };
     static_assert(std::is_trivially_copyable_v<BackendError>);
 
+    struct ConsumerStateMailbox final {
+        std::atomic_flag lock = ATOMIC_FLAG_INIT;
+        std::atomic<std::uint64_t> publication{0u};
+        std::uint64_t state_revision = 0u;
+        NativePortGraphicsLayout layout;
+        NativePortLifecycleState lifecycle =
+            NativePortLifecycleState::Running;
+        BackendError error;
+    };
+
     struct ReplySlot final {
         std::atomic<std::uint64_t> ready_sequence{0u};
         BackendError error;
@@ -6040,7 +6254,41 @@ class NativePortGraphicsDevice::Impl final {
         NativePortGraphicsLayout layout;
         NativePortLifecycleState lifecycle =
             NativePortLifecycleState::Running;
+        std::uint64_t state_revision = 0u;
         std::uint32_t failed_ordinal = 0u;
+    };
+
+    static void saturating_add_value(
+        std::uint64_t& value, const std::uint64_t amount) noexcept {
+        value = amount > std::numeric_limits<std::uint64_t>::max() - value
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : value + amount;
+    }
+
+    class ScopedProducerWait final {
+      public:
+        ScopedProducerWait(std::uint64_t& total, const bool enabled) noexcept
+            : total_(enabled ? &total : nullptr),
+              started_(enabled ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{}) {}
+
+        ~ScopedProducerWait() noexcept {
+            if (total_ == nullptr) return;
+            const auto elapsed = std::chrono::duration_cast<
+                std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_)
+                                     .count();
+            if (elapsed > 0)
+                saturating_add_value(
+                    *total_, static_cast<std::uint64_t>(elapsed));
+        }
+
+        ScopedProducerWait(const ScopedProducerWait&) = delete;
+        ScopedProducerWait& operator=(const ScopedProducerWait&) = delete;
+
+      private:
+        std::uint64_t* total_ = nullptr;
+        std::chrono::steady_clock::time_point started_;
     };
 
     [[nodiscard]] bool serial() const noexcept {
@@ -6132,6 +6380,148 @@ class NativePortGraphicsDevice::Impl final {
                 "render-producer-thread");
     }
 
+    void lock_consumer_state_mailbox() noexcept {
+        while (consumer_state_mailbox_.lock.test_and_set(
+            std::memory_order_acquire))
+            consumer_state_mailbox_.lock.wait(
+                true, std::memory_order_relaxed);
+    }
+
+    void unlock_consumer_state_mailbox() noexcept {
+        consumer_state_mailbox_.lock.clear(std::memory_order_release);
+        consumer_state_mailbox_.lock.notify_one();
+    }
+
+    [[nodiscard]] std::uint64_t next_consumer_state_revision() noexcept {
+        if (consumer_state_revision_ ==
+            std::numeric_limits<std::uint64_t>::max())
+            std::terminate();
+        return ++consumer_state_revision_;
+    }
+
+    void publish_consumer_state_mailbox(
+        const NativePortGraphicsLayout& layout,
+        const NativePortLifecycleState lifecycle,
+        const BackendError error = {}) noexcept {
+        const auto revision = next_consumer_state_revision();
+        lock_consumer_state_mailbox();
+        consumer_state_mailbox_.layout = layout;
+        consumer_state_mailbox_.lifecycle = lifecycle;
+        consumer_state_mailbox_.state_revision = revision;
+        if (error.valid && !consumer_state_mailbox_.error.valid)
+            consumer_state_mailbox_.error = error;
+        const auto publication =
+            consumer_state_mailbox_.publication.load(
+                std::memory_order_relaxed);
+        consumer_state_mailbox_.publication.store(
+            publication == std::numeric_limits<std::uint64_t>::max()
+                ? 1u
+                : publication + 1u,
+            std::memory_order_release);
+        unlock_consumer_state_mailbox();
+    }
+
+    void publish_consumer_error_mailbox(
+        const BackendError error) noexcept {
+        lock_consumer_state_mailbox();
+        if (!consumer_state_mailbox_.error.valid)
+            consumer_state_mailbox_.error = error;
+        const auto publication =
+            consumer_state_mailbox_.publication.load(
+                std::memory_order_relaxed);
+        consumer_state_mailbox_.publication.store(
+            publication == std::numeric_limits<std::uint64_t>::max()
+                ? 1u
+                : publication + 1u,
+            std::memory_order_release);
+        unlock_consumer_state_mailbox();
+    }
+
+    void acquire_consumer_state_mailbox() {
+        if (serial()) return;
+        auto publication = consumer_state_mailbox_.publication.load(
+            std::memory_order_acquire);
+        if (publication == acquired_state_mailbox_publication_) return;
+        NativePortGraphicsLayout layout;
+        NativePortLifecycleState lifecycle =
+            NativePortLifecycleState::Running;
+        BackendError error;
+        std::uint64_t revision = 0u;
+        lock_consumer_state_mailbox();
+        publication = consumer_state_mailbox_.publication.load(
+            std::memory_order_relaxed);
+        if (publication != acquired_state_mailbox_publication_) {
+            layout = consumer_state_mailbox_.layout;
+            lifecycle = consumer_state_mailbox_.lifecycle;
+            revision = consumer_state_mailbox_.state_revision;
+            error = consumer_state_mailbox_.error;
+            consumer_state_mailbox_.error = {};
+        }
+        unlock_consumer_state_mailbox();
+        if (publication == acquired_state_mailbox_publication_) return;
+        acquired_state_mailbox_publication_ = publication;
+        if (revision > cached_state_revision_) {
+            cached_layout_ = layout;
+            cached_lifecycle_ = lifecycle;
+            cached_state_revision_ = revision;
+        }
+        if (error.valid) throw_backend_error(error);
+    }
+
+    void close_consumer_wake_event() noexcept {
+#ifdef _WIN32
+        if (consumer_wake_event_ == nullptr) return;
+        CloseHandle(consumer_wake_event_);
+        consumer_wake_event_ = nullptr;
+#endif
+    }
+
+    void signal_consumer() {
+#ifdef _WIN32
+        if (!serial() && consumer_wake_event_ != nullptr &&
+            SetEvent(consumer_wake_event_) == FALSE) {
+            const auto code = GetLastError();
+            queue_->report_producer_error(
+                NativePortFrameQueueError::ProducerException,
+                last_submitted_sequence_);
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::RenderThreadContract,
+                code == 0u ? 1u : code,
+                "render-consumer-wake");
+        }
+#endif
+    }
+
+    void signal_consumer_noexcept() noexcept {
+#ifdef _WIN32
+        if (!serial() && consumer_wake_event_ != nullptr)
+            static_cast<void>(SetEvent(consumer_wake_event_));
+#endif
+    }
+
+    void request_consumer_shutdown() noexcept {
+        queue_->request_shutdown();
+        signal_consumer_noexcept();
+    }
+
+    [[nodiscard]] bool pump_consumer_events(
+        NativePortGraphicsBackend& backend) noexcept {
+        try {
+            backend.poll_events();
+            publish_consumer_state_mailbox(
+                backend.layout(), backend.lifecycle_state());
+            return true;
+        } catch (const NativePortGraphicsError& error) {
+            publish_consumer_error_mailbox(capture_backend_error(error));
+        } catch (...) {
+            publish_consumer_error_mailbox(
+                facade_error("render-consumer-message-pump"));
+        }
+        queue_->report_consumer_error(
+            NativePortFrameQueueError::ConsumerException, 0u);
+        return false;
+    }
+
     void cache_initial_backend(NativePortGraphicsBackend& backend) {
         cached_snapshot_ = backend.snapshot();
         cached_layout_ = backend.layout();
@@ -6156,7 +6546,7 @@ class NativePortGraphicsDevice::Impl final {
     void bind_parallel_producer_domain() {
         auto producer = queue_->try_begin_produce();
         if (!producer.has_value()) {
-            queue_->request_shutdown();
+            request_consumer_shutdown();
             consumer_thread_.join();
             throw_queue_failure("render-producer-bind");
         }
@@ -6168,7 +6558,7 @@ class NativePortGraphicsDevice::Impl final {
                 queue_snapshot.consumer_thread_identity) {
             queue_->report_producer_error(
                 NativePortFrameQueueError::ThreadDomainOverlap, 0u);
-            queue_->request_shutdown();
+            request_consumer_shutdown();
             consumer_thread_.join();
             fail_facade("render-thread-domains");
         }
@@ -6188,6 +6578,8 @@ class NativePortGraphicsDevice::Impl final {
         cached_snapshot_ = startup_snapshot_;
         cached_layout_ = startup_layout_;
         cached_lifecycle_ = startup_lifecycle_;
+        cached_state_revision_ = startup_state_revision_;
+        acquire_consumer_state_mailbox();
         published_presented_frames_.store(
             cached_snapshot_.presented_frames, std::memory_order_release);
     }
@@ -6200,6 +6592,14 @@ class NativePortGraphicsDevice::Impl final {
             startup_snapshot_ = backend->snapshot();
             startup_layout_ = backend->layout();
             startup_lifecycle_ = backend->lifecycle_state();
+            startup_state_revision_ = next_consumer_state_revision();
+            lock_consumer_state_mailbox();
+            consumer_state_mailbox_.layout = startup_layout_;
+            consumer_state_mailbox_.lifecycle = startup_lifecycle_;
+            consumer_state_mailbox_.state_revision = startup_state_revision_;
+            consumer_state_mailbox_.publication.store(
+                1u, std::memory_order_release);
+            unlock_consumer_state_mailbox();
             startup_state_.store(StartupState::Ready,
                                  std::memory_order_release);
             startup_state_.notify_all();
@@ -6218,11 +6618,46 @@ class NativePortGraphicsDevice::Impl final {
         }
 
         for (;;) {
+            if (auto lease = queue_->try_begin_consume(); lease.has_value()) {
+                if (consume_lease(*backend, *lease)) break;
+                continue;
+            }
+            // ShowWindow/DispatchMessage can deliver resize state
+            // synchronously without leaving a queued message. Pump exactly
+            // once while transitioning to idle, publish that state, then
+            // block on the queue event or the next Windows message.
+            if (!pump_consumer_events(*backend)) break;
+            const auto lifecycle = queue_->snapshot().lifecycle;
+            if (lifecycle == NativePortFrameQueueLifecycle::Disabled ||
+                lifecycle == NativePortFrameQueueLifecycle::Stopped ||
+                lifecycle == NativePortFrameQueueLifecycle::Failed)
+                break;
+#ifdef _WIN32
+            const HANDLE handles[]{consumer_wake_event_};
+            const auto wait_result = MsgWaitForMultipleObjectsEx(
+                1u, handles, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if (wait_result == WAIT_OBJECT_0) continue;
+            if (wait_result == WAIT_OBJECT_0 + 1u) {
+                if (!pump_consumer_events(*backend)) break;
+                continue;
+            }
+            const auto code = GetLastError();
+            publish_consumer_error_mailbox(
+                {true,
+                 NativePortGraphicsFailure::RenderThreadContract,
+                 code == 0u ? 1u : code,
+                 native_port_graphics_operation_id(
+                     "render-consumer-message-wait")});
+            queue_->report_consumer_error(
+                NativePortFrameQueueError::ConsumerException, 0u);
+            break;
+#else
             auto lease = queue_->wait_begin_consume();
             if (!lease.has_value()) break;
             if (consume_lease(*backend, *lease)) break;
+#endif
         }
-        queue_->request_shutdown();
+        request_consumer_shutdown();
         backend.reset();
     }
 
@@ -6323,10 +6758,12 @@ class NativePortGraphicsDevice::Impl final {
             ready = slot.ready_sequence.load(std::memory_order_acquire);
         }
         backend.publish_telemetry();
+        slot.state_revision = 0u;
         try {
             slot.snapshot = backend.snapshot();
             slot.layout = backend.layout();
             slot.lifecycle = backend.lifecycle_state();
+            slot.state_revision = next_consumer_state_revision();
         } catch (const NativePortGraphicsError& snapshot_error) {
             error = capture_backend_error(snapshot_error);
         } catch (...) {
@@ -6354,11 +6791,15 @@ class NativePortGraphicsDevice::Impl final {
             fail_facade("render-command-reply-sequence");
 
         cached_snapshot_ = slot.snapshot;
-        cached_layout_ = slot.layout;
-        cached_lifecycle_ = slot.lifecycle;
+        if (slot.state_revision > cached_state_revision_) {
+            cached_layout_ = slot.layout;
+            cached_lifecycle_ = slot.lifecycle;
+            cached_state_revision_ = slot.state_revision;
+        }
         cached_backend_reply_sequence_ = sequence;
         const auto error = slot.error;
         slot.error = {};
+        slot.state_revision = 0u;
         slot.failed_ordinal = 0u;
         slot.ready_sequence.store(0u, std::memory_order_release);
         slot.ready_sequence.notify_all();
@@ -6379,6 +6820,8 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     void wait_for_all_replies() {
+        if (last_retired_sequence_ >= last_submitted_sequence_) return;
+        const ScopedProducerWait wait(render_producer_wait_ns_, !serial());
         while (last_retired_sequence_ < last_submitted_sequence_)
             consume_reply(last_retired_sequence_ + 1u, true);
     }
@@ -6393,7 +6836,12 @@ class NativePortGraphicsDevice::Impl final {
         require_producer_thread();
         retire_available_replies();
         require_queue_healthy();
-        auto lease = queue_->wait_begin_produce();
+        auto lease = queue_->try_begin_produce();
+        if (!lease.has_value()) {
+            const ScopedProducerWait wait(
+                render_producer_wait_ns_, !serial());
+            lease = queue_->wait_begin_produce();
+        }
         if (!lease.has_value()) {
             retire_available_replies();
             throw_queue_failure("render-command-begin");
@@ -6451,6 +6899,7 @@ class NativePortGraphicsDevice::Impl final {
         saturating_atomic_add(recorded_commands_, command_count);
         last_recorded_sequence_.store(sequence, std::memory_order_release);
         last_submitted_sequence_ = sequence;
+        signal_consumer();
 
         if (serial()) {
             auto lease = queue_->wait_begin_consume();
@@ -6458,7 +6907,12 @@ class NativePortGraphicsDevice::Impl final {
                 throw_queue_failure("serial-render-consume");
             static_cast<void>(consume_lease(*serial_backend_, *lease));
         }
-        if (serial() || wait_current) consume_reply(sequence, true);
+        if (serial()) {
+            consume_reply(sequence, true);
+        } else if (wait_current) {
+            const ScopedProducerWait wait(render_producer_wait_ns_, true);
+            consume_reply(sequence, true);
+        }
     }
 
     void abort_open_batch() noexcept {
@@ -6522,6 +6976,10 @@ class NativePortGraphicsDevice::Impl final {
             return;
         }
 
+        saturating_add_value(resource_fence_count_, 1u);
+        const ScopedProducerWait resource_wait(
+            render_resource_fence_wait_ns_, true);
+
         // Writer rejection invalidates an entire lease.  Retire the already
         // recorded Begin/Draw prefix first, execute the synchronous resource
         // operation in its own ordered lease, then continue the same backend
@@ -6529,10 +6987,12 @@ class NativePortGraphicsDevice::Impl final {
         // historical lazy-resource error boundary without losing earlier
         // draws or closing the frame.
         try {
-            if (batch_command_count_ != 0u)
+            if (batch_command_count_ != 0u) {
                 publish_open_batch(true);
-            else
+                saturating_add_value(frame_prefix_publications_, 1u);
+            } else {
                 abort_open_batch();
+            }
         } catch (...) {
             producer_frame_open_ = false;
             throw;
@@ -6802,6 +7262,11 @@ class NativePortGraphicsDevice::Impl final {
             queue_snapshot.producer_queue_position;
         result.frame_queue_consumer_position =
             queue_snapshot.consumer_queue_position;
+        result.render_producer_wait_ns = render_producer_wait_ns_;
+        result.render_resource_fence_wait_ns =
+            render_resource_fence_wait_ns_;
+        result.resource_fence_count = resource_fence_count_;
+        result.frame_prefix_publications = frame_prefix_publications_;
     }
 
     std::string title_storage_;
@@ -6814,12 +7279,19 @@ class NativePortGraphicsDevice::Impl final {
     std::unique_ptr<NativePortGraphicsBackend> serial_backend_;
     std::unique_ptr<NativePortFrameQueue> queue_;
     std::thread consumer_thread_;
+#ifdef _WIN32
+    HANDLE consumer_wake_event_ = nullptr;
+#endif
+    ConsumerStateMailbox consumer_state_mailbox_;
+    std::uint64_t consumer_state_revision_ = 0u;
+    std::uint64_t acquired_state_mailbox_publication_ = 0u;
     std::atomic<StartupState> startup_state_{StartupState::Pending};
     BackendError startup_error_;
     NativePortGraphicsSnapshot startup_snapshot_;
     NativePortGraphicsLayout startup_layout_;
     NativePortLifecycleState startup_lifecycle_ =
         NativePortLifecycleState::Running;
+    std::uint64_t startup_state_revision_ = 0u;
     std::array<ReplySlot, native_port_frame_queue_depth> reply_slots_;
     std::optional<NativePortFrameWriteLease> batch_lease_;
     std::optional<NativePortGraphicsCommandWriter> batch_writer_;
@@ -6829,6 +7301,7 @@ class NativePortGraphicsDevice::Impl final {
     std::uint64_t last_submitted_sequence_ = 0u;
     std::uint64_t last_retired_sequence_ = 0u;
     std::uint64_t cached_backend_reply_sequence_ = 0u;
+    std::uint64_t cached_state_revision_ = 0u;
     NativePortGraphicsSnapshot cached_snapshot_;
     NativePortGraphicsLayout cached_layout_;
     NativePortLifecycleState cached_lifecycle_ =
@@ -6844,6 +7317,10 @@ class NativePortGraphicsDevice::Impl final {
     std::atomic<std::uint64_t> last_executed_sequence_{0u};
     std::atomic<std::uint64_t> last_failed_sequence_{0u};
     std::atomic<std::uint32_t> last_failed_ordinal_{0u};
+    std::uint64_t render_producer_wait_ns_ = 0u;
+    std::uint64_t render_resource_fence_wait_ns_ = 0u;
+    std::uint64_t resource_fence_count_ = 0u;
+    std::uint64_t frame_prefix_publications_ = 0u;
     std::uint64_t next_texture_handle_ = 1u;
     std::uint64_t next_mesh_handle_ = 1u;
     std::unordered_map<std::uint64_t, NativePortTextureHandle>
@@ -6943,6 +7420,10 @@ void NativePortGraphicsDevice::present_image(
     const NativePortViewportTarget viewport,
     const NativePortImageFit fit) {
     impl_->present_image(image, viewport, fit);
+}
+
+void NativePortGraphicsDevice::finish() {
+    impl_->finish();
 }
 
 NativePortGraphicsSnapshot NativePortGraphicsDevice::snapshot() const {

@@ -1279,6 +1279,10 @@ add_library(katana_port_export_tooling_objects OBJECT
     src/codegen/prepared_native_port_admission_artifact.cpp
     src/codegen/port_export.cpp
 )
+add_dependencies(
+    katana_port_export_tooling_objects
+    katana-component-identities
+)
 add_library(
     katana_core
     STATIC

@@ -28,12 +28,16 @@ enum class NativePortTelemetryStage : std::uint8_t {
     AudioDecode,
     AudioMix,
     GpuTime,
+    // Total wall time for one executor region whose decode and mix phases
+    // have no honest separate timing seam. This is not a sum of the two
+    // narrower stages and must never be projected into either one.
+    AudioServiceTotal,
     Count,
 };
 
 inline constexpr std::size_t native_port_telemetry_stage_count =
     static_cast<std::size_t>(NativePortTelemetryStage::Count);
-inline constexpr std::uint32_t native_port_telemetry_schema_version = 1u;
+inline constexpr std::uint32_t native_port_telemetry_schema_version = 2u;
 inline constexpr std::size_t native_port_telemetry_maximum_json_bytes =
     4096u;
 
@@ -58,6 +62,8 @@ inline constexpr std::size_t native_port_telemetry_maximum_json_bytes =
         return "audio_mix";
     case NativePortTelemetryStage::GpuTime:
         return "gpu_time";
+    case NativePortTelemetryStage::AudioServiceTotal:
+        return "audio_service_total";
     case NativePortTelemetryStage::Count:
         break;
     }

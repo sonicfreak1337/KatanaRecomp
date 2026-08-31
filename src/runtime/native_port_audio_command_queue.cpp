@@ -457,6 +457,31 @@ void NativePortAudioCommandQueue::request_shutdown() noexcept {
     event_epoch_.notify_all();
 }
 
+void NativePortAudioCommandQueue::notify_consumer_event() noexcept {
+    event_epoch_.fetch_add(1u, std::memory_order_release);
+    event_epoch_.notify_all();
+}
+
+std::uint64_t
+NativePortAudioCommandQueue::consumer_event_epoch_nonblocking() const noexcept {
+    return event_epoch_.load(std::memory_order_acquire);
+}
+
+void NativePortAudioCommandQueue::wait_for_consumer_event(
+    const std::uint64_t observed_epoch) const noexcept {
+    event_epoch_.wait(observed_epoch, std::memory_order_acquire);
+}
+
+bool NativePortAudioCommandQueue::consumer_closed_nonblocking() const noexcept {
+    const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
+    if (lifecycle == NativePortAudioCommandQueueLifecycle::Disabled ||
+        lifecycle == NativePortAudioCommandQueueLifecycle::Stopped)
+        return true;
+    return lifecycle == NativePortAudioCommandQueueLifecycle::Failed &&
+           consumer_position_.load(std::memory_order_acquire) >=
+               producer_position_.load(std::memory_order_acquire);
+}
+
 void NativePortAudioCommandQueue::fail_terminal(
     const NativePortAudioCommandQueueFailure failure,
     const std::uint64_t command_sequence) noexcept {
@@ -476,10 +501,12 @@ NativePortAudioCommandQueue::snapshot() const noexcept {
     NativePortAudioCommandQueueSnapshot result;
     result.lifecycle = lifecycle_.load(std::memory_order_acquire);
     result.mode = config_.mode;
-    result.first_error = static_cast<NativePortAudioCommandQueueFailure>(
-        first_error_.load(std::memory_order_acquire));
-    result.first_error_command_sequence =
-        first_error_command_sequence_.load(std::memory_order_acquire);
+    if (first_error_published_.load(std::memory_order_acquire)) {
+        result.first_error = static_cast<NativePortAudioCommandQueueFailure>(
+            first_error_.load(std::memory_order_relaxed));
+        result.first_error_command_sequence =
+            first_error_command_sequence_.load(std::memory_order_relaxed);
+    }
     result.producer_thread_identity =
         producer_thread_identity_.load(std::memory_order_acquire);
     result.consumer_thread_identity =
@@ -497,13 +524,7 @@ NativePortAudioCommandQueue::snapshot() const noexcept {
         completed_payload_bytes_.load(std::memory_order_acquire);
     result.cancelled_payload_bytes =
         cancelled_payload_bytes_.load(std::memory_order_acquire);
-    const auto producer_position =
-        producer_position_.load(std::memory_order_acquire);
-    const auto consumer_position =
-        consumer_position_.load(std::memory_order_acquire);
-    result.queued_commands = producer_position >= consumer_position
-                                 ? producer_position - consumer_position
-                                 : 0u;
+    result.queued_commands = queued_commands_nonblocking();
     const auto producer_payload =
         producer_payload_position_.load(std::memory_order_acquire);
     const auto consumer_payload =
@@ -536,6 +557,17 @@ NativePortAudioCommandQueue::snapshot() const noexcept {
     result.last_completed_stamp.guest_sequence =
         last_completed_guest_sequence_.load(std::memory_order_acquire);
     return result;
+}
+
+std::uint64_t
+NativePortAudioCommandQueue::queued_commands_nonblocking() const noexcept {
+    const auto producer_position =
+        producer_position_.load(std::memory_order_acquire);
+    const auto consumer_position =
+        consumer_position_.load(std::memory_order_acquire);
+    return producer_position >= consumer_position
+               ? producer_position - consumer_position
+               : 0u;
 }
 
 std::optional<NativePortAudioCommandProducerLease>
@@ -639,9 +671,9 @@ NativePortAudioCommandQueue::try_begin_produce_impl(
         release_lease();
         return std::nullopt;
     }
-    const auto producer_payload =
+    auto producer_payload =
         producer_payload_position_.load(std::memory_order_relaxed);
-    const auto consumer_payload =
+    auto consumer_payload =
         consumer_payload_position_.load(std::memory_order_acquire);
     if (producer_payload < consumer_payload ||
         producer_payload - consumer_payload > config_.maximum_payload_bytes) {
@@ -655,12 +687,39 @@ NativePortAudioCommandQueue::try_begin_produce_impl(
             NativePortAudioCommandQueueFailure::PayloadReservationOverflow);
     }
     const auto payload_size = static_cast<std::uint64_t>(command.payload_size);
-    const auto offset = producer_payload % config_.maximum_payload_bytes;
-    const auto padding =
-        payload_size != 0u &&
-                offset + payload_size > config_.maximum_payload_bytes
-            ? config_.maximum_payload_bytes - offset
-            : 0u;
+    const auto payload_capacity =
+        static_cast<std::uint64_t>(config_.maximum_payload_bytes);
+    auto offset = producer_payload % payload_capacity;
+    auto padding = std::uint64_t{0u};
+    if (payload_size != 0u) {
+        const auto alignment = static_cast<std::uint64_t>(
+            native_port_audio_command_queue_payload_alignment);
+        const auto alignment_padding =
+            (alignment - (offset % alignment)) % alignment;
+        padding = offset + alignment_padding + payload_size <= payload_capacity
+                      ? alignment_padding
+                      : payload_capacity - offset;
+
+        // A completely drained ring may otherwise lack enough logical room
+        // for a maximum-sized payload solely because the previous command
+        // ended away from physical offset zero. Rebase both equal cursors to
+        // the next ring boundary; no live lease or payload can reference the
+        // discarded empty suffix once producer/consumer command positions
+        // are equal.
+        if (producer_payload == consumer_payload &&
+            producer_position ==
+                consumer_position_.load(std::memory_order_acquire) &&
+            padding + payload_size > payload_capacity) {
+            const auto rebase = payload_capacity - offset;
+            producer_payload += rebase;
+            consumer_payload += rebase;
+            producer_payload_position_.store(producer_payload,
+                                             std::memory_order_relaxed);
+            consumer_payload_position_.store(consumer_payload,
+                                             std::memory_order_release);
+            padding = 0u;
+        }
+    }
     const auto reservation_size = padding + payload_size;
     if (reservation_size > config_.maximum_payload_bytes ||
         producer_payload - consumer_payload >
@@ -705,7 +764,7 @@ NativePortAudioCommandQueue::try_begin_produce_impl(
                                       ? 0u
                                       : static_cast<std::uint32_t>(
                                             (producer_payload + padding) %
-                                            config_.maximum_payload_bytes);
+                                            payload_capacity);
     slot.payload_begin = producer_payload + padding;
     slot.payload_reserved_size = reservation_size;
     if (command.ack_slot != native_port_audio_command_queue_invalid_ack_slot) {
@@ -945,8 +1004,11 @@ bool NativePortAudioCommandQueue::finalize_consumer(
     } else {
         failed_commands_.fetch_add(1u, std::memory_order_relaxed);
     }
+    // payload_begin already includes any alignment/wrap padding. Adding the
+    // whole reservation again would double-count that padding and eventually
+    // make a drained ring appear occupied.
     consumer_payload_position_.store(
-        slot.payload_begin + slot.payload_reserved_size,
+        slot.payload_begin + slot.command.payload_size,
         std::memory_order_release);
     slot.state.store(static_cast<std::uint8_t>(SlotState::Free),
                      std::memory_order_release);
@@ -997,9 +1059,9 @@ void NativePortAudioCommandQueue::publish_error(
             expected, true, std::memory_order_acq_rel,
             std::memory_order_acquire)) {
         first_error_.store(static_cast<std::uint8_t>(failure),
-                           std::memory_order_release);
+                           std::memory_order_relaxed);
         first_error_command_sequence_.store(command_sequence,
-                                            std::memory_order_release);
+                                            std::memory_order_relaxed);
         // Publish the error payload before making Failed observable. Losers
         // only cancel already-ready slots; they never publish lifecycle state
         // while the winner is still filling the first-error record.

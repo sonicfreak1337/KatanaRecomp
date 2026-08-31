@@ -114,14 +114,18 @@ thread_local HostFpuEpochState host_fpu_epoch_state;
 #if KATANA_RUNTIME_HAS_SSE_ROUNDING
 constexpr std::uint32_t host_denormals_are_zero_mask = 0x00000040u;
 constexpr std::uint32_t host_flush_to_zero_mask = 0x00008000u;
+constexpr std::uint32_t host_exception_status_mask = 0x0000003Fu;
+constexpr std::uint32_t host_exception_mask_mask = 0x00001F80u;
 
 [[nodiscard]] std::uint32_t requested_host_control(const std::uint32_t current,
                                                    const std::uint8_t rounding_mode) noexcept {
     const std::uint32_t requested =
         rounding_mode == 1u ? _MM_ROUND_TOWARD_ZERO : _MM_ROUND_NEAREST;
     return (current & ~(_MM_ROUND_MASK | host_denormals_are_zero_mask |
-                        host_flush_to_zero_mask)) |
-           requested;
+                        host_flush_to_zero_mask |
+                        host_exception_status_mask |
+                        host_exception_mask_mask)) |
+           requested | host_exception_mask_mask;
 }
 #else
 [[nodiscard]] int requested_host_rounding(const std::uint8_t rounding_mode) noexcept {
@@ -145,7 +149,7 @@ class ScopedHostRounding final {
             _mm_setcsr(scoped);
         }
 #else
-        if (std::fegetenv(&previous_) != 0) return;
+        if (std::feholdexcept(&previous_) != 0) return;
         restore_ = true;
         const int requested = requested_host_rounding(rounding_mode);
         if (requested != std::fegetround()) {
@@ -406,7 +410,7 @@ HostFpuExecutionEpoch::HostFpuExecutionEpoch(const CpuState& cpu) noexcept
         _mm_setcsr(requested);
     }
 #else
-    static_cast<void>(std::fegetenv(&previous_host_environment_));
+    static_cast<void>(std::feholdexcept(&previous_host_environment_));
     const auto requested = requested_host_rounding(rounding_mode);
     if (requested != std::fegetround()) {
         static_cast<void>(std::fesetround(requested));
@@ -470,6 +474,7 @@ void fpu_binary(CpuState& cpu,
                 const std::uint8_t source,
                 const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     if (double_precision(cpu)) {
         write_double_result(cpu,
                             destination,
@@ -500,6 +505,7 @@ void fpu_negate(CpuState& cpu, const std::uint8_t destination) noexcept {
 
 void fpu_square_root(CpuState& cpu, const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     if (double_precision(cpu)) {
         write_double_result(cpu, destination, std::sqrt(read_double_operand(cpu, destination)));
     } else {
@@ -689,6 +695,7 @@ void fpu_inner_product(CpuState& cpu,
                        const std::uint8_t source_vector,
                        const std::uint8_t destination_vector) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     float source[4];
     float destination[4];
     for (std::uint8_t i = 0; i < 4u; ++i) {
@@ -705,6 +712,7 @@ void fpu_inner_product(CpuState& cpu,
 
 void fpu_transform_vector(CpuState& cpu, const std::uint8_t destination_vector) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     float vector[4];
     float matrix[16];
     for (std::uint8_t i = 0; i < 4u; ++i) {
@@ -747,6 +755,7 @@ bool try_fpu_transform_vector_simd(
             return std::isfinite(value);
         }))
         return false;
+    clear_fpu_causes(cpu);
     detail::fpu_transform_vector_avx2_fma(matrix, vector, result);
     for (std::uint8_t row = 0u; row < 4u; ++row) {
         write_single_result(
@@ -764,6 +773,7 @@ void fpu_multiply_accumulate(CpuState& cpu,
                              const std::uint8_t source,
                              const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     write_single_result(cpu,
                         destination,
                         std::fma(read_single_operand(cpu, 0u),
@@ -774,6 +784,8 @@ void fpu_multiply_accumulate(CpuState& cpu,
 void fpu_compare_equal(CpuState& cpu,
                        const std::uint8_t source,
                        const std::uint8_t destination) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     cpu.t = double_precision(cpu)
                 ? read_double_operand(cpu, destination) == read_double_operand(cpu, source)
                 : read_single_operand(cpu, destination) == read_single_operand(cpu, source);
@@ -782,6 +794,8 @@ void fpu_compare_equal(CpuState& cpu,
 void fpu_compare_greater(CpuState& cpu,
                          const std::uint8_t source,
                          const std::uint8_t destination) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     cpu.t = double_precision(cpu)
                 ? read_double_operand(cpu, destination) > read_double_operand(cpu, source)
                 : read_single_operand(cpu, destination) > read_single_operand(cpu, source);
@@ -789,6 +803,7 @@ void fpu_compare_greater(CpuState& cpu,
 
 void fpu_float_from_fpul(CpuState& cpu, const std::uint8_t destination) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     const auto value = static_cast<std::int32_t>(cpu.fpul);
     if (double_precision(cpu)) {
         write_double_result(cpu, destination, static_cast<double>(value));
@@ -798,6 +813,8 @@ void fpu_float_from_fpul(CpuState& cpu, const std::uint8_t destination) noexcept
 }
 
 void fpu_truncate_to_fpul(CpuState& cpu, const std::uint8_t source) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     cpu.fpul = double_precision(cpu)
                    ? truncate_to_integer_bits(read_double_operand(cpu, source))
                    : truncate_to_integer_bits(read_single_operand(cpu, source));
@@ -805,12 +822,15 @@ void fpu_truncate_to_fpul(CpuState& cpu, const std::uint8_t source) noexcept {
 
 void fpu_convert_double_to_single(CpuState& cpu, const std::uint8_t source) noexcept {
     const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     const float result =
         flush_denormalized(cpu, static_cast<float>(read_double_operand(cpu, source)));
     cpu.fpul = std::isnan(result) ? canonical_single_nan : std::bit_cast<std::uint32_t>(result);
 }
 
 void fpu_convert_single_to_double(CpuState& cpu, const std::uint8_t destination) noexcept {
+    const ScopedHostRounding rounding(cpu);
+    clear_fpu_causes(cpu);
     write_double_result(
         cpu,
         destination,

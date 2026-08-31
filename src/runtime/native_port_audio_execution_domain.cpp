@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -24,6 +25,8 @@ thread_local NativePortAudioExecutionDomainFailure last_request_failure_ =
     NativePortAudioExecutionDomainFailure::None;
 thread_local NativePortAudioCommandQueueFailure last_queue_failure_ =
     NativePortAudioCommandQueueFailure::None;
+
+inline constexpr std::uint16_t telemetry_barrier_opcode = 1u;
 
 [[nodiscard]] std::uint64_t audio_domain_thread_token() noexcept {
     static thread_local const std::uint64_t token = [] {
@@ -251,6 +254,8 @@ class NativePortAudioExecutionDomain::Impl final {
         std::atomic<std::uint32_t> last_generation{0u};
         std::atomic<NativePortAudioExecutionDomainExecutor> executor{nullptr};
         std::atomic<NativePortAudioExecutionDomainCleanup> cleanup{nullptr};
+        std::atomic<NativePortAudioExecutionDomainConsumerService>
+            consumer_service{nullptr};
         std::atomic<std::uint32_t> active_dispatches{0u};
         std::atomic<std::uint64_t> executed_commands{0u};
         std::atomic<std::uint64_t> failed_commands{0u};
@@ -260,6 +265,8 @@ class NativePortAudioExecutionDomain::Impl final {
         TargetSlot* slot = nullptr;
         void* object = nullptr;
         NativePortAudioExecutionDomainExecutor executor = nullptr;
+        NativePortAudioExecutionDomainConsumerService consumer_service =
+            nullptr;
         bool valid = false;
     };
 
@@ -315,7 +322,9 @@ class NativePortAudioExecutionDomain::Impl final {
         const std::uint32_t target_generation,
         void* const object,
         const NativePortAudioExecutionDomainExecutor executor,
-        const NativePortAudioExecutionDomainCleanup cleanup) noexcept {
+        const NativePortAudioExecutionDomainCleanup cleanup,
+        const NativePortAudioExecutionDomainConsumerService
+            consumer_service) noexcept {
         if (shutdown_requested_.load(std::memory_order_acquire)) {
             record_failure(NativePortAudioExecutionDomainFailure::Shutdown, 0u);
             return false;
@@ -361,10 +370,17 @@ class NativePortAudioExecutionDomain::Impl final {
                                    std::memory_order_relaxed);
         slot.executor.store(executor, std::memory_order_relaxed);
         slot.cleanup.store(cleanup, std::memory_order_relaxed);
+        slot.consumer_service.store(consumer_service,
+                                    std::memory_order_relaxed);
         slot.active_dispatches.store(0u, std::memory_order_relaxed);
         slot.executed_commands.store(0u, std::memory_order_relaxed);
         slot.failed_commands.store(0u, std::memory_order_relaxed);
         slot.state.store(slot_active, std::memory_order_release);
+        if (consumer_service != nullptr)
+            consumer_service_target_mask_.fetch_or(
+                std::uint64_t{1u}
+                    << target_slot_index(target, target_slot),
+                std::memory_order_release);
         return true;
     }
 
@@ -374,7 +390,9 @@ class NativePortAudioExecutionDomain::Impl final {
         const NativePortAudioExecutionDomainTarget target,
         void* const object,
         const NativePortAudioExecutionDomainExecutor executor,
-        const NativePortAudioExecutionDomainCleanup cleanup) noexcept {
+        const NativePortAudioExecutionDomainCleanup cleanup,
+        const NativePortAudioExecutionDomainConsumerService
+            consumer_service) noexcept {
         if (shutdown_requested_.load(std::memory_order_acquire)) {
             record_failure(NativePortAudioExecutionDomainFailure::Shutdown, 0u);
             return std::nullopt;
@@ -412,10 +430,17 @@ class NativePortAudioExecutionDomain::Impl final {
                                        std::memory_order_relaxed);
             slot.executor.store(executor, std::memory_order_relaxed);
             slot.cleanup.store(cleanup, std::memory_order_relaxed);
+            slot.consumer_service.store(consumer_service,
+                                        std::memory_order_relaxed);
             slot.active_dispatches.store(0u, std::memory_order_relaxed);
             slot.executed_commands.store(0u, std::memory_order_relaxed);
             slot.failed_commands.store(0u, std::memory_order_relaxed);
             slot.state.store(slot_active, std::memory_order_release);
+            if (consumer_service != nullptr)
+                consumer_service_target_mask_.fetch_or(
+                    std::uint64_t{1u}
+                        << target_slot_index(target, target_slot),
+                    std::memory_order_release);
             return NativePortAudioExecutionDomainTargetHandle{
                 target, target_slot, generation};
         }
@@ -521,10 +546,18 @@ class NativePortAudioExecutionDomain::Impl final {
             slot.state.store(slot_active, std::memory_order_release);
             return false;
         }
-        while (slot.active_dispatches.load(std::memory_order_acquire) != 0u)
-            std::this_thread::yield();
+        consumer_service_target_mask_.fetch_and(
+            ~(std::uint64_t{1u}
+              << target_slot_index(target, target_slot)),
+            std::memory_order_acq_rel);
+        auto active = slot.active_dispatches.load(std::memory_order_acquire);
+        while (active != 0u) {
+            slot.active_dispatches.wait(active, std::memory_order_acquire);
+            active = slot.active_dispatches.load(std::memory_order_acquire);
+        }
         slot.executor.store(nullptr, std::memory_order_release);
         slot.cleanup.store(nullptr, std::memory_order_release);
+        slot.consumer_service.store(nullptr, std::memory_order_release);
         slot.object.store(nullptr, std::memory_order_release);
         // Keep the last issued generation observable.  A freed slot is
         // invalidated by its state; resetting the generation would make
@@ -568,16 +601,20 @@ class NativePortAudioExecutionDomain::Impl final {
                 return NativePortAudioExecutionDomain::ProducerLease(
                     owner_, {}, {}, failed_result(failure, queue_failure));
             };
-        if (!handle.valid() || !valid_target(handle.target) ||
-            handle.slot >= native_port_audio_execution_domain_max_slots_per_target)
-            return invalid_lease(
-                NativePortAudioExecutionDomainFailure::InvalidTarget);
         if (on_audio_thread())
             return invalid_lease(
                 NativePortAudioExecutionDomainFailure::ConsumerThreadViolation);
         if (!producer_thread_allowed())
             return invalid_lease(
                 NativePortAudioExecutionDomainFailure::ProducerThreadViolation);
+        if (const auto ready = check_dispatch_ready(); ready !=
+                                                   NativePortAudioExecutionDomainFailure::None)
+            return NativePortAudioExecutionDomain::ProducerLease(
+                owner_, {}, {}, failed_dispatch_result(ready));
+        if (!handle.valid() || !valid_target(handle.target) ||
+            handle.slot >= native_port_audio_execution_domain_max_slots_per_target)
+            return invalid_lease(
+                NativePortAudioExecutionDomainFailure::InvalidTarget);
         std::uint32_t total_size = 0u;
         // Validate the handle/flags/registration without pretending that the
         // caller already owns source bytes.  This reservation intentionally
@@ -593,9 +630,6 @@ class NativePortAudioExecutionDomain::Impl final {
                 NativePortAudioExecutionDomainFailure::InvalidPayload,
                 NativePortAudioCommandQueueFailure::PayloadOverflow);
         total_size = payload_size;
-        if (const auto ready = check_dispatch_ready(); ready !=
-                                                   NativePortAudioExecutionDomainFailure::None)
-            return invalid_lease(ready, last_queue_failure_);
         NativePortAudioCommandStamp stamp;
         if (!make_stamp(frame_index, stamp))
             return invalid_lease(last_request_failure_, last_queue_failure_);
@@ -673,10 +707,6 @@ class NativePortAudioExecutionDomain::Impl final {
         const std::uint64_t frame_index,
         const std::uint32_t flags,
         const NativePortAudioExecutionDomainStage stage) noexcept {
-        std::uint32_t total_size = 0u;
-        if (!validate_request(target, target_slot, target_generation, parts,
-                              flags, stage, total_size))
-            return failed_result(last_request_failure_, last_queue_failure_);
         if (on_audio_thread())
             return dispatch_inline(target, target_slot, target_generation,
                                    opcode, parts, frame_index, flags, stage,
@@ -686,7 +716,11 @@ class NativePortAudioExecutionDomain::Impl final {
                 NativePortAudioExecutionDomainFailure::ProducerThreadViolation);
         if (const auto ready = check_dispatch_ready(); ready !=
                                                    NativePortAudioExecutionDomainFailure::None)
-            return failed_result(ready);
+            return failed_dispatch_result(ready);
+        std::uint32_t total_size = 0u;
+        if (!validate_request(target, target_slot, target_generation, parts,
+                              flags, stage, total_size))
+            return failed_result(last_request_failure_, last_queue_failure_);
 
         NativePortAudioCommandStamp stamp;
         if (!make_stamp(frame_index, stamp))
@@ -791,10 +825,6 @@ class NativePortAudioExecutionDomain::Impl final {
         const std::uint64_t frame_index,
         const std::uint32_t flags,
         const NativePortAudioExecutionDomainStage stage) noexcept {
-        std::uint32_t total_size = 0u;
-        if (!validate_request(target, target_slot, target_generation, parts,
-                              flags, stage, total_size))
-            return failed_result(last_request_failure_, last_queue_failure_);
         if (on_audio_thread())
             return dispatch_inline(target, target_slot, target_generation,
                                    opcode, parts, frame_index, flags, stage,
@@ -804,7 +834,11 @@ class NativePortAudioExecutionDomain::Impl final {
                 NativePortAudioExecutionDomainFailure::ProducerThreadViolation);
         if (const auto ready = check_dispatch_ready(); ready !=
                                                    NativePortAudioExecutionDomainFailure::None)
-            return failed_result(ready);
+            return failed_dispatch_result(ready);
+        std::uint32_t total_size = 0u;
+        if (!validate_request(target, target_slot, target_generation, parts,
+                              flags, stage, total_size))
+            return failed_result(last_request_failure_, last_queue_failure_);
 
         const auto ack_slot = reserve_ack_slot();
         if (ack_slot == native_port_audio_command_queue_invalid_ack_slot)
@@ -938,8 +972,17 @@ class NativePortAudioExecutionDomain::Impl final {
             if (!lease.has_value()) break;
             process_lease(std::move(*lease));
         }
+        static_cast<void>(service_consumer_if_requested());
         if (shutdown_requested_.load(std::memory_order_acquire))
             cleanup_registered_targets();
+    }
+
+    void request_consumer_service() noexcept {
+        if (shutdown_requested_.load(std::memory_order_acquire) ||
+            terminal_.load(std::memory_order_acquire))
+            return;
+        consumer_service_requested_.store(true, std::memory_order_release);
+        queue_.notify_consumer_event();
     }
 
     void shutdown() noexcept {
@@ -988,13 +1031,27 @@ class NativePortAudioExecutionDomain::Impl final {
                 if (slot.state.load(std::memory_order_acquire) == slot_free)
                     continue;
                 slot.state.store(slot_retiring, std::memory_order_release);
-                while (slot.active_dispatches.load(std::memory_order_acquire) != 0u)
-                    std::this_thread::yield();
+                auto active =
+                    slot.active_dispatches.load(std::memory_order_acquire);
+                while (active != 0u) {
+                    slot.active_dispatches.wait(active,
+                                                std::memory_order_acquire);
+                    active = slot.active_dispatches.load(
+                        std::memory_order_acquire);
+                }
                 const auto object = slot.object.load(std::memory_order_acquire);
                 const auto cleanup =
                     slot.cleanup.exchange(nullptr, std::memory_order_acq_rel);
                 if (cleanup != nullptr && object != nullptr) cleanup(object);
+                consumer_service_target_mask_.fetch_and(
+                    ~(std::uint64_t{1u}
+                      << (target *
+                              native_port_audio_execution_domain_max_slots_per_target +
+                          target_slot)),
+                    std::memory_order_acq_rel);
                 slot.executor.store(nullptr, std::memory_order_release);
+                slot.consumer_service.store(nullptr,
+                                            std::memory_order_release);
                 slot.object.store(nullptr, std::memory_order_release);
                 // Retain the last generation as an invalidated lifecycle
                 // identity.  A free slot must never reset it to zero.
@@ -1036,6 +1093,10 @@ class NativePortAudioExecutionDomain::Impl final {
         result.worker_alive = worker_alive_.load(std::memory_order_acquire);
         result.shutdown_requested =
             shutdown_requested_.load(std::memory_order_acquire);
+        if (async_target_failure_published_.load(std::memory_order_acquire)) {
+            result.has_async_target_failure = true;
+            result.async_target_failure = async_target_failure_;
+        }
         for (std::size_t target = 0u;
              target < native_port_audio_execution_domain_target_count; ++target) {
             for (std::uint32_t slot = 0u;
@@ -1067,6 +1128,17 @@ class NativePortAudioExecutionDomain::Impl final {
             result.first_error =
                 NativePortAudioExecutionDomainFailure::ConsumerThreadViolation;
         return result;
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t>
+    last_frame_index_nonblocking() const noexcept {
+        if (!has_last_frame_index_.load(std::memory_order_acquire))
+            return std::nullopt;
+        return last_frame_index_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] std::uint64_t queued_commands_nonblocking() const noexcept {
+        return queue_.queued_commands_nonblocking();
     }
 
     [[nodiscard]] bool bind_telemetry(NativePortTelemetry* telemetry) noexcept {
@@ -1121,25 +1193,52 @@ class NativePortAudioExecutionDomain::Impl final {
                 0u);
             return false;
         }
-        std::lock_guard lock(telemetry_binding_mutex_);
-        auto* const configured = telemetry_.load(std::memory_order_acquire);
-        const auto count = telemetry_bind_count_.load(std::memory_order_acquire);
-        if (configured != telemetry || count == 0u) {
-            record_failure(
-                NativePortAudioExecutionDomainFailure::TargetIdentityMismatch,
-                0u);
-            return false;
+        bool needs_worker_barrier = false;
+        {
+            std::lock_guard lock(telemetry_binding_mutex_);
+            auto* const configured = telemetry_.load(std::memory_order_acquire);
+            const auto count =
+                telemetry_bind_count_.load(std::memory_order_acquire);
+            if (configured != telemetry || count == 0u) {
+                record_failure(
+                    NativePortAudioExecutionDomainFailure::TargetIdentityMismatch,
+                    0u);
+                return false;
+            }
+            if (count == 1u) {
+                // A worker-side executor may still own a stage timer backed
+                // by telemetry_writer_. Returning true here would let the
+                // caller destroy the NativePortTelemetry owner before that
+                // timer's destructor runs. Reject without changing either
+                // binding field; producer-side unbind provides the required
+                // command/ACK lifetime fence.
+                if (on_audio_thread() && active_command_) return false;
+                // The command boundary below is the lifetime fence: it makes
+                // the consumer publish and destroy its writer before the
+                // caller may release the NativePortTelemetry owner.
+                telemetry_.store(nullptr, std::memory_order_release);
+                telemetry_bind_count_.store(0u, std::memory_order_release);
+                needs_worker_barrier = true;
+            } else {
+                telemetry_bind_count_.store(count - 1u,
+                                            std::memory_order_release);
+            }
         }
-        if (count == 1u) {
-            // Publish the null pointer before dropping the last lease. The
-            // worker will observe it at the next command boundary and reset
-            // its writer/owner on that same worker thread.
-            telemetry_.store(nullptr, std::memory_order_release);
-            telemetry_bind_count_.store(0u, std::memory_order_release);
-        } else {
-            telemetry_bind_count_.store(count - 1u, std::memory_order_release);
+        if (!needs_worker_barrier) return true;
+        if (on_audio_thread()) {
+            // This path is reachable only outside an active executor (for
+            // example during consumer-owned teardown), so no stage timer can
+            // retain the writer and immediate consumer-side retirement is a
+            // complete lifetime fence.
+            ensure_worker_telemetry();
+            return telemetry_writer_owner_.load(std::memory_order_acquire) ==
+                   nullptr;
         }
-        return true;
+        if (dispatch_telemetry_barrier()) return true;
+        // A terminal queue cannot acknowledge a barrier. Joining the sole
+        // consumer is the only remaining sound lifetime fence.
+        shutdown();
+        return telemetry_writer_owner_.load(std::memory_order_acquire) == nullptr;
     }
 
   private:
@@ -1156,6 +1255,58 @@ class NativePortAudioExecutionDomain::Impl final {
         return false;
     }
 
+    [[nodiscard]] bool dispatch_telemetry_barrier() noexcept {
+        if (!queue_config_.enabled || on_audio_thread() ||
+            !producer_thread_allowed())
+            return false;
+        if (const auto ready = check_dispatch_ready();
+            ready != NativePortAudioExecutionDomainFailure::None)
+            return false;
+        const auto ack_slot = reserve_ack_slot();
+        if (ack_slot == native_port_audio_command_queue_invalid_ack_slot)
+            return false;
+
+        NativePortAudioCommandStamp stamp;
+        const auto frame = last_frame_index_nonblocking().value_or(0u);
+        if (!make_stamp(frame, stamp)) {
+            release_ack_slot(ack_slot);
+            return false;
+        }
+        NativePortAudioPodCommand command;
+        command.stamp = stamp;
+        command.target = NativePortAudioCommandTarget::Lifecycle;
+        command.opcode = telemetry_barrier_opcode;
+        command.ack_slot = ack_slot;
+
+        std::optional<NativePortAudioCommandProducerLease> lease;
+        try {
+            lease = queue_.wait_begin_produce(command);
+        } catch (...) {
+            release_ack_slot(ack_slot);
+            return false;
+        }
+        if (!lease.has_value() || !lease->publish()) {
+            if (lease.has_value()) lease->abort();
+            release_ack_slot(ack_slot);
+            return false;
+        }
+        const auto sequence = lease->command_sequence();
+        commit_stamp(stamp);
+        if (queue_.mode() == NativePortAudioCommandQueueMode::SerialReference)
+            pump();
+
+        std::optional<NativePortAudioCommandAck> ack;
+        try {
+            ack = queue_.wait_read_ack(ack_slot, sequence);
+        } catch (...) {
+            release_ack_slot(ack_slot);
+            return false;
+        }
+        release_ack_slot(ack_slot);
+        return ack.has_value() &&
+               ack->status == NativePortAudioCommandAckStatus::Completed;
+    }
+
     [[nodiscard]] NativePortAudioExecutionDomainFailure check_dispatch_ready()
         noexcept {
         if (!queue_config_.enabled) {
@@ -1170,14 +1321,47 @@ class NativePortAudioExecutionDomain::Impl final {
             return last_request_failure_;
         }
         if (terminal_.load(std::memory_order_acquire)) {
-            last_request_failure_ =
-                NativePortAudioExecutionDomainFailure::QueueFailed;
-            last_queue_failure_ = NativePortAudioCommandQueueFailure::QueueFailed;
+            if (async_target_failure_published_.load(
+                    std::memory_order_acquire)) {
+                last_request_failure_ =
+                    NativePortAudioExecutionDomainFailure::TargetExecutionFailed;
+                last_queue_failure_ =
+                    NativePortAudioCommandQueueFailure::WorkerFailure;
+            } else {
+                last_request_failure_ =
+                    NativePortAudioExecutionDomainFailure::QueueFailed;
+                last_queue_failure_ =
+                    NativePortAudioCommandQueueFailure::QueueFailed;
+            }
             return last_request_failure_;
         }
         last_request_failure_ = NativePortAudioExecutionDomainFailure::None;
         last_queue_failure_ = NativePortAudioCommandQueueFailure::None;
         return NativePortAudioExecutionDomainFailure::None;
+    }
+
+    [[nodiscard]] NativePortAudioExecutionDomainDispatchResult
+    failed_dispatch_result(
+        const NativePortAudioExecutionDomainFailure failure) noexcept {
+        auto result = failed_result(failure, last_queue_failure_);
+        if (failure ==
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed &&
+            async_target_failure_published_.load(std::memory_order_acquire)) {
+            const auto& record = async_target_failure_;
+            result.has_target_failure = true;
+            result.target_failure_command_sequence = record.command_sequence;
+            result.target_failure_frame_index = record.frame_index;
+            result.target_failure_guest_sequence = record.guest_sequence;
+            result.target_failure_target = record.target;
+            result.target_failure_opcode = record.opcode;
+            result.target_failure_slot = record.target_slot;
+            result.target_failure_generation = record.target_generation;
+            result.target_failure_error_code = record.target_error_code;
+            result.command_sequence = record.command_sequence;
+            result.stamp.frame_index = record.frame_index;
+            result.stamp.guest_sequence = record.guest_sequence;
+        }
+        return result;
     }
 
     [[nodiscard]] bool validate_request(
@@ -1328,6 +1512,8 @@ class NativePortAudioExecutionDomain::Impl final {
             return result;
         const auto object = slot.object.load(std::memory_order_acquire);
         const auto executor = slot.executor.load(std::memory_order_acquire);
+        const auto consumer_service =
+            slot.consumer_service.load(std::memory_order_acquire);
         const auto generation = slot.generation.load(std::memory_order_acquire);
         if (object == nullptr || executor == nullptr ||
             generation != target_generation)
@@ -1342,14 +1528,17 @@ class NativePortAudioExecutionDomain::Impl final {
         result.slot = &slot;
         result.object = object;
         result.executor = executor;
+        result.consumer_service = consumer_service;
         result.valid = true;
         return result;
     }
 
     void unpin_target(PinnedTarget& target) noexcept {
-        if (target.valid && target.slot != nullptr)
-            target.slot->active_dispatches.fetch_sub(1u,
-                                                      std::memory_order_release);
+        if (target.valid && target.slot != nullptr) {
+            const auto previous = target.slot->active_dispatches.fetch_sub(
+                1u, std::memory_order_release);
+            if (previous == 1u) target.slot->active_dispatches.notify_all();
+        }
         target = {};
     }
 
@@ -1399,6 +1588,9 @@ class NativePortAudioExecutionDomain::Impl final {
         result.command_sequence = active_command_sequence_;
         result.stamp = active_command_stamp_;
         result.inline_execution = true;
+        if (ack_result.status != NativePortAudioCommandAckStatus::Completed)
+            result.failure =
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed;
         if (!synchronous) return result;
         result.has_ack = true;
         result.ack.command_sequence = active_command_sequence_;
@@ -1409,9 +1601,6 @@ class NativePortAudioExecutionDomain::Impl final {
         if (ack_result.result_size != 0u)
             std::memcpy(result.ack.bytes.data(), ack_result.bytes.data(),
                         ack_result.result_size);
-        if (ack_result.status != NativePortAudioCommandAckStatus::Completed)
-            result.failure =
-                NativePortAudioExecutionDomainFailure::TargetExecutionFailed;
         return result;
     }
 
@@ -1433,10 +1622,11 @@ class NativePortAudioExecutionDomain::Impl final {
             pinned.executor(pinned.object, opcode, payload, result);
         } else if (telemetry_writer_.has_value() &&
                    stage == NativePortAudioExecutionDomainStage::AudioDecodeAndMix) {
-            NativePortTelemetryTimer decode_timer(
-                *telemetry_writer_, NativePortTelemetryStage::AudioDecode);
-            NativePortTelemetryTimer mix_timer(
-                *telemetry_writer_, NativePortTelemetryStage::AudioMix);
+            // This is one broad executor region without separable phase
+            // boundaries. Keep its total distinct from both narrower stages.
+            NativePortTelemetryTimer service_total_timer(
+                *telemetry_writer_,
+                NativePortTelemetryStage::AudioServiceTotal);
             pinned.executor(pinned.object, opcode, payload, result);
         } else {
             pinned.executor(pinned.object, opcode, payload, result);
@@ -1445,6 +1635,70 @@ class NativePortAudioExecutionDomain::Impl final {
             pinned.slot->failed_commands.fetch_add(1u, std::memory_order_relaxed);
         else
             pinned.slot->executed_commands.fetch_add(1u, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] bool service_pending_targets() noexcept {
+        auto mask = consumer_service_target_mask_.load(std::memory_order_acquire);
+        if (mask == 0u) return true;
+
+        const bool previous_active = active_command_;
+        const auto previous_sequence = active_command_sequence_;
+        const auto previous_stamp = active_command_stamp_;
+        active_command_ = true;
+        active_command_sequence_ = 0u;
+        active_command_stamp_.frame_index =
+            last_frame_index_.load(std::memory_order_acquire);
+        const auto next_guest =
+            next_guest_sequence_.load(std::memory_order_acquire);
+        active_command_stamp_.guest_sequence =
+            next_guest == 0u ? 0u : next_guest - 1u;
+
+        bool succeeded = true;
+        while (mask != 0u) {
+            const auto index = static_cast<std::size_t>(std::countr_zero(mask));
+            mask &= mask - 1u;
+            const auto target = static_cast<NativePortAudioExecutionDomainTarget>(
+                index /
+                native_port_audio_execution_domain_max_slots_per_target);
+            const auto target_slot = static_cast<std::uint32_t>(
+                index %
+                native_port_audio_execution_domain_max_slots_per_target);
+            const auto generation =
+                registered_generation(target, target_slot);
+            if (generation == 0u) continue;
+            auto pinned = pin_target(target, target_slot, generation);
+            if (!pinned.valid || pinned.consumer_service == nullptr) {
+                unpin_target(pinned);
+                continue;
+            }
+            const auto error = pinned.consumer_service(pinned.object);
+            if (error != 0u) {
+                pinned.slot->failed_commands.fetch_add(
+                    1u, std::memory_order_relaxed);
+                unpin_target(pinned);
+                record_failure(
+                    NativePortAudioExecutionDomainFailure::TargetExecutionFailed,
+                    0u);
+                queue_.fail_terminal(
+                    NativePortAudioCommandQueueFailure::WorkerFailure, 0u);
+                succeeded = false;
+                break;
+            }
+            unpin_target(pinned);
+        }
+
+        active_command_ = previous_active;
+        active_command_sequence_ = previous_sequence;
+        active_command_stamp_ = previous_stamp;
+        return succeeded;
+    }
+
+    [[nodiscard]] bool service_consumer_if_requested() noexcept {
+        if (!consumer_service_requested_.exchange(false,
+                                                   std::memory_order_acq_rel))
+            return true;
+        if (terminal_.load(std::memory_order_acquire)) return true;
+        return service_pending_targets();
     }
 
     void process_lease(NativePortAudioCommandConsumerLease lease) noexcept {
@@ -1478,7 +1732,12 @@ class NativePortAudioExecutionDomain::Impl final {
         case NativePortAudioCommandTarget::Lifecycle:
             observe_queue_depth();
             publish_worker_telemetry();
-            static_cast<void>(lease.fail(1u));
+            if (command.opcode == telemetry_barrier_opcode &&
+                command.target_slot == 0u &&
+                command.target_generation == 0u && lease.payload().empty())
+                static_cast<void>(lease.complete());
+            else
+                static_cast<void>(lease.fail(1u));
             return;
         }
         if (!queue_target_matches(target, command.target)) {
@@ -1518,9 +1777,26 @@ class NativePortAudioExecutionDomain::Impl final {
         // before releasing that fence.
         observe_queue_depth();
         publish_worker_telemetry();
+        const bool terminal_async_failure =
+            command.ack_slot ==
+                native_port_audio_command_queue_invalid_ack_slot &&
+            result.status == NativePortAudioCommandAckStatus::Failed;
+        if (terminal_async_failure) {
+            publish_async_target_failure(command, result.error_code);
+            record_failure(
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed,
+                command.command_sequence);
+        }
         if (!lease.complete(result)) {
             record_failure(NativePortAudioExecutionDomainFailure::WorkerFailure,
                            command.command_sequence);
+            queue_.fail_terminal(
+                NativePortAudioCommandQueueFailure::WorkerFailure,
+                command.command_sequence);
+        } else if (terminal_async_failure) {
+            // Finish this command exactly once, then cancel every later ready
+            // command. The first full target-failure record was release-
+            // published before the producer-visible terminal bit above.
             queue_.fail_terminal(
                 NativePortAudioCommandQueueFailure::WorkerFailure,
                 command.command_sequence);
@@ -1534,9 +1810,27 @@ class NativePortAudioExecutionDomain::Impl final {
         ensure_worker_telemetry();
         try {
             for (;;) {
-                auto lease = queue_.wait_begin_consume();
-                if (!lease.has_value()) break;
-                process_lease(std::move(*lease));
+                // Commands always win over completion maintenance so a
+                // Pause/Resume/Destroy behind a full output burst cannot be
+                // head-of-line blocked by retry work.
+                if (auto lease = queue_.try_begin_consume(); lease.has_value()) {
+                    process_lease(std::move(*lease));
+                    continue;
+                }
+                if (!service_consumer_if_requested()) continue;
+                if (queue_.consumer_closed_nonblocking()) break;
+
+                const auto observed =
+                    queue_.consumer_event_epoch_nonblocking();
+                // Close the observe/wait race without polling: producer
+                // publication, shutdown, and host completion all advance the
+                // same atomic epoch.
+                if (queue_.queued_commands_nonblocking() != 0u ||
+                    consumer_service_requested_.load(
+                        std::memory_order_acquire) ||
+                    queue_.consumer_closed_nonblocking())
+                    continue;
+                queue_.wait_for_consumer_event(observed);
             }
         } catch (const NativePortAudioCommandQueueError& error) {
             record_failure(NativePortAudioExecutionDomainFailure::WorkerFailure,
@@ -1601,7 +1895,25 @@ class NativePortAudioExecutionDomain::Impl final {
         auto* const telemetry = telemetry_.load(std::memory_order_acquire);
         if (telemetry != nullptr)
             telemetry->observe_audio_queue_depth(
-                queue_.snapshot().queued_commands);
+                queue_.queued_commands_nonblocking());
+    }
+
+    void publish_async_target_failure(
+        const NativePortAudioPodCommand& command,
+        const std::uint32_t target_error_code) noexcept {
+        if (async_target_failure_published_.load(std::memory_order_acquire))
+            return;
+        async_target_failure_ = {
+            command.command_sequence,
+            command.stamp.frame_index,
+            command.stamp.guest_sequence,
+            command.target,
+            command.opcode,
+            command.target_slot,
+            command.target_generation,
+            target_error_code};
+        async_target_failure_published_.store(true,
+                                              std::memory_order_release);
     }
 
     void record_failure(
@@ -1619,17 +1931,21 @@ class NativePortAudioExecutionDomain::Impl final {
             first_error_command_sequence_.store(sequence,
                                                 std::memory_order_relaxed);
             first_error_.store(failure, std::memory_order_release);
+            first_error_published_.store(true, std::memory_order_release);
+            first_error_published_.notify_all();
         } else {
             // A competing terminal reporter must not publish the terminal
             // bit before the CAS winner's error+sequence payload is visible.
             // Errors are exceptional, so this bounded publication handoff is
             // deliberately outside every command/sample success hotpath.
-            while (first_error_.load(std::memory_order_acquire) ==
-                   NativePortAudioExecutionDomainFailure::None)
-                std::this_thread::yield();
+            while (!first_error_published_.load(std::memory_order_acquire))
+                first_error_published_.wait(false,
+                                            std::memory_order_acquire);
         }
         if (failure == NativePortAudioExecutionDomainFailure::WorkerFailure ||
             failure == NativePortAudioExecutionDomainFailure::QueueFailed ||
+            failure ==
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed ||
             failure == NativePortAudioExecutionDomainFailure::StampOverflow)
             terminal_.store(true, std::memory_order_release);
     }
@@ -1651,10 +1967,15 @@ class NativePortAudioExecutionDomain::Impl final {
     std::atomic<bool> worker_alive_{false};
     std::atomic<bool> shutdown_requested_{false};
     std::atomic<bool> terminal_{false};
+    std::atomic<bool> consumer_service_requested_{false};
+    std::atomic<std::uint64_t> consumer_service_target_mask_{0u};
     std::atomic<bool> first_error_claimed_{false};
+    std::atomic<bool> first_error_published_{false};
     std::atomic<NativePortAudioExecutionDomainFailure> first_error_{
         NativePortAudioExecutionDomainFailure::None};
     std::atomic<std::uint64_t> first_error_command_sequence_{0u};
+    NativePortAudioExecutionDomainTargetFailureRecord async_target_failure_{};
+    std::atomic<bool> async_target_failure_published_{false};
     std::atomic<NativePortTelemetry*> telemetry_{nullptr};
     std::atomic<std::uint32_t> telemetry_bind_count_{0u};
     std::mutex telemetry_binding_mutex_;
@@ -1796,9 +2117,11 @@ bool NativePortAudioExecutionDomain::register_target(
     const std::uint32_t target_generation,
     void* const object,
     const NativePortAudioExecutionDomainExecutor executor,
-    const NativePortAudioExecutionDomainCleanup cleanup) noexcept {
+    const NativePortAudioExecutionDomainCleanup cleanup,
+    const NativePortAudioExecutionDomainConsumerService
+        consumer_service) noexcept {
     return impl_->register_target(target, target_slot, target_generation, object,
-                                  executor, cleanup);
+                                  executor, cleanup, consumer_service);
 }
 
 std::optional<NativePortAudioExecutionDomainTargetHandle>
@@ -1806,8 +2129,11 @@ NativePortAudioExecutionDomain::register_target(
     const NativePortAudioExecutionDomainTarget target,
     void* const object,
     const NativePortAudioExecutionDomainExecutor executor,
-    const NativePortAudioExecutionDomainCleanup cleanup) noexcept {
-    return impl_->register_target(target, object, executor, cleanup);
+    const NativePortAudioExecutionDomainCleanup cleanup,
+    const NativePortAudioExecutionDomainConsumerService
+        consumer_service) noexcept {
+    return impl_->register_target(target, object, executor, cleanup,
+                                  consumer_service);
 }
 
 bool NativePortAudioExecutionDomain::unregister_target(
@@ -1963,10 +2289,24 @@ NativePortAudioExecutionDomain::dispatch_sync_scatter(
 
 void NativePortAudioExecutionDomain::pump() noexcept { impl_->pump(); }
 
+void NativePortAudioExecutionDomain::request_consumer_service() noexcept {
+    impl_->request_consumer_service();
+}
+
 void NativePortAudioExecutionDomain::shutdown() noexcept { impl_->shutdown(); }
 
 bool NativePortAudioExecutionDomain::on_audio_thread() const noexcept {
     return impl_->on_audio_thread();
+}
+
+std::optional<std::uint64_t>
+NativePortAudioExecutionDomain::last_frame_index_nonblocking() const noexcept {
+    return impl_->last_frame_index_nonblocking();
+}
+
+std::uint64_t
+NativePortAudioExecutionDomain::queued_commands_nonblocking() const noexcept {
+    return impl_->queued_commands_nonblocking();
 }
 
 NativePortAudioExecutionDomainSnapshot

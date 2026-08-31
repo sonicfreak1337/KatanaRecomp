@@ -4012,10 +4012,10 @@ class NativePortSoundBankEngine::Impl final {
             SoundBankOpcode::PlaySequence, command);
     }
     void pause_sequence(const NativePortSoundSequenceHandle value) {
-        sequence_void(SoundBankOpcode::PauseSequence, value);
+        sequence_async(SoundBankOpcode::PauseSequence, value);
     }
     void resume_sequence(const NativePortSoundSequenceHandle value) {
-        sequence_void(SoundBankOpcode::ResumeSequence, value);
+        sequence_async(SoundBankOpcode::ResumeSequence, value);
     }
     void stop_sequence(const NativePortSoundSequenceHandle value) {
         sequence_void(SoundBankOpcode::StopSequence, value);
@@ -4030,21 +4030,21 @@ class NativePortSoundBankEngine::Impl final {
         command.sequence = value;
         command.value0 = gain;
         command.value1 = pan;
-        call_void(SoundBankOpcode::SetSequenceGainPan, command);
+        call_async(SoundBankOpcode::SetSequenceGainPan, command);
     }
     void set_sequence_pitch_bend(const NativePortSoundSequenceHandle value,
                                  const std::int16_t bend) {
         SoundBankCommand command;
         command.sequence = value;
         command.signed_value = bend;
-        call_void(SoundBankOpcode::SetSequencePitchBend, command);
+        call_async(SoundBankOpcode::SetSequencePitchBend, command);
     }
     void set_sequence_playback_rate(const NativePortSoundSequenceHandle value,
                                     const float rate) {
         SoundBankCommand command;
         command.sequence = value;
         command.value0 = rate;
-        call_void(SoundBankOpcode::SetSequencePlaybackRate, command);
+        call_async(SoundBankOpcode::SetSequencePlaybackRate, command);
     }
     void set_sequence_send_levels(const NativePortSoundSequenceHandle value,
                                   const std::uint8_t direct,
@@ -4053,7 +4053,7 @@ class NativePortSoundBankEngine::Impl final {
         command.sequence = value;
         command.value8_0 = direct;
         command.value8_1 = effect;
-        call_void(SoundBankOpcode::SetSequenceSendLevels, command);
+        call_async(SoundBankOpcode::SetSequenceSendLevels, command);
     }
     [[nodiscard]] NativePortSoundVoiceHandle note_on(
         const NativePortSoundCollectionHandle collection,
@@ -4065,7 +4065,7 @@ class NativePortSoundBankEngine::Impl final {
                                                 command);
     }
     void note_off(const NativePortSoundVoiceHandle value) {
-        voice_void(SoundBankOpcode::NoteOff, value);
+        voice_async(SoundBankOpcode::NoteOff, value);
     }
     void release_voice(const NativePortSoundVoiceHandle value) {
         voice_void(SoundBankOpcode::ReleaseVoice, value);
@@ -4077,14 +4077,14 @@ class NativePortSoundBankEngine::Impl final {
         command.voice = value;
         command.value0 = gain;
         command.value1 = pan;
-        call_void(SoundBankOpcode::SetVoiceGainPan, command);
+        call_async(SoundBankOpcode::SetVoiceGainPan, command);
     }
     void set_voice_pitch_bend(const NativePortSoundVoiceHandle value,
                               const std::int16_t bend) {
         SoundBankCommand command;
         command.voice = value;
         command.signed_value = bend;
-        call_void(SoundBankOpcode::SetVoicePitchBend, command);
+        call_async(SoundBankOpcode::SetVoicePitchBend, command);
     }
     void set_voice_send_levels(const NativePortSoundVoiceHandle value,
                                const std::uint8_t direct,
@@ -4093,7 +4093,7 @@ class NativePortSoundBankEngine::Impl final {
         command.voice = value;
         command.value8_0 = direct;
         command.value8_1 = effect;
-        call_void(SoundBankOpcode::SetVoiceSendLevels, command);
+        call_async(SoundBankOpcode::SetVoiceSendLevels, command);
     }
     [[nodiscard]] NativePortSoundMidiPortHandle open_midi_port(
         const NativePortSoundCollectionHandle collection,
@@ -4114,7 +4114,7 @@ class NativePortSoundBankEngine::Impl final {
         command.port = value;
         command.value8_0 = bank;
         command.value8_1 = program;
-        call_void(SoundBankOpcode::SetMidiProgram, command);
+        call_async(SoundBankOpcode::SetMidiProgram, command);
     }
     void set_midi_gain_pan(const NativePortSoundMidiPortHandle value,
                            const float gain,
@@ -4123,21 +4123,21 @@ class NativePortSoundBankEngine::Impl final {
         command.port = value;
         command.value0 = gain;
         command.value1 = pan;
-        call_void(SoundBankOpcode::SetMidiGainPan, command);
+        call_async(SoundBankOpcode::SetMidiGainPan, command);
     }
     void set_midi_pitch_bend(const NativePortSoundMidiPortHandle value,
                              const std::int16_t bend) {
         SoundBankCommand command;
         command.port = value;
         command.signed_value = bend;
-        call_void(SoundBankOpcode::SetMidiPitchBend, command);
+        call_async(SoundBankOpcode::SetMidiPitchBend, command);
     }
     void set_midi_playback_rate(const NativePortSoundMidiPortHandle value,
                                 const float rate) {
         SoundBankCommand command;
         command.port = value;
         command.value0 = rate;
-        call_void(SoundBankOpcode::SetMidiPlaybackRate, command);
+        call_async(SoundBankOpcode::SetMidiPlaybackRate, command);
     }
     void set_midi_send_levels(const NativePortSoundMidiPortHandle value,
                               const std::uint8_t direct,
@@ -4146,7 +4146,7 @@ class NativePortSoundBankEngine::Impl final {
         command.port = value;
         command.value8_0 = direct;
         command.value8_1 = effect;
-        call_void(SoundBankOpcode::SetMidiSendLevels, command);
+        call_async(SoundBankOpcode::SetMidiSendLevels, command);
     }
     [[nodiscard]] NativePortSoundVoiceHandle midi_note_on(
         const NativePortSoundMidiPortHandle port,
@@ -4164,7 +4164,7 @@ class NativePortSoundBankEngine::Impl final {
         SoundBankCommand command;
         command.port = port;
         command.value8_0 = note;
-        call_void(SoundBankOpcode::MidiNoteOff, command);
+        call_async(SoundBankOpcode::MidiNoteOff, command);
     }
     [[nodiscard]] NativePortSoundSequenceHandle midi_play_sequence(
         const NativePortSoundMidiPortHandle port,
@@ -4298,6 +4298,14 @@ class NativePortSoundBankEngine::Impl final {
                             "void-ack-size");
     }
 
+    void call_async(const SoundBankOpcode opcode,
+                    const SoundBankCommand& command) const {
+        require_owner_thread();
+        audio_.dispatch_sound_bank_async(
+            static_cast<std::uint16_t>(opcode),
+            sound_object_bytes(command));
+    }
+
     static void require_success(const NativePortAudioCommandAck& ack) {
         if (ack.status == NativePortAudioCommandAckStatus::Completed) return;
         SoundBankWireError error;
@@ -4315,11 +4323,23 @@ class NativePortSoundBankEngine::Impl final {
         command.sequence = value;
         call_void(opcode, command);
     }
+    void sequence_async(const SoundBankOpcode opcode,
+                        const NativePortSoundSequenceHandle value) {
+        SoundBankCommand command;
+        command.sequence = value;
+        call_async(opcode, command);
+    }
     void voice_void(const SoundBankOpcode opcode,
                     const NativePortSoundVoiceHandle value) {
         SoundBankCommand command;
         command.voice = value;
         call_void(opcode, command);
+    }
+    void voice_async(const SoundBankOpcode opcode,
+                     const NativePortSoundVoiceHandle value) {
+        SoundBankCommand command;
+        command.voice = value;
+        call_async(opcode, command);
     }
     void midi_void(const SoundBankOpcode opcode,
                    const NativePortSoundMidiPortHandle value) {

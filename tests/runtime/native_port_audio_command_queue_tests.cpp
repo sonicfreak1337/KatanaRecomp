@@ -6,13 +6,16 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -85,6 +88,16 @@ void test_pod_contract_and_defaults() {
     static_assert(std::is_standard_layout_v<NativePortAudioCommandAck>);
     static_assert(std::is_trivially_copyable_v<NativePortAudioCommandAck>);
     static_assert(native_port_audio_command_queue_max_ack_result_bytes == 512u);
+    static_assert(static_cast<std::size_t>(
+                      NativePortTelemetryStage::AudioDecode) == 6u);
+    static_assert(static_cast<std::size_t>(
+                      NativePortTelemetryStage::AudioMix) == 7u);
+    static_assert(static_cast<std::size_t>(
+                      NativePortTelemetryStage::GpuTime) == 8u);
+    static_assert(static_cast<std::size_t>(
+                      NativePortTelemetryStage::AudioServiceTotal) == 9u);
+    static_assert(native_port_telemetry_stage_count == 10u);
+    static_assert(native_port_telemetry_schema_version == 2u);
 
     NativePortAudioCommandQueue queue;
     require(queue.mode() == NativePortAudioCommandQueueMode::DedicatedThread,
@@ -303,6 +316,65 @@ void test_payload_overflow_and_copy_contract() {
             "Gueltige Payload ist beim Consumer veraendert.");
 }
 
+void test_payload_alignment_wrap_and_accounting() {
+    NativePortAudioCommandQueue queue(test_config(4u, 33u, 4u));
+    const std::array<std::byte, 3u> odd{
+        std::byte{0x11}, std::byte{0x22}, std::byte{0x33}};
+    struct alignas(std::max_align_t) TypedPayload final {
+        std::array<std::int16_t, 4u> samples{};
+        std::uint32_t marker = 0u;
+    };
+    static_assert(std::is_trivially_copyable_v<TypedPayload>);
+    const TypedPayload typed{{-32768, -1, 0, 32767}, 0x77665544u};
+    publish(queue, command(0u, 0u, static_cast<std::uint32_t>(odd.size())), odd);
+    publish(queue,
+            command(0u, 1u, static_cast<std::uint32_t>(sizeof(typed))),
+            std::as_bytes(std::span(&typed, 1u)));
+
+    auto first = queue.try_begin_consume();
+    require(first.has_value() &&
+                reinterpret_cast<std::uintptr_t>(first->payload().data()) %
+                        native_port_audio_command_queue_payload_alignment ==
+                    0u &&
+                first->complete(),
+            "Erstes Queuepayload ist nicht max_align_t-ausgerichtet.");
+    auto second = queue.try_begin_consume();
+    require(second.has_value() &&
+                reinterpret_cast<std::uintptr_t>(second->payload().data()) %
+                        native_port_audio_command_queue_payload_alignment ==
+                    0u &&
+                second->payload().size() == sizeof(TypedPayload) &&
+                reinterpret_cast<std::uintptr_t>(second->payload().data()) %
+                        alignof(TypedPayload) ==
+                    0u &&
+                reinterpret_cast<const TypedPayload*>(
+                    second->payload().data())->samples == typed.samples &&
+                reinterpret_cast<const TypedPayload*>(
+                    second->payload().data())->marker == typed.marker &&
+                second->complete(),
+            "int16/POD-View verlor Alignment oder Inhalt nach Padding.");
+    require(queue.snapshot().queued_payload_bytes == 0u,
+            "Consumer zaehlte Alignment-Padding doppelt.");
+
+    // A drained ring at a non-zero physical offset must still accept one
+    // maximum-sized aligned payload by rebasing only the empty suffix.
+    std::array<std::byte, 33u> full{};
+    full.front() = std::byte{0xA5};
+    full.back() = std::byte{0x5A};
+    publish(queue, command(1u, 2u, static_cast<std::uint32_t>(full.size())),
+            full);
+    auto wrapped = queue.try_begin_consume();
+    require(wrapped.has_value() &&
+                reinterpret_cast<std::uintptr_t>(wrapped->payload().data()) %
+                        native_port_audio_command_queue_payload_alignment ==
+                    0u &&
+                wrapped->payload().front() == std::byte{0xA5} &&
+                wrapped->payload().back() == std::byte{0x5A} &&
+                wrapped->complete() &&
+                queue.snapshot().queued_payload_bytes == 0u,
+            "Drained Ring konnte Maximalpayload nicht ausgerichtet rebasen.");
+}
+
 void test_terminal_worker_failure_and_cancel() {
     NativePortAudioCommandQueue queue(test_config());
     const auto sequence = publish(queue, command(0u, 0u, 0u, 0u));
@@ -507,10 +579,12 @@ void test_abandon_and_serial_mode() {
 
 struct DomainTargetFixture final {
     NativePortAudioExecutionDomain* domain = nullptr;
+    NativePortTelemetry* telemetry_to_unbind = nullptr;
     std::unique_ptr<std::uint32_t> core;
     std::uint32_t executions = 0u;
     std::uint32_t cleanups = 0u;
     bool all_executions_on_consumer = true;
+    bool telemetry_unbind_result = false;
 
     static void execute(
         void* const object,
@@ -548,6 +622,16 @@ struct DomainTargetFixture final {
         case 3u:
             self.core.reset();
             break;
+        case 4u:
+            self.telemetry_unbind_result =
+                self.domain != nullptr &&
+                self.domain->unbind_telemetry(self.telemetry_to_unbind);
+            if (!self.telemetry_unbind_result) {
+                result.status = NativePortAudioCommandAckStatus::Failed;
+                result.error_code = 5u;
+                return;
+            }
+            break;
         default:
             result.status = NativePortAudioCommandAckStatus::Failed;
             result.error_code = 4u;
@@ -562,6 +646,144 @@ struct DomainTargetFixture final {
         self.core.reset();
     }
 };
+
+struct CompletionServiceFixture final {
+    NativePortAudioExecutionDomain* domain = nullptr;
+    std::mutex mutex;
+    std::condition_variable event;
+    bool service_after_control = false;
+    bool service_on_consumer = false;
+    std::uint32_t pending_blocks = 0u;
+    std::uint32_t drained_blocks = 0u;
+    std::uint32_t controls = 0u;
+    std::uint32_t services = 0u;
+
+    static void execute(
+        void* const object,
+        const std::uint16_t opcode,
+        const std::span<const std::byte> payload,
+        NativePortAudioCommandAckResult& result) noexcept {
+        auto& self = *static_cast<CompletionServiceFixture*>(object);
+        result = {};
+        if (!payload.empty()) {
+            result.status = NativePortAudioCommandAckStatus::Failed;
+            result.error_code = 1u;
+            return;
+        }
+        if (opcode == 1u) {
+            std::lock_guard lock(self.mutex);
+            self.pending_blocks = 8u;
+        } else if (opcode == 2u) {
+            std::lock_guard lock(self.mutex);
+            ++self.controls;
+        } else {
+            result.status = NativePortAudioCommandAckStatus::Failed;
+            result.error_code = 2u;
+            return;
+        }
+        result.status = NativePortAudioCommandAckStatus::Completed;
+    }
+
+    static std::uint32_t service(void* const object) noexcept {
+        auto& self = *static_cast<CompletionServiceFixture*>(object);
+        std::lock_guard lock(self.mutex);
+        self.service_after_control = self.controls == 1u;
+        self.service_on_consumer =
+            self.domain != nullptr && self.domain->on_audio_thread();
+        self.drained_blocks += self.pending_blocks;
+        self.pending_blocks = 0u;
+        ++self.services;
+        self.event.notify_all();
+        return 0u;
+    }
+};
+
+void test_completion_wake_drains_pending_without_new_command() {
+    NativePortAudioExecutionDomainConfig config;
+    config.command_queue = test_config(8u, 64u, 4u);
+    config.command_queue.mode =
+        NativePortAudioCommandQueueMode::DedicatedThread;
+    auto domain = NativePortAudioExecutionDomain::acquire(config);
+    CompletionServiceFixture fixture;
+    fixture.domain = domain.get();
+    const auto handle = domain->register_target(
+        NativePortAudioExecutionDomainTarget::HostOutput, &fixture,
+        &CompletionServiceFixture::execute, nullptr,
+        &CompletionServiceFixture::service);
+    require(handle.has_value(),
+            "Completion-Service-Fixture konnte Ziel nicht registrieren.");
+
+    const auto burst = domain->dispatch_async(*handle, 1u, {}, 0u);
+    require(burst.accepted() && burst.command_sequence == 1u,
+            "Endlicher Pending-Burst wurde nicht publiziert.");
+    const auto control = domain->dispatch_async(*handle, 2u, {}, 0u);
+    require(control.accepted() && control.command_sequence == 2u,
+            "Control hinter Pending-Burst wurde nicht publiziert.");
+    domain->request_consumer_service();
+    {
+        std::unique_lock lock(fixture.mutex);
+        require(fixture.event.wait_for(
+                    lock, std::chrono::seconds(2),
+                    [&fixture] { return fixture.services == 1u; }),
+                "Completion-Wake servicierte Pending ohne Folgecommand nicht.");
+        require(fixture.pending_blocks == 0u &&
+                    fixture.drained_blocks == 8u &&
+                    fixture.controls == 1u &&
+                    fixture.service_after_control &&
+                    fixture.service_on_consumer,
+                "Completion-Retry verlor Tail, blockierte Control oder lief fremd.");
+    }
+    const auto snapshot = domain->snapshot();
+    require(snapshot.queue.submitted_commands == 2u &&
+                snapshot.queue.completed_commands == 2u &&
+                snapshot.next_guest_sequence == 2u &&
+                domain->unregister_target(*handle, &fixture),
+            "Completion-Wake konsumierte eine Sequenz oder verlor Lifecycle.");
+    domain->shutdown();
+}
+
+void test_resultless_async_controls_preserve_sync_fence_order() {
+    NativePortAudioExecutionDomainConfig config;
+    config.command_queue = test_config(8u, 64u, 4u);
+    config.command_queue.mode =
+        NativePortAudioCommandQueueMode::SerialReference;
+    auto domain = NativePortAudioExecutionDomain::acquire(config);
+    DomainTargetFixture fixture;
+    fixture.domain = domain.get();
+    const auto handle = domain->register_target(
+        NativePortAudioExecutionDomainTarget::AudioEngine, &fixture,
+        &DomainTargetFixture::execute, &DomainTargetFixture::cleanup);
+    require(handle.has_value() &&
+                domain->dispatch_sync(*handle, 1u, {}, 5u).completed(),
+            "Async-Control-Fixture konnte nicht konstruiert werden.");
+
+    const auto first = domain->dispatch_async(*handle, 2u, {}, 5u);
+    const auto second = domain->dispatch_async(*handle, 2u, {}, 5u);
+    require(first.accepted() && second.accepted() &&
+                first.command_sequence == 2u &&
+                second.command_sequence == 3u && fixture.executions == 1u,
+            "Resultlose Controls blockierten oder liefen vor dem Consumer.");
+
+    // A later synchronous lifecycle/result boundary is the ordering fence for
+    // every already accepted resultless control on the same domain queue.
+    const auto fence = domain->dispatch_sync(*handle, 2u, {}, 5u);
+    const auto snapshot = domain->snapshot();
+    require(fence.completed() && fence.command_sequence == 4u &&
+                fence.stamp == NativePortAudioCommandStamp{5u, 3u} &&
+                fixture.executions == 4u && fixture.core != nullptr &&
+                *fixture.core == 0xA11D13u &&
+                fixture.all_executions_on_consumer &&
+                snapshot.queue.submitted_commands == 4u &&
+                snapshot.queue.completed_commands == 4u &&
+                snapshot.queue.failed_commands == 0u &&
+                snapshot.next_guest_sequence == 4u,
+            "Sync-Fence verlor Reihenfolge oder Completion der Async-Controls.");
+
+    require(domain->dispatch_sync(*handle, 3u, {}, 6u).completed() &&
+                domain->unregister_target(*handle, &fixture),
+            "Async-Control-Fixture konnte nicht synchron retiren.");
+    domain->shutdown();
+}
 
 void test_serial_domain_top_level_and_cleanup() {
     NativePortAudioExecutionDomainConfig config;
@@ -647,6 +869,8 @@ void test_dedicated_domain_telemetry_before_ack() {
     const auto telemetry_after = telemetry.snapshot();
     const auto mix_index = static_cast<std::size_t>(
         NativePortTelemetryStage::AudioMix);
+    const auto service_total_index = static_cast<std::size_t>(
+        NativePortTelemetryStage::AudioServiceTotal);
     const auto domain_after = domain->snapshot();
     require(result.completed() && !result.inline_execution &&
                 result.command_sequence == 1u &&
@@ -654,6 +878,8 @@ void test_dedicated_domain_telemetry_before_ack() {
                 telemetry_after.publication > publication_before &&
                 telemetry_after.stages[mix_index].available &&
                 telemetry_after.stages[mix_index].calls >= 1u &&
+                !telemetry_after.stages[service_total_index].available &&
+                telemetry_after.stages[service_total_index].calls == 0u &&
                 telemetry_after.audio_queue_available &&
                 domain_after.producer_thread_identity != 0u &&
                 domain_after.consumer_thread_identity != 0u &&
@@ -661,14 +887,158 @@ void test_dedicated_domain_telemetry_before_ack() {
                     domain_after.consumer_thread_identity,
             "Dedicated ACK wurde vor Telemetrie/Threadbeweis publiziert.");
 
+    const auto decode_index = static_cast<std::size_t>(
+        NativePortTelemetryStage::AudioDecode);
+    const auto before_decode = telemetry.snapshot();
+    const auto decoded = domain->dispatch_sync(
+        *handle, 2u, {}, 3u, 0u,
+        NativePortAudioExecutionDomainStage::AudioDecode);
+    const auto after_decode = telemetry.snapshot();
+    require(decoded.completed() &&
+                after_decode.stages[decode_index].available &&
+                after_decode.stages[decode_index].calls ==
+                    before_decode.stages[decode_index].calls + 1u &&
+                after_decode.stages[mix_index].calls ==
+                    before_decode.stages[mix_index].calls &&
+                after_decode.stages[service_total_index].calls ==
+                    before_decode.stages[service_total_index].calls,
+            "Reiner Decode-Command verlor seine exklusive Telemetriestufe.");
+
+    const auto before_combined = telemetry.snapshot();
+    const auto combined = domain->dispatch_sync(
+        *handle, 2u, {}, 3u, 0u,
+        NativePortAudioExecutionDomainStage::AudioDecodeAndMix);
+    const auto after_combined = telemetry.snapshot();
+    const auto combined_json = after_combined.serialize_json();
+    constexpr std::string_view service_total_json_name =
+        "\"audio_service_total\"";
+    require(combined.completed() &&
+                after_combined.stages[mix_index].calls ==
+                    before_combined.stages[mix_index].calls &&
+                after_combined.stages[decode_index].calls ==
+                    before_combined.stages[decode_index].calls &&
+                after_combined.stages[service_total_index].available &&
+                after_combined.stages[service_total_index].calls ==
+                    before_combined.stages[service_total_index].calls + 1u &&
+                combined_json.find("\"schema\":2") != std::string::npos &&
+                combined_json.find(
+                    "\"audio_service_total\":{\"available\":true") !=
+                    std::string::npos &&
+                combined_json.find(service_total_json_name) ==
+                    combined_json.rfind(service_total_json_name),
+            "Combined Audioexecutor verlor AudioServiceTotal, wurde in eine "
+            "schmalere Stufe projiziert oder nicht einmalig serialisiert.");
+
     require(domain->dispatch_sync(*handle, 3u, {}, 4u).completed() &&
                 domain->unregister_target(*handle, &fixture),
             "Dedicated Normal-Destroy konnte Cleanup nicht disarmen.");
+    const auto queue_before_unbind = domain->snapshot().queue;
     require(domain->unbind_telemetry(&telemetry),
             "Audio-Telemetrie konnte nicht geloest werden.");
+    const auto queue_after_unbind = domain->snapshot().queue;
+    require(queue_after_unbind.submitted_commands ==
+                    queue_before_unbind.submitted_commands + 1u &&
+                queue_after_unbind.completed_commands ==
+                    queue_before_unbind.completed_commands + 1u,
+            "Letzter Telemetrie-Unbind besitzt keine Worker-ACK-Barriere.");
     domain->shutdown();
     require(fixture.cleanups == 0u && fixture.core == nullptr,
             "Disarmtes Dedicated-Ziel wurde terminal erneut bereinigt.");
+}
+
+void test_async_target_failure_is_sticky_and_cancels_later_commands() {
+    NativePortAudioExecutionDomainConfig config;
+    config.command_queue = test_config(8u, 128u, 4u);
+    config.command_queue.mode =
+        NativePortAudioCommandQueueMode::SerialReference;
+    auto domain = NativePortAudioExecutionDomain::acquire(config);
+    DomainTargetFixture fixture;
+    fixture.domain = domain.get();
+    const auto handle = domain->register_target(
+        NativePortAudioExecutionDomainTarget::AudioEngine, &fixture,
+        &DomainTargetFixture::execute, &DomainTargetFixture::cleanup);
+    require(handle.has_value(),
+            "Async-Fehler-Fixture konnte Ziel nicht registrieren.");
+
+    const auto failed = domain->dispatch_async(*handle, 99u, {}, 12u);
+    const auto later = domain->dispatch_async(*handle, 1u, {}, 12u);
+    require(failed.accepted() && later.accepted() &&
+                failed.command_sequence == 1u &&
+                later.command_sequence == 2u,
+            "Async-Fixture konnte geordnete Commands nicht publizieren.");
+    domain->pump();
+    const auto snapshot = domain->snapshot();
+    require(fixture.executions == 1u &&
+                snapshot.first_error ==
+                    NativePortAudioExecutionDomainFailure::TargetExecutionFailed &&
+                snapshot.has_async_target_failure &&
+                snapshot.async_target_failure.command_sequence == 1u &&
+                snapshot.async_target_failure.frame_index == 12u &&
+                snapshot.async_target_failure.guest_sequence == 0u &&
+                snapshot.async_target_failure.target == handle->target &&
+                snapshot.async_target_failure.target_slot == handle->slot &&
+                snapshot.async_target_failure.target_generation ==
+                    handle->generation &&
+                snapshot.async_target_failure.opcode == 99u &&
+                snapshot.async_target_failure.target_error_code == 4u &&
+                snapshot.queue.failed_commands == 1u &&
+                snapshot.queue.cancelled_commands == 1u,
+            "Async-Executorfehler wurde nicht sticky/vollstaendig publiziert.");
+    const auto rejected = domain->dispatch_async(*handle, 1u, {}, 13u);
+    require(rejected.failure ==
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed &&
+                rejected.has_target_failure &&
+                rejected.target_failure_command_sequence == 1u &&
+                rejected.target_failure_frame_index == 12u &&
+                rejected.target_failure_guest_sequence == 0u &&
+                rejected.target_failure_target == handle->target &&
+                rejected.target_failure_slot == handle->slot &&
+                rejected.target_failure_generation == handle->generation &&
+                rejected.target_failure_opcode == 99u &&
+                rejected.target_failure_error_code == 4u,
+            "Folgezugriff sah den sticky Async-Executorfehler nicht.");
+    domain->shutdown();
+    require(fixture.cleanups == 1u,
+            "Terminaler Async-Fehler verlor Consumer-Cleanup.");
+}
+
+void test_worker_side_last_telemetry_unbind_is_rejected() {
+    NativePortAudioExecutionDomainConfig config;
+    config.command_queue = test_config(8u, 128u, 4u);
+    auto domain = NativePortAudioExecutionDomain::acquire(config);
+    NativePortTelemetry telemetry;
+    require(domain->bind_telemetry(&telemetry),
+            "Worker-Unbind-Fixture konnte Telemetrie nicht binden.");
+    DomainTargetFixture fixture;
+    fixture.domain = domain.get();
+    fixture.telemetry_to_unbind = &telemetry;
+    const auto handle = domain->register_target(
+        NativePortAudioExecutionDomainTarget::AudioEngine, &fixture,
+        &DomainTargetFixture::execute, &DomainTargetFixture::cleanup);
+    require(handle.has_value(),
+            "Worker-Unbind-Fixture konnte Ziel nicht registrieren.");
+    const auto unbound = domain->dispatch_sync(
+        *handle, 4u, {}, 1u, 0u,
+        NativePortAudioExecutionDomainStage::AudioDecodeAndMix);
+    const auto later = domain->dispatch_sync(*handle, 1u, {}, 2u);
+    const auto destroyed = domain->dispatch_sync(*handle, 3u, {}, 3u);
+    const auto queue_before_producer_unbind = domain->snapshot().queue;
+    const bool producer_unbound = domain->unbind_telemetry(&telemetry);
+    const auto queue_after_producer_unbind = domain->snapshot().queue;
+    require(unbound.has_ack &&
+                unbound.ack.status ==
+                    NativePortAudioCommandAckStatus::Failed &&
+                !fixture.telemetry_unbind_result && later.completed() &&
+                destroyed.completed() &&
+                domain->unregister_target(*handle, &fixture) &&
+                producer_unbound &&
+                queue_after_producer_unbind.submitted_commands ==
+                    queue_before_producer_unbind.submitted_commands + 1u &&
+                queue_after_producer_unbind.completed_commands ==
+                    queue_before_producer_unbind.completed_commands + 1u,
+            "Aktiver Worker-Unbind veraenderte das Binding oder umging die "
+            "Producer-ACK-Lifetime-Barriere.");
+    domain->shutdown();
 }
 
 void test_movie_target_shares_domain_and_retires() {
@@ -709,12 +1079,17 @@ int main() {
     test_abort_does_not_consume_command_sequence();
     test_stamp_contract();
     test_payload_overflow_and_copy_contract();
+    test_payload_alignment_wrap_and_accounting();
     test_terminal_worker_failure_and_cancel();
     test_first_error_publication_gate();
     test_backpressure_and_thread_domains();
     test_abandon_and_serial_mode();
     test_serial_domain_top_level_and_cleanup();
     test_dedicated_domain_telemetry_before_ack();
+    test_async_target_failure_is_sticky_and_cancels_later_commands();
+    test_worker_side_last_telemetry_unbind_is_rejected();
+    test_completion_wake_drains_pending_without_new_command();
+    test_resultless_async_controls_preserve_sync_fence_order();
     test_movie_target_shares_domain_and_retires();
     std::cout << "native_port_audio_command_queue_tests: OK\n";
     return 0;

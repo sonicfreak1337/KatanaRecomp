@@ -16,6 +16,11 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace {
 
 void require(const bool value, const std::string& message) {
@@ -40,8 +45,14 @@ void require_graphics_telemetry(
     require(render_submit.available && render_submit.calls != 0u &&
                 present_wait.available && present_wait.calls != 0u,
             "Consumer-Owner publizierte RenderSubmit/PresentWait nicht.");
-    require(!gpu_time.available,
-            "GPU-Zeit wurde ohne D3D11-Timestamp-Query erfunden.");
+    require(gpu_time.available
+                ? gpu_time.calls != 0u &&
+                      gpu_time.items == gpu_time.calls &&
+                      gpu_time.time_ns != 0u
+                : gpu_time.calls == 0u && gpu_time.items == 0u &&
+                      gpu_time.time_ns == 0u,
+            "GPU-Zeit war weder ein pensioniertes reales Query noch klar "
+            "unavailable.");
 }
 
 template <typename Callback>
@@ -187,6 +198,56 @@ class ScopedEnvironmentOverride final {
     std::optional<std::string> previous_;
 };
 
+void require_autonomous_lifecycle_mailbox(
+    const katana::runtime::NativePortGraphicsConfig& source_config,
+    const bool parallel_expected) {
+    using namespace katana::runtime;
+    auto config = source_config;
+    config.title = "Katana Autonomous Graphics Lifecycle";
+    config.initially_visible = false;
+    config.telemetry = nullptr;
+    NativePortGraphicsDevice graphics(config);
+    const auto before = graphics.snapshot();
+
+    HWND window = nullptr;
+    for (std::uint32_t attempt = 0u; attempt < 500u && window == nullptr;
+         ++attempt) {
+        window = FindWindowW(
+            nullptr, L"Katana Autonomous Graphics Lifecycle");
+        if (window == nullptr)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(window != nullptr,
+            "Das Consumer-eigene Graphics-Fenster wurde nicht gefunden.");
+    require(PostMessageW(
+                window, WM_SIZE, SIZE_RESTORED,
+                MAKELPARAM(80u, 72u)) != FALSE &&
+                PostMessageW(window, WM_CLOSE, 0u, 0) != FALSE,
+            "Lifecycle-Testnachrichten konnten nicht zugestellt werden.");
+
+    if (!parallel_expected) graphics.poll_events();
+    NativePortLifecycleState lifecycle = NativePortLifecycleState::Running;
+    NativePortGraphicsLayout layout;
+    for (std::uint32_t attempt = 0u; attempt < 500u; ++attempt) {
+        lifecycle = graphics.lifecycle_state();
+        layout = graphics.layout();
+        if (lifecycle == NativePortLifecycleState::Shutdown &&
+            layout.output_extent.width == 80u &&
+            layout.output_extent.height == 72u)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(lifecycle == NativePortLifecycleState::Shutdown &&
+                layout.output_extent.width == 80u &&
+                layout.output_extent.height == 72u,
+            "Lifecycle-/Resize-Mailbox wurde nicht autonom publiziert.");
+    const auto after = graphics.snapshot();
+    require(after.recorded_commands ==
+                before.recorded_commands + (parallel_expected ? 0u : 1u),
+            "Parallel-Lifecycle erzeugte einen PollEvents-Queue-Roundtrip.");
+    graphics.finish();
+}
+
 [[nodiscard]] std::array<katana::runtime::NativePortVertex, 3u>
 type_two_pixel_triangle(const float center_x, const float center_y) {
     using katana::runtime::NativePortVertex;
@@ -312,7 +373,7 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 17u);
+    static_assert(native_port_graphics_contract_version == 18u);
 
     // The backend caches this gate on its first construction. Bind it before
     // even the invalid-config constructor probe so one-shot failure injection
@@ -383,6 +444,21 @@ int main(const int argc, char** const argv) {
                 initial_execution.failed_commands == 0u &&
                 initial_execution.skipped_commands == 0u,
             "Die Fassade meldet Kommandos vor dem ersten API-Aufruf.");
+
+    require_autonomous_lifecycle_mailbox(config, parallel_expected);
+
+    {
+        auto finish_guard_config = config;
+        finish_guard_config.title = "Katana Graphics Finish Guard";
+        finish_guard_config.telemetry = nullptr;
+        NativePortGraphicsDevice finish_guard(finish_guard_config);
+        finish_guard.begin_frame(reciprocal_frame());
+        require(throws_graphics(
+                    [&] { finish_guard.finish(); },
+                    NativePortGraphicsFailure::InvalidFrame,
+                    "render-finish-open-frame"),
+                "Finish publizierte still einen unversiegelten Frame.");
+    }
 
     bool foreign_snapshot_rejected = false;
     std::thread foreign_snapshot([&] {
@@ -480,11 +556,21 @@ int main(const int argc, char** const argv) {
         failure_graphics.begin_frame(reciprocal_frame());
         failure_graphics.draw(
             type_two_packet(reciprocal_vertices, 0x700u, 1u));
-        require(submits_frame_throws(
-                    failure_graphics,
-                    [] {},
-                    NativePortGraphicsFailure::DeviceLost,
-                    "present"),
+        bool present_failed = false;
+        if (parallel_expected) {
+            failure_graphics.present();
+            present_failed = throws_graphics(
+                [&] { failure_graphics.finish(); },
+                NativePortGraphicsFailure::DeviceLost,
+                "present");
+        } else {
+            present_failed = throws_graphics(
+                [&] { failure_graphics.present(); },
+                NativePortGraphicsFailure::DeviceLost,
+                "present");
+            failure_graphics.finish();
+        }
+        require(present_failed,
                 "Der injizierte Present-Fehler erreichte den Producer nicht.");
         const auto failed_present = failure_graphics.snapshot();
         require(!failed_present.frame_open &&
@@ -506,6 +592,7 @@ int main(const int argc, char** const argv) {
         failure_graphics.draw(
             screen_packet(reciprocal_vertices, 0x701u, 1u));
         failure_graphics.present();
+        failure_graphics.finish();
         const auto recovered_present = failure_graphics.snapshot();
         require(!recovered_present.frame_open &&
                     recovered_present.begun_frames ==
@@ -518,7 +605,7 @@ int main(const int argc, char** const argv) {
                       recovered_present.presented_frames ==
                           after_rejected_repeat.presented_frames)) &&
                     recovered_present.executed_commands ==
-                        after_rejected_repeat.executed_commands + 3u &&
+                        after_rejected_repeat.executed_commands + 4u &&
                     recovered_present.failed_commands ==
                         after_rejected_repeat.failed_commands,
                 "Der Backendzustand erholte sich nach Present-Fehler nicht.");
@@ -720,6 +807,17 @@ int main(const int argc, char** const argv) {
                     before_resource_frame.consumed_commands + 6u &&
                 completed_resource_frame.executed_commands ==
                     before_resource_frame.executed_commands + 6u &&
+                completed_resource_frame.resource_fence_count ==
+                    before_resource_frame.resource_fence_count + 3u &&
+                completed_resource_frame.frame_prefix_publications ==
+                    before_resource_frame.frame_prefix_publications + 2u &&
+                completed_resource_frame.render_resource_fence_wait_ns >
+                    before_resource_frame.render_resource_fence_wait_ns &&
+                (parallel_expected
+                     ? completed_resource_frame.render_producer_wait_ns >
+                           before_resource_frame.render_producer_wait_ns
+                     : completed_resource_frame.render_producer_wait_ns ==
+                           before_resource_frame.render_producer_wait_ns) &&
                 !completed_resource_frame.frame_open,
             "Open-frame Resource-Commands verloren Reihenfolge oder ACK.");
 
@@ -1107,6 +1205,7 @@ int main(const int argc, char** const argv) {
     graphics.draw(authored_unsorted);
     graphics.present();
 
+    graphics.finish();
     const auto final_execution = graphics.snapshot();
     require(final_execution.requested_execution_mode == expected_mode &&
                 final_execution.active_execution_mode == expected_mode,

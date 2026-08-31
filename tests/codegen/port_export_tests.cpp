@@ -4206,70 +4206,222 @@ int run_test(const int argc, char* argv[]) {
             "Trapzustand.");
     const auto explicit_static_main =
         read_text(explicit_static_output / "src" / "main.cpp");
+    const auto& explicit_static_dispatch =
+        explicit_static_sources.at("code/native-port-dispatch.cpp");
+    const auto handwritten_telemetry_owner = generated_main.find(
+        "katana::runtime::NativePortTelemetry native_performance_telemetry;");
+    const auto handwritten_telemetry_opt_in = generated_main.find(
+        "std::getenv(\"KATANA_NATIVE_PERFORMANCE_TELEMETRY\")",
+        handwritten_telemetry_owner);
+    const auto handwritten_telemetry_exact_enable = generated_main.find(
+        "std::string_view(native_performance_telemetry_opt_in) == \"1\";",
+        handwritten_telemetry_opt_in);
+    const auto handwritten_terminal_opt_in_guard = generated_main.find(
+        "if (!native_performance_telemetry_enabled ||\n"
+        "                terminal_telemetry.native_performance_snapshot_emitted)",
+        handwritten_telemetry_exact_enable);
+    const auto handwritten_terminal_performance_json = generated_main.find(
+        "KATANA_NATIVE_PERFORMANCE_SNAPSHOT ",
+        handwritten_terminal_opt_in_guard);
+    const auto handwritten_audio_telemetry_binding = generated_main.find(
+        "katana::runtime::create_native_audio_output(\n"
+        "                      native_performance_telemetry_enabled\n"
+        "                          ? &native_performance_telemetry : nullptr)",
+        handwritten_terminal_performance_json);
+    require(
+        handwritten_telemetry_owner != std::string::npos &&
+            handwritten_telemetry_opt_in != std::string::npos &&
+            handwritten_telemetry_exact_enable != std::string::npos &&
+            handwritten_terminal_opt_in_guard != std::string::npos &&
+            handwritten_terminal_performance_json != std::string::npos &&
+            handwritten_audio_telemetry_binding != std::string::npos &&
+            handwritten_telemetry_owner < handwritten_telemetry_opt_in &&
+            handwritten_telemetry_opt_in <
+                handwritten_telemetry_exact_enable &&
+            handwritten_telemetry_exact_enable <
+                handwritten_terminal_opt_in_guard &&
+            handwritten_terminal_opt_in_guard <
+                handwritten_terminal_performance_json &&
+            handwritten_terminal_performance_json <
+                handwritten_audio_telemetry_binding &&
+            generated_main.find(
+                "katana::runtime::create_native_audio_output(\n"
+                "                      &native_performance_telemetry)") ==
+                std::string::npos,
+        "Handgeschriebener Produktrunner umgeht den exakten Performance-"
+        "Opt-in am Audio-Hotpath oder emittiert Telemetrie ohne Freigabe.");
     const auto native_telemetry_include = explicit_static_main.find(
         "#include \"katana/runtime/native_port_telemetry.hpp\"");
     const auto native_telemetry_owner = explicit_static_main.find(
         "katana::runtime::NativePortTelemetry native_performance_telemetry;");
-    const auto graphics_telemetry_binding = explicit_static_main.find(
-        "graphics_config.telemetry = &native_performance_telemetry;",
+    const auto native_telemetry_opt_in = explicit_static_main.find(
+        "std::getenv(\"KATANA_NATIVE_PERFORMANCE_TELEMETRY\")",
         native_telemetry_owner);
+    const auto native_telemetry_exact_enable = explicit_static_main.find(
+        "std::string_view(native_performance_telemetry_opt_in) == \"1\";",
+        native_telemetry_opt_in);
+    const auto terminal_performance_opt_in_guard = explicit_static_main.find(
+        "if (!native_performance_telemetry_enabled ||\n"
+        "                native_performance_snapshot_emitted)",
+        native_telemetry_exact_enable);
+    const auto graphics_metrics_json = explicit_static_main.find(
+        "\\\"graphics\\\":{\\\"available\\\":true",
+        terminal_performance_opt_in_guard);
+    const auto render_producer_wait_metric = explicit_static_main.find(
+        "graphics.render_producer_wait_ns", graphics_metrics_json);
+    const auto render_resource_fence_wait_metric = explicit_static_main.find(
+        "graphics.render_resource_fence_wait_ns",
+        render_producer_wait_metric);
+    const auto resource_fence_count_metric = explicit_static_main.find(
+        "graphics.resource_fence_count",
+        render_resource_fence_wait_metric);
+    const auto frame_prefix_publications_metric = explicit_static_main.find(
+        "graphics.frame_prefix_publications", resource_fence_count_metric);
+    const auto terminal_performance_json = explicit_static_main.find(
+        "KATANA_NATIVE_PERFORMANCE_SNAPSHOT ",
+        frame_prefix_publications_metric);
+    const auto graphics_telemetry_binding = explicit_static_main.find(
+        "graphics_config.telemetry =\n"
+        "            native_performance_telemetry_enabled\n"
+        "                ? &native_performance_telemetry : nullptr;",
+        terminal_performance_json);
     const auto graphics_host_construction = explicit_static_main.find(
         "katana::runtime::NativePortDesktopHost host(",
         graphics_telemetry_binding);
+    const auto telemetry_host_storage = explicit_static_main.find(
+        "std::optional<katana::runtime::NativePortTelemetryHostProxy>\n"
+        "            telemetry_host;",
+        graphics_host_construction);
+    const auto telemetry_binding_guard = explicit_static_main.find(
+        "if (native_performance_telemetry_enabled) {",
+        telemetry_host_storage);
     const auto simulation_writer_construction = explicit_static_main.find(
-        "native_performance_writer.emplace(", graphics_host_construction);
+        "native_performance_writer.emplace(", telemetry_binding_guard);
     const auto telemetry_host_construction = explicit_static_main.find(
-        "katana::runtime::NativePortTelemetryHostProxy telemetry_host(",
+        "telemetry_host.emplace(",
         simulation_writer_construction);
+    const auto context_direct_host_binding = explicit_static_main.find(
+        "context.host = &host;", telemetry_host_construction);
+    const auto context_telemetry_host_binding = explicit_static_main.find(
+        "if (telemetry_host) context.host = &*telemetry_host;",
+        context_direct_host_binding);
     const auto context_telemetry_binding = explicit_static_main.find(
-        "context.telemetry = &native_performance_telemetry;",
-        telemetry_host_construction);
+        "context.telemetry = native_performance_telemetry_enabled\n"
+        "            ? &native_performance_telemetry : nullptr;",
+        context_telemetry_host_binding);
     const auto context_writer_binding = explicit_static_main.find(
         "context.telemetry_writer = native_performance_writer",
         context_telemetry_binding);
     const auto terminal_performance_snapshot = explicit_static_main.find(
         "emit_native_performance_snapshot();", context_writer_binding);
+    const auto provider_timer_guard = explicit_static_dispatch.find(
+        "if (context.telemetry_writer != nullptr)\n"
+        "                    provider_telemetry_timer.emplace(");
+    const auto simulation_timer_guard = explicit_static_dispatch.find(
+        "if (context.telemetry_writer != nullptr)\n"
+        "        native_simulation_telemetry_timer.emplace(");
+    const auto aot_timer_guard = explicit_static_dispatch.find(
+        "if (context.telemetry_writer != nullptr)\n"
+        "        native_aot_telemetry_timer.emplace(");
     require(
         native_telemetry_include != std::string::npos &&
             native_telemetry_owner != std::string::npos &&
+            native_telemetry_opt_in != std::string::npos &&
+            native_telemetry_exact_enable != std::string::npos &&
+            terminal_performance_opt_in_guard != std::string::npos &&
+            graphics_metrics_json != std::string::npos &&
+            render_producer_wait_metric != std::string::npos &&
+            render_resource_fence_wait_metric != std::string::npos &&
+            resource_fence_count_metric != std::string::npos &&
+            frame_prefix_publications_metric != std::string::npos &&
+            terminal_performance_json != std::string::npos &&
             graphics_telemetry_binding != std::string::npos &&
             graphics_host_construction != std::string::npos &&
+            telemetry_host_storage != std::string::npos &&
+            telemetry_binding_guard != std::string::npos &&
             simulation_writer_construction != std::string::npos &&
             telemetry_host_construction != std::string::npos &&
+            context_direct_host_binding != std::string::npos &&
+            context_telemetry_host_binding != std::string::npos &&
             context_telemetry_binding != std::string::npos &&
             context_writer_binding != std::string::npos &&
             terminal_performance_snapshot != std::string::npos &&
-            native_telemetry_owner < graphics_telemetry_binding &&
+            provider_timer_guard != std::string::npos &&
+            simulation_timer_guard != std::string::npos &&
+            aot_timer_guard != std::string::npos &&
+            native_telemetry_owner < native_telemetry_opt_in &&
+            native_telemetry_opt_in < native_telemetry_exact_enable &&
+            native_telemetry_exact_enable <
+                terminal_performance_opt_in_guard &&
+            terminal_performance_opt_in_guard < graphics_metrics_json &&
+            graphics_metrics_json < render_producer_wait_metric &&
+            render_producer_wait_metric <
+                render_resource_fence_wait_metric &&
+            render_resource_fence_wait_metric < resource_fence_count_metric &&
+            resource_fence_count_metric < frame_prefix_publications_metric &&
+            frame_prefix_publications_metric < terminal_performance_json &&
+            terminal_performance_json < graphics_telemetry_binding &&
             graphics_telemetry_binding < graphics_host_construction &&
-            graphics_host_construction < simulation_writer_construction &&
+            graphics_host_construction < telemetry_host_storage &&
+            telemetry_host_storage < telemetry_binding_guard &&
+            telemetry_binding_guard < simulation_writer_construction &&
             simulation_writer_construction < telemetry_host_construction &&
-            telemetry_host_construction < context_telemetry_binding &&
+            telemetry_host_construction < context_direct_host_binding &&
+            context_direct_host_binding < context_telemetry_host_binding &&
+            context_telemetry_host_binding < context_telemetry_binding &&
             context_telemetry_binding < context_writer_binding &&
             context_writer_binding < terminal_performance_snapshot,
-        "Nativer Produktport verliert die getrennte Render-/"
-        "Simulationstelemetrie, deren Owner-Lebensdauer oder die terminale "
+        "Nativer Produktport verliert den exakten Performance-Opt-in, bindet "
+        "ohne Opt-in einen Telemetrie-Hotpath oder verliert seine terminale "
         "Publikationsreihenfolge.");
     const auto native_diagnostic_timeout = explicit_static_main.find(
         "KATANA_NATIVE_DIAGNOSTIC_TIMEOUT_MS");
     const auto native_bootstrap_dispatch = explicit_static_main.find(
         "katana_native_bootstrap_dispatch(context);", native_diagnostic_timeout);
+    const auto native_graphics_finish = explicit_static_main.find(
+        "host.graphics().finish();", native_bootstrap_dispatch);
+    const auto native_graphics_metrics_snapshot = explicit_static_main.find(
+        "native_performance_graphics_snapshot.emplace(\n"
+        "                host.graphics().snapshot());",
+        native_graphics_finish);
     const auto native_product_state_capture = explicit_static_main.find(
         "capture_product_state();\n"
-        "        const auto frame_pacing_snapshot =");
+        "        const auto frame_pacing_snapshot =",
+        native_graphics_metrics_snapshot);
     const auto native_frame_pacing_snapshot = explicit_static_main.find(
         "KATANA_NATIVE_FRAME_PACING_SNAPSHOT {\\\"schema\\\":1");
     const auto native_product_gate = explicit_static_main.find(
         "const bool normal_stop =", native_frame_pacing_snapshot);
+    const auto native_clean_shutdown = explicit_static_main.find(
+        "platform.finalize_clean_shutdown();", native_product_gate);
+    const auto native_acceptance_success = explicit_static_main.find(
+        "KATANA_NATIVE_PRODUCT_GATE status=accepted milestone=",
+        native_clean_shutdown);
     require(
         native_diagnostic_timeout != std::string::npos &&
             native_bootstrap_dispatch != std::string::npos &&
+            native_graphics_finish != std::string::npos &&
+            native_graphics_metrics_snapshot != std::string::npos &&
             native_product_state_capture != std::string::npos &&
             native_frame_pacing_snapshot != std::string::npos &&
             native_product_gate != std::string::npos &&
+            native_clean_shutdown != std::string::npos &&
+            native_acceptance_success != std::string::npos &&
             native_diagnostic_timeout < native_bootstrap_dispatch &&
-            native_bootstrap_dispatch < native_product_state_capture &&
+            native_bootstrap_dispatch < native_graphics_finish &&
+            native_graphics_finish < native_graphics_metrics_snapshot &&
+            native_graphics_metrics_snapshot < native_product_state_capture &&
             native_product_state_capture < native_frame_pacing_snapshot &&
-            native_frame_pacing_snapshot < native_product_gate &&
+            native_frame_pacing_snapshot < terminal_performance_snapshot &&
+            terminal_performance_snapshot < native_product_gate &&
+            native_product_gate < native_clean_shutdown &&
+            native_clean_shutdown < native_acceptance_success &&
+            occurrences(explicit_static_main,
+                        "host.graphics().finish();") == 1u &&
+            generated_main.find("host.graphics().finish();") ==
+                std::string::npos &&
+            generated_main.find("native_performance_graphics_snapshot") ==
+                std::string::npos &&
             occurrences(explicit_static_main,
                         "KATANA_NATIVE_FRAME_PACING_SNAPSHOT") == 1u &&
             explicit_static_main.find("\\\"simulation_frames\\\":",
@@ -4882,6 +5034,8 @@ int run_test(const int argc, char* argv[]) {
         "Diagnoseexport verliert seinen typisierten Diagnosepfad oder der "
         "Produktport ist nicht interpreterfrei.");
     const auto& generated_port_cmake = generated_before.at("katana-port.cmake");
+    const auto& generated_link_audit =
+        explicit_static_sources.at("tools/native-port-link-audit.cpp");
     const auto generated_root_cmake = read_text(output / "CMakeLists.txt");
     require(
         generated_root_cmake.find(
@@ -4908,17 +5062,84 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_port_cmake.find(
                 "/clang:-fprofile-instr-use=${KATANA_PORT_PGO_PROFILE_NORMALIZED}") !=
-                std::string::npos,
-        "Performanceexport verliert clang-cl PGO-Generate/Use-Flags.");
-    require(
-        generated_port_cmake.find(
-                "file(SHA256 \"${KATANA_PORT_PGO_PROFILE}\"") !=
                 std::string::npos &&
-            generated_port_cmake.find("PGO profile SHA-256 mismatch") !=
+            generated_port_cmake.find("/clang:-print-resource-dir") !=
+                std::string::npos &&
+            generated_port_cmake.find("clang_rt.profile-x86_64.lib") !=
                 std::string::npos &&
             generated_port_cmake.find(
-                "KATANA_PORT_PGO_PROFILE_SHA256_NAME") != std::string::npos,
-        "Performanceexport verliert die genaue PGO-Profilidentitaet.");
+                "target_compile_definitions(katana_native_port_link_audit PRIVATE\n"
+                "        KATANA_NATIVE_PORT_PGO_GENERATE=1)") !=
+                std::string::npos &&
+            generated_port_cmake.find(
+                "target_link_libraries(synthetic_game PRIVATE\n"
+                "      \"${KATANA_PORT_PGO_RUNTIME}\")") !=
+                std::string::npos,
+        "Performanceexport verliert clang-cl PGO-Flags oder die direkte "
+        "LLD-Profilruntimebindung.");
+    require(
+        generated_link_audit.find(
+            "#ifdef KATANA_NATIVE_PORT_PGO_GENERATE\n"
+            "    return owner == \"clang_rt.profile-x86_64\";") !=
+                std::string::npos &&
+            generated_link_audit.find(
+                "constexpr std::string_view lto_object_marker{\".exe.lto.\"}") !=
+                std::string::npos &&
+            generated_link_audit.find(
+                "const auto owner = origin.substr(0u, library);") !=
+                std::string::npos &&
+            generated_link_audit.find(
+                "if (contains_exact(allowed_direct_objects, origin)) continue;") !=
+                std::string::npos &&
+            generated_link_audit.find("direct-lto-object=") !=
+                std::string::npos &&
+            generated_link_audit.find("malformed-lto-object=") !=
+                std::string::npos,
+        "Native Link-Audit verliert die fail-closed LLD-Full-LTO-Owner-"
+        "Rekonstruktion oder die exakte clang-cl-Profilruntimebindung.");
+    const auto pgo_profile_configure_dependency = generated_port_cmake.find(
+        "set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS\n"
+        "      \"${KATANA_PORT_PGO_PROFILE}\")");
+    const auto pgo_profile_hash = generated_port_cmake.find(
+        "file(SHA256 \"${KATANA_PORT_PGO_PROFILE}\"",
+        pgo_profile_configure_dependency);
+    const auto pgo_optimization_target_loop = generated_port_cmake.find(
+        "foreach(KATANA_PORT_OPT_TARGET IN LISTS "
+        "KATANA_PORT_OPTIMIZATION_TARGETS)",
+        pgo_profile_hash);
+    const auto pgo_target_compile_option = generated_port_cmake.find(
+        "target_compile_options(\"${KATANA_PORT_OPT_TARGET}\" PRIVATE",
+        pgo_optimization_target_loop);
+    const auto pgo_use_identity_guard = generated_port_cmake.find(
+        "if(KATANA_PORT_PGO_MODE STREQUAL \"use\")",
+        pgo_target_compile_option);
+    const auto pgo_all_target_profile_identity = generated_port_cmake.find(
+        "target_compile_definitions(\"${KATANA_PORT_OPT_TARGET}\" PRIVATE\n"
+        "        KATANA_PORT_PGO_PROFILE_SHA256_NAME=",
+        pgo_use_identity_guard);
+    const auto pgo_optimization_target_loop_end = generated_port_cmake.find(
+        "  endforeach()", pgo_all_target_profile_identity);
+    require(
+        pgo_profile_configure_dependency != std::string::npos &&
+            pgo_profile_hash != std::string::npos &&
+            generated_port_cmake.find("PGO profile SHA-256 mismatch") !=
+                std::string::npos &&
+            pgo_optimization_target_loop != std::string::npos &&
+            pgo_target_compile_option != std::string::npos &&
+            pgo_use_identity_guard != std::string::npos &&
+            pgo_all_target_profile_identity != std::string::npos &&
+            pgo_optimization_target_loop_end != std::string::npos &&
+            pgo_profile_configure_dependency < pgo_profile_hash &&
+            pgo_profile_hash < pgo_optimization_target_loop &&
+            pgo_optimization_target_loop < pgo_target_compile_option &&
+            pgo_target_compile_option < pgo_use_identity_guard &&
+            pgo_use_identity_guard < pgo_all_target_profile_identity &&
+            pgo_all_target_profile_identity <
+                pgo_optimization_target_loop_end &&
+            occurrences(generated_port_cmake,
+                        "KATANA_PORT_PGO_PROFILE_SHA256_NAME=") == 1u,
+        "Performanceexport verliert die dateigebundene PGO-Profilidentitaet "
+        "oder bindet sie nicht an alle optimierten Targets.");
     require(
         explicit_static_main.find("#define KATANA_PORT_PGO_MODE_NAME \"off\"") !=
                 std::string::npos &&

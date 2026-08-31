@@ -14,11 +14,13 @@
 namespace katana::runtime {
 
 inline constexpr std::uint32_t native_port_audio_command_queue_contract_version =
-    1u;
+    2u;
 inline constexpr std::uint32_t native_port_audio_command_queue_invalid_ack_slot =
     0xFFFF'FFFFu;
 inline constexpr std::size_t native_port_audio_command_queue_max_ack_result_bytes =
     512u;
+inline constexpr std::size_t native_port_audio_command_queue_payload_alignment =
+    alignof(std::max_align_t);
 inline constexpr std::uint32_t
     native_port_audio_command_queue_default_payload_bytes = 64u * 1024u * 1024u;
 inline constexpr std::string_view native_port_audio_serial_reference_environment =
@@ -304,6 +306,17 @@ class NativePortAudioCommandQueue final {
     [[nodiscard]] std::optional<NativePortAudioCommandAck>
     wait_read_ack(std::uint32_t ack_slot, std::uint64_t command_sequence);
     void request_shutdown() noexcept;
+    // External host-device completions may wake the sole consumer without
+    // publishing a command.  The notifier performs atomics only; command
+    // execution and device polling remain consumer-owned.
+    void notify_consumer_event() noexcept;
+    [[nodiscard]] std::uint64_t
+    consumer_event_epoch_nonblocking() const noexcept;
+    void wait_for_consumer_event(std::uint64_t observed_epoch) const noexcept;
+    [[nodiscard]] bool consumer_closed_nonblocking() const noexcept;
+    // Cheap hot-path observation. Unlike snapshot(), this does not walk or
+    // copy any acknowledgement/target state.
+    [[nodiscard]] std::uint64_t queued_commands_nonblocking() const noexcept;
     [[nodiscard]] NativePortAudioCommandQueueSnapshot
     snapshot() const noexcept;
 

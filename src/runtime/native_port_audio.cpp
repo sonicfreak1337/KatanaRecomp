@@ -64,13 +64,56 @@ class NativePortAudioEndpointCore final {
 #ifdef _WIN32
     struct Block;
     struct PendingBlock;
+    struct CompletionWakeState final {
+        static constexpr std::uint32_t closed_bit = 0x8000'0000u;
+        static constexpr std::uint32_t in_flight_mask = ~closed_bit;
+
+        [[nodiscard]] bool try_enter() noexcept {
+            auto observed = lifecycle.load(std::memory_order_acquire);
+            for (;;) {
+                if ((observed & closed_bit) != 0u ||
+                    (observed & in_flight_mask) == in_flight_mask)
+                    return false;
+                if (lifecycle.compare_exchange_weak(
+                        observed, observed + 1u, std::memory_order_acq_rel,
+                        std::memory_order_acquire))
+                    return true;
+            }
+        }
+
+        void leave() noexcept {
+            const auto previous =
+                lifecycle.fetch_sub(1u, std::memory_order_acq_rel);
+            if ((previous & closed_bit) != 0u &&
+                (previous & in_flight_mask) == 1u)
+                lifecycle.notify_all();
+        }
+
+        void close_and_wait() noexcept {
+            auto observed =
+                lifecycle.fetch_or(closed_bit, std::memory_order_acq_rel) |
+                closed_bit;
+            while ((observed & in_flight_mask) != 0u) {
+                lifecycle.wait(observed, std::memory_order_acquire);
+                observed = lifecycle.load(std::memory_order_acquire);
+            }
+        }
+
+        std::atomic<std::uint32_t> lifecycle{0u};
+        std::atomic<NativePortAudioExecutionDomain*> execution_domain{nullptr};
+    };
 #endif
 
   public:
-    explicit NativePortAudioEndpointCore(const NativePortAudioConfig& config)
+    NativePortAudioEndpointCore(
+        const NativePortAudioConfig& config,
+        NativePortAudioExecutionDomain& execution_domain)
         : config_(config), owner_thread_(std::this_thread::get_id()) {
         validate_config(config_);
 #ifdef _WIN32
+        completion_wake_ = std::make_unique<CompletionWakeState>();
+        completion_wake_->execution_domain.store(
+            &execution_domain, std::memory_order_release);
         pool_.reserve(native_audio_block_pool_size);
         free_pool_indices_.reserve(native_audio_block_pool_size);
         for (std::size_t index = 0u; index < native_audio_block_pool_size;
@@ -98,7 +141,12 @@ class NativePortAudioEndpointCore final {
         format.wBitsPerSample = 16u;
         format.nBlockAlign = static_cast<WORD>(format.nChannels * format.wBitsPerSample / 8u);
         format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-        const auto result = waveOutOpen(&device_, WAVE_MAPPER, &format, 0u, 0u, CALLBACK_NULL);
+        const auto result = waveOutOpen(
+            &device_, WAVE_MAPPER, &format,
+            reinterpret_cast<DWORD_PTR>(
+                &NativePortAudioEndpointCore::wave_out_callback),
+            reinterpret_cast<DWORD_PTR>(completion_wake_.get()),
+            CALLBACK_FUNCTION);
         if (result != MMSYSERR_NOERROR) fail(result, "open");
 #else
         fail(1u, "unsupported-host");
@@ -267,6 +315,15 @@ class NativePortAudioEndpointCore final {
         };
 #ifdef _WIN32
         if (device_ != nullptr) {
+            if (completion_wake_ != nullptr) {
+                // Close admission first, then wait outside the callback
+                // hotpath for every callback which entered before the close.
+                // Only after this fence may the execution-domain lifetime be
+                // severed or the host device reset.
+                completion_wake_->close_and_wait();
+                completion_wake_->execution_domain.store(
+                    nullptr, std::memory_order_release);
+            }
             observe_error(waveOutReset(device_));
             for (auto& block : pool_) {
                 if (!block->prepared) continue;
@@ -286,9 +343,11 @@ class NativePortAudioEndpointCore final {
             observe_error(close_result);
             if (close_result == MMSYSERR_NOERROR) {
                 // A successful close is the final ownership boundary: the
-                // driver no longer retains any submitted WAVEHDR storage.
+                // driver retains neither submitted WAVEHDR storage nor the
+                // callback instance, so the closed wake state may be freed.
                 pending_.clear();
                 pool_.clear();
+                completion_wake_.reset();
             } else {
                 // The driver may still reference submitted storage after a
                 // failed close. Leak it rather than freeing live DMA data.
@@ -299,6 +358,10 @@ class NativePortAudioEndpointCore final {
                         static_cast<void>(pending.owned.release());
                 pending_.clear();
                 pool_.clear();
+                // The driver may still invoke its registered callback. Keep
+                // an inert, null-domain instance alive alongside leaked DMA
+                // storage rather than exposing Core/Domain lifetime.
+                static_cast<void>(completion_wake_.release());
             }
             device_ = nullptr;
         }
@@ -330,6 +393,23 @@ class NativePortAudioEndpointCore final {
 
   private:
 #ifdef _WIN32
+    static void CALLBACK wave_out_callback(
+        HWAVEOUT,
+        const UINT message,
+        const DWORD_PTR instance,
+        DWORD_PTR,
+        DWORD_PTR) noexcept {
+        if (message != WOM_DONE || instance == 0u) return;
+        // The OS callback is never an audio executor. It only advances the
+        // domain's atomic wake epoch; poll/retry remains on the sole consumer.
+        auto* const wake = reinterpret_cast<CompletionWakeState*>(instance);
+        if (!wake->try_enter()) return;
+        auto* const domain =
+            wake->execution_domain.load(std::memory_order_acquire);
+        if (domain != nullptr) domain->request_consumer_service();
+        wake->leave();
+    }
+
     void release_failed_submission(PendingBlock& pending) noexcept {
         if (pending.pool_index.has_value())
             free_pool_indices_.push_back(*pending.pool_index);
@@ -394,6 +474,7 @@ class NativePortAudioEndpointCore final {
         std::unique_ptr<Block> owned;
     };
     HWAVEOUT device_ = nullptr;
+    std::unique_ptr<CompletionWakeState> completion_wake_;
     std::vector<std::unique_ptr<Block>> pool_;
     std::vector<std::size_t> free_pool_indices_;
     std::vector<PendingBlock> pending_;
@@ -448,7 +529,8 @@ class NativePortAudioStream::Impl final {
         validate_config(config_);
         const auto registered = domain_->register_target(
             target_, this, &NativePortAudioStream::Impl::execute,
-            &NativePortAudioStream::Impl::cleanup_worker_state);
+            &NativePortAudioStream::Impl::cleanup_worker_state,
+            &NativePortAudioStream::Impl::service_worker_completion);
         if (!registered.has_value())
             throw std::runtime_error("native-port-audio-target-register");
         handle_ = *registered;
@@ -569,10 +651,8 @@ class NativePortAudioStream::Impl final {
 
     [[nodiscard]] std::uint64_t compatible_frame_index(
         const std::uint64_t requested) const noexcept {
-        const auto snapshot = domain_->snapshot();
-        return snapshot.has_last_frame_index
-                   ? std::max(requested, snapshot.last_frame_index)
-                   : requested;
+        const auto last = domain_->last_frame_index_nonblocking();
+        return last.has_value() ? std::max(requested, *last) : requested;
     }
     using AckResult = NativePortAudioCommandAckResult;
 
@@ -596,7 +676,8 @@ class NativePortAudioStream::Impl final {
             case NativePortAudioStreamOpcode::Construct:
                 if (!payload.empty() || self.core_ != nullptr)
                     throw std::logic_error("native-port-audio-construct");
-                self.core_ = std::make_unique<NativePortAudioEndpointCore>(self.config_);
+                self.core_ = std::make_unique<NativePortAudioEndpointCore>(
+                    self.config_, *self.domain_);
                 self.publish_snapshot();
                 break;
             case NativePortAudioStreamOpcode::SubmitPcmS16: {
@@ -676,6 +757,22 @@ class NativePortAudioStream::Impl final {
             self.state_.store(NativePortAudioState::Failed,
                               std::memory_order_release);
         self.queued_frames_.store(0u, std::memory_order_release);
+    }
+
+    static std::uint32_t
+    service_worker_completion(void* const object) noexcept {
+        auto& self = *static_cast<NativePortAudioStream::Impl*>(object);
+        if (self.core_ == nullptr) return 0u;
+        try {
+            self.core_->poll();
+            self.publish_snapshot();
+            return 0u;
+        } catch (...) {
+            self.state_.store(NativePortAudioState::Failed,
+                              std::memory_order_release);
+            self.error_code_.store(1u, std::memory_order_release);
+            return 1u;
+        }
     }
 
     void publish_snapshot() noexcept {

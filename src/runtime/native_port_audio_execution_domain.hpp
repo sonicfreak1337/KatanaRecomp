@@ -20,7 +20,7 @@ namespace katana::runtime {
 // queue or a second worker.  Keep this contract independent from the public
 // product/profile version; the parent runtime owns that version bump.
 inline constexpr std::uint32_t
-    native_port_audio_execution_domain_contract_version = 1u;
+    native_port_audio_execution_domain_contract_version = 2u;
 
 // The queue now has an explicit Movie tag, so the domain deliberately uses
 // that same target identity instead of creating a second wire-level enum.
@@ -120,14 +120,21 @@ using NativePortAudioExecutionDomainExecutor = void (*)(
 // producer thread.
 using NativePortAudioExecutionDomainCleanup = void (*)(void* target) noexcept;
 
+// Optional bounded maintenance invoked only by the sole audio consumer after
+// a host completion wake.  It must not block, allocate, publish another
+// command, or touch producer-owned state.  A non-zero result is a terminal
+// target failure.
+using NativePortAudioExecutionDomainConsumerService =
+    std::uint32_t (*)(void* target) noexcept;
+
 enum class NativePortAudioExecutionDomainStage : std::uint8_t {
     None = 0u,
     AudioDecode = 1u,
     AudioMix = 2u,
-    // A single product command may perform bounded codec work and mixing
-    // before it submits its owning output buffer.  Keep this as one broad
-    // command classification; the worker records both timers around the
-    // same executor invocation and never times individual samples.
+    // A single product command may perform bounded codec work and mixing.
+    // Until those phases expose separate seams, the worker records this once
+    // as AudioServiceTotal; it must never project the same executor invocation
+    // into either narrower telemetry stage.
     AudioDecodeAndMix = 3u,
 };
 
@@ -166,6 +173,16 @@ struct NativePortAudioExecutionDomainDispatchResult final {
     bool has_ack = false;
     bool inline_execution = false;
     NativePortAudioCommandAck ack{};
+    bool has_target_failure = false;
+    std::uint64_t target_failure_command_sequence = 0u;
+    std::uint64_t target_failure_frame_index = 0u;
+    std::uint64_t target_failure_guest_sequence = 0u;
+    NativePortAudioExecutionDomainTarget target_failure_target =
+        NativePortAudioExecutionDomainTarget::AudioEngine;
+    std::uint16_t target_failure_opcode = 0u;
+    std::uint32_t target_failure_slot = 0u;
+    std::uint32_t target_failure_generation = 0u;
+    std::uint32_t target_failure_error_code = 0u;
 
     [[nodiscard]] constexpr bool accepted() const noexcept {
         return failure == NativePortAudioExecutionDomainFailure::None;
@@ -188,6 +205,23 @@ struct NativePortAudioExecutionDomainTargetSnapshot final {
     std::uint64_t failed_commands = 0u;
 };
 
+struct NativePortAudioExecutionDomainTargetFailureRecord final {
+    std::uint64_t command_sequence = 0u;
+    std::uint64_t frame_index = 0u;
+    std::uint64_t guest_sequence = 0u;
+    NativePortAudioExecutionDomainTarget target =
+        NativePortAudioExecutionDomainTarget::AudioEngine;
+    std::uint16_t opcode = 0u;
+    std::uint32_t target_slot = 0u;
+    std::uint32_t target_generation = 0u;
+    std::uint32_t target_error_code = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<
+              NativePortAudioExecutionDomainTargetFailureRecord>);
+static_assert(std::is_standard_layout_v<
+              NativePortAudioExecutionDomainTargetFailureRecord>);
+
 struct NativePortAudioExecutionDomainSnapshot final {
     NativePortAudioCommandQueueSnapshot queue{};
     NativePortAudioExecutionDomainFailure first_error =
@@ -200,6 +234,8 @@ struct NativePortAudioExecutionDomainSnapshot final {
     bool has_last_frame_index = false;
     bool worker_alive = false;
     bool shutdown_requested = false;
+    bool has_async_target_failure = false;
+    NativePortAudioExecutionDomainTargetFailureRecord async_target_failure{};
     std::array<NativePortAudioExecutionDomainTargetSnapshot,
                 native_port_audio_execution_domain_slot_count>
         targets{};
@@ -286,7 +322,9 @@ class NativePortAudioExecutionDomain final {
         std::uint32_t target_generation,
         void* object,
         NativePortAudioExecutionDomainExecutor executor,
-        NativePortAudioExecutionDomainCleanup cleanup = nullptr) noexcept;
+        NativePortAudioExecutionDomainCleanup cleanup = nullptr,
+        NativePortAudioExecutionDomainConsumerService consumer_service =
+            nullptr) noexcept;
     // Select a free fixed slot and allocate its next non-zero generation.
     // std::optional is allocation-free; registration is a lifecycle
     // operation and is never performed by the command/sample hotpath.
@@ -296,7 +334,9 @@ class NativePortAudioExecutionDomain final {
         NativePortAudioExecutionDomainTarget target,
         void* object,
         NativePortAudioExecutionDomainExecutor executor,
-        NativePortAudioExecutionDomainCleanup cleanup = nullptr) noexcept;
+        NativePortAudioExecutionDomainCleanup cleanup = nullptr,
+        NativePortAudioExecutionDomainConsumerService consumer_service =
+            nullptr) noexcept;
     [[nodiscard]] bool unregister_target(
         const NativePortAudioExecutionDomainTargetHandle& handle,
         void* object) noexcept;
@@ -423,9 +463,16 @@ class NativePortAudioExecutionDomain final {
     // the producer thread; it is intended only for the explicit pre-
     // construction KATANA_PORT_AUDIO_SERIAL_REFERENCE=1 gate.
     void pump() noexcept;
+    // Host completion callbacks may call this from an arbitrary OS thread.
+    // It performs an atomic wake only; all maintenance remains on the one
+    // audio consumer and consumes no command/guest sequence.
+    void request_consumer_service() noexcept;
     void shutdown() noexcept;
 
     [[nodiscard]] bool on_audio_thread() const noexcept;
+    [[nodiscard]] std::optional<std::uint64_t>
+    last_frame_index_nonblocking() const noexcept;
+    [[nodiscard]] std::uint64_t queued_commands_nonblocking() const noexcept;
     [[nodiscard]] NativePortAudioExecutionDomainSnapshot
     snapshot() const noexcept;
 

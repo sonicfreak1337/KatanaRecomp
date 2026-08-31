@@ -11088,6 +11088,11 @@ std::string handwritten_main(
            "    katana::runtime::NativePortTelemetry native_performance_telemetry;\n"
            "    std::optional<katana::runtime::NativePortTelemetryWriter>\n"
            "        native_performance_writer;\n"
+           "    const auto* const native_performance_telemetry_opt_in =\n"
+           "        std::getenv(\"KATANA_NATIVE_PERFORMANCE_TELEMETRY\");\n"
+           "    const bool native_performance_telemetry_enabled =\n"
+           "        native_performance_telemetry_opt_in != nullptr &&\n"
+           "        std::string_view(native_performance_telemetry_opt_in) == \"1\";\n"
            "    std::optional<katana::runtime::HostWorkloadLimiter>\n"
            "        workload_limiter;\n"
            "    ProductCrashContext product_crash_context;\n"
@@ -11098,7 +11103,8 @@ std::string handwritten_main(
            "#endif\n"
            "    const auto emit_native_performance_snapshot = [&]() noexcept {\n"
            "        try {\n"
-           "            if (terminal_telemetry.native_performance_snapshot_emitted)\n"
+           "            if (!native_performance_telemetry_enabled ||\n"
+           "                terminal_telemetry.native_performance_snapshot_emitted)\n"
            "                return;\n"
            "            terminal_telemetry.native_performance_snapshot_emitted = true;\n"
            "            if (native_performance_writer)\n"
@@ -11749,7 +11755,8 @@ std::string handwritten_main(
            "        std::unique_ptr<katana::runtime::HostAudioOutput> audio =\n"
            "            katana::runtime::native_audio_available()\n"
            "                ? katana::runtime::create_native_audio_output(\n"
-           "                      &native_performance_telemetry)\n"
+           "                      native_performance_telemetry_enabled\n"
+           "                          ? &native_performance_telemetry : nullptr)\n"
            "                : std::make_unique<katana::runtime::RecordingHostAudioOutput>();\n"
            "        const auto capture_product_evidence_counters = [&]() noexcept {\n"
            "            ProductEvidenceCounters current;\n"
@@ -17084,17 +17091,48 @@ std::string native_product_main(
            "    katana::runtime::NativePortTelemetry native_performance_telemetry;\n"
            "    std::optional<katana::runtime::NativePortTelemetryWriter>\n"
            "        native_performance_writer;\n"
+           "    std::optional<katana::runtime::NativePortGraphicsSnapshot>\n"
+           "        native_performance_graphics_snapshot;\n"
+           "    const auto* const native_performance_telemetry_opt_in =\n"
+           "        std::getenv(\"KATANA_NATIVE_PERFORMANCE_TELEMETRY\");\n"
+           "    const bool native_performance_telemetry_enabled =\n"
+           "        native_performance_telemetry_opt_in != nullptr &&\n"
+           "        std::string_view(native_performance_telemetry_opt_in) == \"1\";\n"
            "    bool native_performance_snapshot_emitted = false;\n"
            "    const auto emit_native_performance_snapshot = [&]() noexcept {\n"
            "        try {\n"
-           "            if (native_performance_snapshot_emitted) return;\n"
+           "            if (!native_performance_telemetry_enabled ||\n"
+           "                native_performance_snapshot_emitted)\n"
+           "                return;\n"
            "            native_performance_snapshot_emitted = true;\n"
            "            if (native_performance_writer)\n"
            "                native_performance_telemetry.publish(\n"
            "                    *native_performance_writer);\n"
            "            const auto snapshot = native_performance_telemetry.snapshot();\n"
+           "            auto snapshot_json = snapshot.serialize_json();\n"
+           "            if (native_performance_graphics_snapshot) {\n"
+           "                if (snapshot_json.empty() || snapshot_json.back() != '}')\n"
+           "                    throw std::runtime_error(\n"
+           "                        \"native-performance-snapshot-json\");\n"
+           "                snapshot_json.pop_back();\n"
+           "                const auto& graphics =\n"
+           "                    *native_performance_graphics_snapshot;\n"
+           "                snapshot_json +=\n"
+           "                    \",\\\"graphics\\\":{\\\"available\\\":true\";\n"
+           "                snapshot_json += \",\\\"render_producer_wait_ns\\\":\" +\n"
+           "                    std::to_string(graphics.render_producer_wait_ns);\n"
+           "                snapshot_json +=\n"
+           "                    \",\\\"render_resource_fence_wait_ns\\\":\" +\n"
+           "                    std::to_string(\n"
+           "                        graphics.render_resource_fence_wait_ns);\n"
+           "                snapshot_json += \",\\\"resource_fence_count\\\":\" +\n"
+           "                    std::to_string(graphics.resource_fence_count);\n"
+           "                snapshot_json += \",\\\"frame_prefix_publications\\\":\" +\n"
+           "                    std::to_string(graphics.frame_prefix_publications);\n"
+           "                snapshot_json += \"}}\";\n"
+           "            }\n"
            "            std::cout << \"KATANA_NATIVE_PERFORMANCE_SNAPSHOT \"\n"
-           "                      << snapshot.serialize_json() << '\\n';\n"
+           "                      << snapshot_json << '\\n';\n"
            "        } catch (...) {}\n"
            "    };\n"
            "    const bool input_record_launch = argc == 3 &&\n"
@@ -17345,13 +17383,19 @@ std::string native_product_main(
            "        frame_pacing.simulation_rate_hz =\n"
            "            definition.frame_timing.simulation_rate_hz;\n"
            "        frame_pacing.presentation_rate_hz = presentation_fps;\n"
-           "        graphics_config.telemetry = &native_performance_telemetry;\n"
+           "        graphics_config.telemetry =\n"
+           "            native_performance_telemetry_enabled\n"
+           "                ? &native_performance_telemetry : nullptr;\n"
            "        katana::runtime::NativePortDesktopHost host(\n"
            "            graphics_config, frame_pacing);\n"
-           "        native_performance_writer.emplace(\n"
-           "            &native_performance_telemetry);\n"
-           "        katana::runtime::NativePortTelemetryHostProxy telemetry_host(\n"
-           "            host, *native_performance_writer);\n"
+           "        std::optional<katana::runtime::NativePortTelemetryHostProxy>\n"
+           "            telemetry_host;\n"
+           "        if (native_performance_telemetry_enabled) {\n"
+           "            native_performance_writer.emplace(\n"
+           "                &native_performance_telemetry);\n"
+           "            telemetry_host.emplace(\n"
+           "                host, *native_performance_writer);\n"
+           "        }\n"
            "        std::cerr << \"KATANA_NATIVE_FRAME_PACING simulation_fps=\"\n"
            "                  << frame_pacing.simulation_rate_hz\n"
            "                  << \" presentation_fps=\"\n"
@@ -17361,8 +17405,10 @@ std::string native_product_main(
            "            host.graphics());\n"
            "        katana::runtime::NativePortContext context;\n"
            "        context.cpu = &cpu;\n"
-           "        context.host = &telemetry_host;\n"
-           "        context.telemetry = &native_performance_telemetry;\n"
+           "        context.host = &host;\n"
+           "        if (telemetry_host) context.host = &*telemetry_host;\n"
+           "        context.telemetry = native_performance_telemetry_enabled\n"
+           "            ? &native_performance_telemetry : nullptr;\n"
            "        context.telemetry_writer = native_performance_writer\n"
            "            ? &*native_performance_writer : nullptr;\n"
            "        context.graphics = &host.graphics();\n"
@@ -17476,6 +17522,9 @@ std::string native_product_main(
            "        };\n"
            "        try {\n"
            "            katana_native_bootstrap_dispatch(context);\n"
+           "            host.graphics().finish();\n"
+           "            native_performance_graphics_snapshot.emplace(\n"
+           "                host.graphics().snapshot());\n"
            "        } catch (...) {\n"
            "            capture_product_state();\n"
            "            throw;\n"
@@ -22356,6 +22405,16 @@ template <std::size_t Size>
     return contains_exact(allowed_platform_owners, owner);
 }
 
+[[nodiscard]] bool allowed_compiler_profile_owner(
+    const std::string_view owner) noexcept {
+#ifdef KATANA_NATIVE_PORT_PGO_GENERATE
+    return owner == "clang_rt.profile-x86_64";
+#else
+    static_cast<void>(owner);
+    return false;
+#endif
+}
+
 [[nodiscard]] bool allowed_native_codec_owner(
     std::string_view owner) noexcept {
     if (owner.starts_with("lib")) owner.remove_prefix(3u);
@@ -22377,6 +22436,19 @@ bool audit_map_owners(const std::filesystem::path& map) {
     std::array<bool, allowed_first_party_owners.size()> seen{};
     bool failed = false;
     bool structural_owner_seen = false;
+    const auto audit_owner = [&](const std::string_view owner) {
+        structural_owner_seen = true;
+        const auto allowed = allowed_owner_index(owner);
+        if (allowed) {
+            seen[*allowed] = true;
+        } else if (!allowed_platform_owner(owner) &&
+                   !allowed_compiler_profile_owner(owner) &&
+                   !allowed_native_codec_owner(owner)) {
+            std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner="
+                      << owner << '\n';
+            failed = true;
+        }
+    };
     std::string line;
     while (std::getline(input, line)) {
         lower_ascii(line);
@@ -22391,16 +22463,7 @@ bool audit_map_owners(const std::filesystem::path& map) {
             (token.find(".obj", colon) != std::string_view::npos ||
              token.find(".o", colon) != std::string_view::npos)) {
             const auto owner = token.substr(0u, colon);
-            structural_owner_seen = true;
-            const auto allowed = allowed_owner_index(owner);
-            if (allowed) {
-                seen[*allowed] = true;
-            } else if (!allowed_platform_owner(owner) &&
-                       !allowed_native_codec_owner(owner)) {
-                std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner="
-                          << owner << '\n';
-                failed = true;
-            }
+            audit_owner(owner);
             continue;
         }
         const auto archive = token.find(".a(");
@@ -22409,21 +22472,43 @@ bool audit_map_owners(const std::filesystem::path& map) {
             const auto owner = token.substr(
                 slash == std::string_view::npos ? 0u : slash + 1u,
                 archive - (slash == std::string_view::npos ? 0u : slash + 1u));
-            structural_owner_seen = true;
-            const auto allowed = allowed_owner_index(owner);
-            if (allowed) {
-                seen[*allowed] = true;
-            } else if (!allowed_platform_owner(owner) &&
-                       !allowed_native_codec_owner(owner)) {
-                std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION owner="
-                          << owner << '\n';
-                failed = true;
-            }
+            audit_owner(owner);
             continue;
         }
         const auto object = object_basename(token);
         if (!object.ends_with(".obj") && !object.ends_with(".o")) continue;
         structural_owner_seen = true;
+#ifdef _WIN32
+        // lld-link's full-LTO map flattens an archive member to the exact form
+        // <output>.exe.lto.<archive-owner>.lib<member>.obj. Recover and audit
+        // that owner instead of treating the flattened name as a direct
+        // object. The sole direct LTO origin remains main.cpp.obj.
+        constexpr std::string_view lto_object_marker{".exe.lto."};
+        const auto lto = object.find(lto_object_marker);
+        if (lto != std::string_view::npos) {
+            const auto origin = object.substr(lto + lto_object_marker.size());
+            const auto library = origin.find(".lib");
+            if (library != std::string_view::npos) {
+                const auto owner = origin.substr(0u, library);
+                const auto member = origin.substr(library + 4u);
+                if (owner.empty() || member.empty() ||
+                    (!member.ends_with(".obj") && !member.ends_with(".o"))) {
+                    std::cerr
+                        << "KATANA_NATIVE_PORT_LINK_VIOLATION malformed-lto-object="
+                        << object << '\n';
+                    failed = true;
+                } else {
+                    audit_owner(owner);
+                }
+                continue;
+            }
+            if (contains_exact(allowed_direct_objects, origin)) continue;
+            std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION direct-lto-object="
+                      << object << '\n';
+            failed = true;
+            continue;
+        }
+#endif
         if (contains_exact(allowed_direct_objects, object)) continue;
         std::cerr << "KATANA_NATIVE_PORT_LINK_VIOLATION direct-object="
                   << object << '\n';
@@ -23009,8 +23094,30 @@ std::string port_cmake(const std::string& target_name) {
            "  if(KATANA_PORT_PGO_MODE STREQUAL \"generate\")\n"
            "    set(KATANA_PORT_PGO_COMPILE_OPTION\n"
            "      \"/clang:-fprofile-instr-generate\")\n"
-           "    set(KATANA_PORT_PGO_LINK_OPTION\n"
-           "      \"/clang:-fprofile-instr-generate\")\n"
+           "    execute_process(\n"
+           "      COMMAND \"${CMAKE_CXX_COMPILER}\" /clang:-print-resource-dir\n"
+           "      RESULT_VARIABLE KATANA_PORT_PGO_RESOURCE_RESULT\n"
+           "      OUTPUT_VARIABLE KATANA_PORT_PGO_RESOURCE_DIR\n"
+           "      ERROR_VARIABLE KATANA_PORT_PGO_RESOURCE_ERROR\n"
+           "      OUTPUT_STRIP_TRAILING_WHITESPACE)\n"
+           "    if(NOT KATANA_PORT_PGO_RESOURCE_RESULT EQUAL 0 OR\n"
+           "       KATANA_PORT_PGO_RESOURCE_DIR STREQUAL \"\")\n"
+           "      message(FATAL_ERROR\n"
+           "        \"clang-cl profile runtime discovery failed: ${KATANA_PORT_PGO_RESOURCE_ERROR}\")\n"
+           "    endif()\n"
+           "    file(TO_CMAKE_PATH \"${KATANA_PORT_PGO_RESOURCE_DIR}\"\n"
+           "      KATANA_PORT_PGO_RESOURCE_DIR_NORMALIZED)\n"
+           "    set(KATANA_PORT_PGO_RUNTIME\n"
+           "      \"${KATANA_PORT_PGO_RESOURCE_DIR_NORMALIZED}/lib/windows/clang_rt.profile-x86_64.lib\")\n"
+           "    if(NOT EXISTS \"${KATANA_PORT_PGO_RUNTIME}\" OR\n"
+           "       IS_DIRECTORY \"${KATANA_PORT_PGO_RUNTIME}\")\n"
+           "      message(FATAL_ERROR\n"
+           "        \"clang-cl profile runtime is unavailable: ${KATANA_PORT_PGO_RUNTIME}\")\n"
+           "    endif()\n"
+           "    if(TARGET katana_native_port_link_audit)\n"
+           "      target_compile_definitions(katana_native_port_link_audit PRIVATE\n"
+           "        KATANA_NATIVE_PORT_PGO_GENERATE=1)\n"
+           "    endif()\n"
            "  else()\n"
            "    if(KATANA_PORT_PGO_PROFILE STREQUAL \"\" OR\n"
            "       NOT IS_ABSOLUTE \"${KATANA_PORT_PGO_PROFILE}\" OR\n"
@@ -23021,6 +23128,8 @@ std::string port_cmake(const std::string& target_name) {
            "    endif()\n"
            "    file(TO_CMAKE_PATH \"${KATANA_PORT_PGO_PROFILE}\"\n"
            "      KATANA_PORT_PGO_PROFILE_NORMALIZED)\n"
+           "    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS\n"
+           "      \"${KATANA_PORT_PGO_PROFILE}\")\n"
            "    string(TOLOWER \"${KATANA_PORT_PGO_PROFILE_SHA256}\"\n"
            "      KATANA_PORT_PGO_PROFILE_EXPECTED_SHA256)\n"
            "    string(LENGTH \"${KATANA_PORT_PGO_PROFILE_EXPECTED_SHA256}\"\n"
@@ -23039,17 +23148,19 @@ std::string port_cmake(const std::string& target_name) {
            "    endif()\n"
            "    set(KATANA_PORT_PGO_COMPILE_OPTION\n"
            "      \"/clang:-fprofile-instr-use=${KATANA_PORT_PGO_PROFILE_NORMALIZED}\")\n"
-           "    set(KATANA_PORT_PGO_LINK_OPTION\n"
-           "      \"/clang:-fprofile-instr-use=${KATANA_PORT_PGO_PROFILE_NORMALIZED}\")\n"
-           "    target_compile_definitions(" + target_name + " PRIVATE\n"
-           "      KATANA_PORT_PGO_PROFILE_SHA256_NAME=\\\"${KATANA_PORT_PGO_PROFILE_EXPECTED_SHA256}\\\")\n"
            "  endif()\n"
            "  foreach(KATANA_PORT_OPT_TARGET IN LISTS KATANA_PORT_OPTIMIZATION_TARGETS)\n"
            "    target_compile_options(\"${KATANA_PORT_OPT_TARGET}\" PRIVATE\n"
            "      \"${KATANA_PORT_PGO_COMPILE_OPTION}\")\n"
+           "    if(KATANA_PORT_PGO_MODE STREQUAL \"use\")\n"
+           "      target_compile_definitions(\"${KATANA_PORT_OPT_TARGET}\" PRIVATE\n"
+           "        KATANA_PORT_PGO_PROFILE_SHA256_NAME=\\\"${KATANA_PORT_PGO_PROFILE_EXPECTED_SHA256}\\\")\n"
+           "    endif()\n"
            "  endforeach()\n"
-           "  target_link_options(" + target_name + " PRIVATE\n"
-           "    \"${KATANA_PORT_PGO_LINK_OPTION}\")\n"
+           "  if(KATANA_PORT_PGO_MODE STREQUAL \"generate\")\n"
+           "    target_link_libraries(" + target_name + " PRIVATE\n"
+           "      \"${KATANA_PORT_PGO_RUNTIME}\")\n"
+           "  endif()\n"
            "endif()\n";
 }
 
