@@ -3048,11 +3048,27 @@ void Memory::refresh_direct_linear_access_state() noexcept {
 
     const bool common =
         direct_linear_backing_ != nullptr && direct_linear_bytes_ != nullptr &&
-        direct_linear_physical_span_ != 0u && lookup_mode_ == MemoryLookupMode::Indexed &&
-        !access_observers_active() && !guest_memory_access_sink_;
-    direct_linear_reads_enabled_ = common;
+        direct_linear_physical_span_ != 0u &&
+        lookup_mode_ == MemoryLookupMode::Indexed &&
+        !guest_memory_access_sink_;
+    // Read and write observation are independent contracts. A write-only
+    // diagnostic watchpoint must retire raw/staged writes so it sees every
+    // store, but it cannot invalidate an immutable direct read used by
+    // runtime-image identity validation. Likewise, a read-only watchpoint
+    // does not make prevalidated writes unobservable.
+    const auto observes = [this](const MemoryAccessOperation operation) {
+        return static_cast<bool>(trace_handler_) ||
+               std::any_of(watchpoints_.begin(), watchpoints_.end(),
+                           [operation](const Watchpoint& watchpoint) {
+                               return watchpoint_accepts(watchpoint.access,
+                                                         operation);
+                           });
+    };
+    direct_linear_reads_enabled_ =
+        common && !observes(MemoryAccessOperation::Read);
     direct_linear_writes_enabled_ =
-        common && guest_write_observer_allows_prevalidated_linear_writes();
+        common && !observes(MemoryAccessOperation::Write) &&
+        guest_write_observer_allows_prevalidated_linear_writes();
 }
 
 const Memory::MappedRegion& Memory::resolve_writable(const std::uint32_t address,

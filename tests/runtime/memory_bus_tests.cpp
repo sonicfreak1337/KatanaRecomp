@@ -415,10 +415,24 @@ int main(const int argc, const char* const* argv) {
             4u,
             katana::runtime::MemoryWatchpointAccess::Write,
             [](const auto&) {});
-        require(!direct.begin_direct_linear_write_batch(),
-                "Watchpoint laesst Direct-RAM-Batching zu.");
+        require(direct.direct_linear_memory_guard(false) &&
+                    !direct.begin_direct_linear_write_batch(),
+                "Write-Watchpoint sperrt direkte Reads oder laesst "
+                "Direct-RAM-Batching zu.");
         require(direct.remove_watchpoint(watchpoint),
                 "Batch-Admissionstest kann Watchpoint nicht entfernen.");
+
+        const auto read_watchpoint = direct.add_watchpoint(
+            base,
+            4u,
+            katana::runtime::MemoryWatchpointAccess::Read,
+            [](const auto&) {});
+        require(!direct.direct_linear_memory_guard(false) &&
+                    direct.begin_direct_linear_write_batch(),
+                "Read-Watchpoint laesst direkte Reads zu oder sperrt "
+                "unbeobachtete Direct-RAM-Writes.");
+        require(direct.remove_watchpoint(read_watchpoint),
+                "Batch-Admissionstest kann Read-Watchpoint nicht entfernen.");
 
         std::size_t sink_events = 0u;
         direct.set_guest_memory_access_sink(
