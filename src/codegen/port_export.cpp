@@ -17962,6 +17962,14 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             }
             return false;
         };
+    const auto compile_time_static_immutable_instruction =
+        [&](const std::uint32_t address) {
+            return !latent_source_instruction(address) &&
+                   !runtime_image_source_instruction(address) &&
+                   !executable_hook_physical_addresses.contains(
+                       projected_physical_instruction(address)) &&
+                   !runtime_destination_instruction(address);
+        };
     const auto append_executable_instruction =
         [&](const std::uint32_t address) {
             // Synthetic latent-module addresses do not name live product RAM.
@@ -18691,16 +18699,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                          << symbol(blocks[index].address) << "u, &fn_"
                          << symbol(blocks[index].owner)
                          << "_runtime_entry, "
-                         << (!latent_source_instruction(
-                                  blocks[index].address) &&
-                                     !runtime_image_source_instruction(
-                                         blocks[index].address) &&
-                                     !executable_hook_physical_addresses
-                                          .contains(
-                                              projected_physical_instruction(
-                                                  blocks[index].address)) &&
-                                     !runtime_destination_instruction(
-                                         blocks[index].address)
+                         << (compile_time_static_immutable_instruction(
+                                 blocks[index].address)
                                  ? "true"
                                  : "false")
                          << "});\n";
@@ -39159,6 +39159,139 @@ static PortExportResult export_dreamcast_port_project_impl(
             return runtime_image_architectural_boundaries.contains(address) ||
                    composite_callback_architectural_boundaries.contains(address);
         };
+    const auto projected_primary_physical_instruction =
+        [&](const std::uint32_t address) {
+            auto runtime_address = address;
+            for (const auto& alias : prepared.image.address_aliases()) {
+                const auto begin =
+                    static_cast<std::uint64_t>(alias.source_start);
+                const auto end = begin + alias.size;
+                if (address < begin ||
+                    static_cast<std::uint64_t>(address) + 2u > end)
+                    continue;
+                runtime_address = alias.runtime_start +
+                    (address - alias.source_start);
+                break;
+            }
+            return katana::runtime::canonical_physical_address(
+                runtime_address);
+        };
+    std::unordered_set<std::uint32_t>
+        executable_hook_physical_instructions;
+    executable_hook_physical_instructions.reserve(
+        external_hook_entries.size() * 2u);
+    for (const auto entry : external_hook_entries)
+        executable_hook_physical_instructions.insert(
+            katana::runtime::canonical_physical_address(entry));
+    if (native_port_definition != nullptr) {
+        for (const auto& hook : native_port_definition->hooks) {
+            if (!katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
+                continue;
+            if ((hook.guest_address & 1u) != 0u ||
+                hook.covered_size == 0u ||
+                (hook.covered_size & 1u) != 0u ||
+                static_cast<std::uint64_t>(hook.guest_address) +
+                        hook.covered_size >
+                    0x1'0000'0000ull)
+                throw std::runtime_error(
+                    "Native executable hook has an invalid instruction "
+                    "range during partition emission.");
+            for (std::uint32_t offset = 0u;
+                 offset < hook.covered_size; offset += 2u)
+                executable_hook_physical_instructions.insert(
+                    katana::runtime::canonical_physical_address(
+                        hook.guest_address + offset));
+        }
+    }
+    const auto latent_source_instruction =
+        [&](const std::uint32_t address) {
+            return std::any_of(
+                latent_aot.modules.begin(), latent_aot.modules.end(),
+                [&](const auto& module) {
+                    return address >= module.source_address &&
+                           static_cast<std::uint64_t>(address) + 2u <=
+                               static_cast<std::uint64_t>(
+                                   module.source_address) +
+                                   module.byte_size;
+                });
+        };
+    const auto checkpoint_runtime_image_selected =
+        [&](const katana::runtime::GameProjectRuntimeImage& image) {
+            return native_port_definition != nullptr &&
+                   std::find(
+                       native_port_definition
+                           ->checkpoint_runtime_image_ids.begin(),
+                       native_port_definition
+                           ->checkpoint_runtime_image_ids.end(),
+                       image.image_id) !=
+                       native_port_definition
+                           ->checkpoint_runtime_image_ids.end();
+        };
+    const auto checkpoint_runtime_image_source_instruction =
+        [&](const std::uint32_t address) {
+            return options.game_project != nullptr &&
+                   std::any_of(
+                       options.game_project->runtime_images.begin(),
+                       options.game_project->runtime_images.end(),
+                       [&](const auto& image) {
+                           return checkpoint_runtime_image_selected(image) &&
+                                  address >= image.source_start &&
+                                  static_cast<std::uint64_t>(address) + 2u <=
+                                      static_cast<std::uint64_t>(
+                                          image.source_start) +
+                                          image.byte_size;
+                       });
+        };
+    const auto runtime_destination_instruction =
+        [&](const std::uint32_t address) {
+            const auto physical =
+                projected_primary_physical_instruction(address);
+            const auto contains =
+                [&](const std::uint32_t runtime_start,
+                    const std::uint64_t byte_size) {
+                    if (runtime_start == 0u || byte_size == 0u)
+                        return false;
+                    const auto begin = static_cast<std::uint64_t>(
+                        katana::runtime::canonical_physical_address(
+                            runtime_start));
+                    return physical >= begin &&
+                           static_cast<std::uint64_t>(physical) + 2u <=
+                               begin + byte_size;
+                };
+            if (options.game_project != nullptr &&
+                std::any_of(
+                    options.game_project->runtime_images.begin(),
+                    options.game_project->runtime_images.end(),
+                    [&](const auto& image) {
+                        return checkpoint_runtime_image_selected(image) &&
+                               contains(image.runtime_start,
+                                        image.byte_size);
+                    }))
+                return true;
+            for (const auto& hint : options.latent_aot_entry_hints) {
+                if (hint.proven_runtime_base == 0u) continue;
+                const auto module = std::find_if(
+                    latent_aot.modules.begin(), latent_aot.modules.end(),
+                    [&](const auto& candidate) {
+                        return candidate.byte_identity ==
+                               hint.byte_identity;
+                    });
+                if (module != latent_aot.modules.end() &&
+                    contains(hint.proven_runtime_base,
+                             module->byte_size))
+                    return true;
+            }
+            return false;
+        };
+    const auto compile_time_static_immutable_instruction =
+        [&](const std::uint32_t address) {
+            return !latent_source_instruction(address) &&
+                   !checkpoint_runtime_image_source_instruction(address) &&
+                   !executable_hook_physical_instructions.contains(
+                       projected_primary_physical_instruction(address)) &&
+                   !runtime_destination_instruction(address);
+        };
 
     // Runtime-only analysis candidates are not promoted to static CFG edges:
     // writable callback slots remain authoritative. A singleton candidate can
@@ -39329,6 +39462,8 @@ static PortExportResult export_dreamcast_port_project_impl(
         std::vector<std::uint32_t> partition_closure_probe_callsites;
         std::vector<std::uint32_t>
             partition_native_bringup_dispatch_callsites;
+        std::vector<std::uint32_t>
+            partition_compile_time_static_immutable_entries;
         const auto append_native_block_owner = [&](const std::uint32_t target) {
             const auto owner = emitted_block_owners.find(target);
             if (owner == emitted_block_owners.end()) return;
@@ -39347,6 +39482,13 @@ static PortExportResult export_dreamcast_port_project_impl(
                     external_callees.push_back(callee);
             }
             for (const auto& block : function.blocks) {
+                if (native_product_export &&
+                    compile_time_static_immutable_instruction(
+                        block.start_address) &&
+                    !is_generated_architectural_boundary(
+                        block.start_address))
+                    partition_compile_time_static_immutable_entries.push_back(
+                        block.start_address);
                 if (external_hook_entries.contains(block.start_address) ||
                     is_generated_architectural_boundary(
                         block.start_address))
@@ -39475,6 +39617,14 @@ static PortExportResult export_dreamcast_port_project_impl(
             std::unique(partition_native_bringup_dispatch_callsites.begin(),
                         partition_native_bringup_dispatch_callsites.end()),
             partition_native_bringup_dispatch_callsites.end());
+        std::sort(
+            partition_compile_time_static_immutable_entries.begin(),
+            partition_compile_time_static_immutable_entries.end());
+        partition_compile_time_static_immutable_entries.erase(
+            std::unique(
+                partition_compile_time_static_immutable_entries.begin(),
+                partition_compile_time_static_immutable_entries.end()),
+            partition_compile_time_static_immutable_entries.end());
         const auto contains_program_entry = std::any_of(
             functions.begin(),
             functions.end(),
@@ -39501,6 +39651,10 @@ static PortExportResult export_dreamcast_port_project_impl(
              partition_native_bringup_dispatch_callsites)
             partition_linkage_identity << "native-bringup-dispatch="
                                        << callsite << ';';
+        for (const auto entry :
+             partition_compile_time_static_immutable_entries)
+            partition_linkage_identity << "compile-time-static="
+                                       << entry << ';';
         const bool native_bringup_dispatch_validation =
             !partition_native_bringup_dispatch_callsites.empty();
         // NativeBringup inserts a product-ineligible preflight before eligible
@@ -39570,6 +39724,8 @@ static PortExportResult export_dreamcast_port_project_impl(
             partition_closure_probe_callsites;
         request.native_bringup_dispatch_callsites =
             partition_native_bringup_dispatch_callsites;
+        request.compile_time_static_immutable_entries =
+            partition_compile_time_static_immutable_entries;
         auto content = emit_cpp_port_translation_unit(request).joined_text();
         if (partition_cache) {
             if (content.size() <=

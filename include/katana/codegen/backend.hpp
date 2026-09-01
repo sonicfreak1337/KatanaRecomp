@@ -120,6 +120,12 @@ struct BackendRequest {
     // the sealed NativeBringup allowlist. Keep extension fields at the end so
     // the offsets of the ABI-25 request fields remain stable.
     std::span<const std::uint32_t> native_bringup_dispatch_callsites;
+    // Exact block entries whose primary-image bytes and ownership can never
+    // be replaced by hooks, runtime images or generation-bound loaded AOT.
+    // The C++ backend may directly chain only forward, same-owner edges for
+    // which both source and target occur in this set. Backedges deliberately
+    // retain the runtime boundary check.
+    std::span<const std::uint32_t> compile_time_static_immutable_entries;
 };
 
 struct BackendEmission {

@@ -1654,10 +1654,14 @@ int run_test(const int argc, char* argv[]) {
             explicit_static_dispatch_shards.find(
                 "entries.push_back({0x89000000u, "
                 "&fn_89000000_runtime_entry, false})") !=
+                std::string::npos &&
+            explicit_static_dispatch_shards.find(
+                "entries.push_back({0x8C010006u, "
+                "&fn_8C010000_runtime_entry, true})") !=
                 std::string::npos,
         "Expliziter identity-bound StaticEntry wird nicht materialisiert "
-        "oder descriptive/RuntimeImage-Entry wurde implizit zum statischen "
-        "Chain-Root.");
+        "oder Hook-/RuntimeImage- und statischer Chain-Root werden nicht "
+        "getrennt klassifiziert.");
 
     auto proven_unknown_image = stored_unknown_image;
     proven_unknown_image.add_entry_point(stored_unknown_candidate);
@@ -6453,12 +6457,14 @@ int run_test(const int argc, char* argv[]) {
         for (const auto& block : function.blocks) {
             if (std::find(block.successors.begin(),
                           block.successors.end(),
-                          runtime_only_block->start_address) != block.successors.end())
+                          runtime_only_block->start_address) != block.successors.end() &&
+                block.start_address < runtime_only_block->start_address)
                 runtime_only_predecessor = &block;
         }
     }
     require(runtime_only_predecessor != nullptr,
-            "Runtime-only-Fixture besitzt keinen statisch chainbaren Vorgaengerblock.");
+            "Runtime-only-Fixture besitzt keinen statisch und vorwaerts "
+            "chainbaren Vorgaengerblock.");
     const auto runtime_only_output = fixture.root / "runtime-only-port";
     static_cast<void>(export_dreamcast_port_project({guarded_image,
                                                      runtime_only_analysis,
@@ -6484,8 +6490,7 @@ int run_test(const int argc, char* argv[]) {
     const auto predecessor_label =
         runtime_only_text.find("katana_block_" + predecessor_symbol + ":");
     const auto local_chain = runtime_only_text.find(
-        "services->can_chain_executable_block(cpu.pc)) goto katana_block_" +
-            block_symbol,
+        "goto katana_block_" + block_symbol,
         predecessor_label);
     const auto runtime_only_label =
         runtime_only_text.find("katana_block_" + block_symbol + ":", local_chain);
@@ -6498,6 +6503,9 @@ int run_test(const int argc, char* argv[]) {
     require(runtime_only_text.find("runtime_only_jump") != std::string::npos &&
                 predecessor_label != std::string::npos &&
                 local_chain != std::string::npos &&
+                runtime_only_text.find(
+                    "services->can_chain_executable_block(cpu.pc)",
+                    predecessor_label) < local_chain &&
                 runtime_only_label != std::string::npos &&
                 runtime_only_source != std::string::npos &&
                 runtime_only_class != std::string::npos &&

@@ -3467,6 +3467,7 @@ void emit_block_transition(std::ostringstream& output,
                            const bool single_block,
                            const bool guarded_local_block_chaining,
                            const std::optional<std::uint32_t> local_target,
+                           const bool compile_time_static_forward_edge,
                            const bool native_internal_block_labels,
                            const bool uses_proven_linear_ram,
                            const NativeRegisterEmission& registers) {
@@ -3492,9 +3493,9 @@ void emit_block_transition(std::ostringstream& output,
         // invalidate the function-scoped RAM guard. Calls and multi-block completions retain
         // their explicit revalidation/refresh below.
         emit_indent(output, indent);
-        output << "if (services != nullptr && "
-                  "services->can_chain_executable_block(cpu.pc)";
-        output << ") ";
+        if (!compile_time_static_forward_edge)
+            output << "if (services != nullptr && "
+                      "services->can_chain_executable_block(cpu.pc)) ";
         if (native_internal_block_labels) {
             output << "goto " << cpp_block_label(*local_target) << ";\n";
         } else {
@@ -3513,6 +3514,8 @@ void emit_conditional_block_transition(std::ostringstream& output,
                                        const std::uint32_t fallthrough_target,
                                        const bool branch_target_local,
                                        const bool fallthrough_target_local,
+                                       const bool branch_is_static_forward,
+                                       const bool fallthrough_is_static_forward,
                                        const std::optional<std::uint32_t> branch_target_owner,
                                        const std::optional<std::uint32_t> fallthrough_target_owner,
                                        const bool native_internal_block_labels,
@@ -3525,6 +3528,7 @@ void emit_conditional_block_transition(std::ostringstream& output,
                               single_block,
                               guarded_local_block_chaining,
                               std::nullopt,
+                              false,
                               false,
                               uses_proven_linear_ram,
                               registers);
@@ -3574,9 +3578,11 @@ void emit_conditional_block_transition(std::ostringstream& output,
     output << "if (take_branch) {\n";
     if (branch_target_local) {
         emit_indent(output, indent + 1);
-        output << "if (services != nullptr && "
-                  "services->can_chain_executable_block(cpu.pc))\n";
-        emit_indent(output, indent + 2);
+        if (!branch_is_static_forward) {
+            output << "if (services != nullptr && "
+                      "services->can_chain_executable_block(cpu.pc))\n";
+            emit_indent(output, indent + 2);
+        }
         output << "goto " << cpp_block_label(branch_target) << ";\n";
     } else if (branch_target_owner.has_value()) {
         emit_native_owner_transfer(output,
@@ -3591,9 +3597,11 @@ void emit_conditional_block_transition(std::ostringstream& output,
     output << "}\n";
     if (fallthrough_target_local) {
         emit_indent(output, indent);
-        output << "if (services != nullptr && "
-                  "services->can_chain_executable_block(cpu.pc))\n";
-        emit_indent(output, indent + 1);
+        if (!fallthrough_is_static_forward) {
+            output << "if (services != nullptr && "
+                      "services->can_chain_executable_block(cpu.pc))\n";
+            emit_indent(output, indent + 1);
+        }
         output << "goto " << cpp_block_label(fallthrough_target) << ";\n";
     } else if (fallthrough_target_owner.has_value()) {
         emit_native_owner_transfer(output,
@@ -3617,6 +3625,8 @@ void emit_terminal(std::ostringstream& output,
                    const std::unordered_set<std::uint32_t>& current_blocks,
                    const std::unordered_set<std::uint32_t>&
                        architectural_boundary_entries,
+                   const std::unordered_set<std::uint32_t>&
+                       compile_time_static_immutable_entries,
                    const int indent,
                    const bool single_block,
                    const bool guarded_local_block_chaining,
@@ -3632,6 +3642,12 @@ void emit_terminal(std::ostringstream& output,
     using Operation = katana::ir::Operation;
 
     const auto& instruction = block.instructions[control_index];
+    const auto is_static_forward_edge = [&](const std::uint32_t target) {
+        return block.start_address < target &&
+               compile_time_static_immutable_entries.contains(
+                   block.start_address) &&
+               compile_time_static_immutable_entries.contains(target);
+    };
     if (instruction.dynamic_target_class ==
             katana::ir::DynamicTargetClass::GuardedComplete &&
         instruction.resolved_targets.empty())
@@ -3775,6 +3791,9 @@ void emit_terminal(std::ostringstream& output,
                                   branch_target_local
                                       ? instruction.target_address
                                       : std::nullopt,
+                                  branch_target_local &&
+                                      is_static_forward_edge(
+                                          *instruction.target_address),
                                   native_internal_block_labels,
                                   uses_proven_linear_ram,
                                   registers);
@@ -3969,6 +3988,8 @@ void emit_terminal(std::ostringstream& output,
             fallthrough_address(instruction),
             current_blocks.contains(*instruction.target_address),
             current_blocks.contains(fallthrough_address(instruction)),
+            is_static_forward_edge(*instruction.target_address),
+            is_static_forward_edge(fallthrough_address(instruction)),
             native_owner_for_target(*instruction.target_address,
                                     known_functions,
                                     native_block_owner_entries),
@@ -4036,6 +4057,7 @@ void emit_terminal(std::ostringstream& output,
                                           single_block,
                                           guarded_local_block_chaining,
                                           target,
+                                          false,
                                           native_internal_block_labels,
                                           uses_proven_linear_ram,
                                           registers);
@@ -4101,6 +4123,7 @@ void emit_terminal(std::ostringstream& output,
                                       single_block,
                                       guarded_local_block_chaining,
                                       target,
+                                      false,
                                       native_internal_block_labels,
                                       uses_proven_linear_ram,
                                       registers);
@@ -5098,6 +5121,8 @@ void emit_block(std::ostringstream& output,
                 const std::unordered_set<std::uint32_t>& current_blocks,
                 const std::unordered_set<std::uint32_t>&
                     architectural_boundary_entries,
+                const std::unordered_set<std::uint32_t>&
+                    compile_time_static_immutable_entries,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
                 const bool native_internal_block_labels,
@@ -5380,6 +5405,7 @@ void emit_block(std::ostringstream& output,
                       native_block_owner_entries,
                       current_blocks,
                       architectural_boundary_entries,
+                      compile_time_static_immutable_entries,
                       4,
                       single_block,
                       guarded_local_block_chaining,
@@ -5427,6 +5453,12 @@ void emit_block(std::ostringstream& output,
                                   successor_local
                                       ? std::optional{successor}
                                       : std::nullopt,
+                                  successor_local &&
+                                      block.start_address < successor &&
+                                      compile_time_static_immutable_entries
+                                          .contains(block.start_address) &&
+                                      compile_time_static_immutable_entries
+                                          .contains(successor),
                                   native_internal_block_labels,
                                   uses_proven_linear_ram,
                                   registers);
@@ -5575,6 +5607,27 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             throw std::invalid_argument(
                 "Architekturgrenze besitzt keinen emittierten AOT-Entry.");
         known_functions.erase(boundary);
+    }
+    if (!request.compile_time_static_immutable_entries.empty() &&
+        (request.runtime_binding != BackendRuntimeBinding::NativePort ||
+         !request.single_block_execution ||
+         !request.guarded_local_block_chaining))
+        throw std::invalid_argument(
+            "Compile-time-static AOT entries require guarded native-product "
+            "single-block emission.");
+    std::unordered_set<std::uint32_t>
+        compile_time_static_immutable_entries;
+    compile_time_static_immutable_entries.reserve(
+        request.compile_time_static_immutable_entries.size());
+    for (const auto entry :
+         request.compile_time_static_immutable_entries) {
+        if ((entry & 1u) != 0u ||
+            architectural_boundary_entries.contains(entry) ||
+            !emitted_block_entries.contains(entry) ||
+            !compile_time_static_immutable_entries.insert(entry).second)
+            throw std::invalid_argument(
+                "Compile-time-static AOT entry is not a unique emitted "
+                "non-boundary block.");
     }
     auto native_resume_entries = std::move(emitted_internal_resume_entries);
     std::unordered_map<std::uint32_t, std::uint32_t> guarded_native_call_targets;
@@ -6165,6 +6218,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        native_block_owner_entries,
                        current_blocks,
                        architectural_boundary_entries,
+                       compile_time_static_immutable_entries,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,
                        native_internal_block_labels,

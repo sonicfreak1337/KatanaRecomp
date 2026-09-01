@@ -325,6 +325,43 @@ int main() {
             "Mehrblock-Chaining, keinen Attempt/Retire-Guard oder keine konservative "
             "Registerlokalisierung.");
 
+    const std::array compile_time_static_entries{
+        0x8C010000u, 0x8C010002u, 0x8C010006u};
+    auto compile_time_static_request = local_chain_request;
+    compile_time_static_request.emit_run_functions = false;
+    compile_time_static_request.runtime_binding =
+        katana::codegen::BackendRuntimeBinding::NativePort;
+    compile_time_static_request.compile_time_static_immutable_entries =
+        compile_time_static_entries;
+    const auto compile_time_static_source =
+        local_chain_backend.emit(compile_time_static_request).joined_text();
+    const auto static_first_label = compile_time_static_source.find(
+        "katana_block_8C010000:");
+    const auto static_second_label = compile_time_static_source.find(
+        "katana_block_8C010002:", static_first_label);
+    const auto static_forward_goto = compile_time_static_source.find(
+        "goto katana_block_8C010002;", static_first_label);
+    const auto first_static_guard = compile_time_static_source.find(
+        "services->can_chain_executable_block(cpu.pc)",
+        static_first_label);
+    const auto guarded_backedge = compile_time_static_source.find(
+        "services->can_chain_executable_block(cpu.pc)",
+        static_second_label);
+    const auto backedge_goto = compile_time_static_source.find(
+        "goto katana_block_8C010002;", static_second_label);
+    require(static_first_label != std::string::npos &&
+                static_second_label != std::string::npos &&
+                static_forward_goto != std::string::npos &&
+                static_first_label < static_forward_goto &&
+                static_forward_goto < static_second_label &&
+                (first_static_guard == std::string::npos ||
+                 first_static_guard > static_forward_goto) &&
+                guarded_backedge != std::string::npos &&
+                backedge_goto != std::string::npos &&
+                guarded_backedge < backedge_goto,
+            "Compile-time-static AOT entfernt den Laufzeitcheck nicht von "
+            "der Vorwaertskante oder schwächt die Rueckkantengrenze.");
+
     katana::codegen::BackendRequest native_call_request{program, 0x8C010000u};
     native_call_request.single_block_execution = true;
     native_call_request.guarded_local_block_chaining = true;
