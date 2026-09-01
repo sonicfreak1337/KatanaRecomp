@@ -48,17 +48,11 @@ constexpr std::uint32_t maximum_native_frame_rate_hz = 1'000u;
 constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000u;
 constexpr std::uint32_t minimum_dynamic_vertex_buffer_bytes = 1u << 20u;
 constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
-constexpr std::uint32_t type_two_maximum_fragments_per_pixel = 16u;
+// Match the bounded per-pixel OIT depth used by the validated Flycast oracle
+// profile.  Sixteen is insufficient for Sonic Adventure's Character Select
+// model, whose overlapping translucent strips legitimately exceed that depth.
+constexpr std::uint32_t type_two_maximum_fragments_per_pixel = 32u;
 constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
-
-[[nodiscard]] constexpr bool type_two_status_within_bounds(
-    const std::uint32_t fragment_count,
-    const std::uint32_t maximum_fragments_per_pixel,
-    const std::uint32_t allocator_capacity) noexcept {
-    return fragment_count <= allocator_capacity &&
-           maximum_fragments_per_pixel <=
-               type_two_maximum_fragments_per_pixel;
-}
 
 [[nodiscard]] constexpr std::uint64_t mix_graphics_digest(
     std::uint64_t digest,
@@ -191,6 +185,14 @@ template <std::size_t Size>
            valid_blend_factor(blend.destination_alpha) &&
            valid_blend_operation(blend.alpha_operation) &&
            (blend.color_write_mask & 0xF0u) == 0u;
+}
+
+[[nodiscard]] constexpr std::uint32_t pack_type2_blend_factors(
+    const NativePortBlendState& blend) noexcept {
+    return static_cast<std::uint32_t>(blend.source_color) |
+           (static_cast<std::uint32_t>(blend.destination_color) << 8u) |
+           (static_cast<std::uint32_t>(blend.source_alpha) << 16u) |
+           (static_cast<std::uint32_t>(blend.destination_alpha) << 24u);
 }
 
 [[nodiscard]] bool valid_compare(
@@ -669,25 +671,14 @@ template <std::size_t Size>
             return false;
         if (packet.translucency ==
             NativePortTranslucencyPolicy::Type2AutoSorted) {
-            // The first executable Type-2 contract deliberately supports only
-            // the PVR source-alpha-over destination-alpha family.  Keeping
-            // every other blend equation out of the gather/resolve pass is
-            // correctness-critical: the resolve shader must not guess a
-            // generic fixed-function blend operation.
-            return packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
-                   packet.depth.test_enabled &&
-                   !packet.depth.write_enabled &&
+            // PVR Type-2 stores the fixed-function blend factors with each
+            // fragment and applies them after per-pixel depth sorting.  The
+            // native resolver implements every public factor, but keeps the
+            // operation and write-mask contract deliberately narrow.
+            return packet.depth.test_enabled &&
                    packet.depth.compare ==
                        NativePortCompareOperation::GreaterEqual &&
                    reciprocal_depth_mode(packet.depth_mapping.mode) &&
-                   packet.blend.source_color ==
-                       NativePortBlendFactor::SourceAlpha &&
-                   packet.blend.destination_color ==
-                       NativePortBlendFactor::InverseSourceAlpha &&
-                   packet.blend.source_alpha ==
-                       NativePortBlendFactor::SourceAlpha &&
-                   packet.blend.destination_alpha ==
-                       NativePortBlendFactor::InverseSourceAlpha &&
                    packet.blend.color_operation ==
                        NativePortBlendOperation::Add &&
                    packet.blend.alpha_operation ==
@@ -1628,13 +1619,12 @@ class NativePortGraphicsBackend final {
         require_owner_thread();
         const bool type2 = packet.translucency ==
             NativePortTranslucencyPolicy::Type2AutoSorted;
-        // The first non-Type-2 phase after a Scene3D list is its explicit
-        // scene boundary. A second translucent policy in the same batch is
-        // forbidden: two independently resolved runs are not equivalent to
-        // one PVR Type-2 list.
+        // A fixed-function pass identity owns one complete translucent list,
+        // even when several host semantic batches contribute to it. A second
+        // policy under that identity would create independently resolved runs
+        // and is therefore not equivalent to the PVR list.
         if (!type2 &&
             packet.draw_class == NativePortDrawClass::Translucent &&
-            packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
             type2_closed_batch_valid_ &&
             packet.batch.identity == type2_closed_batch_identity_) {
             try {
@@ -1647,16 +1637,13 @@ class NativePortGraphicsBackend final {
             }
         }
         if (type2 && type2_subpass_active_ &&
-            (packet.batch.identity != type2_batch_identity_ ||
-             packet.batch.semantic != NativePortDrawBatchClass::Scene3D)) {
-            // A new identity is an explicit scene boundary. Resolve the
-            // previous Type-2 list before admitting the next one; the normal
-            // batch-order validator still proves that the identity advances.
+            packet.batch.identity != type2_batch_identity_) {
+            // A new authenticated pass identity is an explicit list boundary.
+            // Resolve the previous Type-2 list before admitting the next one.
             flush_type2_translucency();
         }
         if (!type2 && type2_subpass_active_) {
             if (packet.batch.identity == type2_batch_identity_ &&
-                packet.batch.semantic == NativePortDrawBatchClass::Scene3D &&
                 packet.draw_class == NativePortDrawClass::Translucent) {
                 try {
                     fail(NativePortGraphicsFailure::InvalidDraw,
@@ -1689,8 +1676,7 @@ class NativePortGraphicsBackend final {
         if (type2_gather) {
             validate_type2_scene_admission(packet);
             if (!type2_subpass_active_) begin_type2_subpass(packet);
-        } else if (packet.draw_class == NativePortDrawClass::Translucent &&
-                   packet.batch.semantic == NativePortDrawBatchClass::Scene3D) {
+        } else if (packet.draw_class == NativePortDrawClass::Translucent) {
             type2_non_type2_batch_valid_ = true;
             type2_non_type2_batch_identity_ = packet.batch.identity;
         }
@@ -1904,11 +1890,10 @@ class NativePortGraphicsBackend final {
             static_cast<std::uint32_t>(packet.fog.mode),
             alpha_test_flags};
         if (type2_gather) {
-            // The Type-2 resolve is restricted to the validated
-            // SourceAlpha/InverseSourceAlpha/Add/full-mask family, so the
-            // gather only needs the stable packet order and allocator cap.
+            // Type-2 blending is performed only after per-pixel sorting, so
+            // the capture must preserve the exact factors of this packet.
             constants.type_two_parameters = {
-                0u,
+                pack_type2_blend_factors(packet.blend),
                 0u,
                 packet.batch.submission_order,
                 config_.maximum_type2_fragment_nodes};
@@ -1963,12 +1948,20 @@ class NativePortGraphicsBackend final {
                 nullptr);
         set_viewport(viewport_rect);
 
-        // Type-2 capture uses the same hardware DSV GEQUAL/no-write state as
-        // the validated translucent packet. The color target is redirected
-        // to the PPLL UAVs while the DSV remains authoritative for
-        // opaque/punch visibility.
+        // Type-2 capture must not mutate the depth buffer while the list is
+        // being gathered.  The PVR/Flycast per-pixel path publishes every
+        // fragment that passes the completed opaque/punch front depth and
+        // only then orders the complete list.  Honouring a polygon's Z write
+        // directly in submission order makes a nearer transparent UI quad
+        // reject a later, farther quad before the resolver can see it.  That
+        // produces rectangular holes behind transparent texels (Character
+        // Select's Play Select, name and percentage layers).  Preserve the
+        // packet's GEQUAL test against opaque/punch depth, but defer all
+        // translucent ordering to the PPLL resolver.
         auto* const blend = resolve_blend_state(packet.blend);
-        auto* const depth = resolve_depth_state(packet.depth);
+        auto effective_depth_state = packet.depth;
+        if (type2_gather) effective_depth_state.write_enabled = false;
+        auto* const depth = resolve_depth_state(effective_depth_state);
         auto host_rasterizer = packet.rasterizer;
         // Flat-last-vertex and small-triangle semantics were resolved by the
         // bounded vertex preprocessing above. They do not create distinct
@@ -2187,12 +2180,15 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::UnsupportedHost,
                  0u,
                  "type2-ppll-feature-level");
-        if (packet.batch.semantic != NativePortDrawBatchClass::Scene3D ||
-            packet.viewport != NativePortViewportTarget::Game ||
-            packet.draw_class != NativePortDrawClass::Translucent)
+        // PVR Type-2 ordering belongs to the complete translucent list, not
+        // to a host semantic batch or viewport. Character Select contributes
+        // both its 3D model and reciprocal-screen UI to the same per-pixel
+        // list. Semantic/viewport compatibility is already proved by the
+        // ordinary packet validators.
+        if (packet.draw_class != NativePortDrawClass::Translucent)
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
-                 "type2-scene-contract");
+                 "type2-list-contract");
         if (type2_closed_batch_valid_ &&
             packet.batch.identity == type2_closed_batch_identity_)
             fail(NativePortGraphicsFailure::InvalidDraw,
@@ -2242,6 +2238,44 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result),
                  "type2-base-view");
+
+        // A pixel shader with UAV side effects is not guaranteed to run only
+        // after the ordinary DSV test.  Preserve the completed opaque/punch
+        // depth in a separate shader-readable texture so the Type-2 gather
+        // can reject hidden fragments before publishing a PPLL node.  This is
+        // the native equivalent of the PVR OIT front-depth test; it is not a
+        // second rendering pass or a guest-side emulation path.
+        D3D11_TEXTURE2D_DESC depth_copy_description{};
+        depth_copy_description.Width = width;
+        depth_copy_description.Height = height;
+        depth_copy_description.MipLevels = 1u;
+        depth_copy_description.ArraySize = 1u;
+        depth_copy_description.Format = DXGI_FORMAT_R24G8_TYPELESS;
+        depth_copy_description.SampleDesc.Count = 1u;
+        depth_copy_description.Usage = D3D11_USAGE_DEFAULT;
+        depth_copy_description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        result = device_->CreateTexture2D(
+            &depth_copy_description,
+            nullptr,
+            type_two_depth_texture_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-depth-texture");
+        D3D11_SHADER_RESOURCE_VIEW_DESC depth_copy_view_description{};
+        depth_copy_view_description.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        depth_copy_view_description.ViewDimension =
+            D3D11_SRV_DIMENSION_TEXTURE2D;
+        depth_copy_view_description.Texture2D.MostDetailedMip = 0u;
+        depth_copy_view_description.Texture2D.MipLevels = 1u;
+        result = device_->CreateShaderResourceView(
+            type_two_depth_texture_.Get(),
+            &depth_copy_view_description,
+            type_two_depth_view_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "type2-depth-view");
 
         const auto create_uint_texture = [&](ComPtr<ID3D11Texture2D>& texture,
                                              ComPtr<ID3D11ShaderResourceView>*
@@ -2386,20 +2420,24 @@ class NativePortGraphicsBackend final {
 
     void begin_type2_subpass(const NativePortDrawPacket& packet) {
         ensure_type2_resources();
-        // Preserve the opaque/punch result as the resolve destination before
-        // unbinding the render target.  Type-2 gathers never touch scene depth
-        // or the color target directly.
+        // Preserve the opaque/punch color and depth before publishing any
+        // Type-2 nodes.  The copied depth is sampled manually in the gather
+        // shader because D3D11 does not order UAV side effects after the DSV
+        // test unless early depth is used, while our logarithmic SV_Depth is a
+        // pixel-stage value and cannot use that shortcut.
         context_->OMSetRenderTargets(0u, nullptr, nullptr);
-        context_->CopyResource(type_two_base_texture_.Get(),
-                               render_texture_.Get());
-        // Resolve binds Type-2 resources through t1..t4. Clear the complete
-        // range before rebinding the same textures as UAVs on a later scene;
-        // leaving t2/t3/t4 live would rely on implicit hazard unbinding.
-        std::array<ID3D11ShaderResourceView*, 5u> no_resources{};
+        std::array<ID3D11ShaderResourceView*, 6u> no_resources{};
         context_->PSSetShaderResources(
             0u,
             static_cast<UINT>(no_resources.size()),
             no_resources.data());
+        context_->CopyResource(type_two_base_texture_.Get(),
+                               render_texture_.Get());
+        context_->CopyResource(type_two_depth_texture_.Get(),
+                               depth_texture_.Get());
+        // Resolve binds Type-2 resources through t1..t4. Clear the complete
+        // range (including the depth copy at t5) before rebinding the same
+        // resources as outputs on a later scene.
         bound_shader_resource_ = nullptr;
         bound_shader_resource_valid_ = false;
         constexpr std::array<std::uint32_t, 4u> empty_heads{
@@ -2425,6 +2463,8 @@ class NativePortGraphicsBackend final {
             static_cast<UINT>(unordered_views.size()),
             unordered_views.data(),
             nullptr);
+        context_->PSSetShaderResources(
+            5u, 1u, type_two_depth_view_.GetAddressOf());
         type_two_uavs_bound_ = true;
         type2_subpass_active_ = true;
         type2_gather_active_ = true;
@@ -2452,15 +2492,20 @@ class NativePortGraphicsBackend final {
         type2_fragment_count_ = status[0];
         type2_max_fragments_per_pixel_ = status[2];
         if (status[1] != 0u ||
-            !type_two_status_within_bounds(
-                status[0], status[2],
-                config_.maximum_type2_fragment_nodes))
+            status[0] > config_.maximum_type2_fragment_nodes)
             fail(NativePortGraphicsFailure::ResourceLimit,
-                 0u,
-                 "type2-fragment-overflow");
+                 status[0],
+                 "type2-global-fragment-overflow");
+        // The reference OIT implementation retains at most 32 nodes from a
+        // pixel's linked list and composites those nodes deterministically.
+        // A denser pixel is a bounded quality limit, not a process-fatal
+        // resource failure. Keep the observed maximum for diagnostics; the
+        // resolve shader applies the same fixed retention below.
     }
 
     void unbind_type2_subpass() {
+        ID3D11ShaderResourceView* no_depth_resource = nullptr;
+        context_->PSSetShaderResources(5u, 1u, &no_depth_resource);
         if (!type_two_uavs_bound_) return;
         std::array<ID3D11UnorderedAccessView*, 4u> no_views{
             nullptr, nullptr, nullptr, nullptr};
@@ -2533,7 +2578,7 @@ class NativePortGraphicsBackend final {
             type_two_count_view_.Get()};
         context_->PSSetShaderResources(1u, 4u, resources);
         context_->Draw(3u, 0u);
-        std::array<ID3D11ShaderResourceView*, 5u> no_resources{};
+        std::array<ID3D11ShaderResourceView*, 6u> no_resources{};
         context_->PSSetShaderResources(
             0u,
             static_cast<UINT>(no_resources.size()),
@@ -2890,24 +2935,25 @@ class NativePortGraphicsBackend final {
         std::array<float, 4u> depth_parameters{};
         std::array<float, 4u> material_parameters{};
         std::array<std::uint32_t, 4u> pipeline_flags{};
-        // x/y are reserved for a future admitted blend family; z is the
-        // stable packet submission sequence and w is the bounded allocator
-        // capacity. These values are consumed only by the Type-2 capture
-        // shader; ordinary draws keep them zero.
+        // x stores the packet's four fixed-function blend factors, y is
+        // reserved, z is the stable packet submission sequence and w is the
+        // bounded allocator capacity. These values are consumed only by the
+        // Type-2 capture shader; ordinary draws keep them zero.
         std::array<std::uint32_t, 4u> type_two_parameters{};
     };
 
     static_assert(sizeof(DrawConstants) % 16u == 0u);
 
     struct TypeTwoFragmentGpu final {
-        std::array<float, 4u> color{};
+        std::uint32_t color = 0u;
         float depth = 0.0f;
         std::uint32_t sequence = 0u;
         std::uint32_t primitive = 0u;
         std::uint32_t next = 0xFFFFFFFFu;
+        std::uint32_t blend_factors = 0u;
     };
 
-    static_assert(sizeof(TypeTwoFragmentGpu) == 32u);
+    static_assert(sizeof(TypeTwoFragmentGpu) == 24u);
 
     struct TypeTwoResolveConstants final {
         std::array<std::uint32_t, 4u> parameters{};
@@ -3468,7 +3514,10 @@ class NativePortGraphicsBackend final {
         depth_description.Height = config_.render_extent.height;
         depth_description.MipLevels = 1u;
         depth_description.ArraySize = 1u;
-        depth_description.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        // Keep the scene depth in the D24/S8 typeless family so Type-2 can
+        // copy it into a shader-readable front-depth snapshot without a
+        // format conversion or CPU readback.
+        depth_description.Format = DXGI_FORMAT_R24G8_TYPELESS;
         depth_description.SampleDesc.Count = 1u;
         depth_description.Usage = D3D11_USAGE_DEFAULT;
         depth_description.BindFlags = D3D11_BIND_DEPTH_STENCIL;
@@ -3478,8 +3527,14 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result),
                  "depth-texture");
+        D3D11_DEPTH_STENCIL_VIEW_DESC depth_view_description{};
+        depth_view_description.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        depth_view_description.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        depth_view_description.Texture2D.MipSlice = 0u;
         result = device_->CreateDepthStencilView(
-            depth_texture_.Get(), nullptr, depth_view_.GetAddressOf());
+            depth_texture_.Get(),
+            &depth_view_description,
+            depth_view_.GetAddressOf());
         if (FAILED(result))
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result),
@@ -3812,12 +3867,13 @@ class NativePortGraphicsBackend final {
             return;
         }
 
-        if (packet.batch.identity != frame_batch_identity_) {
-            if (semantic_rank <=
-                static_cast<std::uint8_t>(frame_batch_semantic_))
-                fail(NativePortGraphicsFailure::InvalidDraw,
-                     0u,
-                     "draw-batch-order");
+        const auto previous_phase_rank =
+            static_cast<std::uint8_t>(frame_batch_phase_);
+        if (phase_rank < previous_phase_rank)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-phase-order");
+        if (phase_rank > previous_phase_rank) {
             frame_batch_identity_ = packet.batch.identity;
             frame_batch_semantic_ = packet.batch.semantic;
             frame_batch_phase_ = packet.draw_class;
@@ -3825,25 +3881,32 @@ class NativePortGraphicsBackend final {
             return;
         }
 
-        // A batch owns one semantic layer and its stable submission order.
-        // Viewport, vertex-space, interpolation and depth mapping remain
-        // per-draw pipeline state: validate_draw() proves those contracts and
-        // draw() binds them independently. Requiring them to be identical
-        // here rejects valid semantic batches that combine native producers.
-        if (packet.batch.semantic != frame_batch_semantic_)
+        const auto previous_semantic_rank =
+            static_cast<std::uint8_t>(frame_batch_semantic_);
+        if (semantic_rank < previous_semantic_rank)
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
-                 "draw-batch-contract");
-        const auto previous_phase_rank =
-            static_cast<std::uint8_t>(frame_batch_phase_);
-        if (phase_rank < previous_phase_rank ||
-            (phase_rank == previous_phase_rank &&
-             packet.batch.submission_order <=
-                 frame_batch_submission_order_))
+                 "draw-batch-order");
+        if (semantic_rank > previous_semantic_rank) {
+            frame_batch_identity_ = packet.batch.identity;
+            frame_batch_semantic_ = packet.batch.semantic;
+            frame_batch_submission_order_ = packet.batch.submission_order;
+            return;
+        }
+
+        // One list phase owns at most one batch for each semantic layer.
+        // Viewport, vertex-space, interpolation and depth mapping remain
+        // per-draw state. Different semantic layers may share an authenticated
+        // fixed-function pass identity, but two identities cannot both claim
+        // the same semantic/phase pair.
+        if (packet.batch.identity != frame_batch_identity_)
+            fail(NativePortGraphicsFailure::InvalidDraw,
+                 0u,
+                 "draw-batch-order");
+        if (packet.batch.submission_order <= frame_batch_submission_order_)
             fail(NativePortGraphicsFailure::InvalidDraw,
                  0u,
                  "draw-phase-order");
-        frame_batch_phase_ = packet.draw_class;
         frame_batch_submission_order_ = packet.batch.submission_order;
     }
 
@@ -5692,6 +5755,8 @@ class NativePortGraphicsBackend final {
     ComPtr<ID3D11Buffer> type_two_resolve_constants_;
     ComPtr<ID3D11Texture2D> type_two_base_texture_;
     ComPtr<ID3D11ShaderResourceView> type_two_base_view_;
+    ComPtr<ID3D11Texture2D> type_two_depth_texture_;
+    ComPtr<ID3D11ShaderResourceView> type_two_depth_view_;
     ComPtr<ID3D11Texture2D> type_two_head_texture_;
     ComPtr<ID3D11ShaderResourceView> type_two_head_view_;
     ComPtr<ID3D11UnorderedAccessView> type_two_head_uav_;
@@ -8103,19 +8168,27 @@ struct DrawPixelOutput {
 };
 
 struct TypeTwoFragment {
-    float4 color;
+    uint color;
     float depth;
     uint sequence;
     uint primitive;
     uint next;
+    uint blend_factors;
 };
 
 Texture2D draw_texture : register(t0);
 SamplerState draw_sampler : register(s0);
+Texture2D<float> type_two_depth_texture : register(t5);
 RWTexture2D<uint> type_two_heads : register(u1);
 RWStructuredBuffer<TypeTwoFragment> type_two_fragments : register(u2);
 RWTexture2D<uint> type_two_counts : register(u3);
 RWStructuredBuffer<uint> type_two_status : register(u4);
+
+uint type_two_pack_color(float4 color) {
+    const uint4 bytes = uint4(round(saturate(color) * 255.0));
+    return (bytes.r << 24u) | (bytes.g << 16u) |
+           (bytes.b << 8u) | bytes.a;
+}
 
 bool alpha_test_passes(float alpha, uint operation, float reference) {
     if (operation == 0u) return false;
@@ -8288,6 +8361,12 @@ DrawPixelOutput draw_type_two_capture_main(
             depth_parameters.y;
     }
     const uint2 pixel = uint2(input.position.xy);
+    // UAV writes are pixel-shader side effects and therefore cannot rely on
+    // the later DSV test to suppress hidden nodes.  Match the PVR OIT
+    // front-depth contract explicitly before touching the per-pixel list.
+    const float opaque_depth =
+        type_two_depth_texture.Load(int3(pixel, 0));
+    if (final_depth < opaque_depth) discard;
     uint pixel_count;
     InterlockedAdd(type_two_counts[pixel], 1u, pixel_count);
     uint ignored;
@@ -8299,19 +8378,21 @@ DrawPixelOutput draw_type_two_capture_main(
         discard;
     }
     TypeTwoFragment fragment;
-    fragment.color = result;
+    fragment.color = type_two_pack_color(result);
     fragment.depth = final_depth;
     fragment.sequence = type_two_parameters.z;
     fragment.primitive = primitive_id;
     fragment.next = 0xFFFFFFFFu;
+    fragment.blend_factors = type_two_parameters.x;
     uint previous;
     InterlockedExchange(type_two_heads[pixel], fragment_index, previous);
     fragment.next = previous;
     type_two_fragments[fragment_index] = fragment;
 
     DrawPixelOutput output;
-    // The capture blend state masks the color target.  Keep the exact native
-    // depth output for the packet's depth test, but never write scene depth.
+    // The capture blend state masks the color target and its depth state is
+    // deliberately read-only.  Return the exact native depth for the GEQUAL
+    // test while the PPLL keeps the complete translucent list for sorting.
     output.color = float4(0.0, 0.0, 0.0, 0.0);
     output.depth = final_depth;
     return output;
@@ -8328,13 +8409,21 @@ Texture2D<uint> type_two_head_texture : register(t2);
 Texture2D<uint> type_two_count_texture : register(t4);
 
 struct TypeTwoFragment {
-    float4 color;
+    uint color;
     float depth;
     uint sequence;
     uint primitive;
     uint next;
+    uint blend_factors;
 };
 StructuredBuffer<TypeTwoFragment> type_two_fragments : register(t3);
+
+float4 type_two_unpack_color(uint packed) {
+    return float4(float((packed >> 24u) & 0xffu),
+                  float((packed >> 16u) & 0xffu),
+                  float((packed >> 8u) & 0xffu),
+                  float(packed & 0xffu)) / 255.0;
+}
 
 struct CompositeVertexOutput {
     float4 position : SV_Position;
@@ -8361,26 +8450,56 @@ bool type_two_key_before(TypeTwoFragment candidate,
               candidate.primitive < selected.primitive)));
 }
 
+float4 type_two_blend_factor(uint factor,
+                             float4 source,
+                             float4 destination) {
+    if (factor == 0u) return 0.0;
+    if (factor == 1u) return 1.0;
+    if (factor == 2u) return source;
+    if (factor == 3u) return 1.0 - source;
+    if (factor == 4u) return destination;
+    if (factor == 5u) return 1.0 - destination;
+    if (factor == 6u) return source.aaaa;
+    if (factor == 7u) return 1.0 - source.aaaa;
+    if (factor == 8u) return destination.aaaa;
+    return 1.0 - destination.aaaa;
+}
+
+float4 type_two_blend(TypeTwoFragment fragment, float4 destination) {
+    const uint packed = fragment.blend_factors;
+    const float4 source = type_two_unpack_color(fragment.color);
+    const float4 source_color_factor = type_two_blend_factor(
+        packed & 0xffu, source, destination);
+    const float4 destination_color_factor = type_two_blend_factor(
+        (packed >> 8u) & 0xffu, source, destination);
+    const float4 source_alpha_factor = type_two_blend_factor(
+        (packed >> 16u) & 0xffu, source, destination);
+    const float4 destination_alpha_factor = type_two_blend_factor(
+        (packed >> 24u) & 0xffu, source, destination);
+    return float4(
+        saturate(source.rgb * source_color_factor.rgb +
+                 destination.rgb * destination_color_factor.rgb),
+        saturate(source.a * source_alpha_factor.a +
+                 destination.a * destination_alpha_factor.a));
+}
+
 float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
     const uint2 pixel = uint2(input.position.xy);
     const float4 base = type_two_base_texture.Load(int3(pixel, 0));
     float4 result = base;
     const uint pixel_count = type_two_count_texture.Load(int3(pixel, 0));
-    // A count beyond the configured allocator capacity cannot be produced by
-    // an admitted gather. Treat malformed/stale UAV contents as a closed
-    // pixel instead of returning a partially composited list.
-    if (pixel_count > type_two_parameters.x) return base;
+    const uint retained_pixel_count =
+        min(pixel_count, type_two_parameters.x);
     uint processed = 0u;
     float previous_depth = 0.0;
     uint previous_sequence = 0u;
     uint previous_primitive = 0u;
     bool has_previous = false;
-    // The count texture is populated by the same atomics that link every
-    // node. Repeated selection scans the chain and visits every admitted
-    // fragment without a fixed local array or silent truncation.
+    // Match the bounded reference OIT list: retain the first 32 nodes reached
+    // from the per-pixel head (the most recently submitted fragments), sort
+    // that retained set, and ignore any older tail nodes.
     [loop]
-    while (processed < pixel_count &&
-           processed < type_two_parameters.x) {
+    while (processed < retained_pixel_count) {
         uint node = type_two_head_texture.Load(int3(pixel, 0));
         bool found = false;
         TypeTwoFragment selected;
@@ -8409,18 +8528,14 @@ float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
             node = candidate.next;
         }
         if (!found) return base;
-        result = float4(
-            saturate(selected.color.rgb * selected.color.a +
-                     result.rgb * (1.0 - selected.color.a)),
-            saturate(selected.color.a * selected.color.a +
-                     result.a * (1.0 - selected.color.a)));
+        result = type_two_blend(selected, result);
         previous_depth = selected.depth;
         previous_sequence = selected.sequence;
         previous_primitive = selected.primitive;
         has_previous = true;
         ++processed;
     }
-    if (processed != pixel_count) return base;
+    if (processed != retained_pixel_count) return base;
     return result;
 }
 )";

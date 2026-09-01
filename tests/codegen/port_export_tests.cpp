@@ -4956,6 +4956,20 @@ int run_test(const int argc, char* argv[]) {
                                                       memory_probe_end - memory_probe_begin);
     const auto& generated_native_dispatch =
         explicit_static_sources.at("code/native-port-dispatch.cpp");
+    require(
+        generated_native_dispatch.find(
+            "#define KATANA_NATIVE_PORT_NOINLINE __declspec(noinline)") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "#define KATANA_NATIVE_PORT_NOINLINE "
+                "__attribute__((noinline))") != std::string::npos &&
+            generated_native_dispatch.find(
+                "extern \"C\" KATANA_NATIVE_PORT_NOINLINE void "
+                "katana_native_bootstrap_dispatch(") != std::string::npos &&
+            generated_native_dispatch.find(
+                "#undef KATANA_NATIVE_PORT_NOINLINE") != std::string::npos,
+        "Full-LTO darf den autoritativen Produkt-Bootstrap nicht aus dem "
+        "Link-Audit entfernen oder die portable Retention verlieren.");
     const auto native_proof_table_begin = generated_native_dispatch.find(
         "inline constexpr std::array<StaticReturnNopCallbackProof,");
     const auto native_proof_table_end = generated_native_dispatch.find(

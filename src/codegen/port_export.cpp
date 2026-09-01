@@ -21743,11 +21743,20 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            context, katana::runtime::NativePortStopReason::HookAbort, 6u);\n"
               "    }\n"
               "}\n\n"
-              "extern \"C\" void katana_native_bootstrap_dispatch(\n"
+              "#if defined(_MSC_VER)\n"
+              "#define KATANA_NATIVE_PORT_NOINLINE __declspec(noinline)\n"
+              "#elif defined(__GNUC__) || defined(__clang__)\n"
+              "#define KATANA_NATIVE_PORT_NOINLINE __attribute__((noinline))\n"
+              "#else\n"
+              "#define KATANA_NATIVE_PORT_NOINLINE\n"
+              "#endif\n"
+              "extern \"C\" KATANA_NATIVE_PORT_NOINLINE void "
+              "katana_native_bootstrap_dispatch(\n"
               "    katana::runtime::NativePortContext& context) {\n"
               "    "
            << entry_namespace << "::run_native_port(context);\n"
-              "}\n";
+              "}\n"
+              "#undef KATANA_NATIVE_PORT_NOINLINE\n";
     result.push_back({"code/native-port-dispatch.cpp", output.str()});
     return result;
 }

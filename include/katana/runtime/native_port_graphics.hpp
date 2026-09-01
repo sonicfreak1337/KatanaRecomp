@@ -15,14 +15,16 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 18u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 19u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
-// per-pixel ordering subpass; the adapter only identifies an auto-sorted
-// Scene3D list and its scene boundary.
+// per-pixel ordering subpass, including the fixed-function blend factors of
+// every fragment; the adapter identifies one authenticated auto-sorted PVR
+// translucent list.  Host semantic batches and viewports may both contribute
+// to that one fixed-function list and therefore must not create extra resolves.
 inline constexpr std::uint32_t
-    native_port_type2_autosort_contract_version = 1u;
+    native_port_type2_autosort_contract_version = 3u;
 
 struct NativePortExtent final {
     std::uint32_t width = 0u;
@@ -91,9 +93,11 @@ struct NativePortGraphicsConfig final {
     // handles; this budget keeps hostile or corrupt state churn fail-closed.
     std::uint32_t maximum_pipeline_states = 4'096u;
     // Upper bound for the transient Type-2 per-pixel fragment pool. It is
-    // allocated lazily only when a Type2AutoSorted Scene3D packet arrives;
-    // overflow is detected before resolve and fails the frame closed.
-    std::uint32_t maximum_type2_fragment_nodes = 4'194'304u;
+    // allocated lazily only when an authenticated Type2AutoSorted list
+    // arrives. The compact 24-byte nodes and this 16-Mi-node default keep the
+    // 1080p pool below Flycast's 512-MiB reference budget while admitting the
+    // complete Sonic Adventure title/character-select translucent lists.
+    std::uint32_t maximum_type2_fragment_nodes = 16'777'216u;
     // The render-thread command stream is atomic at command boundaries: an
     // upload or draw is never split, redirected through a host pointer, or
     // silently executed on the producer. These explicit budgets size both
@@ -364,10 +368,10 @@ enum class NativePortDrawClass : std::uint8_t {
     Overlay,
 };
 
-// One frame contains at most one batch for each semantic layer, in this
-// order.  List phases are ordered independently inside a batch.  This keeps
-// the renderer address-agnostic while making otherwise implicit UI/scene
-// composition part of the native packet contract.
+// One fixed-function list phase contains at most one batch for each semantic
+// layer, in this order.  Phases are submitted Opaque -> PunchThrough ->
+// Translucent -> Overlay, and the semantic order restarts at each phase.  This
+// matches PVR list composition while keeping host scene/UI ownership explicit.
 enum class NativePortDrawBatchClass : std::uint8_t {
     Scene3D,
     GameOverlay,
@@ -380,7 +384,8 @@ enum class NativePortTranslucencyPolicy : std::uint8_t {
     // Preserve the owner's authored order and explicit depth state.
     AuthoredUnsorted,
     // The adapter has already produced stable depth order.  The host color
-    // pass therefore uses GEQUAL against opaque/punch depth without writing.
+    // pass therefore uses GEQUAL against opaque/punch depth and preserves the
+    // packet's authored ZWriteDis state.
     StableDepthSorted,
     // Dreamcast/PVR Type-2 translucent list semantics.  The renderer gathers
     // qualifying fragments and resolves them per pixel from far to near.
@@ -399,7 +404,9 @@ struct NativePortType2AutosortContract final {
 };
 
 struct NativePortDrawBatch final {
-    // Non-zero and stable for all draws in this semantic batch.
+    // Non-zero and stable for all draws in this semantic batch.  Batches from
+    // different semantic layers may deliberately share an identity when an
+    // authenticated fixed-function pass (notably one Type-2 list) owns both.
     std::uint64_t identity = 0u;
     // Strictly increasing within one draw class in the batch.  It preserves
     // ties without requiring the graphics device to guess submission order.

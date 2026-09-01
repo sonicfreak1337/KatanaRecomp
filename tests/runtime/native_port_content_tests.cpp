@@ -1,5 +1,6 @@
 #include "katana/runtime/native_port_content.hpp"
 #include "katana/runtime/native_port_aot_runtime.hpp"
+#include "katana/runtime/native_port_texture_asset.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,79 @@ void require(const bool condition, const std::string& message) {
     if (!condition) {
         std::cerr << "TEST FEHLGESCHLAGEN: " << message << '\n';
         std::exit(EXIT_FAILURE);
+    }
+}
+
+void test_non_vq_twiddled_mipmap_layout() {
+    using namespace katana::runtime;
+
+    // PVRT data-format 0x02 uses the compact SDK file layout rather than the
+    // raw VRAM/0x12 OtherMipPoint layout.  A 16x16 RGB565 chain has 684
+    // semantic bytes; a containing PVRT chunk may add separately validated
+    // trailing alignment (EFF_REGULAR carries four such bytes).  Use distinct
+    // solid levels to pin the compact offsets without depending on private
+    // Sonic content at CTest time.
+    constexpr std::size_t encoded_bytes = 684u;
+    std::vector<std::uint8_t> encoded(encoded_bytes, 0u);
+    const auto write_rgb565 = [&](const std::size_t offset,
+                                  const std::uint16_t value) {
+        require(offset + 1u < encoded.size(),
+                "Twiddled-Mipmap-Test schreibt ausserhalb des Payloads.");
+        encoded[offset] = static_cast<std::uint8_t>(value & 0xFFu);
+        encoded[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto morton_index = [](const std::uint32_t x,
+                                 const std::uint32_t y,
+                                 const std::uint32_t dimension) {
+        std::uint32_t result = 0u;
+        for (std::uint32_t bit = 0u; (1u << bit) < dimension; ++bit) {
+            result |= ((y >> bit) & 1u) << (bit * 2u);
+            result |= ((x >> bit) & 1u) << (bit * 2u + 1u);
+        }
+        return result;
+    };
+    const auto fill_level = [&](const std::size_t offset,
+                                const std::uint32_t dimension,
+                                const std::uint16_t value) {
+        for (std::uint32_t y = 0u; y < dimension; ++y) {
+            for (std::uint32_t x = 0u; x < dimension; ++x) {
+                write_rgb565(
+                    offset + static_cast<std::size_t>(morton_index(
+                                 x, y, dimension)) * 2u,
+                    value);
+            }
+        }
+    };
+
+    write_rgb565(2u, 0xF800u);    // 1x1
+    fill_level(4u, 2u, 0x07E0u);  // 2x2
+    fill_level(12u, 4u, 0x001Fu); // 4x4
+    fill_level(44u, 8u, 0xFFFFu); // 8x8
+    fill_level(172u, 16u, 0xFFE0u); // 16x16
+
+    const auto texture = decode_native_port_texture_surface(
+        encoded, {16u, 16u}, NativePortTextureAssetPixelFormat::Rgb565,
+        NativePortTextureAssetDataFormat::SquareTwiddledMipmaps);
+    require(texture.rgba8.size() == 16u * 16u * 4u &&
+                texture.lower_mip_levels.size() == 4u,
+            "Nicht-VQ-Twiddled-Mipmapkette verliert Top-Level oder Mips.");
+    require(texture.rgba8[0] == 0xFFu && texture.rgba8[1] == 0xFFu &&
+                texture.rgba8[2] == 0u && texture.rgba8[3] == 0xFFu,
+            "Twiddled-Top-Level startet nicht am physischen 16x16-Offset.");
+    constexpr std::array<std::array<std::uint8_t, 4u>, 4u> expected{
+        std::array<std::uint8_t, 4u>{0xFFu, 0xFFu, 0xFFu, 0xFFu},
+        std::array<std::uint8_t, 4u>{0u, 0u, 0xFFu, 0xFFu},
+        std::array<std::uint8_t, 4u>{0u, 0xFFu, 0u, 0xFFu},
+        std::array<std::uint8_t, 4u>{0xFFu, 0u, 0u, 0xFFu}};
+    constexpr std::array<std::uint32_t, 4u> expected_dimensions{
+        8u, 4u, 2u, 1u};
+    for (std::size_t index = 0u; index < expected.size(); ++index) {
+        const auto& level = texture.lower_mip_levels[index];
+        require(level.extent.width == expected_dimensions[index] &&
+                    level.extent.height == expected_dimensions[index] &&
+                    std::equal(level.rgba8.begin(), level.rgba8.begin() + 4,
+                               expected[index].begin()),
+                "Nicht-VQ-Twiddled-Mip-Offset oder 1x1-Selektor ist falsch.");
     }
 }
 
@@ -167,6 +241,7 @@ int main(const int argc, char** const argv) {
         return EXIT_SUCCESS;
     }
     require(argc == 1, "Unbekannte Native-Port-Content-Testoption.");
+    test_non_vq_twiddled_mipmap_layout();
     const std::array immutable_ranges{
         katana::runtime::NativePortImmutableRange{
             0x0C000000u, 2u,

@@ -268,11 +268,11 @@ type_two_pixel_triangle(const float center_x, const float center_y) {
 }
 
 void run_type_two_global_fragment_capture(
-    const katana::runtime::NativePortGraphicsConfig& source_config,
-    const bool parallel_expected) {
+    const katana::runtime::NativePortGraphicsConfig& source_config) {
     using namespace katana::runtime;
     constexpr std::uint32_t extent = 64u;
     constexpr std::size_t triangle_count = 17u;
+    constexpr std::uint32_t maximum_fragments_per_pixel = 32u;
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     const auto directory = std::filesystem::temp_directory_path() /
@@ -302,6 +302,83 @@ void run_type_two_global_fragment_capture(
         std::array<std::array<std::uint32_t, 2u>, triangle_count>
             sample_pixels{};
         capture_graphics.begin_frame(reciprocal_frame());
+
+        // The opaque destination and two different Type-2 blend families
+        // share one pixel.  PVR resolves each fragment with its own polygon
+        // factors after sorting: blue(1/4) + red One/One(1/4) + green
+        // SourceAlpha/One(1/2 * 1/2) must produce neutral 1/4 grey.  The old
+        // hard-coded SourceAlpha/InverseSourceAlpha resolver did not.
+        auto mixed_opaque = type_two_pixel_triangle(32.5f, 32.5f);
+        for (auto& vertex : mixed_opaque) {
+            vertex.color = {0.0f, 0.0f, 0.25f, 1.0f};
+            vertex.depth_coordinate = 0.25f;
+        }
+        capture_graphics.draw(
+            screen_packet(mixed_opaque, 0x7711u, 1u));
+
+        // UAV side effects happen in the pixel shader, before a conventional
+        // late DSV result is guaranteed.  Cover the PVR/Flycast contract that
+        // an autosorted fragment behind completed opaque depth is rejected
+        // before it can enter the per-pixel list.
+        auto depth_occluder = type_two_pixel_triangle(22.5f, 32.5f);
+        for (auto& vertex : depth_occluder) {
+            vertex.color = {1.0f, 0.0f, 1.0f, 1.0f};
+            vertex.depth_coordinate = 0.75f;
+        }
+        capture_graphics.draw(
+            screen_packet(depth_occluder, 0x7711u, 2u));
+
+        // A nearer, fully transparent Type-2 texel must not depth-reject a
+        // farther fragment submitted afterwards.  Character Select authors
+        // its transparent text/name quads before parts of the wheel; writing
+        // DSV depth during gather turns their transparent bounds into holes.
+        auto transparent_hole_base =
+            type_two_pixel_triangle(42.5f, 32.5f);
+        for (auto& vertex : transparent_hole_base) {
+            vertex.color = {0.0f, 0.0f, 0.25f, 1.0f};
+            vertex.depth_coordinate = 0.25f;
+        }
+        capture_graphics.draw(
+            screen_packet(transparent_hole_base, 0x7711u, 3u));
+
+        // PVR list phases are outermost: an opaque UI semantic batch is part
+        // of the completed OP depth/color base before the Scene3D translucent
+        // list begins. The old semantic-outer host order could not express
+        // this without regressing from UiOverlay back to Scene3D.
+        auto cross_semantic_base =
+            type_two_pixel_triangle(52.5f, 32.5f);
+        for (auto& vertex : cross_semantic_base) {
+            vertex.color = {0.0f, 0.0f, 0.25f, 1.0f};
+            vertex.depth_coordinate = 0.25f;
+        }
+        auto cross_semantic_opaque =
+            screen_packet(cross_semantic_base, 0x7712u, 4u);
+        cross_semantic_opaque.batch.semantic =
+            NativePortDrawBatchClass::UiOverlay;
+        cross_semantic_opaque.viewport = NativePortViewportTarget::Ui;
+        capture_graphics.draw(cross_semantic_opaque);
+
+        auto transparent_front = type_two_pixel_triangle(42.5f, 32.5f);
+        for (auto& vertex : transparent_front) {
+            vertex.color = {0.0f, 1.0f, 0.0f, 0.0f};
+            vertex.depth_coordinate = 1.0f;
+        }
+        auto transparent_front_packet = type_two_packet(
+            transparent_front, 0x7711u, 4u);
+        transparent_front_packet.depth.write_enabled = true;
+        capture_graphics.draw(transparent_front_packet);
+
+        auto visible_behind_transparency =
+            type_two_pixel_triangle(42.5f, 32.5f);
+        for (auto& vertex : visible_behind_transparency) {
+            vertex.color = {1.0f, 0.0f, 0.0f, 1.0f};
+            vertex.depth_coordinate = 0.5f;
+        }
+        auto visible_behind_packet = type_two_packet(
+            visible_behind_transparency, 0x7711u, 5u);
+        visible_behind_packet.depth.write_enabled = true;
+        capture_graphics.draw(visible_behind_packet);
+
         for (std::size_t index = 0u; index < triangles.size(); ++index) {
             const auto x = 6u + static_cast<std::uint32_t>(index % 6u) * 10u;
             const auto y = 7u + static_cast<std::uint32_t>(index / 6u) * 20u;
@@ -311,8 +388,62 @@ void run_type_two_global_fragment_capture(
                 static_cast<float>(y) + 0.5f);
             capture_graphics.draw(type_two_packet(
                 triangles[index], 0x7711u,
-                static_cast<std::uint32_t>(index + 1u)));
+                static_cast<std::uint32_t>(index + 6u)));
         }
+
+        auto hidden_type_two = type_two_pixel_triangle(22.5f, 32.5f);
+        for (auto& vertex : hidden_type_two) {
+            vertex.color = {0.0f, 1.0f, 0.0f, 1.0f};
+            vertex.depth_coordinate = 0.25f;
+        }
+        capture_graphics.draw(type_two_packet(
+            hidden_type_two, 0x7711u,
+            static_cast<std::uint32_t>(triangle_count + 6u)));
+
+        auto mixed_additive = type_two_pixel_triangle(32.5f, 32.5f);
+        for (auto& vertex : mixed_additive) {
+            vertex.color = {0.25f, 0.0f, 0.0f, 0.25f};
+            vertex.depth_coordinate = 0.5f;
+        }
+        auto additive_packet = type_two_packet(
+            mixed_additive, 0x7711u,
+            static_cast<std::uint32_t>(triangle_count + 7u));
+        additive_packet.blend.source_color = NativePortBlendFactor::One;
+        additive_packet.blend.destination_color = NativePortBlendFactor::One;
+        additive_packet.blend.source_alpha = NativePortBlendFactor::One;
+        additive_packet.blend.destination_alpha = NativePortBlendFactor::One;
+        capture_graphics.draw(additive_packet);
+
+        auto mixed_source_alpha = type_two_pixel_triangle(32.5f, 32.5f);
+        for (auto& vertex : mixed_source_alpha) {
+            vertex.color = {0.0f, 0.5f, 0.0f, 0.5f};
+            vertex.depth_coordinate = 1.0f;
+        }
+        auto source_alpha_add_packet = type_two_packet(
+            mixed_source_alpha, 0x7711u,
+            static_cast<std::uint32_t>(triangle_count + 8u));
+        source_alpha_add_packet.blend.destination_color =
+            NativePortBlendFactor::One;
+        source_alpha_add_packet.blend.destination_alpha =
+            NativePortBlendFactor::One;
+        capture_graphics.draw(source_alpha_add_packet);
+
+        // Character Select contributes its reciprocal-screen UI to the same
+        // authenticated Type-2 list as the model. The semantic changes but the
+        // pass identity and single resolve do not.
+        auto cross_semantic_layer =
+            type_two_pixel_triangle(52.5f, 32.5f);
+        for (auto& vertex : cross_semantic_layer) {
+            vertex.color = {1.0f, 0.0f, 0.0f, 0.5f};
+            vertex.depth_coordinate = 0.5f;
+        }
+        auto cross_semantic_type_two = type_two_packet(
+            cross_semantic_layer, 0x7711u,
+            static_cast<std::uint32_t>(triangle_count + 9u));
+        cross_semantic_type_two.batch.semantic =
+            NativePortDrawBatchClass::UiOverlay;
+        cross_semantic_type_two.viewport = NativePortViewportTarget::Ui;
+        capture_graphics.draw(cross_semantic_type_two);
         capture_graphics.present();
         static_cast<void>(capture_graphics.snapshot());
 
@@ -343,21 +474,76 @@ void run_type_two_global_fragment_capture(
                         bytes[offset + 2u] >= 0xC0u,
                     "Ein globaler Type2-Node >=16 wurde nicht composited.");
         }
+        constexpr std::array mixed_sample{32u, 32u};
+        const auto mixed_row = extent - mixed_sample[1u] - 1u;
+        const auto mixed_offset = 54u +
+            (static_cast<std::size_t>(mixed_row) * extent +
+             mixed_sample[0u]) * 4u;
+        for (std::size_t channel = 0u; channel < 3u; ++channel)
+            require(bytes[mixed_offset + channel] >= 0x38u &&
+                        bytes[mixed_offset + channel] <= 0x48u,
+                    "Type2 verlor den per-Fragment-Blendfaktor oder die "
+                    "opaque Basisfarbe.");
+
+        constexpr std::array occluded_sample{22u, 32u};
+        const auto occluded_row = extent - occluded_sample[1u] - 1u;
+        const auto occluded_offset = 54u +
+            (static_cast<std::size_t>(occluded_row) * extent +
+             occluded_sample[0u]) * 4u;
+        require(bytes[occluded_offset + 0u] >= 0xE0u &&
+                    bytes[occluded_offset + 1u] <= 0x10u &&
+                    bytes[occluded_offset + 2u] >= 0xE0u,
+                "Ein hinter opaque Depth liegender Type2-Fragment wurde "
+                "trotzdem in den PPLL publiziert.");
+
+        constexpr std::array transparent_hole_sample{42u, 32u};
+        const auto transparent_hole_row =
+            extent - transparent_hole_sample[1u] - 1u;
+        const auto transparent_hole_offset = 54u +
+            (static_cast<std::size_t>(transparent_hole_row) * extent +
+             transparent_hole_sample[0u]) * 4u;
+        require(bytes[transparent_hole_offset + 0u] <= 0x10u &&
+                    bytes[transparent_hole_offset + 1u] <= 0x10u &&
+                    bytes[transparent_hole_offset + 2u] >= 0xE0u,
+                "Ein transparentes Type2-Vordergrundfragment hat den "
+                "spaeter eingereichten Hintergrundlayer per DSV geloescht.");
+
+        constexpr std::array cross_semantic_sample{52u, 32u};
+        const auto cross_semantic_row =
+            extent - cross_semantic_sample[1u] - 1u;
+        const auto cross_semantic_offset = 54u +
+            (static_cast<std::size_t>(cross_semantic_row) * extent +
+             cross_semantic_sample[0u]) * 4u;
+        require(bytes[cross_semantic_offset + 0u] >= 0x18u &&
+                    bytes[cross_semantic_offset + 0u] <= 0x28u &&
+                    bytes[cross_semantic_offset + 1u] <= 0x10u &&
+                    bytes[cross_semantic_offset + 2u] >= 0x78u &&
+                    bytes[cross_semantic_offset + 2u] <= 0x88u,
+                "Scene3D und UiOverlay teilten nicht dieselbe Type2-Liste.");
+
+        // A UI semantic packet is independently legal in an authenticated
+        // Type-2 list; the host semantic is not a fixed-function list type.
+        auto ui_viewport_packet = type_two_packet(
+            type_two_pixel_triangle(32.5f, 32.5f), 0x7722u, 1u);
+        ui_viewport_packet.viewport = NativePortViewportTarget::Ui;
+        ui_viewport_packet.batch.semantic =
+            NativePortDrawBatchClass::UiOverlay;
+        capture_graphics.begin_frame(reciprocal_frame());
+        capture_graphics.draw(ui_viewport_packet);
+        capture_graphics.present();
+        static_cast<void>(capture_graphics.snapshot());
 
         const auto overlapping = type_two_pixel_triangle(32.5f, 32.5f);
         capture_graphics.begin_frame(reciprocal_frame());
-        for (std::uint32_t index = 0u; index < triangle_count; ++index)
+        for (std::uint32_t index = 0u;
+             index <= maximum_fragments_per_pixel;
+             ++index)
             capture_graphics.draw(type_two_packet(
                 overlapping, 0x7712u, index + 1u));
-        require(throws_graphics(
-                    [&] {
-                        capture_graphics.present();
-                        if (parallel_expected)
-                            static_cast<void>(capture_graphics.snapshot());
-                    },
-                    NativePortGraphicsFailure::ResourceLimit,
-                    "type2-fragment-overflow"),
-                "17 Type2-Fragmente in einem Pixel wurden nicht fail-closed.");
+        capture_graphics.present();
+        const auto dense_pixel_snapshot = capture_graphics.snapshot();
+        require(!dense_pixel_snapshot.frame_open,
+                "Der begrenzte 32-Layer-Type2-Resolve schloss den Frame nicht.");
     }
     std::error_code cleanup_error;
     std::filesystem::remove_all(directory, cleanup_error);
@@ -373,7 +559,8 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 18u);
+    static_assert(native_port_graphics_contract_version == 19u);
+    static_assert(native_port_type2_autosort_contract_version == 3u);
 
     // The backend caches this gate on its first construction. Bind it before
     // even the invalid-config constructor probe so one-shot failure injection
@@ -741,7 +928,7 @@ int main(const int argc, char** const argv) {
 
     // This GPU/readback regression deliberately precedes the Parallel-only
     // facade branch below so both CTest modes execute the same Type-2 proof.
-    run_type_two_global_fragment_capture(config, parallel_expected);
+    run_type_two_global_fragment_capture(config);
 
     // SerialReference and Parallel share the exact same sealed ordinary-frame
     // codec contract.  No per-operation lease is permitted in either mode.
@@ -1091,16 +1278,28 @@ int main(const int argc, char** const argv) {
     require(graphics.snapshot().draw_calls == draws_after_flat,
             "Small-Triangle-Filter verliert seine Vorverarbeitung.");
 
+    const auto before_cross_semantic_phase = graphics.snapshot();
     graphics.begin_frame(reciprocal_frame());
     graphics.draw(screen_packet(reciprocal_vertices, 4u, 1u));
     auto changed_semantic = object_packet(object_vertices, 4u, 2u);
     changed_semantic.batch.semantic = NativePortDrawBatchClass::UiOverlay;
+    graphics.draw(changed_semantic);
+    graphics.present();
+    require(graphics.snapshot().draw_calls ==
+                before_cross_semantic_phase.draw_calls + 2u,
+            "Eine Listenphase konnte Scene3D und UI nicht gemeinsam tragen.");
+
+    graphics.begin_frame(reciprocal_frame());
+    auto invalid_semantic_viewport =
+        screen_packet(reciprocal_vertices, 0x41u, 1u);
+    invalid_semantic_viewport.batch.semantic =
+        NativePortDrawBatchClass::UiOverlay;
     require(submits_frame_throws(
                 graphics,
-                [&] { graphics.draw(changed_semantic); },
+                [&] { graphics.draw(invalid_semantic_viewport); },
                 NativePortGraphicsFailure::InvalidDraw,
                 "draw-batch-contract"),
-            "Ein Batch akzeptiert einen wechselnden semantischen Layer.");
+            "UiOverlay akzeptierte den Game-Viewport.");
     graphics.begin_frame(reciprocal_frame());
     graphics.draw(screen_packet(reciprocal_vertices, 5u, 1u));
     require(submits_frame_throws(
@@ -1157,7 +1356,10 @@ int main(const int argc, char** const argv) {
     // this also exercises the GPU-side PPLL resources and the opaque DSV
     // binding used by the capture pass.
     graphics.begin_frame(reciprocal_frame());
-    graphics.draw(type_two_packet(reciprocal_vertices, 9u, 1u));
+    auto depth_writing_type_two =
+        type_two_packet(reciprocal_vertices, 9u, 1u);
+    depth_writing_type_two.depth.write_enabled = true;
+    graphics.draw(depth_writing_type_two);
     graphics.draw(type_two_packet(reciprocal_vertices, 9u, 2u));
     graphics.flush_type2_translucency();
     graphics.present();

@@ -467,8 +467,11 @@ void bind_decoded_texture_payload_identity(
     if (is_vector_quantized(format))
         return std::max(pixels / 4u, std::size_t{1u});
     if (is_twiddled(format)) {
-        // Dreamcast twiddled mip chains reserve two 16-bit texels for the
-        // otherwise single-texel 1x1 level.
+        // PVRT data-format 0x02 is the compact SDK file representation, not
+        // the raw VRAM/0x12 layout.  It drops the first two 16-bit words from
+        // OtherMipPoint, so the 1x1 level occupies four bytes and the 2x2
+        // level starts at byte four.  Any remaining bytes in the PVRT chunk
+        // are validated separately as writer alignment/trailer bytes.
         if (dimension == 1u) return 4u;
         return checked_multiply(
             pixels, 2u, NativePortTextureAssetFailure::InvalidPvrt, offset,
@@ -745,6 +748,10 @@ void decode_pixels(std::span<const std::uint8_t> source,
     if (!has_mipmaps(format)) return layout.top_level_offset;
     if (is_vector_quantized(format) && dimension == 1u)
         return layout.codebook_bytes;
+    // In compact PVRT data-format 0x02, the 1x1 texel is the second 16-bit
+    // word.  Flycast expresses the same file-layout distinction as
+    // (OtherMipPoint[TexU] - 2) * 2, while raw VRAM/format 0x12 uses the
+    // unadjusted table.  This decoder accepts only the former format.
     if (is_twiddled(format) && dimension == 1u) return 2u;
 
     auto result = is_vector_quantized(format) ? layout.codebook_bytes : 0u;
