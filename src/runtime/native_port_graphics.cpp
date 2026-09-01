@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -53,6 +54,48 @@ constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
 // model, whose overlapping translucent strips legitimately exceed that depth.
 constexpr std::uint32_t type_two_maximum_fragments_per_pixel = 32u;
 constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
+
+// The producer-owned desktop host and consumer-owned Win32 window exchange
+// only fixed atomics here. Menu clicks never enter the render command queue,
+// and the consumer never reads mutable host pacing state directly.
+struct NativePortRuntimeOptionsBridge final {
+    std::atomic<std::uint32_t> simulation_rate_hz{60u};
+    std::atomic<std::uint32_t> presentation_rate_hz{60u};
+    std::atomic<std::uint32_t> maximum_presentation_rate_hz{144u};
+    std::atomic<std::uint32_t> requested_presentation_rate_hz{60u};
+    std::atomic<std::uint64_t> simulation_frames{0u};
+    std::atomic<bool> frame_pacing_enabled{true};
+};
+
+constexpr std::array<std::uint32_t, 4u>
+    runtime_presentation_rate_choices{60u, 90u, 120u, 144u};
+
+#ifdef _WIN32
+constexpr UINT runtime_menu_output_fps = 0x7100u;
+constexpr UINT runtime_menu_simulation_fps = 0x7101u;
+constexpr UINT runtime_menu_rate_first = 0x7110u;
+constexpr UINT runtime_menu_rate_last =
+    runtime_menu_rate_first +
+    static_cast<UINT>(runtime_presentation_rate_choices.size()) - 1u;
+#endif
+
+[[nodiscard]] constexpr bool runtime_presentation_rate_choice(
+    const std::uint32_t rate_hz) noexcept {
+    return std::find(runtime_presentation_rate_choices.begin(),
+                     runtime_presentation_rate_choices.end(),
+                     rate_hz) != runtime_presentation_rate_choices.end();
+}
+
+void saturating_atomic_increment(
+    std::atomic<std::uint64_t>& value) noexcept {
+    auto current = value.load(std::memory_order_relaxed);
+    while (current != std::numeric_limits<std::uint64_t>::max() &&
+           !value.compare_exchange_weak(current,
+                                        current + 1u,
+                                        std::memory_order_release,
+                                        std::memory_order_relaxed)) {
+    }
+}
 
 [[nodiscard]] constexpr std::uint64_t mix_graphics_digest(
     std::uint64_t digest,
@@ -774,7 +817,11 @@ void validate_frame_pacing_config(
         config.simulation_rate_hz == 0u ||
         config.simulation_rate_hz > maximum_native_frame_rate_hz ||
         config.presentation_rate_hz < config.simulation_rate_hz ||
-        config.presentation_rate_hz > maximum_native_frame_rate_hz)
+        config.presentation_rate_hz > maximum_native_frame_rate_hz ||
+        config.maximum_presentation_rate_hz <
+            config.presentation_rate_hz ||
+        config.maximum_presentation_rate_hz >
+            maximum_native_frame_rate_hz)
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::InvalidConfig,
             0u,
@@ -1192,9 +1239,12 @@ class NativePortGraphicsBackend final {
         std::numeric_limits<std::size_t>::max();
 
   public:
-    explicit NativePortGraphicsBackend(const NativePortGraphicsConfig& config)
+    NativePortGraphicsBackend(
+        const NativePortGraphicsConfig& config,
+        NativePortRuntimeOptionsBridge* const runtime_options)
         : title_storage_(copy_validated_graphics_title(config.title)),
-          config_(config), owner_thread_(std::this_thread::get_id()) {
+          config_(config), owner_thread_(std::this_thread::get_id()),
+          runtime_options_(runtime_options) {
         config_.title = title_storage_;
         inject_present_failure_once_ = present_failure_test_requested();
         validate_graphics_config(config_);
@@ -1259,6 +1309,7 @@ class NativePortGraphicsBackend final {
             DispatchMessageW(&message);
         }
         apply_pending_resize();
+        update_runtime_options_menu();
     }
 
     [[nodiscard]] NativePortLifecycleState lifecycle_state() const {
@@ -2802,6 +2853,7 @@ class NativePortGraphicsBackend final {
         snapshot_.occluded = false;
         capture_completed_frame(snapshot_.presented_frames + 1u);
         saturating_increment(snapshot_.presented_frames);
+        update_runtime_options_menu();
         maybe_checkpoint_graphics_breadcrumbs();
     }
 
@@ -3013,6 +3065,12 @@ class NativePortGraphicsBackend final {
         }
         if (self == nullptr) return DefWindowProcW(window, message, word, data);
         switch (message) {
+        case WM_COMMAND:
+            if (HIWORD(word) == 0u &&
+                self->handle_runtime_menu_command(
+                    static_cast<UINT>(LOWORD(word))))
+                return 0;
+            return DefWindowProcW(window, message, word, data);
         case WM_CLOSE:
             self->close_requested_ = true;
             return 0;
@@ -3032,6 +3090,197 @@ class NativePortGraphicsBackend final {
         default:
             return DefWindowProcW(window, message, word, data);
         }
+    }
+
+    [[nodiscard]] bool handle_runtime_menu_command(
+        const UINT command) noexcept {
+        if (runtime_options_ == nullptr ||
+            command < runtime_menu_rate_first ||
+            command > runtime_menu_rate_last)
+            return false;
+        const auto index = static_cast<std::size_t>(
+            command - runtime_menu_rate_first);
+        const auto rate_hz = runtime_presentation_rate_choices[index];
+        const auto simulation_rate_hz =
+            runtime_options_->simulation_rate_hz.load(
+                std::memory_order_acquire);
+        const auto maximum_rate_hz =
+            runtime_options_->maximum_presentation_rate_hz.load(
+                std::memory_order_acquire);
+        if (!runtime_options_->frame_pacing_enabled.load(
+                std::memory_order_acquire) ||
+            rate_hz < simulation_rate_hz || rate_hz > maximum_rate_hz)
+            return true;
+        runtime_options_->requested_presentation_rate_hz.store(
+            rate_hz, std::memory_order_release);
+        update_runtime_options_menu(true);
+        return true;
+    }
+
+    void create_runtime_options_menu() {
+        auto* const menu_bar = CreateMenu();
+        if (menu_bar == nullptr)
+            fail(NativePortGraphicsFailure::WindowCreation,
+                 GetLastError(),
+                 "runtime-menu-bar");
+        auto* const options_menu = CreatePopupMenu();
+        if (options_menu == nullptr) {
+            const auto code = GetLastError();
+            DestroyMenu(menu_bar);
+            fail(NativePortGraphicsFailure::WindowCreation,
+                 code,
+                 "runtime-options-menu");
+        }
+        const auto fail_menu = [&](const char* const operation) {
+            const auto code = GetLastError();
+            DestroyMenu(options_menu);
+            DestroyMenu(menu_bar);
+            fail(NativePortGraphicsFailure::WindowCreation,
+                 code == 0u ? 1u : code,
+                 operation);
+        };
+        if (AppendMenuW(options_menu,
+                        MF_STRING | MF_GRAYED,
+                        runtime_menu_output_fps,
+                        L"Ausgabe: -- FPS (60 Hz)") == FALSE)
+            fail_menu("runtime-menu-output-fps");
+        if (AppendMenuW(options_menu,
+                        MF_STRING | MF_GRAYED,
+                        runtime_menu_simulation_fps,
+                        L"Simulation: -- FPS (30 Hz)") == FALSE)
+            fail_menu("runtime-menu-simulation-fps");
+        if (AppendMenuW(options_menu, MF_SEPARATOR, 0u, nullptr) == FALSE)
+            fail_menu("runtime-menu-separator");
+        for (std::size_t index = 0u;
+             index < runtime_presentation_rate_choices.size();
+             ++index) {
+            wchar_t label[32]{};
+            static_cast<void>(std::swprintf(
+                label,
+                std::size(label),
+                L"%u Hz",
+                runtime_presentation_rate_choices[index]));
+            if (AppendMenuW(options_menu,
+                            MF_STRING,
+                            runtime_menu_rate_first +
+                                static_cast<UINT>(index),
+                            label) == FALSE)
+                fail_menu("runtime-menu-rate");
+        }
+        if (AppendMenuW(menu_bar,
+                        MF_POPUP,
+                        reinterpret_cast<UINT_PTR>(options_menu),
+                        L"&Optionen") == FALSE)
+            fail_menu("runtime-menu-options");
+        menu_bar_ = menu_bar;
+        options_menu_ = options_menu;
+    }
+
+    void update_runtime_options_menu(const bool force = false) noexcept {
+        if (window_ == nullptr || options_menu_ == nullptr ||
+            runtime_options_ == nullptr)
+            return;
+        const auto elapsed = std::chrono::steady_clock::now()
+                                 .time_since_epoch();
+        const auto signed_now =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed)
+                .count();
+        const auto now = signed_now <= 0
+                             ? 0u
+                             : static_cast<std::uint64_t>(signed_now);
+        const auto output_frames = snapshot_.presented_frames;
+        const auto simulation_frames =
+            runtime_options_->simulation_frames.load(
+                std::memory_order_acquire);
+        constexpr std::uint64_t sample_interval_nanoseconds = 500'000'000u;
+        if (runtime_menu_sample_nanoseconds_ == 0u) {
+            runtime_menu_sample_nanoseconds_ = now;
+            runtime_menu_output_frames_ = output_frames;
+            runtime_menu_simulation_frames_ = simulation_frames;
+        } else {
+            const auto interval = now >= runtime_menu_sample_nanoseconds_
+                                      ? now - runtime_menu_sample_nanoseconds_
+                                      : 0u;
+            if (interval < sample_interval_nanoseconds) {
+                if (!force) return;
+            } else {
+                runtime_menu_output_fps_ =
+                    static_cast<double>(
+                        output_frames - runtime_menu_output_frames_) *
+                    static_cast<double>(nanoseconds_per_second) /
+                    static_cast<double>(interval);
+                runtime_menu_simulation_fps_ =
+                    static_cast<double>(
+                        simulation_frames - runtime_menu_simulation_frames_) *
+                    static_cast<double>(nanoseconds_per_second) /
+                    static_cast<double>(interval);
+                runtime_menu_sample_nanoseconds_ = now;
+                runtime_menu_output_frames_ = output_frames;
+                runtime_menu_simulation_frames_ = simulation_frames;
+            }
+        }
+
+        const auto simulation_rate_hz =
+            runtime_options_->simulation_rate_hz.load(
+                std::memory_order_acquire);
+        const auto presentation_rate_hz =
+            runtime_options_->presentation_rate_hz.load(
+                std::memory_order_acquire);
+        const auto maximum_rate_hz =
+            runtime_options_->maximum_presentation_rate_hz.load(
+                std::memory_order_acquire);
+        const auto requested_rate_hz =
+            runtime_options_->requested_presentation_rate_hz.load(
+                std::memory_order_acquire);
+        const auto pacing_enabled =
+            runtime_options_->frame_pacing_enabled.load(
+                std::memory_order_acquire);
+        wchar_t output_label[96]{};
+        wchar_t simulation_label[96]{};
+        static_cast<void>(std::swprintf(output_label,
+                                        std::size(output_label),
+                                        L"Ausgabe: %.1f FPS (%u Hz)",
+                                        runtime_menu_output_fps_,
+                                        presentation_rate_hz));
+        static_cast<void>(std::swprintf(simulation_label,
+                                        std::size(simulation_label),
+                                        L"Simulation: %.1f FPS (%u Hz)",
+                                        runtime_menu_simulation_fps_,
+                                        simulation_rate_hz));
+        static_cast<void>(ModifyMenuW(options_menu_,
+                                      runtime_menu_output_fps,
+                                      MF_BYCOMMAND | MF_STRING | MF_GRAYED,
+                                      runtime_menu_output_fps,
+                                      output_label));
+        static_cast<void>(ModifyMenuW(options_menu_,
+                                      runtime_menu_simulation_fps,
+                                      MF_BYCOMMAND | MF_STRING | MF_GRAYED,
+                                      runtime_menu_simulation_fps,
+                                      simulation_label));
+        UINT selected = 0u;
+        for (std::size_t index = 0u;
+             index < runtime_presentation_rate_choices.size();
+             ++index) {
+            const auto rate_hz = runtime_presentation_rate_choices[index];
+            const auto command = runtime_menu_rate_first +
+                static_cast<UINT>(index);
+            const auto enabled = pacing_enabled &&
+                rate_hz >= simulation_rate_hz &&
+                rate_hz <= maximum_rate_hz;
+            static_cast<void>(EnableMenuItem(
+                options_menu_,
+                command,
+                MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED)));
+            if (enabled && rate_hz == requested_rate_hz)
+                selected = command;
+        }
+        if (selected != 0u)
+            static_cast<void>(CheckMenuRadioItem(options_menu_,
+                                                 runtime_menu_rate_first,
+                                                 runtime_menu_rate_last,
+                                                 selected,
+                                                 MF_BYCOMMAND));
+        DrawMenuBar(window_);
     }
 
     void create_window() {
@@ -3062,11 +3311,17 @@ class NativePortGraphicsBackend final {
                                ? WS_OVERLAPPEDWINDOW
                                : WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
                                      WS_MINIMIZEBOX;
-        if (AdjustWindowRect(&bounds, style, FALSE) == FALSE)
-            fail(NativePortGraphicsFailure::WindowCreation,
-                 GetLastError(),
-                 "window-rect");
         const auto title = utf8_to_wide(config_.title);
+        create_runtime_options_menu();
+        if (AdjustWindowRect(&bounds, style, TRUE) == FALSE) {
+            const auto code = GetLastError();
+            DestroyMenu(menu_bar_);
+            menu_bar_ = nullptr;
+            options_menu_ = nullptr;
+            fail(NativePortGraphicsFailure::WindowCreation,
+                 code,
+                 "window-rect");
+        }
         window_ = CreateWindowExW(0,
                                   native_graphics_window_class,
                                   title.c_str(),
@@ -3076,15 +3331,21 @@ class NativePortGraphicsBackend final {
                                   bounds.right - bounds.left,
                                   bounds.bottom - bounds.top,
                                   nullptr,
-                                  nullptr,
+                                  menu_bar_,
                                   instance,
                                   this);
-        if (window_ == nullptr)
+        if (window_ == nullptr) {
+            const auto code = GetLastError();
+            DestroyMenu(menu_bar_);
+            menu_bar_ = nullptr;
+            options_menu_ = nullptr;
             fail(NativePortGraphicsFailure::WindowCreation,
-                 GetLastError(),
+                 code,
                  "window-create");
+        }
         output_extent_ = config_.output_extent;
         pending_output_extent_ = output_extent_;
+        update_runtime_options_menu(true);
     }
 
     void destroy_window() noexcept {
@@ -3092,6 +3353,8 @@ class NativePortGraphicsBackend final {
         SetWindowLongPtrW(window_, GWLP_USERDATA, 0);
         DestroyWindow(window_);
         window_ = nullptr;
+        menu_bar_ = nullptr;
+        options_menu_ = nullptr;
     }
 
     void create_device() {
@@ -5714,6 +5977,7 @@ class NativePortGraphicsBackend final {
     std::string title_storage_;
     NativePortGraphicsConfig config_;
     std::thread::id owner_thread_;
+    NativePortRuntimeOptionsBridge* runtime_options_ = nullptr;
     std::optional<NativePortTelemetryWriter> telemetry_writer_;
     std::optional<NativePortTelemetryTimer> render_submit_timer_;
     std::array<GpuTimingSlot, gpu_timing_query_count> gpu_timing_queries_{};
@@ -5721,6 +5985,13 @@ class NativePortGraphicsBackend final {
     std::size_t active_gpu_timing_query_ = no_gpu_timing_query;
     bool gpu_timing_enabled_ = false;
     HWND window_ = nullptr;
+    HMENU menu_bar_ = nullptr;
+    HMENU options_menu_ = nullptr;
+    std::uint64_t runtime_menu_sample_nanoseconds_ = 0u;
+    std::uint64_t runtime_menu_output_frames_ = 0u;
+    std::uint64_t runtime_menu_simulation_frames_ = 0u;
+    double runtime_menu_output_fps_ = 0.0;
+    double runtime_menu_simulation_fps_ = 0.0;
     NativePortExtent output_extent_;
     NativePortExtent pending_output_extent_;
     NativePortGraphicsLayout cached_layout_;
@@ -5890,7 +6161,9 @@ class NativePortGraphicsBackend final {
 
 class NativePortGraphicsBackend final {
   public:
-    explicit NativePortGraphicsBackend(const NativePortGraphicsConfig& config) {
+    NativePortGraphicsBackend(
+        const NativePortGraphicsConfig& config,
+        NativePortRuntimeOptionsBridge*) {
         validate_graphics_config(config);
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::UnsupportedHost,
@@ -5968,7 +6241,8 @@ class NativePortGraphicsDevice::Impl final {
 
         if (serial()) {
             serial_backend_ =
-                std::make_unique<NativePortGraphicsBackend>(config_);
+                std::make_unique<NativePortGraphicsBackend>(
+                    config_, &runtime_options_);
             cache_initial_backend(*serial_backend_);
             bind_serial_queue_domains();
             return;
@@ -6041,6 +6315,42 @@ class NativePortGraphicsDevice::Impl final {
             },
             NativePortGraphicsFailure::RenderThreadContract,
             "render-poll-encode");
+    }
+
+    void configure_runtime_options(
+        const std::uint32_t simulation_rate_hz,
+        const std::uint32_t presentation_rate_hz,
+        const std::uint32_t maximum_presentation_rate_hz,
+        const bool frame_pacing_enabled) {
+        require_producer_thread();
+        runtime_options_.simulation_rate_hz.store(
+            simulation_rate_hz, std::memory_order_release);
+        runtime_options_.maximum_presentation_rate_hz.store(
+            maximum_presentation_rate_hz, std::memory_order_release);
+        runtime_options_.presentation_rate_hz.store(
+            presentation_rate_hz, std::memory_order_release);
+        runtime_options_.requested_presentation_rate_hz.store(
+            presentation_rate_hz, std::memory_order_release);
+        runtime_options_.frame_pacing_enabled.store(
+            frame_pacing_enabled, std::memory_order_release);
+        signal_consumer_noexcept();
+    }
+
+    void record_simulation_frame_nonblocking() noexcept {
+        saturating_atomic_increment(runtime_options_.simulation_frames);
+    }
+
+    [[nodiscard]] std::uint32_t
+    requested_presentation_rate_nonblocking() const noexcept {
+        return runtime_options_.requested_presentation_rate_hz.load(
+            std::memory_order_acquire);
+    }
+
+    void acknowledge_presentation_rate_nonblocking(
+        const std::uint32_t presentation_rate_hz) noexcept {
+        runtime_options_.presentation_rate_hz.store(
+            presentation_rate_hz, std::memory_order_release);
+        signal_consumer_noexcept();
     }
 
     [[nodiscard]] NativePortLifecycleState lifecycle_state() {
@@ -6225,6 +6535,21 @@ class NativePortGraphicsDevice::Impl final {
             "repeat-present-command-encode");
     }
 
+    void repeat_present_async() {
+        require_producer_thread();
+        if (producer_frame_open_)
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidFrame,
+                1u,
+                "repeat-present-with-open-frame");
+        submit_standalone_async(
+            [](NativePortGraphicsCommandWriter& writer) {
+                return writer.repeat_present();
+            },
+            NativePortGraphicsFailure::InvalidFrame,
+            "repeat-present-command-encode");
+    }
+
     void present_image(const NativePortImageView& image,
                        const NativePortViewportTarget viewport,
                        const NativePortImageFit fit) {
@@ -6284,6 +6609,12 @@ class NativePortGraphicsDevice::Impl final {
     [[nodiscard]] std::uint64_t
     presented_frames_nonblocking() const noexcept {
         return published_presented_frames_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t
+    repeated_presentations_nonblocking() const noexcept {
+        return published_repeated_presentations_.load(
+            std::memory_order_acquire);
     }
 
     [[nodiscard]] bool frame_recording_open_nonblocking() const noexcept {
@@ -6652,7 +6983,8 @@ class NativePortGraphicsDevice::Impl final {
     void consumer_main() noexcept {
         std::unique_ptr<NativePortGraphicsBackend> backend;
         try {
-            backend = std::make_unique<NativePortGraphicsBackend>(config_);
+            backend = std::make_unique<NativePortGraphicsBackend>(
+                config_, &runtime_options_);
             static_cast<void>(queue_->try_begin_consume());
             startup_snapshot_ = backend->snapshot();
             startup_layout_ = backend->layout();
@@ -6836,6 +7168,8 @@ class NativePortGraphicsDevice::Impl final {
         }
         slot.error = error;
         slot.failed_ordinal = failed_ordinal;
+        published_repeated_presentations_.store(
+            consumer_repeated_presentations_, std::memory_order_release);
         published_presented_frames_.store(
             slot.snapshot.presented_frames, std::memory_order_release);
         slot.ready_sequence.store(sequence, std::memory_order_release);
@@ -7012,6 +7346,20 @@ class NativePortGraphicsDevice::Impl final {
         append_open(std::forward<Encoder>(encode),
                     source_failure, source_operation);
         publish_open_batch(true);
+    }
+
+    template <typename Encoder>
+    void submit_standalone_async(
+        Encoder&& encode,
+        const NativePortGraphicsFailure source_failure,
+        const char* const source_operation) {
+        require_producer_thread();
+        if (batch_writer_.has_value())
+            fail_facade("render-standalone-with-open-batch");
+        begin_batch();
+        append_open(std::forward<Encoder>(encode),
+                    source_failure, source_operation);
+        publish_open_batch(false);
     }
 
     template <typename Encoder>
@@ -7279,9 +7627,15 @@ class NativePortGraphicsDevice::Impl final {
         case NativePortGraphicsCommandKind::Present:
             backend.present();
             return false;
-        case NativePortGraphicsCommandKind::RepeatPresent:
+        case NativePortGraphicsCommandKind::RepeatPresent: {
+            const auto before = backend.snapshot().presented_frames;
             backend.repeat_present();
+            const auto after = backend.snapshot().presented_frames;
+            if (after > before)
+                saturating_add_value(
+                    consumer_repeated_presentations_, after - before);
             return false;
+        }
         case NativePortGraphicsCommandKind::PresentImage: {
             const auto& view =
                 std::get<NativePortGraphicsPresentImageView>(command.payload);
@@ -7341,6 +7695,7 @@ class NativePortGraphicsDevice::Impl final {
         NativePortGraphicsExecutionMode::Parallel;
     NativePortGraphicsExecutionMode active_mode_ =
         NativePortGraphicsExecutionMode::Parallel;
+    NativePortRuntimeOptionsBridge runtime_options_;
     std::unique_ptr<NativePortGraphicsBackend> serial_backend_;
     std::unique_ptr<NativePortFrameQueue> queue_;
     std::thread consumer_thread_;
@@ -7372,6 +7727,8 @@ class NativePortGraphicsDevice::Impl final {
     NativePortLifecycleState cached_lifecycle_ =
         NativePortLifecycleState::Running;
     std::atomic<std::uint64_t> published_presented_frames_{0u};
+    std::atomic<std::uint64_t> published_repeated_presentations_{0u};
+    std::uint64_t consumer_repeated_presentations_ = 0u;
     std::atomic<std::uint64_t> recorded_commands_{0u};
     std::atomic<std::uint64_t> consumed_commands_{0u};
     std::atomic<std::uint64_t> executed_commands_{0u};
@@ -7404,6 +7761,33 @@ void NativePortGraphicsDevice::show() {
 
 void NativePortGraphicsDevice::poll_events() {
     impl_->poll_events();
+}
+
+void NativePortGraphicsDevice::configure_runtime_options(
+    const std::uint32_t simulation_rate_hz,
+    const std::uint32_t presentation_rate_hz,
+    const std::uint32_t maximum_presentation_rate_hz,
+    const bool frame_pacing_enabled) {
+    impl_->configure_runtime_options(simulation_rate_hz,
+                                     presentation_rate_hz,
+                                     maximum_presentation_rate_hz,
+                                     frame_pacing_enabled);
+}
+
+void NativePortGraphicsDevice::record_simulation_frame_nonblocking()
+    noexcept {
+    impl_->record_simulation_frame_nonblocking();
+}
+
+std::uint32_t
+NativePortGraphicsDevice::requested_presentation_rate_nonblocking()
+    const noexcept {
+    return impl_->requested_presentation_rate_nonblocking();
+}
+
+void NativePortGraphicsDevice::acknowledge_presentation_rate_nonblocking(
+    const std::uint32_t presentation_rate_hz) noexcept {
+    impl_->acknowledge_presentation_rate_nonblocking(presentation_rate_hz);
 }
 
 NativePortLifecycleState
@@ -7480,6 +7864,10 @@ void NativePortGraphicsDevice::repeat_present() {
     impl_->repeat_present();
 }
 
+void NativePortGraphicsDevice::repeat_present_async() {
+    impl_->repeat_present_async();
+}
+
 void NativePortGraphicsDevice::present_image(
     const NativePortImageView& image,
     const NativePortViewportTarget viewport,
@@ -7500,6 +7888,11 @@ NativePortGraphicsDevice::presented_frames_nonblocking() const noexcept {
     return impl_->presented_frames_nonblocking();
 }
 
+std::uint64_t
+NativePortGraphicsDevice::repeated_presentations_nonblocking() const noexcept {
+    return impl_->repeated_presentations_nonblocking();
+}
+
 bool NativePortGraphicsDevice::frame_recording_open_nonblocking()
     const noexcept {
     return impl_->frame_recording_open_nonblocking();
@@ -7517,6 +7910,11 @@ NativePortDesktopHost::NativePortDesktopHost(
     frame_pacing_snapshot_.presentation_rate_hz =
         frame_pacing_config_.presentation_rate_hz;
     frame_pacing_snapshot_.enabled = frame_pacing_config_.enabled;
+    graphics_.configure_runtime_options(
+        frame_pacing_config_.simulation_rate_hz,
+        frame_pacing_config_.presentation_rate_hz,
+        frame_pacing_config_.maximum_presentation_rate_hz,
+        frame_pacing_config_.enabled);
 }
 
 NativePortDesktopHost::~NativePortDesktopHost() {
@@ -7540,6 +7938,7 @@ NativePortLifecycleState NativePortDesktopHost::poll_lifecycle() {
     const auto now = monotonic_time_nanoseconds();
     if (now >= next_event_poll_nanoseconds_) {
         graphics_.poll_events();
+        apply_runtime_presentation_rate();
         next_event_poll_nanoseconds_ =
             now > std::numeric_limits<std::uint64_t>::max() -
                       event_poll_interval_nanoseconds
@@ -7550,6 +7949,7 @@ NativePortLifecycleState NativePortDesktopHost::poll_lifecycle() {
 }
 
 void NativePortDesktopHost::synchronize_simulation_boundary() {
+    apply_runtime_presentation_rate();
     if (!frame_pacing_config_.enabled || !frame_pacing_started_)
         return;
     if (monotonic_time_nanoseconds() <
@@ -7565,6 +7965,7 @@ void NativePortDesktopHost::begin_frame(const std::uint64_t frame_index) {
 
 void NativePortDesktopHost::present_frame(const std::uint64_t frame_index) {
     static_cast<void>(frame_index);
+    graphics_.record_simulation_frame_nonblocking();
     paced_present();
 }
 
@@ -7574,40 +7975,66 @@ std::uint64_t NativePortDesktopHost::presented_frames() const noexcept {
 
 NativePortFramePacingSnapshot
 NativePortDesktopHost::frame_pacing_snapshot() const noexcept {
-    reconcile_presentations(false);
+    reconcile_presentations();
     return frame_pacing_snapshot_;
 }
 
-void NativePortDesktopHost::reconcile_presentations(
-    const bool residual_repeated) const noexcept {
+void NativePortDesktopHost::reconcile_presentations() const noexcept {
     const auto completed = graphics_.presented_frames_nonblocking();
     if (completed <= accounted_presented_frames_) return;
     const auto delta = completed - accounted_presented_frames_;
-    const auto normal = std::min(delta, pending_normal_presentations_);
-    pending_normal_presentations_ -= normal;
+    const auto repeated = std::min(
+        graphics_.repeated_presentations_nonblocking(), completed);
+    const auto repeated_delta = std::min(
+        delta,
+        repeated > accounted_repeated_presentations_
+            ? repeated - accounted_repeated_presentations_
+            : 0u);
     saturating_add(frame_pacing_snapshot_.presentation_frames, delta);
-    if (residual_repeated && delta > normal)
-        saturating_add(frame_pacing_snapshot_.repeated_presentations,
-                       delta - normal);
+    saturating_add(frame_pacing_snapshot_.repeated_presentations,
+                   repeated_delta);
     accounted_presented_frames_ = completed;
+    accounted_repeated_presentations_ = repeated;
+}
+
+void NativePortDesktopHost::apply_runtime_presentation_rate() {
+    if (!frame_pacing_config_.enabled) return;
+    const auto requested =
+        graphics_.requested_presentation_rate_nonblocking();
+    if (requested == frame_pacing_config_.presentation_rate_hz) return;
+    if (!runtime_presentation_rate_choice(requested) ||
+        requested < frame_pacing_config_.simulation_rate_hz ||
+        requested > frame_pacing_config_.maximum_presentation_rate_hz) {
+        graphics_.acknowledge_presentation_rate_nonblocking(
+            frame_pacing_config_.presentation_rate_hz);
+        return;
+    }
+    frame_pacing_config_.presentation_rate_hz = requested;
+    frame_pacing_snapshot_.presentation_rate_hz = requested;
+    graphics_.acknowledge_presentation_rate_nonblocking(requested);
+    if (!frame_pacing_started_) return;
+    const auto now = monotonic_time_nanoseconds();
+    next_presentation_deadline_nanoseconds_ = now;
+    presentation_deadline_remainder_ = 0u;
+    advance_frame_deadline(next_presentation_deadline_nanoseconds_,
+                           presentation_deadline_remainder_,
+                           requested);
 }
 
 void NativePortDesktopHost::paced_present() {
+    apply_runtime_presentation_rate();
     const auto present_and_record = [this](const bool repeated) {
         const bool repeat_completed_frame =
             repeated || !graphics_.frame_recording_open_nonblocking();
         if (repeat_completed_frame) {
-            graphics_.repeat_present();
-            reconcile_presentations(true);
+            graphics_.repeat_present_async();
+            reconcile_presentations();
         } else {
-            if (pending_normal_presentations_ !=
-                std::numeric_limits<std::uint64_t>::max())
-                ++pending_normal_presentations_;
             graphics_.present();
             // present() retires the preceding frame before publishing the
             // current one. Account whichever FIFO completions are visible;
             // the current asynchronous presentation remains pending.
-            reconcile_presentations(false);
+            reconcile_presentations();
         }
     };
 

@@ -16,7 +16,7 @@ namespace katana::runtime {
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
 inline constexpr std::uint32_t native_port_graphics_contract_version = 19u;
-inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 1u;
+inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 2u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
 // per-pixel ordering subpass, including the fixed-function blend factors of
@@ -130,6 +130,9 @@ struct NativePortFramePacingConfig final {
         native_port_frame_pacing_contract_version;
     std::uint32_t simulation_rate_hz = 60u;
     std::uint32_t presentation_rate_hz = 60u;
+    // Runtime presentation choices are bounded by the authenticated title
+    // contract. Changing this value never changes the simulation cadence.
+    std::uint32_t maximum_presentation_rate_hz = 1'000u;
     bool enabled = true;
 };
 
@@ -988,8 +991,21 @@ class NativePortGraphicsDevice final {
 
   private:
     friend class NativePortDesktopHost;
+    void configure_runtime_options(
+        std::uint32_t simulation_rate_hz,
+        std::uint32_t presentation_rate_hz,
+        std::uint32_t maximum_presentation_rate_hz,
+        bool frame_pacing_enabled);
+    void record_simulation_frame_nonblocking() noexcept;
+    [[nodiscard]] std::uint32_t
+    requested_presentation_rate_nonblocking() const noexcept;
+    void acknowledge_presentation_rate_nonblocking(
+        std::uint32_t presentation_rate_hz) noexcept;
+    void repeat_present_async();
     [[nodiscard]] std::uint64_t
     presented_frames_nonblocking() const noexcept;
+    [[nodiscard]] std::uint64_t
+    repeated_presentations_nonblocking() const noexcept;
     [[nodiscard]] bool frame_recording_open_nonblocking() const noexcept;
     class Impl;
     std::unique_ptr<Impl> impl_;
@@ -1022,14 +1038,15 @@ class NativePortDesktopHost final : public NativePortHostServices {
     [[nodiscard]] const NativePortGraphicsDevice& graphics() const noexcept;
 
   private:
+    void apply_runtime_presentation_rate();
     void paced_present();
-    void reconcile_presentations(bool residual_repeated) const noexcept;
+    void reconcile_presentations() const noexcept;
 
     NativePortGraphicsDevice graphics_;
     NativePortFramePacingConfig frame_pacing_config_;
     mutable NativePortFramePacingSnapshot frame_pacing_snapshot_;
     mutable std::uint64_t accounted_presented_frames_ = 0u;
-    mutable std::uint64_t pending_normal_presentations_ = 0u;
+    mutable std::uint64_t accounted_repeated_presentations_ = 0u;
     std::uint64_t next_event_poll_nanoseconds_ = 0u;
     std::uint64_t next_simulation_deadline_nanoseconds_ = 0u;
     std::uint64_t next_presentation_deadline_nanoseconds_ = 0u;

@@ -550,6 +550,70 @@ void run_type_two_global_fragment_capture(
     require(!cleanup_error, "Type2-Capture-Tempverzeichnis blieb zurueck.");
 }
 
+void require_runtime_options_menu(
+    katana::runtime::NativePortGraphicsConfig config) {
+    using namespace katana::runtime;
+    config.title = "Katana Runtime Options Contract Test";
+    config.telemetry = nullptr;
+    config.initially_visible = false;
+    NativePortFramePacingConfig pacing;
+    pacing.simulation_rate_hz = 30u;
+    pacing.presentation_rate_hz = 60u;
+    pacing.maximum_presentation_rate_hz = 144u;
+    NativePortDesktopHost host(config, pacing);
+    static_cast<void>(host.poll_lifecycle());
+
+    const auto window = FindWindowW(
+        nullptr, L"Katana Runtime Options Contract Test");
+    require(window != nullptr,
+            "Das Runtime-Options-Menue besitzt kein Hostfenster.");
+    const auto menu_bar = GetMenu(window);
+    require(menu_bar != nullptr && GetMenuItemCount(menu_bar) >= 1,
+            "Das Runtime-Options-Menue fehlt unter der Titelleiste.");
+    const auto options = GetSubMenu(menu_bar, 0);
+    require(options != nullptr && GetMenuItemCount(options) == 7,
+            "Das Optionen-Untermenue besitzt nicht exakt Counter und "
+            "Hz-Auswahl.");
+    wchar_t output_label[96]{};
+    wchar_t simulation_label[96]{};
+    static_cast<void>(GetMenuStringW(
+        options,
+        0u,
+        output_label,
+        static_cast<int>(std::size(output_label)),
+        MF_BYPOSITION));
+    static_cast<void>(GetMenuStringW(
+        options,
+        1u,
+        simulation_label,
+        static_cast<int>(std::size(simulation_label)),
+        MF_BYPOSITION));
+    require(std::wstring_view(output_label).find(L"Ausgabe:") == 0u &&
+                std::wstring_view(simulation_label).find(L"Simulation:") ==
+                    0u,
+            "FPS- oder Simulations-Counter fehlt im Optionen-Menue.");
+
+    const auto rate_144_command = GetMenuItemID(options, 6);
+    require(rate_144_command != static_cast<UINT>(-1),
+            "Die 144-Hz-Auswahl besitzt keine klickbare Command-ID.");
+    DWORD_PTR command_result = 0u;
+    require(SendMessageTimeoutW(window,
+                                WM_COMMAND,
+                                MAKEWPARAM(rate_144_command, 0u),
+                                0,
+                                SMTO_ABORTIFHUNG,
+                                1'000u,
+                                &command_result) != 0u,
+            "Das Optionen-Menue reagierte nicht auf die 144-Hz-Auswahl.");
+    host.synchronize_simulation_boundary();
+    const auto selected = host.frame_pacing_snapshot();
+    require(selected.simulation_rate_hz == 30u &&
+                selected.presentation_rate_hz == 144u,
+            "Die Hz-Auswahl veraenderte die 30-Hz-Simulation oder erreichte "
+            "die Praesentationsuhr nicht.");
+    host.graphics().finish();
+}
+
 #endif
 
 } // namespace
@@ -560,6 +624,7 @@ int main(const int argc, char** const argv) {
 #else
     using namespace katana::runtime;
     static_assert(native_port_graphics_contract_version == 19u);
+    static_assert(native_port_frame_pacing_contract_version == 2u);
     static_assert(native_port_type2_autosort_contract_version == 3u);
 
     // The backend caches this gate on its first construction. Bind it before
@@ -589,6 +654,8 @@ int main(const int argc, char** const argv) {
     config.maximum_render_resource_payload_bytes_per_command = 64u << 10u;
     NativePortTelemetry telemetry;
     config.telemetry = &telemetry;
+
+    require_runtime_options_menu(config);
 
     auto invalid_resource_capacity = config;
     invalid_resource_capacity.maximum_render_resource_payload_bytes_per_command =

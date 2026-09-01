@@ -4488,6 +4488,10 @@ int run_test(const int argc, char* argv[]) {
             explicit_static_main.find("\\\"presentation_rate_hz\\\":",
                                       native_frame_pacing_snapshot) !=
                 std::string::npos &&
+            explicit_static_main.find(
+                "frame_pacing.maximum_presentation_rate_hz =\n"
+                "            definition.frame_timing.maximum_presentation_rate_hz;") !=
+                std::string::npos &&
             explicit_static_main.find("\\\"enabled\\\":",
                                       native_frame_pacing_snapshot) !=
                 std::string::npos,
@@ -5022,6 +5026,8 @@ int run_test(const int argc, char* argv[]) {
             generated_native_dispatch.find(
                 "class NativePortStaticChainIndex final") !=
                 std::string::npos &&
+            generated_native_dispatch.find(
+                "native-static-chain-empty") == std::string::npos &&
             generated_native_dispatch.find(
                 "if (static_chainable_source_address(source)) return true;") !=
                 std::string::npos &&

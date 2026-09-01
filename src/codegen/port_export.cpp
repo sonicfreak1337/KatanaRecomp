@@ -17383,6 +17383,8 @@ std::string native_product_main(
            "        frame_pacing.simulation_rate_hz =\n"
            "            definition.frame_timing.simulation_rate_hz;\n"
            "        frame_pacing.presentation_rate_hz = presentation_fps;\n"
+           "        frame_pacing.maximum_presentation_rate_hz =\n"
+           "            definition.frame_timing.maximum_presentation_rate_hz;\n"
            "        graphics_config.telemetry =\n"
            "            native_performance_telemetry_enabled\n"
            "                ? &native_performance_telemetry : nullptr;\n"
@@ -17860,12 +17862,49 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     constexpr std::uint8_t read_only_image_range_kind = 1u << 1u;
     std::vector<ImmutableRange> executable_fragments;
     executable_fragments.reserve(block_count);
-    std::unordered_set<std::uint32_t> executable_hook_addresses;
-    executable_hook_addresses.reserve(definition.hooks.size());
+    const auto projected_runtime_address =
+        [&](const std::uint32_t address,
+            const std::uint32_t width) {
+            auto runtime_address = address;
+            for (const auto& alias : image.address_aliases()) {
+                const auto begin =
+                    static_cast<std::uint64_t>(alias.source_start);
+                const auto end = begin + alias.size;
+                if (address < begin ||
+                    static_cast<std::uint64_t>(address) + width > end)
+                    continue;
+                runtime_address = alias.runtime_start +
+                    (address - alias.source_start);
+                break;
+            }
+            return runtime_address;
+        };
+    const auto projected_physical_instruction =
+        [&](const std::uint32_t address) {
+            return katana::runtime::canonical_physical_address(
+                projected_runtime_address(address, 2u));
+        };
+    std::unordered_set<std::uint32_t> executable_hook_physical_addresses;
+    executable_hook_physical_addresses.reserve(
+        definition.hooks.size() * 2u);
     for (const auto& hook : definition.hooks) {
-        if (katana::runtime::native_port_hook_is_executable(
+        if (!katana::runtime::native_port_hook_is_executable(
                 hook.requirement))
-            executable_hook_addresses.insert(hook.guest_address);
+            continue;
+        if ((hook.guest_address & 1u) != 0u ||
+            hook.covered_size == 0u ||
+            (hook.covered_size & 1u) != 0u ||
+            static_cast<std::uint64_t>(hook.guest_address) +
+                    hook.covered_size >
+                0x1'0000'0000ull)
+            throw std::runtime_error(
+                "Nativer executable Hook besitzt einen ungueltigen "
+                "Instruktionsbereich.");
+        for (std::uint32_t offset = 0u; offset < hook.covered_size;
+             offset += 2u)
+            executable_hook_physical_addresses.insert(
+                katana::runtime::canonical_physical_address(
+                    hook.guest_address + offset));
     }
     const auto latent_source_instruction =
         [&](const std::uint32_t address) {
@@ -17892,6 +17931,37 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                                    runtime_image->byte_size;
                 });
         };
+    const auto runtime_destination_instruction =
+        [&](const std::uint32_t address) {
+            const auto physical = projected_physical_instruction(address);
+            const auto contains =
+                [&](const std::uint32_t runtime_start,
+                    const std::uint32_t byte_size) {
+                    if (runtime_start == 0u || byte_size == 0u) return false;
+                    const auto begin = static_cast<std::uint64_t>(
+                        katana::runtime::canonical_physical_address(
+                            runtime_start));
+                    const auto end = begin + byte_size;
+                    return physical >= begin &&
+                           static_cast<std::uint64_t>(physical) + 2u <= end;
+                };
+            if (std::any_of(
+                    native_runtime_image_definitions.begin(),
+                    native_runtime_image_definitions.end(),
+                    [&](const auto* const runtime_image) {
+                        return contains(runtime_image->runtime_start,
+                                        runtime_image->byte_size);
+                    }))
+                return true;
+            for (const auto& module : latent_modules) {
+                for (const auto& binding : module.source_bindings) {
+                    if (contains(proven_runtime_base(module, binding),
+                                 module.byte_size))
+                        return true;
+                }
+            }
+            return false;
+        };
     const auto append_executable_instruction =
         [&](const std::uint32_t address) {
             // Synthetic latent-module addresses do not name live product RAM.
@@ -17900,21 +17970,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             if (latent_source_instruction(address) ||
                 runtime_image_source_instruction(address))
                 return;
-            auto runtime_address = address;
-            for (const auto& alias : image.address_aliases()) {
-                const auto begin =
-                    static_cast<std::uint64_t>(alias.source_start);
-                const auto end = begin + alias.size;
-                if (address < begin ||
-                    static_cast<std::uint64_t>(address) + 2u > end)
-                    continue;
-                runtime_address = alias.runtime_start +
-                    (address - alias.source_start);
-                break;
-            }
             const auto physical =
-                katana::runtime::canonical_physical_address(
-                    runtime_address);
+                projected_physical_instruction(address);
             if ((address & 1u) != 0u ||
                 static_cast<std::uint64_t>(physical) + 2u >
                     0x1'0000'0000ull)
@@ -18638,7 +18695,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                                   blocks[index].address) &&
                                      !runtime_image_source_instruction(
                                          blocks[index].address) &&
-                                     !executable_hook_addresses.contains(
+                                     !executable_hook_physical_addresses
+                                          .contains(
+                                              projected_physical_instruction(
+                                                  blocks[index].address)) &&
+                                     !runtime_destination_instruction(
                                          blocks[index].address)
                                  ? "true"
                                  : "false")
@@ -19421,8 +19482,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            last = std::max(last, page);\n"
               "        }\n"
               "        if (first == std::numeric_limits<std::uint32_t>::max())\n"
-              "            throw std::runtime_error(\n"
-              "                \"native-static-chain-empty\");\n"
+              "            return;\n"
               "        const auto page_span =\n"
               "            static_cast<std::uint64_t>(last) - first + 1u;\n"
               "        if (page_span > maximum_page_span)\n"
