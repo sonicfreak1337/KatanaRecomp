@@ -16722,6 +16722,28 @@ std::string native_product_main(
            "#define KATANA_PORT_PGO_PROFILE_SHA256_NAME \"none\"\n"
            "#endif\n\n"
            "namespace {\n"
+           "std::filesystem::path native_product_user_data_root() {\n"
+           "    if (const auto* configured = std::getenv(\"KATANA_USER_DATA_ROOT\");\n"
+           "        configured != nullptr && *configured != '\\0')\n"
+           "        return std::filesystem::absolute(configured).lexically_normal();\n"
+           "#if defined(_WIN32)\n"
+           "    if (const auto* local = std::getenv(\"LOCALAPPDATA\");\n"
+           "        local != nullptr && *local != '\\0')\n"
+           "        return (std::filesystem::absolute(local) / \"KatanaRecomp\")\n"
+           "            .lexically_normal();\n"
+           "#else\n"
+           "    if (const auto* data = std::getenv(\"XDG_DATA_HOME\");\n"
+           "        data != nullptr && *data != '\\0')\n"
+           "        return (std::filesystem::absolute(data) / \"katana-recomp\")\n"
+           "            .lexically_normal();\n"
+           "    if (const auto* home = std::getenv(\"HOME\");\n"
+           "        home != nullptr && *home != '\\0')\n"
+           "        return (std::filesystem::absolute(home) / \".local\" / \"share\" /\n"
+           "                \"katana-recomp\")\n"
+           "            .lexically_normal();\n"
+           "#endif\n"
+           "    throw std::runtime_error(\"native-product-user-data-root\");\n"
+           "}\n"
            "std::atomic<std::uint32_t> native_product_crash_latch{0u};\n"
            "std::atomic<katana::runtime::CpuState*> native_product_cpu{nullptr};\n"
            "katana::runtime::CrashCapsule native_product_crash_capsule{};\n"
@@ -17354,7 +17376,7 @@ std::string native_product_main(
            "        katana::runtime::NativePortPlatformConfig platform_config;\n"
            "        platform_config.content_root = content_root;\n"
            "        platform_config.user_data_root =\n"
-           "            executable_path.parent_path() / \"user-data\";\n"
+           "            native_product_user_data_root();\n"
            "        platform_config.project_id = definition.project_id;\n"
            "        platform_config.input_identity = " +
            katana::io::quote_json(input_compatibility_identity) +
@@ -17696,6 +17718,7 @@ struct NativeBringupCoverageSourceEmission final {
         katana::runtime::NativeBringupCoverageSourceKind::StaticAot;
     NativeBringupDispatchBlockEmission source;
     std::string source_module_identity;
+    std::string source_image_id;
     std::uint32_t source_runtime_start = 0u;
     std::uint32_t source_module_size = 0u;
     std::uint32_t source_module_offset = 0u;
@@ -17830,6 +17853,84 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         }
         return result.value_or(0u);
     };
+    const auto loaded_aot_module_universe_identity = [&] {
+        std::string material;
+        const auto append_u64 = [&](const std::uint64_t value) {
+            for (std::size_t index = 0u; index < 8u; ++index)
+                material.push_back(static_cast<char>(
+                    static_cast<std::uint8_t>(value >> (index * 8u))));
+        };
+        const auto append_string = [&](const std::string_view value) {
+            append_u64(value.size());
+            material.append(value);
+        };
+        append_string("katana-native-port-loaded-aot-module-universe-v1");
+        std::vector<const PreparedLatentAotModule*> module_order;
+        module_order.reserve(latent_modules.size());
+        for (const auto& module : latent_modules)
+            module_order.push_back(&module);
+        std::sort(
+            module_order.begin(), module_order.end(),
+            [](const auto* left, const auto* right) {
+                return std::tie(left->source_address, left->byte_size,
+                                left->byte_identity) <
+                       std::tie(right->source_address, right->byte_size,
+                                right->byte_identity);
+            });
+        append_u64(module_order.size());
+        for (const auto* const module : module_order) {
+            append_u64(module->source_address);
+            append_u64(module->byte_size);
+            append_string(module->byte_identity);
+
+            std::vector<const PreparedLatentAotSourceBinding*> binding_order;
+            binding_order.reserve(module->source_bindings.size());
+            for (const auto& binding : module->source_bindings)
+                binding_order.push_back(&binding);
+            std::sort(
+                binding_order.begin(), binding_order.end(),
+                [&](const auto* left, const auto* right) {
+                    return std::tuple{
+                               static_cast<std::uint8_t>(left->transform),
+                               left->byte_identity, left->disc_byte_offset,
+                               left->byte_size,
+                               proven_runtime_base(*module, *left)} <
+                           std::tuple{
+                               static_cast<std::uint8_t>(right->transform),
+                               right->byte_identity, right->disc_byte_offset,
+                               right->byte_size,
+                               proven_runtime_base(*module, *right)};
+                });
+            append_u64(binding_order.size());
+            for (const auto* const binding : binding_order) {
+                append_u64(static_cast<std::uint8_t>(binding->transform));
+                append_string(binding->byte_identity);
+                append_u64(binding->disc_byte_offset);
+                append_u64(binding->byte_size);
+                append_u64(proven_runtime_base(*module, *binding));
+            }
+
+            std::vector<const PreparedLatentAotBlockIdentity*> block_order;
+            block_order.reserve(module->block_identities.size());
+            for (const auto& block : module->block_identities)
+                block_order.push_back(&block);
+            std::sort(
+                block_order.begin(), block_order.end(),
+                [](const auto* left, const auto* right) {
+                    return std::tie(left->source_offset, left->size,
+                                    left->sha256) <
+                           std::tie(right->source_offset, right->size,
+                                    right->sha256);
+                });
+            append_u64(block_order.size());
+            for (const auto* const block : block_order) {
+                append_u64(block->source_offset);
+                append_u64(block->size);
+                append_string(block->sha256);
+            }
+        }
+        return std::string("sha256:") + katana::io::sha256_bytes(material);
+    }();
     const auto build_identity_marker = native_port_build_identity_marker(
         definition, native_port_artifact_identity);
     const bool post_entry_is_continuation = std::ranges::any_of(
@@ -19343,7 +19444,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                     << (source.source_kind == katana::runtime::
                                 NativeBringupCoverageSourceKind::LoadedAot
                             ? "LoadedAot"
-                            : "StaticAot")
+                            : source.source_kind == katana::runtime::
+                                      NativeBringupCoverageSourceKind::
+                                          RuntimeImage
+                                  ? "RuntimeImage"
+                                  : "StaticAot")
                     << ", {{0x" << symbol(source.source.address)
                     << "u, 0x" << symbol(physical) << "u}, "
                     << source.source.size
@@ -19353,6 +19458,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                     << "}, "
                     << katana::io::quote_json(
                            source.source_module_identity)
+                    << ", " << katana::io::quote_json(source.source_image_id)
                     << ", 0x" << symbol(source.source_runtime_start)
                     << "u, " << source.source_module_size << "u, "
                     << source.source_module_offset << "u},\n";
@@ -19397,6 +19503,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                 << katana::io::quote_json(
                        native_bringup_analysis_identity)
                 << ", " << katana::io::quote_json(native_aot_pack_identity)
+                << ", "
+                << katana::io::quote_json(
+                       loaded_aot_module_universe_identity)
                 << ", " << native_aot_pack_generation << "ull},\n"
                 << "    std::span<const katana::runtime::"
                    "NativeBringupCoverageSourceTransfer>("
@@ -21660,6 +21769,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "    static_cast<void>(katana::runtime::\n"
                    "        preflight_native_bringup_coverage_dispatch(\n"
                    "            *active_native_bringup_table,\n"
+                   "            *active_runtime_image_bindings,\n"
                    "            *runtime_dispatch_detail::\n"
                    "                active_loaded_aot_binder,\n"
                    "            *active_native_bringup_coverage_context,\n"
@@ -22153,6 +22263,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        *context.cpu,\n"
               "        runtime_dispatch_detail::native_loaded_aot_module_views(),\n"
               "        immutable_guard, executable_lifecycle_ledger,\n"
+           << "        "
+           << katana::io::quote_json(loaded_aot_module_universe_identity)
+           << ", " << katana::io::quote_json(native_aot_pack_identity)
+           << ",\n"
+           <<
               "        context.crash_capsule);\n"
               "    katana::runtime::NativePortAotServices services(\n"
               "        context, &runtime_dispatch_detail::native_chainable_entry,\n"
@@ -22181,7 +22296,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                      "    const auto native_bringup_coverage_context =\n"
                      "        katana::runtime::\n"
                      "        make_native_bringup_coverage_dispatch_context(\n"
-                     "            native_bringup_table, loaded_aot_binder,\n"
+                     "            native_bringup_table, runtime_image_bindings,\n"
+                     "            loaded_aot_binder,\n"
                      "            native_bringup_coverage_dispatch_pack,\n"
                      "            native_bringup_runtime_generation,\n"
                      "            native_bringup_coverage_observations);\n"
@@ -29811,6 +29927,7 @@ struct NativeBringupCoverageEmissions final {
 NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
     const CompleteDisassemblyAuthority& authority,
     const katana::runtime::NativePortDefinition& definition,
+    const katana::runtime::GameProjectDefinition& game_project,
     const std::span<const katana::ir::Function> emitted_program,
     const katana::io::ExecutableImage& image,
     const std::span<const PreparedLatentAotModule> latent_modules,
@@ -29851,6 +29968,27 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         }
         return match;
     };
+    const auto runtime_image_for_range =
+        [&](const std::uint32_t start,
+            const std::uint32_t size)
+        -> const katana::runtime::GameProjectRuntimeImage* {
+        const katana::runtime::GameProjectRuntimeImage* match = nullptr;
+        const auto end = static_cast<std::uint64_t>(start) + size;
+        for (const auto& runtime_image : game_project.runtime_images) {
+            if (!game_project_runtime_image_is_active(
+                    &definition, runtime_image.image_id))
+                continue;
+            const auto image_begin =
+                static_cast<std::uint64_t>(runtime_image.source_start);
+            const auto image_end = image_begin + runtime_image.byte_size;
+            if (start < image_begin || end > image_end) continue;
+            if (match != nullptr)
+                throw std::runtime_error(
+                    "Coverage-AOT-Block besitzt mehrere Runtime-Image-Owner.");
+            match = &runtime_image;
+        }
+        return match;
+    };
     const auto ir_block_for_entry =
         [&](const PreparedLatentAotModule& module,
             const std::uint32_t source_address)
@@ -29870,11 +30008,120 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         }
         return match;
     };
+    const auto emitted_block_for_entry =
+        [&](const std::uint32_t source_address)
+        -> const katana::ir::BasicBlock* {
+        const katana::ir::BasicBlock* match = nullptr;
+        for (const auto& function : emitted_program) {
+            for (const auto& block : function.blocks) {
+                if (block.start_address != source_address) continue;
+                if (match != nullptr &&
+                    (exact_ir_block_size(*match) !=
+                         exact_ir_block_size(block) ||
+                     native_bringup_block_end_kind(*match) !=
+                         native_bringup_block_end_kind(block)))
+                    throw std::runtime_error(
+                        "Coverage-Entry besitzt widerspruechliche "
+                        "resident AOT-Views.");
+                match = &block;
+            }
+        }
+        return match;
+    };
+    const auto valid_entry_semantics =
+        [](const CompleteDisassemblyEntryKind kind,
+           const bool function_entry,
+           const bool block_entry) {
+        switch (kind) {
+        case CompleteDisassemblyEntryKind::DeclaredEntry:
+        case CompleteDisassemblyEntryKind::FunctionEntry:
+            return function_entry;
+        case CompleteDisassemblyEntryKind::ControlFlowTarget:
+            return block_entry;
+        case CompleteDisassemblyEntryKind::CodePointerTarget:
+            return function_entry || block_entry;
+        }
+        return false;
+    };
 
     std::unordered_map<std::string_view, std::uint32_t>
         authority_runtime_by_identity;
     authority_runtime_by_identity.reserve(authority.modules.size());
     for (const auto& authority_module : authority.modules) {
+        if (authority_module.module_class !=
+            CompleteDisassemblyModuleClass::LatentLoaded) {
+            const auto source_start = authority_module.source_address;
+            const auto* runtime_image = runtime_image_for_range(
+                source_start, authority_module.decoded_byte_size);
+            if (authority_module.module_class ==
+                CompleteDisassemblyModuleClass::PrimaryStatic) {
+                if (authority_module.runtime_address != source_start ||
+                    runtime_image != nullptr)
+                    throw std::runtime_error(
+                        "PrimaryStatic-Authority verlor ihren residenten "
+                        "Imageowner.");
+            } else if (authority_module.module_class ==
+                       CompleteDisassemblyModuleClass::FixedRuntimeImage) {
+                if (runtime_image == nullptr ||
+                    runtime_image->image_id != authority_module.module_id ||
+                    runtime_image->byte_identity !=
+                        authority_module.decoded_byte_identity ||
+                    runtime_image->source_start != source_start ||
+                    runtime_image->runtime_start !=
+                        authority_module.runtime_address ||
+                    runtime_image->byte_size !=
+                        authority_module.decoded_byte_size)
+                    throw std::runtime_error(
+                        "FixedRuntimeImage-Authority verlor ihren exakten "
+                        "Runtime-Image-Owner.");
+            } else {
+                throw std::runtime_error(
+                    "Coverage-Authority besitzt eine ungueltige "
+                    "Modulklasse.");
+            }
+            const auto image_identity =
+                "sha256:" + executable_image_range_sha256(
+                    image,
+                    source_start,
+                    authority_module.decoded_byte_size);
+            if (image_identity !=
+                authority_module.decoded_byte_identity)
+                throw std::runtime_error(
+                    "Residente Coverage-Authority verlor ihre "
+                    "Imageidentitaet.");
+            for (const auto& authority_entry :
+                 authority_module.entries) {
+                const auto source = source_start +
+                                    authority_entry.module_relative_offset;
+                const auto* block = emitted_block_for_entry(source);
+                const bool function_entry = std::ranges::any_of(
+                    emitted_program, [&](const auto& function) {
+                        return function.entry_address == source;
+                    });
+                if (block == nullptr ||
+                    !valid_entry_semantics(
+                        authority_entry.kind,
+                        function_entry,
+                        block != nullptr) ||
+                    "sha256:" + executable_image_range_sha256(
+                        image, source, authority_entry.byte_size) !=
+                        authority_entry.byte_identity)
+                    throw std::runtime_error(
+                        "Residenter Coverage-Authority-Entry verlor seine "
+                        "klassifizierte Blockidentitaet.");
+                const auto identity = native_port_code_identity(
+                    image,
+                    latent_modules,
+                    source,
+                    exact_ir_block_size(*block));
+                if (!identity.has_value() ||
+                    !native_bringup_sha256(*identity))
+                    throw std::runtime_error(
+                        "Residenter Coverage-Authority-Entry verlor seine "
+                        "AOT-Codeidentitaet.");
+            }
+            continue;
+        }
         const PreparedLatentAotModule* module = nullptr;
         for (const auto& candidate : latent_modules) {
             if (candidate.byte_identity !=
@@ -29886,6 +30133,8 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
             module = &candidate;
         }
         if (module == nullptr ||
+            module->module_class !=
+                CompleteDisassemblyModuleClass::LatentLoaded ||
             module->byte_size != authority_module.decoded_byte_size)
             throw std::runtime_error(
                 "Coverage-Authority verlor ihr final emittiertes Modul.");
@@ -29896,6 +30145,14 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
             throw std::runtime_error(
                 "Coverage-Authority besitzt eine doppelte Modulidentitaet.");
         for (const auto& authority_entry : authority_module.entries) {
+            if (!std::ranges::any_of(
+                    module->authority_entries,
+                    [&](const auto& retained) {
+                        return retained == authority_entry;
+                    }))
+                throw std::runtime_error(
+                    "Coverage-Authority-Entry verlor seine klassifizierte "
+                    "Prepared-Inventarform.");
             const auto identity = std::find_if(
                 module->block_identities.begin(),
                 module->block_identities.end(),
@@ -29920,7 +30177,15 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
                 continue;
             }
             const auto* block = ir_block_for_entry(*module, source);
+            const bool function_entry = std::ranges::any_of(
+                module->program, [&](const auto& function) {
+                    return function.entry_address == source;
+                });
             if (block == nullptr ||
+                !valid_entry_semantics(
+                    authority_entry.kind,
+                    function_entry,
+                    block != nullptr) ||
                 exact_ir_block_size(*block) != identity->size ||
                 !native_bringup_sha256(identity->sha256))
                 throw std::runtime_error(
@@ -30058,11 +30323,11 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         std::unique(result.entries.begin(), result.entries.end(),
                     same_entry_key),
         result.entries.end());
+    const auto fixed_accelerator_candidates = result.entries.size();
     if (result.entries.size() >
-            katana::runtime::native_bringup_coverage_maximum_entries)
-        throw std::runtime_error(
-            "Coverage-Entryinventar ueberschreitet sein "
-            "Runtime-Budget.");
+        katana::runtime::native_bringup_coverage_maximum_entries)
+        result.entries.resize(
+            katana::runtime::native_bringup_coverage_maximum_entries);
 
     for (const auto& function : emitted_program) {
         for (const auto& block : function.blocks) {
@@ -30124,9 +30389,20 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
                  call ? katana::runtime::BlockEndKind::Call
                       : katana::runtime::BlockEndKind::DynamicBranch,
                  *identity};
-            if (const auto* module =
-                    module_for_range(block.start_address, block_size);
-                module != nullptr) {
+            if (const auto* runtime_image =
+                    runtime_image_for_range(block.start_address, block_size);
+                runtime_image != nullptr) {
+                source.source_kind = katana::runtime::
+                    NativeBringupCoverageSourceKind::RuntimeImage;
+                source.source_module_identity = runtime_image->byte_identity;
+                source.source_image_id = runtime_image->image_id;
+                source.source_runtime_start = runtime_image->runtime_start;
+                source.source_module_size = runtime_image->byte_size;
+                source.source_module_offset =
+                    block.start_address - runtime_image->source_start;
+            } else if (const auto* module =
+                           module_for_range(block.start_address, block_size);
+                       module != nullptr) {
                 source.source_kind = katana::runtime::
                     NativeBringupCoverageSourceKind::LoadedAot;
                 source.source_module_identity = module->byte_identity;
@@ -30185,13 +30461,14 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         "KATANA_NATIVE_BRINGUP_COVERAGE_INVENTORY "
         "dispatch_callsites=%zu source_transfers=%zu guarded_unbound=%zu "
         "replacement_owned_sources=%zu replacement_owned_entries=%zu "
-        "entries=%zu source_limit=%zu\n",
+        "entries=%zu fixed_accelerator_candidates=%zu source_limit=%zu\n",
         result.dispatch_callsites.size(),
         result.sources.size(),
         guarded_unbound_diagnostics,
         replacement_owned_sources,
         replacement_owned_entries,
         result.entries.size(),
+        fixed_accelerator_candidates,
         katana::runtime::native_bringup_coverage_maximum_source_transfers);
     if (result.dispatch_callsites.empty() ||
         result.dispatch_callsites.size() >
@@ -30230,6 +30507,7 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
                 previous.source.code_identity != source.source.code_identity ||
                 previous.source_module_identity !=
                     source.source_module_identity ||
+                previous.source_image_id != source.source_image_id ||
                 previous.source_runtime_start !=
                     source.source_runtime_start ||
                 previous.source_module_size != source.source_module_size ||
@@ -31716,14 +31994,218 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
 
     const auto authority = normalize_complete_disassembly_authority(
         *options.native_bringup_coverage_authority);
-    auto coverage_hints =
+    const auto authority_hints =
         complete_disassembly_coverage_entry_hints(authority);
-    if (coverage_hints.empty() ||
-        coverage_hints.size() >
-            katana::runtime::native_bringup_coverage_maximum_entries)
+    if (authority_hints.empty())
         throw std::runtime_error(
-            "Complete-Disassembly-Coverage ueberschreitet das gebundene "
-            "Runtime-Entrybudget.");
+            "Complete-Disassembly-Coverage besitzt keine Compile-Roots.");
+    // Only loader-owned modules enter the disc/Loaded-AOT discovery lane.
+    // Primary and fixed runtime images are already present in the exact
+    // PreparedPortProgram image and use different runtime ownership and
+    // retirement contracts.  In particular, the 16k fixed-placement pack is
+    // merely an accelerator and must never cap this 65k compile authority.
+    std::vector<LatentAotEntryHint> coverage_hints;
+    coverage_hints.reserve(authority_hints.size());
+    for (const auto& hint : authority_hints) {
+        if (hint.module_class ==
+            CompleteDisassemblyModuleClass::LatentLoaded)
+            coverage_hints.push_back(hint);
+    }
+
+    std::vector<katana::ir::Function> coverage_primary_program(
+        prepared.program.begin(), prepared.program.end());
+    std::vector<std::uint32_t> resident_compile_roots;
+    const auto emitted_entry_shape =
+        [&](const std::span<const katana::ir::Function> program,
+            const std::uint32_t address,
+            const CompleteDisassemblyEntryKind kind) {
+            const bool function_entry = std::ranges::any_of(
+                program, [&](const auto& function) {
+                    return function.entry_address == address;
+                });
+            const bool block_entry = std::ranges::any_of(
+                program, [&](const auto& function) {
+                    return std::ranges::any_of(
+                        function.blocks, [&](const auto& block) {
+                            return block.start_address == address;
+                        });
+                });
+            switch (kind) {
+            case CompleteDisassemblyEntryKind::DeclaredEntry:
+            case CompleteDisassemblyEntryKind::FunctionEntry:
+                return function_entry;
+            case CompleteDisassemblyEntryKind::ControlFlowTarget:
+                return block_entry;
+            case CompleteDisassemblyEntryKind::CodePointerTarget:
+                return function_entry || block_entry;
+            }
+            return false;
+        };
+    const auto active_runtime_image_for_authority =
+        [&](const CompleteDisassemblyModuleAuthority& module)
+        -> const katana::runtime::GameProjectRuntimeImage* {
+        const katana::runtime::GameProjectRuntimeImage* match = nullptr;
+        for (const auto& image : options.game_project->runtime_images) {
+            if (!game_project_runtime_image_is_active(
+                    options.native_port_definition, image.image_id) ||
+                image.image_id != module.module_id ||
+                image.byte_identity != module.decoded_byte_identity ||
+                image.source_start != module.source_address ||
+                image.runtime_start != module.runtime_address ||
+                image.byte_size != module.decoded_byte_size)
+                continue;
+            if (match != nullptr)
+                throw std::runtime_error(
+                    "Complete-Disassembly-RuntimeImage ist mehrdeutig.");
+            match = &image;
+        }
+        return match;
+    };
+    for (const auto& module : authority.modules) {
+        if (module.module_class ==
+            CompleteDisassemblyModuleClass::LatentLoaded)
+            continue;
+        const auto identity_source = module.source_address;
+        if (module.transform != LatentAotSourceTransform::Identity ||
+            module.encoded_byte_identity != module.decoded_byte_identity ||
+            module.encoded_byte_size != module.decoded_byte_size ||
+            identity_source == 0u)
+            throw std::runtime_error(
+                "Residentes Complete-Disassembly-Modul besitzt keinen "
+                "direkten Imagevertrag.");
+        if (module.module_class ==
+            CompleteDisassemblyModuleClass::PrimaryStatic) {
+            if (module.runtime_address != identity_source ||
+                std::ranges::any_of(
+                    options.game_project->runtime_images,
+                    [&](const auto& image) {
+                        const auto module_end =
+                            static_cast<std::uint64_t>(identity_source) +
+                            module.decoded_byte_size;
+                        const auto image_end =
+                            static_cast<std::uint64_t>(image.source_start) +
+                            image.byte_size;
+                        return identity_source < image_end &&
+                               image.source_start < module_end;
+                    }))
+                throw std::runtime_error(
+                    "PrimaryStatic-Authority besitzt keine statische "
+                    "Primaerimage-Range.");
+        } else if (module.module_class ==
+                   CompleteDisassemblyModuleClass::FixedRuntimeImage) {
+            if (active_runtime_image_for_authority(module) == nullptr)
+                throw std::runtime_error(
+                    "FixedRuntimeImage-Authority passt zu keinem aktiven "
+                    "Runtime-Image.");
+        } else {
+            throw std::runtime_error(
+                "Complete-Disassembly-Modulklasse ist ungueltig.");
+        }
+        const auto module_identity =
+            "sha256:" + executable_image_range_sha256(
+                prepared.image,
+                identity_source,
+                module.decoded_byte_size);
+        if (module_identity != module.decoded_byte_identity)
+            throw std::runtime_error(
+                "Residentes Complete-Disassembly-Modul verlor seine "
+                "Imageidentitaet.");
+        for (const auto& entry : module.entries) {
+            const auto address64 =
+                static_cast<std::uint64_t>(identity_source) +
+                entry.module_relative_offset;
+            if (address64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::runtime_error(
+                    "Residenter Complete-Disassembly-Entry laeuft ueber.");
+            const auto address = static_cast<std::uint32_t>(address64);
+            const auto probe_identity =
+                "sha256:" + executable_image_range_sha256(
+                    prepared.image, address, entry.byte_size);
+            if (probe_identity != entry.byte_identity)
+                throw std::runtime_error(
+                    "Residenter Complete-Disassembly-Entry verlor seinen "
+                    "exakten Byteprobe.");
+            if (emitted_entry_shape(
+                    coverage_primary_program, address, entry.kind))
+                continue;
+            // A control-flow target is deliberately not promoted to a new
+            // function owner.  Its owning FunctionEntry must materialize the
+            // block; the exact semantic check below rejects a missing block.
+            if (entry.kind !=
+                CompleteDisassemblyEntryKind::ControlFlowTarget)
+                resident_compile_roots.push_back(address);
+        }
+    }
+    std::sort(resident_compile_roots.begin(), resident_compile_roots.end());
+    resident_compile_roots.erase(
+        std::unique(resident_compile_roots.begin(),
+                    resident_compile_roots.end()),
+        resident_compile_roots.end());
+    if (!resident_compile_roots.empty()) {
+        auto coverage_image = prepared.image;
+        for (const auto& function : prepared.program)
+            coverage_image.add_entry_point(function.entry_address);
+        for (const auto root : resident_compile_roots)
+            coverage_image.add_entry_point(root);
+        const auto coverage_overrides = port_analysis_overrides(
+            options.game_project,
+            options.native_port_definition,
+            coverage_image,
+            options.native_aot_resume_entries);
+        report_progress(options, "native-bringup-resident-coverage-analysis");
+        auto coverage_analysis = katana::analysis::analyze_control_flow(
+            coverage_image,
+            coverage_overrides.has_value() ? &*coverage_overrides : nullptr);
+        if (coverage_analysis.termination_reason !=
+                katana::analysis::ControlFlowAnalysisTerminationReason::None ||
+            coverage_analysis.function_budget_exhausted ||
+            std::ranges::any_of(
+                coverage_analysis.recursive.diagnostics,
+                katana::analysis::analysis_diagnostic_blocks_codegen))
+            throw std::runtime_error(
+                "Residenter Complete-Disassembly-Coverage-Compile ist "
+                "nicht vollstaendig.");
+        auto architectural_safepoints =
+            katana::ir::architectural_safepoint_block_leaders(
+                coverage_analysis);
+        for (const auto& continuation :
+             options.native_port_definition->bootstrap
+                 .post_aot_continuations)
+            architectural_safepoints.push_back(
+                continuation.resume_address);
+        for (const auto& hook : options.native_port_definition->hooks) {
+            if (hook.kind ==
+                    katana::runtime::NativePortHookKind::Instruction &&
+                katana::runtime::native_port_hook_is_executable(
+                    hook.requirement))
+                architectural_safepoints.push_back(hook.guest_address);
+        }
+        std::sort(architectural_safepoints.begin(),
+                  architectural_safepoints.end());
+        architectural_safepoints.erase(
+            std::unique(architectural_safepoints.begin(),
+                        architectural_safepoints.end()),
+            architectural_safepoints.end());
+        coverage_primary_program = katana::ir::lower_program(
+            coverage_analysis,
+            architectural_safepoints,
+            options.progress);
+        katana::ir::require_valid_program(coverage_primary_program);
+    }
+    for (const auto& module : authority.modules) {
+        if (module.module_class ==
+            CompleteDisassemblyModuleClass::LatentLoaded)
+            continue;
+        for (const auto& entry : module.entries) {
+            const auto address = module.source_address +
+                                 entry.module_relative_offset;
+            if (!emitted_entry_shape(
+                    coverage_primary_program, address, entry.kind))
+                throw std::runtime_error(
+                    "Residenter Complete-Disassembly-Entry verlor seine "
+                    "klassifizierte AOT-Form.");
+        }
+    }
 
     std::unordered_map<std::string_view, const CompleteDisassemblyModuleAuthority*>
         authority_by_identity;
@@ -31747,6 +32229,9 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     }
 
     for (const auto& authority_module : authority.modules) {
+        if (authority_module.module_class !=
+            CompleteDisassemblyModuleClass::LatentLoaded)
+            continue;
         const auto proof = proof_by_identity.find(
             authority_module.decoded_byte_identity);
         const auto pinned_source =
@@ -31841,22 +32326,32 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     discovery_options.mode = LatentAotDiscoveryMode::ExactOnly;
     discovery_options.completeness_policy =
         LatentAotCompletenessPolicy::ExactRuntimeOnlyStopOnMiss;
-    report_progress(options, "native-bringup-coverage-discovery");
-    const std::array excluded_identities{
-        std::string("sha256:") + disc.boot_sha256};
-    auto coverage_latent_aot = discover_latent_aot_modules(
-        disc.source,
-        prepared.disc_volume_start_lba,
-        prepared.disc_extent_lba_bias,
-        excluded_identities,
-        discovery_options,
-        occupied,
-        coverage_hints);
-    report_latent_aot_analysis_durations(options, coverage_latent_aot);
-    if (coverage_latent_aot.modules.size() != authority.modules.size())
+    const auto latent_authority_module_count =
+        static_cast<std::size_t>(std::ranges::count_if(
+            authority.modules, [](const auto& module) {
+                return module.module_class ==
+                       CompleteDisassemblyModuleClass::LatentLoaded;
+            }));
+    LatentAotDiscovery coverage_latent_aot;
+    if (!coverage_hints.empty()) {
+        report_progress(options, "native-bringup-coverage-discovery");
+        const std::array excluded_identities{
+            std::string("sha256:") + disc.boot_sha256};
+        coverage_latent_aot = discover_latent_aot_modules(
+            disc.source,
+            prepared.disc_volume_start_lba,
+            prepared.disc_extent_lba_bias,
+            excluded_identities,
+            discovery_options,
+            occupied,
+            coverage_hints);
+        report_latent_aot_analysis_durations(options, coverage_latent_aot);
+    }
+    if (coverage_latent_aot.modules.size() !=
+        latent_authority_module_count)
         throw std::runtime_error(
-            "Complete-Disassembly-Coverage hat nicht jedes Authority-Modul "
-            "exakt materialisiert.");
+            "Complete-Disassembly-Coverage hat nicht jedes LatentLoaded-"
+            "Authority-Modul exakt materialisiert.");
 
     const auto source_binding_less =
         [](const PreparedLatentAotSourceBinding& left,
@@ -31920,10 +32415,12 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     for (auto& coverage_module : coverage_latent_aot.modules) {
         const auto authority_match = authority_by_identity.find(
             coverage_module.byte_identity);
-        if (authority_match == authority_by_identity.end())
+        if (authority_match == authority_by_identity.end() ||
+            authority_match->second->module_class !=
+                CompleteDisassemblyModuleClass::LatentLoaded)
             throw std::runtime_error(
                 "Coverage-Discovery publizierte ein nicht authorisiertes "
-                "Modul.");
+                "LatentLoaded-Modul.");
         const auto& authority_module = *authority_match->second;
         const auto proof = proof_by_identity.find(coverage_module.byte_identity);
         const auto expected_source =
@@ -32125,7 +32622,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         std::unique(result.entry_hints.begin(), result.entry_hints.end()),
         result.entry_hints.end());
     result.program = materialize_prepared_native_port_emitted_program(
-        prepared.program, result.latent_aot);
+        coverage_primary_program, result.latent_aot);
     report_progress(
         options,
         "native-bringup-coverage-emission:modules=" +
@@ -40901,6 +41398,7 @@ static PortExportResult export_dreamcast_port_project_impl(
             revalidate_native_bringup_coverage_emission(
                 *options.native_bringup_coverage_authority,
                 *options.native_port_definition,
+                *options.game_project,
                 emitted_program,
                 prepared.image,
                 latent_aot.modules,
@@ -40915,10 +41413,16 @@ static PortExportResult export_dreamcast_port_project_impl(
             aot_linkage_material
                 << "coverage-source="
                 << static_cast<unsigned>(source.transfer_kind) << ':'
-                << source.callsite << ':' << source.source.address << ':'
+                << source.callsite << ':'
+                << static_cast<unsigned>(source.source_kind) << ':'
+                << source.source_image_id << ':'
+                << source.source_module_identity << ':'
+                << source.source.address << ':'
                 << source.source.size << ':'
                 << source.source.code_identity << ':'
-                << source.source_runtime_start << ';';
+                << source.source_runtime_start << ':'
+                << source.source_module_size << ':'
+                << source.source_module_offset << ';';
         for (const auto callsite :
              native_bringup_coverage_emissions->dispatch_callsites)
             aot_linkage_material

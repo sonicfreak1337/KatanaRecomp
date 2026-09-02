@@ -271,14 +271,16 @@ bool coverage_source_valid(
     switch (source.source_kind) {
     case NativeBringupCoverageSourceKind::StaticAot:
         return source.source_module_identity.empty() &&
+               source.source_image_id.empty() &&
                source.source_runtime_start == 0u &&
                source.source_module_size == 0u &&
                source.source_module_offset == 0u;
-    case NativeBringupCoverageSourceKind::LoadedAot:
+    case NativeBringupCoverageSourceKind::LoadedAot: {
         const auto runtime_end =
             static_cast<std::uint64_t>(source.source_runtime_start) +
             source.source_module_size;
         return canonical_sha256(source.source_module_identity) &&
+               source.source_image_id.empty() &&
                (source.source_runtime_start & 0xFFFu) == 0u &&
                canonical_coverage_runtime_alias(
                    source.source_runtime_start) ==
@@ -291,6 +293,25 @@ bool coverage_source_valid(
                    source.source_module_size - source.source_module_offset &&
                source.source.block.virtual_address >=
                    source.source_module_offset;
+    }
+    case NativeBringupCoverageSourceKind::RuntimeImage: {
+        const auto runtime_image_end =
+            static_cast<std::uint64_t>(source.source_runtime_start) +
+            source.source_module_size;
+        return canonical_sha256(source.source_module_identity) &&
+               valid_component(source.source_image_id) &&
+               (source.source_runtime_start & 3u) == 0u &&
+               canonical_coverage_runtime_alias(
+                   source.source_runtime_start) ==
+                   source.source_runtime_start &&
+               source.source_module_size >= 2u &&
+               runtime_image_end <= 0x1'0000'0000ull &&
+               source.source_module_offset <= source.source_module_size &&
+               source.source.size <=
+                   source.source_module_size - source.source_module_offset &&
+               source.source.block.virtual_address >=
+                   source.source_module_offset;
+    }
     }
     return false;
 }
@@ -336,6 +357,7 @@ bool ordered_coverage_view(
         !valid_component(identity.project_version) ||
         !canonical_sha256(identity.analysis_identity) ||
         !canonical_sha256(identity.aot_pack_identity) ||
+        !canonical_sha256(identity.module_universe_identity) ||
         identity.aot_pack_generation == 0u ||
         pack.source_transfers.size() >
             native_bringup_coverage_maximum_source_transfers ||
@@ -384,6 +406,8 @@ const char* coverage_source_kind_name(
         return "static-aot";
     case NativeBringupCoverageSourceKind::LoadedAot:
         return "loaded-aot";
+    case NativeBringupCoverageSourceKind::RuntimeImage:
+        return "runtime-image";
     }
     return "invalid";
 }
@@ -619,6 +643,7 @@ NativeBringupDispatchPreflightResult preflight_native_bringup_dispatch(
 
 NativeBringupCoverageDispatchContext::NativeBringupCoverageDispatchContext(
     const RuntimeBlockTable& validated_table,
+    NativePortRuntimeImageBindings& validated_runtime_images,
     NativePortLoadedAotBinder& validated_binder,
     const NativeBringupCoverageDispatchPack& validated_pack,
     const std::uint64_t active_runtime_generation,
@@ -632,12 +657,14 @@ NativeBringupCoverageDispatchContext::NativeBringupCoverageDispatchContext(
       validated_entries_size_(validated_pack.entries.size()),
       validated_identity_(validated_pack.identity),
       validated_table_(&validated_table),
+      validated_runtime_images_(&validated_runtime_images),
       validated_binder_(&validated_binder),
       validated_table_lifetime_(validated_table.dispatch_lifetime()),
       validated_table_generation_(validated_table.dispatch_generation()) {}
 
 bool NativeBringupCoverageDispatchContext::validated_view_current(
     const RuntimeBlockTable& table,
+    const NativePortRuntimeImageBindings& runtime_images,
     const NativePortLoadedAotBinder& binder) const noexcept {
     const auto same_storage = [](const std::string_view current,
                                  const std::string_view validated) noexcept {
@@ -646,7 +673,9 @@ bool NativeBringupCoverageDispatchContext::validated_view_current(
     };
     const auto& current = pack.identity;
     return runtime_generation != 0u && table.static_aot_dispatch_ready() &&
-           validated_table_ == &table && validated_binder_ == &binder &&
+           validated_table_ == &table &&
+           validated_runtime_images_ == &runtime_images &&
+           validated_binder_ == &binder &&
            table.dispatch_lifetime() == validated_table_lifetime_ &&
            table.dispatch_generation() == validated_table_generation_ &&
            pack.source_transfers.data() == validated_sources_data_ &&
@@ -663,6 +692,8 @@ bool NativeBringupCoverageDispatchContext::validated_view_current(
                         validated_identity_.analysis_identity) &&
            same_storage(current.aot_pack_identity,
                         validated_identity_.aot_pack_identity) &&
+           same_storage(current.module_universe_identity,
+                        validated_identity_.module_universe_identity) &&
            current.aot_pack_generation ==
                validated_identity_.aot_pack_generation;
 }
@@ -670,6 +701,7 @@ bool NativeBringupCoverageDispatchContext::validated_view_current(
 NativeBringupCoverageDispatchContext
 make_native_bringup_coverage_dispatch_context(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchPack& pack,
     const std::uint64_t runtime_generation,
@@ -704,7 +736,8 @@ make_native_bringup_coverage_dispatch_context(
             "Native bring-up coverage pack is not bound to the sealed "
             "Static-AOT table.");
     return NativeBringupCoverageDispatchContext{
-        table, binder, pack, runtime_generation, observations};
+        table, runtime_images, binder, pack, runtime_generation,
+        observations};
 }
 
 NativeBringupDispatchError::NativeBringupDispatchError(
@@ -767,6 +800,10 @@ const char* native_bringup_dispatch_miss_name(
         return "loaded-module-inactive";
     case NativeBringupDispatchMiss::LoadedModuleIdentityMismatch:
         return "loaded-module-identity-mismatch";
+    case NativeBringupDispatchMiss::RuntimeImageInactive:
+        return "runtime-image-inactive";
+    case NativeBringupDispatchMiss::RuntimeImageIdentityMismatch:
+        return "runtime-image-identity-mismatch";
     case NativeBringupDispatchMiss::HookReplacementConflict:
         return "hook-replacement-conflict";
     }

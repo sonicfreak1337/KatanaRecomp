@@ -49,6 +49,16 @@ static_assert(
 static_assert(
     katana::codegen::maximum_prepared_latent_aot_total_function_identities >
     katana::codegen::maximum_prepared_latent_aot_function_identities);
+static_assert(
+    katana::codegen::maximum_complete_disassembly_entries == 65'536u);
+static_assert(
+    katana::codegen::maximum_prepared_latent_aot_entry_hints ==
+    katana::codegen::maximum_complete_disassembly_entries);
+static_assert(
+    katana::runtime::native_bringup_coverage_maximum_entries == 16'384u);
+static_assert(
+    katana::runtime::native_bringup_coverage_maximum_entries <
+    katana::codegen::maximum_complete_disassembly_entries);
 
 std::vector<std::string> observed_progress;
 
@@ -2520,6 +2530,7 @@ int run_test(const int argc, char* argv[]) {
         coverage_content_identity,
         coverage_boot.metadata.boot_file_name,
         coverage_boot_identity};
+    coverage_project.runtime_images = external_runtime_images;
     const std::array coverage_native_images{
         katana::runtime::NativePortImageBinding{
             "coverage-system-bootstrap",
@@ -2567,8 +2578,12 @@ int run_test(const int argc, char* argv[]) {
         coverage_project.identity.content_identity,
         coverage_project.identity.boot_file_name,
         coverage_project.identity.boot_byte_identity};
-    coverage_native_port.bootstrap.writes = {};
-    coverage_native_port.checkpoint_runtime_image_ids = {};
+    coverage_native_port.bootstrap.writes =
+        explicit_static_bootstrap_writes;
+    constexpr std::array<std::string_view, 1u>
+        coverage_runtime_image_ids{"external-runtime-image"};
+    coverage_native_port.checkpoint_runtime_image_ids =
+        coverage_runtime_image_ids;
     coverage_native_port.images = coverage_native_images;
     coverage_native_port.hooks = coverage_native_hooks;
     coverage_native_port.acceptance = {
@@ -2606,6 +2621,77 @@ int run_test(const int argc, char* argv[]) {
         refined_coverage_tail_entry_identity,
         katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
     coverage_authority.modules.push_back(std::move(coverage_module));
+
+    katana::codegen::CompleteDisassemblyModuleAuthority
+        coverage_primary_module;
+    coverage_primary_module.module_id = "primary-static";
+    coverage_primary_module.module_class =
+        katana::codegen::CompleteDisassemblyModuleClass::PrimaryStatic;
+    coverage_primary_module.transform =
+        katana::codegen::LatentAotSourceTransform::Identity;
+    coverage_primary_module.encoded_byte_identity = coverage_boot_identity;
+    coverage_primary_module.disc_byte_offset = 0u;
+    coverage_primary_module.encoded_byte_size =
+        static_cast<std::uint32_t>(coverage_boot.boot_file.size());
+    coverage_primary_module.decoded_byte_identity = coverage_boot_identity;
+    coverage_primary_module.decoded_byte_size =
+        static_cast<std::uint32_t>(coverage_boot.boot_file.size());
+    coverage_primary_module.source_address =
+        katana::platform::dreamcast_disc_boot_address;
+    coverage_primary_module.runtime_address =
+        katana::platform::dreamcast_disc_boot_address;
+    coverage_primary_module.disassembly_identity =
+        "sha256:" + katana::io::sha256_bytes(
+            "katana-test-primary-complete-disassembly-view-v1");
+    coverage_primary_module.entries.push_back({
+        0u,
+        4u,
+        coverage_hook_identity,
+        katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
+    coverage_authority.modules.push_back(
+        std::move(coverage_primary_module));
+
+    constexpr std::array<std::uint8_t, 4u>
+        external_runtime_image_entry{
+            external_runtime_image_bytes[0u],
+            external_runtime_image_bytes[1u],
+            external_runtime_image_bytes[2u],
+            external_runtime_image_bytes[3u]};
+    const auto external_runtime_image_entry_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                external_runtime_image_entry.data()),
+            external_runtime_image_entry.size()));
+    katana::codegen::CompleteDisassemblyModuleAuthority
+        coverage_runtime_image_module;
+    coverage_runtime_image_module.module_id = "external-runtime-image";
+    coverage_runtime_image_module.module_class =
+        katana::codegen::CompleteDisassemblyModuleClass::FixedRuntimeImage;
+    coverage_runtime_image_module.transform =
+        katana::codegen::LatentAotSourceTransform::Identity;
+    coverage_runtime_image_module.encoded_byte_identity =
+        external_runtime_image_identity;
+    coverage_runtime_image_module.disc_byte_offset = 0u;
+    coverage_runtime_image_module.encoded_byte_size =
+        static_cast<std::uint32_t>(external_runtime_image_bytes.size());
+    coverage_runtime_image_module.decoded_byte_identity =
+        external_runtime_image_identity;
+    coverage_runtime_image_module.decoded_byte_size =
+        static_cast<std::uint32_t>(external_runtime_image_bytes.size());
+    coverage_runtime_image_module.source_address =
+        external_runtime_images.front().source_start;
+    coverage_runtime_image_module.runtime_address =
+        external_runtime_images.front().runtime_start;
+    coverage_runtime_image_module.disassembly_identity =
+        "sha256:" + katana::io::sha256_bytes(
+            "katana-test-runtime-image-complete-disassembly-view-v1");
+    coverage_runtime_image_module.entries.push_back({
+        0u,
+        4u,
+        external_runtime_image_entry_identity,
+        katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
+    coverage_authority.modules.push_back(
+        std::move(coverage_runtime_image_module));
     coverage_authority =
         katana::codegen::normalize_complete_disassembly_authority(
             std::move(coverage_authority));
@@ -2629,6 +2715,10 @@ int run_test(const int argc, char* argv[]) {
     coverage_options.native_bringup_artifact_identity =
         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     coverage_options.native_bringup_coverage_authority = &coverage_authority;
+    coverage_options.game_project_runtime_image_payloads =
+        external_runtime_image_payloads;
+    coverage_options.native_port_bootstrap_write_payloads =
+        explicit_static_bootstrap_write_payloads;
     auto strict_coverage_options = coverage_options;
     strict_coverage_options.native_execution_profile =
         katana::codegen::NativePortExecutionProfile::StrictProduct;
@@ -2679,6 +2769,14 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             coverage_dispatch.find(
                 "NativeBringupCoverageEntry, 2u") != std::string::npos &&
+            coverage_dispatch.find(
+                "*active_runtime_image_bindings") != std::string::npos &&
+            coverage_dispatch.find(
+                "NativePortLoadedAotBinder loaded_aot_binder") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "runtime_image_bindings,\n"
+                "            loaded_aot_binder") != std::string::npos &&
             coverage_dispatch.find("0x8C01000Cu") != std::string::npos &&
             coverage_dispatch.find("0x8C100000u") != std::string::npos &&
             coverage_dispatch.find("0x8C200000u") != std::string::npos &&
@@ -2718,10 +2816,10 @@ int run_test(const int argc, char* argv[]) {
                 "\"complete_disassembly_coverage_release_eligible\":false") !=
                 std::string::npos &&
             coverage_metadata.find(
-                "\"complete_disassembly_coverage_modules\":1") !=
+                "\"complete_disassembly_coverage_modules\":3") !=
                 std::string::npos &&
             coverage_metadata.find(
-                "\"complete_disassembly_coverage_entries\":2") !=
+                "\"complete_disassembly_coverage_entries\":4") !=
                 std::string::npos &&
             coverage_dispatch.find("dynamic_interpreter.hpp") ==
                 std::string::npos,
@@ -4654,6 +4752,30 @@ int run_test(const int argc, char* argv[]) {
         read_text(explicit_static_output / "src" / "main.cpp");
     const auto& explicit_static_dispatch =
         explicit_static_sources.at("code/native-port-dispatch.cpp");
+    const auto native_user_data_helper = explicit_static_main.find(
+        "std::filesystem::path native_product_user_data_root()");
+    const auto native_user_data_override = explicit_static_main.find(
+        "std::getenv(\"KATANA_USER_DATA_ROOT\")", native_user_data_helper);
+    const auto native_user_data_platform_default = explicit_static_main.find(
+        "std::getenv(\"LOCALAPPDATA\")", native_user_data_override);
+    const auto native_user_data_assignment = explicit_static_main.find(
+        "platform_config.user_data_root =\n"
+        "            native_product_user_data_root();",
+        native_user_data_platform_default);
+    require(
+        native_user_data_helper != std::string::npos &&
+            native_user_data_override != std::string::npos &&
+            native_user_data_platform_default != std::string::npos &&
+            native_user_data_assignment != std::string::npos &&
+            native_user_data_helper < native_user_data_override &&
+            native_user_data_override < native_user_data_platform_default &&
+            native_user_data_platform_default < native_user_data_assignment &&
+            explicit_static_main.find(
+                "platform_config.user_data_root =\n"
+                "            executable_path.parent_path() / \"user-data\";") ==
+                std::string::npos,
+        "Nativer Produktport bindet Saves weiterhin an den wechselnden "
+        "Exportordner oder ignoriert die explizite Nutzerdatenwurzel.");
     const auto handwritten_telemetry_owner = generated_main.find(
         "katana::runtime::NativePortTelemetry native_performance_telemetry;");
     const auto handwritten_telemetry_opt_in = generated_main.find(

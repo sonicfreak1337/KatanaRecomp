@@ -405,8 +405,25 @@ int main(const int argc, char** const argv) {
         katana::runtime::NativePortImmutableWriteGuard module_guard(
             immutable_ranges);
         katana::runtime::NativePortExecutableLifecycleLedger module_ledger(1u);
+        constexpr std::string_view pack_identity =
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        const auto module_universe_identity =
+            katana::runtime::native_port_loaded_aot_module_universe_identity(
+                modules);
         katana::runtime::NativePortLoadedAotBinder binder(
-            cpu, modules, module_guard, module_ledger);
+            cpu, modules, module_guard, module_ledger,
+            module_universe_identity, pack_identity);
+        const auto initial_dispatch_stamp = binder.dispatch_stamp();
+        require(module_universe_identity.starts_with("sha256:") &&
+                    module_universe_identity.size() == 71u &&
+                    binder.module_universe_identity() ==
+                        module_universe_identity &&
+                    binder.aot_pack_identity() == pack_identity &&
+                    initial_dispatch_stamp.module_universe_identity ==
+                        module_universe_identity &&
+                    initial_dispatch_stamp.aot_pack_identity == pack_identity,
+                "Loaded-AOT-Binder verlor die kanonische Moduluniversums- "
+                "oder AOT-Pack-Identitaet in seinem Dispatch-Stamp.");
         const auto unplaced = binder.resolve_prs_module_source(
             identity, 0u, bytes.size());
         require(unplaced.has_value() && unplaced->sha256 == identity &&
@@ -671,7 +688,9 @@ int main(const int argc, char** const argv) {
         katana::runtime::NativePortExecutableLifecycleLedger image_ledger(1u);
         katana::runtime::NativePortRuntimeImageBindings bindings(
             cpu, images, image_guard, image_ledger);
+        const auto inactive_stamp = bindings.dispatch_stamp();
         bindings.activate("closure-runtime-image");
+        const auto active_stamp = bindings.dispatch_stamp();
         const auto exact = bindings.active_entry_for_address(runtime_start);
         require(exact.has_value() && exact->image_id == "closure-runtime-image" &&
                     exact->image_sha256 == identity &&
@@ -685,8 +704,12 @@ int main(const int argc, char** const argv) {
                 "oder Generation.");
         require(!bindings.active_entry_for_address(runtime_start + 2u).has_value(),
                 "Runtime-Image-Midblock wurde als exakter Closure-Entry akzeptiert.");
-        require(bindings.deactivate_runtime_range(runtime_start, bytes.size()) == 1u &&
-                    !bindings.active_entry_for_address(runtime_start).has_value(),
+        require(active_stamp != inactive_stamp &&
+                    bindings.deactivate_runtime_range(
+                        runtime_start, bytes.size()) == 1u &&
+                    bindings.dispatch_stamp() != active_stamp &&
+                    !bindings.active_entry_for_address(runtime_start)
+                         .has_value(),
                 "Retired Runtime-Image blieb als Closure-Entry aktiv.");
     } catch (const std::exception& error) {
         require(false, std::string("Runtime-Image-Entryidentitaet warf: ") +

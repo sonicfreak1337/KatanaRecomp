@@ -457,6 +457,91 @@ void append_bootstrap_immutable_backing_intervals(
 
 } // namespace
 
+std::string native_port_loaded_aot_module_universe_identity(
+    const std::span<const NativePortLoadedAotModuleView> modules) {
+    Sha256 hash;
+    const auto append_u64 = [&](const std::uint64_t value) {
+        std::array<std::uint8_t, 8u> bytes{};
+        for (std::size_t index = 0u; index < bytes.size(); ++index)
+            bytes[index] =
+                static_cast<std::uint8_t>(value >> (index * 8u));
+        hash.update(bytes);
+    };
+    const auto append_string = [&](const std::string_view value) {
+        append_u64(value.size());
+        hash.update(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(value.data()),
+            value.size()));
+    };
+
+    append_string("katana-native-port-loaded-aot-module-universe-v1");
+    std::vector<const NativePortLoadedAotModuleView*> module_order;
+    module_order.reserve(modules.size());
+    for (const auto& module : modules) module_order.push_back(&module);
+    std::sort(
+        module_order.begin(), module_order.end(),
+        [](const auto* left, const auto* right) {
+            return std::tie(
+                       left->source_start, left->byte_size, left->sha256) <
+                   std::tie(
+                       right->source_start, right->byte_size, right->sha256);
+        });
+    append_u64(module_order.size());
+    for (const auto* const module : module_order) {
+        append_u64(module->source_start);
+        append_u64(module->byte_size);
+        append_string(module->sha256);
+
+        std::vector<const NativePortLoadedAotSourceBindingView*>
+            binding_order;
+        binding_order.reserve(module->source_bindings.size());
+        for (const auto& binding : module->source_bindings)
+            binding_order.push_back(&binding);
+        std::sort(
+            binding_order.begin(), binding_order.end(),
+            [](const auto* left, const auto* right) {
+                return std::tuple{
+                           static_cast<std::uint8_t>(left->transform),
+                           left->sha256, left->disc_byte_offset,
+                           left->byte_size, left->runtime_start} <
+                       std::tuple{
+                           static_cast<std::uint8_t>(right->transform),
+                           right->sha256, right->disc_byte_offset,
+                           right->byte_size, right->runtime_start};
+            });
+        append_u64(binding_order.size());
+        for (const auto* const binding : binding_order) {
+            append_u64(static_cast<std::uint8_t>(binding->transform));
+            append_string(binding->sha256);
+            append_u64(binding->disc_byte_offset);
+            append_u64(binding->byte_size);
+            append_u64(binding->runtime_start);
+        }
+
+        std::vector<const NativePortLoadedAotBlockIdentityView*> block_order;
+        block_order.reserve(module->block_identities.size());
+        for (const auto& block : module->block_identities)
+            block_order.push_back(&block);
+        std::sort(
+            block_order.begin(), block_order.end(),
+            [](const auto* left, const auto* right) {
+                return std::tie(
+                           left->source_offset, left->byte_size,
+                           left->sha256) <
+                       std::tie(
+                           right->source_offset, right->byte_size,
+                           right->sha256);
+            });
+        append_u64(block_order.size());
+        for (const auto* const block : block_order) {
+            append_u64(block->source_offset);
+            append_u64(block->byte_size);
+            append_string(block->sha256);
+        }
+    }
+    return std::string("sha256:") + hash.finish();
+}
+
 NativePortMemory::NativePortMemory(
     const std::uint32_t initial_cache_control_value)
     : main_memory_(
@@ -1022,6 +1107,13 @@ NativePortRuntimeImageBindings::active_entry_for_address(
         match->lifecycle_generation};
 }
 
+NativePortRuntimeImageDispatchStamp
+NativePortRuntimeImageBindings::dispatch_stamp() const noexcept {
+    if (impl_ == nullptr) return {};
+    return {impl_->lifecycle_ledger.generation(),
+            impl_->immutable_guard.generation()};
+}
+
 struct NativePortLoadedAotBinder::Impl final {
     struct PendingBinding final {
         std::size_t module_index = 0u;
@@ -1043,6 +1135,8 @@ struct NativePortLoadedAotBinder::Impl final {
     std::span<const NativePortLoadedAotModuleView> modules;
     NativePortImmutableWriteGuard& immutable_guard;
     NativePortExecutableLifecycleLedger& lifecycle_ledger;
+    std::string module_universe_identity;
+    std::string aot_pack_identity;
     CrashCapsule* crash_capsule = nullptr;
     std::vector<PendingBinding> pending;
     std::vector<ActiveBinding> active;
@@ -1054,9 +1148,29 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
     NativePortImmutableWriteGuard& immutable_guard,
     NativePortExecutableLifecycleLedger& lifecycle_ledger,
     CrashCapsule* const crash_capsule)
+    : NativePortLoadedAotBinder(
+          cpu, modules, immutable_guard, lifecycle_ledger, {}, {},
+          crash_capsule) {}
+
+NativePortLoadedAotBinder::NativePortLoadedAotBinder(
+    CpuState& cpu,
+    const std::span<const NativePortLoadedAotModuleView> modules,
+    NativePortImmutableWriteGuard& immutable_guard,
+    NativePortExecutableLifecycleLedger& lifecycle_ledger,
+    const std::string_view module_universe_identity,
+    const std::string_view aot_pack_identity,
+    CrashCapsule* const crash_capsule)
     : impl_(std::make_unique<Impl>(
           Impl{cpu, modules, immutable_guard, lifecycle_ledger,
-               crash_capsule, {}, {}})) {
+               std::string(module_universe_identity),
+               std::string(aot_pack_identity), crash_capsule, {}, {}})) {
+    if ((!module_universe_identity.empty() &&
+         !valid_sha256_identity(module_universe_identity)) ||
+        (!aot_pack_identity.empty() &&
+         !valid_sha256_identity(aot_pack_identity)))
+        throw NativePortContractError(
+            NativePortContractFailure::InvalidDefinition,
+            "loaded-aot-universe-identity");
     constexpr std::uint32_t maximum_module_bytes = 4u * 1024u * 1024u;
     std::size_t maximum_runtime_ranges = 0u;
     for (std::size_t module_index = 0u;
@@ -1147,6 +1261,14 @@ NativePortLoadedAotBinder::NativePortLoadedAotBinder(
             previous_offset = block.source_offset;
         }
     }
+    const auto computed_module_universe_identity =
+        native_port_loaded_aot_module_universe_identity(modules);
+    if (!module_universe_identity.empty() &&
+        module_universe_identity != computed_module_universe_identity)
+        throw NativePortContractError(
+            NativePortContractFailure::InvalidDefinition,
+            "loaded-aot-universe-identity-mismatch");
+    impl_->module_universe_identity = computed_module_universe_identity;
     impl_->immutable_guard.reserve_additional_runtime_executable_ranges(
         maximum_runtime_ranges);
     impl_->pending.reserve(modules.size());
@@ -1390,7 +1512,21 @@ NativePortLoadedAotDispatchStamp
 NativePortLoadedAotBinder::dispatch_stamp() const noexcept {
     if (impl_ == nullptr) return {};
     return {impl_->lifecycle_ledger.generation(),
-            impl_->immutable_guard.generation()};
+            impl_->immutable_guard.generation(),
+            impl_->module_universe_identity,
+            impl_->aot_pack_identity};
+}
+
+std::string_view
+NativePortLoadedAotBinder::module_universe_identity() const noexcept {
+    return impl_ != nullptr ? std::string_view(impl_->module_universe_identity)
+                            : std::string_view{};
+}
+
+std::string_view
+NativePortLoadedAotBinder::aot_pack_identity() const noexcept {
+    return impl_ != nullptr ? std::string_view(impl_->aot_pack_identity)
+                            : std::string_view{};
 }
 
 std::optional<NativePortLoadedAotEntryView>

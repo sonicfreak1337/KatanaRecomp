@@ -1207,6 +1207,7 @@ katana_configure_runtime_archive(katana_native_port_runtime FALSE)
 if(MSVC)
     set_source_files_properties(
         src/analysis/function_value_analysis.cpp
+        src/codegen/port_export.cpp
         PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()

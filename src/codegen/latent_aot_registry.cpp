@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cstdio>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -110,7 +111,7 @@ constexpr std::string_view latent_aot_analysis_cache_artifact{
     "module-analysis.bin"};
 constexpr std::string_view latent_aot_module_static_cache_artifact{
     "module-static.bin"};
-constexpr std::uint32_t latent_aot_module_static_cache_schema_version = 1u;
+constexpr std::uint32_t latent_aot_module_static_cache_schema_version = 2u;
 constexpr std::array<std::uint8_t, 8u> latent_aot_module_static_cache_magic{
     'K', 'L', 'A', 'T', 'S', 'T', 'A', '1'};
 
@@ -171,6 +172,12 @@ struct DiscFileCandidate {
     // distinct: a derived table must never become a user-supplied hint or make
     // a rejected heuristic candidate fatal.
     bool inferred_authoritative_entry_table = false;
+    // Exact complete-disassembly entries, retained separately from the
+    // ordinary ingress offsets so block-only authority never becomes a
+    // public callable root by accident.
+    std::vector<CompleteDisassemblyEntryAuthority> authority_entries;
+    CompleteDisassemblyModuleClass module_class =
+        CompleteDisassemblyModuleClass::LatentLoaded;
 };
 
 bool candidate_has_authoritative_entries(
@@ -197,7 +204,22 @@ bool valid_entry_hint(const LatentAotEntryHint& hint) noexcept {
     // an odd encoded size and an entry beyond that compressed byte count.
     // The identity-specific raw/decoded candidate path validates the aligned
     // entry against the resolved executable bytes before accepting the hint.
+    const bool valid_kind =
+        hint.entry_kind == CompleteDisassemblyEntryKind::DeclaredEntry ||
+        hint.entry_kind == CompleteDisassemblyEntryKind::FunctionEntry ||
+        hint.entry_kind == CompleteDisassemblyEntryKind::ControlFlowTarget ||
+        hint.entry_kind == CompleteDisassemblyEntryKind::CodePointerTarget;
+    const bool valid_module_class =
+        hint.module_class == CompleteDisassemblyModuleClass::LatentLoaded ||
+        hint.module_class == CompleteDisassemblyModuleClass::PrimaryStatic ||
+        hint.module_class == CompleteDisassemblyModuleClass::FixedRuntimeImage;
+    const bool valid_probe =
+        hint.entry_byte_size == 0u ||
+        (hint.entry_byte_size >= 2u && hint.entry_byte_size <= 256u &&
+         (hint.entry_byte_size & 1u) == 0u &&
+         valid_sha256_identity(hint.entry_byte_identity));
     return valid_sha256_identity(hint.byte_identity) && hint.byte_size != 0u &&
+           valid_kind && valid_module_class && valid_probe &&
            (hint.module_relative_offset & 1u) == 0u &&
            (hint.source_address == 0u ||
             (hint.source_address & 0xFFFu) == 0u) &&
@@ -217,7 +239,17 @@ bool entry_hint_less(const LatentAotEntryHint& left,
         return left.module_relative_offset < right.module_relative_offset;
     if (left.source_address != right.source_address)
         return left.source_address < right.source_address;
-    return left.proven_runtime_base < right.proven_runtime_base;
+    if (left.proven_runtime_base != right.proven_runtime_base)
+        return left.proven_runtime_base < right.proven_runtime_base;
+    if (left.entry_kind != right.entry_kind)
+        return static_cast<unsigned>(left.entry_kind) <
+               static_cast<unsigned>(right.entry_kind);
+    if (left.module_class != right.module_class)
+        return static_cast<unsigned>(left.module_class) <
+               static_cast<unsigned>(right.module_class);
+    if (left.entry_byte_size != right.entry_byte_size)
+        return left.entry_byte_size < right.entry_byte_size;
+    return left.entry_byte_identity < right.entry_byte_identity;
 }
 
 std::vector<LatentAotEntryHint>
@@ -343,6 +375,84 @@ void merge_entry_offsets(std::vector<std::uint32_t>& destination,
     std::sort(destination.begin(), destination.end());
     destination.erase(std::unique(destination.begin(), destination.end()),
                       destination.end());
+}
+
+void merge_authority_entries(
+    std::vector<CompleteDisassemblyEntryAuthority>& destination,
+    std::vector<CompleteDisassemblyEntryAuthority> source) {
+    destination.insert(destination.end(),
+                       std::make_move_iterator(source.begin()),
+                       std::make_move_iterator(source.end()));
+    std::sort(destination.begin(), destination.end(),
+              [](const auto& left, const auto& right) {
+                  if (left.module_relative_offset !=
+                      right.module_relative_offset)
+                      return left.module_relative_offset <
+                             right.module_relative_offset;
+                  if (left.byte_size != right.byte_size)
+                      return left.byte_size < right.byte_size;
+                  if (left.byte_identity != right.byte_identity)
+                      return left.byte_identity < right.byte_identity;
+                  return static_cast<unsigned>(left.kind) <
+                         static_cast<unsigned>(right.kind);
+              });
+    destination.erase(std::unique(destination.begin(), destination.end()),
+                      destination.end());
+}
+
+std::vector<std::uint32_t> candidate_analysis_roots(
+    const DiscFileCandidate& candidate) {
+    if (candidate.authority_entries.empty())
+        return candidate.entry_offsets;
+    std::vector<std::uint32_t> roots;
+    for (const auto offset : candidate.entry_offsets) {
+        const bool authority_offset = std::any_of(
+            candidate.authority_entries.begin(), candidate.authority_entries.end(),
+            [&](const auto& entry) {
+                return entry.module_relative_offset == offset;
+            });
+        if (!authority_offset) roots.push_back(offset);
+    }
+    for (const auto& entry : candidate.authority_entries) {
+        if (entry.kind != CompleteDisassemblyEntryKind::ControlFlowTarget)
+            roots.push_back(entry.module_relative_offset);
+    }
+    std::sort(roots.begin(), roots.end());
+    roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+    return roots;
+}
+
+std::vector<std::uint32_t> candidate_public_roots(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program) {
+    if (candidate.authority_entries.empty())
+        return candidate.entry_offsets;
+    std::vector<std::uint32_t> roots;
+    for (const auto offset : candidate.entry_offsets) {
+        const bool authority_offset = std::any_of(
+            candidate.authority_entries.begin(), candidate.authority_entries.end(),
+            [&](const auto& entry) {
+                return entry.module_relative_offset == offset;
+            });
+        if (!authority_offset) roots.push_back(offset);
+    }
+    for (const auto& entry : candidate.authority_entries) {
+        const auto address = candidate.source_address +
+                             entry.module_relative_offset;
+        const bool function_entry = std::any_of(
+            program.begin(), program.end(),
+            [&](const auto& function) {
+                return function.entry_address == address;
+            });
+        if (entry.kind == CompleteDisassemblyEntryKind::DeclaredEntry ||
+            entry.kind == CompleteDisassemblyEntryKind::FunctionEntry ||
+            (entry.kind == CompleteDisassemblyEntryKind::CodePointerTarget &&
+             function_entry))
+            roots.push_back(entry.module_relative_offset);
+    }
+    std::sort(roots.begin(), roots.end());
+    roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+    return roots;
 }
 
 std::vector<std::uint32_t> latent_program_strict_interior_addresses(
@@ -5163,6 +5273,9 @@ struct LatentAotStaticCandidateKey final {
     std::uint32_t source_address = 0u;
     std::vector<std::uint32_t> entry_offsets;
     std::vector<std::uint32_t> explicit_entry_offsets;
+    std::vector<CompleteDisassemblyEntryAuthority> authority_entries;
+    CompleteDisassemblyModuleClass module_class =
+        CompleteDisassemblyModuleClass::LatentLoaded;
     bool exact_candidate = false;
     bool inferred_authoritative_entry_table = false;
     std::optional<std::uint32_t> proven_runtime_base;
@@ -5405,6 +5518,13 @@ void write_static_key(StaticCandidateWriter& output,
     output.u32(key.source_address);
     write_static_u32s(output, key.entry_offsets);
     write_static_u32s(output, key.explicit_entry_offsets);
+    output.u8(static_cast<std::uint8_t>(key.module_class));
+    write_static_vector(output, key.authority_entries, [&](const auto& entry) {
+        output.u32(entry.module_relative_offset);
+        output.u32(entry.byte_size);
+        output.text(entry.byte_identity);
+        output.u8(static_cast<std::uint8_t>(entry.kind));
+    });
     output.boolean(key.exact_candidate);
     output.boolean(key.inferred_authoritative_entry_table);
     output.boolean(key.proven_runtime_base.has_value());
@@ -5438,6 +5558,24 @@ LatentAotStaticCandidateKey read_static_key(StaticCandidateReader& input) {
     key.source_address = input.u32();
     key.entry_offsets = read_static_u32s(input);
     key.explicit_entry_offsets = read_static_u32s(input);
+    const auto module_class = input.u8();
+    if (module_class > static_cast<std::uint8_t>(
+                          CompleteDisassemblyModuleClass::FixedRuntimeImage))
+        throw StaticCandidateCodecError{};
+    key.module_class = static_cast<CompleteDisassemblyModuleClass>(module_class);
+    key.authority_entries = read_static_vector<CompleteDisassemblyEntryAuthority>(
+        input, maximum_complete_disassembly_entries, [&] {
+            CompleteDisassemblyEntryAuthority entry;
+            entry.module_relative_offset = input.u32();
+            entry.byte_size = input.u32();
+            entry.byte_identity = input.text(96u);
+            const auto kind = input.u8();
+            if (kind > static_cast<std::uint8_t>(
+                           CompleteDisassemblyEntryKind::CodePointerTarget))
+                throw StaticCandidateCodecError{};
+            entry.kind = static_cast<CompleteDisassemblyEntryKind>(kind);
+            return entry;
+        });
     key.exact_candidate = input.boolean();
     key.inferred_authoritative_entry_table = input.boolean();
     if (input.boolean()) key.proven_runtime_base = input.u32();
@@ -6208,6 +6346,8 @@ LatentAotStaticCandidateKey make_static_candidate_key(
     key.source_address = candidate.source_address;
     key.entry_offsets = candidate.entry_offsets;
     key.explicit_entry_offsets = candidate.explicit_entry_offsets;
+    key.authority_entries = candidate.authority_entries;
+    key.module_class = candidate.module_class;
     key.exact_candidate = candidate_has_authoritative_entries(candidate);
     key.inferred_authoritative_entry_table =
         candidate.inferred_authoritative_entry_table;
@@ -6242,6 +6382,13 @@ LatentAotStaticCandidateKey make_static_candidate_key(
         std::unique(key.explicit_entry_offsets.begin(),
                     key.explicit_entry_offsets.end()),
         key.explicit_entry_offsets.end());
+    std::sort(key.authority_entries.begin(), key.authority_entries.end(),
+              [](const auto& left, const auto& right) {
+                  return std::tie(left.module_relative_offset, left.byte_size,
+                                  left.byte_identity, left.kind) <
+                         std::tie(right.module_relative_offset, right.byte_size,
+                                  right.byte_identity, right.kind);
+              });
     std::sort(key.source_bindings.begin(), key.source_bindings.end(),
               source_binding_less);
     return key;
@@ -6281,6 +6428,10 @@ std::size_t estimate_static_candidate_state_bytes(
     add_count(state.key.entry_offsets.capacity(), sizeof(std::uint32_t));
     add_count(state.key.explicit_entry_offsets.capacity(),
               sizeof(std::uint32_t));
+    add_count(state.key.authority_entries.capacity(),
+              sizeof(CompleteDisassemblyEntryAuthority));
+    for (const auto& entry : state.key.authority_entries)
+        add_string(entry.byte_identity);
     add_count(state.key.source_bindings.capacity(),
               sizeof(PreparedLatentAotSourceBinding));
     for (const auto& binding : state.key.source_bindings) {
@@ -6882,8 +7033,9 @@ CandidateAnalysisOutcome finalize_candidate_program(
     std::vector<katana::ir::Function> program,
     katana::analysis::DreamcastHardwareAudit hardware_audit,
     const LatentAotDiscoveryOptions& options,
-    const std::span<const katana::ir::ExternalDispatchEntry>
+        const std::span<const katana::ir::ExternalDispatchEntry>
         external_dispatch_entries) {
+    const auto required_public_roots = candidate_public_roots(candidate, program);
     if (const auto rejection =
             candidate_source_shape_rejection(
                 candidate, options))
@@ -6895,8 +7047,8 @@ CandidateAnalysisOutcome finalize_candidate_program(
                            published_entry_offsets.end()) !=
             published_entry_offsets.end() ||
         std::any_of(
-            candidate.entry_offsets.begin(),
-            candidate.entry_offsets.end(),
+            required_public_roots.begin(),
+            required_public_roots.end(),
             [&](const auto offset) {
                 return !std::binary_search(
                     published_entry_offsets.begin(),
@@ -7336,6 +7488,45 @@ CandidateAnalysisOutcome finalize_candidate_program(
             return reject_candidate(
                 LatentAotAnalysisRejection::EntryBlockMissing);
     }
+    for (const auto& authority_entry : candidate.authority_entries) {
+        const auto offset = authority_entry.module_relative_offset;
+        if (offset > candidate.bytes.size() ||
+            authority_entry.byte_size > candidate.bytes.size() - offset ||
+            authority_entry.byte_size == 0u)
+            return reject_candidate(LatentAotAnalysisRejection::ProgramInvalid);
+        const auto bytes = std::string_view(
+            reinterpret_cast<const char*>(candidate.bytes.data() + offset),
+            authority_entry.byte_size);
+        if ("sha256:" + katana::io::sha256_bytes(bytes) !=
+            authority_entry.byte_identity)
+            return reject_candidate(LatentAotAnalysisRejection::ProgramInvalid);
+        const auto address = candidate.source_address + offset;
+        const bool function_entry = std::any_of(
+            program.begin(), program.end(),
+            [&](const auto& function) {
+                return function.entry_address == address;
+            });
+        const bool block_entry = std::any_of(
+            program.begin(), program.end(),
+            [&](const auto& function) {
+                return std::any_of(
+                    function.blocks.begin(), function.blocks.end(),
+                    [&](const auto& block) {
+                        return block.start_address == address;
+                    });
+            });
+        const bool valid_semantics =
+            (authority_entry.kind == CompleteDisassemblyEntryKind::DeclaredEntry &&
+             function_entry) ||
+            (authority_entry.kind == CompleteDisassemblyEntryKind::FunctionEntry &&
+             function_entry) ||
+            (authority_entry.kind == CompleteDisassemblyEntryKind::ControlFlowTarget &&
+             block_entry) ||
+            (authority_entry.kind == CompleteDisassemblyEntryKind::CodePointerTarget &&
+             (function_entry || block_entry));
+        if (!valid_semantics)
+            return reject_candidate(LatentAotAnalysisRejection::ProgramInvalid);
+    }
     std::vector<PreparedLatentAotCodePointerEvidence>
         external_code_pointer_evidence;
     external_code_pointer_evidence.reserve(std::min<std::size_t>(
@@ -7455,7 +7646,9 @@ CandidateAnalysisOutcome finalize_candidate_program(
             std::move(unique_block_identities),
             std::move(function_identities),
             std::move(program),
-            std::move(hardware_audit)},
+            std::move(hardware_audit),
+            candidate.authority_entries,
+            candidate.module_class},
         LatentAotAnalysisRejection::None,
         true};
 }
@@ -7520,7 +7713,7 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
              *candidate.proven_runtime_base,
              candidate.size});
     }
-    auto analysis_entry_offsets = candidate.entry_offsets;
+    auto analysis_entry_offsets = candidate_analysis_roots(candidate);
     for (const auto offset : analysis_entry_offsets)
         image.add_entry_point(candidate.source_address + offset);
     // A transformed PRS module is admitted only with an exact decoded-byte
@@ -7993,7 +8186,8 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     // discovered function root.  Reusing candidate.entry_offsets here used
     // to analyze loader tails successfully and then silently drop them from
     // the prepared module and generated dispatch.
-    auto published_entry_offsets = candidate.entry_offsets;
+    auto published_entry_offsets = candidate_public_roots(
+        candidate, stable_discovery_program);
     merge_entry_offsets(published_entry_offsets, analysis_entry_offsets);
 
     // Positive Guarded-AOT inventory is already canonicalized, structurally
@@ -8109,6 +8303,10 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         for (const auto offset : published_entry_offsets)
             dispatch_block_entries.insert(
                 candidate.source_address + offset);
+        // Authority entries are all block inventory, but only callable
+        // entries are present in published_entry_offsets/public roots.
+        for (const auto offset : candidate.entry_offsets)
+            dispatch_block_entries.insert(candidate.source_address + offset);
         dispatch_block_entries.insert(
             architectural_safepoints.begin(),
             architectural_safepoints.end());
@@ -8198,6 +8396,14 @@ inspect_cached_static_candidate(
 
     if (state.resolver_contract == current_contract)
         return LatentAotCachedStaticExpansion{};
+    if (state.key.authority_entries.size() >
+            maximum_complete_disassembly_entries ||
+        std::any_of(state.key.authority_entries.begin(),
+                    state.key.authority_entries.end(), [](const auto& entry) {
+                        return entry.byte_size == 0u ||
+                               entry.byte_identity.empty();
+                    }))
+        return std::nullopt;
 
     const auto strict_interior_addresses =
         latent_program_strict_interior_addresses(state.program);
@@ -9089,9 +9295,15 @@ void append_complete_disassembly_identity_number(
 }
 
 std::string complete_disassembly_authority_identity_unchecked(
-    const CompleteDisassemblyAuthority& authority) {
-    constexpr std::string_view identity_domain{
+    const CompleteDisassemblyAuthority& authority,
+    const bool include_module_class) {
+    constexpr std::string_view legacy_identity_domain{
         "katana-complete-disassembly-authority-v1"};
+    constexpr std::string_view current_identity_domain{
+        "katana-complete-disassembly-authority-v2"};
+    const auto identity_domain = include_module_class
+        ? current_identity_domain
+        : legacy_identity_domain;
     std::string material{identity_domain};
     material.push_back('\0');
     append_complete_disassembly_identity_number(
@@ -9103,6 +9315,9 @@ std::string complete_disassembly_authority_identity_unchecked(
         material, authority.modules.size());
     for (const auto& module : authority.modules) {
         append_complete_disassembly_identity_field(material, module.module_id);
+        if (include_module_class)
+            append_complete_disassembly_identity_number(
+                material, static_cast<unsigned>(module.module_class));
         append_complete_disassembly_identity_number(
             material, static_cast<unsigned>(module.transform));
         append_complete_disassembly_identity_field(
@@ -9143,8 +9358,13 @@ CompleteDisassemblyAuthority normalize_complete_disassembly_authority(
     CompleteDisassemblyAuthority authority) {
     constexpr std::uint32_t page_size = 4096u;
     constexpr std::uint32_t maximum_entry_probe_bytes = 256u;
-    if (authority.contract_version !=
-            complete_disassembly_authority_contract_version ||
+    const bool legacy_contract =
+        authority.contract_version ==
+        complete_disassembly_authority_legacy_contract_version;
+    const bool current_contract =
+        authority.contract_version ==
+        complete_disassembly_authority_contract_version;
+    if ((!legacy_contract && !current_contract) ||
         !valid_complete_disassembly_component(authority.project_id) ||
         !valid_complete_disassembly_component(authority.project_version) ||
         authority.modules.empty() ||
@@ -9172,6 +9392,12 @@ CompleteDisassemblyAuthority normalize_complete_disassembly_authority(
     source_ranges.reserve(authority.modules.size());
     std::optional<std::string_view> previous_module_id;
     for (auto& module : authority.modules) {
+        if (legacy_contract)
+            module.module_class = CompleteDisassemblyModuleClass::LatentLoaded;
+        const bool valid_module_class =
+            module.module_class == CompleteDisassemblyModuleClass::LatentLoaded ||
+            module.module_class == CompleteDisassemblyModuleClass::PrimaryStatic ||
+            module.module_class == CompleteDisassemblyModuleClass::FixedRuntimeImage;
         const bool valid_transform =
             module.transform == LatentAotSourceTransform::Identity ||
             module.transform == LatentAotSourceTransform::SegaPrs;
@@ -9184,7 +9410,7 @@ CompleteDisassemblyAuthority normalize_complete_disassembly_authority(
         if (!valid_complete_disassembly_component(module.module_id) ||
             (previous_module_id.has_value() &&
              *previous_module_id == module.module_id) ||
-            !valid_transform ||
+            !valid_transform || !valid_module_class ||
             !valid_sha256_identity(module.encoded_byte_identity) ||
             !valid_sha256_identity(module.decoded_byte_identity) ||
             !valid_sha256_identity(module.disassembly_identity) ||
@@ -9277,7 +9503,8 @@ CompleteDisassemblyAuthority normalize_complete_disassembly_authority(
 
     const auto supplied_identity = authority.authority_identity;
     authority.authority_identity =
-        complete_disassembly_authority_identity_unchecked(authority);
+        complete_disassembly_authority_identity_unchecked(
+            authority, current_contract);
     if (!supplied_identity.empty() &&
         supplied_identity != authority.authority_identity)
         throw std::invalid_argument(
@@ -9299,7 +9526,12 @@ complete_disassembly_coverage_entry_hints(
     auto normalized = normalize_complete_disassembly_authority(authority);
     std::vector<LatentAotEntryHint> hints;
     std::size_t count = 0u;
-    for (const auto& module : normalized.modules) count += module.entries.size();
+    for (const auto& module : normalized.modules) {
+        if (module.entries.size() > maximum_prepared_latent_aot_entry_hints -
+                std::min(count, maximum_prepared_latent_aot_entry_hints))
+            throw std::invalid_argument("complete-disassembly-entry-hint-budget");
+        count += module.entries.size();
+    }
     hints.reserve(count);
     for (const auto& module : normalized.modules) {
         for (const auto& entry : module.entries) {
@@ -9309,7 +9541,11 @@ complete_disassembly_coverage_entry_hints(
                  module.encoded_byte_size,
                  entry.module_relative_offset,
                  module.source_address,
-                 module.runtime_address});
+                 module.runtime_address,
+                 entry.kind,
+                 module.module_class,
+                 entry.byte_size,
+                 entry.byte_identity});
         }
     }
     return hints;
@@ -10463,6 +10699,8 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                             reinterpret_cast<const char*>(bytes.data()), bytes.size()));
         std::vector<std::size_t> matching_entry_hints;
         std::vector<std::uint32_t> explicit_entry_offsets;
+        std::vector<CompleteDisassemblyEntryAuthority> authority_entries;
+        std::optional<CompleteDisassemblyModuleClass> requested_module_class;
         std::optional<std::uint32_t> requested_source_address;
         std::optional<std::uint32_t> requested_runtime_base;
         for (const auto hint_index : extent_hint_indices) {
@@ -10470,6 +10708,18 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             if (hint.byte_identity == byte_identity) {
                 matching_entry_hints.push_back(hint_index);
                 explicit_entry_offsets.push_back(hint.module_relative_offset);
+                if (hint.entry_byte_size != 0u) {
+                    authority_entries.push_back({
+                        hint.module_relative_offset,
+                        hint.entry_byte_size,
+                        hint.entry_byte_identity,
+                        hint.entry_kind});
+                    if (requested_module_class.has_value() &&
+                        *requested_module_class != hint.module_class)
+                        throw std::runtime_error(
+                            "latent-aot-entry-hint-module-class-conflict");
+                    requested_module_class = hint.module_class;
+                }
                 if (hint.source_address != 0u) {
                     if (requested_source_address.has_value() &&
                         *requested_source_address != hint.source_address)
@@ -10558,6 +10808,11 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                     "latent-aot-entry-hint-runtime-base-conflict");
             if (requested_runtime_base.has_value())
                 candidate.proven_runtime_base = requested_runtime_base;
+            if (requested_module_class.has_value() &&
+                !candidate.authority_entries.empty() &&
+                candidate.module_class != *requested_module_class)
+                throw std::runtime_error(
+                    "latent-aot-entry-hint-module-class-conflict");
             if (source_binding_count >= maximum_latent_aot_source_bindings)
                 throw std::runtime_error(
                     "latent-aot-source-binding-budget");
@@ -10565,6 +10820,10 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                 ++source_binding_count;
             merge_entry_offsets(candidate.entry_offsets,
                                 entry_offsets);
+            merge_authority_entries(candidate.authority_entries,
+                                    std::move(authority_entries));
+            if (requested_module_class.has_value())
+                candidate.module_class = *requested_module_class;
             candidate.explicit_entry_offsets = candidate.entry_offsets;
             candidate.inferred_authoritative_entry_table = false;
         } else {
@@ -10583,7 +10842,10 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                      entry_offsets,
                      entry_offsets,
                      requested_runtime_base,
-                     false},
+                     false,
+                     std::move(authority_entries),
+                     requested_module_class.value_or(
+                         CompleteDisassemblyModuleClass::LatentLoaded)},
                     true,
                     requested_source_address))
                 break;

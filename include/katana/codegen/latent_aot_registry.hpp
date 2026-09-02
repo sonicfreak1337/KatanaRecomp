@@ -21,7 +21,7 @@ namespace katana::codegen {
 // aggregate. Keep these limits shared so a producer cannot serialize a valid
 // discovery that the export-time source revalidator later rejects.
 inline constexpr std::size_t maximum_prepared_latent_aot_entry_hints =
-    16'384u;
+    65'536u;
 inline constexpr std::size_t maximum_prepared_latent_aot_source_bindings =
     1024u;
 inline constexpr std::uint64_t
@@ -74,6 +74,31 @@ inline constexpr std::uint64_t
     maximum_prepared_latent_aot_function_identity_bytes =
         64ull * 1024ull * 1024ull;
 
+// Coverage-only entries are compile authority, never reachability evidence.
+// They are admitted only by the NativeBringup exporter and remain separate
+// from NativeBringupEvidenceStage so neither a successful preflight nor a
+// replay witness can promote Product/Proven closure.
+enum class CompleteDisassemblyEntryKind : std::uint8_t {
+    // An explicit declaration is a callable public function root.
+    DeclaredEntry,
+    // Analyzer-classified callable function root.
+    FunctionEntry,
+    // A block leader owned by an existing function; never a new owner.
+    ControlFlowTarget,
+    // Analyzer-classified callable root or block entry.
+    CodePointerTarget,
+};
+
+// The module class is part of the authority identity. LatentLoaded preserves
+// the historical loader-bound module contract; PrimaryStatic identifies a
+// statically resident image; FixedRuntimeImage identifies an image whose
+// runtime placement is fixed by the authority record.
+enum class CompleteDisassemblyModuleClass : std::uint8_t {
+    LatentLoaded,
+    PrimaryStatic,
+    FixedRuntimeImage,
+};
+
 // A local, export-time-only request for a native entry in an exact disc module.
 // byte_size binds the encoded disc extent. byte_identity and
 // module_relative_offset bind the executable view: for an identity source
@@ -93,6 +118,16 @@ struct LatentAotEntryHint {
     std::uint32_t module_relative_offset = 0u;
     std::uint32_t source_address = 0u;
     std::uint32_t proven_runtime_base = 0u;
+    // Complete-disassembly authority classification. Ordinary latent hints
+    // retain the historical callable DeclaredEntry default.
+    CompleteDisassemblyEntryKind entry_kind =
+        CompleteDisassemblyEntryKind::DeclaredEntry;
+    CompleteDisassemblyModuleClass module_class =
+        CompleteDisassemblyModuleClass::LatentLoaded;
+    // Optional exact authority probe. Zero/empty means this is an ordinary
+    // latent hint rather than a CompleteDisassembly authority entry.
+    std::uint32_t entry_byte_size = 0u;
+    std::string entry_byte_identity;
 
     [[nodiscard]] bool operator==(const LatentAotEntryHint&) const = default;
 };
@@ -500,17 +535,6 @@ enum class LatentAotSourceTransform : std::uint8_t {
     SegaPrs,
 };
 
-// Coverage-only entries are compile authority, never reachability evidence.
-// They are admitted only by the NativeBringup exporter and remain separate
-// from NativeBringupEvidenceStage so neither a successful preflight nor a
-// replay witness can promote Product/Proven closure.
-enum class CompleteDisassemblyEntryKind : std::uint8_t {
-    DeclaredEntry,
-    FunctionEntry,
-    ControlFlowTarget,
-    CodePointerTarget,
-};
-
 struct CompleteDisassemblyEntryAuthority final {
     std::uint32_t module_relative_offset = 0u;
     // Exact bounded probe at the entry. The exporter independently replaces
@@ -543,13 +567,17 @@ struct CompleteDisassemblyModuleAuthority final {
     // The view is audit authority only; decoded bytes remain executable truth.
     std::string disassembly_identity;
     std::vector<CompleteDisassemblyEntryAuthority> entries;
+    CompleteDisassemblyModuleClass module_class =
+        CompleteDisassemblyModuleClass::LatentLoaded;
 
     [[nodiscard]] bool operator==(
         const CompleteDisassemblyModuleAuthority&) const = default;
 };
 
 inline constexpr std::uint32_t
-    complete_disassembly_authority_contract_version = 1u;
+    complete_disassembly_authority_contract_version = 2u;
+inline constexpr std::uint32_t
+    complete_disassembly_authority_legacy_contract_version = 1u;
 inline constexpr std::size_t maximum_complete_disassembly_modules = 256u;
 inline constexpr std::size_t maximum_complete_disassembly_entries = 65'536u;
 
@@ -578,8 +606,9 @@ normalize_complete_disassembly_authority(
 [[nodiscard]] std::string complete_disassembly_authority_identity(
     const CompleteDisassemblyAuthority& authority);
 
-// Converts only the compile roots of a validated authority to ordinary
-// latent-module discovery hints. The caller must analyze these hints in a
+// Converts every entry of a validated authority to bounded latent-module
+// hints. The entry kind remains attached so lowering can keep callable roots
+// separate from block-only authority. The caller must analyze these hints in a
 // separate CoverageOnly program; feeding them to the proof program would be a
 // contract violation at the exporter boundary.
 [[nodiscard]] std::vector<LatentAotEntryHint>
@@ -661,6 +690,12 @@ struct PreparedLatentAotModule {
     std::vector<PreparedLatentAotFunctionIdentity> function_identities;
     std::vector<katana::ir::Function> program;
     katana::analysis::DreamcastHardwareAudit hardware_audit;
+    // Every authority entry survives normalization and preparation exactly,
+    // including block-only entries. entry_offsets above remains the public
+    // callable-root set consumed by the loaded-module ingress contract.
+    std::vector<CompleteDisassemblyEntryAuthority> authority_entries;
+    CompleteDisassemblyModuleClass module_class =
+        CompleteDisassemblyModuleClass::LatentLoaded;
 };
 
 struct LatentAotDiscovery {

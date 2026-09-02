@@ -165,6 +165,24 @@ bool loaded_target_execution_matches(
            execution->provenance == entry.block_sha256;
 }
 
+bool runtime_image_target_execution_matches(
+    const RuntimeBlockTable& table,
+    const std::optional<ValidatedBlockExecution>& execution,
+    const NativePortRuntimeImageActiveEntryView& entry,
+    const BlockVariantKey& variant) noexcept {
+    const auto source_target =
+        static_cast<std::uint64_t>(entry.source_start) + entry.source_offset;
+    if (source_target > std::numeric_limits<std::uint32_t>::max())
+        return false;
+    const auto source_address = static_cast<std::uint32_t>(source_target);
+    return current_static_target_execution(
+               table, execution, source_address, variant) &&
+           execution->virtual_start == source_address &&
+           execution->size == entry.block_size &&
+           execution->provenance == entry.block_sha256 &&
+           entry.lifecycle_generation != 0u;
+}
+
 bool loaded_source_matches(
     const NativePortLoadedAotEntryView& current,
     const NativeBringupCoverageSourceTransfer& expected) noexcept {
@@ -173,6 +191,22 @@ bool loaded_source_matches(
            current.block_sha256 == expected.source.block_code_identity &&
            current.runtime_start == expected.source_runtime_start &&
            current.module_size == expected.source_module_size &&
+           current.source_offset == expected.source_module_offset &&
+           current.block_size == expected.source.size &&
+           static_cast<std::uint64_t>(current.source_start) +
+                   current.source_offset ==
+               expected.source.block.virtual_address &&
+           current.lifecycle_generation != 0u;
+}
+
+bool runtime_image_source_matches(
+    const NativePortRuntimeImageActiveEntryView& current,
+    const NativeBringupCoverageSourceTransfer& expected) noexcept {
+    return current.image_id == expected.source_image_id &&
+           current.image_sha256 == expected.source_module_identity &&
+           current.block_sha256 == expected.source.block_code_identity &&
+           current.runtime_start == expected.source_runtime_start &&
+           current.image_size == expected.source_module_size &&
            current.source_offset == expected.source_module_offset &&
            current.block_size == expected.source.size &&
            static_cast<std::uint64_t>(current.source_start) +
@@ -216,11 +250,31 @@ bool source_transfer_shape_matches(
 
 std::optional<CoverageSourceAuthority> active_coverage_source_authority(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchContext& context,
     const NativeBringupCoveragePreflightRequest& request) {
     const auto runtime_source =
         relocate_code_address(request.source.virtual_address);
+    const auto runtime_image_source =
+        runtime_images.active_entry_for_address(runtime_source);
+    if (runtime_image_source.has_value()) {
+        const auto source_address =
+            static_cast<std::uint64_t>(runtime_image_source->source_start) +
+            runtime_image_source->source_offset;
+        if (source_address != request.source.virtual_address ||
+            !source_transfer_shape_matches(
+                request, static_cast<std::uint32_t>(source_address),
+                runtime_image_source->block_size))
+            return std::nullopt;
+        return CoverageSourceAuthority{
+            NativeBringupCoverageSourceKind::RuntimeImage,
+            runtime_image_source->image_sha256,
+            runtime_image_source->block_sha256,
+            runtime_image_source->runtime_start,
+            runtime_image_source->source_offset,
+            runtime_image_source->lifecycle_generation};
+    }
     const auto active_module =
         binder.active_module_for_address(runtime_source);
     if (active_module.has_value()) {
@@ -283,10 +337,12 @@ static_assert((coverage_preflight_cache_capacity &
 struct CoveragePreflightCacheEntry final {
     bool valid = false;
     const RuntimeBlockTable* table = nullptr;
+    const NativePortRuntimeImageBindings* runtime_images = nullptr;
     const NativePortLoadedAotBinder* binder = nullptr;
     const NativeBringupCoverageDispatchContext* context = nullptr;
     std::uint64_t table_lifetime = 0u;
     std::uint64_t table_generation = 0u;
+    NativePortRuntimeImageDispatchStamp runtime_image_stamp;
     NativePortLoadedAotDispatchStamp binder_stamp;
     NativeBringupCoveragePreflightRequest request;
     NativeBringupCoveragePreflightResult result;
@@ -336,18 +392,22 @@ bool same_coverage_preflight_request(
 std::optional<NativeBringupCoveragePreflightResult>
 replay_cached_coverage_preflight(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchContext& context,
     const NativeBringupCoveragePreflightRequest& request) noexcept {
     auto& cached = coverage_preflight_cache[
         coverage_preflight_cache_index(request)];
-    if (!cached.valid || cached.table != &table || cached.binder != &binder ||
+    if (!cached.valid || cached.table != &table ||
+        cached.runtime_images != &runtime_images ||
+        cached.binder != &binder ||
         cached.context != &context ||
         cached.table_lifetime != table.dispatch_lifetime() ||
         cached.table_generation != table.dispatch_generation() ||
+        cached.runtime_image_stamp != runtime_images.dispatch_stamp() ||
         cached.binder_stamp != binder.dispatch_stamp() ||
         !same_coverage_preflight_request(cached.request, request) ||
-        !context.validated_view_current(table, binder))
+        !context.validated_view_current(table, runtime_images, binder))
         return std::nullopt;
 
     if (cached.has_observation &&
@@ -362,6 +422,7 @@ replay_cached_coverage_preflight(
 
 NativeBringupCoveragePreflightResult remember_coverage_preflight(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchContext& context,
     const NativeBringupCoveragePreflightRequest& request,
@@ -371,10 +432,12 @@ NativeBringupCoveragePreflightResult remember_coverage_preflight(
         coverage_preflight_cache_index(request)];
     cached.valid = false;
     cached.table = &table;
+    cached.runtime_images = &runtime_images;
     cached.binder = &binder;
     cached.context = &context;
     cached.table_lifetime = table.dispatch_lifetime();
     cached.table_generation = table.dispatch_generation();
+    cached.runtime_image_stamp = runtime_images.dispatch_stamp();
     cached.binder_stamp = binder.dispatch_stamp();
     cached.request = request;
     result.cache_hit = false;
@@ -409,14 +472,20 @@ NativeBringupCoveragePreflightResult remember_coverage_preflight(
 NativeBringupCoveragePreflightResult
 preflight_native_bringup_coverage_dispatch(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchContext& context,
     const NativeBringupCoveragePreflightRequest& request) {
+    if (binder.module_universe_identity() !=
+            context.pack.identity.module_universe_identity ||
+        binder.aot_pack_identity() !=
+            context.pack.identity.aot_pack_identity)
+        reject(request, NativeBringupDispatchMiss::InvalidEntry);
     if (const auto cached = replay_cached_coverage_preflight(
-            table, binder, context, request);
+            table, runtime_images, binder, context, request);
         cached.has_value())
         return *cached;
-    if (!context.validated_view_current(table, binder))
+    if (!context.validated_view_current(table, runtime_images, binder))
         reject(request, NativeBringupDispatchMiss::InvalidEntry);
     if (request.variant.runtime_generation != context.runtime_generation)
         reject(request, NativeBringupDispatchMiss::GenerationMismatch);
@@ -477,16 +546,38 @@ preflight_native_bringup_coverage_dispatch(
                     NativeBringupDispatchMiss::LoadedModuleIdentityMismatch);
             source_authority.lifecycle_generation =
                 active_source->lifecycle_generation;
+        } else if (selected_source->source_kind ==
+                   NativeBringupCoverageSourceKind::RuntimeImage) {
+            const auto runtime_source =
+                selected_source->source_runtime_start +
+                selected_source->source_module_offset;
+            const auto active_source =
+                runtime_images.active_entry_for_address(runtime_source);
+            if (!active_source.has_value())
+                reject(request, NativeBringupDispatchMiss::RuntimeImageInactive);
+            if (relocate_code_address(
+                    selected_source->source.block.virtual_address) !=
+                runtime_source)
+                reject(
+                    request,
+                    NativeBringupDispatchMiss::RuntimeImageIdentityMismatch);
+            if (!runtime_image_source_matches(
+                    *active_source, *selected_source))
+                reject(
+                    request,
+                    NativeBringupDispatchMiss::RuntimeImageIdentityMismatch);
+            source_authority.lifecycle_generation =
+                active_source->lifecycle_generation;
         }
     } else {
         // Coverage source records are diagnostics/proof accelerators, not
         // compile authority. An unknown edge may originate at any exact block
-        // in the sealed Static-AOT universe or in the currently active,
-        // identity- and generation-bound Loaded-AOT module. This is the
+        // in the sealed Static-AOT universe or in a currently active,
+        // identity- and generation-bound RuntimeImage/Loaded-AOT module. This is the
         // deliberate NativeBringup-only separation between code availability
         // and reachability proof.
         const auto active_source = active_coverage_source_authority(
-            table, binder, context, request);
+            table, runtime_images, binder, context, request);
         if (!active_source.has_value())
             reject(request, NativeBringupDispatchMiss::CoverageSourceMissing);
         source_authority = *active_source;
@@ -504,7 +595,7 @@ preflight_native_bringup_coverage_dispatch(
         // return an empty execution result without mutating the Loaded-AOT
         // binder or claiming a CoverageOnly target observation.
         return remember_coverage_preflight(
-            table, binder, context, request,
+            table, runtime_images, binder, context, request,
             {{}, {}, request.target,
              canonical_physical_address(request.target), 0u, false},
             nullptr);
@@ -545,9 +636,60 @@ preflight_native_bringup_coverage_dispatch(
             context.runtime_generation,
             1u};
         return remember_coverage_preflight(
-            table, binder, context, request,
+            table, runtime_images, binder, context, request,
             {static_target->block, *static_target, request.target,
              canonical_physical_address(request.target), 0u, false},
+            &observation);
+    }
+
+    // Fixed runtime images have their own activation/retirement owner. They
+    // are neither StaticAOT at the runtime address nor staged LoadedAOT
+    // modules. Authenticate the active image tuple, then execute the exact
+    // source-space AOT block that its sealed mapping names.
+    const auto runtime_image_target =
+        runtime_images.active_entry_for_address(canonical_target);
+    if (runtime_image_target.has_value()) {
+        const auto source_target_wide =
+            static_cast<std::uint64_t>(runtime_image_target->source_start) +
+            runtime_image_target->source_offset;
+        if (source_target_wide > std::numeric_limits<std::uint32_t>::max())
+            reject(
+                request,
+                NativeBringupDispatchMiss::RuntimeImageIdentityMismatch);
+        const auto source_target =
+            static_cast<std::uint32_t>(source_target_wide);
+        const auto target_execution = table.lookup_static_aot(
+            canonical_physical_address(source_target), source_target,
+            request.variant);
+        if (!runtime_image_target_execution_matches(
+                table, target_execution, *runtime_image_target,
+                request.variant))
+            reject(
+                request,
+                NativeBringupDispatchMiss::RuntimeImageIdentityMismatch);
+        const NativeBringupCoverageObservation observation{
+            request.transfer_kind,
+            request.callsite,
+            canonical_target,
+            source_authority.kind,
+            source_authority.module_identity,
+            source_authority.block_identity,
+            source_authority.runtime_start,
+            source_authority.module_offset,
+            source_authority.lifecycle_generation,
+            runtime_image_target->image_sha256,
+            runtime_image_target->block_sha256,
+            runtime_image_target->runtime_start,
+            runtime_image_target->source_offset,
+            runtime_image_target->lifecycle_generation,
+            context.pack.identity.aot_pack_generation,
+            context.runtime_generation,
+            1u};
+        return remember_coverage_preflight(
+            table, runtime_images, binder, context, request,
+            {target_execution->block, *target_execution, request.target,
+             canonical_physical_address(request.target),
+             runtime_image_target->lifecycle_generation, false},
             &observation);
     }
 
@@ -632,7 +774,7 @@ preflight_native_bringup_coverage_dispatch(
         1u};
 
     return remember_coverage_preflight(
-        table, binder, context, request,
+        table, runtime_images, binder, context, request,
         {target_block,
          target_execution.value_or(ValidatedBlockExecution{}),
          request.target,

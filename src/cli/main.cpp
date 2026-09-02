@@ -8240,6 +8240,18 @@ parse_complete_disassembly_transform(const std::string_view text) {
         "Complete-Disassembly-Authority besitzt einen unbekannten Transform.");
 }
 
+katana::codegen::CompleteDisassemblyModuleClass
+parse_complete_disassembly_module_class(const std::string_view text) {
+    if (text == "latent-loaded")
+        return katana::codegen::CompleteDisassemblyModuleClass::LatentLoaded;
+    if (text == "primary-static")
+        return katana::codegen::CompleteDisassemblyModuleClass::PrimaryStatic;
+    if (text == "fixed-runtime-image")
+        return katana::codegen::CompleteDisassemblyModuleClass::FixedRuntimeImage;
+    throw std::invalid_argument(
+        "Complete-Disassembly-Authority besitzt eine unbekannte Modulklasse.");
+}
+
 CompleteDisassemblyEntryKindArgument parse_complete_disassembly_entry_kind(
     const std::string_view text) {
     if (text == "declared-entry")
@@ -8305,6 +8317,7 @@ CompleteDisassemblyAuthorityArgument load_complete_disassembly_authority_file(
 
     CompleteDisassemblyAuthorityArgument authority;
     bool schema_seen = false;
+    std::uint32_t schema_version = 0u;
     bool authority_seen = false;
     bool project_seen = false;
     std::size_t line_number = 0u;
@@ -8329,10 +8342,14 @@ CompleteDisassemblyAuthorityArgument load_complete_disassembly_authority_file(
             try {
                 const auto fields = split_complete_disassembly_record(line);
                 if (fields[0] == "schema") {
-                    if (fields.size() != 2u || schema_seen || fields[1] != "1")
+                    if (fields.size() != 2u || schema_seen ||
+                        (fields[1] != "1" && fields[1] != "2"))
                         throw std::invalid_argument(
                             "ungueltiger oder doppelter schema-Record");
                     schema_seen = true;
+                    schema_version = static_cast<std::uint32_t>(
+                        fields[1] == "2" ? 2u : 1u);
+                    authority.contract_version = schema_version;
                 } else if (fields[0] == "authority") {
                     if (fields.size() != 2u || authority_seen ||
                         !valid_latent_aot_entry_identity(fields[1]))
@@ -8348,21 +8365,40 @@ CompleteDisassemblyAuthorityArgument load_complete_disassembly_authority_file(
                     authority.project_version = std::string(fields[2]);
                     project_seen = true;
                 } else if (fields[0] == "module") {
-                    if (fields.size() != 11u)
+                    if (!schema_seen ||
+                        fields.size() != (schema_version == 2u ? 12u : 11u))
                         throw std::invalid_argument(
-                            "module-Record erwartet zehn Felder");
+                            "module-Record passt nicht zum Schema");
+                    const std::size_t class_index = schema_version == 2u ? 2u : 0u;
+                    const std::size_t transform_index = schema_version == 2u ? 3u : 2u;
+                    const std::size_t encoded_identity_index =
+                        schema_version == 2u ? 4u : 3u;
+                    const std::size_t disc_offset_index =
+                        schema_version == 2u ? 5u : 4u;
+                    const std::size_t encoded_size_index =
+                        schema_version == 2u ? 6u : 5u;
+                    const std::size_t decoded_identity_index =
+                        schema_version == 2u ? 7u : 6u;
+                    const std::size_t decoded_size_index =
+                        schema_version == 2u ? 8u : 7u;
+                    const std::size_t source_address_index =
+                        schema_version == 2u ? 9u : 8u;
+                    const std::size_t runtime_address_index =
+                        schema_version == 2u ? 10u : 9u;
+                    const std::size_t disassembly_identity_index =
+                        schema_version == 2u ? 11u : 10u;
                     const auto disc_offset = parse_complete_disassembly_integer(
-                        fields[4], "Disc-Byteoffset");
+                        fields[disc_offset_index], "Disc-Byteoffset");
                     const auto encoded_size = parse_complete_disassembly_integer(
-                        fields[5], "encoded Bytegroesse");
+                        fields[encoded_size_index], "encoded Bytegroesse");
                     const auto decoded_size = parse_complete_disassembly_integer(
-                        fields[7], "decoded Bytegroesse");
+                        fields[decoded_size_index], "decoded Bytegroesse");
                     const auto source_address =
                         parse_complete_disassembly_integer(
-                            fields[8], "Sourceadresse");
+                            fields[source_address_index], "Sourceadresse");
                     const auto runtime_address =
                         parse_complete_disassembly_integer(
-                            fields[9], "Runtimeadresse");
+                            fields[runtime_address_index], "Runtimeadresse");
                     if (encoded_size > std::numeric_limits<std::uint32_t>::max() ||
                         decoded_size > std::numeric_limits<std::uint32_t>::max() ||
                         source_address > std::numeric_limits<std::uint32_t>::max() ||
@@ -8371,20 +8407,28 @@ CompleteDisassemblyAuthorityArgument load_complete_disassembly_authority_file(
                             "module-Record ueberschreitet 32-Bit-Felder");
                     CompleteDisassemblyModuleAuthorityArgument module;
                     module.module_id = std::string(fields[1]);
+                    if (schema_version == 2u)
+                        module.module_class =
+                            parse_complete_disassembly_module_class(
+                                fields[class_index]);
                     module.transform =
-                        parse_complete_disassembly_transform(fields[2]);
-                    module.encoded_byte_identity = std::string(fields[3]);
+                        parse_complete_disassembly_transform(
+                            fields[transform_index]);
+                    module.encoded_byte_identity =
+                        std::string(fields[encoded_identity_index]);
                     module.disc_byte_offset = disc_offset;
                     module.encoded_byte_size =
                         static_cast<std::uint32_t>(encoded_size);
-                    module.decoded_byte_identity = std::string(fields[6]);
+                    module.decoded_byte_identity =
+                        std::string(fields[decoded_identity_index]);
                     module.decoded_byte_size =
                         static_cast<std::uint32_t>(decoded_size);
                     module.source_address =
                         static_cast<std::uint32_t>(source_address);
                     module.runtime_address =
                         static_cast<std::uint32_t>(runtime_address);
-                    module.disassembly_identity = std::string(fields[10]);
+                    module.disassembly_identity =
+                        std::string(fields[disassembly_identity_index]);
                     authority.modules.push_back(std::move(module));
                 } else if (fields[0] == "entry") {
                     if (fields.size() != 6u)

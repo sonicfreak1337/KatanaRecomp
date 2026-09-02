@@ -96,6 +96,12 @@ struct NativePortLoadedAotModuleView {
     std::span<const NativePortLoadedAotBlockIdentityView> block_identities;
 };
 
+// Canonical, order-independent identity of the complete generated Loaded-AOT
+// module/binding/block universe. Coverage packs bind this value to the binder
+// so a pack cannot be paired with a different generated module inventory.
+[[nodiscard]] std::string native_port_loaded_aot_module_universe_identity(
+    std::span<const NativePortLoadedAotModuleView> modules);
+
 // Identity supplied by a title-owned loader before a decoded module becomes
 // executable.  Staging does not authorize code: the binder still verifies the
 // exact generated module and every emitted block against the bytes resident at
@@ -140,9 +146,21 @@ struct NativePortLoadedAotEntryView final {
 struct NativePortLoadedAotDispatchStamp final {
     std::uint64_t lifecycle_generation = 0u;
     std::uint64_t immutable_generation = 0u;
+    std::string_view module_universe_identity;
+    std::string_view aot_pack_identity;
 
     [[nodiscard]] bool operator==(
         const NativePortLoadedAotDispatchStamp&) const noexcept = default;
+};
+
+// A cached fixed-runtime-image admission remains reusable only while both the
+// shared executable lifecycle and immutable-code state are unchanged.
+struct NativePortRuntimeImageDispatchStamp final {
+    std::uint64_t lifecycle_generation = 0u;
+    std::uint64_t immutable_generation = 0u;
+
+    [[nodiscard]] bool operator==(
+        const NativePortRuntimeImageDispatchStamp&) const noexcept = default;
 };
 
 struct NativePortExecutableRange final {
@@ -253,6 +271,8 @@ class NativePortRuntimeImageBindings final {
     [[nodiscard]] bool active(std::string_view image_id) const noexcept;
     [[nodiscard]] std::optional<NativePortRuntimeImageActiveEntryView>
     active_entry_for_address(std::uint32_t address) const;
+    [[nodiscard]] NativePortRuntimeImageDispatchStamp
+    dispatch_stamp() const noexcept;
 
   private:
     friend bool reconcile_native_port_runtime_executable_write(
@@ -270,6 +290,14 @@ class NativePortLoadedAotBinder final {
         std::span<const NativePortLoadedAotModuleView> modules,
         NativePortImmutableWriteGuard& immutable_guard,
         NativePortExecutableLifecycleLedger& lifecycle_ledger,
+        CrashCapsule* crash_capsule = nullptr);
+    NativePortLoadedAotBinder(
+        CpuState& cpu,
+        std::span<const NativePortLoadedAotModuleView> modules,
+        NativePortImmutableWriteGuard& immutable_guard,
+        NativePortExecutableLifecycleLedger& lifecycle_ledger,
+        std::string_view module_universe_identity,
+        std::string_view aot_pack_identity,
         CrashCapsule* crash_capsule = nullptr);
     ~NativePortLoadedAotBinder() noexcept;
 
@@ -302,6 +330,9 @@ class NativePortLoadedAotBinder final {
     // can be reused by a dispatch preflight cache.
     [[nodiscard]] NativePortLoadedAotDispatchStamp
     dispatch_stamp() const noexcept;
+    [[nodiscard]] std::string_view
+    module_universe_identity() const noexcept;
+    [[nodiscard]] std::string_view aot_pack_identity() const noexcept;
     // Records one exact loader-selected module at its destination. The module
     // remains non-executable until bind_entry verifies its current bytes and
     // an exact emitted block at the requested entry. Returns the independent,

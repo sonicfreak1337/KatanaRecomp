@@ -3239,6 +3239,36 @@ int main() {
                 "Multi-Modul-Disassembly-Authority verlor kanonische Ordnung, "
                 "Digest oder decoded PRS Hint-Bindung.");
 
+        auto primary_static_authority = normalized_authority;
+        primary_static_authority.authority_identity.clear();
+        primary_static_authority.modules.front().module_class =
+            katana::codegen::CompleteDisassemblyModuleClass::PrimaryStatic;
+        const auto primary_static_normalized =
+            katana::codegen::normalize_complete_disassembly_authority(
+                primary_static_authority);
+        require(primary_static_normalized.authority_identity !=
+                    normalized_authority.authority_identity,
+                "Moduleklasse wurde nicht in die v2 Authority-Identitaet gebunden.");
+
+        auto legacy_authority = normalized_authority;
+        legacy_authority.contract_version =
+            katana::codegen::complete_disassembly_authority_legacy_contract_version;
+        legacy_authority.authority_identity.clear();
+        legacy_authority.modules.front().module_class =
+            katana::codegen::CompleteDisassemblyModuleClass::PrimaryStatic;
+        const auto normalized_legacy_authority =
+            katana::codegen::normalize_complete_disassembly_authority(
+                legacy_authority);
+        require(normalized_legacy_authority.contract_version == 1u &&
+                    std::all_of(
+                        normalized_legacy_authority.modules.begin(),
+                        normalized_legacy_authority.modules.end(),
+                        [](const auto& module) {
+                            return module.module_class ==
+                                   katana::codegen::CompleteDisassemblyModuleClass::LatentLoaded;
+                        }),
+                "Legacy Authority wurde nicht identitaetsstabil als LatentLoaded gelesen.");
+
         auto reordered_authority = normalized_authority;
         reordered_authority.authority_identity.clear();
         std::reverse(reordered_authority.modules.begin(),

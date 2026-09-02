@@ -15,6 +15,7 @@
 namespace katana::runtime {
 
 class NativePortLoadedAotBinder;
+class NativePortRuntimeImageBindings;
 
 // This contract is deliberately independent of the historical indirect-
 // dispatch runtime. It may be linked into a generated native port without
@@ -32,6 +33,8 @@ enum class NativeBringupDispatchMiss : std::uint8_t {
     CoverageTargetMissing,
     LoadedModuleInactive,
     LoadedModuleIdentityMismatch,
+    RuntimeImageInactive,
+    RuntimeImageIdentityMismatch,
     HookReplacementConflict
 };
 
@@ -204,11 +207,12 @@ preflight_native_bringup_dispatch(
 // Coverage authority deliberately remains disjoint from the proof allowlist.
 // It can compile and execution-admit an exact complete-disassembly entry in a
 // NativeBringup product, but can never promote Evidence/Product closure.
-inline constexpr std::uint32_t native_bringup_coverage_contract_version = 2u;
+inline constexpr std::uint32_t native_bringup_coverage_contract_version = 3u;
 
 enum class NativeBringupCoverageSourceKind : std::uint8_t {
     StaticAot,
     LoadedAot,
+    RuntimeImage,
 };
 
 struct NativeBringupCoveragePackIdentity final {
@@ -219,6 +223,7 @@ struct NativeBringupCoveragePackIdentity final {
     std::string_view project_version;
     std::string_view analysis_identity;
     std::string_view aot_pack_identity;
+    std::string_view module_universe_identity;
     std::uint64_t aot_pack_generation = 0u;
 };
 
@@ -235,8 +240,10 @@ struct NativeBringupCoverageSourceTransfer final {
     NativeBringupCoverageSourceKind source_kind =
         NativeBringupCoverageSourceKind::StaticAot;
     NativeBringupDispatchStaticAotBinding source;
-    // LoadedAot only. StaticAot requires the empty/zero tuple.
+    // LoadedAot/RuntimeImage SHA-256. StaticAot requires the empty tuple.
     std::string_view source_module_identity;
+    // RuntimeImage descriptor ID. Other source kinds require empty.
+    std::string_view source_image_id;
     std::uint32_t source_runtime_start = 0u;
     std::uint32_t source_module_size = 0u;
     std::uint32_t source_module_offset = 0u;
@@ -344,11 +351,13 @@ class NativeBringupCoverageDispatchContext final {
 
     [[nodiscard]] bool validated_view_current(
         const RuntimeBlockTable& table,
+        const NativePortRuntimeImageBindings& runtime_images,
         const NativePortLoadedAotBinder& binder) const noexcept;
 
   private:
     NativeBringupCoverageDispatchContext(
         const RuntimeBlockTable& validated_table,
+        NativePortRuntimeImageBindings& validated_runtime_images,
         NativePortLoadedAotBinder& validated_binder,
         const NativeBringupCoverageDispatchPack& validated_pack,
         std::uint64_t active_runtime_generation,
@@ -361,6 +370,7 @@ class NativeBringupCoverageDispatchContext final {
     std::size_t validated_entries_size_ = 0u;
     NativeBringupCoveragePackIdentity validated_identity_;
     const RuntimeBlockTable* validated_table_ = nullptr;
+    const NativePortRuntimeImageBindings* validated_runtime_images_ = nullptr;
     const NativePortLoadedAotBinder* validated_binder_ = nullptr;
     std::uint64_t validated_table_lifetime_ = 0u;
     std::uint64_t validated_table_generation_ = 0u;
@@ -368,6 +378,7 @@ class NativeBringupCoverageDispatchContext final {
     friend NativeBringupCoverageDispatchContext
     make_native_bringup_coverage_dispatch_context(
         const RuntimeBlockTable&,
+        NativePortRuntimeImageBindings&,
         NativePortLoadedAotBinder&,
         const NativeBringupCoverageDispatchPack&,
         std::uint64_t,
@@ -377,6 +388,7 @@ class NativeBringupCoverageDispatchContext final {
 [[nodiscard]] NativeBringupCoverageDispatchContext
 make_native_bringup_coverage_dispatch_context(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchPack& pack,
     std::uint64_t runtime_generation,
@@ -414,6 +426,7 @@ struct NativeBringupCoveragePreflightResult final {
 [[nodiscard]] NativeBringupCoveragePreflightResult
 preflight_native_bringup_coverage_dispatch(
     const RuntimeBlockTable& table,
+    NativePortRuntimeImageBindings& runtime_images,
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchContext& context,
     const NativeBringupCoveragePreflightRequest& request);
