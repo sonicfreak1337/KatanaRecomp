@@ -387,6 +387,12 @@ std::optional<NativePortAudioCommandProducerLease>
 NativePortAudioCommandQueue::wait_begin_produce(
     const NativePortAudioPodCommand& command) {
     for (;;) {
+        // Observe the shared epoch before inspecting queue state. If the
+        // consumer frees space after this load, its epoch increment either
+        // makes wait() return immediately or wakes it. Loading the epoch only
+        // after the failed state check can miss that sole transition and
+        // sleep until an unrelated later command.
+        const auto observed = event_epoch_.load(std::memory_order_acquire);
         if (auto lease = try_begin_produce_impl(command); lease.has_value())
             return lease;
         const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
@@ -400,7 +406,6 @@ NativePortAudioCommandQueue::wait_begin_produce(
             throw NativePortAudioCommandQueueError(
                 NativePortAudioCommandQueueFailure::QueueClosed);
         queue_full_waits_.fetch_add(1u, std::memory_order_relaxed);
-        const auto observed = event_epoch_.load(std::memory_order_acquire);
         event_epoch_.wait(observed, std::memory_order_acquire);
     }
 }
@@ -413,6 +418,10 @@ NativePortAudioCommandQueue::try_begin_consume() {
 std::optional<NativePortAudioCommandConsumerLease>
 NativePortAudioCommandQueue::wait_begin_consume() {
     for (;;) {
+        // Pair the state inspection with an epoch captured first. A producer
+        // publication between those operations must not become an already-
+        // consumed notification followed by an unbounded wait.
+        const auto observed = event_epoch_.load(std::memory_order_acquire);
         if (auto lease = try_begin_consume_impl(); lease.has_value())
             return lease;
         const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
@@ -423,7 +432,6 @@ NativePortAudioCommandQueue::wait_begin_consume() {
             consumer_position_.load(std::memory_order_acquire) >=
                 producer_position_.load(std::memory_order_acquire))
             return std::nullopt;
-        const auto observed = event_epoch_.load(std::memory_order_acquire);
         event_epoch_.wait(observed, std::memory_order_acquire);
     }
 }
@@ -1139,6 +1147,13 @@ NativePortAudioCommandQueue::read_ack(
             NativePortAudioCommandQueueFailure::InvalidAckSlot);
     auto& ack = acks_[ack_slot];
     for (;;) {
+        // Capture the notification epoch before reading the ACK. Completion
+        // release-publishes the ACK and then advances this epoch. Therefore a
+        // completion concurrent with the check either becomes visible below
+        // or changes the value observed by wait(). The previous inverse order
+        // could read Pending, then read the post-completion epoch, and sleep
+        // forever despite the ACK already being terminal.
+        const auto observed = event_epoch_.load(std::memory_order_acquire);
         const auto state = ack.state.load(std::memory_order_acquire);
         const auto terminal = state == static_cast<std::uint8_t>(AckSlotState::Completed) ||
                                state == static_cast<std::uint8_t>(AckSlotState::Cancelled) ||
@@ -1158,7 +1173,6 @@ NativePortAudioCommandQueue::read_ack(
         }
         if (!wait) return std::nullopt;
         ack_waits_.fetch_add(1u, std::memory_order_relaxed);
-        const auto observed = event_epoch_.load(std::memory_order_acquire);
         event_epoch_.wait(observed, std::memory_order_acquire);
         const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
         if (lifecycle == NativePortAudioCommandQueueLifecycle::Stopped ||

@@ -37,12 +37,24 @@ inline constexpr std::size_t
 inline constexpr std::size_t
     maximum_prepared_latent_aot_instructions_per_module = 65'536u;
 
+// The limits above constrain each independently authenticated module.  A
+// whole-game discovery contains many such modules and therefore needs its
+// own bounded aggregate transport limits.  Do not reuse a per-module limit
+// for the combined discovery: doing so makes a valid module set depend on
+// how many exact disc images happen to participate in the product.
+inline constexpr std::size_t maximum_prepared_latent_aot_total_functions =
+    16'384u;
+inline constexpr std::size_t maximum_prepared_latent_aot_total_blocks =
+    262'144u;
+
 // Native internal resume entries are separate authenticated dispatch entries,
 // but they are not separate IR blocks. Keep their transport budget aligned
 // with the exporter/runtime template contract instead of reusing the smaller
 // analysis block budget.
 inline constexpr std::size_t maximum_prepared_latent_aot_block_identities =
     65'536u;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_total_block_identities = 1'048'576u;
 inline constexpr std::uint64_t
     maximum_prepared_latent_aot_block_identity_bytes =
         64ull * 1024ull * 1024ull;
@@ -56,6 +68,8 @@ inline constexpr std::size_t
     maximum_prepared_latent_aot_pc_literal_evidence = 65'536u;
 inline constexpr std::size_t
     maximum_prepared_latent_aot_function_identities = 2'048u;
+inline constexpr std::size_t
+    maximum_prepared_latent_aot_total_function_identities = 16'384u;
 inline constexpr std::uint64_t
     maximum_prepared_latent_aot_function_identity_bytes =
         64ull * 1024ull * 1024ull;
@@ -485,6 +499,92 @@ enum class LatentAotSourceTransform : std::uint8_t {
     Identity,
     SegaPrs,
 };
+
+// Coverage-only entries are compile authority, never reachability evidence.
+// They are admitted only by the NativeBringup exporter and remain separate
+// from NativeBringupEvidenceStage so neither a successful preflight nor a
+// replay witness can promote Product/Proven closure.
+enum class CompleteDisassemblyEntryKind : std::uint8_t {
+    DeclaredEntry,
+    FunctionEntry,
+    ControlFlowTarget,
+    CodePointerTarget,
+};
+
+struct CompleteDisassemblyEntryAuthority final {
+    std::uint32_t module_relative_offset = 0u;
+    // Exact bounded probe at the entry. The exporter independently replaces
+    // this probe with the complete emitted block identity before execution.
+    std::uint32_t byte_size = 0u;
+    std::string byte_identity;
+    CompleteDisassemblyEntryKind kind =
+        CompleteDisassemblyEntryKind::DeclaredEntry;
+
+    [[nodiscard]] bool operator==(
+        const CompleteDisassemblyEntryAuthority&) const = default;
+};
+
+struct CompleteDisassemblyModuleAuthority final {
+    std::string module_id;
+    LatentAotSourceTransform transform = LatentAotSourceTransform::Identity;
+    std::string encoded_byte_identity;
+    std::uint64_t disc_byte_offset = 0u;
+    std::uint32_t encoded_byte_size = 0u;
+    std::string decoded_byte_identity;
+    std::uint32_t decoded_byte_size = 0u;
+    // Optional synthetic export-time analysis placement and the independently
+    // proven loader placement. A zero source address retains the registry's
+    // deterministic collision-free placement. A non-zero source and every
+    // runtime address are exact page-aligned identities; runtime still
+    // requires a live module-instance/lifecycle binding before execution.
+    std::uint32_t source_address = 0u;
+    std::uint32_t runtime_address = 0u;
+    // Hash of the complete lossless disassembly view used to classify entries.
+    // The view is audit authority only; decoded bytes remain executable truth.
+    std::string disassembly_identity;
+    std::vector<CompleteDisassemblyEntryAuthority> entries;
+
+    [[nodiscard]] bool operator==(
+        const CompleteDisassemblyModuleAuthority&) const = default;
+};
+
+inline constexpr std::uint32_t
+    complete_disassembly_authority_contract_version = 1u;
+inline constexpr std::size_t maximum_complete_disassembly_modules = 256u;
+inline constexpr std::size_t maximum_complete_disassembly_entries = 65'536u;
+
+struct CompleteDisassemblyAuthority final {
+    std::uint32_t contract_version =
+        complete_disassembly_authority_contract_version;
+    std::string project_id;
+    std::string project_version;
+    // Optional input assertion. Normalization fills an empty value and rejects
+    // a non-empty value that differs from the canonical payload identity.
+    std::string authority_identity;
+    std::vector<CompleteDisassemblyModuleAuthority> modules;
+
+    [[nodiscard]] bool operator==(
+        const CompleteDisassemblyAuthority&) const = default;
+};
+
+// Sorts modules/entries canonically, rejects duplicate/conflicting offsets,
+// validates every exact identity/range/budget and seals authority_identity.
+[[nodiscard]] CompleteDisassemblyAuthority
+normalize_complete_disassembly_authority(
+    CompleteDisassemblyAuthority authority);
+
+// Computes the canonical payload identity. authority_identity itself is not
+// part of the digest, avoiding a self-referential artifact contract.
+[[nodiscard]] std::string complete_disassembly_authority_identity(
+    const CompleteDisassemblyAuthority& authority);
+
+// Converts only the compile roots of a validated authority to ordinary
+// latent-module discovery hints. The caller must analyze these hints in a
+// separate CoverageOnly program; feeding them to the proof program would be a
+// contract violation at the exporter boundary.
+[[nodiscard]] std::vector<LatentAotEntryHint>
+complete_disassembly_coverage_entry_hints(
+    const CompleteDisassemblyAuthority& authority);
 
 // One exact logical disc extent which may materialize a byte-identical native
 // template at runtime. The identifier is descriptor-local and carries neither

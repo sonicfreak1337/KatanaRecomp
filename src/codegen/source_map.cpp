@@ -47,12 +47,32 @@ bool location_less(const AddressSourceLocation& left, const AddressSourceLocatio
     return left.generated_line < right.generated_line;
 }
 
+const katana::io::ImageSegment* find_source_segment(
+    const std::span<const katana::io::ImageSegment> segments,
+    const std::uint32_t address) noexcept {
+    // ExecutableImage::add_segment keeps this collection ordered and rejects
+    // overlaps. Source-map construction performs one lookup per generated
+    // guest marker, so selecting the sole possible predecessor avoids the
+    // otherwise locations x segments metadata cost without changing analyzer
+    // or executable-image semantics.
+    const auto candidate = std::upper_bound(
+        segments.begin(), segments.end(), address,
+        [](const std::uint32_t value,
+           const katana::io::ImageSegment& segment) {
+            return value < segment.virtual_address;
+        });
+    if (candidate == segments.begin()) return nullptr;
+    const auto& segment = *std::prev(candidate);
+    return segment.contains(address, 1u) ? &segment : nullptr;
+}
+
 } // namespace
 
 std::vector<AddressSourceLocation>
 build_address_source_map(const katana::io::ExecutableImage& image,
                          const std::span<const ProjectArtifact> generated_units) {
     std::vector<AddressSourceLocation> result;
+    const auto image_segments = image.segments();
     for (const auto& unit : generated_units) {
         if (unit.relative_path.extension() != ".cpp") continue;
         if (!portable_relative_path(unit.relative_path)) {
@@ -77,7 +97,8 @@ build_address_source_map(const katana::io::ExecutableImage& image,
                     parsed.ptr != digits.data() + digits.size()) {
                     throw std::runtime_error("Generierter Source-Map-Marker ist ungueltig.");
                 }
-                const auto* segment = image.find_segment(address);
+                const auto* segment =
+                    find_source_segment(image_segments, address);
                 const auto byte_offset =
                     segment == nullptr ? std::optional<std::uint64_t>{}
                                        : segment->source_byte_offset(address);

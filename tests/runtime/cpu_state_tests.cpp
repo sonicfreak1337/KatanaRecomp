@@ -1,4 +1,5 @@
 #include "katana/runtime/aot_runtime_abi.hpp"
+#include "katana/build_contract.hpp"
 #include "katana/runtime/runtime.hpp"
 
 #include <algorithm>
@@ -31,7 +32,8 @@ int main() {
     static_assert(katana::runtime::banked_register_count == 8u);
     static_assert(katana::runtime::fpu_register_count == 16u);
 
-    static_assert(katana::runtime::abi_version == 126u);
+    static_assert(katana::runtime::abi_version ==
+                  katana::build_contract::aot_runtime_abi_version);
 
     CpuState cpu;
 

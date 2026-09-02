@@ -2,6 +2,8 @@
 #include "katana/runtime/block_guards.hpp"
 #include "katana/runtime/executable_modules.hpp"
 #include "katana/runtime/native_aot_template.hpp"
+#include "katana/runtime/native_port_aot_runtime.hpp"
+#include "katana/runtime/native_port_content.hpp"
 
 #include <array>
 #include <iostream>
@@ -11,6 +13,8 @@
 #include <vector>
 
 using namespace katana::runtime;
+
+static_assert(native_bringup_coverage_maximum_source_transfers == 262'144u);
 
 namespace {
 BlockExit block(CpuState&, BlockExecutionContext&) {
@@ -682,6 +686,415 @@ void runtime_only_hit_hotloop_regression() {
     }
     require(stale_cache_rejected,
             "Block-/Codegeneration liess einen invalidierten Inline-Cachehit zu.");
+}
+
+void native_bringup_coverage_regression() {
+    static_assert(!NativeBringupCoverageDispatchContext::release_eligible);
+    constexpr std::string_view module_identity =
+        "sha256:7af85194466a76bee16168ca8152d4560bd9bec17ade2525f267ed49a54f36a9";
+    constexpr std::string_view static_source_identity =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    constexpr std::string_view authority_identity =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    constexpr std::string_view analysis_identity =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    constexpr std::string_view pack_identity =
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    constexpr std::uint32_t source_start = 0x80810000u;
+    constexpr std::uint32_t target_source_start = 0x80820000u;
+    constexpr std::uint32_t source_runtime_start = 0x8C910000u;
+    constexpr std::uint32_t target_runtime_start = 0x8C920000u;
+    constexpr std::uint32_t unrelated_fixed_runtime_start = 0x8C930000u;
+    constexpr std::uint64_t runtime_generation = 37u;
+    constexpr std::uint64_t aot_pack_generation = 41u;
+    const std::array<std::uint8_t, 4u> bytes{
+        0x09u, 0x00u, 0x0Bu, 0x00u};
+
+    const std::array source_source_bindings{
+        NativePortLoadedAotSourceBindingView{
+            NativePortLoadedAotSourceTransform::Identity,
+            module_identity,
+            0u,
+            static_cast<std::uint32_t>(bytes.size()),
+            source_runtime_start}};
+    const std::array target_source_bindings{
+        NativePortLoadedAotSourceBindingView{
+            NativePortLoadedAotSourceTransform::Identity,
+            module_identity,
+            4u,
+            static_cast<std::uint32_t>(bytes.size()),
+            0u}};
+    const std::array blocks{
+        NativePortLoadedAotBlockIdentityView{
+            0u, static_cast<std::uint32_t>(bytes.size()), module_identity}};
+    const std::array modules{
+        NativePortLoadedAotModuleView{
+            source_start,
+            static_cast<std::uint32_t>(bytes.size()),
+            module_identity,
+            source_source_bindings,
+            blocks},
+        NativePortLoadedAotModuleView{
+            target_source_start,
+            static_cast<std::uint32_t>(bytes.size()),
+            module_identity,
+            target_source_bindings,
+            blocks}};
+    const std::array immutable_ranges{
+        NativePortImmutableRange{
+            0x0C000000u,
+            2u,
+            native_port_immutable_range_mask(
+                NativePortImmutableRangeKind::Executable)}};
+    NativePortMemory memory;
+    auto& cpu = memory.cpu();
+    cpu.memory.write_bytes(
+        canonical_physical_address(source_runtime_start),
+        bytes,
+        CodeWriteSource::Copy);
+    cpu.memory.write_bytes(
+        canonical_physical_address(target_runtime_start),
+        bytes,
+        CodeWriteSource::Copy);
+    NativePortImmutableWriteGuard immutable_guard(immutable_ranges);
+    NativePortExecutableLifecycleLedger lifecycle_ledger(2u);
+    NativePortLoadedAotBinder binder(
+        cpu, modules, immutable_guard, lifecycle_ledger);
+    const auto source_lifecycle = binder.stage_runtime_module(
+        {module_identity,
+         source_start,
+         source_runtime_start,
+         static_cast<std::uint32_t>(bytes.size())});
+    require(binder.bind_entry(source_runtime_start),
+            "Coverage-Fixture konnte den geladenen Source-Owner nicht aktivieren.");
+    const auto target_lifecycle = binder.stage_runtime_module(
+        {module_identity,
+         target_source_start,
+         target_runtime_start,
+         static_cast<std::uint32_t>(bytes.size())});
+
+    const NativeBringupDispatchStaticAotBinding source_binding{
+        {source_start, canonical_physical_address(source_start)},
+        static_cast<std::uint32_t>(bytes.size()),
+        BlockEndKind::Call,
+        module_identity};
+    const NativeBringupDispatchStaticAotBinding target_binding{
+        {target_source_start, canonical_physical_address(target_source_start)},
+        static_cast<std::uint32_t>(bytes.size()),
+        BlockEndKind::Return,
+        module_identity};
+    RuntimeBlockTable table;
+    table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    const auto make_static_block = [=](
+                                       const NativeBringupDispatchStaticAotBinding& binding) {
+        RuntimeBlock native{binding.block.virtual_address,
+                            binding.block.physical_address,
+                            binding.size,
+                            binding.end_kind,
+                            {0u, 0u, 0u, 0u, runtime_generation},
+                            block,
+                            std::string(binding.block_code_identity),
+                            false};
+        native.static_variant_policy =
+            StaticVariantPolicy::DirectP1P2RuntimeStateAgnostic;
+        return native;
+    };
+    const auto source_handle =
+        table.register_static(make_static_block(source_binding));
+    const auto target_handle =
+        table.register_static(make_static_block(target_binding));
+    table.seal_static();
+
+    const std::array source_transfers{
+        NativeBringupCoverageSourceTransfer{
+            NativeBringupTransferKind::CallRegister,
+            source_start,
+            source_start + 4u,
+            NativeBringupCoverageSourceKind::LoadedAot,
+            source_binding,
+            module_identity,
+            source_runtime_start,
+            static_cast<std::uint32_t>(bytes.size()),
+            0u}};
+    const std::array coverage_entries{
+        NativeBringupCoverageEntry{
+            module_identity,
+            static_cast<std::uint32_t>(bytes.size()),
+            target_source_start,
+            unrelated_fixed_runtime_start,
+            0u,
+            target_binding}};
+    const NativeBringupCoverageDispatchPack coverage_pack{
+        {native_bringup_coverage_contract_version,
+         authority_identity,
+         "fixture-project",
+         "fixture-v1",
+         analysis_identity,
+         pack_identity,
+         aot_pack_generation},
+        source_transfers,
+        coverage_entries};
+    NativeBringupCoverageObservations coverage_observations;
+    const auto context = make_native_bringup_coverage_dispatch_context(
+        table, binder, coverage_pack, runtime_generation,
+        coverage_observations);
+    NativeBringupCoveragePreflightRequest request{
+        NativeBringupTransferKind::CallRegister,
+        source_start,
+        target_runtime_start,
+        source_start + 4u,
+        source_binding.block,
+        {0u, 0u, 0u, 0u, runtime_generation},
+        NativeBringupCoveragePreflightRequest::TargetHook::
+            CallableFunctionEntry};
+
+    auto wrong_runtime_sources = source_transfers;
+    wrong_runtime_sources.front().source_runtime_start += 0x1000u;
+    const NativeBringupCoverageDispatchPack wrong_runtime_pack{
+        coverage_pack.identity, wrong_runtime_sources, coverage_entries};
+    const auto wrong_runtime_context =
+        make_native_bringup_coverage_dispatch_context(
+            table, binder, wrong_runtime_pack, runtime_generation,
+            coverage_observations);
+    auto wrong_runtime_request = request;
+    bool wrong_runtime_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+            table, binder, wrong_runtime_context, wrong_runtime_request));
+    } catch (const NativeBringupDispatchError& error) {
+        wrong_runtime_rejected =
+            error.miss() ==
+            NativeBringupDispatchMiss::LoadedModuleIdentityMismatch;
+    }
+    require(wrong_runtime_rejected &&
+                !binder.active_entry_for_address(target_runtime_start)
+                     .has_value() &&
+                coverage_observations.total_occurrences() == 0u,
+            "Coverage-Preflight akzeptierte eine falsche Source-Runtimebasis "
+            "oder aktivierte vorher das Ziel.");
+
+    const auto native_hook_admitted =
+        preflight_native_bringup_coverage_dispatch(
+            table, binder, context, request);
+    const auto still_staged =
+        binder.preflight_entry_for_address(target_runtime_start);
+    require(!native_hook_admitted.block &&
+                native_hook_admitted.execution.function == nullptr &&
+                native_hook_admitted.target == target_runtime_start &&
+                native_hook_admitted.physical_target ==
+                    canonical_physical_address(target_runtime_start) &&
+                native_hook_admitted.lifecycle_generation == 0u &&
+                still_staged.has_value() && !still_staged->active &&
+                still_staged->lifecycle_generation == target_lifecycle &&
+                coverage_observations.total_occurrences() == 0u,
+            "Coverage-Preflight band einen Native-FunctionEntry als AOT-Ziel "
+            "oder erfand dafuer eine Coverage-Promotion.");
+
+    auto instruction_hook_request = request;
+    instruction_hook_request.target_hook =
+        NativeBringupCoveragePreflightRequest::TargetHook::
+            ConflictingInstruction;
+    bool hook_conflict_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+            table, binder, context, instruction_hook_request));
+    } catch (const NativeBringupDispatchError& error) {
+        hook_conflict_rejected =
+            error.miss() == NativeBringupDispatchMiss::HookReplacementConflict;
+    }
+    require(hook_conflict_rejected && still_staged.has_value() &&
+                !still_staged->active &&
+                still_staged->lifecycle_generation == target_lifecycle &&
+                coverage_observations.total_occurrences() == 0u,
+            "Coverage-Hookkonflikt aktivierte das Ziel trotz fail-closed Preflight.");
+
+    request.target_hook =
+        NativeBringupCoveragePreflightRequest::TargetHook::None;
+    const auto admitted = preflight_native_bringup_coverage_dispatch(
+        table, binder, context, request);
+    const auto active_target =
+        binder.active_entry_for_address(target_runtime_start);
+    const auto active_source =
+        binder.active_entry_for_address(source_runtime_start);
+    const auto coverage_events = coverage_observations.events();
+    const auto coverage_json = coverage_observations.serialize_json();
+    require(source_handle && target_handle &&
+                !admitted.block &&
+                !admitted.cache_hit &&
+                admitted.execution.function == nullptr &&
+                admitted.target == target_runtime_start &&
+                admitted.physical_target ==
+                    canonical_physical_address(target_runtime_start) &&
+                admitted.lifecycle_generation == target_lifecycle &&
+                active_target.has_value() && active_target->active &&
+                active_target->lifecycle_generation == target_lifecycle &&
+                active_source.has_value() && active_source->active &&
+                active_source->lifecycle_generation == source_lifecycle &&
+                coverage_observations.total_occurrences() == 1u &&
+                coverage_observations.dropped_events() == 0u &&
+                coverage_events.size() == 1u &&
+                coverage_events.front().transfer_kind ==
+                    NativeBringupTransferKind::CallRegister &&
+                coverage_events.front().callsite == source_start &&
+                coverage_events.front().target == target_runtime_start &&
+                coverage_events.front().source_kind ==
+                    NativeBringupCoverageSourceKind::LoadedAot &&
+                coverage_events.front().source_module_identity ==
+                    module_identity &&
+                coverage_events.front().source_runtime_start ==
+                    source_runtime_start &&
+                coverage_events.front().source_lifecycle_generation ==
+                    source_lifecycle &&
+                coverage_events.front().target_module_identity ==
+                    module_identity &&
+                coverage_events.front().target_lifecycle_generation ==
+                    target_lifecycle &&
+                coverage_events.front().occurrences == 1u &&
+                coverage_json.find("\"coverage_only\":true") !=
+                    std::string::npos &&
+                coverage_json.find("\"static_proof_promotions\":0") !=
+                    std::string::npos,
+            "Coverage-Preflight verlor kompiliertes Ziel, Modulidentitaet "
+            "oder atomare Lifecycle-Generation, weil der Loader eine beim "
+            "Export noch unbekannte Platzierung gewaehlt hatte.");
+
+    const auto cached_admitted =
+        preflight_native_bringup_coverage_dispatch(
+            table, binder, context, request);
+    require(cached_admitted.cache_hit &&
+                cached_admitted.lifecycle_generation == target_lifecycle &&
+                coverage_observations.total_occurrences() == 2u &&
+                coverage_observations.events().size() == 1u &&
+                coverage_observations.events().front().occurrences == 2u,
+            "Coverage-Preflight cachete die unveraenderte geladene Kante nicht "
+            "oder verlor deren bounded Witnesszaehler.");
+
+    const std::array<NativeBringupCoverageSourceTransfer, 0u>
+        no_source_transfers{};
+    const std::array<NativeBringupCoverageEntry, 0u> no_placement_entries{};
+    const NativeBringupCoverageDispatchPack compile_universe_only_pack{
+        coverage_pack.identity, no_source_transfers, no_placement_entries};
+    NativeBringupCoverageObservations compile_universe_observations;
+    const auto compile_universe_only_context =
+        make_native_bringup_coverage_dispatch_context(
+            table, binder, compile_universe_only_pack, runtime_generation,
+            compile_universe_observations);
+    const auto compile_universe_admitted =
+        preflight_native_bringup_coverage_dispatch(
+            table, binder, compile_universe_only_context, request);
+    const auto compile_universe_events =
+        compile_universe_observations.events();
+    require(!compile_universe_admitted.block &&
+                compile_universe_admitted.execution.function == nullptr &&
+                compile_universe_admitted.target == target_runtime_start &&
+                compile_universe_admitted.lifecycle_generation ==
+                    target_lifecycle &&
+                compile_universe_events.size() == 1u &&
+                compile_universe_events.front().source_kind ==
+                    NativeBringupCoverageSourceKind::LoadedAot &&
+                compile_universe_events.front().source_module_identity ==
+                    module_identity &&
+                compile_universe_events.front().source_lifecycle_generation ==
+                    source_lifecycle &&
+                compile_universe_events.front().target_module_identity ==
+                    module_identity &&
+                compile_universe_events.front().target_lifecycle_generation ==
+                    target_lifecycle,
+            "Coverage-Preflight verlangte fuer einen exakten aktiven "
+            "Compile-Universe-Block weiterhin eine Callsite- oder "
+            "Platzierungstabelle.");
+
+    auto unknown_source = request;
+    unknown_source.callsite += 2u;
+    bool unknown_source_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+            table, binder, context, unknown_source));
+    } catch (const NativeBringupDispatchError& error) {
+        unknown_source_rejected =
+            error.miss() == NativeBringupDispatchMiss::CoverageSourceMissing;
+    }
+    require(unknown_source_rejected,
+            "Kein exakter Compile-Universe-Block erbte eine "
+            "Coverage-Zulassung.");
+
+    auto static_source_transfers = source_transfers;
+    static_source_transfers.front().source_kind =
+        NativeBringupCoverageSourceKind::StaticAot;
+    static_source_transfers.front().source_module_identity = {};
+    static_source_transfers.front().source_runtime_start = 0u;
+    static_source_transfers.front().source_module_size = 0u;
+    static_source_transfers.front().source_module_offset = 0u;
+    const NativeBringupCoverageDispatchPack static_target_pack{
+        coverage_pack.identity, static_source_transfers, coverage_entries};
+    NativeBringupCoverageObservations static_target_observations;
+    const auto static_target_context =
+        make_native_bringup_coverage_dispatch_context(
+            table, binder, static_target_pack, runtime_generation,
+            static_target_observations);
+    auto static_target_request = request;
+    static_target_request.target = target_source_start;
+    const auto static_admitted =
+        preflight_native_bringup_coverage_dispatch(
+            table, binder, static_target_context, static_target_request);
+    const auto static_events = static_target_observations.events();
+    require(static_admitted.block == target_handle &&
+                !static_admitted.cache_hit &&
+                static_admitted.execution.function == block &&
+                static_admitted.execution.virtual_start ==
+                    target_source_start &&
+                static_admitted.target == target_source_start &&
+                static_admitted.physical_target ==
+                    canonical_physical_address(target_source_start) &&
+                static_admitted.lifecycle_generation == 0u &&
+                static_events.size() == 1u &&
+                static_events.front().source_kind ==
+                    NativeBringupCoverageSourceKind::StaticAot &&
+                static_events.front().target == target_source_start &&
+                static_events.front().target_module_identity ==
+                    pack_identity &&
+                static_events.front().target_block_identity ==
+                    module_identity &&
+                static_events.front().target_runtime_start ==
+                    target_source_start &&
+                static_events.front().target_module_offset == 0u &&
+                static_events.front().target_lifecycle_generation == 0u,
+            "Coverage-Preflight wies ein exakt gebundenes Static-AOT-Ziel "
+            "faelschlich als fehlendes Loaded-AOT-Modul ab oder erfand eine "
+            "Lifecycle-Generation.");
+
+    const auto stamp_before_retirement = binder.dispatch_stamp();
+    require(binder.deactivate_runtime_range(
+                target_runtime_start, bytes.size()) == 1u &&
+                binder.dispatch_stamp() != stamp_before_retirement,
+            "Loaded-AOT-Retirement aenderte den Dispatch-Cache-Stamp nicht.");
+    bool retired_cache_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+            table, binder, context, request));
+    } catch (const NativeBringupDispatchError& error) {
+        retired_cache_rejected =
+            error.miss() == NativeBringupDispatchMiss::UnmappedTarget;
+    }
+    require(retired_cache_rejected,
+            "Coverage-Preflight verwendete nach Lifecycle-Retirement einen "
+            "stalen Cachetreffer.");
+
+    auto bounded_event = coverage_observations.events().front();
+    coverage_observations.clear();
+    for (std::size_t index = 0u;
+         index < native_bringup_coverage_observation_capacity + 1u;
+         ++index) {
+        bounded_event.callsite = static_cast<std::uint32_t>(index * 2u);
+        coverage_observations.record(bounded_event);
+    }
+    require(coverage_observations.events().size() ==
+                    native_bringup_coverage_observation_capacity &&
+                coverage_observations.total_occurrences() ==
+                    native_bringup_coverage_observation_capacity + 1u &&
+                coverage_observations.dropped_events() == 1u,
+            "Coverage-Witnessindex ueberschritt seine feste 4096er Grenze.");
 }
 
 void native_bringup_allowlist_regression() {
@@ -1397,6 +1810,7 @@ int main() {
         missing_aot_dispatch_regression();
         materialization_identity_diagnostic_regression();
         runtime_only_hit_hotloop_regression();
+        native_bringup_coverage_regression();
         native_bringup_allowlist_regression();
         RuntimeBlockTable table;
         const BlockVariantKey variant{1u, 0u, 0u, 0u, 0u};

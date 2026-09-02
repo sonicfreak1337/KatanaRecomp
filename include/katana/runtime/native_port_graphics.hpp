@@ -94,10 +94,11 @@ struct NativePortGraphicsConfig final {
     std::uint32_t maximum_pipeline_states = 4'096u;
     // Upper bound for the transient Type-2 per-pixel fragment pool. It is
     // allocated lazily only when an authenticated Type2AutoSorted list
-    // arrives. The compact 24-byte nodes and this 16-Mi-node default keep the
-    // 1080p pool below Flycast's 512-MiB reference budget while admitting the
-    // complete Sonic Adventure title/character-select translucent lists.
-    std::uint32_t maximum_type2_fragment_nodes = 16'777'216u;
+    // arrives. The compact 24-byte nodes and this default consume no more than
+    // Flycast's 512-MiB reference A-buffer budget. Capacity exhaustion is a
+    // bounded quality limit: later fragments are discarded, never promoted to
+    // a process-fatal graphics error.
+    std::uint32_t maximum_type2_fragment_nodes = 22'369'621u;
     // The render-thread command stream is atomic at command boundaries: an
     // upload or draw is never split, redirected through a host pointer, or
     // silently executed on the producer. These explicit budgets size both

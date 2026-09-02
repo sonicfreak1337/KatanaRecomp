@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -30,7 +31,6 @@ constexpr std::uint32_t maximum_sound_bank_midi_ports = 4'096u;
 constexpr std::uint32_t maximum_sound_bank_units = 65'536u;
 constexpr std::uint32_t maximum_sound_bank_events = 16u * 1024u * 1024u;
 constexpr std::uint32_t maximum_sound_bank_reference_depth = 64u;
-constexpr std::uint32_t maximum_sound_bank_render_blocks = 4'096u;
 constexpr std::uint32_t maximum_mpb_programs = 128u;
 constexpr std::uint32_t maximum_mpb_layers = 4u;
 constexpr std::uint32_t maximum_mpb_splits = 128u;
@@ -101,11 +101,15 @@ aica_pan_gains(const std::uint8_t raw_pan) noexcept {
 }
 
 void validate_config(const NativePortSoundBankConfig& config) {
+    const auto& effect_provider = config.effect_kernel_provider;
+    const auto valid_effect_provider =
+        effect_provider.resolve == nullptr ||
+        effect_provider.contract_version ==
+            native_port_sound_effect_kernel_contract_version;
     if (config.output_sample_rate < 8'000u ||
         config.output_sample_rate > maximum_output_sample_rate ||
         config.render_block_frames == 0u ||
         config.render_block_frames > maximum_render_block_frames ||
-        config.target_feed_frames < config.render_block_frames ||
         config.maximum_collections == 0u ||
         config.maximum_collections > maximum_sound_bank_collections ||
         config.maximum_collection_bytes < 32u ||
@@ -126,9 +130,8 @@ void validate_config(const NativePortSoundBankConfig& config) {
         config.maximum_midi_ports == 0u ||
         config.maximum_midi_ports > maximum_sound_bank_midi_ports ||
         config.maximum_decoded_sample_frames == 0u ||
-        config.maximum_render_blocks_per_pump == 0u ||
-        config.maximum_render_blocks_per_pump >
-            maximum_sound_bank_render_blocks)
+        config.maximum_effect_state_bytes == 0u ||
+        !valid_effect_provider)
         fail_sound_bank(NativePortSoundBankFailure::InvalidConfig, "config");
 }
 
@@ -512,6 +515,41 @@ class NativePortSoundBankEngine::Core final {
         std::uint8_t pan = 0u;
     };
 
+    struct EffectKernelState final {
+        EffectKernelState() = default;
+        EffectKernelState(const EffectKernelState&) = delete;
+        EffectKernelState& operator=(const EffectKernelState&) = delete;
+        EffectKernelState(EffectKernelState&& other) noexcept
+            : kernel(std::exchange(other.kernel, nullptr)),
+              storage(std::exchange(other.storage, nullptr)) {}
+        EffectKernelState& operator=(EffectKernelState&& other) noexcept {
+            if (this == &other) return *this;
+            reset();
+            kernel = std::exchange(other.kernel, nullptr);
+            storage = std::exchange(other.storage, nullptr);
+            return *this;
+        }
+        ~EffectKernelState() { reset(); }
+
+        void reset() noexcept {
+            if (storage == nullptr || kernel == nullptr) return;
+            kernel->destroy(storage);
+            ::operator delete(
+                storage,
+                std::align_val_t(static_cast<std::size_t>(
+                    kernel->state_alignment)));
+            storage = nullptr;
+            kernel = nullptr;
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return kernel != nullptr && storage != nullptr;
+        }
+
+        const NativePortSoundEffectKernel* kernel = nullptr;
+        void* storage = nullptr;
+    };
+
     struct Collection final {
         std::vector<std::uint8_t> bytes;
         std::array<std::optional<ProgramBank>, maximum_mlt_banks> program_banks;
@@ -520,15 +558,15 @@ class NativePortSoundBankEngine::Core final {
                    maximum_mlt_banks>
             authored_pcm_stream_rings;
         std::array<EffectOutput, maximum_effect_buses> effect_outputs{};
-        bool qsound_reverb_medium = false;
         bool effect_program_present = false;
         bool effect_output_present = false;
         bool effect_work_present = false;
+        std::uint32_t effect_work_area_bytes = 0u;
         std::optional<std::uint8_t> effect_bank;
         std::vector<double> effect_sends;
-        std::array<std::vector<double>, 4u> effect_delay;
-        std::array<std::size_t, 4u> effect_cursor{};
-        std::array<double, 4u> effect_allpass{};
+        std::vector<std::int32_t> effect_kernel_inputs;
+        std::vector<std::int32_t> effect_kernel_outputs;
+        EffectKernelState effect_kernel_state;
         std::unordered_map<std::uint64_t,
                            std::shared_ptr<std::vector<std::int16_t>>>
             sample_cache;
@@ -653,8 +691,6 @@ class NativePortSoundBankEngine::Core final {
         : audio_(audio), config_(config),
           owner_thread_(std::this_thread::get_id()) {
         validate_config(config_);
-        feed_ = audio_.create_pcm_feed();
-        audio_.play(feed_);
         sequences_.reserve(config_.maximum_active_sequences);
         active_sequence_indices_.reserve(config_.maximum_active_sequences);
         active_sequence_positions_.reserve(config_.maximum_active_sequences);
@@ -662,16 +698,9 @@ class NativePortSoundBankEngine::Core final {
         active_voice_indices_.reserve(config_.maximum_synth_voices);
         active_voice_positions_.reserve(config_.maximum_synth_voices);
         mix_.resize(static_cast<std::size_t>(config_.render_block_frames) * 2u);
-        output_.resize(static_cast<std::size_t>(config_.render_block_frames) * 2u);
     }
 
-    ~Core() {
-        try {
-            audio_.stop(feed_);
-            audio_.release(feed_);
-        } catch (...) {
-        }
-    }
+    ~Core() = default;
 
     [[nodiscard]] NativePortSoundCollectionHandle load_collection(
         const NativePortContentFileBinding& binding,
@@ -1083,6 +1112,7 @@ class NativePortSoundBankEngine::Core final {
                                  collection.effect_work_present,
                                  "fpw-duplicate");
                 collection.effect_work_present = true;
+                collection.effect_work_area_bytes = layout_size;
                 continue;
             }
             if (!has_payload) continue;
@@ -1127,15 +1157,28 @@ class NativePortSoundBankEngine::Core final {
                                 "osb-payload");
             }
         }
-        if (collection.effect_program_present !=
-            collection.effect_output_present)
+        const auto effect_unit_count =
+            static_cast<std::uint32_t>(collection.effect_program_present) +
+            static_cast<std::uint32_t>(collection.effect_output_present) +
+            static_cast<std::uint32_t>(collection.effect_work_present);
+        if (effect_unit_count != 0u && effect_unit_count != 3u)
             fail_sound_bank(NativePortSoundBankFailure::UnsupportedEffect,
-                            "effect-unit-pair");
-        if (collection.qsound_reverb_medium) {
+                            "effect-unit-family");
+        if (collection.effect_kernel_state) {
+            if (collection.effect_kernel_state.kernel
+                    ->required_work_area_bytes !=
+                collection.effect_work_area_bytes)
+                fail_sound_bank(NativePortSoundBankFailure::UnsupportedEffect,
+                                "effect-work-area");
             collection.effect_sends.resize(
                 static_cast<std::size_t>(config_.render_block_frames) *
                 maximum_effect_buses);
-            initialize_effect_delay(collection);
+            collection.effect_kernel_inputs.resize(
+                static_cast<std::size_t>(config_.render_block_frames) *
+                maximum_effect_buses);
+            collection.effect_kernel_outputs.resize(
+                static_cast<std::size_t>(config_.render_block_frames) *
+                maximum_effect_buses);
         }
     }
 
@@ -1811,17 +1854,59 @@ class NativePortSoundBankEngine::Core final {
                      32u,
                      NativePortSoundBankFailure::UnsupportedEffect,
                      "fpb-name");
-        constexpr std::string_view supported = "QSound&ReverbM.FPD";
-        const auto name = bytes.span(
-            name_offset,
-            supported.size() + 1u,
-            NativePortSoundBankFailure::UnsupportedEffect,
-            "fpb-name");
-        if (!std::equal(supported.begin(), supported.end(), name.begin()) ||
-            name[supported.size()] != 0u)
+        // The title-owned provider performs the complete immutable-program
+        // identity and structural check. Public runtime never promotes a
+        // program name into executable semantics and has no generic MPRO
+        // interpreter fallback.
+        const auto& provider = config_.effect_kernel_provider;
+        if (provider.resolve == nullptr)
             fail_sound_bank(NativePortSoundBankFailure::UnsupportedEffect,
-                            "fpb-program");
-        collection.qsound_reverb_medium = true;
+                            "fpb-provider");
+        const auto raw_program = bytes.span(
+            0u, bytes.size(), NativePortSoundBankFailure::UnsupportedEffect,
+            "fpb-program-bytes");
+        const auto program = std::as_bytes(raw_program);
+        const auto* const kernel = provider.resolve(provider.user, program);
+        const auto valid_alignment =
+            kernel != nullptr && kernel->state_alignment != 0u &&
+            std::has_single_bit(kernel->state_alignment) &&
+            kernel->state_alignment <= 4'096u;
+        if (kernel == nullptr ||
+            kernel->contract_version !=
+                native_port_sound_effect_kernel_contract_version ||
+            kernel->input_bus_count != maximum_effect_buses ||
+            kernel->output_bus_count != maximum_effect_buses ||
+            kernel->required_work_area_bytes == 0u ||
+            kernel->state_size == 0u ||
+            kernel->state_size > config_.maximum_effect_state_bytes ||
+            kernel->state_size > std::numeric_limits<std::size_t>::max() ||
+            !valid_alignment || kernel->initialize == nullptr ||
+            kernel->destroy == nullptr || kernel->render == nullptr)
+            fail_sound_bank(NativePortSoundBankFailure::UnsupportedEffect,
+                            "fpb-kernel");
+
+        void* storage = nullptr;
+        try {
+            storage = ::operator new(
+                static_cast<std::size_t>(kernel->state_size),
+                std::align_val_t(
+                    static_cast<std::size_t>(kernel->state_alignment)));
+        } catch (const std::bad_alloc&) {
+            fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
+                            "fpb-state");
+        }
+        if (!kernel->initialize(program, config_.output_sample_rate, storage)) {
+            ::operator delete(
+                storage,
+                std::align_val_t(static_cast<std::size_t>(
+                    kernel->state_alignment)));
+            fail_sound_bank(NativePortSoundBankFailure::UnsupportedEffect,
+                            "fpb-initialize");
+        }
+        EffectKernelState state;
+        state.kernel = kernel;
+        state.storage = storage;
+        collection.effect_kernel_state = std::move(state);
     }
 
     void parse_effect_output(Collection& collection,
@@ -2306,11 +2391,6 @@ class NativePortSoundBankEngine::Core final {
 
     void reset() {
         require_owner_thread();
-        // First discard this provider's pending PCM. The host mixer may also
-        // contain independent movie/codec voices, so a sound-bank reset must
-        // not reset the shared output endpoint.
-        audio_.stop(feed_);
-
         for (auto& slot : ports_) {
             if (!slot.value.has_value()) continue;
             slot.value.reset();
@@ -2333,32 +2413,39 @@ class NativePortSoundBankEngine::Core final {
         // No live handle can now retain a collection. Use the same validated
         // unload path so counters and generations cannot drift.
         unload_all_collections();
-        audio_.play(feed_);
     }
 
     void pump() {
         require_owner_thread();
         collect_stale_groups_and_ports();
+        // Compatibility entry point: the shared AudioEngine is the sole
+        // output clock.  SoundBank samples are rendered directly into its
+        // wide accumulator by render_into(), never through an S16 feed.
         audio_.pump();
-        std::uint32_t blocks = 0u;
-        for (;;) {
-            const auto feed = audio_.voice_snapshot(feed_);
-            if (feed.buffered_frames >= config_.target_feed_frames ||
-                blocks == config_.maximum_render_blocks_per_pump ||
-                !has_live_work())
-                break;
-            const auto room = config_.target_feed_frames -
-                              static_cast<std::uint32_t>(feed.buffered_frames);
-            const auto frames = std::min(config_.render_block_frames, room);
-            render_block(frames);
-            const auto samples = std::span<const std::int16_t>(
-                output_.data(), static_cast<std::size_t>(frames) * 2u);
-            if (!audio_.submit_pcm_s16(feed_, samples)) break;
-            ++blocks;
-            NativePortSoundBankEngine::
-                pump_audio_with_cached_playback_position(audio_);
-        }
         collect_stale_groups_and_ports();
+    }
+
+    void render_into(std::span<double> interleaved_stereo_accumulation,
+                     const std::uint32_t frame_count) {
+        require_owner_thread();
+        const auto required_samples =
+            static_cast<std::uint64_t>(frame_count) * 2u;
+        if (required_samples > interleaved_stereo_accumulation.size())
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "mix-destination");
+
+        std::uint32_t rendered = 0u;
+        while (rendered < frame_count) {
+            const auto frames = std::min(config_.render_block_frames,
+                                         frame_count - rendered);
+            render_block(frames);
+            const auto sample_count = static_cast<std::size_t>(frames) * 2u;
+            const auto destination = static_cast<std::size_t>(rendered) * 2u;
+            for (std::size_t sample = 0u; sample < sample_count; ++sample)
+                interleaved_stereo_accumulation[destination + sample] +=
+                    mix_[sample];
+            rendered += frames;
+        }
     }
 
     [[nodiscard]] NativePortSoundSequenceSnapshot sequence_snapshot(
@@ -2434,7 +2521,9 @@ class NativePortSoundBankEngine::Core final {
             saturating_add(result.reserved_pcm_stream_bytes,
                            slot.value->byte_size);
         }
-        result.feed_buffered_frames = audio_.voice_snapshot(feed_).buffered_frames;
+        // Contract v8 has no intermediate SoundBank PCM feed.  The field is
+        // retained as a compatibility counter and is therefore exactly zero.
+        result.feed_buffered_frames = 0u;
         return result;
     }
 
@@ -3454,14 +3543,6 @@ class NativePortSoundBankEngine::Core final {
         saturating_add(active.rendered_frames, 1u);
     }
 
-    [[nodiscard]] bool has_live_work() const noexcept {
-        if (!active_voice_indices_.empty()) return true;
-        return std::ranges::any_of(active_sequence_indices_, [&](const auto index) {
-            return sequences_[index].value->state ==
-                   NativePortSoundSequenceState::Playing;
-        });
-    }
-
     [[nodiscard]] static double combined_pan(const Split& split,
                                              const Channel& channel,
                                              const float external) noexcept {
@@ -3655,7 +3736,7 @@ class NativePortSoundBankEngine::Core final {
         std::fill_n(mix_.begin(), sample_count, 0.0);
         for (auto& collection : collections_)
             if (collection.value.has_value() &&
-                !collection.value->effect_sends.empty())
+                collection.value->effect_kernel_state)
                 std::fill_n(collection.value->effect_sends.begin(),
                             static_cast<std::size_t>(frames) *
                                 maximum_effect_buses,
@@ -3769,10 +3850,6 @@ class NativePortSoundBankEngine::Core final {
                 ++active_voice;
             }
 
-            for (auto& collection : collections_)
-                if (collection.value.has_value() &&
-                    collection.value->qsound_reverb_medium)
-                    process_effect_frame(*collection.value, frame);
             for (const auto index : active_sequence_indices_) {
                 auto& sequence = *sequences_[index].value;
                 if (sequence.state != NativePortSoundSequenceState::Playing)
@@ -3780,66 +3857,73 @@ class NativePortSoundBankEngine::Core final {
                 advance_sequence_time(sequence);
             }
         }
-        for (std::size_t sample = 0u; sample < sample_count; ++sample) {
-            const auto value = std::llround(mix_[sample]);
-            output_[sample] = static_cast<std::int16_t>(
-                std::clamp<std::int64_t>(value, -32768, 32767));
-        }
+        for (auto& collection : collections_)
+            if (collection.value.has_value() &&
+                collection.value->effect_kernel_state)
+                process_effect_block(*collection.value, frames);
+        // Keep the SoundBank contribution wide.  AudioEngine combines this
+        // with codec/movie sources and performs the sole final S16 rounding
+        // and saturation at the host-output boundary.
         saturating_add(rendered_frames_, frames);
         current_render_frame_ = rendered_frames_;
         collect_stale_groups_and_ports();
     }
 
-    void initialize_effect_delay(Collection& collection) const {
-        static constexpr std::array<std::uint32_t, 4u> base_lengths{
-            1557u, 1617u, 1491u, 1422u};
-        for (std::size_t index = 0u; index < collection.effect_delay.size();
-             ++index) {
-            const auto scaled = std::max<std::uint32_t>(
-                1u,
-                static_cast<std::uint32_t>(
-                    static_cast<std::uint64_t>(base_lengths[index]) *
-                    config_.output_sample_rate / 44'100u));
-            collection.effect_delay[index].assign(scaled, 0.0);
+    void process_effect_block(Collection& collection,
+                              const std::uint32_t frames) {
+        constexpr std::int64_t minimum_input = -(1ll << 19);
+        constexpr std::int64_t maximum_input = (1ll << 19) - 1ll;
+        const auto bus_values =
+            static_cast<std::size_t>(frames) * maximum_effect_buses;
+        for (std::size_t index = 0u; index < bus_values; ++index) {
+            const auto value = collection.effect_sends[index];
+            if (!std::isfinite(value))
+                fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                                "effect-input");
+            collection.effect_kernel_inputs[index] =
+                static_cast<std::int32_t>(std::clamp<std::int64_t>(
+                    std::llround(value), minimum_input, maximum_input));
         }
-    }
+        std::fill_n(collection.effect_kernel_outputs.begin(), bus_values, 0);
+        const auto& state = collection.effect_kernel_state;
+        if (!state.kernel->render(
+                state.storage,
+                std::span<const std::int32_t>(
+                    collection.effect_kernel_inputs.data(), bus_values),
+                std::span<std::int32_t>(
+                    collection.effect_kernel_outputs.data(), bus_values),
+                frames))
+            fail_sound_bank(NativePortSoundBankFailure::WorkerFailure,
+                            "effect-render");
 
-    void process_effect_frame(Collection& collection,
-                              const std::uint32_t frame) {
-        double input = 0.0;
-        const auto send_base =
-            static_cast<std::size_t>(frame) * maximum_effect_buses;
-        for (std::size_t bus = 0u; bus < maximum_effect_buses; ++bus)
-            input += collection.effect_sends[send_base + bus];
-        std::array<double, 4u> effect_outputs{};
-        for (std::size_t line = 0u; line < collection.effect_delay.size();
-             ++line) {
-            auto& delay = collection.effect_delay[line];
-            auto& cursor = collection.effect_cursor[line];
-            const auto delayed = delay[cursor];
-            delay[cursor] = input * 0.22 + delayed * 0.72;
-            cursor = (cursor + 1u) % delay.size();
-            const auto allpass =
-                delayed - collection.effect_allpass[line] * 0.45;
-            collection.effect_allpass[line] = delayed + allpass * 0.45;
-            effect_outputs[line] = allpass * 0.175;
+        for (std::uint32_t frame = 0u; frame < frames; ++frame) {
+            const auto bus_base =
+                static_cast<std::size_t>(frame) * maximum_effect_buses;
+            const auto destination = static_cast<std::size_t>(frame) * 2u;
+            for (std::size_t output = 0u; output < maximum_effect_buses;
+                 ++output) {
+                const auto value =
+                    collection.effect_kernel_outputs[bus_base + output];
+                if (value < std::numeric_limits<std::int16_t>::min() ||
+                    value > std::numeric_limits<std::int16_t>::max())
+                    fail_sound_bank(
+                        NativePortSoundBankFailure::WorkerFailure,
+                        "effect-output");
+                const auto& route = collection.effect_outputs[output];
+                const auto [left, right] = aica_pan_gains(route.pan);
+                const auto level = aica_send_gain(route.level);
+                mix_[destination] +=
+                    static_cast<double>(value) * level * left;
+                mix_[destination + 1u] +=
+                    static_cast<double>(value) * level * right;
+            }
         }
-        const auto destination = static_cast<std::size_t>(frame) * 2u;
-        for (std::size_t output = 0u; output < effect_outputs.size(); ++output) {
-            const auto& route = collection.effect_outputs[output];
-            const auto [left, right] = aica_pan_gains(route.pan);
-            const auto level = aica_send_gain(route.level);
-            mix_[destination] += effect_outputs[output] * level * left;
-            mix_[destination + 1u] +=
-                effect_outputs[output] * level * right;
-        }
-        saturating_add(effect_frames_, 1u);
+        saturating_add(effect_frames_, frames);
     }
 
     NativePortAudioEngine& audio_;
     NativePortSoundBankConfig config_;
     std::thread::id owner_thread_;
-    NativePortAudioVoiceHandle feed_;
     std::vector<Slot<Collection>> collections_;
     std::vector<Slot<ActiveSequence>> sequences_;
     std::vector<std::uint32_t> active_sequence_indices_;
@@ -3852,7 +3936,6 @@ class NativePortSoundBankEngine::Core final {
     std::array<Slot<NativePortSoundPcmStreamRingConfig>, maximum_mlt_banks>
         pcm_stream_rings_{};
     std::vector<double> mix_;
-    std::vector<std::int16_t> output_;
     std::uint64_t current_render_frame_ = 0u;
     std::uint64_t voice_serial_ = 0u;
     std::uint64_t loaded_collections_ = 0u;
@@ -3881,7 +3964,8 @@ class NativePortSoundBankEngine::Impl final {
         validate_config(config_);
         audio_.bind_sound_bank_target(
             this, &NativePortSoundBankEngine::execute_worker_command,
-            &Impl::cleanup_worker_state);
+            &Impl::cleanup_worker_state,
+            &Impl::mix_worker_audio);
         try {
             call_void(SoundBankOpcode::Construct);
         } catch (...) {
@@ -4238,6 +4322,7 @@ class NativePortSoundBankEngine::Impl final {
             self->execute(static_cast<SoundBankOpcode>(raw_opcode),
                           payload,
                           result);
+            self->audio_.request_consumer_service();
         } catch (const NativePortSoundBankError& error) {
             write_sound_error(result, error.failure());
         } catch (...) {
@@ -4248,6 +4333,24 @@ class NativePortSoundBankEngine::Impl final {
     static void cleanup_worker_state(void* const target) noexcept {
         auto& self = *static_cast<Impl*>(target);
         self.core_.reset();
+    }
+
+    static std::uint32_t mix_worker_audio(
+        void* const target,
+        const std::span<double> interleaved_stereo_accumulation,
+        const std::uint32_t frame_count) noexcept {
+        auto* const self = static_cast<Impl*>(target);
+        if (self == nullptr || self->core_ == nullptr) return 0u;
+        try {
+            self->core_->render_into(interleaved_stereo_accumulation,
+                                     frame_count);
+            return 0u;
+        } catch (const NativePortSoundBankError& error) {
+            return static_cast<std::uint32_t>(error.failure());
+        } catch (...) {
+            return static_cast<std::uint32_t>(
+                NativePortSoundBankFailure::WorkerFailure);
+        }
     }
 
   private:
@@ -4822,11 +4925,6 @@ void NativePortSoundBankEngine::unload_all_collections() {
 void NativePortSoundBankEngine::stop_all() { impl_->stop_all(); }
 
 void NativePortSoundBankEngine::reset() { impl_->reset(); }
-
-void NativePortSoundBankEngine::pump_audio_with_cached_playback_position(
-    NativePortAudioEngine& audio) {
-    audio.pump_with_cached_playback_position();
-}
 
 void NativePortSoundBankEngine::pump() { impl_->pump(); }
 

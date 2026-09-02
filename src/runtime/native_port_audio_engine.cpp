@@ -820,7 +820,9 @@ class NativePortAudioEngine::Core final {
         }
     }
 
-    void pump(const bool refresh_playback_position) {
+    void pump(const bool refresh_playback_position,
+              void* const sound_bank_target,
+              const WorkerMixSource sound_bank_mix_source) {
         require_owner_thread();
         try {
             output_->poll();
@@ -868,8 +870,10 @@ class NativePortAudioEngine::Core final {
             const auto requested_frames =
                 std::min(config_.mix_block_frames, queue_room);
             const auto output_start_frame = output_snapshot.submitted_frames;
-            const auto mixed_frames =
-                mix_block(requested_frames, decoder_reads_remaining);
+            const auto mixed_frames = mix_block(requested_frames,
+                                                decoder_reads_remaining,
+                                                sound_bank_target,
+                                                sound_bank_mix_source);
             if (mixed_frames == 0u) break;
             const auto sample_count =
                 static_cast<std::size_t>(mixed_frames) * 2u;
@@ -1432,15 +1436,14 @@ class NativePortAudioEngine::Core final {
 
     [[nodiscard]] std::uint32_t mix_block(
         const std::uint32_t requested_frames,
-        std::uint32_t& decoder_reads_remaining) {
+        std::uint32_t& decoder_reads_remaining,
+        void* const sound_bank_target,
+        const WorkerMixSource sound_bank_mix_source) {
         pending_contributions_.clear();
-        bool has_live_voice = false;
-        std::uint64_t maximum_available = 0u;
         for (auto& slot : slots_) {
             if (!slot.voice) continue;
             auto& voice = *slot.voice;
             if (voice.state == NativePortAudioVoiceState::Playing) {
-                has_live_voice = true;
                 fill_voice(voice, requested_frames, decoder_reads_remaining);
                 // Do not advance other voices while one live decoder has not
                 // produced the requested clock interval within this pump's
@@ -1450,15 +1453,12 @@ class NativePortAudioEngine::Core final {
                     available_frames(voice) < requested_frames)
                     return 0u;
             }
-            if (voice.state == NativePortAudioVoiceState::Playing ||
-                voice.state == NativePortAudioVoiceState::Completed)
-                maximum_available =
-                    std::max(maximum_available, available_frames(voice));
         }
-        if (!has_live_voice && maximum_available == 0u) return 0u;
-        const auto frames = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(requested_frames, maximum_available));
-        if (frames == 0u) return 0u;
+        // Once the native endpoint exists it owns a continuous 44.1-kHz
+        // timeline.  A silent interval is still an interval: emitting zeroes
+        // keeps host completion cadence independent of the simulation frame
+        // rate and lets worker-local effect sources drain their state.
+        const auto frames = requested_frames;
 
         const auto sample_count = static_cast<std::size_t>(frames) * 2u;
         std::fill_n(mix_accumulation_.begin(), sample_count, 0.0);
@@ -1496,6 +1496,17 @@ class NativePortAudioEngine::Core final {
             if (voice.source == NativePortAudioVoiceSource::PcmFeed &&
                 voice.feed_finished && available_frames(voice) == 0u)
                 voice.state = NativePortAudioVoiceState::Completed;
+        }
+
+        if (sound_bank_mix_source != nullptr && sound_bank_target != nullptr) {
+            const auto error = sound_bank_mix_source(
+                sound_bank_target,
+                std::span<double>(mix_accumulation_.data(), sample_count),
+                frames);
+            if (error != 0u)
+                fail_audio_engine(NativePortAudioEngineFailure::WorkerFailure,
+                                  error,
+                                  "sound-bank-mix");
         }
 
         if (!native_audio_signal_diagnostics_enabled()) {
@@ -1578,7 +1589,8 @@ class NativePortAudioEngine::Impl final {
             NativePortAudioExecutionDomainTarget::AudioEngine,
             this,
             &Impl::execute_worker_command,
-            &Impl::cleanup_worker_state);
+            &Impl::cleanup_worker_state,
+            &Impl::service_worker_audio);
         if (!registered.has_value()) {
             release_telemetry();
             fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
@@ -1603,6 +1615,7 @@ class NativePortAudioEngine::Impl final {
                               result.ack.error_code,
                               "engine-construct");
         }
+        domain_->request_consumer_service();
     }
 
     ~Impl() {
@@ -1614,6 +1627,8 @@ class NativePortAudioEngine::Impl final {
             // before the engine and retires every slot exactly once.
             domain_->shutdown();
             sound_bank_handle_ = {};
+            sound_bank_mix_source_.store(nullptr, std::memory_order_release);
+            sound_bank_mix_target_.store(nullptr, std::memory_order_release);
             sound_bank_target_ = nullptr;
             handle_ = {};
             release_telemetry();
@@ -1802,10 +1817,11 @@ class NativePortAudioEngine::Impl final {
 
     void bind_sound_bank_target(void* const target,
                                 const WorkerTargetExecutor executor,
-                                const WorkerTargetCleanup cleanup) {
+                                const WorkerTargetCleanup cleanup,
+                                const WorkerMixSource mix_source) {
         require_producer_thread();
         if (target == nullptr || executor == nullptr || cleanup == nullptr ||
-            sound_bank_handle_.valid())
+            mix_source == nullptr || sound_bank_handle_.valid())
             fail_audio_engine(NativePortAudioEngineFailure::InvalidConfig,
                               0u,
                               "sound-bank-bind");
@@ -1820,6 +1836,9 @@ class NativePortAudioEngine::Impl final {
                               "sound-bank-register");
         sound_bank_handle_ = *registered;
         sound_bank_target_ = target;
+        sound_bank_mix_target_.store(target, std::memory_order_relaxed);
+        sound_bank_mix_source_.store(mix_source, std::memory_order_release);
+        domain_->request_consumer_service();
     }
 
     void unbind_sound_bank_target(
@@ -1827,6 +1846,8 @@ class NativePortAudioEngine::Impl final {
         if (target == nullptr || target != sound_bank_target_ ||
             !sound_bank_handle_.valid())
             return;
+        sound_bank_mix_source_.store(nullptr, std::memory_order_release);
+        sound_bank_mix_target_.store(nullptr, std::memory_order_release);
         if (destroy_acknowledged) {
             if (!domain_->unregister_target(sound_bank_handle_, target))
                 domain_->shutdown();
@@ -1871,6 +1892,10 @@ class NativePortAudioEngine::Impl final {
 
     [[nodiscard]] bool on_audio_thread() const noexcept {
         return domain_ != nullptr && domain_->on_audio_thread();
+    }
+
+    void request_consumer_service() noexcept {
+        if (domain_ != nullptr) domain_->request_consumer_service();
     }
 
   private:
@@ -2069,9 +2094,26 @@ class NativePortAudioEngine::Impl final {
             return;
         }
         try {
-            self->execute_engine(static_cast<AudioEngineOpcode>(opcode),
-                                 payload,
-                                 result);
+            const auto operation = static_cast<AudioEngineOpcode>(opcode);
+            self->execute_engine(operation, payload, result);
+            switch (operation) {
+            case AudioEngineOpcode::CreateVoice:
+            case AudioEngineOpcode::CreatePcmFeed:
+            case AudioEngineOpcode::SubmitPcm:
+            case AudioEngineOpcode::FinishPcmFeed:
+            case AudioEngineOpcode::Play:
+            case AudioEngineOpcode::Pause:
+            case AudioEngineOpcode::Resume:
+            case AudioEngineOpcode::Stop:
+            case AudioEngineOpcode::Release:
+            case AudioEngineOpcode::SetGainPan:
+            case AudioEngineOpcode::SetOutputPaused:
+            case AudioEngineOpcode::StopAll:
+                self->domain_->request_consumer_service();
+                break;
+            default:
+                break;
+            }
         } catch (const NativePortAudioEngineError& error) {
             write_engine_error(result,
                                error.failure(),
@@ -2086,6 +2128,28 @@ class NativePortAudioEngine::Impl final {
     static void cleanup_worker_state(void* const target) noexcept {
         auto& self = *static_cast<Impl*>(target);
         self.core_.reset();
+    }
+
+    static std::uint32_t service_worker_audio(void* const target) noexcept {
+        auto* const self = static_cast<Impl*>(target);
+        if (self == nullptr || self->core_ == nullptr) return 0u;
+        try {
+            const auto mix_source =
+                self->sound_bank_mix_source_.load(std::memory_order_acquire);
+            auto* const mix_target = mix_source != nullptr
+                                         ? self->sound_bank_mix_target_.load(
+                                               std::memory_order_acquire)
+                                         : nullptr;
+            self->core_->pump(true, mix_target, mix_source);
+            return 0u;
+        } catch (const NativePortAudioEngineError& error) {
+            return error.provider_error_code() != 0u
+                       ? error.provider_error_code()
+                       : static_cast<std::uint32_t>(error.failure());
+        } catch (...) {
+            return static_cast<std::uint32_t>(
+                NativePortAudioEngineFailure::WorkerFailure);
+        }
     }
 
     void execute_engine(const AudioEngineOpcode opcode,
@@ -2181,7 +2245,9 @@ class NativePortAudioEngine::Impl final {
         case AudioEngineOpcode::Pump:
         case AudioEngineOpcode::PumpCached:
             if (!payload.empty()) return invalid_payload(result);
-            core_->pump(opcode == AudioEngineOpcode::Pump);
+            core_->pump(opcode == AudioEngineOpcode::Pump,
+                        sound_bank_mix_target_.load(std::memory_order_acquire),
+                        sound_bank_mix_source_.load(std::memory_order_acquire));
             return;
         case AudioEngineOpcode::VoiceSnapshot: {
             AudioHandleCommand command;
@@ -2281,6 +2347,8 @@ class NativePortAudioEngine::Impl final {
     mutable NativePortAudioCommandStamp bound_stamp_{};
     mutable AudioEngineFrameCursor frame_cursor_;
     void* sound_bank_target_ = nullptr;
+    std::atomic<void*> sound_bank_mix_target_{nullptr};
+    std::atomic<WorkerMixSource> sound_bank_mix_source_{nullptr};
     bool telemetry_bound_ = false;
 };
 
@@ -2375,8 +2443,9 @@ NativePortAudioEngineSnapshot NativePortAudioEngine::snapshot() const {
 void NativePortAudioEngine::bind_sound_bank_target(
     void* const target,
     const WorkerTargetExecutor executor,
-    const WorkerTargetCleanup cleanup) {
-    impl_->bind_sound_bank_target(target, executor, cleanup);
+    const WorkerTargetCleanup cleanup,
+    const WorkerMixSource mix_source) {
+    impl_->bind_sound_bank_target(target, executor, cleanup, mix_source);
 }
 
 void NativePortAudioEngine::unbind_sound_bank_target(
@@ -2398,6 +2467,10 @@ void NativePortAudioEngine::dispatch_sound_bank_async(
 
 bool NativePortAudioEngine::on_audio_thread() const noexcept {
     return impl_->on_audio_thread();
+}
+
+void NativePortAudioEngine::request_consumer_service() noexcept {
+    impl_->request_consumer_service();
 }
 
 } // namespace katana::runtime

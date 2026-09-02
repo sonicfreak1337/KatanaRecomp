@@ -1,5 +1,7 @@
 #include "katana/runtime/native_port_audio_command_queue.hpp"
+#include "katana/runtime/native_port_audio_engine.hpp"
 #include "katana/runtime/native_port_movie.hpp"
+#include "katana/runtime/native_port_sound_bank.hpp"
 #include "katana/runtime/native_port_telemetry.hpp"
 
 #include "../../src/runtime/native_port_audio_execution_domain.hpp"
@@ -25,6 +27,13 @@
 namespace {
 
 using namespace katana::runtime;
+
+template <typename T>
+concept HasTargetFeedFrames = requires(T value) { value.target_feed_frames; };
+
+template <typename T>
+concept HasMaximumRenderBlocksPerPump =
+    requires(T value) { value.maximum_render_blocks_per_pump; };
 
 void require(const bool condition, const std::string_view message) {
     if (!condition) {
@@ -81,6 +90,17 @@ std::uint64_t publish(
 }
 
 void test_pod_contract_and_defaults() {
+    static_assert(native_port_audio_engine_contract_version == 7u);
+    static_assert(native_port_sound_bank_contract_version == 9u);
+    static_assert(native_port_sound_effect_kernel_contract_version == 1u);
+    static_assert(std::is_standard_layout_v<NativePortSoundEffectKernel>);
+    static_assert(std::is_trivially_copyable_v<NativePortSoundEffectKernel>);
+    static_assert(std::is_standard_layout_v<NativePortSoundEffectKernelProvider>);
+    static_assert(
+        std::is_trivially_copyable_v<NativePortSoundEffectKernelProvider>);
+    static_assert(!HasTargetFeedFrames<NativePortSoundBankConfig>);
+    static_assert(
+        !HasMaximumRenderBlocksPerPump<NativePortSoundBankConfig>);
     static_assert(std::is_standard_layout_v<NativePortAudioPodCommand>);
     static_assert(std::is_trivially_copyable_v<NativePortAudioPodCommand>);
     static_assert(std::is_standard_layout_v<NativePortAudioCommandAckResult>);

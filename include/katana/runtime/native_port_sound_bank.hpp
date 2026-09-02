@@ -3,15 +3,19 @@
 #include "katana/runtime/native_port_audio_engine.hpp"
 #include "katana/runtime/native_port_platform.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_sound_bank_contract_version = 7u;
+inline constexpr std::uint32_t native_port_sound_bank_contract_version = 9u;
+inline constexpr std::uint32_t native_port_sound_effect_kernel_contract_version =
+    1u;
 inline constexpr std::uint32_t native_port_manatee_sound_layout_bytes =
     2u * 1024u * 1024u;
 
@@ -48,10 +52,51 @@ class NativePortSoundBankError final : public std::runtime_error {
     NativePortSoundBankFailure failure_;
 };
 
+// A title may bind a statically compiled native specialization of one authored
+// effect program. The provider resolves immutable program bytes once during
+// collection load; the returned descriptor and all callbacks must remain valid
+// for the SoundBank lifetime. Runtime instruction decoding, JIT compilation,
+// register devices and guest-memory access are deliberately outside this ABI.
+struct NativePortSoundEffectKernel final {
+    std::uint32_t contract_version =
+        native_port_sound_effect_kernel_contract_version;
+    std::uint32_t input_bus_count = 16u;
+    std::uint32_t output_bus_count = 16u;
+    // Exact authored SFPW reservation required by this statically compiled
+    // program, including its format-owned prefix and ring workspace.
+    std::uint32_t required_work_area_bytes = 0u;
+    // State is allocated once at collection load with aligned operator new.
+    // Alignment must be a nonzero power of two; destroy receives that same
+    // live, exactly aligned object before the matching aligned delete.
+    std::uint64_t state_size = 0u;
+    std::uint64_t state_alignment = 0u;
+    // On false, initialize leaves no live object in state and destroy must not
+    // be called. On true, destroy is called exactly once before aligned delete.
+    bool (*initialize)(std::span<const std::byte> program_bytes,
+                       std::uint32_t output_sample_rate,
+                       void* state) noexcept = nullptr;
+    void (*destroy)(void* state) noexcept = nullptr;
+    // Both bus spans are frame-major: element frame * bus_count + bus. Their
+    // extents must be exactly frame_count * the corresponding bus count.
+    // Inputs are signed 20-bit values. The kernel overwrites every output
+    // element with a signed 16-bit value on every successful call.
+    bool (*render)(void* state,
+                   std::span<const std::int32_t> signed_20bit_input_buses,
+                   std::span<std::int32_t> signed_16bit_output_buses,
+                   std::uint32_t frame_count) noexcept = nullptr;
+};
+
+struct NativePortSoundEffectKernelProvider final {
+    std::uint32_t contract_version =
+        native_port_sound_effect_kernel_contract_version;
+    void* user = nullptr;
+    const NativePortSoundEffectKernel* (*resolve)(
+        void* user, std::span<const std::byte> program_bytes) noexcept = nullptr;
+};
+
 struct NativePortSoundBankConfig final {
     std::uint32_t output_sample_rate = 44'100u;
     std::uint32_t render_block_frames = 256u;
-    std::uint32_t target_feed_frames = 512u;
     std::uint32_t maximum_collections = 256u;
     std::uint32_t maximum_collection_bytes = 64u * 1024u * 1024u;
     std::uint64_t maximum_total_collection_bytes = 256ull * 1024ull * 1024ull;
@@ -63,7 +108,8 @@ struct NativePortSoundBankConfig final {
     std::uint32_t maximum_synth_voices = 128u;
     std::uint32_t maximum_midi_ports = 64u;
     std::uint32_t maximum_decoded_sample_frames = 16u * 1024u * 1024u;
-    std::uint32_t maximum_render_blocks_per_pump = 16u;
+    std::uint32_t maximum_effect_state_bytes = 1u * 1024u * 1024u;
+    NativePortSoundEffectKernelProvider effect_kernel_provider{};
 };
 
 struct NativePortSoundCollectionHandle final {
@@ -224,6 +270,8 @@ struct NativePortSoundBankSnapshot final {
     std::uint32_t active_voices = 0u;
     std::uint32_t active_pcm_stream_rings = 0u;
     std::uint64_t reserved_pcm_stream_bytes = 0u;
+    // Retired in SoundBank contract v8: mixing is direct and wide in the
+    // shared AudioEngine. Retained for snapshot layout compatibility.
     std::uint64_t feed_buffered_frames = 0u;
 };
 
@@ -360,8 +408,6 @@ class NativePortSoundBankEngine final {
     [[nodiscard]] NativePortSoundBankSnapshot snapshot() const;
 
   private:
-    static void pump_audio_with_cached_playback_position(
-        NativePortAudioEngine& audio);
     static void execute_worker_command(
         void* target,
         std::uint16_t opcode,

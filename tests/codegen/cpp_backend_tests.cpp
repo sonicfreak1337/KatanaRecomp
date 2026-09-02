@@ -17,6 +17,15 @@ void require(const bool condition, const std::string& message) {
     }
 }
 
+std::size_t occurrences(const std::string_view text,
+                        const std::string_view needle) {
+    std::size_t result = 0u;
+    for (auto position = text.find(needle); position != std::string_view::npos;
+         position = text.find(needle, position + needle.size()))
+        ++result;
+    return result;
+}
+
 katana::ir::Instruction instruction(const std::uint32_t address,
                                     const katana::ir::Operation operation) {
     katana::ir::Instruction result;
@@ -304,6 +313,64 @@ int main() {
         "RuntimeOnly-Candidate-Call emittiert den versiegelten Preflight "
         "nicht exakt fuer die freigegebene Callsite oder mutiert CPU-/Cycle-/"
         "PR-Zustand vor der Autorisierung.");
+
+    auto overlapping_runtime_only_program = make_indirect_call_program(
+        katana::ir::DynamicTargetClass::RuntimeOnly);
+    constexpr std::uint32_t overlapping_entry = 0x8C020080u;
+    auto overlapping_return =
+        instruction(overlapping_entry, katana::ir::Operation::Return);
+    overlapping_return.delay_slot = {
+        katana::ir::DelaySlotRole::Owner, overlapping_entry + 2u};
+    auto overlapping_slot =
+        instruction(overlapping_entry + 2u, katana::ir::Operation::Nop);
+    overlapping_slot.delay_slot = {
+        katana::ir::DelaySlotRole::Slot, overlapping_entry};
+    katana::ir::BasicBlock overlapping_entry_block;
+    overlapping_entry_block.start_address = overlapping_entry;
+    overlapping_entry_block.instructions = {
+        overlapping_return, overlapping_slot};
+    katana::ir::Function overlapping_owner;
+    overlapping_owner.entry_address = overlapping_entry;
+    overlapping_owner.blocks = {
+        overlapping_entry_block,
+        overlapping_runtime_only_program.front().blocks.front()};
+    overlapping_owner.direct_callees =
+        overlapping_runtime_only_program.front().direct_callees;
+    overlapping_owner.indirect_call_sites =
+        overlapping_runtime_only_program.front().indirect_call_sites;
+    overlapping_runtime_only_program.insert(
+        overlapping_runtime_only_program.begin() + 1,
+        overlapping_owner);
+    auto overlapping_request =
+        katana::codegen::make_native_aot_backend_request(
+            NativeAotEmissionProfile::Product,
+            overlapping_runtime_only_program,
+            overlapping_runtime_only_program.front().entry_address,
+            indirect_options);
+    overlapping_request.native_bringup_dispatch_callsites =
+        native_bringup_dispatch_callsites;
+    const auto overlapping_emission =
+        katana::codegen::emit_cpp_port_translation_unit(overlapping_request);
+    require(
+        occurrences(overlapping_emission.functions,
+                    "preflight_native_bringup_indirect_dispatch(") == 2u,
+        "Identischer physischer NativeBringup-Block unter mehreren "
+        "Funktionsowner verlor einen Preflight oder wurde abgelehnt.");
+
+    auto divergent_request = overlapping_request;
+    auto divergent_program = overlapping_runtime_only_program;
+    divergent_program[1u].blocks[1u].instructions[0u].branch_register = 2u;
+    divergent_request.functions = divergent_program;
+    bool divergent_owner_rejected = false;
+    try {
+        static_cast<void>(
+            katana::codegen::emit_cpp_port_translation_unit(
+                divergent_request));
+    } catch (const std::invalid_argument&) {
+        divergent_owner_rejected = true;
+    }
+    require(divergent_owner_rejected,
+            "Abweichender NativeBringup-IR-Owner erbte eine Callsitefreigabe.");
 
     bool unbound_native_bringup_rejected = false;
     try {

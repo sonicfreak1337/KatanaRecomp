@@ -110,6 +110,11 @@ struct PortExportOptions {
     // Enables component-level FunctionValue cache miss diagnostics. Basic
     // progress remains cheap and must not retain the detailed key history.
     bool detailed_analysis_telemetry = false;
+    // Full source maps and CFG/call-graph JSON/DOT are offline analysis
+    // products. Library callers retain the historical default; the ordinary
+    // product CLI disables them so a runnable executable never pays minutes
+    // and gigabytes for metadata that neither compile nor run-time consumes.
+    bool analysis_metadata_requested = true;
     // Optional persistent, local-only caches. Analysis and codegen identities
     // are build-bound to their respective implementation components so a
     // runtime/UI-only rebuild does not invalidate native analysis artifacts.
@@ -173,10 +178,18 @@ struct PortExportOptions {
     std::span<const LatentAotEntryHint> latent_aot_entry_hints;
     LatentAotDiscoveryMode latent_aot_discovery_mode =
         LatentAotDiscoveryMode::HintsAndHeuristics;
+    // NativeBringup-only compile authority from the complete, identity-bound
+    // disassembly inventory. Coverage entries are emitted separately from the
+    // proof program and never contribute reachability, closure or admission
+    // evidence. The caller owns the normalized authority for the complete
+    // export call.
+    const CompleteDisassemblyAuthority*
+        native_bringup_coverage_authority = nullptr;
     // Analysis-only tooling may request a private, source-bound archive for
-    // agent query/diff. Product exports keep this false so a disabled positive
-    // cache does not spend time serializing and writing an unusable 256-MiB
-    // component artifact.
+    // agent query/diff. Product exports keep this false; the non-release
+    // NativeBringup profile may independently retain an exact local analyzer
+    // checkpoint so downstream codegen failures remain incrementally
+    // recoverable without materializing the agent World.
     bool analysis_artifact_archive_requested = false;
     // Materialization-World/agent JSON is analysis-tool output. Ordinary
     // product exports keep this false and do not serialize/discard the full

@@ -222,17 +222,23 @@ native_bringup_error(const NativeBringupDispatchMiss miss) noexcept {
     case NativeBringupDispatchMiss::None:
         return DispatchDiagnosticError::None;
     case NativeBringupDispatchMiss::UnknownCompiledTarget:
+    case NativeBringupDispatchMiss::CoverageSourceMissing:
+    case NativeBringupDispatchMiss::CoverageTargetMissing:
         return DispatchDiagnosticError::UnknownTarget;
     case NativeBringupDispatchMiss::MissingIdentity:
     case NativeBringupDispatchMiss::SourceIdentityMismatch:
     case NativeBringupDispatchMiss::PhysicalIdentityMismatch:
+    case NativeBringupDispatchMiss::LoadedModuleIdentityMismatch:
         return DispatchDiagnosticError::ByteIdentityMismatch;
     case NativeBringupDispatchMiss::GenerationMismatch:
         return DispatchDiagnosticError::GenerationMismatch;
     case NativeBringupDispatchMiss::InvalidEntry:
         return DispatchDiagnosticError::InvalidBoundary;
     case NativeBringupDispatchMiss::UnmappedTarget:
+    case NativeBringupDispatchMiss::LoadedModuleInactive:
         return DispatchDiagnosticError::UnmappedMemory;
+    case NativeBringupDispatchMiss::HookReplacementConflict:
+        return DispatchDiagnosticError::InvalidBoundary;
     }
     return DispatchDiagnosticError::UnknownTarget;
 }

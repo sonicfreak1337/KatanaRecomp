@@ -16,7 +16,7 @@ namespace katana::runtime {
 class NativePortSoundBankEngine;
 class NativePortTelemetry;
 
-inline constexpr std::uint32_t native_port_audio_engine_contract_version = 6u;
+inline constexpr std::uint32_t native_port_audio_engine_contract_version = 7u;
 
 enum class NativePortAudioEngineFailure : std::uint8_t {
     None,
@@ -249,13 +249,18 @@ class NativePortAudioEngine final {
         std::span<const std::byte> payload,
         NativePortAudioCommandAckResult& result) noexcept;
     using WorkerTargetCleanup = void (*)(void* target) noexcept;
+    using WorkerMixSource = std::uint32_t (*)(
+        void* target,
+        std::span<double> interleaved_stereo_accumulation,
+        std::uint32_t frame_count) noexcept;
 
     // One sound-bank target may share this engine's worker. Registration is
     // a synchronous lifecycle command; command slots themselves remain POD
     // and never contain pointers or executable callbacks.
     void bind_sound_bank_target(void* target,
                                 WorkerTargetExecutor executor,
-                                WorkerTargetCleanup cleanup);
+                                WorkerTargetCleanup cleanup,
+                                WorkerMixSource mix_source);
     void unbind_sound_bank_target(
         void* target, bool destroy_acknowledged) noexcept;
     [[nodiscard]] NativePortAudioCommandAck dispatch_sound_bank_sync(
@@ -265,6 +270,7 @@ class NativePortAudioEngine final {
         std::uint16_t opcode,
         std::span<const std::byte> payload) const;
     [[nodiscard]] bool on_audio_thread() const noexcept;
+    void request_consumer_service() noexcept;
 
     class Core;
     class Impl;

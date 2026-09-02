@@ -71,8 +71,10 @@ enum class NativePortLoadedAotSourceTransform : std::uint8_t {
 // Exact source provenance retained from the export-time latent-AOT hint. It
 // lets a title loader bind an authenticated encoded extent to the generated
 // decoded module without copying title paths or addresses into the runtime.
-// A zero runtime_start means that no loader placement was proven and is never
-// eligible for automatic PRS staging.
+// A zero runtime_start means that export analysis proved the encoded/decoded
+// identity but not one fixed placement.  The title loader must bind that
+// placement from its authenticated PRS destination before staging; zero is
+// never itself an executable address.
 struct NativePortLoadedAotSourceBindingView final {
     NativePortLoadedAotSourceTransform transform =
         NativePortLoadedAotSourceTransform::Identity;
@@ -117,6 +119,32 @@ struct NativePortLoadedAotActiveModuleView final {
     std::uint64_t lifecycle_generation = 0u;
 };
 
+// Exact generated entry of one loader-staged or currently active AOT module.
+// A staged view has active=false but already binds the immutable module,
+// block and lifecycle identities needed by a fail-closed dispatch preflight.
+// It does not install a code-address mapping or otherwise authorize execution.
+struct NativePortLoadedAotEntryView final {
+    std::string_view module_sha256;
+    std::string_view block_sha256;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t module_size = 0u;
+    std::uint32_t source_offset = 0u;
+    std::uint32_t block_size = 0u;
+    std::uint64_t lifecycle_generation = 0u;
+    bool active = false;
+};
+
+// A cached loaded-AOT dispatch admission remains reusable only while both the
+// title executable lifecycle and immutable-code state are unchanged.
+struct NativePortLoadedAotDispatchStamp final {
+    std::uint64_t lifecycle_generation = 0u;
+    std::uint64_t immutable_generation = 0u;
+
+    [[nodiscard]] bool operator==(
+        const NativePortLoadedAotDispatchStamp&) const noexcept = default;
+};
+
 struct NativePortExecutableRange final {
     std::uint32_t runtime_start = 0u;
     std::size_t byte_size = 0u;
@@ -153,6 +181,9 @@ class NativePortExecutableLifecycleLedger final {
         std::uint64_t generation) noexcept;
     [[nodiscard]] std::uint64_t release_noexcept(
         std::uint64_t generation) noexcept;
+    // Monotone owner-thread epoch for cache invalidation. Every successful
+    // executable-range acquire or release advances this value.
+    [[nodiscard]] std::uint64_t generation() const noexcept;
 
   private:
     struct Impl;
@@ -257,6 +288,20 @@ class NativePortLoadedAotBinder final {
     // generation. The address may point at code or module-owned data.
     [[nodiscard]] std::optional<NativePortLoadedAotActiveModuleView>
     active_module_for_address(std::uint32_t address) const;
+    // Returns one exact generated block entry only when it belongs to a
+    // loader-staged or active lifecycle generation and its current executable
+    // bytes still match the generated identities. This operation is read-only.
+    [[nodiscard]] std::optional<NativePortLoadedAotEntryView>
+    preflight_entry_for_address(std::uint32_t address) const;
+    // Active-only counterpart used to recheck identity/generation after an
+    // atomic bind_entry commit. A staged entry is reported as no match.
+    [[nodiscard]] std::optional<NativePortLoadedAotEntryView>
+    active_entry_for_address(std::uint32_t address) const;
+    // Cheap owner-thread cache stamp. It deliberately exposes no mutable
+    // binder state and changes before any retired/staged executable identity
+    // can be reused by a dispatch preflight cache.
+    [[nodiscard]] NativePortLoadedAotDispatchStamp
+    dispatch_stamp() const noexcept;
     // Records one exact loader-selected module at its destination. The module
     // remains non-executable until bind_entry verifies its current bytes and
     // an exact emitted block at the requested entry. Returns the independent,
@@ -264,7 +309,9 @@ class NativePortLoadedAotBinder final {
     [[nodiscard]] std::uint64_t stage_runtime_module(
         const NativePortLoadedAotModuleActivation& activation);
     // Resolves one exact, export-authenticated Sega PRS disc extent to its
-    // generated decoded module and loader-proven runtime placement. No match
+    // generated decoded module. runtime_start is zero when export analysis did
+    // not prove one fixed placement; an authenticated title loader must replace
+    // zero with its observed destination before stage_runtime_module. No match
     // is an ordinary non-executable PRS asset; ambiguity fails closed.
     [[nodiscard]] std::optional<NativePortLoadedAotModuleActivation>
     resolve_prs_module_source(

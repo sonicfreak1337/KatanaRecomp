@@ -197,7 +197,7 @@ class PortPhaseTimingRecorder final {
             output << "]}";
             std::osyncstream(std::cout)
                 << "KATANA_PORT_PHASE_TIMINGS "
-                << output.str() << '\n' << std::flush;
+                << output.str() << '\n' << std::flush_emit;
             telemetry_recorded_ =
                 telemetry_ == nullptr || !telemetry_->enabled();
             if (telemetry_ != nullptr && telemetry_->enabled()) {
@@ -480,6 +480,7 @@ void observe_port_export_progress(
         phase.find("cycle-exhausted") !=
             std::string_view::npos ||
         phase.starts_with("latent-primary-root-seed-cache-") ||
+        phase.starts_with("native-disc-analysis-artifact-") ||
         phase.ends_with("-complete");
     if (!recorded_module_timing && !timing_boundary &&
         !phase_timings.should_emit_dynamic_progress(
@@ -487,14 +488,14 @@ void observe_port_export_progress(
         return;
     std::osyncstream(std::cout)
         << "KATANA_PORT_SUBPHASE " << phase << '\n'
-        << std::flush;
+        << std::flush_emit;
 }
 
 void observe_structured_progress(
     const katana::ProgressEvent& event) {
     std::osyncstream(std::cout)
         << katana::format_progress_event_human(event) << '\n'
-                                << std::flush;
+                                << std::flush_emit;
 }
 
 std::uint32_t
@@ -7845,6 +7846,14 @@ using NativeBootstrapWritePayloadArgument =
 using LatentAotEntryHintArgument = katana::codegen::LatentAotEntryHint;
 using LatentAotDiscoveryModeArgument =
     katana::codegen::LatentAotDiscoveryMode;
+using CompleteDisassemblyAuthorityArgument =
+    katana::codegen::CompleteDisassemblyAuthority;
+using CompleteDisassemblyEntryAuthorityArgument =
+    katana::codegen::CompleteDisassemblyEntryAuthority;
+using CompleteDisassemblyEntryKindArgument =
+    katana::codegen::CompleteDisassemblyEntryKind;
+using CompleteDisassemblyModuleAuthorityArgument =
+    katana::codegen::CompleteDisassemblyModuleAuthority;
 using PortAnalysisMode = katana::codegen::PortAnalysisMode;
 using NativePortExecutionProfile =
     katana::codegen::NativePortExecutionProfile;
@@ -7855,6 +7864,9 @@ constexpr std::size_t maximum_latent_aot_entry_hint_arguments =
 constexpr std::uintmax_t maximum_latent_aot_entry_file_bytes = 1024u * 1024u;
 constexpr std::size_t maximum_latent_aot_entry_file_line_bytes = 512u;
 constexpr std::size_t maximum_native_aot_resume_entry_arguments = 4096u;
+constexpr std::uintmax_t maximum_complete_disassembly_authority_file_bytes =
+    32u * 1024u * 1024u;
+constexpr std::size_t maximum_complete_disassembly_authority_line_bytes = 1024u;
 
 LatentAotDiscoveryModeArgument parse_latent_aot_discovery_mode(
     const std::string_view text) {
@@ -8170,6 +8182,255 @@ std::vector<LatentAotEntryHintArgument> load_latent_aot_entry_hint_file(
         throw std::invalid_argument(
             "--latent-aot-entry-file enthaelt keine Entry-Hints.");
     return hints;
+}
+
+std::uint64_t parse_complete_disassembly_integer(
+    const std::string_view text,
+    const std::string_view field_name) {
+    auto digits = text;
+    int base = 10;
+    if (digits.starts_with("0x") || digits.starts_with("0X")) {
+        digits.remove_prefix(2u);
+        base = 16;
+    }
+    if (digits.empty())
+        throw std::invalid_argument(
+            "Complete-Disassembly-Authority besitzt kein " +
+            std::string(field_name) + ".");
+    std::uint64_t value = 0u;
+    const auto parsed = std::from_chars(
+        digits.data(), digits.data() + digits.size(), value, base);
+    if (parsed.ec != std::errc{} ||
+        parsed.ptr != digits.data() + digits.size())
+        throw std::invalid_argument(
+            "Complete-Disassembly-Authority besitzt ein ungueltiges " +
+            std::string(field_name) + ".");
+    return value;
+}
+
+std::vector<std::string_view> split_complete_disassembly_record(
+    const std::string_view line) {
+    std::vector<std::string_view> fields;
+    std::size_t begin = 0u;
+    while (begin <= line.size()) {
+        const auto separator = line.find('|', begin);
+        const auto end = separator == std::string_view::npos
+            ? line.size()
+            : separator;
+        fields.push_back(line.substr(begin, end - begin));
+        if (separator == std::string_view::npos) break;
+        begin = separator + 1u;
+    }
+    if (fields.empty() ||
+        std::ranges::any_of(fields, [](const auto field) {
+            return field.empty();
+        }))
+        throw std::invalid_argument(
+            "Complete-Disassembly-Authority besitzt ein leeres Recordfeld.");
+    return fields;
+}
+
+katana::codegen::LatentAotSourceTransform
+parse_complete_disassembly_transform(const std::string_view text) {
+    if (text == "identity")
+        return katana::codegen::LatentAotSourceTransform::Identity;
+    if (text == "sega-prs")
+        return katana::codegen::LatentAotSourceTransform::SegaPrs;
+    throw std::invalid_argument(
+        "Complete-Disassembly-Authority besitzt einen unbekannten Transform.");
+}
+
+CompleteDisassemblyEntryKindArgument parse_complete_disassembly_entry_kind(
+    const std::string_view text) {
+    if (text == "declared-entry")
+        return CompleteDisassemblyEntryKindArgument::DeclaredEntry;
+    if (text == "function-entry")
+        return CompleteDisassemblyEntryKindArgument::FunctionEntry;
+    if (text == "control-flow-target")
+        return CompleteDisassemblyEntryKindArgument::ControlFlowTarget;
+    if (text == "code-pointer-target")
+        return CompleteDisassemblyEntryKindArgument::CodePointerTarget;
+    throw std::invalid_argument(
+        "Complete-Disassembly-Authority besitzt eine unbekannte Entryart.");
+}
+
+CompleteDisassemblyAuthorityArgument load_complete_disassembly_authority_file(
+    const std::filesystem::path& path) {
+    if (path.empty())
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority besitzt keinen Dateipfad.");
+
+    std::error_code status_error;
+    const auto status = std::filesystem::symlink_status(path, status_error);
+    if (status_error || !std::filesystem::is_regular_file(status) ||
+        unsafe_port_filesystem_link(path, status))
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority muss eine regulaere "
+            "Nicht-Symlink-Datei sein.");
+    const auto canonical = std::filesystem::canonical(path, status_error);
+    if (status_error)
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority kann nicht kanonisiert werden.");
+    const auto byte_size = std::filesystem::file_size(canonical, status_error);
+    if (status_error || byte_size == 0u ||
+        byte_size > maximum_complete_disassembly_authority_file_bytes)
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority ist leer oder ueberschreitet "
+            "32 MiB.");
+
+    std::ifstream input(canonical, std::ios::binary | std::ios::ate);
+    if (!input || input.tellg() != static_cast<std::streamoff>(byte_size))
+        throw std::runtime_error(
+            "--native-bringup-coverage-authority kann nicht stabil geoeffnet werden.");
+    std::string contents(static_cast<std::size_t>(byte_size), '\0');
+    input.seekg(0, std::ios::beg);
+    input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+    if (!input)
+        throw std::runtime_error(
+            "--native-bringup-coverage-authority kann nicht gelesen werden.");
+    input.close();
+
+    const auto final_status =
+        std::filesystem::symlink_status(canonical, status_error);
+    if (status_error || !std::filesystem::is_regular_file(final_status) ||
+        unsafe_port_filesystem_link(canonical, final_status) ||
+        std::filesystem::file_size(canonical, status_error) != byte_size ||
+        status_error)
+        throw std::runtime_error(
+            "--native-bringup-coverage-authority wurde waehrend des Lesens "
+            "veraendert.");
+    if (contents.find('\0') != std::string::npos)
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority enthaelt ein NUL-Byte.");
+
+    CompleteDisassemblyAuthorityArgument authority;
+    bool schema_seen = false;
+    bool authority_seen = false;
+    bool project_seen = false;
+    std::size_t line_number = 0u;
+    std::size_t line_begin = 0u;
+    while (line_begin <= contents.size()) {
+        ++line_number;
+        const auto line_end = contents.find('\n', line_begin);
+        const auto line_length =
+            (line_end == std::string::npos ? contents.size() : line_end) -
+            line_begin;
+        if (line_length > maximum_complete_disassembly_authority_line_bytes)
+            throw std::invalid_argument(
+                "--native-bringup-coverage-authority Zeile " +
+                std::to_string(line_number) + " ist zu lang.");
+        auto line = std::string_view(contents).substr(line_begin, line_length);
+        const auto ascii_space = [](const char character) noexcept {
+            return character == ' ' || character == '\t' || character == '\r';
+        };
+        while (!line.empty() && ascii_space(line.front())) line.remove_prefix(1u);
+        while (!line.empty() && ascii_space(line.back())) line.remove_suffix(1u);
+        if (!line.empty() && !line.starts_with('#')) {
+            try {
+                const auto fields = split_complete_disassembly_record(line);
+                if (fields[0] == "schema") {
+                    if (fields.size() != 2u || schema_seen || fields[1] != "1")
+                        throw std::invalid_argument(
+                            "ungueltiger oder doppelter schema-Record");
+                    schema_seen = true;
+                } else if (fields[0] == "authority") {
+                    if (fields.size() != 2u || authority_seen ||
+                        !valid_latent_aot_entry_identity(fields[1]))
+                        throw std::invalid_argument(
+                            "ungueltiger oder doppelter authority-Record");
+                    authority.authority_identity = std::string(fields[1]);
+                    authority_seen = true;
+                } else if (fields[0] == "project") {
+                    if (fields.size() != 3u || project_seen)
+                        throw std::invalid_argument(
+                            "ungueltiger oder doppelter project-Record");
+                    authority.project_id = std::string(fields[1]);
+                    authority.project_version = std::string(fields[2]);
+                    project_seen = true;
+                } else if (fields[0] == "module") {
+                    if (fields.size() != 11u)
+                        throw std::invalid_argument(
+                            "module-Record erwartet zehn Felder");
+                    const auto disc_offset = parse_complete_disassembly_integer(
+                        fields[4], "Disc-Byteoffset");
+                    const auto encoded_size = parse_complete_disassembly_integer(
+                        fields[5], "encoded Bytegroesse");
+                    const auto decoded_size = parse_complete_disassembly_integer(
+                        fields[7], "decoded Bytegroesse");
+                    const auto source_address =
+                        parse_complete_disassembly_integer(
+                            fields[8], "Sourceadresse");
+                    const auto runtime_address =
+                        parse_complete_disassembly_integer(
+                            fields[9], "Runtimeadresse");
+                    if (encoded_size > std::numeric_limits<std::uint32_t>::max() ||
+                        decoded_size > std::numeric_limits<std::uint32_t>::max() ||
+                        source_address > std::numeric_limits<std::uint32_t>::max() ||
+                        runtime_address > std::numeric_limits<std::uint32_t>::max())
+                        throw std::invalid_argument(
+                            "module-Record ueberschreitet 32-Bit-Felder");
+                    CompleteDisassemblyModuleAuthorityArgument module;
+                    module.module_id = std::string(fields[1]);
+                    module.transform =
+                        parse_complete_disassembly_transform(fields[2]);
+                    module.encoded_byte_identity = std::string(fields[3]);
+                    module.disc_byte_offset = disc_offset;
+                    module.encoded_byte_size =
+                        static_cast<std::uint32_t>(encoded_size);
+                    module.decoded_byte_identity = std::string(fields[6]);
+                    module.decoded_byte_size =
+                        static_cast<std::uint32_t>(decoded_size);
+                    module.source_address =
+                        static_cast<std::uint32_t>(source_address);
+                    module.runtime_address =
+                        static_cast<std::uint32_t>(runtime_address);
+                    module.disassembly_identity = std::string(fields[10]);
+                    authority.modules.push_back(std::move(module));
+                } else if (fields[0] == "entry") {
+                    if (fields.size() != 6u)
+                        throw std::invalid_argument(
+                            "entry-Record erwartet fuenf Felder");
+                    const auto module = std::find_if(
+                        authority.modules.begin(), authority.modules.end(),
+                        [&](const auto& candidate) {
+                            return candidate.module_id == fields[1];
+                        });
+                    if (module == authority.modules.end())
+                        throw std::invalid_argument(
+                            "entry-Record referenziert kein vorheriges Modul");
+                    const auto offset = parse_complete_disassembly_integer(
+                        fields[2], "Modulentryoffset");
+                    const auto probe_size = parse_complete_disassembly_integer(
+                        fields[3], "Entry-Probegroesse");
+                    if (offset > std::numeric_limits<std::uint32_t>::max() ||
+                        probe_size > std::numeric_limits<std::uint32_t>::max())
+                        throw std::invalid_argument(
+                            "entry-Record ueberschreitet 32-Bit-Felder");
+                    module->entries.push_back(
+                        CompleteDisassemblyEntryAuthorityArgument{
+                            static_cast<std::uint32_t>(offset),
+                            static_cast<std::uint32_t>(probe_size),
+                            std::string(fields[4]),
+                            parse_complete_disassembly_entry_kind(fields[5])});
+                } else {
+                    throw std::invalid_argument(
+                        "unbekannter Complete-Disassembly-Record");
+                }
+            } catch (const std::invalid_argument& error) {
+                throw std::invalid_argument(
+                    "--native-bringup-coverage-authority Zeile " +
+                    std::to_string(line_number) + ": " + error.what());
+            }
+        }
+        if (line_end == std::string::npos) break;
+        line_begin = line_end + 1u;
+    }
+    if (!schema_seen || !authority_seen || !project_seen)
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority braucht genau schema, "
+            "authority und project.");
+    return katana::codegen::normalize_complete_disassembly_authority(
+        std::move(authority));
 }
 
 bool latent_aot_entry_hint_less(const LatentAotEntryHintArgument& left,
@@ -11927,7 +12188,10 @@ int export_port_project(const std::filesystem::path& source_path,
                             native_execution_profile =
                                 NativePortExecutionProfile::StrictProduct,
                         const std::optional<std::filesystem::path>&
-                            native_bringup_allowlist_path = std::nullopt) {
+                            native_bringup_allowlist_path = std::nullopt,
+                        const std::optional<std::filesystem::path>&
+                            native_bringup_coverage_authority_path =
+                                std::nullopt) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
@@ -11961,7 +12225,8 @@ int export_port_project(const std::filesystem::path& source_path,
     if (analysis_only &&
         (native_execution_profile !=
              NativePortExecutionProfile::StrictProduct ||
-         native_bringup_allowlist_path.has_value()))
+         native_bringup_allowlist_path.has_value() ||
+         native_bringup_coverage_authority_path.has_value()))
         throw std::invalid_argument(
             "Native-Bring-up ist ein Post-Analysis-Exportprofil und darf "
             "keinen analyze-port-Lauf veraendern.");
@@ -11973,10 +12238,12 @@ int export_port_project(const std::filesystem::path& source_path,
             "explizite --native-bringup-allowlist.");
     if (native_execution_profile ==
             NativePortExecutionProfile::StrictProduct &&
-        native_bringup_allowlist_path.has_value())
+        (native_bringup_allowlist_path.has_value() ||
+         native_bringup_coverage_authority_path.has_value()))
         throw std::invalid_argument(
-            "--native-bringup-allowlist ist ausschliesslich mit "
-            "--native-execution-profile native-bringup zulaessig.");
+            "Native-Bring-up-Allowlist und Complete-Disassembly-Coverage "
+            "sind ausschliesslich mit --native-execution-profile "
+            "native-bringup zulaessig.");
     // NativeBringup may consume a committed analysis generation, but it may
     // also derive the analysis and AOT pack in this same source-bound export.
     // Candidate authoring is independently revalidated against the exact
@@ -11989,6 +12256,13 @@ int export_port_project(const std::filesystem::path& source_path,
          !native_port_definition_path.has_value()))
         throw std::invalid_argument(
             "--native-bringup-allowlist braucht einen vollstaendigen "
+            "NativeDisc-Port mit GameProject und NativePortDefinition.");
+    if (native_bringup_coverage_authority_path.has_value() &&
+        (diagnostic_partial || boot_executable_artifact ||
+         !game_project_path.has_value() ||
+         !native_port_definition_path.has_value()))
+        throw std::invalid_argument(
+            "--native-bringup-coverage-authority braucht einen vollstaendigen "
             "NativeDisc-Port mit GameProject und NativePortDefinition.");
     if (refresh_analysis && (!analysis_only || !resume_analysis))
         throw std::invalid_argument(
@@ -12425,6 +12699,8 @@ int export_port_project(const std::filesystem::path& source_path,
         verified_analysis_generation_game_project;
     std::shared_ptr<katana::runtime::NativeBringupAuthoringArtifact>
         verified_native_bringup_authoring;
+    std::optional<CompleteDisassemblyAuthorityArgument>
+        verified_native_bringup_coverage_authority;
     std::optional<katana::runtime::GameProjectDefinition>
         resolved_game_project;
     std::vector<std::vector<std::uint8_t>>
@@ -12507,6 +12783,25 @@ int export_port_project(const std::filesystem::path& source_path,
                 resolved_game_project->project_version)
             throw std::invalid_argument(
                 "Native-Bring-up-Allowlist gehoert nicht zum aktuellen "
+                "GameProject samt Version oder NativePort-Projekt.");
+    }
+    if (native_bringup_coverage_authority_path.has_value()) {
+        verified_native_bringup_coverage_authority =
+            load_complete_disassembly_authority_file(
+                *native_bringup_coverage_authority_path);
+        const auto& coverage =
+            *verified_native_bringup_coverage_authority;
+        // Complete-disassembly authority belongs to the GameProject/AOT
+        // universe.  NativePort adapters/providers are independently
+        // versioned, so only their project id participates here.
+        if (!verified_native_port || !resolved_game_project.has_value() ||
+            coverage.project_id !=
+                verified_native_port->definition().project_id ||
+            coverage.project_id != resolved_game_project->project_id ||
+            coverage.project_version !=
+                resolved_game_project->project_version)
+            throw std::invalid_argument(
+                "Complete-Disassembly-Coverage gehoert nicht zum aktuellen "
                 "GameProject samt Version oder NativePort-Projekt.");
     }
     const auto implementation_identities =
@@ -12853,6 +13148,7 @@ int export_port_project(const std::filesystem::path& source_path,
             export_options.progress = port_progress;
             export_options.detailed_analysis_telemetry =
                 detailed_analysis_telemetry;
+            export_options.analysis_metadata_requested = analysis_only;
             export_options.analysis_cache_root =
                 component_cache_root;
             export_options.codegen_cache_root = codegen_cache_root;
@@ -12888,6 +13184,10 @@ int export_port_project(const std::filesystem::path& source_path,
                 normalized_latent_aot_entry_hints;
             export_options.latent_aot_discovery_mode =
                 latent_aot_discovery_mode;
+            export_options.native_bringup_coverage_authority =
+                verified_native_bringup_coverage_authority.has_value()
+                    ? &*verified_native_bringup_coverage_authority
+                    : nullptr;
             export_options.analysis_artifact_archive_requested =
                 analysis_only;
             export_options.agent_analysis_artifacts_requested =
@@ -13064,9 +13364,13 @@ int export_port_project(const std::filesystem::path& source_path,
         // non-release profile and its allowlist; partition cache identities
         // likewise remain tied solely to AOT-affecting inputs.
         whole_export_cache_key = katana::io::sha256_bytes(
-            std::string("katana-native-bringup-whole-export-v1:") +
+            std::string("katana-native-bringup-whole-export-v2:") +
             whole_export_cache_key.value() + ':' +
-            verified_native_bringup_authoring->artifact_identity());
+            verified_native_bringup_authoring->artifact_identity() + ':' +
+            (verified_native_bringup_coverage_authority.has_value()
+                 ? verified_native_bringup_coverage_authority
+                       ->authority_identity
+                 : "no-complete-disassembly-coverage"));
     }
     if (analysis_only) {
         if (!verified_native_disc)
@@ -15498,6 +15802,7 @@ void print_usage(std::ostream& output) {
                "[--analysis-mode <platform|runtime-only>] "
                "[--native-execution-profile <strict-product|native-bringup>] "
                "[--native-bringup-allowlist <private .katana-native-bringup>] "
+               "[--native-bringup-coverage-authority <private TXT-v1>] "
                "[--native-aot-resume-entry <0xAdresse>]... "
                "[--runtime-image-payload <Image-ID>=<private-Datei>] "
               "[--native-bootstrap-write-payload "
@@ -16308,6 +16613,8 @@ int main(const int argc, char* argv[]) {
             bool native_execution_profile_seen = false;
             std::optional<std::filesystem::path>
                 native_bringup_allowlist_path;
+            std::optional<std::filesystem::path>
+                native_bringup_coverage_authority_path;
             std::string console_profile = "japan-ntsc";
             bool console_profile_seen = false;
             bool resume_analysis = false;
@@ -16500,6 +16807,12 @@ int main(const int argc, char* argv[]) {
                     !native_bringup_allowlist_path.has_value()) {
                     native_bringup_allowlist_path =
                         std::filesystem::path(value);
+                } else if (
+                    option == "--native-bringup-coverage-authority" &&
+                    port_command == "port" &&
+                    !native_bringup_coverage_authority_path.has_value()) {
+                    native_bringup_coverage_authority_path =
+                        std::filesystem::path(value);
                 } else {
                     throw std::invalid_argument(
                         "port erwartet eindeutige Ausgabe-, Ziel- und Konsolenprofiloptionen.");
@@ -16550,7 +16863,8 @@ int main(const int argc, char* argv[]) {
                                        analysis_generation_path,
                                        analysis_generation_game_project_path,
                                        native_execution_profile,
-                                       native_bringup_allowlist_path);
+                                       native_bringup_allowlist_path,
+                                       native_bringup_coverage_authority_path);
         }
 
         if ((argc == 3 || argc == 4) &&

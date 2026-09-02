@@ -9057,6 +9057,264 @@ CandidateAnalysisOutcome analyze_candidate(
 }
 } // namespace
 
+namespace {
+
+bool valid_complete_disassembly_component(
+    const std::string_view value) noexcept {
+    return !value.empty() && value.size() <= 128u &&
+           std::all_of(value.begin(), value.end(), [](const char character) {
+               return (character >= 'a' && character <= 'z') ||
+                      (character >= 'A' && character <= 'Z') ||
+                      (character >= '0' && character <= '9') ||
+                      character == '-' || character == '_' ||
+                      character == '.';
+           });
+}
+
+void append_complete_disassembly_identity_field(
+    std::string& material,
+    const std::string_view value) {
+    material += std::to_string(value.size());
+    material.push_back(':');
+    material.append(value);
+    material.push_back(';');
+}
+
+template <typename Value>
+void append_complete_disassembly_identity_number(
+    std::string& material,
+    const Value value) {
+    append_complete_disassembly_identity_field(
+        material, std::to_string(value));
+}
+
+std::string complete_disassembly_authority_identity_unchecked(
+    const CompleteDisassemblyAuthority& authority) {
+    constexpr std::string_view identity_domain{
+        "katana-complete-disassembly-authority-v1"};
+    std::string material{identity_domain};
+    material.push_back('\0');
+    append_complete_disassembly_identity_number(
+        material, authority.contract_version);
+    append_complete_disassembly_identity_field(material, authority.project_id);
+    append_complete_disassembly_identity_field(
+        material, authority.project_version);
+    append_complete_disassembly_identity_number(
+        material, authority.modules.size());
+    for (const auto& module : authority.modules) {
+        append_complete_disassembly_identity_field(material, module.module_id);
+        append_complete_disassembly_identity_number(
+            material, static_cast<unsigned>(module.transform));
+        append_complete_disassembly_identity_field(
+            material, module.encoded_byte_identity);
+        append_complete_disassembly_identity_number(
+            material, module.disc_byte_offset);
+        append_complete_disassembly_identity_number(
+            material, module.encoded_byte_size);
+        append_complete_disassembly_identity_field(
+            material, module.decoded_byte_identity);
+        append_complete_disassembly_identity_number(
+            material, module.decoded_byte_size);
+        append_complete_disassembly_identity_number(
+            material, module.source_address);
+        append_complete_disassembly_identity_number(
+            material, module.runtime_address);
+        append_complete_disassembly_identity_field(
+            material, module.disassembly_identity);
+        append_complete_disassembly_identity_number(
+            material, module.entries.size());
+        for (const auto& entry : module.entries) {
+            append_complete_disassembly_identity_number(
+                material, entry.module_relative_offset);
+            append_complete_disassembly_identity_number(
+                material, entry.byte_size);
+            append_complete_disassembly_identity_field(
+                material, entry.byte_identity);
+            append_complete_disassembly_identity_number(
+                material, static_cast<unsigned>(entry.kind));
+        }
+    }
+    return "sha256:" + katana::io::sha256_bytes(material);
+}
+
+} // namespace
+
+CompleteDisassemblyAuthority normalize_complete_disassembly_authority(
+    CompleteDisassemblyAuthority authority) {
+    constexpr std::uint32_t page_size = 4096u;
+    constexpr std::uint32_t maximum_entry_probe_bytes = 256u;
+    if (authority.contract_version !=
+            complete_disassembly_authority_contract_version ||
+        !valid_complete_disassembly_component(authority.project_id) ||
+        !valid_complete_disassembly_component(authority.project_version) ||
+        authority.modules.empty() ||
+        authority.modules.size() > maximum_complete_disassembly_modules)
+        throw std::invalid_argument(
+            "complete-disassembly-authority-definition");
+    if (!authority.authority_identity.empty() &&
+        !valid_sha256_identity(authority.authority_identity))
+        throw std::invalid_argument(
+            "complete-disassembly-authority-identity");
+
+    std::sort(
+        authority.modules.begin(), authority.modules.end(),
+        [](const auto& left, const auto& right) {
+            if (left.module_id != right.module_id)
+                return left.module_id < right.module_id;
+            if (left.decoded_byte_identity != right.decoded_byte_identity)
+                return left.decoded_byte_identity < right.decoded_byte_identity;
+            return left.source_address < right.source_address;
+        });
+
+    std::size_t total_entries = 0u;
+    std::uint64_t total_decoded_bytes = 0u;
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> source_ranges;
+    source_ranges.reserve(authority.modules.size());
+    std::optional<std::string_view> previous_module_id;
+    for (auto& module : authority.modules) {
+        const bool valid_transform =
+            module.transform == LatentAotSourceTransform::Identity ||
+            module.transform == LatentAotSourceTransform::SegaPrs;
+        const auto source_end =
+            static_cast<std::uint64_t>(module.source_address) +
+            module.decoded_byte_size;
+        const auto runtime_end =
+            static_cast<std::uint64_t>(module.runtime_address) +
+            module.decoded_byte_size;
+        if (!valid_complete_disassembly_component(module.module_id) ||
+            (previous_module_id.has_value() &&
+             *previous_module_id == module.module_id) ||
+            !valid_transform ||
+            !valid_sha256_identity(module.encoded_byte_identity) ||
+            !valid_sha256_identity(module.decoded_byte_identity) ||
+            !valid_sha256_identity(module.disassembly_identity) ||
+            module.encoded_byte_size == 0u ||
+            module.encoded_byte_size >
+                katana::runtime::maximum_native_aot_template_extent ||
+            module.decoded_byte_size < 2u ||
+            module.decoded_byte_size > 4u * 1024u * 1024u ||
+            module.disc_byte_offset % iso_sector_size != 0u ||
+            module.disc_byte_offset >
+                std::numeric_limits<std::uint64_t>::max() -
+                    module.encoded_byte_size ||
+            (module.source_address != 0u &&
+             (module.source_address & (page_size - 1u)) != 0u) ||
+            (module.runtime_address & (page_size - 1u)) != 0u ||
+            module.runtime_address == 0u ||
+            (module.source_address != 0u &&
+             source_end > 0x1'0000'0000ull) ||
+            module.runtime_address < latent_aot_main_ram_begin ||
+            runtime_end > latent_aot_main_ram_end ||
+            module.entries.empty() ||
+            (module.transform == LatentAotSourceTransform::Identity &&
+             (module.encoded_byte_identity != module.decoded_byte_identity ||
+              module.encoded_byte_size != module.decoded_byte_size)))
+            throw std::invalid_argument(
+                "complete-disassembly-module-definition");
+        previous_module_id = module.module_id;
+        if (total_decoded_bytes >
+            maximum_validated_latent_aot_total_module_bytes -
+                module.decoded_byte_size)
+            throw std::invalid_argument(
+                "complete-disassembly-module-byte-budget");
+        total_decoded_bytes += module.decoded_byte_size;
+        if (module.entries.size() >
+            maximum_complete_disassembly_entries -
+                std::min(total_entries,
+                         maximum_complete_disassembly_entries))
+            throw std::invalid_argument(
+                "complete-disassembly-entry-budget");
+        total_entries += module.entries.size();
+        if (module.source_address != 0u)
+            source_ranges.emplace_back(module.source_address, source_end);
+
+        std::sort(
+            module.entries.begin(), module.entries.end(),
+            [](const auto& left, const auto& right) {
+                if (left.module_relative_offset !=
+                    right.module_relative_offset)
+                    return left.module_relative_offset <
+                           right.module_relative_offset;
+                if (left.byte_size != right.byte_size)
+                    return left.byte_size < right.byte_size;
+                if (left.byte_identity != right.byte_identity)
+                    return left.byte_identity < right.byte_identity;
+                return static_cast<unsigned>(left.kind) <
+                       static_cast<unsigned>(right.kind);
+            });
+        std::optional<std::uint32_t> previous_offset;
+        for (const auto& entry : module.entries) {
+            const auto entry_end =
+                static_cast<std::uint64_t>(entry.module_relative_offset) +
+                entry.byte_size;
+            const bool valid_kind =
+                entry.kind == CompleteDisassemblyEntryKind::DeclaredEntry ||
+                entry.kind == CompleteDisassemblyEntryKind::FunctionEntry ||
+                entry.kind ==
+                    CompleteDisassemblyEntryKind::ControlFlowTarget ||
+                entry.kind ==
+                    CompleteDisassemblyEntryKind::CodePointerTarget;
+            if ((entry.module_relative_offset & 1u) != 0u ||
+                entry.byte_size < 2u ||
+                entry.byte_size > maximum_entry_probe_bytes ||
+                (entry.byte_size & 1u) != 0u ||
+                entry_end > module.decoded_byte_size ||
+                !valid_sha256_identity(entry.byte_identity) || !valid_kind ||
+                (previous_offset.has_value() &&
+                 entry.module_relative_offset == *previous_offset))
+                throw std::invalid_argument(
+                    "complete-disassembly-entry-definition");
+            previous_offset = entry.module_relative_offset;
+        }
+    }
+
+    std::sort(source_ranges.begin(), source_ranges.end());
+    for (std::size_t index = 1u; index < source_ranges.size(); ++index) {
+        if (source_ranges[index].first < source_ranges[index - 1u].second)
+            throw std::invalid_argument(
+                "complete-disassembly-source-overlap");
+    }
+
+    const auto supplied_identity = authority.authority_identity;
+    authority.authority_identity =
+        complete_disassembly_authority_identity_unchecked(authority);
+    if (!supplied_identity.empty() &&
+        supplied_identity != authority.authority_identity)
+        throw std::invalid_argument(
+            "complete-disassembly-authority-identity-mismatch");
+    return authority;
+}
+
+std::string complete_disassembly_authority_identity(
+    const CompleteDisassemblyAuthority& authority) {
+    auto copy = authority;
+    copy.authority_identity.clear();
+    return normalize_complete_disassembly_authority(std::move(copy))
+        .authority_identity;
+}
+
+std::vector<LatentAotEntryHint>
+complete_disassembly_coverage_entry_hints(
+    const CompleteDisassemblyAuthority& authority) {
+    auto normalized = normalize_complete_disassembly_authority(authority);
+    std::vector<LatentAotEntryHint> hints;
+    std::size_t count = 0u;
+    for (const auto& module : normalized.modules) count += module.entries.size();
+    hints.reserve(count);
+    for (const auto& module : normalized.modules) {
+        for (const auto& entry : module.entries) {
+            hints.push_back(
+                {module.decoded_byte_identity,
+                 module.disc_byte_offset,
+                 module.encoded_byte_size,
+                 entry.module_relative_offset,
+                 module.source_address,
+                 module.runtime_address});
+        }
+    }
+    return hints;
+}
+
 struct LatentAotDiscoverySession::Impl final {
     struct CatalogStatistics final {
         std::size_t examined_files = 0u;
@@ -11034,13 +11292,13 @@ bool validate_latent_aot_discovery_source_binding(
                     maximum_latent_aot_source_bindings -
                         total_source_bindings ||
                 module.block_identities.size() >
-                    maximum_prepared_latent_aot_block_identities -
+                    maximum_prepared_latent_aot_total_block_identities -
                         total_block_identities ||
                 module.function_identities.size() >
-                    maximum_prepared_latent_aot_function_identities -
+                    maximum_prepared_latent_aot_total_function_identities -
                         total_function_identities ||
                 module.program.size() >
-                    maximum_prepared_latent_aot_function_identities -
+                    maximum_prepared_latent_aot_total_functions -
                         total_functions)
                 return false;
             total_module_bytes += module.byte_size;
@@ -11107,7 +11365,7 @@ bool validate_latent_aot_discovery_source_binding(
             std::set<std::uint32_t> block_entries;
             for (const auto& function : module.program) {
                 if (function.blocks.size() >
-                    maximum_prepared_latent_aot_block_identities -
+                    maximum_prepared_latent_aot_total_blocks -
                         total_blocks)
                     return false;
                 total_blocks += function.blocks.size();

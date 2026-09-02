@@ -388,7 +388,7 @@ int main(const int argc, char** const argv) {
         const std::array<std::uint8_t, 4u> bytes{0x09u, 0x00u, 0x0Bu, 0x00u};
         const std::array source_bindings{
             katana::runtime::NativePortLoadedAotSourceBindingView{
-                katana::runtime::NativePortLoadedAotSourceTransform::Identity,
+                katana::runtime::NativePortLoadedAotSourceTransform::SegaPrs,
                 identity, 0u, static_cast<std::uint32_t>(bytes.size()), 0u}};
         const std::array blocks{
             katana::runtime::NativePortLoadedAotBlockIdentityView{
@@ -407,9 +407,34 @@ int main(const int argc, char** const argv) {
         katana::runtime::NativePortExecutableLifecycleLedger module_ledger(1u);
         katana::runtime::NativePortLoadedAotBinder binder(
             cpu, modules, module_guard, module_ledger);
-        const auto lifecycle = binder.stage_runtime_module(
-            {identity, source_start, runtime_start,
-             static_cast<std::uint32_t>(bytes.size())});
+        const auto unplaced = binder.resolve_prs_module_source(
+            identity, 0u, bytes.size());
+        require(unplaced.has_value() && unplaced->sha256 == identity &&
+                    unplaced->source_start == source_start &&
+                    unplaced->runtime_start == 0u &&
+                    unplaced->byte_size == bytes.size() &&
+                    !binder.resolve_prs_module_source(
+                               identity, bytes.size(), bytes.size())
+                         .has_value(),
+                "Exactes PRS-Modul ohne statische Placement-Authority wurde "
+                "nicht fuer die authentifizierte Loader-Platzierung erhalten.");
+        auto loader_bound = *unplaced;
+        loader_bound.runtime_start = runtime_start;
+        const auto lifecycle = binder.stage_runtime_module(loader_bound);
+        const auto staged_entry =
+            binder.preflight_entry_for_address(runtime_start);
+        require(staged_entry.has_value() && !staged_entry->active &&
+                    staged_entry->module_sha256 == identity &&
+                    staged_entry->block_sha256 == identity &&
+                    staged_entry->source_start == source_start &&
+                    staged_entry->runtime_start == runtime_start &&
+                    staged_entry->module_size == bytes.size() &&
+                    staged_entry->source_offset == 0u &&
+                    staged_entry->block_size == bytes.size() &&
+                    staged_entry->lifecycle_generation == lifecycle &&
+                    !binder.active_entry_for_address(runtime_start).has_value(),
+                "Read-only AOT-Preflight verlor staged Modul-, Block- oder "
+                "Lifecycle-Identitaet.");
         require(binder.bind_entry(runtime_start),
                 "Geladenes AOT-Testmodul wurde nicht aktiviert.");
         require(binder.validate_bound_entry(runtime_start) &&
@@ -426,11 +451,17 @@ int main(const int argc, char** const argv) {
                 "Geladenes AOT-Entry-Bitmap akzeptierte Midblock-Ziel.");
         const auto active = binder.active_module_for_address(
             0x0C900002u);
+        const auto active_entry =
+            binder.active_entry_for_address(0x0C900000u);
         require(active.has_value() && active->sha256 == identity &&
                     active->source_start == source_start &&
                     active->runtime_start == runtime_start &&
                     active->byte_size == bytes.size() &&
-                    active->lifecycle_generation == lifecycle,
+                    active->lifecycle_generation == lifecycle &&
+                    active_entry.has_value() && active_entry->active &&
+                    active_entry->module_sha256 == identity &&
+                    active_entry->block_sha256 == identity &&
+                    active_entry->lifecycle_generation == lifecycle,
                 "Aktive Modulidentitaet verliert Alias, Range oder Generation.");
         require(!binder.active_module_for_address(0x8C800000u).has_value(),
                 "Ungebundene Adresse wurde einem geladenen Modul zugeordnet.");
@@ -446,7 +477,11 @@ int main(const int argc, char** const argv) {
                 "Geladenes AOT-Entry-Bitmap umging Guard-Invalidierung.");
         require(binder.deactivate_runtime_range(runtime_start, bytes.size()) ==
                         1u &&
-                    !binder.validate_bound_entry(runtime_start),
+                    !binder.validate_bound_entry(runtime_start) &&
+                    !binder.preflight_entry_for_address(runtime_start)
+                         .has_value() &&
+                    !binder.active_entry_for_address(runtime_start)
+                         .has_value(),
                 "Retired geladenes AOT-Entry blieb dispatchbar.");
     } catch (const std::exception& error) {
         require(false, std::string("Aktive Modulidentitaet warf: ") +

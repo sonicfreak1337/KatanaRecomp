@@ -1001,6 +1001,7 @@ add_library(
     $<TARGET_OBJECTS:katana_native_port_audio_domain_objects>
 )
 set(KATANA_NATIVE_PORT_RUNTIME_SOURCES
+    src/runtime/native_bringup_coverage.cpp
     src/runtime/native_port_audio_engine.cpp
     src/runtime/native_port_sound_bank.cpp
     src/runtime/native_port_codec.cpp
@@ -2198,7 +2199,10 @@ katana_enable_warnings(katana-block-table-tests)
 add_test(NAME katana-block-table-tests COMMAND katana-block-table-tests)
 
 add_executable(katana-indirect-dispatch-tests tests/runtime/indirect_dispatch_tests.cpp)
-target_link_libraries(katana-indirect-dispatch-tests PRIVATE katana_runtime)
+target_link_libraries(
+    katana-indirect-dispatch-tests
+    PRIVATE katana_runtime katana_native_port_runtime
+)
 katana_enable_warnings(katana-indirect-dispatch-tests)
 add_test(NAME katana-indirect-dispatch-tests COMMAND katana-indirect-dispatch-tests)
 

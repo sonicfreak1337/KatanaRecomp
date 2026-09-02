@@ -429,8 +429,20 @@ void run_type_two_global_fragment_capture(
         capture_graphics.draw(source_alpha_add_packet);
 
         // Character Select contributes its reciprocal-screen UI to the same
-        // authenticated Type-2 list as the model. The semantic changes but the
-        // pass identity and single resolve do not.
+        // authenticated Type-2 list as the model. submission_order is scoped
+        // to a semantic batch, so the UI batch may legally restart at one.
+        // The renderer must still give both equal-depth/primitive fragments a
+        // unique list-wide key or the whole pixel falls back to its base.
+        auto cross_semantic_scene_layer =
+            type_two_pixel_triangle(52.5f, 32.5f);
+        for (auto& vertex : cross_semantic_scene_layer) {
+            vertex.color = {0.0f, 1.0f, 0.0f, 0.5f};
+            vertex.depth_coordinate = 0.5f;
+        }
+        capture_graphics.draw(type_two_packet(
+            cross_semantic_scene_layer, 0x7711u,
+            static_cast<std::uint32_t>(triangle_count + 9u)));
+
         auto cross_semantic_layer =
             type_two_pixel_triangle(52.5f, 32.5f);
         for (auto& vertex : cross_semantic_layer) {
@@ -438,8 +450,7 @@ void run_type_two_global_fragment_capture(
             vertex.depth_coordinate = 0.5f;
         }
         auto cross_semantic_type_two = type_two_packet(
-            cross_semantic_layer, 0x7711u,
-            static_cast<std::uint32_t>(triangle_count + 9u));
+            cross_semantic_layer, 0x7711u, 1u);
         cross_semantic_type_two.batch.semantic =
             NativePortDrawBatchClass::UiOverlay;
         cross_semantic_type_two.viewport = NativePortViewportTarget::Ui;
@@ -514,12 +525,14 @@ void run_type_two_global_fragment_capture(
         const auto cross_semantic_offset = 54u +
             (static_cast<std::size_t>(cross_semantic_row) * extent +
              cross_semantic_sample[0u]) * 4u;
-        require(bytes[cross_semantic_offset + 0u] >= 0x18u &&
-                    bytes[cross_semantic_offset + 0u] <= 0x28u &&
-                    bytes[cross_semantic_offset + 1u] <= 0x10u &&
+        require(bytes[cross_semantic_offset + 0u] >= 0x08u &&
+                    bytes[cross_semantic_offset + 0u] <= 0x18u &&
+                    bytes[cross_semantic_offset + 1u] >= 0x38u &&
+                    bytes[cross_semantic_offset + 1u] <= 0x48u &&
                     bytes[cross_semantic_offset + 2u] >= 0x78u &&
                     bytes[cross_semantic_offset + 2u] <= 0x88u,
-                "Scene3D und UiOverlay teilten nicht dieselbe Type2-Liste.");
+                "Scene3D und UiOverlay verloren bei neu gestarteter "
+                "Submission-Order einen Type2-Layer.");
 
         // A UI semantic packet is independently legal in an authenticated
         // Type-2 list; the host semantic is not a fixed-function list type.
@@ -548,6 +561,29 @@ void run_type_two_global_fragment_capture(
     std::error_code cleanup_error;
     std::filesystem::remove_all(directory, cleanup_error);
     require(!cleanup_error, "Type2-Capture-Tempverzeichnis blieb zurueck.");
+
+    // The fixed global arena is a quality budget, not a title-lifecycle
+    // contract. Exercise a real overflow with fewer than 32 layers per pixel:
+    // the backend must retain the linked nodes it did publish and complete the
+    // frame instead of surfacing an asynchronous fatal error at the next API
+    // fence.
+    auto overflow_config = source_config;
+    overflow_config.title = "Katana Type2 Bounded Overflow Regression";
+    overflow_config.initially_visible = false;
+    overflow_config.synchronize_present = false;
+    overflow_config.maximum_type2_fragment_nodes = 32u;
+    overflow_config.telemetry = nullptr;
+    NativePortGraphicsDevice overflow_graphics(overflow_config);
+    overflow_graphics.begin_frame(reciprocal_frame());
+    const auto overflow_triangle = type_two_pixel_triangle(32.5f, 32.5f);
+    for (std::uint32_t order = 1u; order <= 4u; ++order)
+        overflow_graphics.draw(
+            type_two_packet(overflow_triangle, 0x7733u, order));
+    overflow_graphics.present();
+    const auto overflow_snapshot = overflow_graphics.snapshot();
+    require(!overflow_snapshot.frame_open &&
+                overflow_snapshot.failed_commands == 0u,
+            "Type2-Arenaerschoepfung wurde prozessfatal behandelt.");
 }
 
 void require_runtime_options_menu(
@@ -571,9 +607,9 @@ void require_runtime_options_menu(
     require(menu_bar != nullptr && GetMenuItemCount(menu_bar) >= 1,
             "Das Runtime-Options-Menue fehlt unter der Titelleiste.");
     const auto options = GetSubMenu(menu_bar, 0);
-    require(options != nullptr && GetMenuItemCount(options) == 7,
-            "Das Optionen-Untermenue besitzt nicht exakt Counter und "
-            "Hz-Auswahl.");
+    require(options != nullptr && GetMenuItemCount(options) == 8,
+            "Das Optionen-Untermenue besitzt nicht exakt Counter, "
+            "Ingame-Toggle und Hz-Auswahl.");
     wchar_t output_label[96]{};
     wchar_t simulation_label[96]{};
     static_cast<void>(GetMenuStringW(
@@ -593,10 +629,42 @@ void require_runtime_options_menu(
                     0u,
             "FPS- oder Simulations-Counter fehlt im Optionen-Menue.");
 
-    const auto rate_144_command = GetMenuItemID(options, 6);
+    const auto overlay_command = GetMenuItemID(options, 2);
+    require(overlay_command != static_cast<UINT>(-1),
+            "Der Ingame-FPS-Toggle besitzt keine klickbare Command-ID.");
+    DWORD_PTR command_result = 0u;
+    require(SendMessageTimeoutW(window,
+                                WM_COMMAND,
+                                MAKEWPARAM(overlay_command, 0u),
+                                0,
+                                SMTO_ABORTIFHUNG,
+                                1'000u,
+                                &command_result) != 0u &&
+                (GetMenuState(options, overlay_command, MF_BYCOMMAND) &
+                 MF_CHECKED) != 0u,
+            "Der Ingame-FPS-Toggle reagierte nicht oder wurde nicht markiert.");
+
+    // Exercise the lazy overlay pipeline as part of the ordinary sealed
+    // Begin->Present contract.  A menu-only assertion would not compile or
+    // bind the overlay shader and could therefore miss a product-only fault.
+    host.graphics().begin_frame();
+    host.graphics().present();
+    command_result = 0u;
+    require(SendMessageTimeoutW(window,
+                                WM_COMMAND,
+                                MAKEWPARAM(overlay_command, 0u),
+                                0,
+                                SMTO_ABORTIFHUNG,
+                                1'000u,
+                                &command_result) != 0u &&
+                (GetMenuState(options, overlay_command, MF_BYCOMMAND) &
+                 MF_CHECKED) == 0u,
+            "Der Ingame-FPS-Toggle liess sich nicht wieder ausschalten.");
+
+    const auto rate_144_command = GetMenuItemID(options, 7);
     require(rate_144_command != static_cast<UINT>(-1),
             "Die 144-Hz-Auswahl besitzt keine klickbare Command-ID.");
-    DWORD_PTR command_result = 0u;
+    command_result = 0u;
     require(SendMessageTimeoutW(window,
                                 WM_COMMAND,
                                 MAKEWPARAM(rate_144_command, 0u),

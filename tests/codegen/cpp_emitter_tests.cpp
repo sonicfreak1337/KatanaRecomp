@@ -344,6 +344,9 @@ int main() {
     const auto first_static_guard = compile_time_static_source.find(
         "services->can_chain_executable_block(cpu.pc)",
         static_first_label);
+    const auto static_island_budget = compile_time_static_source.find(
+        "if (cpu.pending_guest_cycles <= 253u)",
+        static_second_label);
     const auto guarded_backedge = compile_time_static_source.find(
         "services->can_chain_executable_block(cpu.pc)",
         static_second_label);
@@ -356,11 +359,46 @@ int main() {
                 static_forward_goto < static_second_label &&
                 (first_static_guard == std::string::npos ||
                  first_static_guard > static_forward_goto) &&
-                guarded_backedge != std::string::npos &&
+                static_island_budget != std::string::npos &&
                 backedge_goto != std::string::npos &&
-                guarded_backedge < backedge_goto,
+                static_island_budget < backedge_goto &&
+                (guarded_backedge == std::string::npos ||
+                 guarded_backedge > backedge_goto),
             "Compile-time-static AOT entfernt den Laufzeitcheck nicht von "
-            "der Vorwaertskante oder schwächt die Rueckkantengrenze.");
+            "der Vorwaertskante oder budgetiert die immutable "
+            "Rueckkanteninsel nicht.");
+
+    auto privileged_loop_program = local_loop_program;
+    const auto privileged_loop_block = std::find_if(
+        privileged_loop_program.front().blocks.begin(),
+        privileged_loop_program.front().blocks.end(),
+        [](const auto& block) { return block.start_address == 0x8C010002u; });
+    require(privileged_loop_block !=
+                    privileged_loop_program.front().blocks.end() &&
+                !privileged_loop_block->instructions.empty(),
+            "Lokaler Loop-Test besitzt keinen Rueckkantenblock.");
+    privileged_loop_block->instructions.front().is_privileged = true;
+    auto privileged_loop_request = compile_time_static_request;
+    privileged_loop_request.functions = privileged_loop_program;
+    const auto privileged_loop_source =
+        local_chain_backend.emit(privileged_loop_request).joined_text();
+    const auto privileged_loop_label = privileged_loop_source.find(
+        "katana_block_8C010002:");
+    const auto privileged_loop_guard = privileged_loop_source.find(
+        "services->can_chain_executable_block(cpu.pc)",
+        privileged_loop_label);
+    const auto privileged_loop_goto = privileged_loop_source.find(
+        "goto katana_block_8C010002;", privileged_loop_label);
+    const auto privileged_loop_budget = privileged_loop_source.find(
+        "if (cpu.pending_guest_cycles <= ", privileged_loop_label);
+    require(privileged_loop_label != std::string::npos &&
+                privileged_loop_guard != std::string::npos &&
+                privileged_loop_goto != std::string::npos &&
+                privileged_loop_guard < privileged_loop_goto &&
+                (privileged_loop_budget == std::string::npos ||
+                 privileged_loop_budget > privileged_loop_goto),
+            "Privilegierte Rueckkante wurde faelschlich in eine statische "
+            "Execution-Island aufgenommen.");
 
     katana::codegen::BackendRequest native_call_request{program, 0x8C010000u};
     native_call_request.single_block_execution = true;

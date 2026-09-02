@@ -1,4 +1,5 @@
 #include "katana/build_contract.hpp"
+#include "katana/codegen/latent_aot_registry.hpp"
 #include "katana/codegen/port_export.hpp"
 #include "katana/ir/lower.hpp"
 #include "katana/platform/dreamcast_disc.hpp"
@@ -35,6 +36,19 @@ namespace {
 constexpr std::size_t raw_sector_size = 2352u;
 constexpr std::size_t payload_size = 2048u;
 constexpr std::uint32_t data_lba = 45'000u;
+
+static_assert(
+    katana::codegen::maximum_prepared_latent_aot_total_functions >
+    katana::codegen::maximum_prepared_latent_aot_functions_per_module);
+static_assert(
+    katana::codegen::maximum_prepared_latent_aot_total_blocks >
+    katana::codegen::maximum_prepared_latent_aot_blocks_per_module);
+static_assert(
+    katana::codegen::maximum_prepared_latent_aot_total_block_identities >
+    katana::codegen::maximum_prepared_latent_aot_block_identities);
+static_assert(
+    katana::codegen::maximum_prepared_latent_aot_total_function_identities >
+    katana::codegen::maximum_prepared_latent_aot_function_identities);
 
 std::vector<std::string> observed_progress;
 
@@ -108,6 +122,7 @@ enum class FixtureProgram : std::uint8_t {
     Normal,
     ImmediateTrap,
     UnknownDynamicTarget,
+    UnknownDynamicTargetAfterInternalBranch,
 };
 
 std::vector<std::uint8_t> boot_track(
@@ -173,8 +188,25 @@ std::vector<std::uint8_t> boot_track(
         0x00u, 0x00u, 0x10u, 0x8Cu, // mapped main RAM at 0x8C100000, no code provenance
         0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u,
         0x09u, 0x00u, 0x09u, 0x00u, 0x09u, 0x00u};
+    constexpr std::array<std::uint8_t, 24u>
+        unknown_dynamic_target_after_internal_branch_program = {
+            0x00u, 0xA0u, // bra 0x8C010004: emitted non-function block
+            0x09u, 0x00u, // delay-slot nop
+            0x00u, 0xA0u, // bra 0x8C010008: second emitted block
+            0x09u, 0x00u, // delay-slot nop
+            0x02u, 0x22u, // mov.l r0,@r2: exact mid-block resume at 0x8C01000A
+            0x02u, 0xD1u, // mov.l @(2,pc),r1 -> literal at 0x8C010014
+            0x2Bu, 0x41u, // jmp @r1
+            0x09u, 0x00u, // delay-slot nop
+            0x09u, 0x00u, // aligned padding
+            0x09u, 0x00u, // aligned padding
+            0x00u, 0x00u, 0x10u, 0x8Cu}; // mapped RAM, no code provenance
     const auto& program = fixture_program == FixtureProgram::ImmediateTrap
                               ? trap_program
+                          : fixture_program ==
+                                    FixtureProgram::
+                                        UnknownDynamicTargetAfterInternalBranch
+                              ? unknown_dynamic_target_after_internal_branch_program
                           : fixture_program == FixtureProgram::UnknownDynamicTarget
                               ? unknown_dynamic_target_program
                               : normal_program;
@@ -512,8 +544,9 @@ memory_fill_loop_boot_track(const MemoryFillFixtureVariant variant =
     return bytes;
 }
 
-std::vector<std::uint8_t> latent_module_boot_track() {
-    auto bytes = boot_track();
+std::vector<std::uint8_t> latent_module_boot_track(
+    const FixtureProgram fixture_program = FixtureProgram::Normal) {
+    auto bytes = boot_track(fixture_program);
     bytes.resize(25u * raw_sector_size);
     bytes[22u * raw_sector_size + 15u] = 1u;
     bytes[23u * raw_sector_size + 15u] = 1u;
@@ -537,6 +570,54 @@ std::vector<std::uint8_t> latent_module_boot_track() {
     std::copy(module.begin(),
               module.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(22u)));
+    std::copy(module.begin(),
+              module.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(23u)));
+    constexpr std::array<std::uint8_t, 4u> unhinted_module{
+        0x0Bu, 0x00u, // rts
+        0x08u, 0x00u  // delay-slot clrt
+    };
+    std::copy(unhinted_module.begin(),
+              unhinted_module.end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(24u)));
+    return bytes;
+}
+
+std::vector<std::uint8_t> refined_coverage_module_boot_track(
+    const FixtureProgram fixture_program,
+    const std::span<const std::uint8_t> primary_module) {
+    if (primary_module.empty() || primary_module.size() > payload_size)
+        throw std::invalid_argument("invalid refined coverage module");
+    auto bytes = boot_track(fixture_program);
+    bytes.resize(25u * raw_sector_size);
+    bytes[22u * raw_sector_size + 15u] = 1u;
+    bytes[23u * raw_sector_size + 15u] = 1u;
+    bytes[24u * raw_sector_size + 15u] = 1u;
+    auto directory = payload_offset(20u);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
+    directory +=
+        record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
+    directory += record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
+    directory += record(
+        bytes,
+        directory,
+        data_lba + 22u,
+        static_cast<std::uint32_t>(primary_module.size()),
+        "ENGINE.BIN;1",
+        false);
+    directory +=
+        record(bytes, directory, data_lba + 23u, 4u, "ENGINE_COPY.BIN;1", false);
+    static_cast<void>(
+        record(bytes, directory, data_lba + 24u, 4u, "UNHINTED.BIN;1", false));
+    std::copy(
+        primary_module.begin(),
+        primary_module.end(),
+        bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(22u)));
+    constexpr std::array<std::uint8_t, 4u> module{
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // delay-slot nop
+    };
     std::copy(module.begin(),
               module.end(),
               bytes.begin() + static_cast<std::ptrdiff_t>(payload_offset(23u)));
@@ -1738,6 +1819,23 @@ int run_test(const int argc, char* argv[]) {
     observed_progress.clear();
     const auto first = export_dreamcast_port_project(gdi, output, options);
     const auto generated_before = snapshot(output / "generated");
+    auto runtime_only_options = options;
+    runtime_only_options.analysis_metadata_requested = false;
+    const auto no_analysis_metadata_output =
+        fixture.root / "no-analysis-metadata-port";
+    static_cast<void>(export_dreamcast_port_project(
+        gdi, no_analysis_metadata_output, runtime_only_options));
+    const auto runtime_only_generated =
+        snapshot(no_analysis_metadata_output / "generated");
+    require(
+        runtime_only_generated.contains("metadata/port-project.json") &&
+            runtime_only_generated.contains("metadata/provenance.json") &&
+            !runtime_only_generated.contains("metadata/source-map.json") &&
+            !runtime_only_generated.contains("metadata/cfg.json") &&
+            !runtime_only_generated.contains("metadata/cfg.dot") &&
+            !runtime_only_generated.contains("metadata/callgraph.json") &&
+            !runtime_only_generated.contains("metadata/callgraph.dot"),
+        "Runtime-only Portexport materialisiert Offline-Analysemetadaten.");
     const auto generated_main = read_text(output / "src" / "main.cpp");
     const auto& runtime_dispatch = generated_before.at("code/runtime-dispatch.cpp");
     std::string runtime_dispatch_shards;
@@ -2330,6 +2428,307 @@ int run_test(const int argc, char* argv[]) {
                 latent_dispatch.find(representation_specific_identity) == std::string::npos,
             "Latentes AOT bindet faelschlich die repraesentationsspezifische GDI-Identitaet "
             "statt der GDI-zu-Pack-Contentidentitaet.");
+
+    const auto coverage_disc_directory = fixture.root / "coverage-aot-disc";
+    std::filesystem::create_directories(coverage_disc_directory);
+    constexpr std::array<std::uint8_t, 12u> refined_coverage_module{
+        0x02u, 0xA0u, // bra +2 -> module offset 8
+        0x09u, 0x00u, // delay-slot nop
+        0x0Bu, 0x00u, // unreachable rts
+        0x09u, 0x00u, // delay-slot nop
+        0x0Bu, 0x00u, // tail-target rts
+        0x09u, 0x00u  // delay-slot nop
+    };
+    constexpr std::array<std::uint8_t, 4u> refined_coverage_entry{
+        refined_coverage_module[0u],
+        refined_coverage_module[1u],
+        refined_coverage_module[2u],
+        refined_coverage_module[3u]};
+    constexpr std::array<std::uint8_t, 4u> refined_coverage_tail_entry{
+        refined_coverage_module[8u],
+        refined_coverage_module[9u],
+        refined_coverage_module[10u],
+        refined_coverage_module[11u]};
+    const auto refined_coverage_module_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(
+                            refined_coverage_module.data()),
+                        refined_coverage_module.size()));
+    const auto refined_coverage_entry_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(
+                            refined_coverage_entry.data()),
+                        refined_coverage_entry.size()));
+    const auto refined_coverage_tail_entry_identity =
+        "sha256:" + katana::io::sha256_bytes(std::string_view(
+                        reinterpret_cast<const char*>(
+                            refined_coverage_tail_entry.data()),
+                        refined_coverage_tail_entry.size()));
+    write_fixture(
+        coverage_disc_directory,
+        FixtureProgram::UnknownDynamicTargetAfterInternalBranch);
+    write_binary(
+        coverage_disc_directory / "high.bin",
+        refined_coverage_module_boot_track(
+            FixtureProgram::UnknownDynamicTargetAfterInternalBranch,
+            refined_coverage_module));
+    const auto coverage_gdi_path = coverage_disc_directory / "disc.gdi";
+    const auto coverage_gdi =
+        katana::runtime::GdiDiscSource::open(coverage_gdi_path);
+    const auto coverage_boot =
+        katana::platform::load_dreamcast_gdi_boot(coverage_gdi_path);
+    const auto coverage_content_identity =
+        katana::runtime::packed_disc_content_identity(*coverage_gdi);
+    const auto coverage_boot_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(coverage_boot.boot_file.data()),
+            coverage_boot.boot_file.size()));
+    const auto coverage_bootstrap_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(
+                coverage_boot.system_bootstrap.data()),
+            coverage_boot.system_bootstrap.size()));
+    const auto coverage_hook_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(coverage_boot.boot_file.data()),
+            4u));
+    constexpr std::uint32_t coverage_runtime_start = 0x8C100000u;
+    constexpr std::uint32_t coverage_proof_runtime_start = 0x8C200000u;
+    const std::array coverage_entry_hints{
+        katana::codegen::LatentAotEntryHint{
+            refined_coverage_module_identity,
+            static_cast<std::uint64_t>(data_lba + 22u) * payload_size,
+            static_cast<std::uint32_t>(refined_coverage_module.size()),
+            0u,
+            0u,
+            coverage_runtime_start},
+        katana::codegen::LatentAotEntryHint{
+            latent_block_identity,
+            static_cast<std::uint64_t>(data_lba + 23u) * payload_size,
+            4u,
+            0u,
+            0u,
+            coverage_proof_runtime_start}};
+
+    katana::runtime::GameProjectDefinition coverage_project;
+    coverage_project.project_id = "katana.test.coverage-native-port";
+    coverage_project.project_version = "1";
+    coverage_project.identity = {
+        coverage_content_identity,
+        coverage_boot.metadata.boot_file_name,
+        coverage_boot_identity};
+    const std::array coverage_native_images{
+        katana::runtime::NativePortImageBinding{
+            "coverage-system-bootstrap",
+            "IP.BIN",
+            coverage_bootstrap_identity,
+            0u,
+            katana::platform::dreamcast_system_bootstrap_address,
+            static_cast<std::uint32_t>(
+                coverage_boot.system_bootstrap.size()),
+            false},
+        katana::runtime::NativePortImageBinding{
+            "coverage-boot-executable",
+            coverage_boot.metadata.boot_file_name,
+            coverage_boot_identity,
+            0u,
+            katana::platform::dreamcast_disc_boot_address,
+            static_cast<std::uint32_t>(coverage_boot.boot_file.size()),
+            false}};
+    const std::array coverage_native_hooks{
+        katana::runtime::NativePortHookBinding{
+            katana::platform::dreamcast_disc_boot_address,
+            4u,
+            katana::runtime::NativePortHookKind::Instruction,
+            katana::runtime::NativePortHookRequirement::Required,
+            katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal,
+            "coverage_acceptance_hook",
+            coverage_hook_identity},
+        katana::runtime::NativePortHookBinding{
+            0x80000000u,
+            static_cast<std::uint32_t>(refined_coverage_module.size()),
+            katana::runtime::NativePortHookKind::FunctionEntry,
+            katana::runtime::NativePortHookRequirement::Required,
+            katana::runtime::NativePortHookOriginalPolicy::ReplacesOriginal,
+            "coverage_module_replacement",
+            refined_coverage_module_identity,
+            {},
+            katana::runtime::NativePortHookCodeSource::LatentAotModule,
+            refined_coverage_module_identity}};
+    auto coverage_native_port = latent_native_port;
+    coverage_native_port.project_id = coverage_project.project_id;
+    // Coverage is sealed against the GameProject/AOT generation. NativePort
+    // adapter/provider revisions remain independently versioned.
+    coverage_native_port.project_version = "coverage-native-port-v1";
+    coverage_native_port.executable = {
+        coverage_project.identity.content_identity,
+        coverage_project.identity.boot_file_name,
+        coverage_project.identity.boot_byte_identity};
+    coverage_native_port.bootstrap.writes = {};
+    coverage_native_port.checkpoint_runtime_image_ids = {};
+    coverage_native_port.images = coverage_native_images;
+    coverage_native_port.hooks = coverage_native_hooks;
+    coverage_native_port.acceptance = {
+        katana::runtime::required_product_milestone_name(
+            coverage_project.required_product_milestone),
+        katana::platform::dreamcast_disc_boot_address};
+
+    katana::codegen::CompleteDisassemblyAuthority coverage_authority;
+    coverage_authority.project_id = coverage_project.project_id;
+    coverage_authority.project_version = coverage_project.project_version;
+    katana::codegen::CompleteDisassemblyModuleAuthority coverage_module;
+    coverage_module.module_id = "ENGINE.BIN";
+    coverage_module.transform =
+        katana::codegen::LatentAotSourceTransform::Identity;
+    coverage_module.encoded_byte_identity = refined_coverage_module_identity;
+    coverage_module.disc_byte_offset =
+        static_cast<std::uint64_t>(data_lba + 22u) * payload_size;
+    coverage_module.encoded_byte_size =
+        static_cast<std::uint32_t>(refined_coverage_module.size());
+    coverage_module.decoded_byte_identity = refined_coverage_module_identity;
+    coverage_module.decoded_byte_size =
+        static_cast<std::uint32_t>(refined_coverage_module.size());
+    coverage_module.runtime_address = coverage_runtime_start;
+    coverage_module.disassembly_identity =
+        "sha256:" + katana::io::sha256_bytes(
+            "katana-test-complete-disassembly-view-v1");
+    coverage_module.entries.push_back({
+        0u,
+        4u,
+        refined_coverage_entry_identity,
+        katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
+    coverage_module.entries.push_back({
+        8u,
+        4u,
+        refined_coverage_tail_entry_identity,
+        katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
+    coverage_authority.modules.push_back(std::move(coverage_module));
+    coverage_authority =
+        katana::codegen::normalize_complete_disassembly_authority(
+            std::move(coverage_authority));
+
+    const katana::runtime::NativeBringupAuthoringDefinition
+        empty_coverage_authoring{
+            katana::runtime::native_bringup_evidence_contract_version,
+            coverage_project.project_id,
+            coverage_project.project_version,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            1u,
+            {}};
+    auto coverage_options = latent_options;
+    coverage_options.game_project = &coverage_project;
+    coverage_options.native_port_definition = &coverage_native_port;
+    coverage_options.latent_aot_entry_hints = coverage_entry_hints;
+    coverage_options.native_execution_profile =
+        katana::codegen::NativePortExecutionProfile::NativeBringup;
+    coverage_options.native_bringup_authoring = &empty_coverage_authoring;
+    coverage_options.native_bringup_artifact_identity =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    coverage_options.native_bringup_coverage_authority = &coverage_authority;
+    auto strict_coverage_options = coverage_options;
+    strict_coverage_options.native_execution_profile =
+        katana::codegen::NativePortExecutionProfile::StrictProduct;
+    strict_coverage_options.native_bringup_authoring = nullptr;
+    strict_coverage_options.native_bringup_artifact_identity.clear();
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                coverage_gdi_path,
+                fixture.root / "strict-coverage-port",
+                strict_coverage_options));
+        },
+        "StrictProduct akzeptiert Complete-Disassembly-Coverage.");
+
+    const auto coverage_output = fixture.root / "coverage-aot-port";
+    static_cast<void>(export_dreamcast_port_project(
+        coverage_gdi_path, coverage_output, coverage_options));
+    const auto coverage_generated = snapshot(coverage_output / "generated");
+    const auto& coverage_dispatch =
+        coverage_generated.at("code/native-port-dispatch.cpp");
+    const auto coverage_metadata =
+        coverage_generated.at("metadata/port-project.json");
+    const auto proof_branch = coverage_dispatch.find("if (proof_target) {");
+    const auto proof_return = coverage_dispatch.find(
+        "        return;\n    }", proof_branch);
+    const auto coverage_preflight = coverage_dispatch.find(
+        "preflight_native_bringup_coverage_dispatch(", proof_return);
+    const auto static_table_begin = coverage_dispatch.find(
+        "native_bringup_static_blocks{{");
+    const auto static_table_end = coverage_dispatch.find(
+        "}};", static_table_begin);
+    const auto primary_internal_block_binding = coverage_dispatch.find(
+        "{{0x8C010004u, 0x0C010004u}", static_table_begin);
+    const auto primary_internal_resume_binding = coverage_dispatch.find(
+        "{{0x8C01000Au, 0x0C01000Au}", static_table_begin);
+    require(
+            static_table_begin != std::string::npos &&
+            static_table_end != std::string::npos &&
+            primary_internal_block_binding != std::string::npos &&
+            primary_internal_block_binding < static_table_end &&
+            primary_internal_resume_binding != std::string::npos &&
+            primary_internal_resume_binding < static_table_end,
+        "Complete-Disassembly-Coverage materialisiert nicht jeden exakt "
+        "emittierten Static-AOT-Block und Mid-Block-Resume-Entry.");
+    require(
+            coverage_dispatch.find(
+                "NativeBringupCoverageSourceTransfer, 1u") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "NativeBringupCoverageEntry, 2u") != std::string::npos &&
+            coverage_dispatch.find("0x8C01000Cu") != std::string::npos &&
+            coverage_dispatch.find("0x8C100000u") != std::string::npos &&
+            coverage_dispatch.find("0x8C200000u") != std::string::npos &&
+            coverage_dispatch.find(latent_block_identity) !=
+                std::string::npos &&
+            coverage_dispatch.find(refined_coverage_module_identity) !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "NativeBringupCoverageObservations\n"
+                "        native_bringup_coverage_observations") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "native_bringup_runtime_generation,\n"
+                "            native_bringup_coverage_observations)") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "KATANA_NATIVE_BRINGUP_COVERAGE ") !=
+                std::string::npos &&
+            proof_branch != std::string::npos &&
+            proof_return != std::string::npos &&
+            coverage_preflight != std::string::npos &&
+            coverage_dispatch.find(
+                "const auto coverage_target_hook =\n"
+                "        find_native_hook(target);") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "TargetHook::CallableFunctionEntry") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "TargetHook::ConflictingInstruction") !=
+                std::string::npos &&
+            proof_branch < proof_return && proof_return < coverage_preflight &&
+            coverage_metadata.find(
+                "\"complete_disassembly_coverage_enabled\":true") !=
+                std::string::npos &&
+            coverage_metadata.find(
+                "\"complete_disassembly_coverage_release_eligible\":false") !=
+                std::string::npos &&
+            coverage_metadata.find(
+                "\"complete_disassembly_coverage_modules\":1") !=
+                std::string::npos &&
+            coverage_metadata.find(
+                "\"complete_disassembly_coverage_entries\":2") !=
+                std::string::npos &&
+            coverage_dispatch.find("dynamic_interpreter.hpp") ==
+                std::string::npos,
+        "Complete-Disassembly-Coverage verliert Authority, Replacement-"
+        "Isolation, Proof-Prioritaet, Non-Release-Journal oder "
+        "interpreterfreie Produkttrennung.");
+
     const auto trace_enable = generated_main.find(
         "if (!enabled || runtime_wait_loop_descriptors.empty()) return;");
     const auto trace_allocate =
@@ -5120,8 +5519,14 @@ int run_test(const int argc, char* argv[]) {
             generated_root_cmake.find(
                 "Merged LLVM .profdata used by a performance build\" FORCE)") !=
                 std::string::npos &&
-            generated_root_cmake.find(
+        generated_root_cmake.find(
                 "Required SHA-256 of KATANA_PORT_PGO_PROFILE\" FORCE)") !=
+                std::string::npos &&
+            generated_root_cmake.find(
+                "set(KATANA_PORT_THINLTO_CACHE_SIZE \"16g\" CACHE STRING") !=
+                std::string::npos &&
+            generated_root_cmake.find(
+                "KATANA_PORT_THINLTO_CACHE_SIZE must be a positive byte size") !=
                 std::string::npos &&
             generated_port_cmake.find(
                 "KATANA_PORT_BUILD_PROFILE STREQUAL \"performance\" OR") !=
@@ -5146,7 +5551,8 @@ int run_test(const int argc, char* argv[]) {
                 "\"/lldltocache:${KATANA_PORT_THINLTO_CACHE_DIRECTORY}\"") !=
                 std::string::npos &&
             generated_port_cmake.find(
-                "\"/lldltocachepolicy:cache_size=0%:cache_size_bytes=8g:"
+                "\"/lldltocachepolicy:cache_size=0%:cache_size_bytes="
+                "${KATANA_PORT_THINLTO_CACHE_SIZE}:"
                 "prune_after=168h:prune_interval=20m\"") !=
                 std::string::npos,
         "Performanceexport verliert Profilwahl, verpflichtendes IPO oder "

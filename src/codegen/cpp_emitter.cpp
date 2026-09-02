@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <sstream>
@@ -20,6 +21,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace katana::codegen {
 
@@ -42,6 +44,48 @@ std::string fixed_hex32(const std::string_view prefix,
     return result;
 }
 
+bool equivalent_dispatch_instruction(const katana::ir::Instruction& left,
+                                     const katana::ir::Instruction& right) {
+    return left.source_address == right.source_address &&
+           left.original_opcode == right.original_opcode &&
+           left.original_operation == right.original_operation &&
+           left.operation == right.operation && left.widths == right.widths &&
+           left.status_effects == right.status_effects &&
+           left.memory_effects == right.memory_effects &&
+           left.accumulator_effects == right.accumulator_effects &&
+           left.destination_register == right.destination_register &&
+           left.source_register == right.source_register &&
+           left.branch_register == right.branch_register &&
+           left.immediate == right.immediate &&
+           left.displacement == right.displacement &&
+           left.special_register == right.special_register &&
+           left.effective_address == right.effective_address &&
+           left.target_address == right.target_address &&
+           left.resolved_targets == right.resolved_targets &&
+           left.forwarded_value_register == right.forwarded_value_register &&
+           left.dynamic_target_class == right.dynamic_target_class &&
+           left.delay_slot == right.delay_slot &&
+           left.is_privileged == right.is_privileged &&
+           left.branch_register_relative == right.branch_register_relative;
+}
+
+bool equivalent_dispatch_block_payload(const katana::ir::BasicBlock& left,
+                                       const katana::ir::BasicBlock& right) {
+    // Function discovery may retain the same physical block under multiple
+    // callable entries. Successor lists are owner-relative, but every emitted
+    // instruction and indirect-edge contract must remain byte-for-byte the
+    // same before one source callsite may guard all generated copies.
+    return left.start_address == right.start_address &&
+           left.guarded_case_ownership_targets ==
+               right.guarded_case_ownership_targets &&
+           left.has_indirect_successor == right.has_indirect_successor &&
+           left.instructions.size() == right.instructions.size() &&
+           std::equal(left.instructions.begin(),
+                      left.instructions.end(),
+                      right.instructions.begin(),
+                      equivalent_dispatch_instruction);
+}
+
 } // namespace
 
 std::string cpp_function_name(const std::uint32_t address) {
@@ -59,6 +103,8 @@ std::string cpp_runtime_block_function_name(const std::uint32_t address) {
 namespace {
 
 enum class BlockEntryMetadataMode : std::uint8_t { None, Routed, Direct };
+
+constexpr std::uint64_t static_execution_island_cycle_budget = 256u;
 
 bool is_control_flow(katana::ir::Operation operation);
 
@@ -3468,6 +3514,8 @@ void emit_block_transition(std::ostringstream& output,
                            const bool guarded_local_block_chaining,
                            const std::optional<std::uint32_t> local_target,
                            const bool compile_time_static_forward_edge,
+                           const std::optional<std::uint64_t>
+                               static_execution_island_target_cycles,
                            const bool native_internal_block_labels,
                            const bool uses_proven_linear_ram,
                            const NativeRegisterEmission& registers) {
@@ -3493,9 +3541,20 @@ void emit_block_transition(std::ostringstream& output,
         // invalidate the function-scoped RAM guard. Calls and multi-block completions retain
         // their explicit revalidation/refresh below.
         emit_indent(output, indent);
-        if (!compile_time_static_forward_edge)
+        if (static_execution_island_target_cycles.has_value()) {
+            const auto target_cycles =
+                *static_execution_island_target_cycles;
+            if (target_cycles <= static_execution_island_cycle_budget) {
+                output << "if (cpu.pending_guest_cycles <= "
+                       << static_execution_island_cycle_budget - target_cycles
+                       << "u) ";
+            } else {
+                output << "if (false) ";
+            }
+        } else if (!compile_time_static_forward_edge) {
             output << "if (services != nullptr && "
                       "services->can_chain_executable_block(cpu.pc)) ";
+        }
         if (native_internal_block_labels) {
             output << "goto " << cpp_block_label(*local_target) << ";\n";
         } else {
@@ -3516,6 +3575,10 @@ void emit_conditional_block_transition(std::ostringstream& output,
                                        const bool fallthrough_target_local,
                                        const bool branch_is_static_forward,
                                        const bool fallthrough_is_static_forward,
+                                       const std::optional<std::uint64_t>
+                                           branch_static_island_target_cycles,
+                                       const std::optional<std::uint64_t>
+                                           fallthrough_static_island_target_cycles,
                                        const std::optional<std::uint32_t> branch_target_owner,
                                        const std::optional<std::uint32_t> fallthrough_target_owner,
                                        const bool native_internal_block_labels,
@@ -3529,6 +3592,7 @@ void emit_conditional_block_transition(std::ostringstream& output,
                               guarded_local_block_chaining,
                               std::nullopt,
                               false,
+                              std::nullopt,
                               false,
                               uses_proven_linear_ram,
                               registers);
@@ -3578,7 +3642,17 @@ void emit_conditional_block_transition(std::ostringstream& output,
     output << "if (take_branch) {\n";
     if (branch_target_local) {
         emit_indent(output, indent + 1);
-        if (!branch_is_static_forward) {
+        if (branch_static_island_target_cycles.has_value()) {
+            const auto target_cycles = *branch_static_island_target_cycles;
+            if (target_cycles <= static_execution_island_cycle_budget) {
+                output << "if (cpu.pending_guest_cycles <= "
+                       << static_execution_island_cycle_budget - target_cycles
+                       << "u)\n";
+            } else {
+                output << "if (false)\n";
+            }
+            emit_indent(output, indent + 2);
+        } else if (!branch_is_static_forward) {
             output << "if (services != nullptr && "
                       "services->can_chain_executable_block(cpu.pc))\n";
             emit_indent(output, indent + 2);
@@ -3597,7 +3671,18 @@ void emit_conditional_block_transition(std::ostringstream& output,
     output << "}\n";
     if (fallthrough_target_local) {
         emit_indent(output, indent);
-        if (!fallthrough_is_static_forward) {
+        if (fallthrough_static_island_target_cycles.has_value()) {
+            const auto target_cycles =
+                *fallthrough_static_island_target_cycles;
+            if (target_cycles <= static_execution_island_cycle_budget) {
+                output << "if (cpu.pending_guest_cycles <= "
+                       << static_execution_island_cycle_budget - target_cycles
+                       << "u)\n";
+            } else {
+                output << "if (false)\n";
+            }
+            emit_indent(output, indent + 1);
+        } else if (!fallthrough_is_static_forward) {
             output << "if (services != nullptr && "
                       "services->can_chain_executable_block(cpu.pc))\n";
             emit_indent(output, indent + 1);
@@ -3627,6 +3712,10 @@ void emit_terminal(std::ostringstream& output,
                        architectural_boundary_entries,
                    const std::unordered_set<std::uint32_t>&
                        compile_time_static_immutable_entries,
+                   const std::unordered_map<std::uint32_t, std::size_t>&
+                       static_execution_island_by_entry,
+                   const std::unordered_map<std::uint32_t, std::uint64_t>&
+                       static_execution_island_cycles_by_entry,
                    const int indent,
                    const bool single_block,
                    const bool guarded_local_block_chaining,
@@ -3647,6 +3736,23 @@ void emit_terminal(std::ostringstream& output,
                compile_time_static_immutable_entries.contains(
                    block.start_address) &&
                compile_time_static_immutable_entries.contains(target);
+    };
+    const auto static_execution_island_target_cycles =
+        [&](const std::uint32_t target) -> std::optional<std::uint64_t> {
+        const auto source_island =
+            static_execution_island_by_entry.find(block.start_address);
+        const auto target_island =
+            static_execution_island_by_entry.find(target);
+        if (source_island == static_execution_island_by_entry.end() ||
+            target_island == static_execution_island_by_entry.end() ||
+            source_island->second != target_island->second)
+            return std::nullopt;
+        const auto cycles =
+            static_execution_island_cycles_by_entry.find(target);
+        if (cycles == static_execution_island_cycles_by_entry.end())
+            throw std::invalid_argument(
+                "Static execution island target has no cycle bound.");
+        return cycles->second;
     };
     if (instruction.dynamic_target_class ==
             katana::ir::DynamicTargetClass::GuardedComplete &&
@@ -3794,6 +3900,10 @@ void emit_terminal(std::ostringstream& output,
                                   branch_target_local &&
                                       is_static_forward_edge(
                                           *instruction.target_address),
+                                  branch_target_local
+                                      ? static_execution_island_target_cycles(
+                                            *instruction.target_address)
+                                      : std::nullopt,
                                   native_internal_block_labels,
                                   uses_proven_linear_ram,
                                   registers);
@@ -3990,6 +4100,10 @@ void emit_terminal(std::ostringstream& output,
             current_blocks.contains(fallthrough_address(instruction)),
             is_static_forward_edge(*instruction.target_address),
             is_static_forward_edge(fallthrough_address(instruction)),
+            static_execution_island_target_cycles(
+                *instruction.target_address),
+            static_execution_island_target_cycles(
+                fallthrough_address(instruction)),
             native_owner_for_target(*instruction.target_address,
                                     known_functions,
                                     native_block_owner_entries),
@@ -4058,6 +4172,7 @@ void emit_terminal(std::ostringstream& output,
                                           guarded_local_block_chaining,
                                           target,
                                           false,
+                                          std::nullopt,
                                           native_internal_block_labels,
                                           uses_proven_linear_ram,
                                           registers);
@@ -4124,6 +4239,7 @@ void emit_terminal(std::ostringstream& output,
                                       guarded_local_block_chaining,
                                       target,
                                       false,
+                                      std::nullopt,
                                       native_internal_block_labels,
                                       uses_proven_linear_ram,
                                       registers);
@@ -4959,6 +5075,189 @@ bool is_control_flow(const katana::ir::Operation operation) {
     return false;
 }
 
+struct StaticExecutionIslandPlan final {
+    std::unordered_map<std::uint32_t, std::size_t> island_by_entry;
+    std::unordered_map<std::uint32_t, std::uint64_t> maximum_cycles_by_entry;
+};
+
+bool supports_static_execution_island(
+    const katana::ir::Instruction& instruction,
+    const bool external_instruction_observer) noexcept {
+    using Access = katana::ir::MemoryAccessKind;
+    using Operation = katana::ir::Operation;
+    using TimingClass = katana::sh4::InstructionTimingClass;
+
+    if (external_instruction_observer || instruction.is_privileged ||
+        instruction.operation == Operation::Unknown ||
+        is_fpu_operation(instruction) ||
+        requires_post_instruction_architectural_safepoint(instruction))
+        return false;
+
+    if (is_control_flow(instruction.operation) &&
+        instruction.operation != Operation::Branch &&
+        instruction.operation != Operation::BranchIfTrue &&
+        instruction.operation != Operation::BranchIfFalse)
+        return false;
+
+    if (instruction.memory_effects.access == Access::Write)
+        return false;
+    if (instruction.memory_effects.access != Access::None &&
+        !has_proven_linear_ram_access(instruction))
+        return false;
+
+    const auto timing =
+        katana::sh4::instruction_timing(instruction.original_opcode);
+    if (timing.timing_class == TimingClass::SimpleFpu ||
+        timing.timing_class == TimingClass::ComplexFpu ||
+        timing.timing_class == TimingClass::DeviceBusBoundary)
+        return false;
+    return !timing.requires_cycle_flush ||
+           has_proven_linear_ram_access(instruction);
+}
+
+std::uint64_t maximum_static_execution_island_cycles(
+    const katana::ir::BasicBlock& block) {
+    std::unordered_set<std::uint32_t> accounted_instructions;
+    accounted_instructions.reserve(block.instructions.size());
+    std::uint64_t cycles = 0u;
+    for (const auto& instruction : block.instructions) {
+        if (!accounted_instructions.insert(instruction.source_address).second)
+            continue;
+        const auto instruction_cycles =
+            katana::sh4::instruction_timing(instruction.original_opcode)
+                .guest_cycles;
+        if (instruction_cycles >
+            std::numeric_limits<std::uint64_t>::max() - cycles)
+            return std::numeric_limits<std::uint64_t>::max();
+        cycles += instruction_cycles;
+    }
+    return std::max<std::uint64_t>(cycles, 1u);
+}
+
+StaticExecutionIslandPlan make_static_execution_island_plan(
+    const katana::ir::Function& function,
+    const std::unordered_set<std::uint32_t>&
+        compile_time_static_immutable_entries,
+    const bool external_instruction_observer) {
+    StaticExecutionIslandPlan result;
+    if (compile_time_static_immutable_entries.empty() ||
+        external_instruction_observer)
+        return result;
+
+    std::vector<const katana::ir::BasicBlock*> candidates;
+    candidates.reserve(function.blocks.size());
+    std::unordered_map<std::uint32_t, std::size_t> candidate_by_entry;
+    candidate_by_entry.reserve(function.blocks.size());
+    for (const auto& block : function.blocks) {
+        if (!compile_time_static_immutable_entries.contains(
+                block.start_address) ||
+            block.has_indirect_successor || block.instructions.empty() ||
+            !std::all_of(
+                block.instructions.begin(), block.instructions.end(),
+                [&](const auto& instruction) {
+                    return supports_static_execution_island(
+                        instruction, external_instruction_observer);
+                }))
+            continue;
+        const auto index = candidates.size();
+        if (!candidate_by_entry.emplace(block.start_address, index).second)
+            throw std::invalid_argument(
+                "Static execution island has duplicate block entries.");
+        candidates.push_back(&block);
+    }
+    if (candidates.empty()) return result;
+
+    std::vector<std::vector<std::size_t>> edges(candidates.size());
+    std::vector<std::vector<std::size_t>> reverse_edges(candidates.size());
+    for (std::size_t source = 0u; source < candidates.size(); ++source) {
+        for (const auto successor : candidates[source]->successors) {
+            const auto target = candidate_by_entry.find(successor);
+            if (target == candidate_by_entry.end()) continue;
+            edges[source].push_back(target->second);
+            reverse_edges[target->second].push_back(source);
+        }
+    }
+
+    std::vector<std::uint8_t> visit(candidates.size(), 0u);
+    std::vector<std::size_t> finish_order;
+    finish_order.reserve(candidates.size());
+    for (std::size_t root = 0u; root < candidates.size(); ++root) {
+        if (visit[root] != 0u) continue;
+        std::vector<std::pair<std::size_t, std::size_t>> stack;
+        stack.emplace_back(root, 0u);
+        visit[root] = 1u;
+        while (!stack.empty()) {
+            auto& [node, edge_index] = stack.back();
+            if (edge_index < edges[node].size()) {
+                const auto target = edges[node][edge_index++];
+                if (visit[target] == 0u) {
+                    visit[target] = 1u;
+                    stack.emplace_back(target, 0u);
+                }
+                continue;
+            }
+            visit[node] = 2u;
+            finish_order.push_back(node);
+            stack.pop_back();
+        }
+    }
+
+    constexpr auto no_component = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> component(candidates.size(), no_component);
+    std::vector<std::size_t> component_sizes;
+    for (auto order = finish_order.rbegin(); order != finish_order.rend();
+         ++order) {
+        if (component[*order] != no_component) continue;
+        const auto component_index = component_sizes.size();
+        component_sizes.push_back(0u);
+        std::vector<std::size_t> stack{*order};
+        component[*order] = component_index;
+        while (!stack.empty()) {
+            const auto node = stack.back();
+            stack.pop_back();
+            ++component_sizes[component_index];
+            for (const auto source : reverse_edges[node]) {
+                if (component[source] != no_component) continue;
+                component[source] = component_index;
+                stack.push_back(source);
+            }
+        }
+    }
+
+    std::vector<bool> cyclic(component_sizes.size(), false);
+    for (std::size_t source = 0u; source < candidates.size(); ++source) {
+        const auto component_index = component[source];
+        if (component_sizes[component_index] > 1u) {
+            cyclic[component_index] = true;
+            continue;
+        }
+        cyclic[component_index] = std::find(
+            edges[source].begin(), edges[source].end(), source) !=
+            edges[source].end();
+    }
+
+    std::vector<std::uint64_t> maximum_cycles(candidates.size(), 0u);
+    for (std::size_t index = 0u; index < candidates.size(); ++index) {
+        maximum_cycles[index] =
+            maximum_static_execution_island_cycles(*candidates[index]);
+        if (maximum_cycles[index] > static_execution_island_cycle_budget)
+            cyclic[component[index]] = false;
+    }
+
+    result.island_by_entry.reserve(candidates.size());
+    result.maximum_cycles_by_entry.reserve(candidates.size());
+    for (std::size_t index = 0u; index < candidates.size(); ++index) {
+        const auto component_index = component[index];
+        if (!cyclic[component_index]) continue;
+        result.island_by_entry.emplace(
+            candidates[index]->start_address, component_index);
+        result.maximum_cycles_by_entry.emplace(
+            candidates[index]->start_address,
+            maximum_cycles[index]);
+    }
+    return result;
+}
+
 bool can_batch_instruction_accounting(
     const katana::ir::Instruction& instruction,
     const katana::sh4::InstructionTiming& timing,
@@ -5123,6 +5422,10 @@ void emit_block(std::ostringstream& output,
                     architectural_boundary_entries,
                 const std::unordered_set<std::uint32_t>&
                     compile_time_static_immutable_entries,
+                const std::unordered_map<std::uint32_t, std::size_t>&
+                    static_execution_island_by_entry,
+                const std::unordered_map<std::uint32_t, std::uint64_t>&
+                    static_execution_island_cycles_by_entry,
                 const bool single_block,
                 const bool guarded_local_block_chaining,
                 const bool native_internal_block_labels,
@@ -5406,6 +5709,8 @@ void emit_block(std::ostringstream& output,
                       current_blocks,
                       architectural_boundary_entries,
                       compile_time_static_immutable_entries,
+                      static_execution_island_by_entry,
+                      static_execution_island_cycles_by_entry,
                       4,
                       single_block,
                       guarded_local_block_chaining,
@@ -5459,6 +5764,29 @@ void emit_block(std::ostringstream& output,
                                           .contains(block.start_address) &&
                                       compile_time_static_immutable_entries
                                           .contains(successor),
+                                  [&]() -> std::optional<std::uint64_t> {
+                                      const auto source_island =
+                                          static_execution_island_by_entry.find(
+                                              block.start_address);
+                                      const auto target_island =
+                                          static_execution_island_by_entry.find(
+                                              successor);
+                                      if (source_island ==
+                                              static_execution_island_by_entry.end() ||
+                                          target_island ==
+                                              static_execution_island_by_entry.end() ||
+                                          source_island->second !=
+                                              target_island->second)
+                                          return std::nullopt;
+                                      const auto cycles =
+                                          static_execution_island_cycles_by_entry.find(
+                                              successor);
+                                      if (cycles ==
+                                          static_execution_island_cycles_by_entry.end())
+                                          throw std::invalid_argument(
+                                              "Static execution island target has no cycle bound.");
+                                      return cycles->second;
+                                  }(),
                                   native_internal_block_labels,
                                   uses_proven_linear_ram,
                                   registers);
@@ -5682,7 +6010,7 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
             throw std::invalid_argument(
                 "NativeBringup-Dispatch-Callsites muessen eindeutig sein.");
     }
-    std::unordered_set<std::uint32_t>
+    std::unordered_map<std::uint32_t, const katana::ir::BasicBlock*>
         discovered_native_bringup_dispatch_callsites;
     discovered_native_bringup_dispatch_callsites.reserve(
         native_bringup_dispatch_callsites.size());
@@ -5698,11 +6026,16 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                         throw std::invalid_argument(
                             "NativeBringup-Dispatch-Callsite ist kein "
                             "validierbarer indirekter Transfer.");
-                    if (!discovered_native_bringup_dispatch_callsites.insert(
-                            instruction.source_address).second)
+                    const auto [first_owner, inserted] =
+                        discovered_native_bringup_dispatch_callsites.emplace(
+                            instruction.source_address, &block);
+                    if (!inserted &&
+                        !equivalent_dispatch_block_payload(
+                            *first_owner->second, block))
                         throw std::invalid_argument(
-                            "NativeBringup-Dispatch-Callsite besitzt mehrere "
-                            "IR-Owner.");
+                            "NativeBringup-Dispatch-Callsite besitzt "
+                            "widerspruechliche IR-Owner: " +
+                            fixed_hex32("0x", instruction.source_address));
                 }
             }
         }
@@ -5969,6 +6302,11 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
         std::ostringstream emitted_function;
         const bool native_internal_block_labels =
             request.single_block_execution && request.guarded_local_block_chaining;
+        const auto static_execution_islands =
+            make_static_execution_island_plan(
+                function,
+                compile_time_static_immutable_entries,
+                request.external_instruction_observer);
         const auto registers = make_native_register_emission(
             function,
             request.conservative_register_localization,
@@ -6219,6 +6557,8 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                        current_blocks,
                        architectural_boundary_entries,
                        compile_time_static_immutable_entries,
+                       static_execution_islands.island_by_entry,
+                       static_execution_islands.maximum_cycles_by_entry,
                        request.single_block_execution,
                        request.guarded_local_block_chaining,
                        native_internal_block_labels,

@@ -2175,30 +2175,35 @@ int main() {
                 damaged_options.analysis_cache_root = damaged_fixture.path;
                 damaged_options.maximum_candidate_files = 1u;
                 damaged_options.maximum_workers = 1u;
+                damaged_options.persistent_cache_writes_enabled = false;
                 const std::array one_hint{module_static_base_hints.front()};
+                katana::codegen::LatentAotDiscoverySession damaged_session;
                 const auto cold =
                     katana::codegen::discover_latent_aot_modules(
                         damaged_source, 0u, 0u, {}, damaged_options, {},
-                        one_hint);
+                        one_hint, {}, damaged_session);
                 require(cold.modules.size() == 1u &&
                             cold.module_static_cache_misses == 1u &&
-                            cold.module_static_cache_stores == 1u &&
+                            cold.module_static_cache_stores == 0u &&
                             cold.analysis_full_pipeline_runs == 1u,
                         std::string(fixture_suffix) +
                             " konnte sein kaltes Basisartefakt nicht erzeugen.");
 
-                std::vector<std::filesystem::path> artifacts;
-                for (const auto& entry :
-                     std::filesystem::recursive_directory_iterator(
-                         damaged_fixture.path))
-                    if (entry.is_regular_file() &&
-                        entry.path().filename() == "module-static.bin")
-                        artifacts.push_back(entry.path());
-                require(artifacts.size() == 1u,
+                auto pending = katana::codegen::
+                    stage_latent_aot_module_static_cache_publications(
+                        damaged_session, damaged_options);
+                require(pending.size() == 1u,
                         std::string(fixture_suffix) +
-                            " besitzt kein eindeutiges Modul-Static-Artefakt.");
-                const auto key =
-                    artifacts.front().parent_path().filename().string();
+                            " besitzt keine eindeutige Modul-Static-Publikation.");
+                const auto key = pending.front().cache_key;
+                require(katana::codegen::
+                            publish_latent_aot_module_static_cache_publications(
+                                pending) &&
+                            pending.empty(),
+                        std::string(fixture_suffix) +
+                            " konnte sein Modul-Static-Artefakt nicht publizieren.");
+                damaged_session.reset();
+                damaged_options.persistent_cache_writes_enabled = true;
                 katana::codegen::CodegenCache cache(damaged_fixture.path);
                 const auto current = cache.load_bounded(
                     key, "module-static.bin",
@@ -2207,6 +2212,25 @@ int main() {
                 require(current.has_value() && current->size() > 2u,
                         std::string(fixture_suffix) +
                             " konnte das Modul-Static-Artefakt nicht lesen.");
+                std::vector<std::filesystem::path> physical_artifacts;
+                for (const auto& entry :
+                     std::filesystem::recursive_directory_iterator(
+                         damaged_fixture.path)) {
+                    if (!entry.is_regular_file() ||
+                        entry.file_size() != current->size())
+                        continue;
+                    std::ifstream input(entry.path(), std::ios::binary);
+                    const std::string content{
+                        std::istreambuf_iterator<char>(input),
+                        std::istreambuf_iterator<char>()};
+                    if (content == *current)
+                        physical_artifacts.push_back(entry.path());
+                }
+                require(physical_artifacts.size() == 1u,
+                        std::string(fixture_suffix) +
+                            " konnte sein physisches Modul-Static-Artefakt "
+                            "nicht eindeutig binden.");
+                const auto physical_artifact = physical_artifacts.front();
                 if (damage == StaticArtifactDamage::Corrupt) {
                     auto replacement = *current;
                     replacement.back() =
@@ -2269,9 +2293,9 @@ int main() {
                             std::string(fixture_suffix) +
                                 " konnte das alte Artefakt nicht entfernen.");
                     std::filesystem::create_directories(
-                        artifacts.front().parent_path());
+                        physical_artifact.parent_path());
                     std::ofstream output(
-                        artifacts.front(), std::ios::binary | std::ios::trunc);
+                        physical_artifact, std::ios::binary | std::ios::trunc);
                     output.seekp(static_cast<std::streamoff>(
                         katana::codegen::
                             maximum_latent_aot_module_static_cache_artifact_bytes));
@@ -3136,6 +3160,123 @@ int main() {
         }
         require(rejected,
                 "Directory wurde trotz vorangestelltem Bytebudget vollstaendig gelesen.");
+
+        constexpr std::string_view authority_sha =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        constexpr std::string_view encoded_stg00 =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        constexpr std::string_view decoded_stg00 =
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        constexpr std::string_view encoded_stg01 =
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        constexpr std::string_view decoded_stg01 =
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        constexpr std::string_view disassembly_stg00 =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        constexpr std::string_view disassembly_stg01 =
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        constexpr std::string_view entry_zero =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        constexpr std::string_view entry_two =
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+        katana::codegen::CompleteDisassemblyModuleAuthority stg01;
+        stg01.module_id = "STG01.PRS";
+        stg01.transform = katana::codegen::LatentAotSourceTransform::SegaPrs;
+        stg01.encoded_byte_identity = encoded_stg01;
+        stg01.disc_byte_offset = 4096u;
+        stg01.encoded_byte_size = 4u;
+        stg01.decoded_byte_identity = decoded_stg01;
+        stg01.decoded_byte_size = 8u;
+        stg01.runtime_address = 0x8C900000u;
+        stg01.disassembly_identity = disassembly_stg01;
+        stg01.entries = {
+            {2u, 2u, std::string(entry_two),
+             katana::codegen::CompleteDisassemblyEntryKind::CodePointerTarget},
+            {0u, 2u, std::string(entry_zero),
+             katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry}};
+
+        auto stg00 = stg01;
+        stg00.module_id = "STG00.PRS";
+        stg00.encoded_byte_identity = encoded_stg00;
+        stg00.disc_byte_offset = 2048u;
+        stg00.decoded_byte_identity = decoded_stg00;
+        stg00.decoded_byte_size = 6u;
+        stg00.disassembly_identity = disassembly_stg00;
+        stg00.entries.resize(1u);
+
+        katana::codegen::CompleteDisassemblyAuthority coverage_authority;
+        coverage_authority.project_id = "sonic-adventure-pal-v1003";
+        coverage_authority.project_version = "coverage-fixture-v1";
+        coverage_authority.modules = {stg01, stg00};
+        const auto normalized_authority =
+            katana::codegen::normalize_complete_disassembly_authority(
+                coverage_authority);
+        const auto coverage_hints =
+            katana::codegen::complete_disassembly_coverage_entry_hints(
+                normalized_authority);
+        require(normalized_authority.modules.size() == 2u &&
+                    normalized_authority.modules[0].module_id == "STG00.PRS" &&
+                    normalized_authority.modules[1].module_id == "STG01.PRS" &&
+                    normalized_authority.modules[1].entries[0]
+                            .module_relative_offset == 0u &&
+                    normalized_authority.modules[1].entries[1]
+                            .module_relative_offset == 2u &&
+                    normalized_authority.authority_identity.starts_with(
+                        "sha256:") &&
+                    katana::codegen::complete_disassembly_authority_identity(
+                        normalized_authority) ==
+                        normalized_authority.authority_identity &&
+                    coverage_hints.size() == 3u &&
+                    coverage_hints.front().byte_identity == decoded_stg00 &&
+                    coverage_hints.front().disc_byte_offset == 2048u &&
+                    coverage_hints.front().byte_size == 4u &&
+                    coverage_hints.front().source_address == 0u &&
+                    coverage_hints.front().proven_runtime_base ==
+                        0x8C900000u &&
+                    coverage_hints.back().byte_identity == decoded_stg01 &&
+                    coverage_hints.back().module_relative_offset == 2u,
+                "Multi-Modul-Disassembly-Authority verlor kanonische Ordnung, "
+                "Digest oder decoded PRS Hint-Bindung.");
+
+        auto reordered_authority = normalized_authority;
+        reordered_authority.authority_identity.clear();
+        std::reverse(reordered_authority.modules.begin(),
+                     reordered_authority.modules.end());
+        std::reverse(reordered_authority.modules.back().entries.begin(),
+                     reordered_authority.modules.back().entries.end());
+        require(katana::codegen::complete_disassembly_authority_identity(
+                    reordered_authority) ==
+                    normalized_authority.authority_identity,
+                "Authority-Digest hing von Eingabereihenfolge statt Inhalt ab.");
+
+        auto mismatched_authority = normalized_authority;
+        mismatched_authority.authority_identity = authority_sha;
+        rejected = false;
+        try {
+            static_cast<void>(
+                katana::codegen::normalize_complete_disassembly_authority(
+                    mismatched_authority));
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        require(rejected,
+                "Fremde kanonische Authority-SHA wurde nicht fail-closed verworfen.");
+
+        auto duplicate_entry_authority = normalized_authority;
+        duplicate_entry_authority.authority_identity.clear();
+        duplicate_entry_authority.modules.back().entries.push_back(
+            duplicate_entry_authority.modules.back().entries.front());
+        rejected = false;
+        try {
+            static_cast<void>(
+                katana::codegen::normalize_complete_disassembly_authority(
+                    duplicate_entry_authority));
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        require(rejected,
+                "Doppelter Moduloffset wurde als zwei Coverage-Entries akzeptiert.");
 
         std::cout << "Latente native Disc-AOT-Registry erfolgreich.\n";
         return EXIT_SUCCESS;

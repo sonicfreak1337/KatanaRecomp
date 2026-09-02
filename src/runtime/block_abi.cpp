@@ -19,6 +19,11 @@ struct ActiveCodeAddressMapping {
 
 thread_local std::vector<ActiveCodeAddressMapping> active_code_address_mappings;
 thread_local std::uint64_t next_code_address_mapping_token = 1u;
+// Primary-image AOT execution normally has no relocated loaded-module scope.
+// Keep that overwhelmingly common case independent of the interval caches:
+// even a full-address-space cache hit otherwise loads three TLS fields and
+// performs two comparisons for every generated instruction address.
+thread_local bool code_address_mapping_active = false;
 
 struct CodeAddressLookupCacheEntry final {
     std::uint64_t begin = 0u;
@@ -190,10 +195,12 @@ void validate_code_address_mapping(const CodeAddressMapping& mapping) {
 }
 
 std::uint32_t relocate_code_address(const std::uint32_t source_address) noexcept {
+    if (!code_address_mapping_active) return source_address;
     return lookup_code_address<false>(source_address);
 }
 
 std::uint32_t unrelocate_code_address(const std::uint32_t runtime_address) noexcept {
+    if (!code_address_mapping_active) return runtime_address;
     return lookup_code_address<true>(runtime_address);
 }
 
@@ -201,6 +208,7 @@ ScopedCodeAddressMapping::ScopedCodeAddressMapping(const CodeAddressMapping mapp
     validate_code_address_mapping(mapping);
     token_ = allocate_mapping_token();
     active_code_address_mappings.push_back({token_, mapping});
+    code_address_mapping_active = true;
     invalidate_code_address_lookup_cache();
 }
 
@@ -210,6 +218,7 @@ ScopedCodeAddressMapping::~ScopedCodeAddressMapping() noexcept {
                                     [this](const auto& entry) { return entry.token == token_; });
     if (found == active_code_address_mappings.rend()) return;
     active_code_address_mappings.erase(std::next(found).base());
+    code_address_mapping_active = !active_code_address_mappings.empty();
     invalidate_code_address_lookup_cache();
 }
 

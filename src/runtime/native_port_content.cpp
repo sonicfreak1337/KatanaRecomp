@@ -635,6 +635,10 @@ std::uint64_t NativePortExecutableLifecycleLedger::release_noexcept(
     return ++impl_->generation;
 }
 
+std::uint64_t NativePortExecutableLifecycleLedger::generation() const noexcept {
+    return impl_ != nullptr ? impl_->generation : 0u;
+}
+
 struct NativePortRuntimeImageBindings::Impl final {
     struct ActiveBinding final {
         std::size_t image_index = 0u;
@@ -1330,6 +1334,141 @@ NativePortLoadedAotBinder::active_module_for_address(
         module.byte_size, match->lifecycle_generation};
 }
 
+std::optional<NativePortLoadedAotEntryView>
+NativePortLoadedAotBinder::active_entry_for_address(
+    const std::uint32_t address) const {
+    if (!validate_bound_entry(address)) return std::nullopt;
+
+    const auto runtime_address =
+        canonical_native_port_runtime_alias(address);
+    const Impl::ActiveBinding* match = nullptr;
+    for (const auto& active : impl_->active) {
+        const auto& module = impl_->modules[active.module_index];
+        const auto runtime_start =
+            canonical_native_port_runtime_alias(active.runtime_start);
+        if (runtime_address < runtime_start ||
+            static_cast<std::uint64_t>(runtime_address) >=
+                static_cast<std::uint64_t>(runtime_start) +
+                    module.byte_size)
+            continue;
+        if (match != nullptr)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-active-entry-ambiguous");
+        match = &active;
+    }
+    if (match == nullptr) return std::nullopt;
+
+    const auto& module = impl_->modules[match->module_index];
+    const auto runtime_start =
+        canonical_native_port_runtime_alias(match->runtime_start);
+    const auto source_offset = runtime_address - runtime_start;
+    const auto block = std::lower_bound(
+        module.block_identities.begin(), module.block_identities.end(),
+        source_offset,
+        [](const auto& candidate, const std::uint32_t value) {
+            return candidate.source_offset < value;
+        });
+    if (block == module.block_identities.end() ||
+        block->source_offset != source_offset)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-active-entry-identity-missing");
+    return NativePortLoadedAotEntryView{
+        module.sha256,
+        block->sha256,
+        module.source_start,
+        runtime_start,
+        module.byte_size,
+        block->source_offset,
+        block->byte_size,
+        match->lifecycle_generation,
+        true};
+}
+
+NativePortLoadedAotDispatchStamp
+NativePortLoadedAotBinder::dispatch_stamp() const noexcept {
+    if (impl_ == nullptr) return {};
+    return {impl_->lifecycle_ledger.generation(),
+            impl_->immutable_guard.generation()};
+}
+
+std::optional<NativePortLoadedAotEntryView>
+NativePortLoadedAotBinder::preflight_entry_for_address(
+    const std::uint32_t address) const {
+    if (const auto active = active_entry_for_address(address);
+        active.has_value())
+        return active;
+
+    const auto runtime_address =
+        canonical_native_port_runtime_alias(address);
+    const Impl::PendingBinding* match = nullptr;
+    for (const auto& pending : impl_->pending) {
+        const auto& module = impl_->modules[pending.module_index];
+        const auto runtime_start =
+            canonical_native_port_runtime_alias(pending.runtime_start);
+        if (runtime_address < runtime_start ||
+            static_cast<std::uint64_t>(runtime_address) >=
+                static_cast<std::uint64_t>(runtime_start) +
+                    module.byte_size)
+            continue;
+        if (match != nullptr)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-staged-entry-ambiguous");
+        match = &pending;
+    }
+    if (match == nullptr) return std::nullopt;
+
+    const auto& module = impl_->modules[match->module_index];
+    const auto runtime_start =
+        canonical_native_port_runtime_alias(match->runtime_start);
+    const auto source_offset = runtime_address - runtime_start;
+    const auto block = std::lower_bound(
+        module.block_identities.begin(), module.block_identities.end(),
+        source_offset,
+        [](const auto& candidate, const std::uint32_t value) {
+            return candidate.source_offset < value;
+        });
+    if (block == module.block_identities.end() ||
+        block->source_offset != source_offset)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-staged-entry-identity-missing");
+
+    const auto module_bytes = native_port_direct_bytes(
+        impl_->cpu, runtime_start, module.byte_size);
+    if (!module_bytes.has_value())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-staged-entry-unmapped");
+    const auto complete_identity_matches =
+        sha256_identity(*module_bytes) == module.sha256;
+    if (!complete_identity_matches) {
+        for (const auto& generated_block : module.block_identities) {
+            const auto bytes = native_port_direct_bytes(
+                impl_->cpu,
+                runtime_start + generated_block.source_offset,
+                generated_block.byte_size);
+            if (!bytes.has_value() ||
+                sha256_identity(*bytes) != generated_block.sha256)
+                throw NativePortContractError(
+                    NativePortContractFailure::AotContractViolation,
+                    "loaded-aot-staged-entry-byte-identity-mismatch");
+        }
+    }
+    return NativePortLoadedAotEntryView{
+        module.sha256,
+        block->sha256,
+        module.source_start,
+        runtime_start,
+        module.byte_size,
+        block->source_offset,
+        block->byte_size,
+        match->lifecycle_generation,
+        false};
+}
+
 std::uint64_t NativePortLoadedAotBinder::stage_runtime_module(
     const NativePortLoadedAotModuleActivation& activation) {
     constexpr std::uint32_t maximum_module_bytes = 4u * 1024u * 1024u;
@@ -1443,7 +1582,6 @@ NativePortLoadedAotBinder::resolve_prs_module_source(
         for (const auto& binding : module.source_bindings) {
             if (binding.transform !=
                     NativePortLoadedAotSourceTransform::SegaPrs ||
-                binding.runtime_start == 0u ||
                 binding.sha256 != encoded_sha256 ||
                 binding.disc_byte_offset != disc_byte_offset ||
                 binding.byte_size != encoded_byte_size)
@@ -1454,7 +1592,10 @@ NativePortLoadedAotBinder::resolve_prs_module_source(
                     "loaded-aot-prs-source-ambiguous");
             result = NativePortLoadedAotModuleActivation{
                 module.sha256, module.source_start,
-                canonical_native_port_runtime_alias(binding.runtime_start),
+                binding.runtime_start == 0u
+                    ? 0u
+                    : canonical_native_port_runtime_alias(
+                          binding.runtime_start),
                 module.byte_size};
         }
     }

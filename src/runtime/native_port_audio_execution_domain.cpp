@@ -1828,6 +1828,12 @@ class NativePortAudioExecutionDomain::Impl final {
                 if (queue_.queued_commands_nonblocking() != 0u ||
                     consumer_service_requested_.load(
                         std::memory_order_acquire) ||
+                    // Draining is finalized by try_begin_consume() once the
+                    // queue is empty. If shutdown advanced the event epoch
+                    // before `observed` was captured, waiting here would
+                    // otherwise miss the sole wake and leave join() blocked
+                    // forever with the queue still in Draining.
+                    shutdown_requested_.load(std::memory_order_acquire) ||
                     queue_.consumer_closed_nonblocking())
                     continue;
                 queue_.wait_for_consumer_event(observed);

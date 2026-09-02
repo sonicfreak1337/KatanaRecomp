@@ -18,9 +18,13 @@ void require(const bool condition, const std::string& message) {
 } // namespace
 
 int main() {
-    static_assert(katana::runtime::abi_version == 126u);
-    static_assert(katana::build_contract::aot_runtime_abi_version == 126u);
-    static_assert(katana::build_contract::runtime_abi_version == 129u);
+    // The historical runtime surface follows the narrow generated-AOT ABI.
+    // Product-runtime changes may advance independently without invalidating
+    // every cached AOT partition.
+    static_assert(katana::runtime::abi_version ==
+                  katana::build_contract::aot_runtime_abi_version);
+    static_assert(katana::build_contract::runtime_abi_version >=
+                  katana::build_contract::aot_runtime_abi_version);
 
     katana::runtime::Memory memory(16u);
     require(memory.size() == 16u, "Die Runtime-Speichergroesse ist falsch.");

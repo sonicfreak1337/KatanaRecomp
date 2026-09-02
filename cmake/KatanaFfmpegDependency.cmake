@@ -361,21 +361,84 @@ function(katana_deploy_ffmpeg_runtime target)
     )
 endfunction()
 
+function(_katana_add_buildtree_ffmpeg_runtime_output
+         source destination_root destination_name)
+    set(_katana_ffmpeg_output "${destination_root}/${destination_name}")
+    add_custom_command(
+        OUTPUT "${_katana_ffmpeg_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${destination_root}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${source}"
+            "${_katana_ffmpeg_output}"
+        DEPENDS "${source}"
+        COMMENT "Deploy pinned FFmpeg runtime file ${destination_name}"
+        VERBATIM
+    )
+    set(_katana_ffmpeg_runtime_outputs
+        ${_katana_ffmpeg_runtime_outputs}
+        "${_katana_ffmpeg_output}"
+        PARENT_SCOPE
+    )
+endfunction()
+
+set(_katana_ffmpeg_runtime_roots "${CMAKE_BINARY_DIR}")
+if(CMAKE_CONFIGURATION_TYPES)
+    list(APPEND _katana_ffmpeg_runtime_roots
+        "${CMAKE_BINARY_DIR}/$<CONFIG>")
+endif()
+set(_katana_ffmpeg_runtime_outputs)
+foreach(_katana_ffmpeg_runtime_root IN LISTS _katana_ffmpeg_runtime_roots)
+    foreach(_katana_ffmpeg_runtime_file IN LISTS KATANA_FFMPEG_RUNTIME_FILES)
+        get_filename_component(
+            _katana_ffmpeg_runtime_name
+            "${_katana_ffmpeg_runtime_file}"
+            NAME
+        )
+        _katana_add_buildtree_ffmpeg_runtime_output(
+            "${_katana_ffmpeg_runtime_file}"
+            "${_katana_ffmpeg_runtime_root}"
+            "${_katana_ffmpeg_runtime_name}"
+        )
+    endforeach()
+    _katana_add_buildtree_ffmpeg_runtime_output(
+        "${KATANA_FFMPEG_ROOT}/LICENSE.txt"
+        "${_katana_ffmpeg_runtime_root}"
+        "FFmpeg-LGPL.txt"
+    )
+    _katana_add_buildtree_ffmpeg_runtime_output(
+        "${KATANA_FFMPEG_NOTICE_FILE}"
+        "${_katana_ffmpeg_runtime_root}"
+        "FFmpeg-NOTICE.txt"
+    )
+    _katana_add_buildtree_ffmpeg_runtime_output(
+        "${KATANA_FFMPEG_BUILD_CONFIGURATION_FILE}"
+        "${_katana_ffmpeg_runtime_root}"
+        "FFmpeg-BUILD-CONFIGURATION.txt"
+    )
+    _katana_add_buildtree_ffmpeg_runtime_output(
+        "${KATANA_FFMPEG_REDISTRIBUTION_FILE}"
+        "${_katana_ffmpeg_runtime_root}"
+        "${KATANA_FFMPEG_REDISTRIBUTION_FILENAME}"
+    )
+    set(_katana_ffmpeg_cleanup_stamp
+        "${_katana_ffmpeg_runtime_root}/.katana-ffmpeg-runtime-cleanup")
+    add_custom_command(
+        OUTPUT "${_katana_ffmpeg_cleanup_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "${_katana_ffmpeg_runtime_root}/FFmpeg-Corresponding-Source.zip"
+            "${_katana_ffmpeg_runtime_root}/FFmpeg-DEVELOPMENT-ONLY.txt"
+        COMMAND ${CMAKE_COMMAND} -E touch
+            "${_katana_ffmpeg_cleanup_stamp}"
+        DEPENDS "${CMAKE_CURRENT_LIST_FILE}"
+        COMMENT "Validate pinned FFmpeg redistribution closure"
+        VERBATIM
+    )
+    list(APPEND _katana_ffmpeg_runtime_outputs
+        "${_katana_ffmpeg_cleanup_stamp}")
+endforeach()
 add_custom_target(
     katana_ffmpeg_runtime_files
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/$<CONFIG>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${KATANA_FFMPEG_RUNTIME_FILES} "${CMAKE_BINARY_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${KATANA_FFMPEG_RUNTIME_FILES} "${CMAKE_BINARY_DIR}/$<CONFIG>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_ROOT}/LICENSE.txt" "${CMAKE_BINARY_DIR}/FFmpeg-LGPL.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_ROOT}/LICENSE.txt" "${CMAKE_BINARY_DIR}/$<CONFIG>/FFmpeg-LGPL.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_NOTICE_FILE}" "${CMAKE_BINARY_DIR}/FFmpeg-NOTICE.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_NOTICE_FILE}" "${CMAKE_BINARY_DIR}/$<CONFIG>/FFmpeg-NOTICE.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_BUILD_CONFIGURATION_FILE}" "${CMAKE_BINARY_DIR}/FFmpeg-BUILD-CONFIGURATION.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_BUILD_CONFIGURATION_FILE}" "${CMAKE_BINARY_DIR}/$<CONFIG>/FFmpeg-BUILD-CONFIGURATION.txt"
-    COMMAND ${CMAKE_COMMAND} -E rm -f "${CMAKE_BINARY_DIR}/FFmpeg-Corresponding-Source.zip" "${CMAKE_BINARY_DIR}/FFmpeg-DEVELOPMENT-ONLY.txt"
-    COMMAND ${CMAKE_COMMAND} -E rm -f "${CMAKE_BINARY_DIR}/$<CONFIG>/FFmpeg-Corresponding-Source.zip" "${CMAKE_BINARY_DIR}/$<CONFIG>/FFmpeg-DEVELOPMENT-ONLY.txt"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_REDISTRIBUTION_FILE}" "${CMAKE_BINARY_DIR}/${KATANA_FFMPEG_REDISTRIBUTION_FILENAME}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KATANA_FFMPEG_REDISTRIBUTION_FILE}" "${CMAKE_BINARY_DIR}/$<CONFIG>/${KATANA_FFMPEG_REDISTRIBUTION_FILENAME}"
+    DEPENDS ${_katana_ffmpeg_runtime_outputs}
     COMMENT "Deploy pinned FFmpeg LGPL runtime closure"
     VERBATIM
 )

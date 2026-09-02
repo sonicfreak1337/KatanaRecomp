@@ -7,6 +7,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
@@ -65,6 +66,7 @@ struct NativePortRuntimeOptionsBridge final {
     std::atomic<std::uint32_t> requested_presentation_rate_hz{60u};
     std::atomic<std::uint64_t> simulation_frames{0u};
     std::atomic<bool> frame_pacing_enabled{true};
+    std::atomic<bool> performance_overlay_enabled{false};
 };
 
 constexpr std::array<std::uint32_t, 4u>
@@ -73,10 +75,85 @@ constexpr std::array<std::uint32_t, 4u>
 #ifdef _WIN32
 constexpr UINT runtime_menu_output_fps = 0x7100u;
 constexpr UINT runtime_menu_simulation_fps = 0x7101u;
+constexpr UINT runtime_menu_performance_overlay = 0x7102u;
 constexpr UINT runtime_menu_rate_first = 0x7110u;
 constexpr UINT runtime_menu_rate_last =
     runtime_menu_rate_first +
     static_cast<UINT>(runtime_presentation_rate_choices.size()) - 1u;
+
+constexpr std::uint32_t performance_overlay_width = 128u;
+constexpr std::uint32_t performance_overlay_height = 32u;
+
+struct alignas(16) PerformanceOverlayConstants final {
+    std::array<std::array<std::uint32_t, 4u>,
+               performance_overlay_height>
+        rows{};
+};
+
+static_assert(sizeof(PerformanceOverlayConstants) % 16u == 0u);
+
+[[nodiscard]] constexpr std::array<std::uint8_t, 7u>
+performance_overlay_glyph(const char value) noexcept {
+    switch (value) {
+    case '0': return {14u, 17u, 19u, 21u, 25u, 17u, 14u};
+    case '1': return {4u, 12u, 4u, 4u, 4u, 4u, 14u};
+    case '2': return {14u, 17u, 1u, 2u, 4u, 8u, 31u};
+    case '3': return {30u, 1u, 1u, 14u, 1u, 1u, 30u};
+    case '4': return {2u, 6u, 10u, 18u, 31u, 2u, 2u};
+    case '5': return {31u, 16u, 16u, 30u, 1u, 1u, 30u};
+    case '6': return {14u, 16u, 16u, 30u, 17u, 17u, 14u};
+    case '7': return {31u, 1u, 2u, 4u, 8u, 8u, 8u};
+    case '8': return {14u, 17u, 17u, 14u, 17u, 17u, 14u};
+    case '9': return {14u, 17u, 17u, 15u, 1u, 1u, 14u};
+    case 'F': return {31u, 16u, 16u, 30u, 16u, 16u, 16u};
+    case 'P': return {30u, 17u, 17u, 30u, 16u, 16u, 16u};
+    case 'S': return {15u, 16u, 16u, 14u, 1u, 1u, 30u};
+    case 'I': return {31u, 4u, 4u, 4u, 4u, 4u, 31u};
+    case 'M': return {17u, 27u, 21u, 21u, 17u, 17u, 17u};
+    case '.':
+    case ',': return {0u, 0u, 0u, 0u, 0u, 4u, 4u};
+    default: return {};
+    }
+}
+
+void set_performance_overlay_pixel(
+    PerformanceOverlayConstants& constants,
+    const std::uint32_t x,
+    const std::uint32_t y) noexcept {
+    if (x >= performance_overlay_width ||
+        y >= performance_overlay_height)
+        return;
+    constants.rows[y][x >> 5u] |= std::uint32_t{1u} << (x & 31u);
+}
+
+void rasterize_performance_overlay_text(
+    PerformanceOverlayConstants& constants,
+    const std::string_view text,
+    const std::uint32_t origin_y) noexcept {
+    constexpr std::uint32_t scale = 2u;
+    constexpr std::uint32_t glyph_width = 5u;
+    constexpr std::uint32_t glyph_height = 7u;
+    constexpr std::uint32_t glyph_advance = 6u * scale;
+    std::uint32_t origin_x = 4u;
+    for (const auto character : text) {
+        const auto glyph = performance_overlay_glyph(character);
+        for (std::uint32_t row = 0u; row < glyph_height; ++row) {
+            for (std::uint32_t column = 0u; column < glyph_width; ++column) {
+                if ((glyph[row] &
+                     (std::uint8_t{1u} << (glyph_width - 1u - column))) == 0u)
+                    continue;
+                for (std::uint32_t dy = 0u; dy < scale; ++dy)
+                    for (std::uint32_t dx = 0u; dx < scale; ++dx)
+                        set_performance_overlay_pixel(
+                            constants,
+                            origin_x + column * scale + dx,
+                            origin_y + row * scale + dy);
+            }
+        }
+        origin_x += glyph_advance;
+        if (origin_x >= performance_overlay_width) break;
+    }
+}
 #endif
 
 [[nodiscard]] constexpr bool runtime_presentation_rate_choice(
@@ -1732,6 +1809,16 @@ class NativePortGraphicsBackend final {
             type2_non_type2_batch_identity_ = packet.batch.identity;
         }
 
+        std::uint32_t type2_draw_sequence = 0u;
+        if (type2_gather) {
+            if (type2_list_draw_sequence_ ==
+                std::numeric_limits<std::uint32_t>::max())
+                fail(NativePortGraphicsFailure::ResourceLimit,
+                     type2_list_draw_sequence_,
+                     "type2-draw-sequence-overflow");
+            type2_draw_sequence = type2_list_draw_sequence_++;
+        }
+
         auto vertices = packet.vertices;
         auto indices = packet.indices;
         auto topology = packet.topology;
@@ -1943,10 +2030,13 @@ class NativePortGraphicsBackend final {
         if (type2_gather) {
             // Type-2 blending is performed only after per-pixel sorting, so
             // the capture must preserve the exact factors of this packet.
+            // submission_order is only monotone within one semantic batch;
+            // this renderer-owned sequence is unique across the complete
+            // authenticated Type-2 list, including semantic transitions.
             constants.type_two_parameters = {
                 pack_type2_blend_factors(packet.blend),
                 0u,
-                packet.batch.submission_order,
+                type2_draw_sequence,
                 config_.maximum_type2_fragment_nodes};
         }
         for (std::size_t index = 0u;
@@ -2522,6 +2612,7 @@ class NativePortGraphicsBackend final {
         type2_batch_identity_ = packet.batch.identity;
         type2_fragment_count_ = 0u;
         type2_max_fragments_per_pixel_ = 0u;
+        type2_list_draw_sequence_ = 0u;
     }
 
     void read_type2_status() {
@@ -2540,13 +2631,15 @@ class NativePortGraphicsBackend final {
         std::array<std::uint32_t, 4u> status{};
         std::memcpy(status.data(), mapped.pData, sizeof(status));
         context_->Unmap(type_two_status_readback_.Get(), 0u);
-        type2_fragment_count_ = status[0];
+        // The allocator count records attempted fragments, including entries
+        // discarded after the fixed node arena fills. Flycast's reference OIT
+        // path treats that condition as a bounded quality limit and continues
+        // rendering; killing the title here turned a dense cutscene into an
+        // artificial process crash. Only published nodes are addressable by
+        // the resolve pass.
+        type2_fragment_count_ = std::min(
+            status[0], config_.maximum_type2_fragment_nodes);
         type2_max_fragments_per_pixel_ = status[2];
-        if (status[1] != 0u ||
-            status[0] > config_.maximum_type2_fragment_nodes)
-            fail(NativePortGraphicsFailure::ResourceLimit,
-                 status[0],
-                 "type2-global-fragment-overflow");
         // The reference OIT implementation retains at most 32 nodes from a
         // pixel's linked list and composites those nodes deterministically.
         // A denser pixel is a bounded quality limit, not a process-fatal
@@ -2779,8 +2872,121 @@ class NativePortGraphicsBackend final {
         end_gpu_timing_frame(true);
     }
 
+    void ensure_performance_overlay_pipeline() {
+        if (performance_overlay_pixel_shader_ != nullptr &&
+            performance_overlay_constants_ != nullptr)
+            return;
+        const auto pixel_bytecode = compile_shader(
+            "performance_overlay_pixel_main", "ps_4_0");
+        auto result = device_->CreatePixelShader(
+            pixel_bytecode->GetBufferPointer(),
+            pixel_bytecode->GetBufferSize(),
+            nullptr,
+            performance_overlay_pixel_shader_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "performance-overlay-pixel-shader");
+        D3D11_BUFFER_DESC description{};
+        description.ByteWidth = sizeof(PerformanceOverlayConstants);
+        description.Usage = D3D11_USAGE_DYNAMIC;
+        description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        result = device_->CreateBuffer(
+            &description, nullptr,
+            performance_overlay_constants_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result),
+                 "performance-overlay-constants");
+    }
+
+    void draw_performance_overlay() {
+        if (runtime_options_ == nullptr ||
+            !runtime_options_->performance_overlay_enabled.load(
+                std::memory_order_acquire))
+            return;
+        constexpr std::uint32_t overlay_origin = 12u;
+        if (output_extent_.width <= overlay_origin ||
+            output_extent_.height <= overlay_origin)
+            return;
+        ensure_performance_overlay_pipeline();
+
+        const auto output_fps = std::isfinite(runtime_menu_output_fps_)
+                                    ? std::clamp(runtime_menu_output_fps_,
+                                                 0.0, 999.9)
+                                    : 0.0;
+        const auto simulation_fps =
+            std::isfinite(runtime_menu_simulation_fps_)
+                ? std::clamp(runtime_menu_simulation_fps_, 0.0, 999.9)
+                : 0.0;
+        if (output_fps != performance_overlay_output_fps_ ||
+            simulation_fps != performance_overlay_simulation_fps_) {
+            PerformanceOverlayConstants constants{};
+            char output_text[16]{};
+            char simulation_text[16]{};
+            static_cast<void>(std::snprintf(
+                output_text, std::size(output_text), "FPS %5.1f", output_fps));
+            static_cast<void>(std::snprintf(
+                simulation_text, std::size(simulation_text), "SIM %5.1f",
+                simulation_fps));
+            rasterize_performance_overlay_text(
+                constants, std::string_view(output_text), 2u);
+            rasterize_performance_overlay_text(
+                constants, std::string_view(simulation_text), 17u);
+
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            const auto map_result = context_->Map(
+                performance_overlay_constants_.Get(), 0u,
+                D3D11_MAP_WRITE_DISCARD, 0u, &mapped);
+            if (FAILED(map_result))
+                fail(NativePortGraphicsFailure::ResourceCreation,
+                     static_cast<std::uint32_t>(map_result),
+                     "performance-overlay-map");
+            std::memcpy(mapped.pData, &constants, sizeof(constants));
+            context_->Unmap(performance_overlay_constants_.Get(), 0u);
+            performance_overlay_output_fps_ = output_fps;
+            performance_overlay_simulation_fps_ = simulation_fps;
+        }
+
+        NativePortBlendState blend;
+        blend.enabled = true;
+        blend.source_color = NativePortBlendFactor::SourceAlpha;
+        blend.destination_color = NativePortBlendFactor::InverseSourceAlpha;
+        blend.source_alpha = NativePortBlendFactor::One;
+        blend.destination_alpha = NativePortBlendFactor::InverseSourceAlpha;
+        NativePortDepthState depth;
+        depth.test_enabled = false;
+        depth.write_enabled = false;
+        NativePortRasterizerState rasterizer;
+        rasterizer.cull = NativePortCullMode::None;
+        constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
+        set_viewport({overlay_origin,
+                      overlay_origin,
+                      std::min(performance_overlay_width,
+                               output_extent_.width - overlay_origin),
+                      std::min(performance_overlay_height,
+                               output_extent_.height - overlay_origin)});
+        context_->OMSetBlendState(
+            resolve_blend_state(blend), blend_factor.data(), 0xFFFFFFFFu);
+        context_->OMSetDepthStencilState(resolve_depth_state(depth), 0u);
+        context_->RSSetState(resolve_rasterizer_state(rasterizer));
+        context_->IASetInputLayout(nullptr);
+        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context_->VSSetShader(composite_vertex_shader_.Get(), nullptr, 0u);
+        context_->PSSetShader(
+            performance_overlay_pixel_shader_.Get(), nullptr, 0u);
+        auto* const constant_buffer = performance_overlay_constants_.Get();
+        context_->PSSetConstantBuffers(2u, 1u, &constant_buffer);
+        context_->Draw(3u, 0u);
+        ID3D11Buffer* no_buffer = nullptr;
+        context_->PSSetConstantBuffers(2u, 1u, &no_buffer);
+        invalidate_draw_state_shadow();
+    }
+
     void present_completed_frame(const char* const operation) {
         poll_events();
+        update_runtime_options_menu();
         if (minimized_) {
             end_gpu_timing_frame();
             stop_render_submit_telemetry();
@@ -2818,6 +3024,7 @@ class NativePortGraphicsBackend final {
         context_->Draw(3u, 0u);
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
+        draw_performance_overlay();
         invalidate_draw_state_shadow();
         end_gpu_timing_frame();
         stop_render_submit_telemetry();
@@ -2853,7 +3060,6 @@ class NativePortGraphicsBackend final {
         snapshot_.occluded = false;
         capture_completed_frame(snapshot_.presented_frames + 1u);
         saturating_increment(snapshot_.presented_frames);
-        update_runtime_options_menu();
         maybe_checkpoint_graphics_breadcrumbs();
     }
 
@@ -3094,8 +3300,17 @@ class NativePortGraphicsBackend final {
 
     [[nodiscard]] bool handle_runtime_menu_command(
         const UINT command) noexcept {
-        if (runtime_options_ == nullptr ||
-            command < runtime_menu_rate_first ||
+        if (runtime_options_ == nullptr) return false;
+        if (command == runtime_menu_performance_overlay) {
+            const auto enabled =
+                !runtime_options_->performance_overlay_enabled.load(
+                    std::memory_order_acquire);
+            runtime_options_->performance_overlay_enabled.store(
+                enabled, std::memory_order_release);
+            update_runtime_options_menu(true);
+            return true;
+        }
+        if (command < runtime_menu_rate_first ||
             command > runtime_menu_rate_last)
             return false;
         const auto index = static_cast<std::size_t>(
@@ -3149,6 +3364,11 @@ class NativePortGraphicsBackend final {
                         runtime_menu_simulation_fps,
                         L"Simulation: -- FPS (30 Hz)") == FALSE)
             fail_menu("runtime-menu-simulation-fps");
+        if (AppendMenuW(options_menu,
+                        MF_STRING,
+                        runtime_menu_performance_overlay,
+                        L"FPS im Spiel anzeigen") == FALSE)
+            fail_menu("runtime-menu-performance-overlay");
         if (AppendMenuW(options_menu, MF_SEPARATOR, 0u, nullptr) == FALSE)
             fail_menu("runtime-menu-separator");
         for (std::size_t index = 0u;
@@ -3257,6 +3477,13 @@ class NativePortGraphicsBackend final {
                                       MF_BYCOMMAND | MF_STRING | MF_GRAYED,
                                       runtime_menu_simulation_fps,
                                       simulation_label));
+        const auto overlay_enabled =
+            runtime_options_->performance_overlay_enabled.load(
+                std::memory_order_acquire);
+        static_cast<void>(CheckMenuItem(
+            options_menu_,
+            runtime_menu_performance_overlay,
+            MF_BYCOMMAND | (overlay_enabled ? MF_CHECKED : MF_UNCHECKED)));
         UINT selected = 0u;
         for (std::size_t index = 0u;
              index < runtime_presentation_rate_choices.size();
@@ -5992,6 +6219,8 @@ class NativePortGraphicsBackend final {
     std::uint64_t runtime_menu_simulation_frames_ = 0u;
     double runtime_menu_output_fps_ = 0.0;
     double runtime_menu_simulation_fps_ = 0.0;
+    double performance_overlay_output_fps_ = -1.0;
+    double performance_overlay_simulation_fps_ = -1.0;
     NativePortExtent output_extent_;
     NativePortExtent pending_output_extent_;
     NativePortGraphicsLayout cached_layout_;
@@ -6019,11 +6248,13 @@ class NativePortGraphicsBackend final {
     ComPtr<ID3D11PixelShader> type_two_capture_pixel_shader_;
     ComPtr<ID3D11VertexShader> composite_vertex_shader_;
     ComPtr<ID3D11PixelShader> composite_pixel_shader_;
+    ComPtr<ID3D11PixelShader> performance_overlay_pixel_shader_;
     ComPtr<ID3D11PixelShader> type_two_resolve_pixel_shader_;
     ComPtr<ID3D11InputLayout> input_layout_;
     ComPtr<ID3D11Buffer> draw_constants_;
     ComPtr<ID3D11Buffer> fog_table_constants_;
     ComPtr<ID3D11Buffer> type_two_resolve_constants_;
+    ComPtr<ID3D11Buffer> performance_overlay_constants_;
     ComPtr<ID3D11Texture2D> type_two_base_texture_;
     ComPtr<ID3D11ShaderResourceView> type_two_base_view_;
     ComPtr<ID3D11Texture2D> type_two_depth_texture_;
@@ -6104,6 +6335,7 @@ class NativePortGraphicsBackend final {
     std::uint64_t type2_non_type2_batch_identity_ = 0u;
     std::uint32_t type2_fragment_count_ = 0u;
     std::uint32_t type2_max_fragments_per_pixel_ = 0u;
+    std::uint32_t type2_list_draw_sequence_ = 0u;
     std::vector<NativePortVertex> prepared_vertices_;
     std::vector<BlendStateSlot> blend_states_;
     std::vector<DepthStateSlot> depth_states_;
@@ -8543,6 +8775,32 @@ SamplerState composite_sampler : register(s0);
 float4 composite_pixel_main(CompositeVertexOutput input) : SV_Target {
     return composite_texture.Sample(composite_sampler, input.texcoord);
 }
+
+cbuffer PerformanceOverlayConstants : register(b2) {
+    uint4 performance_overlay_rows[32];
+};
+
+uint performance_overlay_word(uint4 row, uint index) {
+    if (index == 0u) return row.x;
+    if (index == 1u) return row.y;
+    if (index == 2u) return row.z;
+    return row.w;
+}
+
+float4 performance_overlay_pixel_main(
+    CompositeVertexOutput input) : SV_Target {
+    const int2 pixel = int2(floor(input.position.xy)) - int2(12, 12);
+    if (pixel.x < 0 || pixel.y < 0 || pixel.x >= 128 || pixel.y >= 32)
+        discard;
+    const uint x = (uint)pixel.x;
+    const uint y = (uint)pixel.y;
+    const uint word = performance_overlay_word(
+        performance_overlay_rows[y], x >> 5u);
+    const bool glyph = (word & (1u << (x & 31u))) != 0u;
+    return glyph
+        ? float4(0.85, 1.0, 0.25, 0.96)
+        : float4(0.0, 0.0, 0.0, 0.62);
+}
 )";
 
 // This is a separate shader source so the ordinary ps_4_0 draw path remains
@@ -8915,8 +9173,19 @@ float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
     const float4 base = type_two_base_texture.Load(int3(pixel, 0));
     float4 result = base;
     const uint pixel_count = type_two_count_texture.Load(int3(pixel, 0));
-    const uint retained_pixel_count =
-        min(pixel_count, type_two_parameters.x);
+    uint retained_pixel_count = 0u;
+    uint retained_node = type_two_head_texture.Load(int3(pixel, 0));
+    // The per-pixel counter includes globally discarded fragments. Derive the
+    // retained count from the actual bounded linked list so an exhausted
+    // arena cannot make an otherwise valid pixel fall back to its opaque base.
+    [loop]
+    while (retained_pixel_count < min(pixel_count, type_two_parameters.x) &&
+           retained_node != 0xFFFFFFFFu) {
+        if (retained_node >= type_two_parameters.y ||
+            retained_node >= type_two_parameters.w) return base;
+        retained_node = type_two_fragments[retained_node].next;
+        ++retained_pixel_count;
+    }
     uint processed = 0u;
     float previous_depth = 0.0;
     uint previous_sequence = 0u;
