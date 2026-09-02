@@ -2619,7 +2619,9 @@ int run_test(const int argc, char* argv[]) {
         8u,
         4u,
         refined_coverage_tail_entry_identity,
-        katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
+        // The branch from offset zero materializes this exact block, but the
+        // authority deliberately does not promote it to a callable root.
+        katana::codegen::CompleteDisassemblyEntryKind::ControlFlowTarget});
     coverage_authority.modules.push_back(std::move(coverage_module));
 
     katana::codegen::CompleteDisassemblyModuleAuthority

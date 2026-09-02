@@ -32444,21 +32444,70 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             throw std::runtime_error(
                 "Coverage-Discovery verlor die exakte Modul-/Discbindung.");
         for (const auto& entry : authority_module.entries) {
-            if (!std::binary_search(
-                    coverage_module.entry_offsets.begin(),
-                    coverage_module.entry_offsets.end(),
-                    entry.module_relative_offset) ||
-                !std::ranges::any_of(
+            const auto entry_address64 =
+                static_cast<std::uint64_t>(coverage_module.source_address) +
+                entry.module_relative_offset;
+            if (entry_address64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::runtime_error(
+                    "Complete-Disassembly-Entry laeuft ueber.");
+            const auto entry_address =
+                static_cast<std::uint32_t>(entry_address64);
+            const bool function_entry = std::ranges::any_of(
+                coverage_module.program, [&](const auto& function) {
+                    return function.entry_address == entry_address;
+                });
+            const bool block_entry = std::ranges::any_of(
+                coverage_module.program, [&](const auto& function) {
+                    return std::ranges::any_of(
+                        function.blocks, [&](const auto& block) {
+                            return block.start_address == entry_address;
+                        });
+                });
+            const bool public_root = std::binary_search(
+                coverage_module.entry_offsets.begin(),
+                coverage_module.entry_offsets.end(),
+                entry.module_relative_offset);
+            const bool expected_public_root =
+                entry.kind == CompleteDisassemblyEntryKind::DeclaredEntry ||
+                entry.kind == CompleteDisassemblyEntryKind::FunctionEntry ||
+                (entry.kind ==
+                     CompleteDisassemblyEntryKind::CodePointerTarget &&
+                 function_entry);
+            const bool valid_final_shape = [&] {
+                switch (entry.kind) {
+                case CompleteDisassemblyEntryKind::DeclaredEntry:
+                case CompleteDisassemblyEntryKind::FunctionEntry:
+                    return function_entry;
+                case CompleteDisassemblyEntryKind::ControlFlowTarget:
+                    return block_entry;
+                case CompleteDisassemblyEntryKind::CodePointerTarget:
+                    return function_entry || block_entry;
+                }
+                return false;
+            }();
+            const bool exact_final_block = std::ranges::any_of(
                     coverage_module.block_identities,
                     [&](const auto& identity) {
                         return identity.source_offset ==
                                    entry.module_relative_offset &&
                                identity.size >= 2u &&
                                native_bringup_sha256(identity.sha256);
-                    }))
+                    });
+            if (!valid_final_shape || public_root != expected_public_root ||
+                !exact_final_block)
                 throw std::runtime_error(
                     "Complete-Disassembly-Entry ist kein exakter finaler "
-                    "AOT-Blockentry.");
+                    "AOT-Blockentry:module=" + authority_module.module_id +
+                    ":offset=" +
+                    std::to_string(entry.module_relative_offset) +
+                    ":kind=" +
+                    std::to_string(static_cast<unsigned>(entry.kind)) +
+                    ":function=" + (function_entry ? "1" : "0") +
+                    ":block=" + (block_entry ? "1" : "0") +
+                    ":public=" + (public_root ? "1" : "0") +
+                    ":expected-public=" +
+                    (expected_public_root ? "1" : "0") +
+                    ":identity=" + (exact_final_block ? "1" : "0"));
         }
         if (proof == proof_by_identity.end()) continue;
         const auto& proof_module = *proof->second;
