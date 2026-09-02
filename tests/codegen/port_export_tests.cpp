@@ -2743,6 +2743,12 @@ int run_test(const int argc, char* argv[]) {
         coverage_generated.at("code/native-port-dispatch.cpp");
     const auto coverage_metadata =
         coverage_generated.at("metadata/port-project.json");
+    const bool block_only_entry_was_published = std::ranges::any_of(
+        coverage_generated, [](const auto& generated_file) {
+            return generated_file.second.find(
+                       "entries.push_back({0x8C100008u") !=
+                   std::string::npos;
+        });
     const auto proof_branch = coverage_dispatch.find("if (proof_target) {");
     const auto proof_return = coverage_dispatch.find(
         "        return;\n    }", proof_branch);
@@ -2797,6 +2803,7 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch.find(
                 "KATANA_NATIVE_BRINGUP_COVERAGE ") !=
                 std::string::npos &&
+            !block_only_entry_was_published &&
             proof_branch != std::string::npos &&
             proof_return != std::string::npos &&
             coverage_preflight != std::string::npos &&

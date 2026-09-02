@@ -455,6 +455,26 @@ std::vector<std::uint32_t> candidate_public_roots(
     return roots;
 }
 
+void remove_authority_block_only_roots(
+    std::vector<std::uint32_t>& roots,
+    const std::span<const CompleteDisassemblyEntryAuthority> entries) {
+    if (roots.empty() || entries.empty()) return;
+    roots.erase(
+        std::remove_if(
+            roots.begin(), roots.end(), [&](const auto offset) {
+                const auto entry = std::lower_bound(
+                    entries.begin(), entries.end(), offset,
+                    [](const auto& candidate, const auto value) {
+                        return candidate.module_relative_offset < value;
+                    });
+                return entry != entries.end() &&
+                       entry->module_relative_offset == offset &&
+                       entry->kind ==
+                           CompleteDisassemblyEntryKind::ControlFlowTarget;
+            }),
+        roots.end());
+}
+
 std::vector<std::uint32_t> latent_program_strict_interior_addresses(
     const std::span<const katana::ir::Function> program) {
     std::vector<std::uint32_t> result;
@@ -8226,6 +8246,13 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
         guarded_entry_offsets.push_back(offset);
     }
     merge_entry_offsets(published_entry_offsets, guarded_entry_offsets);
+    // Discovery may independently recognize an exact block as a function
+    // root.  An explicit complete-disassembly ControlFlowTarget is a stricter
+    // publication contract: retain the compiled block, but never expose it as
+    // a callable loaded-module ingress merely because a later heuristic or
+    // guarded inventory rediscovered the same address.
+    remove_authority_block_only_roots(
+        published_entry_offsets, candidate.authority_entries);
     if (module_audit != nullptr)
         module_audit->final_entry_offsets = published_entry_offsets;
     control_flow_progress.complete(
@@ -8599,6 +8626,8 @@ CandidateAnalysisOutcome finalize_cached_static_candidate(
     auto published_entry_offsets = state.published_entry_offsets;
     merge_entry_offsets(published_entry_offsets,
                         expansion.additional_entry_offsets);
+    remove_authority_block_only_roots(
+        published_entry_offsets, candidate.authority_entries);
 
     auto external_dispatch_entries = state.external_dispatch_entries;
     for (const auto offset : published_entry_offsets)
