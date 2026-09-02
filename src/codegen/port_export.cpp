@@ -21737,6 +21737,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         if (native_bringup_coverage) {
             output
                 << "    if (active_native_bringup_coverage_context == nullptr ||\n"
+                   "        active_native_context == nullptr ||\n"
+                   "        active_native_context->runtime_images == nullptr ||\n"
                    "        runtime_dispatch_detail::active_loaded_aot_binder == nullptr)\n"
                    "        throw std::runtime_error(\n"
                    "            \"native-bringup-coverage-context\");\n"
@@ -21769,7 +21771,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "    static_cast<void>(katana::runtime::\n"
                    "        preflight_native_bringup_coverage_dispatch(\n"
                    "            *active_native_bringup_table,\n"
-                   "            *active_runtime_image_bindings,\n"
+                   "            *active_native_context->runtime_images,\n"
                    "            *runtime_dispatch_detail::\n"
                    "                active_loaded_aot_binder,\n"
                    "            *active_native_bringup_coverage_context,\n"

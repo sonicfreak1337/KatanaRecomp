@@ -2778,7 +2778,11 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch.find(
                 "NativeBringupCoverageEntry, 2u") != std::string::npos &&
             coverage_dispatch.find(
-                "*active_runtime_image_bindings") != std::string::npos &&
+                "active_native_context->runtime_images == nullptr") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "*active_native_context->runtime_images") !=
+                std::string::npos &&
             coverage_dispatch.find(
                 "NativePortLoadedAotBinder loaded_aot_binder") !=
                 std::string::npos &&
