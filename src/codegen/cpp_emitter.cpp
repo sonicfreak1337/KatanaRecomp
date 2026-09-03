@@ -3362,7 +3362,8 @@ void emit_direct_call(std::ostringstream& output,
                       const int indent,
                       const std::string_view runtime_target,
                       const bool table_compatible_function_entries,
-                      const NativeRegisterEmission& registers) {
+                      const NativeRegisterEmission& registers,
+                      const bool consume_native_bringup_dispatch) {
     emit_indent(output, indent);
     output << "cpu.pc = " << runtime_target << ";\n";
     emit_multi_block_completion(output, indent, false, false, registers);
@@ -3377,6 +3378,11 @@ void emit_direct_call(std::ostringstream& output,
         output << "if (!native_call_depth) return;\n";
         emit_indent(output, indent + 1);
         output << "const auto exception_generation_before_call = cpu.exception_generation;\n";
+        if (consume_native_bringup_dispatch) {
+            emit_indent(output, indent + 1);
+            output << "consume_native_bringup_direct_aot_dispatch("
+                   << runtime_target << ");\n";
+        }
         emit_indent(output, indent + 1);
         if (table_compatible_function_entries)
             output << "static_cast<void>(" << cpp_runtime_block_function_name(target)
@@ -3433,7 +3439,8 @@ void emit_native_owner_transfer(std::ostringstream& output,
                                 const int indent,
                                 const std::uint32_t owner_entry,
                                 const bool table_compatible_function_entries,
-                                const NativeRegisterEmission& registers) {
+                                const NativeRegisterEmission& registers,
+                                const bool consume_native_bringup_dispatch = false) {
     emit_register_flush_release(output, indent, registers);
     emit_indent(output, indent);
     output << "if (services != nullptr && "
@@ -3442,6 +3449,10 @@ void emit_native_owner_transfer(std::ostringstream& output,
     output << "katana::runtime::NativeAotCallDepthGuard native_call_depth;\n";
     emit_indent(output, indent + 1);
     output << "if (native_call_depth) {\n";
+    if (consume_native_bringup_dispatch) {
+        emit_indent(output, indent + 2);
+        output << "consume_native_bringup_direct_aot_dispatch(cpu.pc);\n";
+    }
     emit_indent(output, indent + 2);
     if (table_compatible_function_entries)
         output << "static_cast<void>("
@@ -4021,7 +4032,8 @@ void emit_terminal(std::ostringstream& output,
                              indent,
                              runtime_target,
                              table_compatible_function_entries,
-                             registers);
+                             registers,
+                             native_bringup_dispatch_validation);
         }
 
         emit_multi_block_completion(
@@ -4166,6 +4178,11 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 1);
                 output << "case " << hex32(target) << ": {\n";
                 if (current_blocks.contains(target)) {
+                    if (native_bringup_dispatch_validation) {
+                        emit_indent(output, indent + 2);
+                        output << "consume_native_bringup_direct_aot_dispatch("
+                                  "jump_target);\n";
+                    }
                     emit_block_transition(output,
                                           indent + 2,
                                           single_block,
@@ -4183,7 +4200,8 @@ void emit_terminal(std::ostringstream& output,
                         indent + 2,
                         owner->second,
                         table_compatible_function_entries,
-                        registers);
+                        registers,
+                        native_bringup_dispatch_validation);
                     emit_indent(output, indent + 2);
                     output << "return;\n";
                 } else {
@@ -4233,6 +4251,11 @@ void emit_terminal(std::ostringstream& output,
             if (current_blocks.contains(target)) {
                 emit_indent(output, indent + 2);
                 output << "cpu.pc = jump_target;\n";
+                if (native_bringup_dispatch_validation) {
+                    emit_indent(output, indent + 2);
+                    output << "consume_native_bringup_direct_aot_dispatch("
+                              "jump_target);\n";
+                }
                 emit_block_transition(output,
                                       indent + 2,
                                       single_block,
@@ -4254,13 +4277,21 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 3);
                 output << "katana::runtime::NativeAotCallDepthGuard native_call_depth;\n";
                 emit_indent(output, indent + 3);
-                output << "if (native_call_depth) ";
+                output << "if (native_call_depth) {\n";
+                if (native_bringup_dispatch_validation) {
+                    emit_indent(output, indent + 4);
+                    output << "consume_native_bringup_direct_aot_dispatch("
+                              "jump_target);\n";
+                }
+                emit_indent(output, indent + 4);
                 if (table_compatible_function_entries)
                     output << "static_cast<void>("
                            << cpp_runtime_block_function_name(target)
                            << "(cpu, context));\n";
                 else
                     output << cpp_service_function_name(target) << "(cpu, services);\n";
+                emit_indent(output, indent + 3);
+                output << "}\n";
                 emit_indent(output, indent + 2);
                 output << "}\n";
                 emit_indent(output, indent + 2);
@@ -4381,6 +4412,11 @@ void emit_terminal(std::ostringstream& output,
                         emit_indent(output, indent + 4);
                         output << "const auto exception_generation_before_native_call = "
                                   "cpu.exception_generation;\n";
+                        if (native_bringup_dispatch_validation) {
+                            emit_indent(output, indent + 4);
+                            output << "consume_native_bringup_direct_aot_dispatch("
+                                      "call_target);\n";
+                        }
                         emit_indent(output, indent + 4);
                         if (table_compatible_function_entries)
                             output << "static_cast<void>("
@@ -4487,6 +4523,11 @@ void emit_terminal(std::ostringstream& output,
                 emit_indent(output, indent + 2);
                 output << "const auto exception_generation_before_native_call = "
                           "cpu.exception_generation;\n";
+                if (native_bringup_dispatch_validation) {
+                    emit_indent(output, indent + 2);
+                    output << "consume_native_bringup_direct_aot_dispatch("
+                              "call_target);\n";
+                }
                 emit_indent(output, indent + 2);
                 if (table_compatible_function_entries)
                     output << "static_cast<void>("
@@ -4648,7 +4689,8 @@ void emit_terminal(std::ostringstream& output,
                                      indent + 2,
                                      "call_target",
                                      table_compatible_function_entries,
-                                     registers);
+                                     registers,
+                                     native_bringup_dispatch_validation);
                     emit_indent(output, indent + 2);
                     output << "break;\n";
                 } else if (known_functions.contains(target)) {
@@ -6169,7 +6211,9 @@ BackendEmission emit_cpp_backend(const BackendRequest& request,
                 << "void preflight_native_bringup_indirect_dispatch(\n"
                 << "    std::uint32_t source_block, std::uint32_t callsite,\n"
                 << "    std::uint32_t target, std::uint32_t continuation,\n"
-                << "    bool call);\n";
+                << "    bool call);\n"
+                << "void consume_native_bringup_direct_aot_dispatch(\n"
+                << "    std::uint32_t target);\n";
         }
         if (!closure_probe_callsites.empty()) {
             declarations

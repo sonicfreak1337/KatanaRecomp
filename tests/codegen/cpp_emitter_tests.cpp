@@ -115,6 +115,19 @@ int main() {
     const auto emitter_implementation = read_cpp_emitter_implementation();
     require(!emitter_implementation.empty(),
             "Die Codegen-Regressions koennen cpp_emitter.cpp nicht lesen.");
+    require(
+        count_occurrences(
+            emitter_implementation,
+            "consume_native_bringup_direct_aot_dispatch") >= 7u &&
+            emitter_implementation.find("\"call_target);\\n\"") !=
+                std::string::npos &&
+            emitter_implementation.find("\"jump_target);\\n\"") !=
+                std::string::npos &&
+            emitter_implementation.find(
+                "consume_native_bringup_direct_aot_dispatch(cpu.pc)") !=
+                std::string::npos,
+        "Direkte Call-, Jump- oder Owner-AOT-Ketten verlieren den "
+        "Exact-once-Verbrauch ihrer NativeBringup-Auswahl.");
     constexpr std::array<std::string_view, 12u> legacy_guest_accesses = {
         "guest_read_u8(cpu",
         "guest_read_s8(cpu",
@@ -694,6 +707,7 @@ int main() {
                 "note_successful_closure_probe_dispatch(") == 1u,
         "RuntimeOnly-Kandidat und Fallback teilen keinen exakt einmaligen, "
         "fortsetzungsgebundenen Closure-Probe-Erfolgsweg.");
+
     auto unselected_probe_request = closure_probe_request;
     unselected_probe_request.closure_probe_callsites = {};
     const auto unselected_probe_emission =

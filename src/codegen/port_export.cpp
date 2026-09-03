@@ -22068,7 +22068,33 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                "        const bool call) {\n"
                "    preflight_native_bringup_indirect_dispatch_impl(\n"
                "        source_block, callsite, target, continuation, call);\n"
-               "}\n";
+               "}\n"
+               "void consume_native_bringup_direct_aot_dispatch(\n"
+               "        const std::uint32_t target) {\n";
+    if (native_bringup) {
+        if (native_bringup_coverage)
+            output
+                << "    if (!native_bringup_coverage_dispatch_selection.valid)\n"
+                   "        return;\n"
+                   "    const auto selection =\n"
+                   "        native_bringup_coverage_dispatch_selection;\n"
+                   "    native_bringup_coverage_dispatch_selection = {};\n"
+                   "    const auto source =\n"
+                   "        runtime_dispatch_detail::normalized_source_address(target);\n"
+                   "    if (selection.owner_kind == katana::runtime::\n"
+                   "            NativeBringupCoverageOwnerKind::NativeFunctionEntry ||\n"
+                   "        selection.entry == nullptr ||\n"
+                   "        !exact_guarded_target_matches(\n"
+                   "            target, selection.requested_target) ||\n"
+                   "        source != selection.dispatch_source ||\n"
+                   "        runtime_dispatch_detail::find_exact_entry(source) !=\n"
+                   "            selection.entry)\n"
+                   "        throw std::runtime_error(\n"
+                   "            \"native-bringup-coverage-direct-selection\");\n";
+        else
+            output << "    static_cast<void>(target);\n";
+        output << "}\n";
+    }
     output << "void note_successful_closure_probe_dispatch(\n"
               "        const std::uint32_t callsite,\n"
               "        const std::uint32_t target,\n"

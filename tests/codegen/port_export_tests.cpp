@@ -2854,9 +2854,19 @@ int run_test(const int argc, char* argv[]) {
                 "        return;") != std::string::npos &&
             coverage_dispatch.find(
                 "native_bringup_coverage_dispatch_selection = {") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "void consume_native_bringup_direct_aot_dispatch(") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "native-bringup-coverage-direct-selection") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "runtime_dispatch_detail::find_exact_entry(source) !=") !=
                 std::string::npos,
         "Coverage-Target-Authority verlor Block-vs-Callable-Capability oder "
-        "die direkte Primary-Static-/movable Preflight-zu-Dispatch-Auswahl.");
+        "die direkte Primary-Static-/movable Preflight-zu-Dispatch-Auswahl "
+        "einschliesslich Exact-once-Verbrauch vor direkter AOT-Kettung.");
     require(
             coverage_dispatch.find(
                 "NativeBringupCoverageSourceTransfer, 1u") !=
