@@ -2788,15 +2788,49 @@ int run_test(const int argc, char* argv[]) {
         "{{0x8C010004u, 0x0C010004u}", static_table_begin);
     const auto primary_internal_resume_binding = coverage_dispatch.find(
         "{{0x8C01000Au, 0x0C01000Au}", static_table_begin);
+    const auto target_authority_begin = coverage_dispatch.find(
+        "constexpr std::array<katana::runtime::"
+        "NativeBringupCoverageTargetAuthority");
+    const auto target_authority_end = coverage_dispatch.find(
+        "}};", target_authority_begin);
+    std::size_t authority_binding_count = 0u;
+    bool every_target_authority_is_sealed =
+        target_authority_begin != std::string::npos &&
+        target_authority_end != std::string::npos;
+    for (auto cursor = target_authority_begin;
+         every_target_authority_is_sealed;) {
+        const auto binding_begin = coverage_dispatch.find("{{0x", cursor);
+        if (binding_begin == std::string::npos ||
+            binding_begin >= target_authority_end)
+            break;
+        const auto binding_end = coverage_dispatch.find("\"}", binding_begin);
+        if (binding_end == std::string::npos ||
+            binding_end >= target_authority_end) {
+            every_target_authority_is_sealed = false;
+            break;
+        }
+        const auto binding = coverage_dispatch.substr(
+            binding_begin, binding_end + 2u - binding_begin);
+        const auto sealed = coverage_dispatch.find(binding, static_table_begin);
+        if (sealed == std::string::npos || sealed >= static_table_end) {
+            every_target_authority_is_sealed = false;
+            break;
+        }
+        ++authority_binding_count;
+        cursor = binding_end + 2u;
+    }
     require(
             static_table_begin != std::string::npos &&
             static_table_end != std::string::npos &&
             primary_internal_block_binding != std::string::npos &&
             primary_internal_block_binding < static_table_end &&
             primary_internal_resume_binding != std::string::npos &&
-            primary_internal_resume_binding < static_table_end,
+            primary_internal_resume_binding < static_table_end &&
+            authority_binding_count != 0u &&
+            every_target_authority_is_sealed,
         "Complete-Disassembly-Coverage materialisiert nicht jeden exakt "
-        "emittierten Static-AOT-Block und Mid-Block-Resume-Entry.");
+        "emittierten Static-AOT-Block, Target-Authority-Root und "
+        "Mid-Block-Resume-Entry.");
     require(
             coverage_dispatch.find(
                 "NativeBringupCoverageTargetAuthority") !=

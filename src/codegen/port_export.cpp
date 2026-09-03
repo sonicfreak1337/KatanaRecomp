@@ -18403,7 +18403,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         native_bringup_static_blocks.reserve(
             native_bringup_dispatch_entries.size() * 2u +
             native_bringup_coverage_sources.size() +
-            native_bringup_coverage_entries.size() + blocks.size());
+            native_bringup_coverage_entries.size() +
+            native_bringup_coverage_target_authorities.size() +
+            blocks.size());
         std::unordered_map<std::uint32_t, std::size_t>
             native_bringup_static_block_index;
         native_bringup_static_block_index.reserve(
@@ -18494,6 +18496,18 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             append_static_binding(
                 native_bringup_coverage_entries[index].target,
                 "coverage-entry", index);
+        // Target authorities are the executable ingress set, whereas
+        // coverage entries are only an optional lookup accelerator.  Some
+        // exact callable roots intentionally have no accelerator record; they
+        // still need their immutable source block sealed into the Static-AOT
+        // table so startup validation and later lifecycle-bound admission use
+        // the same executable authority.
+        for (std::size_t index = 0u;
+             index < native_bringup_coverage_target_authorities.size();
+             ++index)
+            append_static_binding(
+                native_bringup_coverage_target_authorities[index].target,
+                "coverage-target-authority", index);
         // The primary immutable image is already fully decoded and every
         // executable entry below is an exact emitted block boundary with
         // identity-bound image bytes. Publish that complete block inventory
