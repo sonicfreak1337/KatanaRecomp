@@ -209,7 +209,7 @@ preflight_native_bringup_dispatch(
 // Coverage authority deliberately remains disjoint from the proof allowlist.
 // It can compile and execution-admit an exact complete-disassembly entry in a
 // NativeBringup product, but can never promote Evidence/Product closure.
-inline constexpr std::uint32_t native_bringup_coverage_contract_version = 4u;
+inline constexpr std::uint32_t native_bringup_coverage_contract_version = 5u;
 
 enum class NativeBringupCoverageSourceKind : std::uint8_t {
     StaticAot,
@@ -297,11 +297,14 @@ struct NativeBringupCoverageEntry final {
     NativeBringupDispatchStaticAotBinding target;
 };
 
-// Executable ingress authority is distinct from the optional fixed-placement
-// accelerator above. Every record names one externally admissible entry and
-// its exact immutable source block. A zero runtime_start is legal only for a
-// loader-placed LoadedAot module; its live runtime address is then supplied by
-// the identity-/generation-bound binder.
+// Movable executable ingress authority is distinct from the optional
+// fixed-placement accelerator above. Every record names one externally
+// admissible RuntimeImage/LoadedAot entry, or an optional narrowed
+// PrimaryStatic capability. An exact sealed PrimaryStatic block with no
+// declared authority at its source address is self-authenticating for the
+// current CallRegister/TailJumpRegister transfer only. A zero runtime_start is
+// legal only for a loader-placed LoadedAot module; its live runtime address is
+// then supplied by the identity-/generation-bound binder.
 struct NativeBringupCoverageTargetAuthority final {
     NativeBringupCoverageOwnerKind owner_kind =
         NativeBringupCoverageOwnerKind::PrimaryStatic;
@@ -322,10 +325,13 @@ struct NativeBringupCoverageDispatchPack final {
     // executable ingress authority.
     std::span<const NativeBringupCoverageSourceTransfer> source_transfers;
     std::span<const NativeBringupCoverageEntry> entries;
-    // This is the executable ingress authority. Every record must also match
-    // the sealed Static-AOT block and, for movable owners, the current exact
-    // lifecycle binding. It contains complete-disassembly and independently
-    // bounded ingress entries only, never all compiled basic blocks.
+    // This is the executable ingress authority for movable owners and optional
+    // narrowing evidence for PrimaryStatic owners. Every record must also
+    // match the sealed Static-AOT block and, for movable owners, the current
+    // exact lifecycle binding. It contains complete-disassembly and
+    // independently bounded ingress entries only, never all compiled basic
+    // blocks. PrimaryStatic blocks missing from this span remain admissible
+    // only when their exact sealed execution is the sole available owner.
     std::span<const NativeBringupCoverageTargetAuthority> target_authorities;
 };
 

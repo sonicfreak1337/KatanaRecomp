@@ -1296,6 +1296,71 @@ void native_bringup_coverage_regression() {
             "faelschlich als fehlendes Loaded-AOT-Modul ab oder erfand eine "
             "Lifecycle-Generation.");
 
+    const std::array unrelated_target_authority{target_authorities[2u]};
+    const NativeBringupCoverageDispatchPack sealed_primary_fallback_pack{
+        coverage_pack.identity, static_source_transfers, coverage_entries,
+        unrelated_target_authority};
+    NativeBringupCoverageObservations sealed_primary_fallback_observations;
+    const auto sealed_primary_fallback_context =
+        make_native_bringup_coverage_dispatch_context(
+            table, runtime_image_bindings, binder,
+            sealed_primary_fallback_pack, runtime_generation,
+            sealed_primary_fallback_observations);
+    const auto sealed_primary_fallback =
+        preflight_native_bringup_coverage_dispatch(
+            table, runtime_image_bindings, binder,
+            sealed_primary_fallback_context, static_target_request);
+    const auto sealed_primary_fallback_events =
+        sealed_primary_fallback_observations.events();
+    require(sealed_primary_fallback.block == target_handle &&
+                sealed_primary_fallback.execution.function == block &&
+                sealed_primary_fallback.execution.virtual_start ==
+                    target_source_start &&
+                sealed_primary_fallback.target == target_source_start &&
+                sealed_primary_fallback.lifecycle_generation == 0u &&
+                sealed_primary_fallback.owner_kind ==
+                    CoverageOwner::PrimaryStatic &&
+                sealed_primary_fallback.capabilities ==
+                    CoverageCapability::Callable &&
+                sealed_primary_fallback.owner_identity == pack_identity &&
+                sealed_primary_fallback.block_identity ==
+                    target_binding.block_code_identity &&
+                sealed_primary_fallback.dispatch_source ==
+                    target_source_start &&
+                sealed_primary_fallback_events.size() == 1u &&
+                sealed_primary_fallback_events.front().target_owner_kind ==
+                    CoverageOwner::PrimaryStatic &&
+                sealed_primary_fallback_events.front().target_module_identity ==
+                    pack_identity &&
+                sealed_primary_fallback_events.front().target_block_identity ==
+                    target_binding.block_code_identity,
+            "Ein exakter, alleiniger versiegelter Primary-Static-AOT-Block "
+            "blieb ohne redundanten TargetAuthority-Tabelleneintrag "
+            "unaufrufbar.");
+
+    const std::array declared_nonprimary_authority{target_authorities[1u]};
+    const NativeBringupCoverageDispatchPack declared_nonprimary_pack{
+        coverage_pack.identity, static_source_transfers, coverage_entries,
+        declared_nonprimary_authority};
+    NativeBringupCoverageObservations declared_nonprimary_observations;
+    const auto declared_nonprimary_context =
+        make_native_bringup_coverage_dispatch_context(
+            table, runtime_image_bindings, binder, declared_nonprimary_pack,
+            runtime_generation, declared_nonprimary_observations);
+    bool declared_nonprimary_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+            table, runtime_image_bindings, binder,
+            declared_nonprimary_context, static_target_request));
+    } catch (const NativeBringupDispatchError& error) {
+        declared_nonprimary_rejected =
+            error.miss() == NativeBringupDispatchMiss::CoverageTargetMissing;
+    }
+    require(declared_nonprimary_rejected &&
+                declared_nonprimary_observations.total_occurrences() == 0u,
+            "Der versiegelte Primary-Static-Fallback umging eine deklarierte "
+            "aber nicht aktive movable TargetAuthority.");
+
     const std::array runtime_image_source_transfers{
         NativeBringupCoverageSourceTransfer{
             NativeBringupTransferKind::CallRegister,
