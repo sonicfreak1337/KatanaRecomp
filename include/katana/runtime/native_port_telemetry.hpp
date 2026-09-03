@@ -232,6 +232,8 @@ class NativePortTelemetryHostProxy final : public NativePortHostServices {
     [[nodiscard]] std::uint64_t monotonic_time_nanoseconds()
         const noexcept override;
     [[nodiscard]] NativePortLifecycleState poll_lifecycle() override;
+    [[nodiscard]] std::optional<NativePortDevelopmentStateRequest>
+    take_development_state_request() override;
     void synchronize_simulation_boundary() override;
     void begin_frame(std::uint64_t frame_index) override;
     void present_frame(std::uint64_t frame_index) override;

@@ -28,6 +28,7 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include <commdlg.h>
 #include <timeapi.h>
 
 #include <d3d11.h>
@@ -55,6 +56,7 @@ constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
 // model, whose overlapping translucent strips legitimately exceed that depth.
 constexpr std::uint32_t type_two_maximum_fragments_per_pixel = 32u;
 constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
+constexpr std::size_t maximum_development_state_path_bytes = 32'768u;
 
 // The producer-owned desktop host and consumer-owned Win32 window exchange
 // only fixed atomics here. Menu clicks never enter the render command queue,
@@ -67,6 +69,16 @@ struct NativePortRuntimeOptionsBridge final {
     std::atomic<std::uint64_t> simulation_frames{0u};
     std::atomic<bool> frame_pacing_enabled{true};
     std::atomic<bool> performance_overlay_enabled{false};
+    // One consumer-to-producer SPSC mailbox. The render/window owner writes
+    // the payload before release-publishing `state_request_publication`; the
+    // simulation owner copies it before release-publishing `consumed`.
+    std::atomic<std::uint64_t> state_request_publication{0u};
+    std::atomic<std::uint64_t> state_request_consumed{0u};
+    NativePortDevelopmentStateOperation state_request_operation =
+        NativePortDevelopmentStateOperation::Save;
+    std::uint32_t state_request_path_bytes = 0u;
+    std::array<char, maximum_development_state_path_bytes>
+        state_request_path{};
 };
 
 constexpr std::array<std::uint32_t, 4u>
@@ -76,6 +88,8 @@ constexpr std::array<std::uint32_t, 4u>
 constexpr UINT runtime_menu_output_fps = 0x7100u;
 constexpr UINT runtime_menu_simulation_fps = 0x7101u;
 constexpr UINT runtime_menu_performance_overlay = 0x7102u;
+constexpr UINT runtime_menu_save_state = 0x7103u;
+constexpr UINT runtime_menu_load_state = 0x7104u;
 constexpr UINT runtime_menu_rate_first = 0x7110u;
 constexpr UINT runtime_menu_rate_last =
     runtime_menu_rate_first +
@@ -211,6 +225,16 @@ void saturating_atomic_increment(
         throw NativePortGraphicsError(
             NativePortGraphicsFailure::InvalidConfig, 0u, "title");
     return std::string(title);
+}
+
+[[nodiscard]] std::string copy_development_state_directory(
+    const std::string_view directory) {
+    if (directory.size() >= maximum_development_state_path_bytes)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidConfig,
+            0u,
+            "development-state-directory");
+    return std::string(directory);
 }
 
 [[nodiscard]] bool valid_extent(const NativePortExtent extent) noexcept {
@@ -1177,6 +1201,7 @@ constexpr std::uint32_t draw_flag_type_two_autosort_capture = 1u << 21u;
     const char* target,
     const char* source_name);
 [[nodiscard]] std::wstring utf8_to_wide(std::string_view value);
+[[nodiscard]] std::string wide_to_utf8(std::wstring_view value);
 [[nodiscard]] DXGI_FORMAT texture_format(
     NativePortTextureFormat format) noexcept;
 [[nodiscard]] D3D11_PRIMITIVE_TOPOLOGY primitive_topology(
@@ -1320,9 +1345,14 @@ class NativePortGraphicsBackend final {
         const NativePortGraphicsConfig& config,
         NativePortRuntimeOptionsBridge* const runtime_options)
         : title_storage_(copy_validated_graphics_title(config.title)),
+          development_state_directory_storage_(
+              copy_development_state_directory(
+                  config.development_state_directory)),
           config_(config), owner_thread_(std::this_thread::get_id()),
           runtime_options_(runtime_options) {
         config_.title = title_storage_;
+        config_.development_state_directory =
+            development_state_directory_storage_;
         inject_present_failure_once_ = present_failure_test_requested();
         validate_graphics_config(config_);
         initialize_frame_capture();
@@ -3301,6 +3331,15 @@ class NativePortGraphicsBackend final {
     [[nodiscard]] bool handle_runtime_menu_command(
         const UINT command) noexcept {
         if (runtime_options_ == nullptr) return false;
+        if (command == runtime_menu_save_state ||
+            command == runtime_menu_load_state) {
+            choose_development_state_path(
+                command == runtime_menu_save_state
+                    ? NativePortDevelopmentStateOperation::Save
+                    : NativePortDevelopmentStateOperation::Load);
+            update_runtime_options_menu(true);
+            return true;
+        }
         if (command == runtime_menu_performance_overlay) {
             const auto enabled =
                 !runtime_options_->performance_overlay_enabled.load(
@@ -3330,6 +3369,104 @@ class NativePortGraphicsBackend final {
             rate_hz, std::memory_order_release);
         update_runtime_options_menu(true);
         return true;
+    }
+
+    void choose_development_state_path(
+        const NativePortDevelopmentStateOperation operation) noexcept {
+        try {
+            const auto published =
+                runtime_options_->state_request_publication.load(
+                    std::memory_order_acquire);
+            if (runtime_options_->state_request_consumed.load(
+                    std::memory_order_acquire) != published) {
+                MessageBoxW(window_,
+                            L"Der vorherige Save-State-Auftrag wird noch verarbeitet.",
+                            L"KatanaRecomp",
+                            MB_OK | MB_ICONINFORMATION);
+                return;
+            }
+
+            std::wstring initial_directory;
+            if (!config_.development_state_directory.empty()) {
+                std::error_code error;
+                const auto directory = std::filesystem::path(
+                    std::string(config_.development_state_directory));
+                std::filesystem::create_directories(directory, error);
+                if (error)
+                    throw NativePortGraphicsError(
+                        NativePortGraphicsFailure::InvalidConfig,
+                        static_cast<std::uint32_t>(error.value()),
+                        "development-state-directory-create");
+                initial_directory = utf8_to_wide(
+                    config_.development_state_directory);
+            }
+
+            std::vector<wchar_t> path(32'768u, L'\0');
+            if (operation == NativePortDevelopmentStateOperation::Save) {
+                constexpr std::wstring_view default_name =
+                    L"sonic-adventure-state.kstate";
+                std::copy(default_name.begin(),
+                          default_name.end(),
+                          path.begin());
+            }
+            OPENFILENAMEW dialog{};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = window_;
+            dialog.lpstrFilter =
+                L"Katana Save States (*.kstate)\0*.kstate\0Alle Dateien\0*.*\0";
+            dialog.lpstrFile = path.data();
+            dialog.nMaxFile = static_cast<DWORD>(path.size());
+            dialog.lpstrInitialDir = initial_directory.empty()
+                                         ? nullptr
+                                         : initial_directory.c_str();
+            dialog.lpstrDefExt = L"kstate";
+            dialog.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR |
+                           OFN_PATHMUSTEXIST;
+            BOOL selected = FALSE;
+            if (operation == NativePortDevelopmentStateOperation::Save) {
+                dialog.Flags |= OFN_OVERWRITEPROMPT;
+                selected = GetSaveFileNameW(&dialog);
+            } else {
+                dialog.Flags |= OFN_FILEMUSTEXIST;
+                selected = GetOpenFileNameW(&dialog);
+            }
+            if (selected == FALSE) {
+                if (const auto error = CommDlgExtendedError(); error != 0u)
+                    MessageBoxW(window_,
+                                L"Der Save-State-Dateidialog ist fehlgeschlagen.",
+                                L"KatanaRecomp",
+                                MB_OK | MB_ICONERROR);
+                return;
+            }
+
+            const auto utf8_path = wide_to_utf8(path.data());
+            if (utf8_path.empty() ||
+                utf8_path.size() >=
+                    runtime_options_->state_request_path.size())
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::InvalidConfig,
+                    0u,
+                    "development-state-path-size");
+            std::memcpy(runtime_options_->state_request_path.data(),
+                        utf8_path.data(),
+                        utf8_path.size());
+            runtime_options_->state_request_path[utf8_path.size()] = '\0';
+            runtime_options_->state_request_path_bytes =
+                static_cast<std::uint32_t>(utf8_path.size());
+            runtime_options_->state_request_operation = operation;
+            if (published == std::numeric_limits<std::uint64_t>::max())
+                throw NativePortGraphicsError(
+                    NativePortGraphicsFailure::RenderThreadContract,
+                    0u,
+                    "development-state-request-sequence");
+            runtime_options_->state_request_publication.store(
+                published + 1u, std::memory_order_release);
+        } catch (...) {
+            MessageBoxW(window_,
+                        L"Der Save-State-Auftrag konnte nicht erstellt werden.",
+                        L"KatanaRecomp",
+                        MB_OK | MB_ICONERROR);
+        }
     }
 
     void create_runtime_options_menu() {
@@ -3371,6 +3508,18 @@ class NativePortGraphicsBackend final {
             fail_menu("runtime-menu-performance-overlay");
         if (AppendMenuW(options_menu, MF_SEPARATOR, 0u, nullptr) == FALSE)
             fail_menu("runtime-menu-separator");
+        if (AppendMenuW(options_menu,
+                        MF_STRING,
+                        runtime_menu_save_state,
+                        L"Save State...") == FALSE)
+            fail_menu("runtime-menu-save-state");
+        if (AppendMenuW(options_menu,
+                        MF_STRING,
+                        runtime_menu_load_state,
+                        L"Load State...") == FALSE)
+            fail_menu("runtime-menu-load-state");
+        if (AppendMenuW(options_menu, MF_SEPARATOR, 0u, nullptr) == FALSE)
+            fail_menu("runtime-menu-state-separator");
         for (std::size_t index = 0u;
              index < runtime_presentation_rate_choices.size();
              ++index) {
@@ -3484,6 +3633,18 @@ class NativePortGraphicsBackend final {
             options_menu_,
             runtime_menu_performance_overlay,
             MF_BYCOMMAND | (overlay_enabled ? MF_CHECKED : MF_UNCHECKED)));
+        const auto state_request_pending =
+            runtime_options_->state_request_publication.load(
+                std::memory_order_acquire) !=
+            runtime_options_->state_request_consumed.load(
+                std::memory_order_acquire);
+        const auto state_menu_flags =
+            MF_BYCOMMAND |
+            (state_request_pending ? MF_GRAYED : MF_ENABLED);
+        static_cast<void>(EnableMenuItem(
+            options_menu_, runtime_menu_save_state, state_menu_flags));
+        static_cast<void>(EnableMenuItem(
+            options_menu_, runtime_menu_load_state, state_menu_flags));
         UINT selected = 0u;
         for (std::size_t index = 0u;
              index < runtime_presentation_rate_choices.size();
@@ -6202,6 +6363,7 @@ class NativePortGraphicsBackend final {
     }
 
     std::string title_storage_;
+    std::string development_state_directory_storage_;
     NativePortGraphicsConfig config_;
     std::thread::id owner_thread_;
     NativePortRuntimeOptionsBridge* runtime_options_ = nullptr;
@@ -6448,12 +6610,17 @@ class NativePortGraphicsDevice::Impl final {
   public:
     explicit Impl(const NativePortGraphicsConfig& config)
         : title_storage_(copy_validated_graphics_title(config.title)),
+          development_state_directory_storage_(
+              copy_development_state_directory(
+                  config.development_state_directory)),
           config_(config), producer_thread_(std::this_thread::get_id()),
           requested_mode_(native_port_render_thread_enabled()
                               ? NativePortGraphicsExecutionMode::Parallel
                               : NativePortGraphicsExecutionMode::SerialReference),
           active_mode_(requested_mode_) {
         config_.title = title_storage_;
+        config_.development_state_directory =
+            development_state_directory_storage_;
         validate_graphics_config(config_);
 
         NativePortFrameQueueConfig queue_config;
@@ -6583,6 +6750,35 @@ class NativePortGraphicsDevice::Impl final {
         runtime_options_.presentation_rate_hz.store(
             presentation_rate_hz, std::memory_order_release);
         signal_consumer_noexcept();
+    }
+
+    [[nodiscard]] std::optional<NativePortDevelopmentStateRequest>
+    take_development_state_request() {
+        require_producer_thread();
+        const auto published =
+            runtime_options_.state_request_publication.load(
+                std::memory_order_acquire);
+        const auto consumed =
+            runtime_options_.state_request_consumed.load(
+                std::memory_order_relaxed);
+        if (published == consumed) return std::nullopt;
+        const auto path_bytes = runtime_options_.state_request_path_bytes;
+        if (path_bytes == 0u ||
+            path_bytes >= runtime_options_.state_request_path.size()) {
+            runtime_options_.state_request_consumed.store(
+                published, std::memory_order_release);
+            signal_consumer_noexcept();
+            fail_facade("development-state-request-payload");
+        }
+        NativePortDevelopmentStateRequest request;
+        request.operation = runtime_options_.state_request_operation;
+        request.path.assign(runtime_options_.state_request_path.data(),
+                            path_bytes);
+        request.sequence = published;
+        runtime_options_.state_request_consumed.store(
+            published, std::memory_order_release);
+        signal_consumer_noexcept();
+        return request;
     }
 
     [[nodiscard]] NativePortLifecycleState lifecycle_state() {
@@ -7921,6 +8117,7 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     std::string title_storage_;
+    std::string development_state_directory_storage_;
     NativePortGraphicsConfig config_;
     std::thread::id producer_thread_;
     NativePortGraphicsExecutionMode requested_mode_ =
@@ -8130,6 +8327,11 @@ bool NativePortGraphicsDevice::frame_recording_open_nonblocking()
     return impl_->frame_recording_open_nonblocking();
 }
 
+std::optional<NativePortDevelopmentStateRequest>
+NativePortGraphicsDevice::take_development_state_request() {
+    return impl_->take_development_state_request();
+}
+
 NativePortDesktopHost::NativePortDesktopHost(
     const NativePortGraphicsConfig& graphics_config,
     const NativePortFramePacingConfig& frame_pacing_config)
@@ -8178,6 +8380,11 @@ NativePortLifecycleState NativePortDesktopHost::poll_lifecycle() {
                 : now + event_poll_interval_nanoseconds;
     }
     return graphics_.lifecycle_state();
+}
+
+std::optional<NativePortDevelopmentStateRequest>
+NativePortDesktopHost::take_development_state_request() {
+    return graphics_.take_development_state_request();
 }
 
 void NativePortDesktopHost::synchronize_simulation_boundary() {
@@ -9353,6 +9560,44 @@ struct ShaderCompilerApi final {
             NativePortGraphicsFailure::InvalidConfig,
             GetLastError(),
             "title-convert");
+    return result;
+}
+
+[[nodiscard]] std::string wide_to_utf8(const std::wstring_view value) {
+    if (value.empty() ||
+        value.size() > static_cast<std::size_t>(
+                           std::numeric_limits<int>::max()))
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidConfig,
+            0u,
+            "development-state-path");
+    const auto count = WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        value.data(),
+        static_cast<int>(value.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (count <= 0)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidConfig,
+            GetLastError(),
+            "development-state-path-utf8");
+    std::string result(static_cast<std::size_t>(count), '\0');
+    if (WideCharToMultiByte(CP_UTF8,
+                            WC_ERR_INVALID_CHARS,
+                            value.data(),
+                            static_cast<int>(value.size()),
+                            result.data(),
+                            count,
+                            nullptr,
+                            nullptr) != count)
+        throw NativePortGraphicsError(
+            NativePortGraphicsFailure::InvalidConfig,
+            GetLastError(),
+            "development-state-path-convert");
     return result;
 }
 

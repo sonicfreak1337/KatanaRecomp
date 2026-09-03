@@ -226,6 +226,10 @@ bool execution_matches(
 
 using CoverageSourceKey = std::tuple<std::uint8_t, std::uint32_t>;
 using CoverageEntryKey = std::tuple<std::uint32_t, std::string_view>;
+using CoverageTargetAuthorityKey =
+    std::tuple<std::uint32_t, std::uint8_t, std::string_view,
+               std::string_view, std::uint32_t, std::uint32_t,
+               std::uint32_t>;
 
 std::optional<CoverageSourceKey> coverage_source_key(
     const NativeBringupCoverageSourceTransfer& source) noexcept {
@@ -347,6 +351,89 @@ bool coverage_entry_valid(
            entry.target.block.virtual_address == target_source;
 }
 
+std::optional<CoverageTargetAuthorityKey> coverage_target_authority_key(
+    const NativeBringupCoverageTargetAuthority& authority) noexcept {
+    if (authority.owner_kind ==
+        NativeBringupCoverageOwnerKind::NativeFunctionEntry)
+        return std::nullopt;
+    return CoverageTargetAuthorityKey{
+        authority.target.block.virtual_address,
+        static_cast<std::uint8_t>(authority.owner_kind),
+        authority.module_identity,
+        authority.image_id,
+        authority.source_start,
+        authority.runtime_start,
+        authority.module_relative_offset};
+}
+
+bool coverage_target_authority_valid(
+    const NativeBringupCoverageTargetAuthority& authority) noexcept {
+    using Capability = NativeBringupCoverageTargetCapability;
+    constexpr auto known_capabilities =
+        static_cast<std::uint8_t>(Capability::Callable) |
+        static_cast<std::uint8_t>(Capability::TailJumpEntry) |
+        static_cast<std::uint8_t>(Capability::InternalBlock) |
+        static_cast<std::uint8_t>(Capability::ResumeOnly);
+    const auto capabilities =
+        static_cast<std::uint8_t>(authority.capabilities);
+    const auto source_end =
+        static_cast<std::uint64_t>(authority.source_start) +
+        authority.module_size;
+    const auto target_source =
+        static_cast<std::uint64_t>(authority.source_start) +
+        authority.module_relative_offset;
+    if (authority.owner_kind ==
+            NativeBringupCoverageOwnerKind::NativeFunctionEntry ||
+        capabilities == 0u || (capabilities & ~known_capabilities) != 0u ||
+        ((capabilities & static_cast<std::uint8_t>(Capability::ResumeOnly)) !=
+             0u &&
+         capabilities != static_cast<std::uint8_t>(Capability::ResumeOnly)) ||
+        !canonical_sha256(authority.module_identity) ||
+        authority.module_size < 2u ||
+        authority.module_size > 4u * 1024u * 1024u ||
+        (authority.source_start & 1u) != 0u ||
+        source_end > 0x1'0000'0000ull ||
+        (authority.module_relative_offset & 1u) != 0u ||
+        authority.module_relative_offset > authority.module_size ||
+        authority.target.size >
+            authority.module_size - authority.module_relative_offset ||
+        target_source > std::numeric_limits<std::uint32_t>::max() ||
+        !binding_valid(authority.target) ||
+        authority.target.block.virtual_address != target_source)
+        return false;
+
+    switch (authority.owner_kind) {
+    case NativeBringupCoverageOwnerKind::PrimaryStatic:
+        return authority.image_id.empty() &&
+               authority.runtime_start == authority.source_start;
+    case NativeBringupCoverageOwnerKind::RuntimeImage: {
+        const auto runtime_end =
+            static_cast<std::uint64_t>(authority.runtime_start) +
+            authority.module_size;
+        return valid_component(authority.image_id) &&
+               authority.runtime_start != 0u &&
+               canonical_coverage_runtime_alias(authority.runtime_start) ==
+                   authority.runtime_start &&
+               runtime_end <= 0x1'0000'0000ull;
+    }
+    case NativeBringupCoverageOwnerKind::LoadedAot: {
+        if (!authority.image_id.empty()) return false;
+        if (authority.runtime_start == 0u) return true;
+        const auto runtime_end =
+            static_cast<std::uint64_t>(authority.runtime_start) +
+            authority.module_size;
+        return (authority.runtime_start & 0xFFFu) == 0u &&
+               canonical_coverage_runtime_alias(authority.runtime_start) ==
+                   authority.runtime_start &&
+               authority.runtime_start >= 0x8C000000u &&
+               runtime_end <= 0x8D000000ull;
+    }
+    case NativeBringupCoverageOwnerKind::NativeFunctionEntry:
+        return false;
+    }
+    return false;
+}
+
 bool ordered_coverage_view(
     const NativeBringupCoverageDispatchPack& pack) noexcept {
     const auto& identity = pack.identity;
@@ -361,7 +448,10 @@ bool ordered_coverage_view(
         identity.aot_pack_generation == 0u ||
         pack.source_transfers.size() >
             native_bringup_coverage_maximum_source_transfers ||
-        pack.entries.size() > native_bringup_coverage_maximum_entries)
+        pack.entries.size() > native_bringup_coverage_maximum_entries ||
+        pack.target_authorities.empty() ||
+        pack.target_authorities.size() >
+            native_bringup_coverage_maximum_target_authorities)
         return false;
 
     std::optional<CoverageSourceKey> previous_source;
@@ -379,6 +469,14 @@ bool ordered_coverage_view(
             (previous_entry && !(*previous_entry < *key)))
             return false;
         previous_entry = key;
+    }
+    std::optional<CoverageTargetAuthorityKey> previous_authority;
+    for (const auto& authority : pack.target_authorities) {
+        const auto key = coverage_target_authority_key(authority);
+        if (!coverage_target_authority_valid(authority) || !key ||
+            (previous_authority && !(*previous_authority < *key)))
+            return false;
+        previous_authority = key;
     }
     return true;
 }
@@ -412,6 +510,21 @@ const char* coverage_source_kind_name(
     return "invalid";
 }
 
+const char* coverage_owner_kind_name(
+    const NativeBringupCoverageOwnerKind kind) noexcept {
+    switch (kind) {
+    case NativeBringupCoverageOwnerKind::NativeFunctionEntry:
+        return "native-function-entry";
+    case NativeBringupCoverageOwnerKind::PrimaryStatic:
+        return "primary-static";
+    case NativeBringupCoverageOwnerKind::RuntimeImage:
+        return "runtime-image";
+    case NativeBringupCoverageOwnerKind::LoadedAot:
+        return "loaded-aot";
+    }
+    return "invalid";
+}
+
 std::uint64_t coverage_observation_hash(
     const NativeBringupCoverageObservation& event) noexcept {
     std::uint64_t hash = 14695981039346656037ull;
@@ -439,7 +552,10 @@ std::uint64_t coverage_observation_hash(
     append_number(event.source_runtime_start);
     append_number(event.source_module_offset);
     append_number(event.source_lifecycle_generation);
+    append_string(event.source_image_id);
+    append_number(static_cast<std::uint8_t>(event.target_owner_kind));
     append_string(event.target_module_identity);
+    append_string(event.target_image_id);
     append_string(event.target_block_identity);
     append_number(event.target_runtime_start);
     append_number(event.target_module_offset);
@@ -462,7 +578,10 @@ bool same_coverage_observation_key(
                left.source_runtime_start,
                left.source_module_offset,
                left.source_lifecycle_generation,
+               left.source_image_id,
+               left.target_owner_kind,
                left.target_module_identity,
+               left.target_image_id,
                left.target_block_identity,
                left.target_runtime_start,
                left.target_module_offset,
@@ -479,7 +598,10 @@ bool same_coverage_observation_key(
                right.source_runtime_start,
                right.source_module_offset,
                right.source_lifecycle_generation,
+               right.source_image_id,
+               right.target_owner_kind,
                right.target_module_identity,
+               right.target_image_id,
                right.target_block_identity,
                right.target_runtime_start,
                right.target_module_offset,
@@ -506,8 +628,11 @@ bool same_coverage_observation_storage_key(
            left.source_module_offset == right.source_module_offset &&
            left.source_lifecycle_generation ==
                right.source_lifecycle_generation &&
+           same_storage(left.source_image_id, right.source_image_id) &&
+           left.target_owner_kind == right.target_owner_kind &&
            same_storage(left.target_module_identity,
                         right.target_module_identity) &&
+           same_storage(left.target_image_id, right.target_image_id) &&
            same_storage(left.target_block_identity,
                         right.target_block_identity) &&
            left.target_runtime_start == right.target_runtime_start &&
@@ -655,6 +780,10 @@ NativeBringupCoverageDispatchContext::NativeBringupCoverageDispatchContext(
       validated_sources_size_(validated_pack.source_transfers.size()),
       validated_entries_data_(validated_pack.entries.data()),
       validated_entries_size_(validated_pack.entries.size()),
+      validated_target_authorities_data_(
+          validated_pack.target_authorities.data()),
+      validated_target_authorities_size_(
+          validated_pack.target_authorities.size()),
       validated_identity_(validated_pack.identity),
       validated_table_(&validated_table),
       validated_runtime_images_(&validated_runtime_images),
@@ -682,6 +811,10 @@ bool NativeBringupCoverageDispatchContext::validated_view_current(
            pack.source_transfers.size() == validated_sources_size_ &&
            pack.entries.data() == validated_entries_data_ &&
            pack.entries.size() == validated_entries_size_ &&
+           pack.target_authorities.data() ==
+               validated_target_authorities_data_ &&
+           pack.target_authorities.size() ==
+               validated_target_authorities_size_ &&
            current.contract_version == validated_identity_.contract_version &&
            same_storage(current.authority_identity,
                         validated_identity_.authority_identity) &&
@@ -714,8 +847,8 @@ make_native_bringup_coverage_dispatch_context(
 
     BlockVariantKey variant;
     variant.runtime_generation = runtime_generation;
-    const auto binding_current = [&](const auto& binding) {
-        const auto execution = table.lookup_static_aot(
+    const auto sealed_binding_current = [&](const auto& binding) {
+        const auto execution = table.lookup_sealed_static_aot(
             binding.block.physical_address,
             binding.block.virtual_address,
             variant);
@@ -725,12 +858,18 @@ make_native_bringup_coverage_dispatch_context(
             pack.source_transfers.begin(),
             pack.source_transfers.end(),
             [&](const auto& source) {
-                return !binding_current(source.source);
+                return !sealed_binding_current(source.source);
             }) ||
         std::any_of(
             pack.entries.begin(), pack.entries.end(),
             [&](const auto& entry) {
-                return !binding_current(entry.target);
+                return !sealed_binding_current(entry.target);
+            }) ||
+        std::any_of(
+            pack.target_authorities.begin(),
+            pack.target_authorities.end(),
+            [&](const auto& authority) {
+                return !sealed_binding_current(authority.target);
             }))
         throw std::invalid_argument(
             "Native bring-up coverage pack is not bound to the sealed "
@@ -806,6 +945,10 @@ const char* native_bringup_dispatch_miss_name(
         return "runtime-image-identity-mismatch";
     case NativeBringupDispatchMiss::HookReplacementConflict:
         return "hook-replacement-conflict";
+    case NativeBringupDispatchMiss::AmbiguousTargetOwner:
+        return "ambiguous-target-owner";
+    case NativeBringupDispatchMiss::TargetCapabilityMismatch:
+        return "target-capability-mismatch";
     }
     return "invalid-entry";
 }
@@ -892,8 +1035,8 @@ NativeBringupCoverageObservations::events() const noexcept {
 
 std::string NativeBringupCoverageObservations::serialize_json() const {
     std::ostringstream output;
-    output << "{\"schema\":\"katana-native-bringup-coverage-v1\""
-           << ",\"report_version\":1"
+    output << "{\"schema\":\"katana-native-bringup-coverage-v2\""
+           << ",\"report_version\":2"
            << ",\"report_type\":\"native-bringup-coverage\""
            << ",\"non_release\":true,\"coverage_only\":true"
            << ",\"proof\":\"incomplete\",\"static_proof_promotions\":0"
@@ -918,8 +1061,14 @@ std::string NativeBringupCoverageObservations::serialize_json() const {
                << event.source_module_offset
                << ",\"source_lifecycle_generation\":"
                << event.source_lifecycle_generation
-               << ",\"target_module_identity\":\""
+               << ",\"source_image_id\":\""
+               << event.source_image_id
+               << "\",\"target_owner_kind\":\""
+               << coverage_owner_kind_name(event.target_owner_kind)
+               << "\",\"target_module_identity\":\""
                << event.target_module_identity
+               << "\",\"target_image_id\":\""
+               << event.target_image_id
                << "\",\"target_block_identity\":\""
                << event.target_block_identity
                << "\",\"target_runtime_start\":"

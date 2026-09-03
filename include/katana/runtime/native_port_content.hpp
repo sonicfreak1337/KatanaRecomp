@@ -239,6 +239,15 @@ struct NativePortRuntimeImageActiveEntryView final {
     std::uint64_t lifecycle_generation = 0u;
 };
 
+// Owner-thread development-state inventory. These views carry identities,
+// never host mappings; a restore must reacquire fresh lifecycle generations.
+struct NativePortRuntimeImageLifecycleView final {
+    std::string_view image_id;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t byte_size = 0u;
+    std::uint64_t lifecycle_generation = 0u;
+};
+
 class NativePortRuntimeImageBindings final {
   public:
     NativePortRuntimeImageBindings(
@@ -269,10 +278,14 @@ class NativePortRuntimeImageBindings final {
         std::uint32_t runtime_start,
         std::size_t byte_size);
     [[nodiscard]] bool active(std::string_view image_id) const noexcept;
+    [[nodiscard]] bool recognizes_image(
+        std::string_view image_id) const noexcept;
     [[nodiscard]] std::optional<NativePortRuntimeImageActiveEntryView>
     active_entry_for_address(std::uint32_t address) const;
     [[nodiscard]] NativePortRuntimeImageDispatchStamp
     dispatch_stamp() const noexcept;
+    [[nodiscard]] std::vector<NativePortRuntimeImageLifecycleView>
+    active_images_for_development_state() const;
 
   private:
     friend bool reconcile_native_port_runtime_executable_write(
@@ -330,6 +343,19 @@ class NativePortLoadedAotBinder final {
     // can be reused by a dispatch preflight cache.
     [[nodiscard]] NativePortLoadedAotDispatchStamp
     dispatch_stamp() const noexcept;
+    struct DevelopmentStateModule final {
+        std::string_view sha256;
+        std::uint32_t source_start = 0u;
+        std::uint32_t runtime_start = 0u;
+        std::uint32_t byte_size = 0u;
+        // One exact generated block start used only to reactivate a saved
+        // module after stage_runtime_module has revalidated its full identity.
+        std::uint32_t activation_entry = 0u;
+        std::uint64_t lifecycle_generation = 0u;
+        bool active = false;
+    };
+    [[nodiscard]] std::vector<DevelopmentStateModule>
+    modules_for_development_state() const;
     [[nodiscard]] std::string_view
     module_universe_identity() const noexcept;
     [[nodiscard]] std::string_view aot_pack_identity() const noexcept;
@@ -352,6 +378,11 @@ class NativePortLoadedAotBinder final {
     [[nodiscard]] std::uint32_t resolve_module_source_start(
         std::string_view sha256,
         std::size_t byte_size) const;
+    // Read-only generated-universe check used before a development-state load
+    // mutates RAM or executable lifecycle state.
+    void validate_development_state_module(
+        const NativePortLoadedAotModuleActivation& activation,
+        std::uint32_t activation_entry) const;
     // Installs one unambiguous exact executable-closure mapping for target.
     // False means no analyzed module matches; ambiguous, malformed, or stale
     // generated-code state fails closed.
@@ -417,6 +448,15 @@ deactivate_native_port_executable_overlaps(
 // covered by the same product contract.
 [[nodiscard]] std::vector<std::uint8_t>
 capture_native_port_main_memory(const CpuState& cpu);
+
+// Restores the complete aliased main-RAM backing after verifying that every
+// fixed executable/read-only byte is identical to the current product. This
+// intentionally bypasses ordinary per-write observers only for those proven
+// identical fixed bytes; all dynamic executable owners must be retired first.
+void restore_native_port_main_memory_for_development_state(
+    CpuState& cpu,
+    std::span<const std::uint8_t> bytes,
+    std::span<const NativePortImmutableRange> immutable_ranges);
 
 void validate_native_port_bootstrap_memory_transition(
     const CpuState& cpu,

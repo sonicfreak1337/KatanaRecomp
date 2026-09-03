@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 19u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 20u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 2u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
@@ -112,6 +112,10 @@ struct NativePortGraphicsConfig final {
     // title-wide texture/mesh budget from forcing gigabyte frame arenas.
     std::uint32_t maximum_render_resource_payload_bytes_per_command =
         64u * 1024u * 1024u;
+    // Stable host directory used only as the initial location for the
+    // development Save State / Load State dialogs. The title simulation owns
+    // serialization and receives the selected path through a bounded mailbox.
+    std::string_view development_state_directory;
     // Optional host-only aggregate telemetry owner. It must outlive the
     // device; the backend owner thread creates and retains its own writer.
     NativePortTelemetry* telemetry = nullptr;
@@ -1008,6 +1012,8 @@ class NativePortGraphicsDevice final {
     [[nodiscard]] std::uint64_t
     repeated_presentations_nonblocking() const noexcept;
     [[nodiscard]] bool frame_recording_open_nonblocking() const noexcept;
+    [[nodiscard]] std::optional<NativePortDevelopmentStateRequest>
+    take_development_state_request();
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -1027,6 +1033,8 @@ class NativePortDesktopHost final : public NativePortHostServices {
     [[nodiscard]] std::uint64_t monotonic_time_nanoseconds()
         const noexcept override;
     [[nodiscard]] NativePortLifecycleState poll_lifecycle() override;
+    [[nodiscard]] std::optional<NativePortDevelopmentStateRequest>
+    take_development_state_request() override;
     void synchronize_simulation_boundary() override;
     void begin_frame(std::uint64_t frame_index) override;
     void present_frame(std::uint64_t frame_index) override;

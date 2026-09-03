@@ -2505,6 +2505,11 @@ int run_test(const int argc, char* argv[]) {
         katana::io::sha256_bytes(std::string_view(
             reinterpret_cast<const char*>(coverage_boot.boot_file.data()),
             4u));
+    const auto coverage_internal_block_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(coverage_boot.boot_file.data() + 4u),
+            4u));
     constexpr std::uint32_t coverage_runtime_start = 0x8C100000u;
     constexpr std::uint32_t coverage_proof_runtime_start = 0x8C200000u;
     const std::array coverage_entry_hints{
@@ -2530,6 +2535,12 @@ int run_test(const int argc, char* argv[]) {
         coverage_content_identity,
         coverage_boot.metadata.boot_file_name,
         coverage_boot_identity};
+    constexpr std::array coverage_function_boundaries{
+        katana::runtime::GameProjectFunctionBoundary{
+            katana::platform::dreamcast_disc_boot_address,
+            16u,
+            "coverage_primary_owner"}};
+    coverage_project.function_boundaries = coverage_function_boundaries;
     coverage_project.runtime_images = external_runtime_images;
     const std::array coverage_native_images{
         katana::runtime::NativePortImageBinding{
@@ -2650,6 +2661,13 @@ int run_test(const int argc, char* argv[]) {
         4u,
         coverage_hook_identity,
         katana::codegen::CompleteDisassemblyEntryKind::FunctionEntry});
+    coverage_primary_module.entries.push_back({
+        4u,
+        4u,
+        coverage_internal_block_identity,
+        // This entry must seed decode and block materialization inside the
+        // exact owner above without becoming an independently callable root.
+        katana::codegen::CompleteDisassemblyEntryKind::ControlFlowTarget});
     coverage_authority.modules.push_back(
         std::move(coverage_primary_module));
 
@@ -2749,6 +2767,14 @@ int run_test(const int argc, char* argv[]) {
                        "entries.push_back({0x8C100008u") !=
                    std::string::npos;
         });
+    const bool resident_block_only_entry_uses_exact_owner =
+        std::ranges::any_of(
+            coverage_generated, [](const auto& generated_file) {
+                return generated_file.second.find(
+                           "entries.push_back({0x8C010004u, "
+                           "&fn_8C010000_runtime_entry") !=
+                       std::string::npos;
+            });
     const auto proof_branch = coverage_dispatch.find("if (proof_target) {");
     const auto proof_return = coverage_dispatch.find(
         "        return;\n    }", proof_branch);
@@ -2771,6 +2797,29 @@ int run_test(const int argc, char* argv[]) {
             primary_internal_resume_binding < static_table_end,
         "Complete-Disassembly-Coverage materialisiert nicht jeden exakt "
         "emittierten Static-AOT-Block und Mid-Block-Resume-Entry.");
+    require(
+            coverage_dispatch.find(
+                "NativeBringupCoverageTargetAuthority") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "NativeBringupCoverageTargetCapability>(6u)") !=
+                std::string::npos &&
+            resident_block_only_entry_uses_exact_owner &&
+            coverage_dispatch.find(
+                "NativeBringupCoverageDispatchSelection") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "find_exact_entry(admission.dispatch_source)") !=
+                std::string::npos &&
+            coverage_dispatch.find("selected_entry->function !=") !=
+                std::string::npos &&
+            coverage_dispatch.find("admission.execution.function") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "native_bringup_coverage_dispatch_selection = {") !=
+                std::string::npos,
+        "Coverage-Target-Authority verlor Block-vs-Callable-Capability oder "
+        "die eindeutige Preflight-zu-Dispatch-Auswahl.");
     require(
             coverage_dispatch.find(
                 "NativeBringupCoverageSourceTransfer, 1u") !=
@@ -2832,7 +2881,7 @@ int run_test(const int argc, char* argv[]) {
                 "\"complete_disassembly_coverage_modules\":3") !=
                 std::string::npos &&
             coverage_metadata.find(
-                "\"complete_disassembly_coverage_entries\":4") !=
+                "\"complete_disassembly_coverage_entries\":5") !=
                 std::string::npos &&
             coverage_dispatch.find("dynamic_interpreter.hpp") ==
                 std::string::npos,
@@ -4789,6 +4838,75 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos,
         "Nativer Produktport bindet Saves weiterhin an den wechselnden "
         "Exportordner oder ignoriert die explizite Nutzerdatenwurzel.");
+    const auto native_state_directory = explicit_static_main.find(
+        "const auto native_product_development_state_directory =\n"
+        "            (platform_config.user_data_root / definition.project_id /\n"
+        "             \"states\").string();",
+        native_user_data_assignment);
+    const auto native_state_directory_binding = explicit_static_main.find(
+        "graphics_config.development_state_directory =\n"
+        "            native_product_development_state_directory;",
+        native_state_directory);
+    const auto native_state_memory_restore = explicit_static_dispatch.find(
+        "restore_native_port_main_memory_for_development_state(");
+    const auto native_state_restore_declaration = explicit_static_dispatch.find(
+        "bool restore_native_development_state_main_memory(\n"
+        "    katana::runtime::NativePortContext& context,\n"
+        "    std::span<const std::uint8_t> bytes) noexcept;");
+    const auto exact_guarded_match_declaration = explicit_static_dispatch.find(
+        "[[nodiscard]] bool exact_guarded_target_matches(\n"
+        "    std::uint32_t target, std::uint32_t allowed_target) noexcept;");
+    const auto native_state_scope_binding = explicit_static_dispatch.find(
+        "context.development_state_restore_main_memory =\n"
+        "            &restore_native_development_state_main_memory;");
+    const auto native_state_restore_definition_scope =
+        explicit_static_dispatch.rfind(
+            "namespace {\nbool restore_native_development_state_main_memory(\n",
+            native_state_memory_restore);
+    const auto native_state_restore_definition_scope_end =
+        explicit_static_dispatch.find(
+            "} // namespace\n",
+            native_state_memory_restore);
+    const auto native_state_request_poll = explicit_static_dispatch.find(
+        "context.host->take_development_state_request();");
+    const auto native_state_handler_call = explicit_static_dispatch.find(
+        "outcome = context.development_state_handler(",
+        native_state_request_poll);
+    const auto native_state_dispatch_restart = explicit_static_dispatch.find(
+        "target = cpu.pc;",
+        native_state_handler_call);
+    require(
+        native_state_directory != std::string::npos &&
+            native_state_directory_binding != std::string::npos &&
+            native_state_memory_restore != std::string::npos &&
+            native_state_restore_declaration != std::string::npos &&
+            exact_guarded_match_declaration != std::string::npos &&
+            native_state_scope_binding != std::string::npos &&
+            native_state_restore_definition_scope != std::string::npos &&
+            native_state_restore_definition_scope_end !=
+                std::string::npos &&
+            native_state_request_poll != std::string::npos &&
+            native_state_handler_call != std::string::npos &&
+            native_state_dispatch_restart != std::string::npos &&
+            native_user_data_assignment < native_state_directory &&
+            native_state_directory < native_state_directory_binding &&
+            native_state_restore_declaration < native_state_scope_binding &&
+            exact_guarded_match_declaration < native_state_scope_binding &&
+            native_state_restore_definition_scope <
+                native_state_memory_restore &&
+            native_state_scope_binding < native_state_memory_restore &&
+            native_state_memory_restore <
+                native_state_restore_definition_scope_end &&
+            native_state_scope_binding < native_state_request_poll &&
+            native_state_request_poll < native_state_handler_call &&
+            native_state_handler_call < native_state_dispatch_restart &&
+            occurrences(explicit_static_dispatch,
+                        "take_development_state_request()") == 1u &&
+            occurrences(explicit_static_dispatch,
+                        "restore_native_port_main_memory_for_development_state(") ==
+                1u,
+        "Save/Load State verliert den stabilen Nutzerdatenpfad, die "
+        "immutable RAM-Grenze oder den outermost Dispatcher-Neustart.");
     const auto handwritten_telemetry_owner = generated_main.find(
         "katana::runtime::NativePortTelemetry native_performance_telemetry;");
     const auto handwritten_telemetry_opt_in = generated_main.find(
@@ -5735,6 +5853,9 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_link_audit.find(
                 "if (contains_exact(allowed_direct_objects, origin)) continue;") !=
+                std::string::npos &&
+            generated_link_audit.find(
+                "std::string_view{\"comdlg32.dll\"}") !=
                 std::string::npos &&
             generated_link_audit.find("direct-lto-object=") !=
                 std::string::npos &&

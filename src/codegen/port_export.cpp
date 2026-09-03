@@ -959,7 +959,7 @@ std::string latent_primary_root_seed_cache_semantic_identity(
     // existing export identity while allowing those downstream declarations
     // to reuse an already authoritative root seed.
     static_assert(
-        katana::runtime::native_port_definition_contract_version == 13u,
+        katana::runtime::native_port_definition_contract_version == 14u,
         "Review the latent-root NativePort projection for the new contract.");
     if (options.native_port_definition == nullptr)
         return latent_primary_root_seed_semantic_identity(
@@ -17402,6 +17402,11 @@ std::string native_product_main(
            "            platform_config);\n"
            "        katana::runtime::NativePortGraphicsConfig graphics_config;\n"
            "        graphics_config.title = definition.project_id;\n"
+           "        const auto native_product_development_state_directory =\n"
+           "            (platform_config.user_data_root / definition.project_id /\n"
+           "             \"states\").string();\n"
+           "        graphics_config.development_state_directory =\n"
+           "            native_product_development_state_directory;\n"
            "        katana::runtime::NativePortFramePacingConfig frame_pacing;\n"
            "        frame_pacing.simulation_rate_hz =\n"
            "            definition.frame_timing.simulation_rate_hz;\n"
@@ -17733,6 +17738,20 @@ struct NativeBringupCoverageEntryEmission final {
     NativeBringupDispatchBlockEmission target;
 };
 
+struct NativeBringupCoverageTargetAuthorityEmission final {
+    katana::runtime::NativeBringupCoverageOwnerKind owner_kind =
+        katana::runtime::NativeBringupCoverageOwnerKind::PrimaryStatic;
+    katana::runtime::NativeBringupCoverageTargetCapability capabilities =
+        katana::runtime::NativeBringupCoverageTargetCapability::None;
+    std::string module_identity;
+    std::string image_id;
+    std::uint32_t module_size = 0u;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t module_relative_offset = 0u;
+    NativeBringupDispatchBlockEmission target;
+};
+
 [[nodiscard]] bool native_bringup_sha256(
     const std::string_view value) noexcept {
     constexpr std::string_view prefix = "sha256:";
@@ -17769,7 +17788,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     const std::span<const NativeBringupCoverageSourceEmission>
         native_bringup_coverage_sources,
     const std::span<const NativeBringupCoverageEntryEmission>
-        native_bringup_coverage_entries) {
+        native_bringup_coverage_entries,
+    const std::span<const NativeBringupCoverageTargetAuthorityEmission>
+        native_bringup_coverage_target_authorities) {
     const bool native_bringup =
         execution_profile == NativePortExecutionProfile::NativeBringup;
     const bool native_bringup_coverage =
@@ -17808,13 +17829,18 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
              katana::runtime::
                  native_bringup_coverage_maximum_source_transfers ||
          native_bringup_coverage_entries.size() >
-             katana::runtime::native_bringup_coverage_maximum_entries))
+             katana::runtime::native_bringup_coverage_maximum_entries ||
+         native_bringup_coverage_target_authorities.empty() ||
+         native_bringup_coverage_target_authorities.size() >
+             katana::runtime::
+                 native_bringup_coverage_maximum_target_authorities))
         throw std::invalid_argument(
             "Native bring-up coverage lost its bounded authority, source or "
             "entry inventory.");
     if (!native_bringup_coverage &&
         (!native_bringup_coverage_sources.empty() ||
-         !native_bringup_coverage_entries.empty()))
+         !native_bringup_coverage_entries.empty() ||
+         !native_bringup_coverage_target_authorities.empty()))
         throw std::invalid_argument(
             "Native bring-up coverage inventory has no authority identity.");
     for (std::size_t index = 0u; index < latent_modules.size(); ++index) {
@@ -19489,6 +19515,57 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
             }
             output
                 << "}};\n"
+                << "constexpr std::array<katana::runtime::"
+                   "NativeBringupCoverageTargetAuthority, "
+                << native_bringup_coverage_target_authorities.size()
+                << "u> native_bringup_coverage_target_authorities{{\n";
+            for (const auto& authority :
+                 native_bringup_coverage_target_authorities) {
+                const auto owner_name = [&]() -> std::string_view {
+                    switch (authority.owner_kind) {
+                    case katana::runtime::NativeBringupCoverageOwnerKind::
+                        NativeFunctionEntry:
+                        return "NativeFunctionEntry";
+                    case katana::runtime::NativeBringupCoverageOwnerKind::
+                        PrimaryStatic:
+                        return "PrimaryStatic";
+                    case katana::runtime::NativeBringupCoverageOwnerKind::
+                        RuntimeImage:
+                        return "RuntimeImage";
+                    case katana::runtime::NativeBringupCoverageOwnerKind::
+                        LoadedAot:
+                        return "LoadedAot";
+                    }
+                    throw std::logic_error(
+                        "Native bring-up target owner is invalid.");
+                }();
+                const auto physical =
+                    katana::runtime::canonical_physical_address(
+                        authority.target.address);
+                output
+                    << "    {katana::runtime::"
+                       "NativeBringupCoverageOwnerKind::"
+                    << owner_name
+                    << ", static_cast<katana::runtime::"
+                       "NativeBringupCoverageTargetCapability>("
+                    << static_cast<unsigned>(authority.capabilities)
+                    << "u), "
+                    << katana::io::quote_json(authority.module_identity)
+                    << ", " << katana::io::quote_json(authority.image_id)
+                    << ", " << authority.module_size << "u, 0x"
+                    << symbol(authority.source_start) << "u, 0x"
+                    << symbol(authority.runtime_start) << "u, "
+                    << authority.module_relative_offset << "u, {{0x"
+                    << symbol(authority.target.address) << "u, 0x"
+                    << symbol(physical) << "u}, " << authority.target.size
+                    << "u, katana::runtime::BlockEndKind::"
+                    << end_kind_name(authority.target.end_kind) << ", "
+                    << katana::io::quote_json(
+                           authority.target.code_identity)
+                    << "}},\n";
+            }
+            output
+                << "}};\n"
                 << "inline constexpr katana::runtime::"
                    "NativeBringupCoverageDispatchPack "
                    "native_bringup_coverage_dispatch_pack{\n"
@@ -19512,7 +19589,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "native_bringup_coverage_sources),\n"
                 << "    std::span<const katana::runtime::"
                    "NativeBringupCoverageEntry>("
-                   "native_bringup_coverage_entries)};\n";
+                   "native_bringup_coverage_entries),\n"
+                << "    std::span<const katana::runtime::"
+                   "NativeBringupCoverageTargetAuthority>("
+                   "native_bringup_coverage_target_authorities)};\n";
         }
         // The complete primary-image dispatch inventory can contain hundreds
         // of thousands of entries. Requiring the standard library to
@@ -20166,6 +20246,18 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
     output << "thread_local bool closure_probe_dispatch_pending = false;\n";
     if (native_bringup)
         output << "thread_local bool native_bringup_dispatch_pending = false;\n";
+    if (native_bringup_coverage)
+        output
+            << "struct NativeBringupCoverageDispatchSelection final {\n"
+               "    bool valid = false;\n"
+               "    std::uint32_t requested_target = 0u;\n"
+               "    std::uint32_t dispatch_source = 0u;\n"
+               "    katana::runtime::NativeBringupCoverageOwnerKind owner_kind =\n"
+               "        katana::runtime::NativeBringupCoverageOwnerKind::PrimaryStatic;\n"
+               "    const runtime_dispatch_detail::NativePortDispatchEntry* entry = nullptr;\n"
+               "};\n"
+               "thread_local NativeBringupCoverageDispatchSelection\n"
+               "    native_bringup_coverage_dispatch_selection;\n";
     output << "namespace {\n"
               "constexpr std::array<katana::runtime::"
               "ClosureProbeEligibleSiteView, "
@@ -20277,7 +20369,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "thread_local std::uint64_t closure_probe_last_generation = 0u;\n"
               "thread_local std::string_view closure_probe_last_owner_identity;\n"
               "thread_local katana::runtime::NativePortContext* "
-              "active_native_context = nullptr;\n";
+              "active_native_context = nullptr;\n"
+              "thread_local std::uint32_t active_native_dispatch_depth = 0u;\n";
     if (native_bringup)
         output
             << "thread_local katana::runtime::RuntimeBlockTable* "
@@ -21224,6 +21317,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        closure_probe_dispatch_pending = false;\n"
               "    }\n"
               "}\n"
+              "bool restore_native_development_state_main_memory(\n"
+              "    katana::runtime::NativePortContext& context,\n"
+              "    std::span<const std::uint8_t> bytes) noexcept;\n"
+              "[[nodiscard]] bool exact_guarded_target_matches(\n"
+              "    std::uint32_t target, std::uint32_t allowed_target) noexcept;\n"
               "class NativeDispatchScope final {\n"
               "  public:\n"
               "    NativeDispatchScope(\n"
@@ -21250,7 +21348,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            runtime_dispatch_detail::active_services != nullptr ||\n"
               "            runtime_dispatch_detail::active_loaded_aot_binder != nullptr ||\n"
               "            context.runtime_images != nullptr ||\n"
-              "            context.loaded_aot != nullptr"
+              "            context.loaded_aot != nullptr ||\n"
+              "            context.development_state_restore_main_memory != nullptr"
            << (native_bringup
                    ? " ||\n            active_native_bringup_table != nullptr ||\n"
                      "            active_native_bringup_context != nullptr ||\n"
@@ -21258,7 +21357,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                     : "")
            << (native_bringup_coverage
                    ? " ||\n            "
-                     "active_native_bringup_coverage_context != nullptr"
+                     "active_native_bringup_coverage_context != nullptr ||\n"
+                     "            native_bringup_coverage_dispatch_selection.valid"
                    : "")
            << ")\n"
               "            throw std::runtime_error(\"native-dispatch-reentry-scope\");\n"
@@ -21268,6 +21368,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            &loaded_aot_binder;\n"
               "        context.runtime_images = &runtime_image_bindings;\n"
               "        context.loaded_aot = &loaded_aot_binder;\n"
+              "        context.development_state_restore_main_memory =\n"
+              "            &restore_native_development_state_main_memory;\n"
            << (native_bringup
                    ? "        active_native_bringup_table = &native_bringup_table;\n"
                      "        active_native_bringup_context = &native_bringup_context;\n"
@@ -21294,12 +21396,13 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                       "        active_native_bringup_table = nullptr;\n"
                     : "")
            << (native_bringup_coverage
-                   ? "        active_native_bringup_coverage_context = "
-                     "nullptr;\n"
+                   ? "        native_bringup_coverage_dispatch_selection = {};\n"
+                     "        active_native_bringup_coverage_context = nullptr;\n"
                    : "")
            <<
               "        context_.loaded_aot = nullptr;\n"
               "        context_.runtime_images = nullptr;\n"
+              "        context_.development_state_restore_main_memory = nullptr;\n"
               "        runtime_dispatch_detail::active_loaded_aot_binder = nullptr;\n"
               "        runtime_dispatch_detail::active_services = nullptr;\n"
               "        active_native_context = nullptr;\n"
@@ -21307,14 +21410,32 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "  private:\n"
               "    katana::runtime::NativePortContext& context_;\n"
               "};\n"
+              "class NativeDispatchDepthScope final {\n"
+              "  public:\n"
+              "    NativeDispatchDepthScope() {\n"
+              "        if (active_native_dispatch_depth ==\n"
+              "            std::numeric_limits<std::uint32_t>::max())\n"
+              "            throw std::runtime_error(\"native-dispatch-depth\");\n"
+              "        ++active_native_dispatch_depth;\n"
+              "    }\n"
+              "    ~NativeDispatchDepthScope() noexcept {\n"
+              "        --active_native_dispatch_depth;\n"
+              "    }\n"
+              "    [[nodiscard]] bool outermost() const noexcept {\n"
+              "        return active_native_dispatch_depth == 1u;\n"
+              "    }\n"
+              "};\n"
               "HookResult dispatch_native(\n"
               "    katana::runtime::NativePortContext& context,\n"
               "    std::uint32_t target,\n"
               "    const std::optional<std::uint32_t> return_sentinel,\n"
               "    std::optional<std::uint32_t> bypass_hook,\n"
               "    const bool stop_after_one_block) {\n"
+              "    NativeDispatchDepthScope dispatch_depth_scope;\n"
               "    auto& cpu = *context.cpu;\n"
               "    bool executed_block = false;\n"
+              "    std::optional<katana::runtime::NativePortDevelopmentStateRequest>\n"
+              "        pending_development_state_request;\n"
               "    for (;;) {\n"
               "        require_native_aot_integrity(\n"
               "            context, *runtime_dispatch_detail::active_services);\n"
@@ -21346,14 +21467,80 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            return {HookAction::Return, 0u, 0u};\n"
               "        }\n"
               "        cpu.pc = target;\n"
+              "        if (dispatch_depth_scope.outermost()) {\n"
+              "            if (!pending_development_state_request.has_value())\n"
+              "                pending_development_state_request =\n"
+              "                    context.host->take_development_state_request();\n"
+              "            if (pending_development_state_request.has_value()) {\n"
+              "                auto outcome = katana::runtime::\n"
+              "                    NativePortDevelopmentStateResult::Rejected;\n"
+              "                if (context.development_state_handler != nullptr)\n"
+              "                    outcome = context.development_state_handler(\n"
+              "                        context, *pending_development_state_request);\n"
+              "                if (outcome != katana::runtime::\n"
+              "                        NativePortDevelopmentStateResult::Deferred) {\n"
+              "                    pending_development_state_request.reset();\n"
+              "                    if (outcome == katana::runtime::\n"
+              "                            NativePortDevelopmentStateResult::Loaded) {\n"
+              "                        target = cpu.pc;\n"
+              "                        bypass_hook.reset();\n"
+              "                        executed_block = false;\n"
+              "                        continue;\n"
+              "                    }\n"
+              "                }\n"
+              "            }\n"
+              "        }\n"
               "        const auto source =\n"
-              "            runtime_dispatch_detail::normalized_source_address(target);\n"
+              "            runtime_dispatch_detail::normalized_source_address(target);\n";
+    if (native_bringup_coverage)
+        output
+            << "        const bool coverage_selection_active =\n"
+               "            native_bringup_coverage_dispatch_selection.valid;\n"
+               "        bool coverage_native_hook = false;\n"
+               "        const runtime_dispatch_detail::NativePortDispatchEntry*\n"
+               "            coverage_entry = nullptr;\n"
+               "        if (coverage_selection_active) {\n"
+               "            const auto selection =\n"
+               "                native_bringup_coverage_dispatch_selection;\n"
+               "            native_bringup_coverage_dispatch_selection = {};\n"
+               "            coverage_native_hook = selection.owner_kind ==\n"
+               "                katana::runtime::NativeBringupCoverageOwnerKind::\n"
+               "                    NativeFunctionEntry;\n"
+               "            if ((!coverage_native_hook &&\n"
+               "                 source != selection.dispatch_source) ||\n"
+               "                !exact_guarded_target_matches(\n"
+               "                    target, selection.requested_target))\n"
+               "                throw std::runtime_error(\n"
+               "                    \"native-bringup-coverage-selection-target\");\n"
+               "            coverage_entry = selection.entry;\n"
+               "            if (coverage_native_hook !=\n"
+               "                    (coverage_entry == nullptr))\n"
+               "                throw std::runtime_error(\n"
+               "                    \"native-bringup-coverage-selection-owner\");\n"
+               "        }\n";
+    else
+        output
+            << "        constexpr bool coverage_selection_active = false;\n"
+               "        constexpr bool coverage_native_hook = false;\n"
+               "        const runtime_dispatch_detail::NativePortDispatchEntry*\n"
+               "            coverage_entry = nullptr;\n";
+    output <<
               "        const bool bypass = bypass_hook.has_value() &&\n"
               "            runtime_dispatch_detail::normalized_source_address(\n"
               "                *bypass_hook) == source;\n"
               "        if (bypass) bypass_hook.reset();\n"
               "        if (!bypass) {\n"
               "            const auto hook = find_native_hook(target);\n"
+              "            if (coverage_selection_active) {\n"
+              "                if (coverage_native_hook &&\n"
+              "                    (!hook.present ||\n"
+              "                     hook.kind != HookKind::FunctionEntry))\n"
+              "                    throw std::runtime_error(\n"
+              "                        \"native-bringup-coverage-hook-owner\");\n"
+              "                if (!coverage_native_hook && hook.present)\n"
+              "                    throw std::runtime_error(\n"
+              "                        \"native-bringup-coverage-aot-hook-conflict\");\n"
+              "            }\n"
               "            if (hook.present) {\n"
               "                if (hook.function == nullptr)\n"
               "                    throw std::runtime_error(\"native-hook-function\");\n"
@@ -21401,7 +21588,11 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "                }\n"
               "            }\n"
               "        }\n"
-              "        const auto* entry = find_dispatch_entry(target);\n"
+              "        if (coverage_selection_active && coverage_native_hook)\n"
+              "            throw std::runtime_error(\n"
+              "                \"native-bringup-coverage-hook-not-dispatched\");\n"
+              "        const auto* entry = coverage_entry != nullptr\n"
+              "            ? coverage_entry : find_dispatch_entry(target);\n"
               "        if (entry == nullptr || entry->function == nullptr)\n"
               "            fail_missing_entry(target);\n"
               "        const auto entry_source =\n"
@@ -21768,14 +21959,50 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "            : katana::runtime::\n"
                    "                NativeBringupCoveragePreflightRequest::\n"
                    "                    TargetHook::ConflictingInstruction;\n"
-                   "    static_cast<void>(katana::runtime::\n"
+                   "    const auto admission = katana::runtime::\n"
                    "        preflight_native_bringup_coverage_dispatch(\n"
                    "            *active_native_bringup_table,\n"
                    "            *active_native_context->runtime_images,\n"
                    "            *runtime_dispatch_detail::\n"
                    "                active_loaded_aot_binder,\n"
                    "            *active_native_bringup_coverage_context,\n"
-                   "            request));\n";
+                   "            request);\n"
+                   "    if (native_bringup_coverage_dispatch_selection.valid ||\n"
+                   "        !exact_guarded_target_matches(\n"
+                   "            admission.target, target))\n"
+                   "        throw std::runtime_error(\n"
+                   "            \"native-bringup-coverage-selection-state\");\n"
+                   "    const runtime_dispatch_detail::NativePortDispatchEntry*\n"
+                   "        selected_entry = nullptr;\n"
+                   "    if (admission.owner_kind == katana::runtime::\n"
+                   "            NativeBringupCoverageOwnerKind::NativeFunctionEntry) {\n"
+                   "        if (request.target_hook != katana::runtime::\n"
+                   "                NativeBringupCoveragePreflightRequest::\n"
+                   "                    TargetHook::CallableFunctionEntry ||\n"
+                   "            admission.execution.function != nullptr ||\n"
+                   "            admission.dispatch_source != 0u)\n"
+                   "            throw std::runtime_error(\n"
+                   "                \"native-bringup-coverage-hook-selection\");\n"
+                   "    } else {\n"
+                   "        if (request.target_hook != katana::runtime::\n"
+                   "                NativeBringupCoveragePreflightRequest::\n"
+                   "                    TargetHook::None ||\n"
+                   "            admission.dispatch_source == 0u ||\n"
+                   "            admission.execution.function == nullptr)\n"
+                   "            throw std::runtime_error(\n"
+                   "                \"native-bringup-coverage-aot-selection\");\n"
+                   "        selected_entry = runtime_dispatch_detail::\n"
+                   "            find_exact_entry(admission.dispatch_source);\n"
+                   "        if (selected_entry == nullptr ||\n"
+                   "            selected_entry->function == nullptr ||\n"
+                   "            selected_entry->function !=\n"
+                   "                admission.execution.function)\n"
+                   "            throw std::runtime_error(\n"
+                   "                \"native-bringup-coverage-entry-binding\");\n"
+                   "    }\n"
+                   "    native_bringup_coverage_dispatch_selection = {\n"
+                   "        true, target, admission.dispatch_source,\n"
+                   "        admission.owner_kind, selected_entry};\n";
         }
         output << "}\n";
     }
@@ -21789,9 +22016,27 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "}\n"
               "void dispatch_jump(katana::runtime::CpuState& cpu,\n"
               "                   const std::uint32_t target) {\n"
-              "    require_active_context(cpu);\n"
-              "    if (!runtime_dispatch_detail::native_hook_address(target) &&\n"
-              "        find_dispatch_entry(target) == nullptr)\n"
+              "    require_active_context(cpu);\n";
+    if (native_bringup_coverage)
+        output
+            << "    if (native_bringup_coverage_dispatch_selection.valid) {\n"
+               "        const auto& selection =\n"
+               "            native_bringup_coverage_dispatch_selection;\n"
+               "        if (!exact_guarded_target_matches(\n"
+               "                target, selection.requested_target) ||\n"
+               "            (selection.owner_kind != katana::runtime::\n"
+               "                    NativeBringupCoverageOwnerKind::NativeFunctionEntry &&\n"
+               "             runtime_dispatch_detail::normalized_source_address(\n"
+               "                 target) != selection.dispatch_source))\n"
+               "            throw std::runtime_error(\n"
+               "                \"native-bringup-coverage-selection-target\");\n"
+               "    } else if (!runtime_dispatch_detail::native_hook_address(target) &&\n"
+               "               find_dispatch_entry(target) == nullptr)\n";
+    else
+        output
+            << "    if (!runtime_dispatch_detail::native_hook_address(target) &&\n"
+               "        find_dispatch_entry(target) == nullptr)\n";
+    output <<
               "        fail_missing_entry(target);\n"
               "    cpu.pc = target;\n"
               "}\n"
@@ -21854,6 +22099,27 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                << range.byte_size << "u, "
                << static_cast<unsigned>(range.kind_mask) << "u},\n";
     output << "}};\n"
+           << "namespace {\n"
+           << "bool restore_native_development_state_main_memory(\n"
+              "    katana::runtime::NativePortContext& context,\n"
+              "    const std::span<const std::uint8_t> bytes) noexcept {\n"
+              "    try {\n"
+              "        if (context.cpu == nullptr) return false;\n"
+              "        katana::runtime::\n"
+              "            restore_native_port_main_memory_for_development_state(\n"
+              "                *context.cpu, bytes, native_immutable_ranges);\n"
+              "        return true;\n"
+              "    } catch (const std::exception& error) {\n"
+              "        std::cerr << \"KATANA_DEVELOPMENT_STATE operation=load\"\n"
+              "                  << \" failure=\" << error.what() << '\\n';\n"
+              "        return false;\n"
+              "    } catch (...) {\n"
+              "        std::cerr << \"KATANA_DEVELOPMENT_STATE operation=load\"\n"
+              "                     \" failure=memory-restore\" << '\\n';\n"
+              "        return false;\n"
+              "    }\n"
+              "}\n"
+              "} // namespace\n"
            << "constexpr std::array<std::string_view, "
            << definition.checkpoint_runtime_image_ids.size()
            << "u> native_checkpoint_runtime_image_ids{{\n";
@@ -23405,7 +23671,8 @@ struct PeSection final {
         std::string_view{"mfreadwrite.dll"}, std::string_view{"mfuuid.dll"},
         std::string_view{"ole32.dll"}, std::string_view{"winmm.dll"},
         std::string_view{"advapi32.dll"}, std::string_view{"shell32.dll"},
-        std::string_view{"gdi32.dll"}, std::string_view{"combase.dll"},
+        std::string_view{"gdi32.dll"}, std::string_view{"comdlg32.dll"},
+        std::string_view{"combase.dll"},
         std::string_view{"oleaut32.dll"}, std::string_view{"ucrtbase.dll"},
         std::string_view{"vcruntime140.dll"},
         std::string_view{"vcruntime140_1.dll"},
@@ -29924,6 +30191,8 @@ struct NativeBringupCoverageEmissions final {
     std::vector<std::uint32_t> dispatch_callsites;
     std::vector<NativeBringupCoverageSourceEmission> sources;
     std::vector<NativeBringupCoverageEntryEmission> entries;
+    std::vector<NativeBringupCoverageTargetAuthorityEmission>
+        target_authorities;
 };
 
 NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
@@ -30045,6 +30314,26 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         }
         return false;
     };
+    const auto entry_capabilities = [](
+        const CompleteDisassemblyEntryKind kind,
+        const bool function_entry) {
+        using Capability =
+            katana::runtime::NativeBringupCoverageTargetCapability;
+        switch (kind) {
+        case CompleteDisassemblyEntryKind::DeclaredEntry:
+        case CompleteDisassemblyEntryKind::FunctionEntry:
+            return Capability::Callable | Capability::TailJumpEntry;
+        case CompleteDisassemblyEntryKind::ControlFlowTarget:
+            return Capability::TailJumpEntry | Capability::InternalBlock;
+        case CompleteDisassemblyEntryKind::CodePointerTarget:
+            return function_entry
+                       ? Capability::Callable | Capability::TailJumpEntry
+                       : Capability::TailJumpEntry |
+                             Capability::InternalBlock;
+        }
+        throw std::logic_error(
+            "Complete-disassembly entry kind is invalid.");
+    };
 
     std::unordered_map<std::string_view, std::uint32_t>
         authority_runtime_by_identity;
@@ -30121,6 +30410,31 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
                     throw std::runtime_error(
                         "Residenter Coverage-Authority-Entry verlor seine "
                         "AOT-Codeidentitaet.");
+                result.target_authorities.push_back(
+                    {authority_module.module_class ==
+                             CompleteDisassemblyModuleClass::PrimaryStatic
+                         ? katana::runtime::
+                               NativeBringupCoverageOwnerKind::PrimaryStatic
+                         : katana::runtime::
+                               NativeBringupCoverageOwnerKind::RuntimeImage,
+                     entry_capabilities(
+                         authority_entry.kind, function_entry),
+                     authority_module.decoded_byte_identity,
+                     authority_module.module_class ==
+                             CompleteDisassemblyModuleClass::FixedRuntimeImage
+                         ? authority_module.module_id
+                         : std::string{},
+                     authority_module.decoded_byte_size,
+                     source_start,
+                     authority_module.module_class ==
+                             CompleteDisassemblyModuleClass::PrimaryStatic
+                         ? source_start
+                         : authority_module.runtime_address,
+                     authority_entry.module_relative_offset,
+                     {source,
+                      exact_ir_block_size(*block),
+                      native_bringup_block_end_kind(*block),
+                      *identity}});
             }
             continue;
         }
@@ -30192,6 +30506,20 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
                 !native_bringup_sha256(identity->sha256))
                 throw std::runtime_error(
                     "Coverage-Authority-Entry verlor seinen exakten IR-Block.");
+            result.target_authorities.push_back(
+                {katana::runtime::
+                     NativeBringupCoverageOwnerKind::LoadedAot,
+                 entry_capabilities(authority_entry.kind, function_entry),
+                 module->byte_identity,
+                 {},
+                 module->byte_size,
+                 module->source_address,
+                 authority_module.runtime_address,
+                 authority_entry.module_relative_offset,
+                 {source,
+                  identity->size,
+                  native_bringup_block_end_kind(*block),
+                  identity->sha256}});
         }
     }
 
@@ -30219,6 +30547,71 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         runtime_starts.erase(
             std::unique(runtime_starts.begin(), runtime_starts.end()),
             runtime_starts.end());
+        if (!std::is_sorted(module.entry_offsets.begin(),
+                            module.entry_offsets.end()) ||
+            std::adjacent_find(module.entry_offsets.begin(),
+                               module.entry_offsets.end()) !=
+                module.entry_offsets.end())
+            throw std::runtime_error(
+                "Coverage-Proof-Modul besitzt kein kanonisches "
+                "Entryinventar.");
+        for (const auto offset : module.entry_offsets) {
+            const auto already_authoritative = std::ranges::any_of(
+                result.target_authorities, [&](const auto& authority) {
+                    return authority.owner_kind ==
+                               katana::runtime::
+                                   NativeBringupCoverageOwnerKind::LoadedAot &&
+                           authority.module_identity == module.byte_identity &&
+                           authority.source_start == module.source_address &&
+                           authority.module_relative_offset == offset;
+                });
+            if (already_authoritative) continue;
+            const auto identity = std::find_if(
+                module.block_identities.begin(),
+                module.block_identities.end(),
+                [&](const auto& candidate) {
+                    return candidate.source_offset == offset;
+                });
+            const auto source64 =
+                static_cast<std::uint64_t>(module.source_address) + offset;
+            if (identity == module.block_identities.end() ||
+                source64 > std::numeric_limits<std::uint32_t>::max())
+                throw std::runtime_error(
+                    "Coverage-Ingress verlor seine Blockidentitaet.");
+            const auto source = static_cast<std::uint32_t>(source64);
+            if (native_port_replacement_function_strictly_contains(
+                    definition, source))
+                continue;
+            const auto* block = ir_block_for_entry(module, source);
+            const bool function_entry = std::ranges::any_of(
+                module.program, [&](const auto& function) {
+                    return function.entry_address == source;
+                });
+            if (block == nullptr ||
+                exact_ir_block_size(*block) != identity->size ||
+                !native_bringup_sha256(identity->sha256))
+                throw std::runtime_error(
+                    "Coverage-Ingress verlor seinen exakten IR-Block.");
+            using Capability = katana::runtime::
+                NativeBringupCoverageTargetCapability;
+            result.target_authorities.push_back(
+                {katana::runtime::
+                     NativeBringupCoverageOwnerKind::LoadedAot,
+                 function_entry
+                     ? Capability::Callable | Capability::TailJumpEntry
+                     : Capability::TailJumpEntry |
+                           Capability::InternalBlock,
+                 module.byte_identity,
+                 {},
+                 module.byte_size,
+                 module.source_address,
+                 0u,
+                 offset,
+                 {source,
+                  identity->size,
+                  native_bringup_block_end_kind(*block),
+                  identity->sha256}});
+        }
         if (runtime_starts.empty()) continue;
         if (const auto authority_runtime =
                 authority_runtime_by_identity.find(module.byte_identity);
@@ -30237,15 +30630,6 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
                     "Coverage-Proof-Modul besitzt eine ungueltige "
                     "Runtimebasis.");
         }
-        if (!std::is_sorted(module.entry_offsets.begin(),
-                            module.entry_offsets.end()) ||
-            std::adjacent_find(module.entry_offsets.begin(),
-                               module.entry_offsets.end()) !=
-                module.entry_offsets.end())
-            throw std::runtime_error(
-                "Coverage-Proof-Modul besitzt kein kanonisches "
-                "Entryinventar.");
-
         for (const auto offset : module.entry_offsets) {
             const auto identity = std::find_if(
                 module.block_identities.begin(),
@@ -30330,6 +30714,69 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         katana::runtime::native_bringup_coverage_maximum_entries)
         result.entries.resize(
             katana::runtime::native_bringup_coverage_maximum_entries);
+
+    std::sort(
+        result.target_authorities.begin(),
+        result.target_authorities.end(),
+        [](const auto& left, const auto& right) {
+            return std::tuple{
+                       left.target.address,
+                       static_cast<std::uint8_t>(left.owner_kind),
+                       std::string_view(left.module_identity),
+                       std::string_view(left.image_id),
+                       left.source_start,
+                       left.runtime_start,
+                       left.module_relative_offset} <
+                   std::tuple{
+                       right.target.address,
+                       static_cast<std::uint8_t>(right.owner_kind),
+                       std::string_view(right.module_identity),
+                       std::string_view(right.image_id),
+                       right.source_start,
+                       right.runtime_start,
+                       right.module_relative_offset};
+        });
+    const auto same_target_authority_key = [](
+        const auto& left, const auto& right) {
+        return left.owner_kind == right.owner_kind &&
+               left.module_identity == right.module_identity &&
+               left.image_id == right.image_id &&
+               left.source_start == right.source_start &&
+               left.runtime_start == right.runtime_start &&
+               left.module_relative_offset == right.module_relative_offset;
+    };
+    const auto conflicting_target_authority = [](
+        const auto& left, const auto& right) {
+        return left.capabilities != right.capabilities ||
+               left.module_size != right.module_size ||
+               left.target.address != right.target.address ||
+               left.target.size != right.target.size ||
+               left.target.end_kind != right.target.end_kind ||
+               left.target.code_identity != right.target.code_identity;
+    };
+    if (std::adjacent_find(
+            result.target_authorities.begin(),
+            result.target_authorities.end(),
+            [&](const auto& left, const auto& right) {
+                return same_target_authority_key(left, right) &&
+                       conflicting_target_authority(left, right);
+            }) != result.target_authorities.end())
+        throw std::runtime_error(
+            "Coverage-Authority besitzt widerspruechliche "
+            "Target-Capabilities.");
+    result.target_authorities.erase(
+        std::unique(
+            result.target_authorities.begin(),
+            result.target_authorities.end(),
+            same_target_authority_key),
+        result.target_authorities.end());
+    if (result.target_authorities.empty() ||
+        result.target_authorities.size() >
+            katana::runtime::
+                native_bringup_coverage_maximum_target_authorities)
+        throw std::runtime_error(
+            "Coverage-Target-Authority ist leer oder ueberschreitet ihr "
+            "Runtime-Budget.");
 
     for (const auto& function : emitted_program) {
         for (const auto& block : function.blocks) {
@@ -30463,13 +30910,15 @@ NativeBringupCoverageEmissions revalidate_native_bringup_coverage_emission(
         "KATANA_NATIVE_BRINGUP_COVERAGE_INVENTORY "
         "dispatch_callsites=%zu source_transfers=%zu guarded_unbound=%zu "
         "replacement_owned_sources=%zu replacement_owned_entries=%zu "
-        "entries=%zu fixed_accelerator_candidates=%zu source_limit=%zu\n",
+        "entries=%zu target_authorities=%zu "
+        "fixed_accelerator_candidates=%zu source_limit=%zu\n",
         result.dispatch_callsites.size(),
         result.sources.size(),
         guarded_unbound_diagnostics,
         replacement_owned_sources,
         replacement_owned_entries,
         result.entries.size(),
+        result.target_authorities.size(),
         fixed_accelerator_candidates,
         katana::runtime::native_bringup_coverage_maximum_source_transfers);
     if (result.dispatch_callsites.empty() ||
@@ -32017,6 +32466,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     std::vector<katana::ir::Function> coverage_primary_program(
         prepared.program.begin(), prepared.program.end());
     std::vector<std::uint32_t> resident_compile_roots;
+    std::vector<std::uint32_t> resident_block_entries;
     const auto emitted_entry_shape =
         [&](const std::span<const katana::ir::Function> program,
             const std::uint32_t address,
@@ -32130,12 +32580,43 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             if (emitted_entry_shape(
                     coverage_primary_program, address, entry.kind))
                 continue;
-            // A control-flow target is deliberately not promoted to a new
-            // function owner.  Its owning FunctionEntry must materialize the
-            // block; the exact semantic check below rejects a missing block.
-            if (entry.kind !=
-                CompleteDisassemblyEntryKind::ControlFlowTarget)
+            if (entry.kind ==
+                CompleteDisassemblyEntryKind::ControlFlowTarget) {
+                const katana::runtime::GameProjectFunctionBoundary* owner =
+                    nullptr;
+                for (const auto& boundary :
+                     options.game_project->function_boundaries) {
+                    const auto boundary_end =
+                        static_cast<std::uint64_t>(boundary.start) +
+                        boundary.size;
+                    const bool same_image =
+                        module.module_class ==
+                                CompleteDisassemblyModuleClass::PrimaryStatic
+                            ? boundary.image_id.empty()
+                            : boundary.image_id == module.module_id;
+                    if (!same_image || boundary.size < 2u ||
+                        address <= boundary.start || address >= boundary_end)
+                        continue;
+                    if (owner != nullptr)
+                        throw std::runtime_error(
+                            "Residenter ControlFlowTarget besitzt mehrere "
+                            "exakte Funktionsowner.");
+                    owner = &boundary;
+                }
+                if (owner == nullptr)
+                    throw std::runtime_error(
+                        "Residenter ControlFlowTarget besitzt keinen "
+                        "exakten Funktionsowner.");
+                // Decode is rooted at both the exact owner and the otherwise
+                // unreachable interior entry.  The external-entry hint plus
+                // lowerer's additional block leader keeps the latter inside
+                // that owner; it never becomes a callable function root.
+                resident_compile_roots.push_back(owner->start);
                 resident_compile_roots.push_back(address);
+                resident_block_entries.push_back(address);
+            } else {
+                resident_compile_roots.push_back(address);
+            }
         }
     }
     std::sort(resident_compile_roots.begin(), resident_compile_roots.end());
@@ -32154,10 +32635,33 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             options.native_port_definition,
             coverage_image,
             options.native_aot_resume_entries);
+        auto resident_coverage_overrides = coverage_overrides;
+        if (!resident_coverage_overrides.has_value()) {
+            resident_coverage_overrides.emplace();
+            resident_coverage_overrides->mode =
+                katana::analysis::AnalysisDirectiveMode::Override;
+        }
+        for (const auto block_entry : resident_block_entries)
+            resident_coverage_overrides->external_entry_hints.push_back(
+                {block_entry, 0u});
+        std::sort(
+            resident_coverage_overrides->external_entry_hints.begin(),
+            resident_coverage_overrides->external_entry_hints.end(),
+            [](const auto& left, const auto& right) {
+                return left.address < right.address;
+            });
+        resident_coverage_overrides->external_entry_hints.erase(
+            std::unique(
+                resident_coverage_overrides->external_entry_hints.begin(),
+                resident_coverage_overrides->external_entry_hints.end(),
+                [](const auto& left, const auto& right) {
+                    return left.address == right.address;
+                }),
+            resident_coverage_overrides->external_entry_hints.end());
         report_progress(options, "native-bringup-resident-coverage-analysis");
         auto coverage_analysis = katana::analysis::analyze_control_flow(
             coverage_image,
-            coverage_overrides.has_value() ? &*coverage_overrides : nullptr);
+            &*resident_coverage_overrides);
         if (coverage_analysis.termination_reason !=
                 katana::analysis::ControlFlowAnalysisTerminationReason::None ||
             coverage_analysis.function_budget_exhausted ||
@@ -32182,6 +32686,9 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
                     hook.requirement))
                 architectural_safepoints.push_back(hook.guest_address);
         }
+        architectural_safepoints.insert(
+            architectural_safepoints.end(),
+            resident_block_entries.begin(), resident_block_entries.end());
         std::sort(architectural_safepoints.begin(),
                   architectural_safepoints.end());
         architectural_safepoints.erase(
@@ -42295,7 +42802,15 @@ static PortExportResult export_dreamcast_port_project_impl(
                                                   native_bringup_coverage_emissions
                                                       ->entries)
                                             : std::span<const
-                                                  NativeBringupCoverageEntryEmission>{})
+                                                  NativeBringupCoverageEntryEmission>{},
+                                        native_bringup_coverage_emissions
+                                                .has_value()
+                                            ? std::span<const
+                                                  NativeBringupCoverageTargetAuthorityEmission>(
+                                                  native_bringup_coverage_emissions
+                                                      ->target_authorities)
+                                            : std::span<const
+                                                  NativeBringupCoverageTargetAuthorityEmission>{})
                                   : runtime_dispatch_artifacts(
                                         entry_namespace,
                                         emitted_program,

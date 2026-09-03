@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -22,10 +23,11 @@ class NativePortRuntimeImageBindings;
 class NativePortLoadedAotBinder;
 class NativePortTelemetry;
 class NativePortTelemetryWriter;
+class NativePortContext;
 
 inline constexpr std::uint32_t native_port_profile_contract_version =
     abi_contract::native_port_profile_contract_version;
-inline constexpr std::uint32_t native_port_definition_contract_version = 13u;
+inline constexpr std::uint32_t native_port_definition_contract_version = 14u;
 
 struct NativePortLinkContract final {
     std::uint32_t version = native_port_profile_contract_version;
@@ -295,6 +297,40 @@ enum class NativePortLifecycleState : std::uint8_t {
     Shutdown
 };
 
+// Development-state file selection is host UI, while capture/restore remains
+// exclusively owned by the title simulation thread.  The host therefore
+// publishes only an owning path request; it never reads CpuState or guest RAM.
+enum class NativePortDevelopmentStateOperation : std::uint8_t {
+    Save,
+    Load,
+};
+
+struct NativePortDevelopmentStateRequest final {
+    NativePortDevelopmentStateOperation operation =
+        NativePortDevelopmentStateOperation::Save;
+    std::string path;
+    std::uint64_t sequence = 0u;
+};
+
+// The title owns serialization because only it can retire and reconstruct
+// its derived native resources.  The generated dispatcher invokes this
+// bridge only at its outermost AOT boundary, after every nested callback has
+// returned.  Deferred leaves the owning request pending until the title has
+// completed its current frame; Loaded restarts dispatch at the restored PC.
+enum class NativePortDevelopmentStateResult : std::uint8_t {
+    Deferred,
+    Completed,
+    Loaded,
+    Rejected,
+};
+
+using NativePortDevelopmentStateHandler = NativePortDevelopmentStateResult (*)(
+    NativePortContext& context,
+    const NativePortDevelopmentStateRequest& request) noexcept;
+using NativePortDevelopmentStateMemoryRestore = bool (*)(
+    NativePortContext& context,
+    std::span<const std::uint8_t> main_memory) noexcept;
+
 // Native host time and frame presentation are explicit title boundaries.
 // They are intentionally unrelated to Dreamcast CPU MHz, ASIC interrupts or
 // VBlank register emulation.
@@ -305,6 +341,10 @@ class NativePortHostServices {
     [[nodiscard]] virtual std::uint64_t monotonic_time_nanoseconds()
         const noexcept = 0;
     [[nodiscard]] virtual NativePortLifecycleState poll_lifecycle() = 0;
+    [[nodiscard]] virtual std::optional<NativePortDevelopmentStateRequest>
+    take_development_state_request() {
+        return std::nullopt;
+    }
     // Synchronize a title-level frame boundary with the native simulation
     // cadence.  This is the semantic replacement for SDK busy-waits on a
     // guest scanline/vblank register: the product waits on host monotonic
@@ -318,8 +358,6 @@ class NativePortHostServices {
     [[nodiscard]] virtual std::uint64_t presented_frames()
         const noexcept = 0;
 };
-
-class NativePortContext;
 
 enum class NativePortImmutableRangeKind : std::uint8_t {
     Executable = 1u << 0u,
@@ -430,6 +468,13 @@ class NativePortContext final {
     // threads through them.
     NativePortTelemetry* telemetry = nullptr;
     NativePortTelemetryWriter* telemetry_writer = nullptr;
+    // Append-only development bridge. It is never called from the host/UI or
+    // a worker thread and is deliberately absent from shipped state files.
+    NativePortDevelopmentStateHandler development_state_handler = nullptr;
+    // Generated code owns the fixed immutable-range inventory. The title
+    // calls this only after retiring every dynamic executable mapping.
+    NativePortDevelopmentStateMemoryRestore
+        development_state_restore_main_memory = nullptr;
 };
 
 enum class NativePortContractFailure : std::uint8_t {

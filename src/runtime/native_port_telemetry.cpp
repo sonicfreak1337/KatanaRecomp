@@ -305,6 +305,11 @@ NativePortLifecycleState NativePortTelemetryHostProxy::poll_lifecycle() {
     return host_->poll_lifecycle();
 }
 
+std::optional<NativePortDevelopmentStateRequest>
+NativePortTelemetryHostProxy::take_development_state_request() {
+    return host_->take_development_state_request();
+}
+
 void NativePortTelemetryHostProxy::synchronize_simulation_boundary() {
     host_->synchronize_simulation_boundary();
 }

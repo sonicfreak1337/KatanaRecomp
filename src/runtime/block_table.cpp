@@ -893,6 +893,30 @@ std::optional<ValidatedBlockExecution>
 RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
                                     const std::uint32_t virtual_address,
                                     const BlockVariantKey& variant) const noexcept {
+    const auto execution = lookup_sealed_static_aot(
+        physical_address, virtual_address, variant);
+    if (!execution.has_value()) return std::nullopt;
+    const auto canonical = canonical_physical_address(physical_address);
+    const auto page_index = canonical / physical_page_size;
+    const auto halfword = (canonical % physical_page_size) / 2u;
+    const auto& page = *static_aot_pages_[page_index];
+    if (const auto& shadow = page.dynamic_entries[halfword]; shadow) {
+        const auto matching_dynamic =
+            std::any_of(shadow->begin(), shadow->end(), [&](const Record* candidate) {
+                return candidate != nullptr && dispatchable(*candidate) &&
+                       !candidate->static_block &&
+                       candidate->block.variant == variant;
+            });
+        if (matching_dynamic) return std::nullopt;
+    }
+    return execution;
+}
+
+std::optional<ValidatedBlockExecution>
+RuntimeBlockTable::lookup_sealed_static_aot(
+    const std::uint32_t physical_address,
+    const std::uint32_t virtual_address,
+    const BlockVariantKey& variant) const noexcept {
     if (!static_sealed_ || (physical_address & 1u) != 0u ||
         (virtual_address & 1u) != 0u ||
         ((virtual_address >> 29u) != 4u && (virtual_address >> 29u) != 5u) ||
@@ -908,15 +932,6 @@ RuntimeBlockTable::lookup_static_aot(const std::uint32_t physical_address,
         return std::nullopt;
     const auto halfword = (canonical % physical_page_size) / 2u;
     const auto& page = *static_aot_pages_[page_index];
-    if (const auto& shadow = page.dynamic_entries[halfword]; shadow) {
-        const auto matching_dynamic =
-            std::any_of(shadow->begin(), shadow->end(), [&](const Record* candidate) {
-                return candidate != nullptr && dispatchable(*candidate) &&
-                       !candidate->static_block &&
-                       candidate->block.variant == variant;
-            });
-        if (matching_dynamic) return std::nullopt;
-    }
     const auto entry_index = page.entries[halfword];
     if (entry_index == 0u ||
         entry_index == std::numeric_limits<std::uint32_t>::max() ||

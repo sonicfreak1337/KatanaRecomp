@@ -35,7 +35,9 @@ enum class NativeBringupDispatchMiss : std::uint8_t {
     LoadedModuleIdentityMismatch,
     RuntimeImageInactive,
     RuntimeImageIdentityMismatch,
-    HookReplacementConflict
+    HookReplacementConflict,
+    AmbiguousTargetOwner,
+    TargetCapabilityMismatch
 };
 
 struct NativeBringupDispatchPackIdentity {
@@ -207,13 +209,43 @@ preflight_native_bringup_dispatch(
 // Coverage authority deliberately remains disjoint from the proof allowlist.
 // It can compile and execution-admit an exact complete-disassembly entry in a
 // NativeBringup product, but can never promote Evidence/Product closure.
-inline constexpr std::uint32_t native_bringup_coverage_contract_version = 3u;
+inline constexpr std::uint32_t native_bringup_coverage_contract_version = 4u;
 
 enum class NativeBringupCoverageSourceKind : std::uint8_t {
     StaticAot,
     LoadedAot,
     RuntimeImage,
 };
+
+enum class NativeBringupCoverageOwnerKind : std::uint8_t {
+    NativeFunctionEntry,
+    PrimaryStatic,
+    RuntimeImage,
+    LoadedAot,
+};
+
+enum class NativeBringupCoverageTargetCapability : std::uint8_t {
+    None = 0u,
+    Callable = 1u << 0u,
+    TailJumpEntry = 1u << 1u,
+    InternalBlock = 1u << 2u,
+    ResumeOnly = 1u << 3u,
+};
+
+[[nodiscard]] constexpr NativeBringupCoverageTargetCapability operator|(
+    const NativeBringupCoverageTargetCapability left,
+    const NativeBringupCoverageTargetCapability right) noexcept {
+    return static_cast<NativeBringupCoverageTargetCapability>(
+        static_cast<std::uint8_t>(left) |
+        static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr bool native_bringup_coverage_has_capability(
+    const NativeBringupCoverageTargetCapability capabilities,
+    const NativeBringupCoverageTargetCapability required) noexcept {
+    return (static_cast<std::uint8_t>(capabilities) &
+            static_cast<std::uint8_t>(required)) != 0u;
+}
 
 struct NativeBringupCoveragePackIdentity final {
     std::uint32_t contract_version =
@@ -265,13 +297,36 @@ struct NativeBringupCoverageEntry final {
     NativeBringupDispatchStaticAotBinding target;
 };
 
+// Executable ingress authority is distinct from the optional fixed-placement
+// accelerator above. Every record names one externally admissible entry and
+// its exact immutable source block. A zero runtime_start is legal only for a
+// loader-placed LoadedAot module; its live runtime address is then supplied by
+// the identity-/generation-bound binder.
+struct NativeBringupCoverageTargetAuthority final {
+    NativeBringupCoverageOwnerKind owner_kind =
+        NativeBringupCoverageOwnerKind::PrimaryStatic;
+    NativeBringupCoverageTargetCapability capabilities =
+        NativeBringupCoverageTargetCapability::None;
+    std::string_view module_identity;
+    std::string_view image_id;
+    std::uint32_t module_size = 0u;
+    std::uint32_t source_start = 0u;
+    std::uint32_t runtime_start = 0u;
+    std::uint32_t module_relative_offset = 0u;
+    NativeBringupDispatchStaticAotBinding target;
+};
+
 struct NativeBringupCoverageDispatchPack final {
     NativeBringupCoveragePackIdentity identity;
-    // Both spans are optional accelerators. Executable authority is the sealed
-    // Static-AOT table plus the generated Loaded-AOT module entry bitmap owned
-    // by NativePortLoadedAotBinder, never membership in these diagnostic lists.
+    // Both spans are optional lookup/proof accelerators. Neither grants
+    // executable ingress authority.
     std::span<const NativeBringupCoverageSourceTransfer> source_transfers;
     std::span<const NativeBringupCoverageEntry> entries;
+    // This is the executable ingress authority. Every record must also match
+    // the sealed Static-AOT block and, for movable owners, the current exact
+    // lifecycle binding. It contains complete-disassembly and independently
+    // bounded ingress entries only, never all compiled basic blocks.
+    std::span<const NativeBringupCoverageTargetAuthority> target_authorities;
 };
 
 inline constexpr std::size_t
@@ -281,6 +336,8 @@ inline constexpr std::size_t
     native_bringup_coverage_maximum_source_transfers = 262'144u;
 inline constexpr std::size_t native_bringup_coverage_maximum_entries =
     16'384u;
+inline constexpr std::size_t
+    native_bringup_coverage_maximum_target_authorities = 65'536u;
 
 struct NativeBringupCoverageObservation final {
     NativeBringupTransferKind transfer_kind =
@@ -302,6 +359,10 @@ struct NativeBringupCoverageObservation final {
     std::uint64_t aot_pack_generation = 0u;
     std::uint64_t runtime_generation = 0u;
     std::uint64_t occurrences = 0u;
+    std::string_view source_image_id;
+    NativeBringupCoverageOwnerKind target_owner_kind =
+        NativeBringupCoverageOwnerKind::PrimaryStatic;
+    std::string_view target_image_id;
 };
 
 inline constexpr std::size_t native_bringup_coverage_observation_capacity =
@@ -368,6 +429,9 @@ class NativeBringupCoverageDispatchContext final {
     std::size_t validated_sources_size_ = 0u;
     const NativeBringupCoverageEntry* validated_entries_data_ = nullptr;
     std::size_t validated_entries_size_ = 0u;
+    const NativeBringupCoverageTargetAuthority*
+        validated_target_authorities_data_ = nullptr;
+    std::size_t validated_target_authorities_size_ = 0u;
     NativeBringupCoveragePackIdentity validated_identity_;
     const RuntimeBlockTable* validated_table_ = nullptr;
     const NativePortRuntimeImageBindings* validated_runtime_images_ = nullptr;
@@ -421,6 +485,14 @@ struct NativeBringupCoveragePreflightResult final {
     std::uint32_t physical_target = 0u;
     std::uint64_t lifecycle_generation = 0u;
     bool cache_hit = false;
+    NativeBringupCoverageOwnerKind owner_kind =
+        NativeBringupCoverageOwnerKind::PrimaryStatic;
+    NativeBringupCoverageTargetCapability capabilities =
+        NativeBringupCoverageTargetCapability::None;
+    std::string_view owner_identity;
+    std::string_view owner_image_id;
+    std::string_view block_identity;
+    std::uint32_t dispatch_source = 0u;
 };
 
 [[nodiscard]] NativeBringupCoveragePreflightResult

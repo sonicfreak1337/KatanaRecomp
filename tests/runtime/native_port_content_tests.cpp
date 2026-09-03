@@ -440,6 +440,8 @@ int main(const int argc, char** const argv) {
         const auto lifecycle = binder.stage_runtime_module(loader_bound);
         const auto staged_entry =
             binder.preflight_entry_for_address(runtime_start);
+        const auto staged_inventory =
+            binder.modules_for_development_state();
         require(staged_entry.has_value() && !staged_entry->active &&
                     staged_entry->module_sha256 == identity &&
                     staged_entry->block_sha256 == identity &&
@@ -449,9 +451,17 @@ int main(const int argc, char** const argv) {
                     staged_entry->source_offset == 0u &&
                     staged_entry->block_size == bytes.size() &&
                     staged_entry->lifecycle_generation == lifecycle &&
+                    staged_inventory.size() == 1u &&
+                    staged_inventory.front().sha256 == identity &&
+                    staged_inventory.front().activation_entry ==
+                        runtime_start &&
+                    staged_inventory.front().lifecycle_generation ==
+                        lifecycle &&
+                    !staged_inventory.front().active &&
                     !binder.active_entry_for_address(runtime_start).has_value(),
                 "Read-only AOT-Preflight verlor staged Modul-, Block- oder "
                 "Lifecycle-Identitaet.");
+        binder.validate_development_state_module(loader_bound, runtime_start);
         require(binder.bind_entry(runtime_start),
                 "Geladenes AOT-Testmodul wurde nicht aktiviert.");
         require(binder.validate_bound_entry(runtime_start) &&
@@ -470,6 +480,8 @@ int main(const int argc, char** const argv) {
             0x0C900002u);
         const auto active_entry =
             binder.active_entry_for_address(0x0C900000u);
+        const auto active_inventory =
+            binder.modules_for_development_state();
         require(active.has_value() && active->sha256 == identity &&
                     active->source_start == source_start &&
                     active->runtime_start == runtime_start &&
@@ -478,7 +490,11 @@ int main(const int argc, char** const argv) {
                     active_entry.has_value() && active_entry->active &&
                     active_entry->module_sha256 == identity &&
                     active_entry->block_sha256 == identity &&
-                    active_entry->lifecycle_generation == lifecycle,
+                    active_entry->lifecycle_generation == lifecycle &&
+                    active_inventory.size() == 1u &&
+                    active_inventory.front().active &&
+                    active_inventory.front().activation_entry ==
+                        runtime_start,
                 "Aktive Modulidentitaet verliert Alias, Range oder Generation.");
         require(!binder.active_module_for_address(0x8C800000u).has_value(),
                 "Ungebundene Adresse wurde einem geladenen Modul zugeordnet.");
@@ -689,8 +705,14 @@ int main(const int argc, char** const argv) {
         katana::runtime::NativePortRuntimeImageBindings bindings(
             cpu, images, image_guard, image_ledger);
         const auto inactive_stamp = bindings.dispatch_stamp();
+        require(bindings.recognizes_image("closure-runtime-image") &&
+                    !bindings.recognizes_image("unknown-runtime-image"),
+                "Runtime-Image-Entwicklungszustand verliert seine feste "
+                "Image-Identitaet.");
         bindings.activate("closure-runtime-image");
         const auto active_stamp = bindings.dispatch_stamp();
+        const auto active_inventory =
+            bindings.active_images_for_development_state();
         const auto exact = bindings.active_entry_for_address(runtime_start);
         require(exact.has_value() && exact->image_id == "closure-runtime-image" &&
                     exact->image_sha256 == identity &&
@@ -699,7 +721,14 @@ int main(const int argc, char** const argv) {
                     exact->runtime_start == runtime_start &&
                     exact->source_offset == 0u &&
                     exact->block_size == bytes.size() &&
-                    exact->lifecycle_generation != 0u,
+                    exact->lifecycle_generation != 0u &&
+                    active_inventory.size() == 1u &&
+                    active_inventory.front().image_id ==
+                        "closure-runtime-image" &&
+                    active_inventory.front().runtime_start == runtime_start &&
+                    active_inventory.front().byte_size == bytes.size() &&
+                    active_inventory.front().lifecycle_generation ==
+                        exact->lifecycle_generation,
                 "Aktives Runtime-Image verlor exakte Entry-/Blockidentitaet "
                 "oder Generation.");
         require(!bindings.active_entry_for_address(runtime_start + 2u).has_value(),
@@ -713,6 +742,54 @@ int main(const int argc, char** const argv) {
                 "Retired Runtime-Image blieb als Closure-Entry aktiv.");
     } catch (const std::exception& error) {
         require(false, std::string("Runtime-Image-Entryidentitaet warf: ") +
+                           error.what());
+    }
+
+    // Development-state restore validates every fixed immutable byte before
+    // publishing the all-RAM copy. Mutable bytes may move backwards; a stale
+    // executable byte rejects the complete transaction without partial RAM.
+    try {
+        katana::runtime::NativePortMemory memory;
+        auto& cpu = memory.cpu();
+        constexpr std::uint32_t immutable_address = 0x0C000100u;
+        constexpr std::uint32_t mutable_address = 0x0C000200u;
+        cpu.memory.write_u8(
+            immutable_address, 0x5Au,
+            katana::runtime::CodeWriteSource::Copy);
+        cpu.memory.write_u8(
+            mutable_address, 0x11u,
+            katana::runtime::CodeWriteSource::Copy);
+        auto saved = katana::runtime::capture_native_port_main_memory(cpu);
+        saved[0x200u] = 0x77u;
+        const std::array fixed{
+            katana::runtime::NativePortImmutableRange{
+                immutable_address, 1u,
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::
+                        NativePortImmutableRangeKind::Executable)}};
+        katana::runtime::restore_native_port_main_memory_for_development_state(
+            cpu, saved, fixed);
+        const auto restored =
+            katana::runtime::capture_native_port_main_memory(cpu);
+        require(restored[0x100u] == 0x5Au && restored[0x200u] == 0x77u,
+                "Development-State-Restore verlor mutable RAM-Bytes.");
+        auto invalid = restored;
+        invalid[0x100u] = 0xA5u;
+        bool rejected = false;
+        try {
+            katana::runtime::
+                restore_native_port_main_memory_for_development_state(
+                    cpu, invalid, fixed);
+        } catch (const katana::runtime::NativePortContractError&) {
+            rejected = true;
+        }
+        require(rejected &&
+                    katana::runtime::capture_native_port_main_memory(cpu) ==
+                        restored,
+                "Development-State-Restore akzeptierte Immutable-Drift oder "
+                "schrieb RAM teilweise.");
+    } catch (const std::exception& error) {
+        require(false, std::string("Development-State-RAM-Restore warf: ") +
                            error.what());
     }
 

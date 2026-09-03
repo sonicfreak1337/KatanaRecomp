@@ -1054,6 +1054,15 @@ bool NativePortRuntimeImageBindings::active(
         });
 }
 
+bool NativePortRuntimeImageBindings::recognizes_image(
+    const std::string_view image_id) const noexcept {
+    return impl_ != nullptr && std::ranges::any_of(
+        impl_->images,
+        [&](const NativePortRuntimeImageView& image) {
+            return image.image_id == image_id;
+        });
+}
+
 std::optional<NativePortRuntimeImageActiveEntryView>
 NativePortRuntimeImageBindings::active_entry_for_address(
     const std::uint32_t address) const {
@@ -1112,6 +1121,19 @@ NativePortRuntimeImageBindings::dispatch_stamp() const noexcept {
     if (impl_ == nullptr) return {};
     return {impl_->lifecycle_ledger.generation(),
             impl_->immutable_guard.generation()};
+}
+
+std::vector<NativePortRuntimeImageLifecycleView>
+NativePortRuntimeImageBindings::active_images_for_development_state() const {
+    std::vector<NativePortRuntimeImageLifecycleView> result;
+    if (!impl_) return result;
+    result.reserve(impl_->active.size());
+    for (const auto& active : impl_->active) {
+        const auto& image = impl_->images[active.image_index];
+        result.push_back({image.image_id, image.runtime_start,
+                          image.byte_size, active.lifecycle_generation});
+    }
+    return result;
 }
 
 struct NativePortLoadedAotBinder::Impl final {
@@ -1517,6 +1539,36 @@ NativePortLoadedAotBinder::dispatch_stamp() const noexcept {
             impl_->aot_pack_identity};
 }
 
+std::vector<NativePortLoadedAotBinder::DevelopmentStateModule>
+NativePortLoadedAotBinder::modules_for_development_state() const {
+    std::vector<DevelopmentStateModule> result;
+    if (!impl_) return result;
+    result.reserve(impl_->pending.size() + impl_->active.size());
+    for (const auto& pending : impl_->pending) {
+        const auto& module = impl_->modules[pending.module_index];
+        result.push_back({module.sha256,
+                          module.source_start,
+                          pending.runtime_start,
+                          module.byte_size,
+                          pending.runtime_start +
+                              module.block_identities.front().source_offset,
+                          pending.lifecycle_generation,
+                          false});
+    }
+    for (const auto& active : impl_->active) {
+        const auto& module = impl_->modules[active.module_index];
+        result.push_back({module.sha256,
+                          module.source_start,
+                          active.runtime_start,
+                          module.byte_size,
+                          active.runtime_start +
+                              module.block_identities.front().source_offset,
+                          active.lifecycle_generation,
+                          true});
+    }
+    return result;
+}
+
 std::string_view
 NativePortLoadedAotBinder::module_universe_identity() const noexcept {
     return impl_ != nullptr ? std::string_view(impl_->module_universe_identity)
@@ -1760,6 +1812,52 @@ std::uint32_t NativePortLoadedAotBinder::resolve_module_source_start(
             NativePortContractFailure::AotContractViolation,
             "loaded-aot-stage-identity-missing");
     return *source_start;
+}
+
+void NativePortLoadedAotBinder::validate_development_state_module(
+    const NativePortLoadedAotModuleActivation& activation,
+    const std::uint32_t activation_entry) const {
+    if (!impl_ || !valid_sha256_identity(activation.sha256) ||
+        activation.byte_size < 2u)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-development-state-definition");
+    const auto runtime_start =
+        canonical_native_port_runtime_alias(activation.runtime_start);
+    const auto runtime_entry =
+        canonical_native_port_runtime_alias(activation_entry);
+    const NativePortLoadedAotModuleView* match = nullptr;
+    for (const auto& module : impl_->modules) {
+        if (module.sha256 != activation.sha256 ||
+            module.source_start != activation.source_start ||
+            module.byte_size != activation.byte_size)
+            continue;
+        if (match != nullptr)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-development-state-ambiguous");
+        match = &module;
+    }
+    if (match == nullptr)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-development-state-missing");
+    if (runtime_entry < runtime_start ||
+        static_cast<std::uint64_t>(runtime_entry) >=
+            static_cast<std::uint64_t>(runtime_start) + match->byte_size)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-development-state-entry");
+    const auto offset = runtime_entry - runtime_start;
+    if (
+        std::ranges::none_of(
+            match->block_identities,
+            [&](const NativePortLoadedAotBlockIdentityView& block) {
+                return block.source_offset == offset;
+            }))
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-development-state-entry");
 }
 
 bool NativePortLoadedAotBinder::bind_entry(
@@ -2344,6 +2442,41 @@ capture_native_port_main_memory(const CpuState& cpu) {
             "bootstrap-main-memory-snapshot");
     return {guard.read_bytes + offset,
             guard.read_bytes + offset + native_port_main_memory_backing_size};
+}
+
+void restore_native_port_main_memory_for_development_state(
+    CpuState& cpu,
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const NativePortImmutableRange> immutable_ranges) {
+    if (bytes.size() != native_port_main_memory_backing_size)
+        throw NativePortContractError(
+            NativePortContractFailure::BootstrapFailed,
+            "development-state-main-memory-size");
+    const auto current = capture_native_port_main_memory(cpu);
+    std::vector<BootstrapBackingInterval> immutable;
+    immutable.reserve(immutable_ranges.size());
+    for (const auto& range : immutable_ranges)
+        append_bootstrap_immutable_backing_intervals(immutable, range);
+    for (const auto& interval : immutable) {
+        const auto count = interval.end - interval.begin;
+        if (!std::equal(
+                bytes.begin() + interval.begin,
+                bytes.begin() + interval.end,
+                current.begin() + interval.begin,
+                current.begin() + interval.begin + count))
+            throw NativePortContractError(
+                NativePortContractFailure::ImmutableMemoryWrite,
+                "development-state-fixed-immutable-drift");
+    }
+    const auto guard = cpu.memory.direct_linear_memory_guard(true);
+    std::uint32_t offset = 0u;
+    if (guard.write_bytes == nullptr ||
+        !direct_linear_guard_offset(
+            guard, 0x8C000000u, bytes.size(), offset))
+        throw NativePortContractError(
+            NativePortContractFailure::BootstrapFailed,
+            "development-state-main-memory-window");
+    std::memcpy(guard.write_bytes + offset, bytes.data(), bytes.size());
 }
 
 void validate_native_port_bootstrap_memory_transition(

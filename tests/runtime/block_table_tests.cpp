@@ -152,6 +152,16 @@ int main() {
         require(!static_fast.lookup_static_aot(
                     0x0C001000u, 0x8C001000u, boot_variant),
                 "Passende Dynamic-Variante wird vom Static-AOT-Tier ueberschattet.");
+        const auto sealed_shadowed_static =
+            static_fast.lookup_sealed_static_aot(
+                0x0C001000u, 0x8C001000u, boot_variant);
+        require(sealed_shadowed_static &&
+                    sealed_shadowed_static->function == block_a &&
+                    sealed_shadowed_static->provenance == "static-fast" &&
+                    static_fast.static_dispatch_generation_guard_current(
+                        sealed_shadowed_static->generation_guard),
+                "Versiegelte Coverage-Authentisierung verlor einen exakten "
+                "Static-AOT-Block hinter einer normalen Dynamic-Praezedenz.");
 
         require(direct_p1_p2_block_binding_contiguous(
                     0x9FFFFFFCu, 0x1FFFFFFCu, 4u) &&

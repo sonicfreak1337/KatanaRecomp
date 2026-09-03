@@ -284,6 +284,14 @@ class RuntimeBlockTable {
     lookup_static_aot(std::uint32_t physical_address,
                       std::uint32_t virtual_address,
                       const BlockVariantKey& variant) const noexcept;
+    // Coverage owner selection must authenticate the immutable Static-AOT
+    // record even when an unrelated runtime record temporarily shadows the
+    // same guest halfword. This does not change normal dispatch precedence:
+    // callers must bind and consume the selected owner explicitly.
+    [[nodiscard]] std::optional<ValidatedBlockExecution>
+    lookup_sealed_static_aot(std::uint32_t physical_address,
+                             std::uint32_t virtual_address,
+                             const BlockVariantKey& variant) const noexcept;
     [[nodiscard]] std::vector<RuntimeBlockHandle> aliases(std::uint32_t physical_origin) const;
     [[nodiscard]] std::optional<std::reference_wrapper<const RuntimeBlock>>
     resolve(RuntimeBlockHandle handle) const noexcept;

@@ -607,9 +607,9 @@ void require_runtime_options_menu(
     require(menu_bar != nullptr && GetMenuItemCount(menu_bar) >= 1,
             "Das Runtime-Options-Menue fehlt unter der Titelleiste.");
     const auto options = GetSubMenu(menu_bar, 0);
-    require(options != nullptr && GetMenuItemCount(options) == 8,
+    require(options != nullptr && GetMenuItemCount(options) == 11,
             "Das Optionen-Untermenue besitzt nicht exakt Counter, "
-            "Ingame-Toggle und Hz-Auswahl.");
+            "Ingame-Toggle, Save/Load State und Hz-Auswahl.");
     wchar_t output_label[96]{};
     wchar_t simulation_label[96]{};
     static_cast<void>(GetMenuStringW(
@@ -628,6 +628,25 @@ void require_runtime_options_menu(
                 std::wstring_view(simulation_label).find(L"Simulation:") ==
                     0u,
             "FPS- oder Simulations-Counter fehlt im Optionen-Menue.");
+    wchar_t save_state_label[96]{};
+    wchar_t load_state_label[96]{};
+    static_cast<void>(GetMenuStringW(
+        options,
+        4u,
+        save_state_label,
+        static_cast<int>(std::size(save_state_label)),
+        MF_BYPOSITION));
+    static_cast<void>(GetMenuStringW(
+        options,
+        5u,
+        load_state_label,
+        static_cast<int>(std::size(load_state_label)),
+        MF_BYPOSITION));
+    require(std::wstring_view(save_state_label) == L"Save State..." &&
+                std::wstring_view(load_state_label) == L"Load State..." &&
+                GetMenuItemID(options, 4) != static_cast<UINT>(-1) &&
+                GetMenuItemID(options, 5) != static_cast<UINT>(-1),
+            "Save State oder Load State fehlt als klickbare Option.");
 
     const auto overlay_command = GetMenuItemID(options, 2);
     require(overlay_command != static_cast<UINT>(-1),
@@ -661,7 +680,7 @@ void require_runtime_options_menu(
                  MF_CHECKED) == 0u,
             "Der Ingame-FPS-Toggle liess sich nicht wieder ausschalten.");
 
-    const auto rate_144_command = GetMenuItemID(options, 7);
+    const auto rate_144_command = GetMenuItemID(options, 10);
     require(rate_144_command != static_cast<UINT>(-1),
             "Die 144-Hz-Auswahl besitzt keine klickbare Command-ID.");
     command_result = 0u;
@@ -691,7 +710,7 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 19u);
+    static_assert(native_port_graphics_contract_version == 20u);
     static_assert(native_port_frame_pacing_contract_version == 2u);
     static_assert(native_port_type2_autosort_contract_version == 3u);
 
