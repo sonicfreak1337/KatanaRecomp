@@ -22014,6 +22014,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "            throw std::runtime_error(\n"
                    "                \"native-bringup-coverage-entry-binding\");\n"
                    "    }\n"
+                   "    if (admission.owner_kind == katana::runtime::\n"
+                   "            NativeBringupCoverageOwnerKind::PrimaryStatic)\n"
+                   "        return;\n"
                    "    native_bringup_coverage_dispatch_selection = {\n"
                    "        true, target, admission.dispatch_source,\n"
                    "        admission.owner_kind, selected_entry};\n";

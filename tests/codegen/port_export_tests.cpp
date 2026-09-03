@@ -2850,10 +2850,13 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch.find("admission.execution.function") !=
                 std::string::npos &&
             coverage_dispatch.find(
+                "NativeBringupCoverageOwnerKind::PrimaryStatic)\n"
+                "        return;") != std::string::npos &&
+            coverage_dispatch.find(
                 "native_bringup_coverage_dispatch_selection = {") !=
                 std::string::npos,
         "Coverage-Target-Authority verlor Block-vs-Callable-Capability oder "
-        "die eindeutige Preflight-zu-Dispatch-Auswahl.");
+        "die direkte Primary-Static-/movable Preflight-zu-Dispatch-Auswahl.");
     require(
             coverage_dispatch.find(
                 "NativeBringupCoverageSourceTransfer, 1u") !=
