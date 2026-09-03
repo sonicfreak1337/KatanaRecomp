@@ -209,7 +209,7 @@ preflight_native_bringup_dispatch(
 // Coverage authority deliberately remains disjoint from the proof allowlist.
 // It can compile and execution-admit an exact complete-disassembly entry in a
 // NativeBringup product, but can never promote Evidence/Product closure.
-inline constexpr std::uint32_t native_bringup_coverage_contract_version = 5u;
+inline constexpr std::uint32_t native_bringup_coverage_contract_version = 6u;
 
 enum class NativeBringupCoverageSourceKind : std::uint8_t {
     StaticAot,
@@ -325,13 +325,14 @@ struct NativeBringupCoverageDispatchPack final {
     // executable ingress authority.
     std::span<const NativeBringupCoverageSourceTransfer> source_transfers;
     std::span<const NativeBringupCoverageEntry> entries;
-    // This is the executable ingress authority for movable owners and optional
-    // narrowing evidence for PrimaryStatic owners. Every record must also
-    // match the sealed Static-AOT block and, for movable owners, the current
-    // exact lifecycle binding. It contains complete-disassembly and
-    // independently bounded ingress entries only, never all compiled basic
-    // blocks. PrimaryStatic blocks missing from this span remain admissible
-    // only when their exact sealed execution is the sole available owner.
+    // Optional narrowing evidence for movable and PrimaryStatic owners.
+    // PrimaryStatic records must match the sealed RuntimeBlockTable. Movable
+    // records instead match the complete generated dispatcher entry plus the
+    // current exact lifecycle binding; requiring them in the smaller sealed
+    // table would turn an export reachability subset into a second allowlist.
+    // Missing records never make an otherwise exact active
+    // RuntimeImage/Loaded-AOT block unavailable. Matching records can still
+    // narrow capabilities, and conflicting active owners remain fail-closed.
     std::span<const NativeBringupCoverageTargetAuthority> target_authorities;
 };
 
@@ -499,6 +500,14 @@ struct NativeBringupCoveragePreflightResult final {
     std::string_view owner_image_id;
     std::string_view block_identity;
     std::uint32_t dispatch_source = 0u;
+    // Movable title code already has two exact authorities that do not depend
+    // on a reachability export: the active RuntimeImage/Loaded-AOT lifecycle
+    // owns the resident bytes, and the generated dispatcher owns an exact
+    // source-address entry.  When that entry was not duplicated into the
+    // much smaller sealed bring-up table, the generated dispatcher must bind
+    // it directly after this preflight instead of treating the missing table
+    // row as missing native code.
+    bool generated_entry_required = false;
 };
 
 [[nodiscard]] NativeBringupCoveragePreflightResult

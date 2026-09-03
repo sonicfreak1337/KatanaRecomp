@@ -521,10 +521,11 @@ int main(const int argc, char** const argv) {
                            error.what());
     }
 
-    // An ordinary guest store may retire one exact dynamic executable owner
-    // after the store has completed. A disjoint active module remains valid
-    // at the new observer generation, and the retired placement can later be
-    // staged and identity-checked again.
+    // An ordinary guest store quarantines only the exact generated block
+    // ranges it overlaps after the store has completed. Unchanged blocks in
+    // the same lifecycle and a disjoint active module remain valid at the new
+    // observer generation. Restoring an exact block identity can reacquire
+    // its already generated entry without retiring or restaging the module.
     try {
         constexpr std::uint32_t first_source_start = 0x80820000u;
         constexpr std::uint32_t second_source_start = 0x80830000u;
@@ -542,9 +543,15 @@ int main(const int argc, char** const argv) {
             katana::runtime::NativePortLoadedAotSourceBindingView{
                 katana::runtime::NativePortLoadedAotSourceTransform::Identity,
                 identity, 4u, static_cast<std::uint32_t>(bytes.size()), 0u}};
+        constexpr std::string_view first_block_identity =
+            "sha256:a2c4aed1cf757cd9a509734a267ffc7b1166b55f4c8f9c3e3550c56e743328fc";
+        constexpr std::string_view second_block_identity =
+            "sha256:cbe2268747c9c8072c7f9926f2288f270637dc55bb9d14d3368361d5e47d25be";
         const std::array blocks{
             katana::runtime::NativePortLoadedAotBlockIdentityView{
-                0u, static_cast<std::uint32_t>(bytes.size()), identity}};
+                0u, 2u, first_block_identity},
+            katana::runtime::NativePortLoadedAotBlockIdentityView{
+                2u, 2u, second_block_identity}};
         const std::array modules{
             katana::runtime::NativePortLoadedAotModuleView{
                 first_source_start, static_cast<std::uint32_t>(bytes.size()),
@@ -594,29 +601,33 @@ int main(const int argc, char** const argv) {
                     services.reconcile_runtime_executable_write() &&
                     !services.immutable_write_detected() &&
                     !binder.validate_bound_entry(first_runtime_start) &&
+                    binder.validate_bound_entry(first_runtime_start + 2u) &&
                     binder.validate_bound_entry(second_runtime_start),
-                "Post-Store-Retirement schloss nicht genau einen dynamischen "
-                "Owner oder invalidierte einen disjunkten Survivor.");
+                "Post-Store-Reconciliation quarantinierte nicht exakt den "
+                "betroffenen Block oder invalidierte Survivors.");
+        const auto same_owner = binder.active_module_for_address(
+            first_runtime_start);
         const auto surviving = binder.active_module_for_address(
             second_runtime_start);
-        require(surviving.has_value() &&
+        require(same_owner.has_value() &&
+                    same_owner->lifecycle_generation ==
+                        initial_owner_lifecycle &&
+                    surviving.has_value() &&
                     surviving->lifecycle_generation == second_lifecycle,
-                "Generation-Rebase veraenderte den Lifecycle des Survivors.");
+                "Blockquarantaene pensionierte einen Modul-Lifecycle.");
 
         cpu.memory.write_bytes(
-            0x0C920000u, bytes,
+            0x0C920000u, std::span(bytes).first(2u),
             katana::runtime::CodeWriteSource::Copy);
-        const auto replacement_lifecycle = binder.stage_runtime_module(
-            {identity, first_source_start, first_runtime_start,
-             static_cast<std::uint32_t>(bytes.size())});
-        require(replacement_lifecycle > initial_owner_lifecycle &&
-                    replacement_lifecycle > second_lifecycle &&
-                    binder.bind_entry(first_runtime_start) &&
-                    binder.validate_bound_entry(first_runtime_start),
-                "Retired dynamischer Owner konnte nicht identity-bound "
-                "reacquired werden.");
+        require(binder.bind_entry(first_runtime_start) &&
+                    binder.validate_bound_entry(first_runtime_start) &&
+                    binder.active_module_for_address(first_runtime_start)
+                            ->lifecycle_generation ==
+                        initial_owner_lifecycle,
+                "Restaurierter Block wurde nicht im bestehenden Lifecycle "
+                "identity-bound reaktiviert.");
 
-        cpu.pr = first_runtime_start + 2u;
+        cpu.pr = first_runtime_start;
         cpu.memory.write_u16(
             0x0C920000u, 0u,
             katana::runtime::CodeWriteSource::Cpu);

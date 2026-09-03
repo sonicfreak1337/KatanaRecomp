@@ -138,6 +138,16 @@ int main() {
                         .find("code/native-port-dispatch.cpp") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_GENERATED_DECLARATIVE_SOURCES") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("^code/native-port-(dispatch|loaded-aot|runtime-image)-"
+                              "shard-[0-9]+\\\\.cpp$") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("PROPERTY COMPILE_OPTIONS /clang:-fno-lto") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
                         .find("PROPERTY COMPILE_OPTIONS /EHsc") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("KATANA_AOT_COMPILE_JOBS") !=

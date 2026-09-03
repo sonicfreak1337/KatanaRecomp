@@ -1101,21 +1101,77 @@ void native_bringup_coverage_regression() {
             table, runtime_image_bindings, binder,
             missing_target_authority_pack, runtime_generation,
             missing_target_observations);
-    bool missing_target_authority_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+    const auto identity_bound_without_target_row =
+        preflight_native_bringup_coverage_dispatch(
             table, runtime_image_bindings, binder, missing_target_context,
-            request));
-    } catch (const NativeBringupDispatchError& error) {
-        missing_target_authority_rejected =
-            error.miss() == NativeBringupDispatchMiss::CoverageTargetMissing;
-    }
-    require(missing_target_authority_rejected &&
-                !binder.active_entry_for_address(target_runtime_start)
-                     .has_value() &&
-                missing_target_observations.total_occurrences() == 0u,
-            "Ein beliebiger kompilierter Block blieb ohne deklarierte "
-            "Ingress-Authority ausfuehrbar.");
+            request);
+    const auto identity_bound_active =
+        binder.active_entry_for_address(target_runtime_start);
+    require(identity_bound_without_target_row.block == target_handle &&
+                identity_bound_without_target_row.owner_kind ==
+                    CoverageOwner::LoadedAot &&
+                identity_bound_without_target_row.lifecycle_generation ==
+                    target_lifecycle &&
+                identity_bound_without_target_row.capabilities ==
+                    CoverageCapability::Callable &&
+                identity_bound_without_target_row.owner_identity ==
+                    module_identity &&
+                identity_bound_without_target_row.block_identity ==
+                    module_identity &&
+                identity_bound_active.has_value() &&
+                identity_bound_active->active &&
+                missing_target_observations.total_occurrences() == 1u,
+            "Exakter Loaded-AOT-Block blieb ohne redundante per-address "
+            "TargetAuthority-Zeile kuenstlich gesperrt.");
+
+    RuntimeBlockTable complete_dispatch_only_table;
+    complete_dispatch_only_table.bind_code_tracker(
+        nullptr, StaticAotInvalidationContract::Coordinated);
+    static_cast<void>(complete_dispatch_only_table.register_static(
+        make_static_block(source_binding)));
+    complete_dispatch_only_table.seal_static();
+    const std::array<NativeBringupCoverageEntry, 0u>
+        no_generated_placement_rows{};
+    const std::array<NativeBringupCoverageTargetAuthority, 0u>
+        no_generated_target_rows{};
+    const NativeBringupCoverageDispatchPack
+        complete_dispatch_only_pack{
+            coverage_pack.identity,
+            source_transfers,
+            no_generated_placement_rows,
+            no_generated_target_rows};
+    NativeBringupCoverageObservations
+        complete_dispatch_only_observations;
+    const auto complete_dispatch_only_context =
+        make_native_bringup_coverage_dispatch_context(
+            complete_dispatch_only_table, runtime_image_bindings, binder,
+            complete_dispatch_only_pack, runtime_generation,
+            complete_dispatch_only_observations);
+    const auto complete_dispatch_only_admission =
+        preflight_native_bringup_coverage_dispatch(
+            complete_dispatch_only_table, runtime_image_bindings, binder,
+            complete_dispatch_only_context, request);
+    require(!complete_dispatch_only_admission.block &&
+                complete_dispatch_only_admission.execution.function ==
+                    nullptr &&
+                complete_dispatch_only_admission.generated_entry_required &&
+                complete_dispatch_only_admission.owner_kind ==
+                    CoverageOwner::LoadedAot &&
+                complete_dispatch_only_admission.target ==
+                    target_runtime_start &&
+                complete_dispatch_only_admission.dispatch_source ==
+                    target_source_start &&
+                complete_dispatch_only_admission.owner_identity ==
+                    module_identity &&
+                complete_dispatch_only_admission.block_identity ==
+                    module_identity &&
+                complete_dispatch_only_admission.lifecycle_generation ==
+                    target_lifecycle &&
+                complete_dispatch_only_observations.total_occurrences() ==
+                    1u,
+            "Ein exakter Eintrag des vollstaendigen generierten Dispatchers "
+            "blieb gesperrt, weil er nicht zusaetzlich in der kleineren "
+            "Bring-up-RuntimeBlockTable dupliziert war.");
 
     const auto admitted = preflight_native_bringup_coverage_dispatch(
         table, runtime_image_bindings, binder, context, request);

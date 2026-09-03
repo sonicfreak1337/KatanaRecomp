@@ -330,7 +330,7 @@ bool NativePortImmutableWriteGuard::fixed_tracks_address(
 }
 
 bool NativePortImmutableWriteGuard::
-acknowledge_retired_runtime_executable_write() noexcept {
+acknowledge_reconciled_runtime_executable_write() noexcept {
     constexpr auto executable_kind = native_port_immutable_range_mask(
         NativePortImmutableRangeKind::Executable);
     if (!write_detected_ || first_write_kind_mask_ != executable_kind ||

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <fstream>
@@ -25,6 +26,33 @@
 
 namespace katana::runtime {
 namespace {
+
+[[nodiscard]] bool active_block_entry(
+    const std::vector<std::uint64_t>& block_entry_bits,
+    const std::uint32_t source_offset) noexcept {
+    if ((source_offset & 1u) != 0u) return false;
+    const auto halfword_offset = source_offset >> 1u;
+    const auto word_index = static_cast<std::size_t>(halfword_offset >> 6u);
+    return word_index < block_entry_bits.size() &&
+           (block_entry_bits[word_index] &
+            (std::uint64_t{1u} << (halfword_offset & 63u))) != 0u;
+}
+
+void set_active_block_entry(
+    std::vector<std::uint64_t>& block_entry_bits,
+    const std::uint32_t source_offset) noexcept {
+    const auto halfword_offset = source_offset >> 1u;
+    block_entry_bits[halfword_offset >> 6u] |=
+        std::uint64_t{1u} << (halfword_offset & 63u);
+}
+
+void clear_active_block_entry(
+    std::vector<std::uint64_t>& block_entry_bits,
+    const std::uint32_t source_offset) noexcept {
+    const auto halfword_offset = source_offset >> 1u;
+    block_entry_bits[halfword_offset >> 6u] &=
+        ~(std::uint64_t{1u} << (halfword_offset & 63u));
+}
 
 constexpr std::array<std::uint32_t, 64u> sha256_round_constants{
     0x428A2F98u, 0x71374491u, 0xB5C0FBCFu, 0xE9B5DBA5u,
@@ -730,6 +758,7 @@ struct NativePortRuntimeImageBindings::Impl final {
         std::uint64_t code_generation = 0u;
         std::uint64_t lifecycle_generation = 0u;
         std::unique_ptr<ScopedCodeAddressMapping> mapping;
+        std::vector<std::uint64_t> block_entry_bits;
     };
 
     CpuState& cpu;
@@ -821,6 +850,9 @@ NativePortRuntimeImageBindings::~NativePortRuntimeImageBindings() noexcept {
         const auto& image = impl_->images[active->image_index];
         bool guard_cleanup_complete = true;
         for (const auto& block : image.block_identities) {
+            if (!active_block_entry(
+                    active->block_entry_bits, block.source_offset))
+                continue;
             try {
                 impl_->immutable_guard.remove_runtime_executable_range(
                     image.runtime_start + block.source_offset,
@@ -903,8 +935,14 @@ void NativePortRuntimeImageBindings::activate(
     const auto lifecycle_generation = impl_->lifecycle_ledger.acquire(
         canonical_runtime_start, found->byte_size);
     std::unique_ptr<ScopedCodeAddressMapping> mapping;
+    std::vector<std::uint64_t> block_entry_bits;
     std::size_t registered = 0u;
     try {
+        block_entry_bits.resize(
+            (static_cast<std::size_t>(found->byte_size) + 127u) / 128u);
+        for (const auto& block : found->block_identities)
+            set_active_block_entry(
+                block_entry_bits, block.source_offset);
         mapping = std::make_unique<ScopedCodeAddressMapping>(
             CodeAddressMapping{found->source_start, canonical_runtime_start,
                                found->byte_size});
@@ -916,7 +954,8 @@ void NativePortRuntimeImageBindings::activate(
         }
         impl_->active.push_back(
             {image_index, impl_->immutable_guard.generation(),
-             lifecycle_generation, std::move(mapping)});
+             lifecycle_generation, std::move(mapping),
+             std::move(block_entry_bits)});
     } catch (...) {
         while (registered != 0u) {
             --registered;
@@ -958,10 +997,15 @@ std::size_t NativePortRuntimeImageBindings::deactivate_runtime_range(
             continue;
         const auto lifecycle_generation =
             impl_->active[active_index].lifecycle_generation;
-        for (const auto& block : image.block_identities)
+        for (const auto& block : image.block_identities) {
+            if (!active_block_entry(
+                    impl_->active[active_index].block_entry_bits,
+                    block.source_offset))
+                continue;
             impl_->immutable_guard.remove_runtime_executable_range_committed(
                 image.runtime_start + block.source_offset,
                 block.byte_size);
+        }
         impl_->active[active_index].mapping.reset();
         const auto retirement_generation =
             impl_->lifecycle_ledger.release_committed(
@@ -1008,11 +1052,15 @@ void NativePortRuntimeImageBindings::validate_deactivate_runtime_range(
         validate_no_live_native_port_continuation(
             impl_->cpu, image_runtime_start, image_end,
             "runtime-image-deactivate-live-continuation");
-        for (const auto& block : image.block_identities)
+        for (const auto& block : image.block_identities) {
+            if (!active_block_entry(
+                    active.block_entry_bits, block.source_offset))
+                continue;
             impl_->immutable_guard
                 .validate_runtime_executable_range_present(
                     image.runtime_start + block.source_offset,
                     block.byte_size);
+        }
         impl_->lifecycle_ledger.validate_release(
             active.lifecycle_generation);
     }
@@ -1101,7 +1149,8 @@ NativePortRuntimeImageBindings::active_entry_for_address(
             return candidate.source_offset < value;
         });
     if (block == image.block_identities.end() ||
-        block->source_offset != offset || block->byte_size == 0u)
+        block->source_offset != offset || block->byte_size == 0u ||
+        !active_block_entry(match->block_entry_bits, offset))
         return std::nullopt;
 
     return NativePortRuntimeImageActiveEntryView{
@@ -1307,6 +1356,9 @@ NativePortLoadedAotBinder::~NativePortLoadedAotBinder() noexcept {
         const auto& module = impl_->modules[active->module_index];
         bool guard_cleanup_complete = true;
         for (const auto& block : module.block_identities) {
+            if (!active_block_entry(
+                    active->block_entry_bits, block.source_offset))
+                continue;
             try {
                 impl_->immutable_guard.remove_runtime_executable_range(
                     active->runtime_start + block.source_offset,
@@ -1386,11 +1438,8 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
     // adjacent SH-4 halfword entry.
     const auto current_generation = impl_->immutable_guard.generation();
     const auto write_detected = impl_->immutable_guard.write_detected();
-    const auto halfword_offset = offset >> 1u;
     const auto exact_entry =
-        (offset & 1u) == 0u &&
-        (match->block_entry_bits[halfword_offset >> 6u] &
-         (std::uint64_t{1u} << (halfword_offset & 63u))) != 0u;
+        active_block_entry(match->block_entry_bits, offset);
     if (!write_detected &&
         match->code_generation == current_generation && exact_entry)
         return true;
@@ -1440,7 +1489,11 @@ bool NativePortLoadedAotBinder::validate_bound_entry(
             NativePortContractFailure::AotContractViolation,
             detail.str());
     }
-    return true;
+    // A reconciled guest write quarantines only the generated blocks whose
+    // validated byte spans changed. The module remains an active lifecycle
+    // owner, but a quarantined entry cannot dispatch again unless bind_entry
+    // independently proves that its exact generated bytes were restored.
+    return exact_entry;
 }
 
 std::optional<NativePortLoadedAotActiveModuleView>
@@ -1867,6 +1920,41 @@ bool NativePortLoadedAotBinder::bind_entry(
     const auto runtime_target =
         canonical_native_port_runtime_alias(target);
 
+    // Reacquire one previously quarantined block only after its exact static
+    // identity has been restored. This never decodes or recompiles guest
+    // code; it merely re-enables the already generated entry in the same
+    // active module lifecycle.
+    for (auto& active : impl_->active) {
+        const auto& module = impl_->modules[active.module_index];
+        const auto active_start =
+            canonical_native_port_runtime_alias(active.runtime_start);
+        if (runtime_target < active_start ||
+            static_cast<std::uint64_t>(runtime_target) >=
+                static_cast<std::uint64_t>(active_start) + module.byte_size)
+            continue;
+        const auto source_offset = runtime_target - active_start;
+        const auto block = std::lower_bound(
+            module.block_identities.begin(), module.block_identities.end(),
+            source_offset,
+            [](const auto& candidate, const std::uint32_t value) {
+                return candidate.source_offset < value;
+            });
+        if (block == module.block_identities.end() ||
+            block->source_offset != source_offset)
+            return false;
+        if (active_block_entry(active.block_entry_bits, source_offset))
+            return true;
+        const auto bytes = native_port_direct_bytes(
+            impl_->cpu, active_start + source_offset, block->byte_size);
+        if (!bytes.has_value() || sha256_identity(*bytes) != block->sha256)
+            return false;
+        impl_->immutable_guard.add_runtime_executable_range(
+            active_start + source_offset, block->byte_size);
+        set_active_block_entry(active.block_entry_bits, source_offset);
+        active.code_generation = impl_->immutable_guard.generation();
+        return true;
+    }
+
     struct Candidate final {
         std::size_t module_index = 0u;
         std::uint32_t runtime_start = 0u;
@@ -2180,11 +2268,15 @@ void NativePortLoadedAotBinder::validate_deactivate_runtime_range(
         validate_no_live_native_port_continuation(
             impl_->cpu, module_start, module_end,
             "loaded-aot-deactivate-live-continuation");
-        for (const auto& block : module.block_identities)
+        for (const auto& block : module.block_identities) {
+            if (!active_block_entry(
+                    active.block_entry_bits, block.source_offset))
+                continue;
             impl_->immutable_guard
                 .validate_runtime_executable_range_present(
                     active.runtime_start + block.source_offset,
                     block.byte_size);
+        }
         impl_->lifecycle_ledger.validate_release(
             active.lifecycle_generation);
     }
@@ -2237,10 +2329,14 @@ std::size_t NativePortLoadedAotBinder::deactivate_runtime_range(
             static_cast<std::uint64_t>(module_start) + module.byte_size;
         if (runtime_start >= module_end || module_start >= requested_end)
             continue;
-        for (const auto& block : module.block_identities)
+        for (const auto& block : module.block_identities) {
+            if (!active_block_entry(
+                    active.block_entry_bits, block.source_offset))
+                continue;
             impl_->immutable_guard.remove_runtime_executable_range_committed(
                 active.runtime_start + block.source_offset,
                 block.byte_size);
+        }
         active.mapping.reset();
         const auto retirement_generation =
             impl_->lifecycle_ledger.release_committed(
@@ -2372,9 +2468,18 @@ bool reconcile_native_port_runtime_executable_write(
             static_cast<std::uint64_t>(write_begin) + write_size;
         if (write_end > 0x1'0000'0000ull) return false;
 
+        enum class OwnerKind : std::uint8_t {
+            None,
+            RuntimeImage,
+            LoadedAot,
+        };
+        OwnerKind owner_kind = OwnerKind::None;
+        std::size_t owner_index = 0u;
         std::size_t owner_count = 0u;
         const auto consider_owner =
-            [&](const std::uint32_t owner_address,
+            [&](const OwnerKind kind,
+                const std::size_t index,
+                const std::uint32_t owner_address,
                 const std::size_t owner_size) noexcept {
                 const auto owner_begin =
                     canonical_native_port_runtime_alias(owner_address);
@@ -2385,42 +2490,165 @@ bool reconcile_native_port_runtime_executable_write(
                 if (write_begin < owner_begin || write_end > owner_end)
                     return false;
                 ++owner_count;
+                owner_kind = kind;
+                owner_index = index;
                 return owner_count <= 1u;
             };
-        for (const auto& active : context.runtime_images->impl_->active) {
+        for (std::size_t index = 0u;
+             index < context.runtime_images->impl_->active.size(); ++index) {
+            const auto& active = context.runtime_images->impl_->active[index];
             const auto& image = context.runtime_images->impl_->images[
                 active.image_index];
-            if (!consider_owner(image.runtime_start, image.byte_size))
+            if (!consider_owner(
+                    OwnerKind::RuntimeImage, index,
+                    image.runtime_start, image.byte_size))
                 return false;
         }
-        for (const auto& active : context.loaded_aot->impl_->active) {
+        for (std::size_t index = 0u;
+             index < context.loaded_aot->impl_->active.size(); ++index) {
+            const auto& active = context.loaded_aot->impl_->active[index];
             const auto& module = context.loaded_aot->impl_->modules[
                 active.module_index];
-            if (!consider_owner(active.runtime_start, module.byte_size))
+            if (!consider_owner(
+                    OwnerKind::LoadedAot, index,
+                    active.runtime_start, module.byte_size))
                 return false;
         }
         if (owner_count != 1u) return false;
 
-        // The scalar/batch write is already committed and the generated
-        // helper has forced a precise block exit. Expand from that write to
-        // the one proven owner, then use the existing atomic two-domain
-        // validation/retirement transaction. Live PC/PR/instruction/block
-        // continuations therefore remain fail-closed.
-        const auto retired = deactivate_native_port_executable_overlaps(
-            context, write_begin, write_size);
-        if (retired.runtime_images + retired.loaded_aot_modules != 1u ||
-            !immutable_guard
-                 .acknowledge_retired_runtime_executable_write())
+        const auto overlaps_write =
+            [&](const std::uint32_t block_address,
+                const std::size_t block_size) noexcept {
+                const auto block_begin =
+                    canonical_native_port_runtime_alias(block_address);
+                const auto block_end =
+                    static_cast<std::uint64_t>(block_begin) + block_size;
+                return write_begin < block_end && block_begin < write_end;
+            };
+        std::size_t quarantined_blocks = 0u;
+        std::uint32_t owner_runtime_start = 0u;
+        std::uint64_t owner_lifecycle_generation = 0u;
+        const char* owner_label = nullptr;
+
+        // The write is already committed, but generated execution has left
+        // the precise store boundary. Prepare every affected exact block
+        // before mutating the guard: an active PC/PR/continuation into one of
+        // those blocks remains a hard failure, while unrelated callbacks in
+        // the same overlay no longer cause whole-module retirement.
+        if (owner_kind == OwnerKind::RuntimeImage) {
+            const auto& active =
+                context.runtime_images->impl_->active[owner_index];
+            const auto& image = context.runtime_images->impl_->images[
+                active.image_index];
+            owner_runtime_start = canonical_native_port_runtime_alias(
+                image.runtime_start);
+            owner_lifecycle_generation = active.lifecycle_generation;
+            owner_label = "runtime-image";
+            for (const auto& block : image.block_identities) {
+                if (!active_block_entry(
+                        active.block_entry_bits, block.source_offset) ||
+                    !overlaps_write(
+                        image.runtime_start + block.source_offset,
+                        block.byte_size))
+                    continue;
+                const auto block_begin =
+                    canonical_native_port_runtime_alias(
+                        image.runtime_start + block.source_offset);
+                validate_no_live_native_port_continuation(
+                    *context.cpu, block_begin,
+                    static_cast<std::uint64_t>(block_begin) + block.byte_size,
+                    "runtime-image-write-live-continuation");
+                immutable_guard.validate_runtime_executable_range_present(
+                    image.runtime_start + block.source_offset,
+                    block.byte_size);
+                ++quarantined_blocks;
+            }
+        } else if (owner_kind == OwnerKind::LoadedAot) {
+            const auto& active =
+                context.loaded_aot->impl_->active[owner_index];
+            const auto& module = context.loaded_aot->impl_->modules[
+                active.module_index];
+            owner_runtime_start = canonical_native_port_runtime_alias(
+                active.runtime_start);
+            owner_lifecycle_generation = active.lifecycle_generation;
+            owner_label = "loaded-aot";
+            for (const auto& block : module.block_identities) {
+                if (!active_block_entry(
+                        active.block_entry_bits, block.source_offset) ||
+                    !overlaps_write(
+                        active.runtime_start + block.source_offset,
+                        block.byte_size))
+                    continue;
+                const auto block_begin =
+                    canonical_native_port_runtime_alias(
+                        active.runtime_start + block.source_offset);
+                validate_no_live_native_port_continuation(
+                    *context.cpu, block_begin,
+                    static_cast<std::uint64_t>(block_begin) + block.byte_size,
+                    "loaded-aot-write-live-continuation");
+                immutable_guard.validate_runtime_executable_range_present(
+                    active.runtime_start + block.source_offset,
+                    block.byte_size);
+                ++quarantined_blocks;
+            }
+        }
+        if (quarantined_blocks == 0u) return false;
+
+        if (owner_kind == OwnerKind::RuntimeImage) {
+            auto& active = context.runtime_images->impl_->active[owner_index];
+            const auto& image = context.runtime_images->impl_->images[
+                active.image_index];
+            for (const auto& block : image.block_identities) {
+                if (!active_block_entry(
+                        active.block_entry_bits, block.source_offset) ||
+                    !overlaps_write(
+                        image.runtime_start + block.source_offset,
+                        block.byte_size))
+                    continue;
+                immutable_guard.remove_runtime_executable_range_committed(
+                    image.runtime_start + block.source_offset,
+                    block.byte_size);
+                clear_active_block_entry(
+                    active.block_entry_bits, block.source_offset);
+            }
+        } else {
+            auto& active = context.loaded_aot->impl_->active[owner_index];
+            const auto& module = context.loaded_aot->impl_->modules[
+                active.module_index];
+            for (const auto& block : module.block_identities) {
+                if (!active_block_entry(
+                        active.block_entry_bits, block.source_offset) ||
+                    !overlaps_write(
+                        active.runtime_start + block.source_offset,
+                        block.byte_size))
+                    continue;
+                immutable_guard.remove_runtime_executable_range_committed(
+                    active.runtime_start + block.source_offset,
+                    block.byte_size);
+                clear_active_block_entry(
+                    active.block_entry_bits, block.source_offset);
+            }
+        }
+        if (!immutable_guard
+                 .acknowledge_reconciled_runtime_executable_write())
             return false;
 
         // The guard generation is global. The reconciled write touched only
-        // the now-retired owner, so surviving disjoint bindings can safely
-        // adopt the post-write generation without re-hashing their code.
+        // quarantined ranges, so every still-active exact block can safely
+        // adopt the post-write generation without re-hashing unrelated code.
         const auto current_generation = immutable_guard.generation();
         for (auto& active : context.runtime_images->impl_->active)
             active.code_generation = current_generation;
         for (auto& active : context.loaded_aot->impl_->active)
             active.code_generation = current_generation;
+        std::fprintf(
+            stderr,
+            "KATANA_NATIVE_EXECUTABLE_BLOCK_QUARANTINE "
+            "owner=%s runtime=0x%08x write=0x%08x bytes=0x%zx "
+            "blocks=%zu lifecycle=%llu\n",
+            owner_label, owner_runtime_start, write_begin, write_size,
+            quarantined_blocks,
+            static_cast<unsigned long long>(owner_lifecycle_generation));
         return true;
     } catch (...) {
         return false;

@@ -65,7 +65,7 @@ class NativePortImmutableWriteGuard final {
         std::uint32_t address,
         std::size_t size) const noexcept;
     [[nodiscard]] bool
-    acknowledge_retired_runtime_executable_write() noexcept;
+    acknowledge_reconciled_runtime_executable_write() noexcept;
 
     friend bool reconcile_native_port_runtime_executable_write(
         NativePortContext& context,

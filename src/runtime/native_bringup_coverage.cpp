@@ -200,6 +200,18 @@ bool target_capability_allows(
     return false;
 }
 
+NativeBringupCoverageTargetCapability inferred_target_capabilities(
+    const NativeBringupTransferKind transfer) noexcept {
+    using Capability = NativeBringupCoverageTargetCapability;
+    switch (transfer) {
+    case NativeBringupTransferKind::CallRegister:
+        return Capability::Callable;
+    case NativeBringupTransferKind::TailJumpRegister:
+        return Capability::TailJumpEntry | Capability::InternalBlock;
+    }
+    return Capability::None;
+}
+
 bool primary_target_authority_matches(
     const RuntimeBlockTable& table,
     const NativeBringupCoverageTargetAuthority& authority,
@@ -553,14 +565,6 @@ preflight_native_bringup_coverage_dispatch(
             request.continuation != selected_source->continuation)
             reject(request, NativeBringupDispatchMiss::SourceIdentityMismatch);
 
-        const auto source_execution = table.lookup_sealed_static_aot(
-            selected_source->source.block.physical_address,
-            selected_source->source.block.virtual_address,
-            request.variant);
-        if (!execution_matches(
-                table, source_execution, selected_source->source,
-                request.variant))
-            reject(request, NativeBringupDispatchMiss::SourceIdentityMismatch);
         source_authority = {
             selected_source->source_kind,
             selected_source->source_module_identity,
@@ -569,7 +573,19 @@ preflight_native_bringup_coverage_dispatch(
             selected_source->source_module_offset,
             0u};
         if (selected_source->source_kind ==
-            NativeBringupCoverageSourceKind::LoadedAot) {
+            NativeBringupCoverageSourceKind::StaticAot) {
+            const auto source_execution = table.lookup_sealed_static_aot(
+                selected_source->source.block.physical_address,
+                selected_source->source.block.virtual_address,
+                request.variant);
+            if (!execution_matches(
+                    table, source_execution, selected_source->source,
+                    request.variant))
+                reject(
+                    request,
+                    NativeBringupDispatchMiss::SourceIdentityMismatch);
+        } else if (selected_source->source_kind ==
+                   NativeBringupCoverageSourceKind::LoadedAot) {
             const auto runtime_source =
                 selected_source->source_runtime_start +
                 selected_source->source_module_offset;
@@ -612,6 +628,8 @@ preflight_native_bringup_coverage_dispatch(
             source_authority.lifecycle_generation =
                 active_source->lifecycle_generation;
             source_authority.image_id = active_source->image_id;
+        } else {
+            reject(request, NativeBringupDispatchMiss::SourceIdentityMismatch);
         }
     } else {
         // Coverage source records are diagnostics/proof accelerators, not
@@ -673,7 +691,13 @@ preflight_native_bringup_coverage_dispatch(
     const NativeBringupCoverageTargetAuthority* selected_authority = nullptr;
     std::optional<NativeBringupCoverageTargetAuthority>
         sealed_primary_authority;
+    std::optional<NativeBringupCoverageTargetAuthority>
+        sealed_runtime_image_authority;
+    std::optional<NativeBringupCoverageTargetAuthority>
+        sealed_loaded_aot_authority;
     std::optional<ValidatedBlockExecution> selected_execution;
+    std::optional<ValidatedBlockExecution> runtime_image_execution;
+    std::optional<ValidatedBlockExecution> loaded_aot_execution;
     std::optional<NativePortRuntimeImageActiveEntryView>
         selected_runtime_image;
     std::optional<NativePortLoadedAotEntryView> selected_loaded_aot;
@@ -730,7 +754,7 @@ preflight_native_bringup_coverage_dispatch(
                 NativeBringupDispatchMiss::RuntimeImageIdentityMismatch);
         const auto source_target =
             static_cast<std::uint32_t>(source_target_wide);
-        const auto execution = table.lookup_sealed_static_aot(
+        runtime_image_execution = table.lookup_sealed_static_aot(
             canonical_physical_address(source_target), source_target,
             request.variant);
         const auto [begin, end] = authority_range(source_target);
@@ -738,11 +762,13 @@ preflight_native_bringup_coverage_dispatch(
             if (runtime_image_target_authority_matches(
                     *authority, *runtime_image_target) &&
                 execution_matches(
-                    table, execution, authority->target, request.variant) &&
+                    table, runtime_image_execution, authority->target,
+                    request.variant) &&
                 runtime_image_target_execution_matches(
-                    table, execution, *runtime_image_target,
+                    table, runtime_image_execution, *runtime_image_target,
                     request.variant))
-                select(*authority, *execution, runtime_image_target,
+                select(*authority, *runtime_image_execution,
+                       runtime_image_target,
                        std::nullopt);
         }
     }
@@ -757,7 +783,7 @@ preflight_native_bringup_coverage_dispatch(
                 NativeBringupDispatchMiss::LoadedModuleIdentityMismatch);
         const auto source_target =
             static_cast<std::uint32_t>(source_target_wide);
-        const auto execution = table.lookup_sealed_static_aot(
+        loaded_aot_execution = table.lookup_sealed_static_aot(
             canonical_physical_address(source_target), source_target,
             request.variant);
         const auto [begin, end] = authority_range(source_target);
@@ -765,12 +791,73 @@ preflight_native_bringup_coverage_dispatch(
             if (loaded_target_authority_matches(
                     *authority, *staged_target) &&
                 execution_matches(
-                    table, execution, authority->target, request.variant) &&
+                    table, loaded_aot_execution, authority->target,
+                    request.variant) &&
                 loaded_target_execution_matches(
-                    table, execution, *staged_target, request.variant))
-                select(*authority, *execution, std::nullopt,
+                    table, loaded_aot_execution, *staged_target,
+                    request.variant))
+                select(*authority, *loaded_aot_execution, std::nullopt,
                        staged_target);
         }
+    }
+
+    // A generated target-authority row is proof/narrowing metadata, not a
+    // second per-address allowlist. The binder and runtime-image ledgers have
+    // already proven a unique active module generation, while the sealed AOT
+    // execution independently binds the exact source block hash. When no row
+    // matches, synthesize only that exact movable owner. This opens the whole
+    // compiled overlay universe without admitting unknown bytes, stale
+    // generations, interior addresses or overlapping movable owners.
+    if (authority_matches == 0u && runtime_image_target.has_value() &&
+        staged_target.has_value())
+        reject(request, NativeBringupDispatchMiss::AmbiguousTargetOwner);
+    if (authority_matches == 0u && runtime_image_target.has_value() &&
+        !staged_target.has_value() && runtime_image_execution.has_value() &&
+        runtime_image_target_execution_matches(
+            table, runtime_image_execution, *runtime_image_target,
+            request.variant)) {
+        sealed_runtime_image_authority.emplace(
+            NativeBringupCoverageTargetAuthority{
+                NativeBringupCoverageOwnerKind::RuntimeImage,
+                inferred_target_capabilities(request.transfer_kind),
+                runtime_image_target->image_sha256,
+                runtime_image_target->image_id,
+                runtime_image_target->image_size,
+                runtime_image_target->source_start,
+                runtime_image_target->runtime_start,
+                runtime_image_target->source_offset,
+                NativeBringupDispatchStaticAotBinding{
+                    {runtime_image_execution->virtual_start,
+                     runtime_image_execution->physical_origin},
+                    runtime_image_execution->size,
+                    runtime_image_execution->end_kind,
+                    runtime_image_execution->provenance}});
+        select(*sealed_runtime_image_authority, *runtime_image_execution,
+               runtime_image_target, std::nullopt);
+    }
+    if (authority_matches == 0u && staged_target.has_value() &&
+        !runtime_image_target.has_value() && loaded_aot_execution.has_value() &&
+        loaded_target_execution_matches(
+            table, loaded_aot_execution, *staged_target,
+            request.variant)) {
+        sealed_loaded_aot_authority.emplace(
+            NativeBringupCoverageTargetAuthority{
+                NativeBringupCoverageOwnerKind::LoadedAot,
+                inferred_target_capabilities(request.transfer_kind),
+                staged_target->module_sha256,
+                {},
+                staged_target->module_size,
+                staged_target->source_start,
+                staged_target->runtime_start,
+                staged_target->source_offset,
+                NativeBringupDispatchStaticAotBinding{
+                    {loaded_aot_execution->virtual_start,
+                     loaded_aot_execution->physical_origin},
+                    loaded_aot_execution->size,
+                    loaded_aot_execution->end_kind,
+                    loaded_aot_execution->provenance}});
+        select(*sealed_loaded_aot_authority, *loaded_aot_execution,
+               std::nullopt, staged_target);
     }
 
     const bool declared_movable_runtime_owner = std::any_of(
@@ -825,6 +912,176 @@ preflight_native_bringup_coverage_dispatch(
 
     if (authority_matches > 1u)
         reject(request, NativeBringupDispatchMiss::AmbiguousTargetOwner);
+
+    // The generated product dispatcher contains the complete exact-entry
+    // universe, while RuntimeBlockTable intentionally contains only the
+    // smaller directly reachable bring-up subset. A movable module entry must
+    // not become uncallable merely because export did not duplicate it into
+    // that subset: its active lifecycle plus the binder's exact resident-byte
+    // identity are already the executable authority. The generated caller
+    // performs the final exact dispatch-entry lookup before publishing the
+    // selection. A conflicting sealed block remains fail-closed.
+    if (authority_matches == 0u && !static_available &&
+        staged_target.has_value() && !runtime_image_target.has_value() &&
+        !loaded_aot_execution.has_value()) {
+        const auto source_target_wide =
+            static_cast<std::uint64_t>(staged_target->source_start) +
+            staged_target->source_offset;
+        if (source_target_wide > std::numeric_limits<std::uint32_t>::max())
+            reject(
+                request,
+                NativeBringupDispatchMiss::LoadedModuleIdentityMismatch);
+        const auto source_target =
+            static_cast<std::uint32_t>(source_target_wide);
+        const NativeBringupCoverageTargetAuthority* identity_authority =
+            nullptr;
+        std::size_t identity_authority_matches = 0u;
+        const auto [begin, end] = authority_range(source_target);
+        for (auto authority = begin; authority != end; ++authority) {
+            if (!loaded_target_authority_matches(
+                    *authority, *staged_target))
+                continue;
+            ++identity_authority_matches;
+            identity_authority = &*authority;
+        }
+        if (identity_authority_matches > 1u)
+            reject(
+                request,
+                NativeBringupDispatchMiss::AmbiguousTargetOwner);
+        const auto capabilities = identity_authority != nullptr
+                                      ? identity_authority->capabilities
+                                      : inferred_target_capabilities(
+                                            request.transfer_kind);
+        if (!target_capability_allows(capabilities, request.transfer_kind))
+            reject(
+                request,
+                NativeBringupDispatchMiss::TargetCapabilityMismatch);
+        if (!binder.bind_entry(request.target))
+            reject(request, NativeBringupDispatchMiss::UnmappedTarget);
+        const auto active_target =
+            binder.active_entry_for_address(request.target);
+        if (!active_target.has_value() || !active_target->active ||
+            !loaded_entry_matches(*active_target, *staged_target) ||
+            (identity_authority != nullptr &&
+             !loaded_target_authority_matches(
+                 *identity_authority, *active_target)))
+            reject(
+                request,
+                NativeBringupDispatchMiss::LoadedModuleIdentityMismatch);
+
+        const NativeBringupCoverageObservation observation{
+            request.transfer_kind,
+            request.callsite,
+            canonical_target,
+            source_authority.kind,
+            source_authority.module_identity,
+            source_authority.block_identity,
+            source_authority.runtime_start,
+            source_authority.module_offset,
+            source_authority.lifecycle_generation,
+            active_target->module_sha256,
+            active_target->block_sha256,
+            active_target->runtime_start,
+            active_target->source_offset,
+            active_target->lifecycle_generation,
+            context.pack.identity.aot_pack_generation,
+            context.runtime_generation,
+            1u,
+            source_authority.image_id,
+            NativeBringupCoverageOwnerKind::LoadedAot,
+            {}};
+        NativeBringupCoveragePreflightResult result;
+        result.target = request.target;
+        result.physical_target =
+            canonical_physical_address(request.target);
+        result.lifecycle_generation =
+            active_target->lifecycle_generation;
+        result.owner_kind = NativeBringupCoverageOwnerKind::LoadedAot;
+        result.capabilities = capabilities;
+        result.owner_identity = active_target->module_sha256;
+        result.block_identity = active_target->block_sha256;
+        result.dispatch_source = source_target;
+        result.generated_entry_required = true;
+        return remember_coverage_preflight(
+            table, runtime_images, binder, context, request, result,
+            &observation);
+    }
+
+    if (authority_matches == 0u && !static_available &&
+        runtime_image_target.has_value() && !staged_target.has_value() &&
+        !runtime_image_execution.has_value()) {
+        const auto source_target_wide =
+            static_cast<std::uint64_t>(runtime_image_target->source_start) +
+            runtime_image_target->source_offset;
+        if (source_target_wide > std::numeric_limits<std::uint32_t>::max())
+            reject(
+                request,
+                NativeBringupDispatchMiss::RuntimeImageIdentityMismatch);
+        const auto source_target =
+            static_cast<std::uint32_t>(source_target_wide);
+        const NativeBringupCoverageTargetAuthority* identity_authority =
+            nullptr;
+        std::size_t identity_authority_matches = 0u;
+        const auto [begin, end] = authority_range(source_target);
+        for (auto authority = begin; authority != end; ++authority) {
+            if (!runtime_image_target_authority_matches(
+                    *authority, *runtime_image_target))
+                continue;
+            ++identity_authority_matches;
+            identity_authority = &*authority;
+        }
+        if (identity_authority_matches > 1u)
+            reject(
+                request,
+                NativeBringupDispatchMiss::AmbiguousTargetOwner);
+        const auto capabilities = identity_authority != nullptr
+                                      ? identity_authority->capabilities
+                                      : inferred_target_capabilities(
+                                            request.transfer_kind);
+        if (!target_capability_allows(capabilities, request.transfer_kind))
+            reject(
+                request,
+                NativeBringupDispatchMiss::TargetCapabilityMismatch);
+
+        const NativeBringupCoverageObservation observation{
+            request.transfer_kind,
+            request.callsite,
+            canonical_target,
+            source_authority.kind,
+            source_authority.module_identity,
+            source_authority.block_identity,
+            source_authority.runtime_start,
+            source_authority.module_offset,
+            source_authority.lifecycle_generation,
+            runtime_image_target->image_sha256,
+            runtime_image_target->block_sha256,
+            runtime_image_target->runtime_start,
+            runtime_image_target->source_offset,
+            runtime_image_target->lifecycle_generation,
+            context.pack.identity.aot_pack_generation,
+            context.runtime_generation,
+            1u,
+            source_authority.image_id,
+            NativeBringupCoverageOwnerKind::RuntimeImage,
+            runtime_image_target->image_id};
+        NativeBringupCoveragePreflightResult result;
+        result.target = request.target;
+        result.physical_target =
+            canonical_physical_address(request.target);
+        result.lifecycle_generation =
+            runtime_image_target->lifecycle_generation;
+        result.owner_kind = NativeBringupCoverageOwnerKind::RuntimeImage;
+        result.capabilities = capabilities;
+        result.owner_identity = runtime_image_target->image_sha256;
+        result.owner_image_id = runtime_image_target->image_id;
+        result.block_identity = runtime_image_target->block_sha256;
+        result.dispatch_source = source_target;
+        result.generated_entry_required = true;
+        return remember_coverage_preflight(
+            table, runtime_images, binder, context, request, result,
+            &observation);
+    }
+
     if (selected_authority == nullptr || !selected_execution.has_value()) {
         if (static_available || runtime_image_target.has_value() ||
             staged_target.has_value())

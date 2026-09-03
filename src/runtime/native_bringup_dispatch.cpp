@@ -449,7 +449,6 @@ bool ordered_coverage_view(
         pack.source_transfers.size() >
             native_bringup_coverage_maximum_source_transfers ||
         pack.entries.size() > native_bringup_coverage_maximum_entries ||
-        pack.target_authorities.empty() ||
         pack.target_authorities.size() >
             native_bringup_coverage_maximum_target_authorities)
         return false;
@@ -858,18 +857,17 @@ make_native_bringup_coverage_dispatch_context(
             pack.source_transfers.begin(),
             pack.source_transfers.end(),
             [&](const auto& source) {
-                return !sealed_binding_current(source.source);
-            }) ||
-        std::any_of(
-            pack.entries.begin(), pack.entries.end(),
-            [&](const auto& entry) {
-                return !sealed_binding_current(entry.target);
+                return source.source_kind ==
+                           NativeBringupCoverageSourceKind::StaticAot &&
+                       !sealed_binding_current(source.source);
             }) ||
         std::any_of(
             pack.target_authorities.begin(),
             pack.target_authorities.end(),
             [&](const auto& authority) {
-                return !sealed_binding_current(authority.target);
+                return authority.owner_kind ==
+                           NativeBringupCoverageOwnerKind::PrimaryStatic &&
+                       !sealed_binding_current(authority.target);
             }))
         throw std::invalid_argument(
             "Native bring-up coverage pack is not bound to the sealed "

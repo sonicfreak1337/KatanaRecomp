@@ -435,9 +435,12 @@ deactivate_native_port_executable_overlaps(
     std::uint32_t runtime_start,
     std::size_t byte_size);
 
-// Cold post-store transition for ordinary guest writes into one exact active
-// dynamic executable owner. Fixed immutable ranges, ambiguous ownership and
-// live continuations remain hard failures at the generated integrity gate.
+// Cold post-store transition for ordinary guest writes into exact generated
+// blocks of one active dynamic executable owner. Only generated blocks whose
+// validated byte ranges overlap the write are quarantined; the surrounding
+// module and its unaffected entries keep their lifecycle generation. Fixed
+// immutable ranges, ambiguous ownership and live continuations into an
+// affected block remain hard failures at the generated integrity gate.
 [[nodiscard]] bool reconcile_native_port_runtime_executable_write(
     NativePortContext& context,
     NativePortImmutableWriteGuard& immutable_guard) noexcept;
