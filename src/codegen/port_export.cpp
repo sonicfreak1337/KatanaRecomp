@@ -987,6 +987,15 @@ std::string latent_primary_root_seed_cache_semantic_identity(
     projected_native_port->hooks = projected_hooks;
     projected_options.native_port_definition = &*projected_native_port;
 
+    // A validated root seed is a conservative primary-image entry-point
+    // union, not a proof that a particular latent hint remains present. New
+    // hint/resume rows may add roots but cannot make an already decoded,
+    // executable primary root unsafe. Excluding these monotone inputs keeps
+    // the expensive CFA seed reusable while all disc, project, code-source,
+    // runtime-payload and bootstrap identities remain exact below.
+    projected_options.latent_aot_entry_hints = {};
+    projected_options.native_aot_resume_entries = {};
+
     // The projected artifact identity deliberately retains just the hook
     // code-source authority. native_port_export_identity() also binds these
     // fields now; this projection prevents the deliberately cleared
@@ -21595,7 +21604,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    std::uint32_t target,\n"
               "    const std::optional<std::uint32_t> return_sentinel,\n"
               "    std::optional<std::uint32_t> bypass_hook,\n"
-              "    const bool stop_after_one_block) {\n"
+              "    const bool stop_after_one_block,\n"
+              "    std::optional<std::uint32_t> initial_source = std::nullopt) {\n"
               "    NativeDispatchDepthScope dispatch_depth_scope;\n"
               "    auto& cpu = *context.cpu;\n"
               "    bool executed_block = false;\n"
@@ -21656,14 +21666,17 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "                            NativePortDevelopmentStateResult::Loaded) {\n"
               "                        target = cpu.pc;\n"
               "                        bypass_hook.reset();\n"
+              "                        initial_source.reset();\n"
               "                        executed_block = false;\n"
               "                        continue;\n"
               "                    }\n"
               "                }\n"
               "            }\n"
               "        }\n"
-              "        auto source =\n"
-              "            runtime_dispatch_detail::normalized_source_address(target);\n";
+              "        auto source = initial_source.has_value()\n"
+              "            ? *initial_source\n"
+              "            : runtime_dispatch_detail::normalized_source_address(target);\n"
+              "        initial_source.reset();\n";
     if (native_bringup_coverage)
         output
             << "        const bool coverage_selection_active =\n"
@@ -22205,10 +22218,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "            (admission.generated_entry_required &&\n"
                    "             admission.owner_kind == katana::runtime::\n"
                    "                 NativeBringupCoverageOwnerKind::PrimaryStatic &&\n"
-                   "             (!selected_entry->static_chainable ||\n"
-                   "              runtime_dispatch_detail::\n"
+                   "             runtime_dispatch_detail::\n"
                    "                  native_loaded_aot_source_address(\n"
-                   "                      admission.dispatch_source))) ||\n"
+                   "                      admission.dispatch_source)) ||\n"
                    "            (!admission.generated_entry_required &&\n"
                    "             selected_entry->function !=\n"
                    "                 admission.execution.function))\n"
@@ -22225,12 +22237,18 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         output << "}\n";
     }
     output << "void dispatch_call(katana::runtime::CpuState& cpu,\n"
-              "                   const std::uint32_t target) {\n"
+              "                   const std::uint32_t target,\n"
+              "                   const std::optional<std::uint32_t> initial_source) {\n"
               "    require_active_context(cpu);\n"
               "    const auto result = dispatch_native(\n"
-              "        *active_native_context, target, cpu.pr, std::nullopt, false);\n"
+              "        *active_native_context, target, cpu.pr, std::nullopt, false,\n"
+              "        initial_source);\n"
               "    if (result.action == HookAction::Abort)\n"
               "        throw NestedHookAbort{result.error_code};\n"
+              "}\n"
+              "void dispatch_call(katana::runtime::CpuState& cpu,\n"
+              "                   const std::uint32_t target) {\n"
+              "    dispatch_call(cpu, target, std::nullopt);\n"
               "}\n"
               "void dispatch_jump(katana::runtime::CpuState& cpu,\n"
               "                   const std::uint32_t target) {\n"
@@ -22312,10 +22330,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "const std::uint32_t target) { dispatch_call(cpu, target); }\n"
               "void exact_guarded_call(katana::runtime::CpuState& cpu, "
               "const std::uint32_t target, const std::uint32_t allowed_target) {\n"
-              "    require_active_context(cpu);\n"
-              "    if (!exact_guarded_target_matches(target, allowed_target))\n"
+              "    const auto source = exact_guarded_source_address(target);\n"
+              "    if (source != exact_guarded_source_address(allowed_target))\n"
               "        fail_missing_entry(target);\n"
-              "    dispatch_call(cpu, target);\n"
+              "    dispatch_call(cpu, target, source);\n"
               "}\n"
               "void runtime_only_call(katana::runtime::CpuState& cpu, "
               "const std::uint32_t target) { dispatch_call(cpu, target); }\n"
@@ -33290,18 +33308,38 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         if (proof == proof_by_identity.end()) continue;
         const auto& proof_module = *proof->second;
         for (const auto& identity : proof_module.block_identities) {
-            if (!std::ranges::any_of(
-                    coverage_module.block_identities,
-                    [&](const auto& candidate) {
-                        return candidate == identity;
-                    }))
-                throw std::runtime_error(
-                    "Coverage-Superset verlor eine Proof-Blockidentitaet:"
-                    "module=" + coverage_module.byte_identity +
-                    ":source-offset=" +
-                    std::to_string(identity.source_offset) +
-                    ":size=" + std::to_string(identity.size) +
-                    ":identity=" + identity.sha256);
+            const auto candidate = std::ranges::find_if(
+                coverage_module.block_identities,
+                [&](const auto& value) {
+                    return value.source_offset == identity.source_offset;
+                });
+            // Adding authoritative entries can only refine an existing block
+            // at the same immutable module offset. The module byte identity
+            // already authenticates the prefix bytes, while the current
+            // block identity binds the newly split dispatch extent. Reject a
+            // moved, enlarged or same-sized-but-different block; accept only
+            // exact preservation or a strict same-start refinement.
+            if (candidate != coverage_module.block_identities.end() &&
+                (*candidate == identity || candidate->size < identity.size))
+                continue;
+            std::string candidates;
+            for (const auto& same_offset :
+                 coverage_module.block_identities) {
+                if (same_offset.source_offset != identity.source_offset)
+                    continue;
+                if (!candidates.empty()) candidates.push_back(',');
+                candidates += std::to_string(same_offset.size) + '@' +
+                              same_offset.sha256;
+            }
+            if (candidates.empty()) candidates = "none";
+            throw std::runtime_error(
+                "Coverage-Superset verlor eine Proof-Blockidentitaet:"
+                "module=" + coverage_module.byte_identity +
+                ":source-offset=" +
+                std::to_string(identity.source_offset) +
+                ":size=" + std::to_string(identity.size) +
+                ":identity=" + identity.sha256 +
+                ":coverage-candidates=" + candidates);
         }
         for (const auto& identity : proof_module.function_identities) {
             const auto candidate = std::ranges::find_if(
@@ -44062,7 +44100,12 @@ NativeDiscAnalysisResult analyze_native_disc_port(
     std::size_t final_external_callback_field_sink_count = 0u;
     std::size_t final_external_callback_record_table_count = 0u;
     std::size_t final_latent_external_root_count = 0u;
-    std::vector<std::uint32_t> latent_external_primary_roots;
+    // Cached roots have already passed the same executable-entry shape gate
+    // and were inserted into the image before the initial CFA. Begin the
+    // authoritative union with them, then discover and append any new roots
+    // from the current hint generation.
+    std::vector<std::uint32_t> latent_external_primary_roots =
+        cached_latent_primary_roots;
     for (std::size_t iteration = 0u;
          iteration < maximum_cross_image_callback_iterations;
          ++iteration) {

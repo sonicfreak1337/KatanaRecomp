@@ -508,9 +508,12 @@ struct NativeBringupCoveragePreflightResult final {
     std::uint32_t dispatch_source = 0u;
     // The generated dispatcher is the complete executable-entry universe.
     // Movable code additionally requires its active identity-bound lifecycle;
-    // primary code additionally requires a static-chainable, non-loaded-AOT
-    // entry. When either exact entry was not duplicated into the much smaller
-    // sealed bring-up table, the generated dispatcher binds it directly after
+    // primary code additionally requires an exact non-loaded-AOT generated
+    // entry. Static-chainability is irrelevant here: the dispatcher invokes
+    // the exact emitted entry directly rather than entering it through a
+    // static-chain table. When either exact entry was not duplicated into the
+    // much smaller sealed bring-up table, the generated dispatcher binds it
+    // directly after
     // this preflight instead of treating the missing row as absent native code.
     bool generated_entry_required = false;
 };

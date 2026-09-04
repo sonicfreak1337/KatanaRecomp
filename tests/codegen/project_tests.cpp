@@ -173,7 +173,7 @@ int main() {
                         .find("KATANA_GENERATED_DECLARATIVE_SOURCES") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
-                        .find("KATANA_GENERATED_COLD_OVERLAY_SOURCES") !=
+                        .find("KATANA_GENERATED_COLD_AOT_SOURCES") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
                         .find("KATANA_GENERATED_CENTRAL_DISPATCH_SOURCES") !=
@@ -182,7 +182,8 @@ int main() {
                         .find("${KATANA_GENERATED_CENTRAL_DISPATCH_SOURCES}") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
-                        .find("^code/unit-v8[Cc]") != std::string::npos &&
+                        .find("NOT KATANA_GENERATED_SOURCE MATCHES \"^code/unit-v8[Cc]\"") ==
+                    std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
                         .find("KATANA_GENERATED_HOT_SOURCE_INDEX EQUAL -1") !=
                     std::string::npos &&

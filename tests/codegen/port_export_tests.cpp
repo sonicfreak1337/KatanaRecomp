@@ -2830,7 +2830,7 @@ int run_test(const int argc, char* argv[]) {
                 "(!admission.generated_entry_required &&") !=
                 std::string::npos &&
             coverage_dispatch.find(
-                "!selected_entry->static_chainable") !=
+                "!selected_entry->static_chainable") ==
                 std::string::npos &&
             coverage_dispatch.find(
                 "native_loaded_aot_source_address(\n"
@@ -4904,6 +4904,27 @@ int run_test(const int argc, char* argv[]) {
     const auto exact_guarded_match_declaration = explicit_static_dispatch.find(
         "[[nodiscard]] bool exact_guarded_target_matches(\n"
         "    std::uint32_t target, std::uint32_t allowed_target) noexcept;");
+    const auto native_dispatch_initial_source_parameter =
+        explicit_static_dispatch.find(
+            "    const bool stop_after_one_block,\n"
+            "    std::optional<std::uint32_t> initial_source = std::nullopt) {");
+    const auto native_dispatch_initial_source_consume =
+        explicit_static_dispatch.find(
+            "        auto source = initial_source.has_value()\n"
+            "            ? *initial_source\n"
+            "            : runtime_dispatch_detail::normalized_source_address(target);\n"
+            "        initial_source.reset();",
+            native_dispatch_initial_source_parameter);
+    const auto exact_guarded_call_pre_normalizes =
+        explicit_static_dispatch.find(
+            "void exact_guarded_call(katana::runtime::CpuState& cpu, "
+            "const std::uint32_t target, const std::uint32_t allowed_target) {\n"
+            "    const auto source = exact_guarded_source_address(target);\n"
+            "    if (source != exact_guarded_source_address(allowed_target))");
+    const auto exact_guarded_call_source_handoff =
+        explicit_static_dispatch.find(
+            "    dispatch_call(cpu, target, source);",
+            exact_guarded_call_pre_normalizes);
     const auto native_state_scope_binding = explicit_static_dispatch.find(
         "context.development_state_restore_main_memory =\n"
         "            &restore_native_development_state_main_memory;");
@@ -4942,6 +4963,10 @@ int run_test(const int argc, char* argv[]) {
             native_state_memory_restore != std::string::npos &&
             native_state_restore_declaration != std::string::npos &&
             exact_guarded_match_declaration != std::string::npos &&
+            native_dispatch_initial_source_parameter != std::string::npos &&
+            native_dispatch_initial_source_consume != std::string::npos &&
+            exact_guarded_call_pre_normalizes != std::string::npos &&
+            exact_guarded_call_source_handoff != std::string::npos &&
             native_state_scope_binding != std::string::npos &&
             native_state_restore_definition_scope != std::string::npos &&
             native_state_restore_definition_scope_end !=
@@ -4953,6 +4978,12 @@ int run_test(const int argc, char* argv[]) {
             native_state_directory < native_state_directory_binding &&
             native_state_restore_declaration < native_state_scope_binding &&
             exact_guarded_match_declaration < native_state_scope_binding &&
+            native_dispatch_initial_source_parameter <
+                native_dispatch_initial_source_consume &&
+            native_dispatch_initial_source_consume <
+                exact_guarded_call_pre_normalizes &&
+            exact_guarded_call_pre_normalizes <
+                exact_guarded_call_source_handoff &&
             native_state_restore_definition_scope <
                 native_state_memory_restore &&
             native_state_scope_binding < native_state_memory_restore &&
