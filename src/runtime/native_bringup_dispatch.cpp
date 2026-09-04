@@ -961,9 +961,29 @@ NativeBringupCoverageObservations::NativeBringupCoverageObservations() {
         std::numeric_limits<std::uint32_t>::max());
 }
 
+void NativeBringupCoverageObservations::set_recording_enabled(
+    const bool enabled) {
+    if (enabled == recording_enabled()) return;
+    events_.clear();
+    total_occurrences_ = 0u;
+    dropped_events_ = 0u;
+    if (!enabled) {
+        event_index_.clear();
+        return;
+    }
+    event_index_.assign(
+        native_bringup_coverage_observation_capacity * 2u,
+        std::numeric_limits<std::uint32_t>::max());
+}
+
+bool NativeBringupCoverageObservations::recording_enabled() const noexcept {
+    return !event_index_.empty();
+}
+
 NativeBringupCoverageObservations::EventIndex
 NativeBringupCoverageObservations::record(
     const NativeBringupCoverageObservation& observation) noexcept {
+    if (!recording_enabled()) return invalid_event_index;
     increment_saturated(total_occurrences_);
     const auto empty = std::numeric_limits<std::uint32_t>::max();
     const auto index_mask = event_index_.size() - 1u;
@@ -999,6 +1019,7 @@ NativeBringupCoverageObservations::record(
 bool NativeBringupCoverageObservations::record_cached(
     const EventIndex index,
     const NativeBringupCoverageObservation& observation) noexcept {
+    if (!recording_enabled()) return true;
     if (index >= events_.size() ||
         !same_coverage_observation_storage_key(events_[index], observation))
         return false;

@@ -385,7 +385,11 @@ std::optional<CoverageSourceAuthority> active_coverage_source_authority(
         0u};
 }
 
-inline constexpr std::size_t coverage_preflight_cache_capacity = 256u;
+// Whole-game bring-up contains tens of thousands of sealed indirect edges.
+// A 256-slot direct map thrashed even on ordinary gameplay and repeatedly paid
+// the complete identity preflight.  Keep the cache bounded/TLS-owned, but make
+// its working set large enough for the hot edge families seen in one stage.
+inline constexpr std::size_t coverage_preflight_cache_capacity = 4096u;
 static_assert((coverage_preflight_cache_capacity &
                (coverage_preflight_cache_capacity - 1u)) == 0u);
 
@@ -453,14 +457,19 @@ replay_cached_coverage_preflight(
     const NativeBringupCoveragePreflightRequest& request) noexcept {
     auto& cached = coverage_preflight_cache[
         coverage_preflight_cache_index(request)];
+    const auto runtime_image_stamp = runtime_images.dispatch_stamp();
+    const auto binder_stamp = binder.dispatch_stamp();
     if (!cached.valid || cached.table != &table ||
         cached.runtime_images != &runtime_images ||
         cached.binder != &binder ||
         cached.context != &context ||
         cached.table_lifetime != table.dispatch_lifetime() ||
         cached.table_generation != table.dispatch_generation() ||
-        cached.runtime_image_stamp != runtime_images.dispatch_stamp() ||
-        cached.binder_stamp != binder.dispatch_stamp() ||
+        cached.runtime_image_stamp != runtime_image_stamp ||
+        cached.binder_stamp.lifecycle_generation !=
+            binder_stamp.lifecycle_generation ||
+        cached.binder_stamp.immutable_generation !=
+            binder_stamp.immutable_generation ||
         !same_coverage_preflight_request(cached.request, request) ||
         !context.validated_view_current(table, runtime_images, binder))
         return std::nullopt;
@@ -497,10 +506,11 @@ NativeBringupCoveragePreflightResult remember_coverage_preflight(
     cached.request = request;
     result.cache_hit = false;
     cached.result = result;
-    cached.has_observation = observation != nullptr;
+    cached.has_observation =
+        observation != nullptr && context.observations.recording_enabled();
     cached.observation_index =
         NativeBringupCoverageObservations::invalid_event_index;
-    if (observation != nullptr) {
+    if (cached.has_observation) {
         cached.observation = *observation;
         cached.observation_index =
             context.observations.record(cached.observation);
@@ -531,15 +541,19 @@ preflight_native_bringup_coverage_dispatch(
     NativePortLoadedAotBinder& binder,
     const NativeBringupCoverageDispatchContext& context,
     const NativeBringupCoveragePreflightRequest& request) {
+    // A remembered edge already proved the immutable binder identities.  Its
+    // exact binder/context pointers plus mutable generation stamps are the
+    // complete reuse boundary, so avoid two SHA-256 string comparisons on
+    // every hot indirect dispatch.
+    if (const auto cached = replay_cached_coverage_preflight(
+            table, runtime_images, binder, context, request);
+        cached.has_value())
+        return *cached;
     if (binder.module_universe_identity() !=
             context.pack.identity.module_universe_identity ||
         binder.aot_pack_identity() !=
             context.pack.identity.aot_pack_identity)
         reject(request, NativeBringupDispatchMiss::InvalidEntry);
-    if (const auto cached = replay_cached_coverage_preflight(
-            table, runtime_images, binder, context, request);
-        cached.has_value())
-        return *cached;
     if (!context.validated_view_current(table, runtime_images, binder))
         reject(request, NativeBringupDispatchMiss::InvalidEntry);
     if (request.variant.runtime_generation != context.runtime_generation)

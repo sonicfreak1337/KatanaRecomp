@@ -1524,6 +1524,22 @@ void native_bringup_coverage_regression() {
             "stalen Cachetreffer.");
 
     auto bounded_event = coverage_observations.events().front();
+    coverage_observations.set_recording_enabled(false);
+    require(!coverage_observations.recording_enabled() &&
+                coverage_observations.record(bounded_event) ==
+                    NativeBringupCoverageObservations::invalid_event_index &&
+                coverage_observations.record_cached(
+                    NativeBringupCoverageObservations::invalid_event_index,
+                    bounded_event) &&
+                coverage_observations.events().empty() &&
+                coverage_observations.total_occurrences() == 0u &&
+                coverage_observations.dropped_events() == 0u,
+            "Abgeschaltetes Coverage-Journal veraenderte Admission-Diagnostik "
+            "oder zeichnete weiterhin Hotpath-Ereignisse auf.");
+    coverage_observations.set_recording_enabled(true);
+    require(coverage_observations.recording_enabled(),
+            "Coverage-Journal liess sich fuer einen Diagnoselauf nicht erneut "
+            "aktivieren.");
     coverage_observations.clear();
     for (std::size_t index = 0u;
          index < native_bringup_coverage_observation_capacity + 1u;

@@ -386,6 +386,12 @@ class NativeBringupCoverageObservations final {
 
     NativeBringupCoverageObservations();
 
+    // Coverage observations are diagnostic-only. Product runners may disable
+    // their hot-path journal while retaining the exact same executable
+    // admission/preflight semantics.
+    void set_recording_enabled(bool enabled);
+    [[nodiscard]] bool recording_enabled() const noexcept;
+
     // Returns a stable index until clear(). Callers that already authenticated
     // the same immutable observation may use record_cached() to avoid hashing
     // its SHA-256 identity strings on every hot dispatch.

@@ -360,6 +360,61 @@ void partial_started_document_is_retried() {
     require(reporter.seal_and_flush(), "Partial-Race-Fortschritt ist unvollstaendig.");
 }
 
+void stable_commit_survives_parallel_partial_event() {
+    TemporaryDirectory temporary;
+    const auto committed = temporary.path() / "event-stable.committed";
+    const auto partial = temporary.path() / "event-parallel.started";
+    std::ofstream(committed, std::ios::binary)
+        << "KATANA_HOST_BUILD_EVENT_V1\nkind=compile\nunits=1\n";
+    {
+        std::ofstream empty(partial, std::ios::binary);
+    }
+    EventLog log;
+    katana::ProgressReporter reporter(
+        [&](const auto& event) { log.append(event); },
+        std::chrono::milliseconds(0),
+        std::chrono::milliseconds(20));
+    katana::cli::HostBuildProgressObserver observer(
+        temporary.path(), {1u, 0u, 0u, 1u}, reporter);
+    observer.poll();
+    const auto live = observer.snapshot();
+    require(
+        live.observation_complete && live.compile_started == 1u &&
+            live.compile_committed == 1u,
+        "Ein partielles Started-Ereignis verdeckte einen stabilen Commit.");
+    std::filesystem::remove(partial);
+    require(
+        observer.finish_success(completion_proof(true)),
+        "Stabiler Commit wurde nach transientem Geschwisterevent verloren.");
+    require(reporter.seal_and_flush(), "Transient-Fortschritt ist unvollstaendig.");
+}
+
+void rapid_live_polls_are_throttled() {
+    TemporaryDirectory temporary;
+    const auto committed = temporary.path() / "event-throttle.committed";
+    std::ofstream(committed, std::ios::binary)
+        << "KATANA_HOST_BUILD_EVENT_V1\nkind=compile\nunits=1\n";
+    std::atomic_uint32_t opens = 0u;
+    EventLog log;
+    katana::ProgressReporter reporter(
+        [&](const auto& event) { log.append(event); },
+        std::chrono::milliseconds(0),
+        std::chrono::milliseconds(20));
+    katana::cli::HostBuildProgressObserver observer(
+        temporary.path(), {1u, 0u, 0u, 1u}, reporter,
+        {{[&](const std::filesystem::path&) { ++opens; }}});
+    observer.poll();
+    for (std::size_t index = 0u; index < 32u; ++index)
+        observer.poll();
+    require(
+        opens == 1u && observer.snapshot().compile_committed == 1u,
+        "Schnelle Heartbeats scannten das Eventverzeichnis ungehemmt.");
+    require(
+        observer.finish_success(completion_proof(true)),
+        "Finalscan wurde durch Live-Drosselung unterdrueckt.");
+    require(reporter.seal_and_flush(), "Throttle-Fortschritt ist unvollstaendig.");
+}
+
 void later_poll_observes_new_event(
     const std::filesystem::path& self) {
     TemporaryDirectory temporary;
@@ -379,6 +434,7 @@ void later_poll_observes_new_event(
             katana::cli::HostBuildToolKind::Compile,
             temporary.path(), self_text, arguments) == 0,
         "Spaeter Compilerlauncher-Aufruf scheiterte.");
+    std::this_thread::sleep_for(std::chrono::milliseconds(110));
     observer.poll();
     require(
         observer.snapshot().compile_committed == 1u,
@@ -422,6 +478,8 @@ int main(const int argc, char* argv[]) {
         replaced_event_root_fails_closed();
         started_to_terminal_rename_is_retried();
         partial_started_document_is_retried();
+        stable_commit_survives_parallel_partial_event();
+        rapid_live_polls_are_throttled();
         later_poll_observes_new_event(self);
         telemetry_failure_does_not_mask_tool_result(self);
         std::cout << "Hostbuild-Fortschrittsvertrag erfolgreich.\n";

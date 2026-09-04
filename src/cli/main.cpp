@@ -7861,8 +7861,10 @@ using NativePortExecutionProfile =
 constexpr std::uint64_t latent_aot_entry_disc_sector_size = 2048u;
 constexpr std::size_t maximum_latent_aot_entry_hint_arguments =
     katana::codegen::maximum_prepared_latent_aot_entry_hints;
-constexpr std::uintmax_t maximum_latent_aot_entry_file_bytes = 1024u * 1024u;
 constexpr std::size_t maximum_latent_aot_entry_file_line_bytes = 512u;
+constexpr std::uintmax_t maximum_latent_aot_entry_file_bytes =
+    static_cast<std::uintmax_t>(maximum_latent_aot_entry_hint_arguments) *
+    (maximum_latent_aot_entry_file_line_bytes + 1u);
 constexpr std::size_t maximum_native_aot_resume_entry_arguments = 4096u;
 constexpr std::uintmax_t maximum_complete_disassembly_authority_file_bytes =
     32u * 1024u * 1024u;
@@ -8118,7 +8120,8 @@ std::vector<LatentAotEntryHintArgument> load_latent_aot_entry_hint_file(
     if (status_error || byte_size == 0u ||
         byte_size > maximum_latent_aot_entry_file_bytes)
         throw std::invalid_argument(
-            "--latent-aot-entry-file ist leer oder ueberschreitet 1 MiB.");
+            "--latent-aot-entry-file ist leer oder ueberschreitet das "
+            "gebundene Hintdateibudget.");
 
     std::ifstream input(canonical, std::ios::binary | std::ios::ate);
     if (!input || input.tellg() != static_cast<std::streamoff>(byte_size))
@@ -15011,7 +15014,9 @@ int export_port_project(const std::filesystem::path& source_path,
 #else
                     , std::nullopt
 #endif
-                    , [] {});
+                    , [&host_build_progress] {
+                        host_build_progress.poll();
+                    });
         } catch (...) {
             host_build_progress.fail();
             throw;

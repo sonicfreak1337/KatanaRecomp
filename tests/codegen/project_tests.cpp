@@ -126,6 +126,38 @@ int main() {
     require(serial_snapshot.at(".katana-generated-artifacts").starts_with(
                 "katana-codegen-artifacts-v2\ngeneration\tsha256:"),
             "Der Artefaktmanifest v2 fehlt die gebundene Generation.");
+
+    const auto manifest_reuse_root = fixture.root / "manifest-cache-reuse";
+    const auto manifest_cache_root = fixture.root / "manifest-cache";
+    CodegenCache manifest_cache(manifest_cache_root);
+    static_cast<void>(write_codegen_project(
+        manifest_reuse_root, artifacts, {2u, &manifest_cache, key}));
+    {
+        std::error_code remove_error;
+        std::filesystem::remove_all(manifest_cache_root, remove_error);
+        require(!remove_error && !std::filesystem::exists(manifest_cache_root),
+                "Das Manifest-Reuse-Fixture konnte den optionalen Cache nicht entfernen.");
+    }
+    const auto manifest_reuse = write_codegen_project(
+        manifest_reuse_root, artifacts, {2u, &manifest_cache, key});
+    require(!std::filesystem::exists(manifest_cache_root) &&
+                manifest_reuse.cache_hits == 0u &&
+                manifest_reuse.cache_misses == artifacts.size(),
+            "Ein exakt gebundenes v2-Manifest liest oder repariert den optionalen Cache.");
+    {
+        std::ofstream mutate_same_size(
+            manifest_reuse_root / "code/unit-00000.cpp",
+            std::ios::binary | std::ios::trunc);
+        auto changed = artifacts[2].content;
+        changed[0] = changed[0] == '#' ? '!' : '#';
+        mutate_same_size << changed;
+    }
+    static_cast<void>(write_codegen_project(
+        manifest_reuse_root, artifacts, {2u, &manifest_cache, key}));
+    require(std::filesystem::exists(manifest_cache_root) &&
+                snapshot(manifest_reuse_root).at("code/unit-00000.cpp") ==
+                    artifacts[2].content,
+            "Eine mutierte Manifest-Bindung faellt nicht in Cache-/Atomic-Recovery zurueck.");
     require(serial_snapshot.at("CMakeLists.txt").find("code/unit-00000.cpp") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt").find("/bigobj") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
@@ -141,8 +173,19 @@ int main() {
                         .find("KATANA_GENERATED_DECLARATIVE_SOURCES") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_GENERATED_COLD_OVERLAY_SOURCES") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("^code/unit-v8[Cc]") != std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_GENERATED_HOT_SOURCE_INDEX EQUAL -1") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
                         .find("^code/native-port-(dispatch|loaded-aot|runtime-image)-"
                               "shard-[0-9]+\\\\.cpp$") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_GENERATED_NON_LTO_SOURCES") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
                         .find("PROPERTY COMPILE_OPTIONS /clang:-fno-lto") !=

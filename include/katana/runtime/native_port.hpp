@@ -313,16 +313,22 @@ struct NativePortDevelopmentStateRequest final {
 };
 
 // The title owns serialization because only it can retire and reconstruct
-// its derived native resources.  The generated dispatcher invokes this
-// bridge only at its outermost AOT boundary, after every nested callback has
-// returned.  Deferred leaves the owning request pending until the title has
-// completed its current frame; Loaded restarts dispatch at the restored PC.
+// its derived native resources. The bridge runs either at a title-owned frame
+// fence or at the outermost generated AOT boundary. Deferred keeps the request
+// pending until a safe fence; Loaded unwinds nested AOT calls before dispatch
+// restarts at the restored PC.
 enum class NativePortDevelopmentStateResult : std::uint8_t {
     Deferred,
     Completed,
     Loaded,
     Rejected,
 };
+
+// Private control-flow token used only to unwind nested generated AOT calls
+// after a development-state restore. It is never a title/provider failure and
+// the outermost dispatcher must consume it before returning to product code.
+inline constexpr std::uint32_t native_port_development_state_restart_error =
+    0x4B535452u; // "KSTR"
 
 using NativePortDevelopmentStateHandler = NativePortDevelopmentStateResult (*)(
     NativePortContext& context,

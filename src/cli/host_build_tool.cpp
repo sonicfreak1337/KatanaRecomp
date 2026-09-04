@@ -102,7 +102,7 @@ inline constexpr std::string_view event_header =
         const auto handle = CreateFileW(
             path.c_str(),
             GENERIC_WRITE | FILE_READ_ATTRIBUTES,
-            FILE_SHARE_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr,
             CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,

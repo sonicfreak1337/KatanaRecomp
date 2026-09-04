@@ -6672,6 +6672,65 @@ std::string_view latent_aot_rejection_name(
     return "unknown";
 }
 
+bool needs_sequential_explicit_hint_certification(
+    const CandidateAnalysisOutcome& outcome,
+    const bool explicit_entry_binding) noexcept {
+    // A parallel worker can only be retried when the exact entry authority is
+    // caller-supplied and the analyzer reported a non-deterministic exception.
+    // Structural, budget, identity and ordinary deterministic rejections are
+    // final and must never be softened by this certification lane.
+    return explicit_entry_binding && !outcome.module.has_value() &&
+           outcome.rejection == LatentAotAnalysisRejection::ProgramInvalid &&
+           !outcome.deterministic;
+}
+
+std::optional<std::pair<std::uint32_t, std::uint32_t>>
+explicit_entry_unknown_before_control_flow(
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const std::uint32_t> entry_offsets,
+    const std::size_t maximum_scan_instructions) noexcept {
+    const auto opcode_at = [&bytes](const std::uint32_t offset) {
+        return static_cast<std::uint16_t>(
+            static_cast<std::uint16_t>(bytes[offset]) |
+            static_cast<std::uint16_t>(
+                static_cast<std::uint16_t>(bytes[offset + 1u]) << 8u));
+    };
+    for (const auto entry_offset : entry_offsets) {
+        if (entry_offset > bytes.size() ||
+            sizeof(std::uint16_t) > bytes.size() - entry_offset)
+            continue;
+        const auto available_instructions =
+            (bytes.size() - entry_offset) / sizeof(std::uint16_t);
+        const auto scan =
+            std::min(maximum_scan_instructions, available_instructions);
+        for (std::size_t instruction = 0u; instruction < scan; ++instruction) {
+            const auto instruction_offset = entry_offset +
+                static_cast<std::uint32_t>(
+                    instruction * sizeof(std::uint16_t));
+            const auto decoded = katana::sh4::decode(
+                opcode_at(instruction_offset));
+            if (!decoded.is_known())
+                return std::pair{entry_offset, instruction_offset};
+            if (decoded.changes_control_flow()) break;
+        }
+    }
+    return std::nullopt;
+}
+
+void require_explicit_entry_prefixes(
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const std::uint32_t> entry_offsets,
+    const std::size_t maximum_scan_instructions) {
+    const auto rejected = explicit_entry_unknown_before_control_flow(
+        bytes, entry_offsets, maximum_scan_instructions);
+    if (!rejected.has_value()) return;
+    std::ostringstream message;
+    message << "latent-aot-entry-hint-prefix-decode-invalid:entry-offset=0x"
+            << std::hex << std::uppercase << rejected->first
+            << ":instruction-offset=0x" << rejected->second;
+    throw std::runtime_error(message.str());
+}
+
 std::optional<LatentAotAnalysisRejection>
 candidate_source_shape_rejection(
     const DiscFileCandidate& candidate,
@@ -10782,6 +10841,9 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                                candidate_size;
                 }))
             throw std::runtime_error("latent-aot-entry-hint-offset-invalid");
+        require_explicit_entry_prefixes(
+            bytes, explicit_entry_offsets,
+            options.maximum_entry_scan_instructions);
         if (requested_runtime_base.has_value() &&
             !valid_latent_runtime_base(
                 *requested_runtime_base, candidate_size))
@@ -11021,6 +11083,9 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
                     }))
                 throw std::runtime_error(
                     "latent-aot-entry-hint-offset-invalid");
+            require_explicit_entry_prefixes(
+                bytes, explicit_entry_offsets,
+                options.maximum_entry_scan_instructions);
             if (requested_runtime_base.has_value() &&
                 !valid_latent_runtime_base(
                     *requested_runtime_base, candidate_size))
@@ -11345,7 +11410,9 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             // the next cross-image discovery call.  The legacy no-session
             // path keeps the old eager release behavior so a one-shot scan
             // does not retain source bytes past candidate analysis.
-            if (session == nullptr)
+            if (session == nullptr &&
+                !needs_sequential_explicit_hint_certification(
+                    analyzed[index], candidates_have_explicit_entries[index]))
                 std::vector<std::uint8_t>{}.swap(
                     candidates[index].bytes);
             candidate_progress.advance(1u);
@@ -11374,6 +11441,30 @@ LatentAotDiscovery discover_latent_aot_modules_impl(
             candidate_progress.update(
                 std::move(counters));
         });
+    // Exact hints are authority, not heuristic candidates. If their parallel
+    // analysis alone observed a non-deterministic ProgramInvalid exception,
+    // certify that one candidate once, sequentially and without consulting a
+    // negative cache. This avoids losing an otherwise valid module to
+    // transient parallel pressure while every repeated or typed rejection
+    // remains fail-closed.
+    for (std::size_t index = 0u; index < analyzed.size(); ++index) {
+        if (!needs_sequential_explicit_hint_certification(
+                analyzed[index], candidates_have_explicit_entries[index]))
+            continue;
+        cache_counters.full_pipeline_runs.fetch_add(
+            1u, std::memory_order_relaxed);
+        std::fprintf(
+            stderr,
+            "KATANA_LATENT_AOT_SEQUENTIAL_CERTIFICATION_RETRY "
+            "candidate=%zu source=0x%08X identity=%s\n",
+            index, candidates[index].source_address,
+            candidates[index].byte_identity.c_str());
+        analyzed[index] = analyze_candidate_uncached(
+            candidates[index], options, candidate_progress.child_reporter(),
+            std::span<const std::uint8_t>{}, {});
+        if (session == nullptr)
+            std::vector<std::uint8_t>{}.swap(candidates[index].bytes);
+    }
     {
         katana::ProgressCounterSnapshot counters;
         counters.configured_workers = configured_candidate_workers;

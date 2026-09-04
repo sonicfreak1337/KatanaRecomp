@@ -542,13 +542,35 @@ std::optional<ArtifactFileBinding> existing_match(
     return std::nullopt;
 }
 
+std::optional<ArtifactFileBinding> trusted_manifest_binding(
+    const std::filesystem::path& root,
+    const std::filesystem::path& relative,
+    const std::size_t content_size,
+    const std::string_view expected_sha256,
+    const ArtifactManifestState& previous_manifest) {
+    if (!previous_manifest.trusted_v2) return std::nullopt;
+    const auto previous = find_manifest_entry(previous_manifest, relative);
+    if (previous == nullptr || previous->size != content_size ||
+        previous->sha256 != expected_sha256)
+        return std::nullopt;
+    const auto binding =
+        capture_file_binding(secure_artifact_path(root, relative));
+    if (!binding.has_value() || previous->binding != *binding)
+        return std::nullopt;
+    return binding;
+}
+
 ArtifactManifestEntry write_file(
     const std::filesystem::path& root,
     const std::filesystem::path& relative,
     const std::string_view content,
-    const ArtifactManifestState& previous_manifest) {
+    const ArtifactManifestState& previous_manifest,
+    const std::string_view precomputed_sha256 = {}) {
     const auto safe_relative = validate_relative_path(relative);
-    const auto expected_sha256 = "sha256:" + katana::io::sha256_bytes(content);
+    const auto expected_sha256 = precomputed_sha256.empty()
+                                     ? "sha256:" +
+                                           katana::io::sha256_bytes(content)
+                                     : std::string(precomputed_sha256);
     for (unsigned attempt = 0u; attempt != 2u; ++attempt) {
         if (const auto matched = existing_match(root,
                                                 safe_relative,
@@ -686,11 +708,21 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "target_compile_features(katana_generated PUBLIC cxx_std_20)\n"
            << "set(KATANA_GENERATED_EXCEPTION_SOURCES \"\")\n"
            << "set(KATANA_GENERATED_DECLARATIVE_SOURCES \"\")\n"
+           << "set(KATANA_GENERATED_COLD_OVERLAY_SOURCES \"\")\n"
            << "foreach(KATANA_GENERATED_SOURCE IN LISTS KATANA_GENERATED_SOURCES)\n"
            << "  if(KATANA_GENERATED_SOURCE MATCHES \"^code/unit-v[^/]+\\\\.cpp$\" OR\n"
            << "     KATANA_GENERATED_SOURCE STREQUAL \"code/native-port-dispatch.cpp\")\n"
            << "    list(APPEND KATANA_GENERATED_EXCEPTION_SOURCES\n"
            << "      \"${KATANA_GENERATED_SOURCE}\")\n"
+           << "  endif()\n"
+           << "  if(KATANA_GENERATED_SOURCE MATCHES \"^code/unit-v[^/]+\\\\.cpp$\" AND\n"
+           << "     NOT KATANA_GENERATED_SOURCE MATCHES \"^code/unit-v8[Cc]\" )\n"
+           << "    list(FIND KATANA_AOT_HOT_SOURCES_EFFECTIVE\n"
+           << "      \"${KATANA_GENERATED_SOURCE}\" KATANA_GENERATED_HOT_SOURCE_INDEX)\n"
+           << "    if(KATANA_GENERATED_HOT_SOURCE_INDEX EQUAL -1)\n"
+           << "      list(APPEND KATANA_GENERATED_COLD_OVERLAY_SOURCES\n"
+           << "        \"${KATANA_GENERATED_SOURCE}\")\n"
+           << "    endif()\n"
            << "  endif()\n"
            << "  if(KATANA_GENERATED_SOURCE MATCHES\n"
            << "       \"^code/native-port-(dispatch|loaded-aot|runtime-image)-shard-[0-9]+\\\\.cpp$\")\n"
@@ -704,16 +736,22 @@ std::string cmake_project(const std::vector<std::filesystem::path>& sources) {
            << "  set_property(SOURCE ${KATANA_GENERATED_EXCEPTION_SOURCES} APPEND\n"
            << "    PROPERTY COMPILE_OPTIONS /EHsc)\n"
            << "endif()\n"
-           << "# The catalog shards only append immutable dispatch/module rows during\n"
-           << "# process initialization. Keeping them out of the final ThinLTO backend\n"
-           << "# avoids re-optimizing a large cold data catalog on every product link;\n"
-           << "# executable AOT units and the central dispatcher retain full IPO.\n"
+           << "# Catalog shards only append immutable rows during initialization.\n"
+           << "# Identity-bound overlay units cannot be called directly across module\n"
+           << "# partitions; cold ones therefore keep local /O2 but skip the expensive\n"
+           << "# final ThinLTO backend. The primary 1ST_READ units, central dispatcher\n"
+           << "# and up to 64 measured overlay sources retain full IPO.\n"
            << "if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL \"Clang\" AND\n"
            << "   DEFINED KATANA_PORT_BUILD_PROFILE AND\n"
-           << "   KATANA_PORT_BUILD_PROFILE STREQUAL \"performance\" AND\n"
-           << "   KATANA_GENERATED_DECLARATIVE_SOURCES)\n"
-           << "  set_property(SOURCE ${KATANA_GENERATED_DECLARATIVE_SOURCES} APPEND\n"
+           << "   KATANA_PORT_BUILD_PROFILE STREQUAL \"performance\")\n"
+           << "  set(KATANA_GENERATED_NON_LTO_SOURCES\n"
+           << "    ${KATANA_GENERATED_DECLARATIVE_SOURCES}\n"
+           << "    ${KATANA_GENERATED_COLD_OVERLAY_SOURCES})\n"
+           << "  list(REMOVE_DUPLICATES KATANA_GENERATED_NON_LTO_SOURCES)\n"
+           << "  if(KATANA_GENERATED_NON_LTO_SOURCES)\n"
+           << "    set_property(SOURCE ${KATANA_GENERATED_NON_LTO_SOURCES} APPEND\n"
            << "    PROPERTY COMPILE_OPTIONS /clang:-fno-lto)\n"
+           << "  endif()\n"
            << "endif()\n"
            << "if(CMAKE_GENERATOR MATCHES \"Ninja\")\n"
            << "  set_property(GLOBAL APPEND PROPERTY JOB_POOLS\n"
@@ -889,6 +927,24 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
             artifact.content.size() <=
                 maximum_project_cache_artifact_bytes) {
             const auto cache_name = artifact.relative_path.generic_string();
+            const auto expected_sha256 =
+                "sha256:" + katana::io::sha256_bytes(artifact.content);
+            // A trusted v2 manifest already binds the current file object to
+            // these exact generated bytes. Reuse it before opening/parsing the
+            // optional integrity cache; a changed binding still falls through
+            // to the existing cache recovery and atomic publication path.
+            if (const auto binding = trusted_manifest_binding(
+                    root, artifact.relative_path, artifact.content.size(),
+                    expected_sha256, previous_manifest)) {
+                ArtifactManifestEntry manifest_entry{
+                    validate_relative_path(artifact.relative_path),
+                    binding->size,
+                    expected_sha256,
+                    *binding};
+                write_progress.advance(1u);
+                return WriteOutcome{artifact.relative_path, false,
+                                    std::move(manifest_entry)};
+            }
             std::optional<std::string> cached;
             try {
                 cached = options.cache->load_integrity_bounded(
@@ -902,7 +958,8 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
             }
             if (cached && *cached == artifact.content) {
                 auto manifest_entry =
-                    write_file(root, artifact.relative_path, *cached, previous_manifest);
+                    write_file(root, artifact.relative_path, *cached,
+                               previous_manifest, expected_sha256);
                 hit = true;
                 write_progress.advance(1u);
                 return WriteOutcome{artifact.relative_path,
@@ -922,7 +979,8 @@ ProjectWriteResult write_codegen_project(const std::filesystem::path& output_roo
                     // optional cache publication is unavailable.
                 }
                 auto manifest_entry =
-                    write_file(root, artifact.relative_path, artifact.content, previous_manifest);
+                    write_file(root, artifact.relative_path, artifact.content,
+                               previous_manifest, expected_sha256);
                 write_progress.advance(1u);
                 return WriteOutcome{artifact.relative_path,
                                     hit,

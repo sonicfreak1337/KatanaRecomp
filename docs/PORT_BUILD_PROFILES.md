@@ -98,9 +98,16 @@ ist `473.506.304` Byte gross.
 ## Performance
 
 `KATANA_PORT_BUILD_PROFILE=performance` verwendet standardmaessig `Release`
-und kompiliert alle generierten AOT-Einheiten mit `/O2 /Ob2`. Der Link bleibt
-nichtinkrementell und verwendet `/OPT:REF /OPT:ICF`, erzwingt aber bewusst kein
-globales IPO/LTCG. Damit ist dieses Profil der reproduzierbare
+und kompiliert alle generierten AOT-Einheiten mit `/O2 /Ob2`. ThinLTO bleibt
+auf den statischen `1ST_READ`-Einheiten, dem zentralen Dispatcher und bis zu 64
+ueber `KATANA_AOT_HOT_SOURCES` gemessenen Overlayquellen aktiv. Kalte,
+identitaetsgebundene Overlayeinheiten sowie reine Dispatch-/Modulkatalogshards
+behalten lokale `/O2`-Optimierung, laufen aber nicht erneut durch den finalen
+ThinLTO-Backendpass. Direkte AOT-Aufrufe ueberschreiten diese
+Modulpartitionsgrenze nicht; deshalb bleibt die Ausfuehrungssemantik gleich,
+waehrend der wiederkehrende Link deutlich weniger IR und Cachematerial
+verarbeiten muss. Der Link bleibt nichtinkrementell und verwendet `/OPT:REF
+/OPT:ICF`. Damit ist dieses Profil der reproduzierbare
 Spielbarkeits-/Laufzeitvergleich zwischen schnellem Bring-up und finalem Gate;
 es ist kein Closure-Ersatz. Das Produkt meldet Profilname und ob alle AOT-TUs
 im Performanceprofil gebaut wurden beim Start.

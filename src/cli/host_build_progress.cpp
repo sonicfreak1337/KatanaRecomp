@@ -274,11 +274,13 @@ struct EventReadResult final {
             nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
             const auto error = GetLastError();
-            return {error == ERROR_FILE_NOT_FOUND ||
-                            error == ERROR_PATH_NOT_FOUND
-                        ? EventReadState::Vanished
-                        : EventReadState::Invalid,
-                    {}};
+            if (error == ERROR_FILE_NOT_FOUND ||
+                error == ERROR_PATH_NOT_FOUND)
+                return {EventReadState::Vanished, {}};
+            if (error == ERROR_SHARING_VIOLATION ||
+                error == ERROR_LOCK_VIOLATION)
+                return {EventReadState::Partial, {}};
+            return {EventReadState::Invalid, {}};
         }
         BY_HANDLE_FILE_INFORMATION identity{};
         FILE_ATTRIBUTE_TAG_INFO attributes{};
@@ -482,6 +484,13 @@ class HostBuildProgressObserver::Impl final {
         std::scoped_lock lock(mutex_);
         if (terminal_) return;
         try {
+            constexpr auto live_scan_interval =
+                std::chrono::milliseconds(100);
+            const auto now = std::chrono::steady_clock::now();
+            if (last_live_scan_ &&
+                now - *last_live_scan_ < live_scan_interval)
+                return;
+            last_live_scan_ = now;
             scan_without_lock(false);
             recompute();
             publish();
@@ -697,17 +706,19 @@ class HostBuildProgressObserver::Impl final {
                 observation_complete_ = false;
                 return;
             }
-            if (state == ScanState::Stable) {
-                for (const auto& [identity, event] : scanned) {
-                    const ParsedEvent parsed{
-                        identity, event.kind, event.state, event.units};
-                    if (!merge_event(events_[identity], parsed)) {
-                        observation_complete_ = false;
-                        return;
-                    }
+            // A concurrently-written event makes only that event transient.
+            // Retain every fully parsed sibling immediately so live progress
+            // cannot remain at zero until the entire build quiesces.
+            for (const auto& [identity, event] : scanned) {
+                const ParsedEvent parsed{
+                    identity, event.kind, event.state, event.units};
+                if (!merge_event(events_[identity], parsed)) {
+                    observation_complete_ = false;
+                    return;
                 }
-                return;
             }
+            if (state == ScanState::Stable)
+                return;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         // A live writer may still own a partial .started document; only the
@@ -862,6 +873,7 @@ class HostBuildProgressObserver::Impl final {
     bool observation_complete_ = true;
     bool terminal_ = false;
     bool final_success_ = false;
+    std::optional<std::chrono::steady_clock::time_point> last_live_scan_;
 };
 
 HostBuildProgressObserver::HostBuildProgressObserver(

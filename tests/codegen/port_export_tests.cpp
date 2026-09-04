@@ -2870,6 +2870,15 @@ int run_test(const int argc, char* argv[]) {
                 "        native_bringup_coverage_observations") !=
                 std::string::npos &&
             coverage_dispatch.find(
+                "KATANA_NATIVE_BRINGUP_COVERAGE_RECORDING") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "native_bringup_coverage_observations.\n"
+                "        set_recording_enabled(") != std::string::npos &&
+            coverage_dispatch.find(
+                "native_bringup_coverage_reporter.emplace(") !=
+                std::string::npos &&
+            coverage_dispatch.find(
                 "native_bringup_runtime_generation,\n"
                 "            native_bringup_coverage_observations)") !=
                 std::string::npos &&
@@ -4895,6 +4904,19 @@ int run_test(const int argc, char* argv[]) {
     const auto native_state_dispatch_restart = explicit_static_dispatch.find(
         "target = cpu.pc;",
         native_state_handler_call);
+    const auto native_state_nested_hook_restart = explicit_static_dispatch.find(
+        "if (hook_result.error_code == katana::runtime::\n"
+        "                            native_port_development_state_restart_error)",
+        native_state_dispatch_restart);
+    const auto native_state_nested_block_restart = explicit_static_dispatch.find(
+        "if (abort.error_code == katana::runtime::\n"
+        "                    native_port_development_state_restart_error)",
+        native_state_nested_hook_restart);
+    const auto native_state_bridge_restart = explicit_static_dispatch.find(
+        "::NestedHookAbort& abort) {\n"
+        "        if (abort.error_code == katana::runtime::\n"
+        "                native_port_development_state_restart_error)",
+        native_state_nested_block_restart);
     require(
         native_state_directory != std::string::npos &&
             native_state_directory_binding != std::string::npos &&
@@ -4920,13 +4942,18 @@ int run_test(const int argc, char* argv[]) {
             native_state_scope_binding < native_state_request_poll &&
             native_state_request_poll < native_state_handler_call &&
             native_state_handler_call < native_state_dispatch_restart &&
+            native_state_dispatch_restart < native_state_nested_hook_restart &&
+            native_state_nested_hook_restart < native_state_nested_block_restart &&
+            native_state_nested_block_restart < native_state_bridge_restart &&
             occurrences(explicit_static_dispatch,
                         "take_development_state_request()") == 1u &&
+            occurrences(explicit_static_dispatch,
+                        "native_port_development_state_restart_error") == 4u &&
             occurrences(explicit_static_dispatch,
                         "restore_native_port_main_memory_for_development_state(") ==
                 1u,
         "Save/Load State verliert den stabilen Nutzerdatenpfad, die "
-        "immutable RAM-Grenze oder den outermost Dispatcher-Neustart.");
+        "immutable RAM-Grenze oder den verschachtelten Dispatcher-Neustart.");
     const auto handwritten_telemetry_owner = generated_main.find(
         "katana::runtime::NativePortTelemetry native_performance_telemetry;");
     const auto handwritten_telemetry_opt_in = generated_main.find(
@@ -5712,14 +5739,24 @@ int run_test(const int argc, char* argv[]) {
                 "               find_entry_from_source(address, source) != nullptr;") !=
                 std::string::npos &&
             generated_native_dispatch.find(
-                "native_dispatch_cache_capacity = 4096u") !=
+                "native_dispatch_cache_capacity = 16384u") !=
                 std::string::npos &&
             generated_native_dispatch.find(
                 "if (cached.binder == active_loaded_aot_binder)") !=
                 std::string::npos &&
             generated_native_dispatch.find(
-                "cached.stamp ==\n"
-                "                    active_loaded_aot_binder->dispatch_stamp()") !=
+                "cached.stamp.lifecycle_generation ==\n"
+                "                    current_stamp.lifecycle_generation") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "cached.stamp.immutable_generation ==\n"
+                "                    current_stamp.immutable_generation") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "loaded_aot = cached.loaded_aot;") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "cached.stamp ==\n") ==
                 std::string::npos &&
             generated_native_dispatch.find(
                 "if (entry == nullptr) return;") !=
@@ -5735,6 +5772,46 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos,
         "Native RTS/NOP-Fastpath umgeht Kill-Switch, Service-, Hook-, "
         "Loaded-AOT-/Generation- oder Instruktionsaccounting-Gates.");
+    require(
+        generated_native_dispatch.find(
+            "native_hook_cache_capacity = 4096u") != std::string::npos &&
+            generated_native_dispatch.find(
+                "if (cached.valid && cached.source == source)\n"
+                "        return cached.hook;") != std::string::npos &&
+            generated_native_dispatch.find(
+                "cached = {source, result, true};") != std::string::npos &&
+            generated_native_dispatch.find(
+                "HookDispatch find_native_hook_from_source(\n"
+                "    const std::uint32_t source) noexcept") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "const auto hook = find_native_hook_from_source(source);") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "entry = find_dispatch_entry(\n"
+                "                target, source, loaded_aot);") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "if (loaded_aot &&\n"
+                "            (target >> 29u) < 6u)") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "const auto entry_source =\n") == std::string::npos &&
+            generated_native_dispatch.find(
+                "native_host_boundary_poll_interval = 4096u") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "const bool poll_host_boundary =\n"
+                "            native_host_boundary_poll_due();") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "if (poll_host_boundary &&\n"
+                "            dispatch_depth_scope.outermost())") !=
+                std::string::npos &&
+            occurrences(generated_native_dispatch,
+                        "context.host->poll_lifecycle()") == 2u,
+        "Native Dispatch verliert den gebundenen Host-Safepoint oder bezahlt "
+        "Hook-/Host-Lookups weiterhin an jedem AOT-Uebergang.");
     require(
         latent_units.find("if (katana_guest_write_exit_requested) {") !=
                 std::string::npos &&
@@ -5758,6 +5835,13 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             generated_before.at("katana-port.cmake")
                     .find("${KATANA_PORT_RUNTIME_TARGET}") !=
+                std::string::npos &&
+            generated_before.at("katana-port.cmake")
+                    .find("target_link_libraries(synthetic_game PRIVATE "
+                          "katana_generated)\n") != std::string::npos &&
+            generated_before.at("katana-port.cmake")
+                    .find("target_link_libraries(synthetic_game PRIVATE "
+                          "katana_generated ${KATANA_PORT_RUNTIME_TARGET})") ==
                 std::string::npos &&
             generated_before.at("code/runtime-dispatch.cpp").find("dispatch_indirect") !=
                 std::string::npos &&

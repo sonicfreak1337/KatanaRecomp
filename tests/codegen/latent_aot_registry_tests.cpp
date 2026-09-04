@@ -2920,6 +2920,42 @@ int main() {
             "Exakter Nonzero-Entry wurde durch einen synthetischen Entry 0 "
             "oder dessen Datenheader abgelehnt.");
 
+        const std::vector<std::uint8_t> invalid_prefix_bytes{
+            0x09u, 0x00u, // nop: known, but no control-flow boundary
+            0xFFu, 0xFFu, // unknown before the first control-flow instruction
+            0x0Bu, 0x00u, 0x09u, 0x00u};
+        auto invalid_prefix_source =
+            std::make_shared<katana::runtime::MemoryDiscSource>(
+                fixture_iso_with_files(
+                    {{21u, "INVALID_PREFIX.BIN;1", invalid_prefix_bytes}}),
+                "synthetic-latent-aot-invalid-prefix-disc");
+        const std::array invalid_prefix_hint{
+            katana::codegen::LatentAotEntryHint{
+                byte_identity(invalid_prefix_bytes),
+                21u * sector_size,
+                static_cast<std::uint32_t>(invalid_prefix_bytes.size()),
+                0u}};
+        rejected = false;
+        try {
+            static_cast<void>(
+                katana::codegen::discover_latent_aot_modules(
+                    invalid_prefix_source,
+                    0u,
+                    0u,
+                    {},
+                    exact_only_options,
+                    {},
+                    invalid_prefix_hint));
+        } catch (const std::runtime_error& error) {
+            rejected = std::string_view{error.what()} ==
+                "latent-aot-entry-hint-prefix-decode-invalid:"
+                "entry-offset=0x0:instruction-offset=0x2";
+        }
+        require(
+            rejected,
+            "Expliziter Entry mit unbekanntem Opcode vor dem ersten "
+            "Kontrollfluss erreichte die teure CFA-/Fixpoint-Pipeline.");
+
         const std::array hybrid_entry_hint{
             katana::codegen::LatentAotEntryHint{
                 byte_identity(multi_entry_bytes),

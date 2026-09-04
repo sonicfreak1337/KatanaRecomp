@@ -1672,10 +1672,30 @@ NativePortLoadedAotBinder::preflight_entry_for_address(
             return candidate.source_offset < value;
         });
     if (block == module.block_identities.end() ||
-        block->source_offset != source_offset)
+        block->source_offset != source_offset) {
+        if (impl_->crash_capsule != nullptr) {
+            impl_->crash_capsule->note_v3_runtime_module_lifecycle(
+                module.sha256, module.source_start, runtime_start,
+                module.byte_size, match->lifecycle_generation, 0u, 1u);
+            impl_->crash_capsule->note_v3_loaded_aot(
+                address, runtime_start, module.source_start, source_offset,
+                module.byte_size, 0u, 0u,
+                impl_->immutable_guard.generation(), module.sha256);
+        }
+        std::ostringstream detail;
+        detail << "loaded-aot-staged-entry-identity-missing:target=0x"
+               << std::hex << runtime_address << ";runtime-start=0x"
+               << runtime_start << ";source-start=0x"
+               << module.source_start << ";offset=0x" << source_offset
+               << ";pc=0x" << impl_->cpu.pc << ";pr=0x"
+               << impl_->cpu.pr << ";active-instruction=0x"
+               << impl_->cpu.active_instruction_pc
+               << ";active-block=0x"
+               << impl_->cpu.active_block_virtual_start;
         throw NativePortContractError(
             NativePortContractFailure::AotContractViolation,
-            "loaded-aot-staged-entry-identity-missing");
+            detail.str());
+    }
 
     const auto module_bytes = native_port_direct_bytes(
         impl_->cpu, runtime_start, module.byte_size);
