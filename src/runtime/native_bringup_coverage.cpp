@@ -927,14 +927,38 @@ preflight_native_bringup_coverage_dispatch(
     if (authority_matches > 1u)
         reject(request, NativeBringupDispatchMiss::AmbiguousTargetOwner);
 
-    // The generated product dispatcher contains the complete exact-entry
-    // universe, while RuntimeBlockTable intentionally contains only the
-    // smaller directly reachable bring-up subset. A movable module entry must
-    // not become uncallable merely because export did not duplicate it into
-    // that subset: its active lifecycle plus the binder's exact resident-byte
-    // identity are already the executable authority. The generated caller
-    // performs the final exact dispatch-entry lookup before publishing the
-    // selection. A conflicting sealed block remains fail-closed.
+    // RuntimeBlockTable is deliberately only the small reachability-proof
+    // subset, while the generated product dispatcher owns every exact
+    // compiled primary entry. Return a provisional PrimaryStatic selection
+    // when no movable owner can claim the address. The generated caller must
+    // still prove an exact static-chainable entry and reject loaded-AOT source
+    // space before it publishes or consumes the selection.
+    if (authority_matches == 0u && !static_available &&
+        !runtime_image_target.has_value() && !staged_target.has_value() &&
+        !declared_movable_runtime_owner) {
+        NativeBringupCoveragePreflightResult result;
+        result.target = request.target;
+        result.physical_target =
+            canonical_physical_address(request.target);
+        result.owner_kind =
+            NativeBringupCoverageOwnerKind::PrimaryStatic;
+        result.capabilities =
+            inferred_target_capabilities(request.transfer_kind);
+        result.owner_identity =
+            context.pack.identity.aot_pack_identity;
+        result.dispatch_source = canonical_target;
+        result.generated_entry_required = true;
+        return remember_coverage_preflight(
+            table, runtime_images, binder, context, request, result,
+            nullptr);
+    }
+
+    // A movable module entry likewise must not become uncallable merely
+    // because export did not duplicate it into the smaller table: its active
+    // lifecycle plus the binder's exact resident-byte identity are already
+    // the executable authority. The generated caller performs the final exact
+    // dispatch-entry lookup before publishing the selection. A conflicting
+    // sealed block remains fail-closed.
     if (authority_matches == 0u && !static_available &&
         staged_target.has_value() && !runtime_image_target.has_value() &&
         !loaded_aot_execution.has_value()) {

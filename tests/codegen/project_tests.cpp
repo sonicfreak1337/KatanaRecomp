@@ -176,6 +176,12 @@ int main() {
                         .find("KATANA_GENERATED_COLD_OVERLAY_SOURCES") !=
                     std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
+                        .find("KATANA_GENERATED_CENTRAL_DISPATCH_SOURCES") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
+                        .find("${KATANA_GENERATED_CENTRAL_DISPATCH_SOURCES}") !=
+                    std::string::npos &&
+                serial_snapshot.at("CMakeLists.txt")
                         .find("^code/unit-v8[Cc]") != std::string::npos &&
                 serial_snapshot.at("CMakeLists.txt")
                         .find("KATANA_GENERATED_HOT_SOURCE_INDEX EQUAL -1") !=

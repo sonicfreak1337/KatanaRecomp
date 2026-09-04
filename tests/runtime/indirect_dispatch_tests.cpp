@@ -1173,6 +1173,39 @@ void native_bringup_coverage_regression() {
             "blieb gesperrt, weil er nicht zusaetzlich in der kleineren "
             "Bring-up-RuntimeBlockTable dupliziert war.");
 
+    auto primary_dispatch_only_request = request;
+    primary_dispatch_only_request.target = target_source_start;
+    const auto primary_dispatch_only_admission =
+        preflight_native_bringup_coverage_dispatch(
+            complete_dispatch_only_table, runtime_image_bindings, binder,
+            complete_dispatch_only_context,
+            primary_dispatch_only_request);
+    require(!primary_dispatch_only_admission.block &&
+                primary_dispatch_only_admission.execution.function ==
+                    nullptr &&
+                primary_dispatch_only_admission.generated_entry_required &&
+                primary_dispatch_only_admission.owner_kind ==
+                    CoverageOwner::PrimaryStatic &&
+                primary_dispatch_only_admission.capabilities ==
+                    CoverageCapability::Callable &&
+                primary_dispatch_only_admission.target ==
+                    target_source_start &&
+                primary_dispatch_only_admission.physical_target ==
+                    canonical_physical_address(target_source_start) &&
+                primary_dispatch_only_admission.dispatch_source ==
+                    target_source_start &&
+                primary_dispatch_only_admission.owner_identity ==
+                    coverage_pack.identity.aot_pack_identity &&
+                primary_dispatch_only_admission.block_identity.empty() &&
+                primary_dispatch_only_admission.lifecycle_generation == 0u &&
+                complete_dispatch_only_observations.total_occurrences() ==
+                    1u,
+            "Ein exakter Primary-Static-Eintrag des vollstaendigen "
+            "generierten Dispatchers blieb ohne redundante kleinere "
+            "Bring-up-RuntimeBlockTable-Zeile kuenstlich gesperrt oder "
+            "erfand vor der finalen generierten Entry-Pruefung eine "
+            "Observation.");
+
     const auto admitted = preflight_native_bringup_coverage_dispatch(
         table, runtime_image_bindings, binder, context, request);
     const auto active_target =

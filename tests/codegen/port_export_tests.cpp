@@ -2799,6 +2799,18 @@ int run_test(const int argc, char* argv[]) {
         "emittierten primaeren Static-AOT-Block und Mid-Block-Resume-Entry.");
     require(
             coverage_dispatch.find(
+                "const auto proof_entry = std::lower_bound(") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "active_native_bringup_context->pack.allowlist.begin()") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "proof_entry->admission.callsite") != std::string::npos &&
+            coverage_dispatch.find(
+                "for (const auto& entry :\n"
+                "         active_native_bringup_context->pack.allowlist)") ==
+                std::string::npos &&
+            coverage_dispatch.find(
                 "NativeBringupCoverageTargetAuthority") !=
                 std::string::npos &&
             coverage_dispatch.find(
@@ -2816,6 +2828,13 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             coverage_dispatch.find(
                 "(!admission.generated_entry_required &&") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "!selected_entry->static_chainable") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "native_loaded_aot_source_address(\n"
+                "                      admission.dispatch_source)") !=
                 std::string::npos &&
             coverage_dispatch.find("selected_entry->function !=") !=
                 std::string::npos &&

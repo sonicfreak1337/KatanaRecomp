@@ -506,13 +506,12 @@ struct NativeBringupCoveragePreflightResult final {
     std::string_view owner_image_id;
     std::string_view block_identity;
     std::uint32_t dispatch_source = 0u;
-    // Movable title code already has two exact authorities that do not depend
-    // on a reachability export: the active RuntimeImage/Loaded-AOT lifecycle
-    // owns the resident bytes, and the generated dispatcher owns an exact
-    // source-address entry.  When that entry was not duplicated into the
-    // much smaller sealed bring-up table, the generated dispatcher must bind
-    // it directly after this preflight instead of treating the missing table
-    // row as missing native code.
+    // The generated dispatcher is the complete executable-entry universe.
+    // Movable code additionally requires its active identity-bound lifecycle;
+    // primary code additionally requires a static-chainable, non-loaded-AOT
+    // entry. When either exact entry was not duplicated into the much smaller
+    // sealed bring-up table, the generated dispatcher binds it directly after
+    // this preflight instead of treating the missing row as absent native code.
     bool generated_entry_required = false;
 };
 
