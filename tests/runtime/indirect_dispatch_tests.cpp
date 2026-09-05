@@ -690,6 +690,18 @@ void runtime_only_hit_hotloop_regression() {
 
 void native_bringup_coverage_regression() {
     static_assert(!NativeBringupCoverageDispatchContext::release_eligible);
+    const NativeBringupDispatchPreflightRequest diagnostic_request{
+        static_cast<NativeBringupTransferKind>(0xA5u),
+        0x12345678u, 0x87654321u, 0x1234567Cu,
+        {0x8C001000u, 0x0C001000u}, {}};
+    const NativeBringupDispatchError diagnostic_error(
+        diagnostic_request, NativeBringupDispatchMiss::UnknownCompiledTarget);
+    require(std::string_view(diagnostic_error.what()) ==
+                "Native bring-up preflight rejected: unknown-compiled-target"
+                " source=0x8c001000 source_physical=0x0c001000"
+                " callsite=0x12345678 target=0x87654321"
+                " continuation=0x1234567c transfer=0xa5",
+            "Bringup-Fehler verlor Praefix oder begrenzte exakte Gastfelder.");
     constexpr std::string_view module_identity =
         "sha256:7af85194466a76bee16168ca8152d4560bd9bec17ade2525f267ed49a54f36a9";
     constexpr std::string_view static_source_identity =
@@ -952,6 +964,46 @@ void native_bringup_coverage_regression() {
             CallableFunctionEntry};
 
     auto wrong_runtime_sources = source_transfers;
+    // A sealed Primary original body is a valid transfer source even when
+    // its entry has a MayContinueOriginal hook (the exporter seals that
+    // metadata separately from guard-free chaining). No coverage rows needed.
+    for (const auto transfer : {NativeBringupTransferKind::CallRegister,
+                               NativeBringupTransferKind::TailJumpRegister}) {
+        constexpr std::uint32_t original_source = 0x8C500000u;
+        const NativeBringupDispatchStaticAotBinding original_binding{
+            {original_source, canonical_physical_address(original_source)},
+            4u, transfer == NativeBringupTransferKind::CallRegister
+                    ? BlockEndKind::Call : BlockEndKind::DynamicBranch,
+            static_source_identity};
+        RuntimeBlockTable original_table;
+        original_table.bind_code_tracker(
+            nullptr, StaticAotInvalidationContract::Coordinated);
+        static_cast<void>(original_table.register_static(
+            make_static_block(original_binding)));
+        const auto original_target = original_table.register_static(
+            make_static_block(target_binding));
+        original_table.seal_static();
+        const NativeBringupCoverageDispatchPack original_pack{
+            coverage_pack.identity, {}, {}, {}};
+        NativeBringupCoverageObservations original_observations;
+        const auto original_context = make_native_bringup_coverage_dispatch_context(
+            original_table, runtime_image_bindings, binder, original_pack,
+            runtime_generation, original_observations);
+        const NativeBringupCoveragePreflightRequest original_request{
+            transfer, original_source, target_source_start,
+            transfer == NativeBringupTransferKind::CallRegister
+                ? original_source + 4u : 0u,
+            original_binding.block, coverage_variant};
+        const auto original_admitted = preflight_native_bringup_coverage_dispatch(
+            original_table, runtime_image_bindings, binder, original_context,
+            original_request);
+        require(original_admitted.block == original_target &&
+                    original_admitted.owner_kind == CoverageOwner::PrimaryStatic &&
+                    original_observations.events().size() == 1u &&
+                    original_observations.events().front().source_kind ==
+                        NativeBringupCoverageSourceKind::StaticAot,
+                "Versiegelter Original-Call/Tail-Jump verlor seine Quellzulassung.");
+    }
     wrong_runtime_sources.front().source_runtime_start += 0x1000u;
     const NativeBringupCoverageDispatchPack wrong_runtime_pack{
         coverage_pack.identity, wrong_runtime_sources, coverage_entries,

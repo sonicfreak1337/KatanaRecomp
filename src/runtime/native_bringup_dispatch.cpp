@@ -602,9 +602,22 @@ make_native_bringup_coverage_dispatch_context(
 NativeBringupDispatchError::NativeBringupDispatchError(
     const NativeBringupDispatchPreflightRequest& request,
     const NativeBringupDispatchMiss miss)
-    : std::runtime_error(
-          "Native bring-up preflight rejected: " +
-          std::string(native_bringup_dispatch_miss_name(miss))),
+    : std::runtime_error([&] {
+          // Error-only, fixed-width guest values; never expose host pointers.
+          std::ostringstream detail;
+          detail << "Native bring-up preflight rejected: "
+                 << native_bringup_dispatch_miss_name(miss)
+                 << std::hex << std::setfill('0')
+                 << " source=0x" << std::setw(8) << request.source.virtual_address
+                 << " source_physical=0x" << std::setw(8)
+                 << request.source.physical_address
+                 << " callsite=0x" << std::setw(8) << request.callsite
+                 << " target=0x" << std::setw(8) << request.target
+                 << " continuation=0x" << std::setw(8) << request.continuation
+                 << " transfer=0x" << std::setw(2)
+                 << static_cast<std::uint32_t>(request.transfer_kind);
+          return detail.str();
+      }()),
       miss_(miss),
       transfer_kind_(request.transfer_kind),
       callsite_(request.callsite),

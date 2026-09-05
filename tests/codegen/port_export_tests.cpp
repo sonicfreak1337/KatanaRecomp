@@ -2525,6 +2525,11 @@ int run_test(const int argc, char* argv[]) {
         katana::io::sha256_bytes(std::string_view(
             reinterpret_cast<const char*>(coverage_boot.boot_file.data() + 4u),
             4u));
+    const auto coverage_original_function_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(coverage_boot.boot_file.data()),
+            16u));
     constexpr std::uint32_t coverage_runtime_start = 0x8C100000u;
     constexpr std::uint32_t coverage_proof_runtime_start = 0x8C200000u;
     const std::array coverage_entry_hints{
@@ -2578,12 +2583,12 @@ int run_test(const int argc, char* argv[]) {
     const std::array coverage_native_hooks{
         katana::runtime::NativePortHookBinding{
             katana::platform::dreamcast_disc_boot_address,
-            4u,
+            16u,
             katana::runtime::NativePortHookKind::FunctionEntry,
             katana::runtime::NativePortHookRequirement::Required,
             katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal,
             "coverage_acceptance_hook",
-            coverage_hook_identity},
+            coverage_original_function_identity},
         katana::runtime::NativePortHookBinding{
             0x80000000u,
             static_cast<std::uint32_t>(refined_coverage_module.size()),
@@ -2917,6 +2922,10 @@ int run_test(const int argc, char* argv[]) {
         "native_bringup_static_blocks{{");
     const auto static_table_end = coverage_dispatch.find(
         "}};", static_table_begin);
+    const auto primary_original_binding = coverage_dispatch.find(
+        "{{0x8C010000u, 0x0C010000u}", static_table_begin);
+    const auto primary_original_jump_binding = coverage_dispatch.find(
+        "{{0x8C010008u, 0x0C010008u}", static_table_begin);
     const auto primary_internal_block_binding = coverage_dispatch.find(
         "{{0x8C010004u, 0x0C010004u}", static_table_begin);
     const auto primary_internal_resume_binding = coverage_dispatch.find(
@@ -2924,12 +2933,30 @@ int run_test(const int argc, char* argv[]) {
     require(
             static_table_begin != std::string::npos &&
             static_table_end != std::string::npos &&
+            primary_original_binding != std::string::npos &&
+            primary_original_binding < static_table_end &&
+            primary_original_jump_binding != std::string::npos &&
+            primary_original_jump_binding < static_table_end &&
             primary_internal_block_binding != std::string::npos &&
             primary_internal_block_binding < static_table_end &&
             primary_internal_resume_binding != std::string::npos &&
             primary_internal_resume_binding < static_table_end,
         "Complete-Disassembly-Coverage materialisiert nicht jeden exakt "
         "emittierten primaeren Static-AOT-Block und Mid-Block-Resume-Entry.");
+    require(
+        coverage_dispatch_shards.find(
+            "entries.push_back({0x8C010008u, "
+            "&fn_8C010000_runtime_entry, false, true})") != std::string::npos &&
+            coverage_dispatch.find(" entry_status=") != std::string::npos &&
+            coverage_dispatch.find(" dispatch_source=0x") != std::string::npos &&
+            coverage_dispatch.find(" expected_owner=0x") != std::string::npos &&
+            coverage_dispatch.find(
+                "if (selected_entry == nullptr || selected_entry->function == nullptr)\n"
+                "                fail_missing_entry(target);\n"
+                "            throw std::runtime_error(detail.str());") !=
+                std::string::npos,
+        "Hook-Original-Quellmetadaten erlauben Guard-Elision oder fehlende "
+        "Generated Entries bleiben mit Owner-Mismatches vermischt.");
     require(
             coverage_dispatch.find(
                 "const auto proof_entry = std::lower_bound(") !=

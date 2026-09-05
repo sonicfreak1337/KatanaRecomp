@@ -138,6 +138,40 @@ std::vector<std::uint8_t> fixture_iso() {
          {23u, "DATA.DAT;1", {0xFFu, 0xFFu, 0xFFu, 0xFFu}}});
 }
 
+std::vector<std::uint8_t> conflicting_loader_tail_bases_module(
+    const std::uint32_t bound_base, const std::uint32_t competing_base,
+    const bool local_p2_alias) {
+    std::vector<std::uint8_t> bytes(0x400u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        for (std::size_t index = 0u; index < 4u; ++index)
+            bytes[offset + index] = static_cast<std::uint8_t>(value >> (index * 8u));
+    };
+    // Two configured epilogues vote for a competing page. Their targets are
+    // external under the explicit placement; only the third tail is local.
+    for (const auto root : {0u, 0x40u, 0x80u}) {
+        put_u16(root, 0x4F26u);       // lds.l @r15+,pr
+        put_u16(root + 2u, 0xD107u); // mov.l @(7,pc),r1 -> root+0x20
+        put_u16(root + 4u, 0x68F6u); // mov.l @r15+,r8
+        put_u16(root + 6u, 0x412Bu); // jmp @r1
+        put_u16(root + 8u, 0x69F6u); // mov.l @r15+,r9 (delay)
+    }
+    put_u32(0x20u, competing_base + 0x200u);
+    put_u32(0x60u, competing_base + 0x220u);
+    put_u32(0xA0u, (bound_base + 0x240u) |
+                       (local_p2_alias ? 0x20000000u : 0u));
+    for (const auto target : {0x200u, 0x220u, 0x240u}) {
+        put_u16(target, 0x000Bu);
+        put_u16(target + 2u, 0x0009u);
+    }
+    return bytes;
+}
+
 std::vector<std::uint8_t> guarded_callback_vector_module() {
     constexpr std::uint32_t runtime_base = 0x8C900000u;
     std::vector<std::uint8_t> bytes(0x120u, 0u);
@@ -1291,6 +1325,27 @@ int main() {
                 " unknown=" +
                 std::to_string(audit_has_entry(guarded_callback_vector,
                                                0xA0u)));
+        const std::array competing_tail_roots{0u, 0x40u, 0x80u};
+        for (const bool p2_alias : {false, true}) {
+            constexpr std::uint32_t bound_base = 0x8C600000u;
+            const auto module = conflicting_loader_tail_bases_module(
+                bound_base, 0x8C200000u, p2_alias);
+            const auto bound = katana::codegen::audit_latent_aot_module(
+                module, 0x84000000u, competing_tail_roots,
+                bound_base, indexed_table_options);
+            require(bound.admitted &&
+                        bound.inferred_runtime_base == bound_base &&
+                        audit_has_entry(bound, 0x240u) &&
+                        !audit_has_entry(bound, 0x200u) &&
+                        !audit_has_entry(bound, 0x220u),
+                    "Konfigurierte Rootvoten verdraengen die gebundene Basis "
+                    "oder projizieren externe Tails in lokale Modulbytes.");
+            const auto unbound = katana::codegen::audit_latent_aot_module(
+                module, 0x84000000u, competing_tail_roots, indexed_table_options);
+            require(unbound.admitted && audit_has_entry(unbound, 0x200u) &&
+                        audit_has_entry(unbound, 0x220u),
+                    "Ungebundene konfigurierte Root-Heuristik wurde deaktiviert.");
+        }
         const auto loaded_aot_entry_family =
             katana::codegen::audit_latent_aot_module(
                 loaded_aot_entry_family_module(), 0x80000000u,

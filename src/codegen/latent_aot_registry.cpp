@@ -4452,18 +4452,18 @@ std::vector<std::uint32_t> latent_runtime_alias_call_entry_offsets(
                      tail_roots.end());
     auto resolver = make_latent_code_address_resolver(
         candidate, program, external_code_targets);
-    const auto configured_root_base =
-        infer_latent_configured_root_dispatch_base(
-            candidate, program, tail_roots,
-            maximum_entry_scan_instructions);
-    if (configured_root_base.has_value()) {
-        // Exact literal-fed transfers from configured immutable loader roots
-        // are stronger placement evidence than pointer-shaped words found by
-        // a whole-image scan.  The inferred base is still only positive
-        // discovery evidence: generated register dispatch retains its runtime
-        // target and loaded-module identity guard.
-        resolver.preferred_runtime_base = configured_root_base;
-        resolver.preferred_runtime_base_identity_consistent = true;
+    if (!candidate.proven_runtime_base.has_value()) {
+        const auto configured_root_base =
+            infer_latent_configured_root_dispatch_base(
+                candidate, program, tail_roots,
+                maximum_entry_scan_instructions);
+        if (configured_root_base.has_value()) {
+            // Root literals may refine unbound whole-image pointer votes,
+            // never override an identity-bound loader placement.
+            // Discovery still retains runtime target/module identity guards.
+            resolver.preferred_runtime_base = configured_root_base;
+            resolver.preferred_runtime_base_identity_consistent = true;
+        }
     }
     if (!resolver.preferred_runtime_base.has_value()) {
         if (loader_tail_diagnostics != nullptr) {

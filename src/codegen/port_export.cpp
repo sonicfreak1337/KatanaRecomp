@@ -18669,7 +18669,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                         "IR block.");
                 return false;
             }
-            if (!compile_time_static_immutable_block(*dispatch->block)) {
+            // Source sealing proves Primary bytes, not guard-free chaining.
+            // MayContinueOriginal hooks retain their compiled source blocks.
+            if (!compile_time_primary_static_block(*dispatch->block)) {
                 if (required)
                     throw std::runtime_error(
                         "Native bring-up Static-AOT block is not fully "
@@ -18709,7 +18711,7 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
         for (std::size_t index = 0u; index < blocks.size(); ++index) {
             const auto entry = blocks[index].address;
             if (blocks[index].block == nullptr ||
-                !compile_time_static_immutable_block(*blocks[index].block) ||
+                !compile_time_primary_static_block(*blocks[index].block) ||
                 native_port_replacement_function_strictly_contains(
                     definition, entry))
                 continue;
@@ -22088,9 +22090,23 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
                    "                    selected_entry,\n"
                    "                    admission.owner_kind == katana::runtime::\n"
                    "                        NativeBringupCoverageOwnerKind::\n"
-                   "                            PrimaryStatic))\n"
-                   "            throw std::runtime_error(\n"
-                   "                \"native-bringup-coverage-entry-binding\");\n"
+                   "                            PrimaryStatic)) {\n"
+                   "            std::ostringstream detail;\n"
+                   "            detail << \"native-bringup-coverage-entry-binding\"\n"
+                   "                   << \" target=0x\" << std::hex << target\n"
+                   "                   << \" dispatch_source=0x\" << admission.dispatch_source\n"
+                   "                   << \" expected_owner=0x\"\n"
+                   "                   << static_cast<std::uint32_t>(admission.owner_kind)\n"
+                   "                   << \" entry_status=\"\n"
+                   "                   << (selected_entry == nullptr ? \"missing\"\n"
+                   "                       : selected_entry->function == nullptr ? \"null-function\"\n"
+                   "                       : selected_entry->primary_static ? \"primary-static\"\n"
+                   "                       : \"non-primary\");\n"
+                   "            std::cerr << detail.str() << '\\n';\n"
+                   "            if (selected_entry == nullptr || selected_entry->function == nullptr)\n"
+                   "                fail_missing_entry(target);\n"
+                   "            throw std::runtime_error(detail.str());\n"
+                   "        }\n"
                    "    }\n"
                    "    if (admission.owner_kind == katana::runtime::\n"
                    "            NativeBringupCoverageOwnerKind::PrimaryStatic)\n"
