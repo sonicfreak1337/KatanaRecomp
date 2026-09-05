@@ -449,6 +449,14 @@ Task implementieren
   nur auf ausdrueckliche Anforderung. Redundante Replays, die denselben
   frueheren Checkpoint nur langsamer erreichen, gehoeren nicht in den
   Standardgurt.
+- Jeder vollstaendige Export ueber zehn Minuten ist P0. Der gesamte echte
+  Kaltexport muss unter zehn Minuten fallen, einschliesslich Authoring,
+  Analyse, AOT-Codegen, Compile, finalem Link und Packaging. Kalt bedeutet
+  ohne passende Build-/Compiler-/Artefaktcachetreffer; warme oder rein
+  inkrementelle Werte erfuellen dieses Kaltziel nicht. Exportoptimierung
+  darf weder Execution-Safety noch vorhandenen Story-/Gameplay-/Savefortschritt
+  abschwaechen. Reine Runtimefixes muessen den gueltigen AOT-Pack ohne
+  unnoetige Vollanalyse und AOT-Neukompilierung wiederverwenden.
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.

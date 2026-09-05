@@ -431,6 +431,11 @@ enum class NativePortBootstrapPhase : std::uint8_t {
     Failed,
 };
 
+// Same simulation thread only. A provider returns true only when its current
+// native work has reached a natural shutdown boundary; it must not force one.
+using NativePortHostStopReady = bool (*)(
+    NativePortContext&, NativePortStopReason) noexcept;
+
 class NativePortContext final {
   public:
     CpuState* cpu = nullptr;
@@ -485,7 +490,18 @@ class NativePortContext final {
     // Append-only title-host lifetime bridge. Generated product code consumes
     // this exactly once while Context, host services and telemetry still live.
     NativePortTitleStateCleanup title_state_cleanup = nullptr;
+    // Append-only host lifetime state, never guest/AOT dispatch authority.
+    // The first request is retained even while a provider finishes its frame.
+    NativePortHostStopReady host_stop_ready = nullptr;
+    NativePortStopReason pending_host_stop_reason = NativePortStopReason::None;
 };
+
+// Return true only for an accepted host stop. Existing non-host failures are
+// never overwritten, including failures raised by a provider readiness check.
+[[nodiscard]] bool try_accept_native_port_host_stop(
+    NativePortContext& context) noexcept;
+[[nodiscard]] bool request_native_port_host_stop(
+    NativePortContext& context, NativePortStopReason reason) noexcept;
 
 enum class NativePortContractFailure : std::uint8_t {
     InvalidDefinition,

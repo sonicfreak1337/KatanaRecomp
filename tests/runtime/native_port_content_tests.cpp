@@ -227,9 +227,245 @@ void run_immutable_guard_benchmark(const std::uint64_t calls) {
     }
 }
 
+// Regression for a host deadline arriving inside Sonic's native frame. This
+// pins the generic request/accept boundary without private content or a GPU.
+void test_host_stop_rendezvous() {
+    using namespace katana::runtime;
+    NativePortContext immediate;
+    require(!request_native_port_host_stop(immediate, NativePortStopReason::HookAbort) &&
+                immediate.pending_host_stop_reason == NativePortStopReason::None &&
+                immediate.stop_reason == NativePortStopReason::None,
+            "Non-host reason entered host-stop rendezvous.");
+    require(request_native_port_host_stop(immediate, NativePortStopReason::HostRequested) &&
+                immediate.stop_reason == NativePortStopReason::HostRequested,
+            "Unbound provider did not preserve immediate host shutdown.");
+    NativePortContext deadline;
+    require(request_native_port_host_stop(deadline, NativePortStopReason::HostDeadline),
+            "Unbound provider did not accept deadline.");
+
+    struct FrameOwner { bool open = true; bool service_active = false; unsigned checks = 0u; } owner;
+    NativePortContext deferred;
+    deferred.host_deadline_nanoseconds = 1234u;
+    deferred.title_state = &owner;
+    deferred.host_stop_ready = [](NativePortContext& context, NativePortStopReason reason) noexcept {
+        auto& state = *static_cast<FrameOwner*>(context.title_state);
+        ++state.checks;
+        return reason == NativePortStopReason::HostDeadline &&
+               !state.open && !state.service_active;
+    };
+    require(!try_accept_native_port_host_stop(deferred) && owner.checks == 0u,
+            "Readiness callback ran without a pending request.");
+    require(!request_native_port_host_stop(deferred, NativePortStopReason::HostDeadline) &&
+                !request_native_port_host_stop(deferred, NativePortStopReason::HostRequested) &&
+                deferred.pending_host_stop_reason == NativePortStopReason::HostDeadline &&
+                deferred.stop_reason == NativePortStopReason::None,
+            "Open frame stopped or second request replaced the first.");
+    require(!try_accept_native_port_host_stop(deferred),
+            "Nested dispatch polling bypassed frame ownership.");
+    owner.open = false; // The provider's ordinary completed-frame boundary.
+    owner.service_active = true;
+    require(!try_accept_native_port_host_stop(deferred),
+            "Nested completed frame unwound an unfinished host-owned AOT service.");
+    owner.service_active = false;
+    require(try_accept_native_port_host_stop(deferred) &&
+                deferred.stop_reason == NativePortStopReason::HostDeadline &&
+                deferred.host_deadline_nanoseconds == 1234u,
+            "Completed frame did not accept the original immutable deadline.");
+    const auto accepted_checks = owner.checks;
+    require(request_native_port_host_stop(deferred, NativePortStopReason::HostRequested) &&
+                deferred.stop_reason == NativePortStopReason::HostDeadline &&
+                owner.checks == accepted_checks,
+            "Accepted host stop was replaced or consulted the provider again.");
+
+    NativePortContext failure;
+    failure.stop_reason = NativePortStopReason::AotContractViolation;
+    failure.host_stop_ready = [](NativePortContext&, NativePortStopReason) noexcept -> bool {
+        std::abort(); // Real errors must not consult a shutdown provider.
+    };
+    require(!request_native_port_host_stop(failure, NativePortStopReason::HostDeadline) &&
+                !try_accept_native_port_host_stop(failure) &&
+                failure.stop_reason == NativePortStopReason::AotContractViolation,
+            "Host request overwrote an existing contract failure.");
+    NativePortContext callback_failure;
+    callback_failure.host_stop_ready = [](NativePortContext& context, NativePortStopReason) noexcept {
+        context.stop_reason = NativePortStopReason::HookAbort;
+        return true;
+    };
+    require(!request_native_port_host_stop(callback_failure, NativePortStopReason::HostRequested) &&
+                callback_failure.stop_reason == NativePortStopReason::HookAbort,
+            "Readiness-time failure lost priority to host shutdown.");
+}
+
+void test_aot_services_host_stop_rendezvous() {
+    using namespace katana::runtime;
+    struct Host final : NativePortHostServices {
+        std::uint64_t now = 1u;
+        NativePortLifecycleState lifecycle = NativePortLifecycleState::Running;
+        bool frame_open = true;
+        bool service_active = false;
+        std::uint64_t presents = 0u;
+        std::uint64_t monotonic_time_nanoseconds() const noexcept override { return now; }
+        NativePortLifecycleState poll_lifecycle() override { return lifecycle; }
+        void synchronize_simulation_boundary() override {}
+        void begin_frame(std::uint64_t) override { frame_open = true; }
+        void present_frame(std::uint64_t) override { frame_open = false; ++presents; }
+        std::uint64_t presented_frames() const noexcept override { return presents; }
+    };
+    struct Fixture {
+        CpuState cpu;
+        Host host;
+        NativePortContext context;
+        std::array<NativePortImmutableRange, 1u> ranges{{
+            {0x0C010000u, 2u,
+             native_port_immutable_range_mask(NativePortImmutableRangeKind::Executable)}}};
+        NativePortImmutableWriteGuard guard{ranges};
+        std::optional<NativePortAotServices> services;
+        Fixture(std::uint64_t deadline = 0u,
+                NativePortLifecycleState lifecycle = NativePortLifecycleState::Running,
+                bool bind_provider = true,
+                NativePortStopReason error = NativePortStopReason::None) {
+            host.lifecycle = lifecycle;
+            context.cpu = &cpu;
+            context.host = &host;
+            context.host_deadline_nanoseconds = deadline;
+            context.stop_reason = error;
+            if (bind_provider)
+                context.host_stop_ready = [](NativePortContext& ctx, NativePortStopReason) noexcept {
+                    const auto& owner = *static_cast<Host*>(ctx.host);
+                    return !owner.frame_open && !owner.service_active;
+                };
+            services.emplace(context, chain_guard_static_entry, guard);
+        }
+        NativePortBlockCompletion complete(std::uint64_t cycles = 1u, bool exception = false) {
+            cpu.pending_guest_cycles += cycles;
+            return finalize_guest_block(cpu, *services, 1u, 0u, 0u, exception);
+        }
+        void present() {
+            host.present_frame(context.frame_index++);
+            static_cast<void>(try_accept_native_port_host_stop(context));
+        }
+    };
+    {
+        Fixture f(1u);
+        require(f.context.stop_reason == NativePortStopReason::None &&
+                    f.context.pending_host_stop_reason == NativePortStopReason::HostDeadline &&
+                    !f.services->poll_interrupt().has_value() &&
+                    f.services->can_chain_executable_block(0x8C010000u),
+                "AOT constructor bypassed the open-frame deadline rendezvous.");
+        for (unsigned i = 0u; i < 3u; ++i) {
+            const auto result = f.complete();
+            require(!result.interrupt.has_value() && result.scheduler.processed_boundaries == 0u &&
+                        f.context.stop_reason == NativePortStopReason::None,
+                    "AOT completed-block deadline unwound an open frame.");
+        }
+        require(f.cpu.total_guest_cycles == 3u && f.cpu.pending_guest_cycles == 0u,
+                "Deferred host stop changed guest-cycle accounting.");
+        f.host.service_active = true;
+        f.present();
+        require(!f.complete().interrupt.has_value(),
+                "AOT deadline unwound an unfinished native service after present.");
+        f.host.service_active = false;
+        require(try_accept_native_port_host_stop(f.context), "Natural service boundary did not accept stop.");
+        require(f.services->poll_interrupt() == NativePortStopReason::HostDeadline &&
+                    f.complete(0u).interrupt == NativePortStopReason::HostDeadline &&
+                    !f.services->can_chain_executable_block(0x8C010000u) &&
+                    f.context.host_deadline_nanoseconds == 1u,
+                "Accepted frame stop required another cycle poll or changed deadline.");
+        require(!f.complete(0u, true).interrupt.has_value(),
+                "Host stop overrode a new guest exception at block completion.");
+        f.host.lifecycle = NativePortLifecycleState::Running;
+        require(f.services->consume_guest_cycles(0u, 1024u).processed_boundaries == 1u,
+                "Accepted stop was absent from effective boundary accounting.");
+    }
+    {
+        Fixture f(10u);
+        f.host.now = 10u;
+        require(!f.complete().interrupt.has_value() &&
+                    f.context.pending_host_stop_reason == NativePortStopReason::HostDeadline,
+                "Budgeted AOT deadline failed to request deferred shutdown.");
+        f.host.lifecycle = NativePortLifecycleState::Shutdown;
+        require(!f.complete().interrupt.has_value(), "Second host request unwound pending frame.");
+        f.present();
+        require(f.services->poll_interrupt() == NativePortStopReason::HostDeadline,
+                "Shutdown replaced the first pending deadline.");
+    }
+    {
+        Fixture f(10u);
+        f.host.lifecycle = NativePortLifecycleState::Shutdown;
+        require(!f.complete().interrupt.has_value() &&
+                    f.context.pending_host_stop_reason == NativePortStopReason::HostRequested,
+                "AOT lifecycle bypassed the open-frame rendezvous.");
+        f.host.now = 10u;
+        f.host.lifecycle = NativePortLifecycleState::Paused;
+        require(!f.complete().interrupt.has_value(), "Pending pause published an AOT unwind signal.");
+        // Also exercise acceptance by the real budgeted runtime refresh,
+        // without a direct helper call from the completed-frame fixture.
+        f.host.present_frame(f.context.frame_index++);
+        require(f.complete().interrupt == NativePortStopReason::HostRequested &&
+                    f.services->poll_interrupt() == NativePortStopReason::HostRequested,
+                "Later deadline replaced the first lifecycle stop.");
+    }
+    {
+        Fixture f(0u, NativePortLifecycleState::Paused);
+        require(f.services->poll_interrupt() == NativePortStopReason::None &&
+                    !f.services->can_chain_executable_block(0x8C010000u),
+                "Normal pause lost its nonterminal engaged-None yield.");
+        f.host.lifecycle = NativePortLifecycleState::Running;
+        require(!f.complete().interrupt.has_value(), "Resume retained a stale pause boundary.");
+        f.host.lifecycle = NativePortLifecycleState::Paused;
+        require(f.complete().interrupt == NativePortStopReason::None, "Pause was not sampled.");
+        require(!request_native_port_host_stop(f.context, NativePortStopReason::HostRequested),
+                "Open paused frame accepted stop early.");
+        require(!f.complete(0u).interrupt.has_value() &&
+                    f.services->can_chain_executable_block(0x8C010000u) &&
+                    f.services->consume_guest_cycles(0u, 1024u).processed_boundaries == 0u &&
+                    !f.complete().interrupt.has_value(),
+                "Cached pause overrode pending stop before or after the poll budget.");
+        f.present();
+        require(f.complete(0u).interrupt == NativePortStopReason::HostRequested,
+                "Paused frame completion failed to publish accepted stop.");
+    }
+    {
+        Fixture f(1u, NativePortLifecycleState::Shutdown, true,
+                  NativePortStopReason::AotContractViolation);
+        require(f.context.stop_reason == NativePortStopReason::AotContractViolation &&
+                    f.services->poll_interrupt() == NativePortStopReason::AotContractViolation &&
+                    !f.services->can_chain_executable_block(0x8C010000u) &&
+                    f.complete().interrupt == NativePortStopReason::AotContractViolation,
+                "AOT host polling replaced or hid a preexisting real error.");
+    }
+    {
+        Fixture f(1u);
+        f.context.stop_reason = NativePortStopReason::HookAbort;
+        require(f.complete(0u).interrupt == NativePortStopReason::HookAbort &&
+                    f.complete().interrupt == NativePortStopReason::HookAbort &&
+                    !f.services->can_chain_executable_block(0x8C010000u),
+                "Failure during pending shutdown lost priority.");
+    }
+    {
+        Fixture f(1u, NativePortLifecycleState::Running, false);
+        require(f.services->poll_interrupt() == NativePortStopReason::HostDeadline,
+                "Unbound AOT provider did not preserve immediate deadline acceptance.");
+        f.context.stop_reason = NativePortStopReason::AotContractViolation;
+        require(f.complete(0u).interrupt == NativePortStopReason::AotContractViolation,
+                "Cached accepted host stop masked a subsequent real failure.");
+    }
+    {
+        Fixture f(0u, NativePortLifecycleState::Shutdown, false);
+        require(f.services->poll_interrupt() == NativePortStopReason::HostRequested,
+                "Unbound AOT provider did not preserve immediate lifecycle shutdown.");
+    }
+}
+
 } // namespace
 
 int main(const int argc, char** const argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--host-stop-only") {
+        test_host_stop_rendezvous();
+        test_aot_services_host_stop_rendezvous();
+        std::cout << "Native host-stop rendezvous passed.\n";
+        return EXIT_SUCCESS;
+    }
     if (argc == 3 &&
         std::string_view(argv[1]) == "--benchmark-immutable-page-reject") {
         std::uint64_t calls = 0u;
@@ -241,6 +477,8 @@ int main(const int argc, char** const argv) {
         return EXIT_SUCCESS;
     }
     require(argc == 1, "Unbekannte Native-Port-Content-Testoption.");
+    test_host_stop_rendezvous();
+    test_aot_services_host_stop_rendezvous();
     test_non_vq_twiddled_mipmap_layout();
     const std::array immutable_ranges{
         katana::runtime::NativePortImmutableRange{

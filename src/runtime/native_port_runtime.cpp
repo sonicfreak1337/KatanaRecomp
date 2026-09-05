@@ -494,11 +494,20 @@ NativePortCycleCommit NativePortAotServices::consume_guest_cycles(
     } else {
         host_boundary_cycles_remaining_ -= guest_cycles;
     }
-    return {guest_sequence_, boundary_.has_value() ? 1u : 0u, false, false};
+    return {guest_sequence_, poll_interrupt().has_value() ? 1u : 0u, false, false};
 }
 
 std::optional<NativePortStopReason>
 NativePortAotServices::poll_interrupt() const noexcept {
+    // A provider can accept a stop at a natural frame boundary between cycle
+    // polls. Conversely, a pending request must suppress a cached pause yield:
+    // generated AOT unwinds on any engaged optional, including enum None.
+    if (context_ != nullptr) {
+        if (context_->stop_reason != NativePortStopReason::None)
+            return context_->stop_reason; // Real failures outrank cached host state.
+        if (context_->pending_host_stop_reason != NativePortStopReason::None)
+            return std::nullopt;
+    }
     return boundary_;
 }
 
@@ -538,7 +547,7 @@ bool NativePortAotServices::prefetch(
 
 bool NativePortAotServices::can_chain_executable_block(
     const std::uint32_t address) const noexcept {
-    return !boundary_.has_value() && aot_contract_valid() &&
+    return !poll_interrupt().has_value() && aot_contract_valid() &&
            !immutable_write_detected() &&
            static_entry_query_ != nullptr &&
            static_entry_query_(address);
@@ -605,25 +614,35 @@ NativePortContext& NativePortAotServices::context() const noexcept {
 }
 
 void NativePortAotServices::refresh_host_boundary() {
+    boundary_.reset();
     if (context_ == nullptr || context_->host == nullptr) return;
+    // Never replace an already accepted stop or a real error with a newly
+    // sampled timeout/lifecycle event. Pending requests retain their first
+    // reason and may only become terminal through the provider rendezvous.
+    if (context_->stop_reason != NativePortStopReason::None) return;
+    static_cast<void>(try_accept_native_port_host_stop(*context_));
+    if (context_->stop_reason != NativePortStopReason::None) return;
     const auto now = context_->host->monotonic_time_nanoseconds();
     if (context_->host_deadline_nanoseconds != 0u &&
         now >= context_->host_deadline_nanoseconds) {
-        context_->stop_reason = NativePortStopReason::HostDeadline;
-        boundary_ = NativePortStopReason::HostDeadline;
+        static_cast<void>(request_native_port_host_stop(
+            *context_, NativePortStopReason::HostDeadline));
         return;
     }
+    // Keep executing ordinary compiled work until its owner can close it.
+    // In particular, Paused must not publish its usual engaged-None yield.
+    if (context_->pending_host_stop_reason != NativePortStopReason::None)
+        return;
     switch (context_->host->poll_lifecycle()) {
     case NativePortLifecycleState::Running:
-        boundary_.reset();
         return;
     case NativePortLifecycleState::Paused:
         // Pause is a temporary dispatch boundary, not a terminal stop reason.
         boundary_ = NativePortStopReason::None;
         return;
     case NativePortLifecycleState::Shutdown:
-        context_->stop_reason = NativePortStopReason::HostRequested;
-        boundary_ = NativePortStopReason::HostRequested;
+        static_cast<void>(request_native_port_host_stop(
+            *context_, NativePortStopReason::HostRequested));
         return;
     }
 }

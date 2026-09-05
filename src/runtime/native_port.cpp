@@ -8,6 +8,34 @@
 #include <tuple>
 
 namespace katana::runtime {
+bool try_accept_native_port_host_stop(NativePortContext& context) noexcept {
+    if (context.stop_reason != NativePortStopReason::None)
+        return context.stop_reason == NativePortStopReason::HostRequested ||
+               context.stop_reason == NativePortStopReason::HostDeadline;
+    const auto reason = context.pending_host_stop_reason;
+    if (reason != NativePortStopReason::HostRequested &&
+        reason != NativePortStopReason::HostDeadline)
+        return false;
+    if (context.host_stop_ready != nullptr &&
+        !context.host_stop_ready(context, reason))
+        return false;
+    if (context.stop_reason != NativePortStopReason::None)
+        return context.stop_reason == NativePortStopReason::HostRequested ||
+               context.stop_reason == NativePortStopReason::HostDeadline;
+    context.stop_reason = reason;
+    return true;
+}
+
+bool request_native_port_host_stop(
+    NativePortContext& context, const NativePortStopReason reason) noexcept {
+    if (reason != NativePortStopReason::HostRequested &&
+        reason != NativePortStopReason::HostDeadline)
+        return false;
+    if (context.pending_host_stop_reason == NativePortStopReason::None)
+        context.pending_host_stop_reason = reason;
+    return try_accept_native_port_host_stop(context);
+}
+
 namespace {
 
 [[nodiscard]] bool valid_identifier_component(
