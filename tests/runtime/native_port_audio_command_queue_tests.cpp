@@ -852,6 +852,16 @@ void test_serial_domain_top_level_and_cleanup() {
                 terminal_handle->slot == first_handle->slot &&
                 terminal_handle->generation > first_handle->generation,
             "Freier Audio-Slot erhielt keine strikt neue Generation.");
+    const auto reused_before = domain->snapshot();
+    const auto& reused_target =
+        reused_before.targets[terminal_handle->slot];
+    require(!domain->unregister_target(*first_handle, &first) &&
+                reused_target.registered &&
+                reused_target.target_generation ==
+                    terminal_handle->generation &&
+                reused_target.active_dispatches == 0u,
+            "Ein stale Handle beanspruchte die wiedereroeffnete Generation "
+            "oder der Closed-Bit-Zaehler leakte in den Snapshot.");
     require(domain->dispatch_sync(*terminal_handle, 1u, {}, 8u).completed(),
             "Terminal-Fixture konnte Core nicht konstruieren.");
     domain->shutdown();

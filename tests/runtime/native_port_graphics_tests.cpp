@@ -267,6 +267,114 @@ type_two_pixel_triangle(const float center_x, const float center_y) {
     return vertices;
 }
 
+void run_flat_vertex_fog_capture(
+    const katana::runtime::NativePortGraphicsConfig& source_config) {
+    using namespace katana::runtime;
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("katana-flat-fog-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    ScopedEnvironmentOverride background("KATANA_PORT_BACKGROUND_TEST", "0");
+    ScopedEnvironmentOverride capture(
+        "KATANA_NATIVE_GRAPHICS_CAPTURE_DIRECTORY", directory.string());
+    ScopedEnvironmentOverride start("KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME", "1");
+    ScopedEnvironmentOverride end("KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME", "24");
+    ScopedEnvironmentOverride interval("KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL", "1");
+    auto config = source_config;
+    config.telemetry = nullptr;
+    config.initially_visible = false;
+    NativePortGraphicsDevice graphics(config);
+    std::array<NativePortVertex, 4u> corners{};
+    corners[0].position = {-0.75f, -0.75f, 0.0f};
+    corners[1].position = {0.75f, -0.75f, 0.0f};
+    corners[2].position = {-0.75f, 0.75f, 0.0f};
+    corners[3].position = {0.75f, 0.75f, 0.0f};
+    for (auto& vertex : corners) {
+        vertex.color = {0.0f, 0.0f, 1.0f, 1.0f};
+        vertex.depth_coordinate = 1.0f;
+        // Deliberately different from fog: the generic API must not infer
+        // its fog factor from secondary alpha.
+        vertex.secondary_color[3] = 0.25f;
+    }
+    corners[2].fog_coordinate = 1.0f;
+    const std::array list{
+        corners[0], corners[1], corners[2],
+        corners[2], corners[1], corners[3]};
+    std::uint64_t frame = 0u;
+    for (const bool type2 : {false, true}) {
+        for (const bool persistent : {false, true}) {
+            for (const bool strip : {false, true}) {
+                for (unsigned mode = 0u; mode < 3u; ++mode) {
+                    const auto vertices = strip
+                        ? std::span<const NativePortVertex>(corners)
+                        : std::span<const NativePortVertex>(list);
+                    const auto topology = strip
+                        ? NativePortPrimitiveTopology::TriangleStrip
+                        : NativePortPrimitiveTopology::TriangleList;
+                    const auto shading = mode == 1u
+                        ? NativePortShadingMode::Smooth
+                        : NativePortShadingMode::FlatLastVertex;
+                    NativePortMeshHandle mesh;
+                    if (persistent) {
+                        NativePortMeshConfig mesh_config;
+                        mesh_config.vertices = vertices;
+                        mesh_config.topology = topology;
+                        mesh_config.shading = shading;
+                        mesh = graphics.create_mesh(mesh_config);
+                    }
+                    graphics.begin_frame(reciprocal_frame());
+                    auto packet = type2 ? type_two_packet(vertices, 1u, 1u)
+                                        : screen_packet(vertices, 1u, 1u);
+                    packet.topology = topology;
+                    packet.rasterizer.shading = shading;
+                    packet.rasterizer.cull = NativePortCullMode::Back;
+                    packet.rasterizer.front_counter_clockwise = true;
+                    packet.fog.mode = mode == 2u ? NativePortFogMode::Linear
+                                                : NativePortFogMode::VertexFactor;
+                    packet.fog.color = {1.0f, 0.0f, 0.0f, 1.0f};
+                    if (persistent) {
+                        packet.vertices = {};
+                        packet.mesh = mesh;
+                    }
+                    graphics.draw(packet);
+                    graphics.present();
+                    graphics.finish();
+                    if (mesh) graphics.destroy_mesh(mesh);
+                    const auto path = directory /
+                        ("frame-" + std::to_string(++frame) + ".bmp");
+                    std::ifstream bitmap(path, std::ios::binary | std::ios::ate);
+                    require(bitmap.is_open(), "Flat-Fog regression missing BMP");
+                    const auto size = static_cast<std::streamoff>(bitmap.tellg());
+                    require(size >= 54 + 64 * 64 * 4, "Flat-Fog BMP truncated");
+                    std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
+                    bitmap.seekg(0);
+                    bitmap.read(reinterpret_cast<char*>(bytes.data()),
+                                static_cast<std::streamsize>(bytes.size()));
+                    const auto red = [&](unsigned x, unsigned y) {
+                        return bytes[54u + ((63u - y) * 64u + x) * 4u + 2u];
+                    };
+                    const auto blue = [&](unsigned x, unsigned y) {
+                        return bytes[54u + ((63u - y) * 64u + x) * 4u];
+                    };
+                    if (mode == 0u) {
+                        require(red(16u, 40u) > 245u &&
+                                    red(16u, 24u) > 245u &&
+                                    blue(48u, 24u) > 245u &&
+                                    red(48u, 24u) < 10u,
+                                "Flat VertexFactor lost last-vertex fog or strip winding");
+                    } else {
+                        require(red(16u, 40u) > 50u &&
+                                    red(16u, 40u) < 125u &&
+                                    red(16u, 24u) > 145u &&
+                                    red(16u, 24u) < 210u &&
+                                    blue(48u, 24u) > 100u,
+                                "Smooth/Distance fog stopped interpolating");
+                    }
+                }
+            }
+        }
+    }
+}
+
 void run_type_two_global_fragment_capture(
     const katana::runtime::NativePortGraphicsConfig& source_config) {
     using namespace katana::runtime;
@@ -285,13 +393,15 @@ void run_type_two_global_fragment_capture(
         ScopedEnvironmentOverride capture_start(
             "KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME", "1");
         ScopedEnvironmentOverride capture_end(
-            "KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME", "1");
+            "KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME", "2");
         ScopedEnvironmentOverride capture_interval(
             "KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL", "1");
 
         auto capture_config = source_config;
         capture_config.title = "Katana Type2 Global Fragment Regression";
-        capture_config.initially_visible = true;
+        // The completed offscreen target is captured even if DXGI reports
+        // occlusion. Real GPU pixel probes need no visible test window.
+        capture_config.initially_visible = false;
         capture_config.synchronize_present = false;
         capture_config.maximum_type2_fragment_nodes = 8'192u;
         capture_config.telemetry = nullptr;
@@ -533,6 +643,32 @@ void run_type_two_global_fragment_capture(
                     bytes[cross_semantic_offset + 2u] <= 0x88u,
                 "Scene3D und UiOverlay verloren bei neu gestarteter "
                 "Submission-Order einen Type2-Layer.");
+
+        // A fresh batch containing only depth-rejected fragments has a zero
+        // allocator count. Resolve must leave the opaque target untouched,
+        // not consume the previous batch's status or fragment links.
+        capture_graphics.begin_frame(reciprocal_frame());
+        capture_graphics.draw(
+            screen_packet(depth_occluder, 0x7713u, 1u));
+        capture_graphics.draw(
+            type_two_packet(hidden_type_two, 0x7713u, 2u));
+        capture_graphics.present();
+        const auto empty_gather_snapshot = capture_graphics.snapshot();
+        require(!empty_gather_snapshot.frame_open &&
+                    empty_gather_snapshot.failed_commands == 0u,
+                "Ein leerer Type2-Gather verlor den Frameabschluss.");
+        std::ifstream empty_bitmap(directory / "frame-2.bmp",
+                                   std::ios::binary);
+        require(empty_bitmap.is_open(),
+                "Leerer Type2-Gather erzeugte keine echte Pixelprobe.");
+        std::vector<std::uint8_t> empty_bytes(bytes.size());
+        empty_bitmap.read(reinterpret_cast<char*>(empty_bytes.data()),
+                          static_cast<std::streamsize>(empty_bytes.size()));
+        require(empty_bitmap.good() &&
+                    empty_bytes[occluded_offset + 0u] >= 0xE0u &&
+                    empty_bytes[occluded_offset + 1u] <= 0x10u &&
+                    empty_bytes[occluded_offset + 2u] >= 0xE0u,
+                "Ein leerer Type2-Gather veraenderte die opaque Bildbasis.");
 
         // A UI semantic packet is independently legal in an authenticated
         // Type-2 list; the host semantic is not a fixed-function list type.
@@ -893,6 +1029,8 @@ int main(const int argc, char** const argv) {
         failure_config.telemetry = nullptr;
         NativePortGraphicsDevice failure_graphics(failure_config);
         const auto before_failure = failure_graphics.snapshot();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 0u,
+                "Neues Geraet besitzt bereits abgeschlossene Draw-Frames.");
 
         failure_graphics.begin_frame(reciprocal_frame());
         failure_graphics.draw(
@@ -914,6 +1052,8 @@ int main(const int argc, char** const argv) {
         require(present_failed,
                 "Der injizierte Present-Fehler erreichte den Producer nicht.");
         const auto failed_present = failure_graphics.snapshot();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 0u,
+                "Fehlgeschlagenes Present wurde als Draw-Frame gezaehlt.");
         require(!failed_present.frame_open &&
                     failed_present.presented_frames ==
                         before_failure.presented_frames,
@@ -925,6 +1065,8 @@ int main(const int argc, char** const argv) {
                     "repeat-without-completed-frame"),
                 "RepeatPresent verwendete den fehlgeschlagenen Frame erneut.");
         const auto after_rejected_repeat = failure_graphics.snapshot();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 0u,
+                "Abgewiesener Repeat wurde als Draw-Frame gezaehlt.");
         require(after_rejected_repeat.presented_frames ==
                     failed_present.presented_frames,
                 "Abgewiesenes RepeatPresent erhoehte den Present-Zaehler.");
@@ -935,6 +1077,8 @@ int main(const int argc, char** const argv) {
         failure_graphics.present();
         failure_graphics.finish();
         const auto recovered_present = failure_graphics.snapshot();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 1u,
+                "Erfolgreicher versteckter Recovery-Frame wurde nicht gezaehlt.");
         require(!recovered_present.frame_open &&
                     recovered_present.begun_frames ==
                         after_rejected_repeat.begun_frames + 1u &&
@@ -952,12 +1096,23 @@ int main(const int argc, char** const argv) {
                 "Der Backendzustand erholte sich nach Present-Fehler nicht.");
         failure_graphics.repeat_present();
         const auto repeated_recovered_frame = failure_graphics.snapshot();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 1u,
+                "RepeatPresent wurde als neuer Draw-Frame gezaehlt.");
         require(repeated_recovered_frame.executed_commands ==
                     recovered_present.executed_commands + 1u &&
                     repeated_recovered_frame.failed_commands ==
                         recovered_present.failed_commands,
                 "Der erfolgreich wiederhergestellte Frame blieb nicht "
                 "repeatierbar.");
+        failure_graphics.begin_frame(reciprocal_frame());
+        failure_graphics.present();
+        failure_graphics.finish();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 1u,
+                "Leerer Clear-Frame erhoehte den Draw-Frame-Zaehler.");
+        failure_graphics.present_image(image);
+        failure_graphics.finish();
+        require(failure_graphics.completed_drawn_frames_nonblocking() == 2u,
+                "PresentImage wurde nicht als abgeschlossener Draw-Frame gezaehlt.");
     }
 
     const auto benchmark = argc == 3 ? std::string_view(argv[1])
@@ -1083,6 +1238,7 @@ int main(const int argc, char** const argv) {
     // This GPU/readback regression deliberately precedes the Parallel-only
     // facade branch below so both CTest modes execute the same Type-2 proof.
     run_type_two_global_fragment_capture(config);
+    run_flat_vertex_fog_capture(config);
 
     // SerialReference and Parallel share the exact same sealed ordinary-frame
     // codec contract.  No per-operation lease is permitted in either mode.
@@ -1126,6 +1282,8 @@ int main(const int argc, char** const argv) {
     // ordered prefix while the logical backend frame stays open; following
     // draws and Present remain in that same frame in both execution modes.
     const auto before_resource_frame = graphics.snapshot();
+    const auto drawn_before_resource_frame =
+        graphics.completed_drawn_frames_nonblocking();
     graphics.begin_frame(reciprocal_frame());
     const auto lazy_texture = graphics.create_texture(texture_config, &image);
     graphics.update_texture(lazy_texture, image);
@@ -1134,10 +1292,16 @@ int main(const int argc, char** const argv) {
     lazy_packet.texture_stage = NativePortTextureStage::RequiredResolved;
     graphics.draw(lazy_packet);
     graphics.destroy_texture(lazy_texture);
+    require(graphics.completed_drawn_frames_nonblocking() ==
+                drawn_before_resource_frame,
+            "Ressourcenpraefix publizierte einen unvollstaendigen Draw-Frame.");
     require(graphics.snapshot().frame_open,
             "Ein synchroner Resource-Fence schloss den logischen Frame.");
     graphics.present();
     const auto completed_resource_frame = graphics.snapshot();
+    require(graphics.completed_drawn_frames_nonblocking() ==
+                drawn_before_resource_frame + 1u,
+            "Abgeschlossener Ressourcenpraefix-Frame wurde nicht genau einmal gezaehlt.");
     require(completed_resource_frame.begun_frames ==
                     before_resource_frame.begun_frames + 1u &&
                 completed_resource_frame.draw_calls ==

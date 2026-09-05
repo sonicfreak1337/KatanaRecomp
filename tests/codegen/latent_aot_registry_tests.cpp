@@ -219,6 +219,104 @@ std::vector<std::uint8_t> loaded_aot_entry_family_module() {
     return bytes;
 }
 
+std::vector<std::uint8_t> task_callback_family_module(
+    const std::size_t pointer_count) {
+    require(pointer_count >= 2u && pointer_count <= 3u,
+            "Task-Callback-Fixture erhielt eine ungueltige Pointerzahl.");
+    constexpr std::uint32_t runtime_base = 0x8C900000u;
+    constexpr std::uint32_t registrar = 0x8C020000u;
+    std::vector<std::uint8_t> bytes(0x180u, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    // The declared root is intentionally unrelated to the callback table.
+    // The three immutable cells below are the bounded family evidence.
+    put_u16(0x00u, 0x001Bu); // sleep: terminate the declared root
+    put_u16(0x02u, 0x0009u); // padding
+    for (std::size_t index = 0u; index < pointer_count; ++index)
+        put_u32(0x20u + index * sizeof(std::uint32_t),
+                runtime_base + 0x100u);
+
+    // An invalid boundary marker keeps the callback outside the declared
+    // root's linear sweep. The callback must therefore satisfy the separate
+    // task-initializer signature rather than the older reverse-prologue lane.
+    put_u16(0xFCu, 0xFFFFu); // non-code boundary marker
+    put_u16(0xFEu, 0x0009u); // padding
+    put_u16(0x100u, pointer_count == 2u ? 0xFFFFu : 0x2FE6u);
+    // A two-cell decoy retains the pointer shape but has no executable
+    // callback signature, so it must remain outside the admitted entries.
+    put_u16(0x102u, 0x4F22u); // sts.l pr,@-r15
+    put_u16(0x104u, 0xD212u); // mov.l @(0x48,pc),r2
+    put_u16(0x106u, 0x420Bu); // jsr @r2
+    put_u16(0x108u, 0x0009u); // delay
+    put_u16(0x10Au, 0x1E43u); // mov.l r3,@(16,r14)
+    put_u16(0x10Cu, 0x1E63u); // mov.l r3,@(24,r14)
+    put_u16(0x10Eu, 0x000Bu); // rts
+    put_u16(0x110u, 0x0009u); // delay
+    put_u32(0x150u, registrar);
+    return bytes;
+}
+
+std::vector<std::uint8_t> referenced_block_entry_budget_module(
+    const std::size_t target_count,
+    const std::size_t cells_per_target = 2u) {
+    require(target_count > 0u &&
+                (cells_per_target == 1u || cells_per_target == 2u) &&
+                target_count <
+                    std::numeric_limits<std::uint32_t>::max() / 4u,
+            "Referenced-Block-Budget-Fixture erhielt eine ungueltige Groesse.");
+    constexpr std::uint32_t source_base = 0x80000000u;
+    const auto block_count = target_count + 1u;
+    const auto code_bytes = block_count * 4u;
+    const auto table_offset = (code_bytes + 3u) & ~std::size_t{3u};
+    // Separate the exact references with a non-pointer cell. This fixture
+    // exercises ingress publication, not the independent guarded callback
+    // vector inventory (whose own finite evidence budget remains intact).
+    const auto cell_stride = (cells_per_target + 1u) * 4u;
+    std::vector<std::uint8_t> bytes(
+        table_offset + target_count * cell_stride, 0u);
+    const auto put_u16 = [&bytes](const std::size_t offset,
+                                  const std::uint16_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+    };
+    const auto put_u32 = [&bytes](const std::size_t offset,
+                                  const std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value);
+        bytes[offset + 1u] = static_cast<std::uint8_t>(value >> 8u);
+        bytes[offset + 2u] = static_cast<std::uint8_t>(value >> 16u);
+        bytes[offset + 3u] = static_cast<std::uint8_t>(value >> 24u);
+    };
+
+    for (std::size_t block = 0u; block < target_count; ++block) {
+        put_u16(block * 4u, 0xA000u); // bra the block after the delay slot
+        put_u16(block * 4u + 2u, 0x0009u);
+    }
+    put_u16(target_count * 4u, 0x000Bu);
+    put_u16(target_count * 4u + 2u, 0x0009u);
+    for (std::size_t target = 1u; target <= target_count; ++target) {
+        const auto address =
+            source_base + static_cast<std::uint32_t>(target * 4u);
+        const auto cell = table_offset + (target - 1u) * cell_stride;
+        for (std::size_t copy = 0u; copy < cells_per_target; ++copy)
+            put_u32(cell + copy * 4u, address);
+        // Zero aliases source_base's physical address in this synthetic
+        // P1 image; use a value outside the image for the separator.
+        put_u32(cell + cells_per_target * 4u, 0xFFFFFFFFu);
+    }
+    return bytes;
+}
+
 std::vector<std::uint8_t> indexed_call_table_module(
     const bool clobber_index = false,
     const bool noncontiguous = false) {
@@ -925,7 +1023,9 @@ std::string analysis_cache_key_for_module(
     external_contract << 's' << cache_implementation_identity.size() << ':'
                       << cache_implementation_identity << ';' << 'o'
                       << product_implementation_identity.size() << ':'
-                      << product_implementation_identity << ';' << 't'
+                      << product_implementation_identity << ';' << 'q'
+                      << katana::codegen::latent_aot_referenced_block_entry_schema
+                      << ';' << 't'
                       << options.external_code_targets.size() << ';';
     for (const auto target : options.external_code_targets)
         external_contract << target << ';';
@@ -1141,6 +1241,12 @@ int main() {
                    std::binary_search(audit.emitted_block_offsets.begin(),
                                       audit.emitted_block_offsets.end(), offset);
         };
+        const auto audit_has_referenced_entry =
+            [](const auto& audit, const std::uint32_t offset) {
+                return std::binary_search(
+                    audit.referenced_block_entry_offsets.begin(),
+                    audit.referenced_block_entry_offsets.end(), offset);
+            };
         const auto guarded_callback_vector =
             katana::codegen::audit_latent_aot_module(
                 guarded_callback_vector_module(), 0x8088B000u,
@@ -1235,6 +1341,71 @@ int main() {
                     0x4E0u),
             "Ein P2-Codepointer wurde ohne identitaetsgebundene Runtime-Basis "
             "als Loaded-AOT-Entry freigegeben.");
+        const auto referenced_singleton_cell =
+            katana::codegen::audit_latent_aot_module(
+                referenced_block_entry_budget_module(1u, 1u),
+                0x80000000u, indexed_table_roots, indexed_table_options);
+        require(
+            referenced_singleton_cell.admitted &&
+                audit_has_entry(referenced_singleton_cell, 4u) &&
+                audit_has_referenced_entry(referenced_singleton_cell,
+                                           4u),
+            "Ein bereits erlaubter exakter Singleton-Blockverweis ging durch "
+            "die monotone Referenzinventur verloren.");
+        constexpr auto referenced_budget_targets =
+            katana::codegen::maximum_prepared_latent_aot_code_pointer_evidence +
+            1u;
+        auto referenced_budget_options = indexed_table_options;
+        referenced_budget_options.maximum_blocks_per_module =
+            referenced_budget_targets + 1u;
+        referenced_budget_options.module_static_cache_enabled = false;
+        const auto referenced_budget =
+            katana::codegen::audit_latent_aot_module(
+                referenced_block_entry_budget_module(
+                    referenced_budget_targets),
+                0x80000000u, indexed_table_roots,
+                referenced_budget_options);
+        require(
+            referenced_budget.admitted &&
+                referenced_budget.referenced_block_entry_offsets.size() ==
+                    referenced_budget_targets &&
+                referenced_budget.final_entry_offsets.size() ==
+                    referenced_budget_targets + 1u &&
+                referenced_budget.final_entry_offsets.front() == 0u &&
+                referenced_budget.final_entry_offsets.back() ==
+                    referenced_budget_targets * 4u,
+            "Mehr als 16384 exakt materialisierte Referenzblockentries "
+            "wurden als Gesamtmenge verworfen oder abgeschnitten: admitted=" +
+                std::to_string(referenced_budget.admitted) + " rejection=" +
+                referenced_budget.rejection + " evidence=" +
+                std::to_string(
+                    referenced_budget.referenced_block_entry_offsets.size()) +
+                " final=" +
+                std::to_string(
+                    referenced_budget.final_entry_offsets.size()));
+
+        const std::array task_callback_external_targets{0x8C020000u};
+        auto task_callback_options = indexed_table_options;
+        task_callback_options.external_code_targets =
+            task_callback_external_targets;
+        const auto task_callback_family =
+            katana::codegen::audit_latent_aot_module(
+                task_callback_family_module(3u), 0x80000000u,
+                indexed_table_roots, 0x8C900000u, task_callback_options);
+        require(
+            task_callback_family.admitted &&
+                audit_has_entry(task_callback_family, 0x100u),
+            "Die bestehende dreifach stride-bewiesene Task-Callback-Familie "
+            "verlor ihren geladenen AOT-Entry.");
+        const auto task_callback_family_too_small =
+            katana::codegen::audit_latent_aot_module(
+                task_callback_family_module(2u), 0x80000000u,
+                indexed_table_roots, 0x8C900000u, task_callback_options);
+        require(
+            task_callback_family_too_small.admitted &&
+                !audit_has_entry(task_callback_family_too_small, 0x100u),
+            "Eine Task-Callback-Tabelle mit weniger als drei regelmaessigen "
+            "Zellen wurde trotz fehlender Familienproof als Entry akzeptiert.");
         const auto indexed_table_positive =
             katana::codegen::audit_latent_aot_module(
                 indexed_call_table_module(), 0x88000000u,
@@ -1976,6 +2147,118 @@ int main() {
                 cache_corrupt.analysis_full_pipeline_runs == 1u,
             "Korrupter Latent-AOT-Analysecache wurde nicht fail-closed "
             "als Miss neu analysiert und begrenzt repariert.");
+
+        // A later resolver wave can expose a candidate-local callback shape
+        // which cold discovery rejects as a heuristic false root. Replaying
+        // the source-bound static graph must apply the same normalization
+        // before treating that proposal as a new CFA root.
+        const auto equivalent_prepared_module =
+            [](const katana::codegen::PreparedLatentAotModule& left,
+               const katana::codegen::PreparedLatentAotModule& right) {
+                return left.id == right.id &&
+                       left.byte_identity == right.byte_identity &&
+                       left.byte_size == right.byte_size &&
+                       left.source_address == right.source_address &&
+                       left.source_bindings == right.source_bindings &&
+                       left.pc_literal_evidence == right.pc_literal_evidence &&
+                       left.entry_offsets == right.entry_offsets &&
+                       left.external_code_pointer_candidates ==
+                           right.external_code_pointer_candidates &&
+                       left.external_code_pointer_evidence ==
+                           right.external_code_pointer_evidence &&
+                       left.external_transfers == right.external_transfers &&
+                       left.block_identities == right.block_identities &&
+                       left.function_identities == right.function_identities &&
+                       left.authority_entries == right.authority_entries &&
+                       left.module_class == right.module_class &&
+                       katana::codegen::serialize_latent_aot_positive_cache(
+                           std::string(64u, 'c'), left.program) ==
+                           katana::codegen::serialize_latent_aot_positive_cache(
+                               std::string(64u, 'c'), right.program);
+            };
+        const auto run_resolver_normalization_fixture =
+            [&](const bool valid_save_prefix,
+                const std::string& source_identity) {
+                constexpr std::uint32_t registrar = 0x8C040000u;
+                constexpr std::uint32_t runtime_base = 0x8C900000u;
+                const auto bytes =
+                    fallthrough_prologue_callback_module(valid_save_prefix);
+                auto source = std::make_shared<
+                    katana::runtime::MemoryDiscSource>(
+                    fixture_iso_with_files(
+                        {{21u, "NORMALIZE.BIN;1", bytes}}),
+                    source_identity);
+                const std::array external_targets{registrar};
+                const std::array hints{
+                    katana::codegen::LatentAotEntryHint{
+                        byte_identity(bytes), 21u * sector_size,
+                        static_cast<std::uint32_t>(bytes.size()), 0u,
+                        0x88000000u, runtime_base},
+                    katana::codegen::LatentAotEntryHint{
+                        byte_identity(bytes), 21u * sector_size,
+                        static_cast<std::uint32_t>(bytes.size()), 0x44u,
+                        0x88000000u, runtime_base}};
+                katana::codegen::LatentAotDiscoveryOptions base_options;
+                base_options.mode =
+                    katana::codegen::LatentAotDiscoveryMode::ExactOnly;
+                base_options.completeness_policy =
+                    katana::codegen::LatentAotCompletenessPolicy::
+                        ExactRuntimeOnlyStopOnMiss;
+                base_options.maximum_candidate_files = 1u;
+                base_options.maximum_workers = 1u;
+                base_options.analysis_implementation_identity =
+                    "latent-normalization-fixture";
+                base_options.analysis_cache_implementation_identity =
+                    "latent-normalization-fixture-cache";
+                base_options.ir_product_implementation_identity =
+                    "latent-normalization-fixture-product";
+                base_options.external_code_targets = external_targets;
+
+                katana::codegen::LatentAotDiscoverySession warm_session;
+                const auto base = katana::codegen::discover_latent_aot_modules(
+                    source, 0u, 0u, {}, base_options, {}, hints, {},
+                    warm_session);
+                const std::array callback_sinks{
+                    katana::codegen::LatentAotExternalCallbackSink{
+                        registrar, 0x04u, 0x00u}};
+                auto expanded_options = base_options;
+                expanded_options.external_callback_sinks = callback_sinks;
+                const auto warm = katana::codegen::discover_latent_aot_modules(
+                    source, 0u, 0u, {}, expanded_options, {}, hints, {},
+                    warm_session);
+                katana::codegen::LatentAotDiscoverySession fresh_session;
+                const auto fresh = katana::codegen::discover_latent_aot_modules(
+                    source, 0u, 0u, {}, expanded_options, {}, hints, {},
+                    fresh_session);
+
+                require(base.modules.size() == 1u &&
+                            base.analysis_full_pipeline_runs == 1u &&
+                            warm.modules.size() == 1u &&
+                            fresh.modules.size() == 1u &&
+                            equivalent_prepared_module(
+                                warm.modules.front(), fresh.modules.front()),
+                        "Warm-/Fresh-Resolvernormalisierung verlor Modul-, "
+                        "Entry- oder Evidence-Output.");
+                const bool callback_is_entry = std::binary_search(
+                    warm.modules.front().entry_offsets.begin(),
+                    warm.modules.front().entry_offsets.end(), 0x40u);
+                if (!valid_save_prefix) {
+                    require(!callback_is_entry &&
+                                warm.analysis_full_pipeline_runs == 0u &&
+                                warm.module_static_cache_cold_fallbacks == 0u,
+                            "Kalt verworfener heuristischer Callback zwang "
+                            "warm unnoetig eine volle CFA/FVA-Pipeline.");
+                } else {
+                    require(callback_is_entry &&
+                                warm.analysis_full_pipeline_runs == 1u,
+                            "Ein echter neuer Callbackroot blieb warm statt "
+                            "fail-closed kalt.");
+                }
+            };
+        run_resolver_normalization_fixture(
+            false, "synthetic-latent-aot-normalize-discarded");
+        run_resolver_normalization_fixture(
+            true, "synthetic-latent-aot-normalize-new-root");
 
         // Cross-process module-static cache: 250 immutable modules establish
         // the production-scale delta contract. Two new exact roots must not

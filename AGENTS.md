@@ -72,13 +72,28 @@ native-bringup:
   NativeBringup-Produktbinary gebaut. Mehrere kompatible Bug-, Evidence-,
   Analyzer-, Runtime-, Adapter- und Manifestarbeiten werden davor gebuendelt;
   ein Produktbuild pro Einzelbug ist unzulaessig.
+- Eggman baut nach jedem sinnvollen, quellseitig geprueften und gezielt
+  verifizierten kompatiblen Fortschrittsbatch genau dieses eine
+  NativeBringup-Produkt. Damit bleibt echtes Sonic-Feedback regelmaessig;
+  offene, noch unbelegte oder grosse Befunde halten einen ansonsten fertigen
+  Batch nicht endlos auf, sondern gehen in den naechsten begrenzten Zyklus.
 - Dasselbe NativeBringup-Binary wird fuer alle zugehoerigen Pflichtreplays
-  wiederverwendet. Ein zweiter Produktbuild im selben Batch braucht eine neue
-  ausdrueckliche Nutzeranweisung.
+  sowie Regression-, Progress- und Performanceproben des Batches
+  wiederverwendet. Reine Hostaenderungen nutzen den unveraendert gueltigen
+  World-/AOT-Pack. Ein zweiter Produktbuild oder zusaetzlicher Strictbuild im
+  selben Batch braucht eine neue ausdrueckliche Nutzeranweisung; es gibt
+  keinen zeitgesteuerten automatischen Export.
 - Gezielte CLI-, Unit- oder Komponenten-Targets zur lokalen
   Quellverifikation sind keine Produktbuilds und bleiben zulaessig. Sie duerfen
   aber weder vorsorglich den Strict-Port bauen noch einen zusaetzlichen
   Produktbuild als Messlauf erzwingen.
+- Die aktuelle stehende Nutzerfreigabe deckt alle fuer den voll
+  funktionsfaehigen leistungsstarken Sonic-Port notwendigen begrenzten
+  Analyse- und Gesamtexportlaeufe ab, auch wenn ihre echte Laufzeit 20 Minuten
+  ueberschreitet. Dafuer wird keine erneute Zeitausnahme erfragt. Echte
+  Fortschritts- und Stallkontrolle, genau ein Produkt pro kompatiblem Batch,
+  produktgegatete lokale Commits, kein Push und keine Emulation bleiben
+  verbindlich.
 
 - Ein vollstaendiger Analyzer-/Exportlauf wird nur bei einer nachgewiesenen
   AOT-wirksamen Aenderung gestartet: neue oder geaenderte Imagebytes,
@@ -90,9 +105,13 @@ native-bringup:
   die kleine Schleife, solange ihre AOT-Identitaet unveraendert bleibt.
 - Bring-up lockert Proof-Completeness, niemals Execution-Safety. Ausgefuehrt
   werden nur exakte aktive vorkompilierte Blockanfaenge einer identity- und
-  generationgebundenen Allowlist, validiert durch die versiegelte
-  Blocktabelle. Die Allowlist enthaelt keine rohen Hostfunktionszeiger und
-  mutiert keine Runtime-Tabelle.
+  generationgebundenen AOT-Welt, validiert durch die versiegelte
+  Blocktabelle und den eindeutigen aktuellen Owner. Mit separat gebundener
+  Complete-Disassembly-Coverage ist das Authoring-/Allowlist-Artefakt ein
+  optionaler Proof-Beschleuniger, keine zusaetzliche Ausfuehrungsautoritaet.
+  Ohne Coverage bleibt die explizite Allowlist Pflicht. Gelieferte Artefakte
+  werden weiterhin vollstaendig validiert; sie enthalten keine rohen
+  Hostfunktionszeiger und mutieren keine Runtime-Tabelle.
 - Ein explizit authorierter `Candidate` darf in dieser nicht releasefaehigen
   Allowlist nur nach unabhaengiger exakter Source-/Callsite-/Target-/Owner-/
   Byte-/Pack-/Generationsvalidierung ausgefuehrt werden. Sein `missing_proof`
@@ -105,7 +124,7 @@ native-bringup:
   Revalidierung jedes Records auf die im selben Export erzeugte Analyse und
   Blocktabelle rebound werden. Ein `Proven`-Record darf nie auf diese Weise
   rebound werden; jeder Identity-Mismatch bleibt dort fail-closed.
-- Ein Allowlist-/Blocktabellen-Miss endet sofort als
+- Ein echter Entry-/Blocktabellen-Miss endet sofort als
   `UnknownCompiledTarget`. Interpreter, JIT, Runtime-Dekodierung,
   Materializer-, No-op- und Guessing-Fallbacks bleiben verboten.
 - Evidence folgt ausschliesslich
@@ -118,40 +137,42 @@ native-bringup:
   ABI und Fortsetzung vor jeder Zustandsaenderung validiert.
 - Im Bring-up ist die erste reproduzierbare Divergenz oder der erste
   typisierte Stop autoritativ. Die gesamte offene Analyzer-Frontier erzeugt
-  nicht automatisch einen Implementierungsauftrag. Nach jeder erfolgreichen
-  Analyse muss der Analyzerstand trotzdem als eigener read-only
-  Katana-Taskpool durch die feste Egg-Fleet inventarisiert werden.
+  nicht automatisch einen Implementierungsauftrag. Eggman entscheidet als
+  technischer Leiter nach jeder erfolgreichen Analyse, ob und wie der
+  Analyzerstand als read-only Katana-Taskpool inventarisiert und delegiert
+  wird.
 
-### Pflichtgate nach jeder Analyse: Egg Fleet
+### Koordinierte Analyse-Inventur und Egg Fleet
 
-- Die allererste Aktion unmittelbar nach jeder erfolgreich publizierten
-  `analyze-port`-Generation ist die Ausgabe und Delegation des neuen
-  Egg-Fleet-Pools. Lokale Closure-, RuntimeOnly-, Replay- oder sonstige
-  Folgearbeit beginnt erst, nachdem diese Tasks gestartet wurden, damit ihre
-  Ergebnisse und relevanten Fixes noch in die naechste Analyse eingehen.
-- Aus genau der publizierten `materialization-world.katana-world` wird mit
-  `next-analysis-task --format agent-json --task-count 28` ein neuer,
-  unveraenderter Pool erzeugt. Pool-, World-, World-JSON- und
-  Native-Analysis-SHA-256 werden vor der Delegation festgehalten. Liefert die
-  Authority nach echter Closure weniger als 28 priorisierte Tasks, ist diese
-  kleinere Taskzahl autoritativ; es werden keine leeren Positionen erfunden.
-- Die vorhandenen Poolpositionen werden zuerst nach Owner, Provider,
-  Frontierart und betroffenen Dateien geclustert. Exklusive Arbeitspakete von
-  hoechstens sechs Positionen gehen an die bestehenden read-only Egg-Fleet-
-  Tasks; Positionen duerfen dafuer nicht zusammenhaengend sein. Dieselbe
-  Ownerfamilie bleibt ueber Zyklen moeglichst beim selben Chat. Nur bei echter
-  Lastungsdifferenz wird umverteilt. Poolposition, Frontier-ID und Authority
-  bleiben in jedem Paket explizit und verlustfrei.
-  Dafuer werden die bestehenden, dauerhaften Egg-Fleet-Chats wiederverwendet.
-  Ein neuer Analysezyklus erzeugt neue Arbeitspakete, aber keine neuen Chats;
-  neue Chats duerfen nur auf eine ausdrueckliche Nutzeranweisung angelegt
-  werden. Nicht benoetigte bestehende Slice-Chats bleiben fuer den Zyklus
-  einfach ohne Auftrag.
-- Jeder Egg-Fleet-Slice und jeder andere delegierte Analyse-Task laeuft
-  verbindlich mit `gpt-5.6-luna` und Reasoning `max`. `gpt-5.6-sol` mit
-  Reasoning `max` ist ausschliesslich dem Haupttask vorbehalten und darf fuer
-  die Flotte weder implizit geerbt noch explizit gewaehlt werden.
-  Jeder Task prueft Pool-zu-World, den Delta zur zuletzt von ihm geprueften
+- Eggman leitet die gesamte technische Entwicklung von Katana/Sonic und
+  finalisiert Architektur, Approach, Prioritaeten und Abnahme. Ein Pool darf
+  aus genau der publizierten `materialization-world.katana-world` mit
+  `next-analysis-task --format agent-json` erzeugt werden; seine Groesse
+  folgt dem konkreten Bedarf und ist kein festes Ziel. Pool-, World-,
+  World-JSON- und Native-Analysis-SHA-256 werden vor jeder Delegation
+  festgehalten.
+- Poolpositionen werden nach Owner, Provider, Frontierart und betroffenen
+  Dateien geclustert. Nur konkrete relevante und disjunkte Arbeitspakete
+  gehen an die bestehenden Cubot-, Orbot- oder Grounder-Tasks. Diese liefern
+  praezise Befunde oder setzen den von Eggman abgegrenzten Scope um. Sage
+  uebernimmt unabhaengige Gegenpruefung und Integration und fuehrt keine
+  eigene Architektur-, Feature- oder Performance-Roadmap.
+  Vorhandene Tasks duerfen inventarisiert werden, erhalten aber keinen
+  unnoetigen Auftrag; neue Tasks entstehen nur auf ausdrueckliche
+  Nutzeranweisung. Es gibt weder automatisches Fan-out noch eine Wartepflicht
+  auf unbenutzte Tasks. Modell und Reasoning werden von Eggman passend zum
+  begrenzten Paket festgelegt, nicht repositoryweit fixiert. Vorhandener
+  Kontext und vorhandene Evidence werden wiederverwendet; doppelte
+  Vollreviews, doppelte Testlaeufe und unbegrenzte Recherche ohne konkrete
+  Entscheidungswirkung sind unzulaessig.
+- Nur fuer konkrete, begrenzte und disjunkte Arbeit benoetigte Tasks werden
+  aktiviert. Zusaetzliche Parallelitaet ist nur zulaessig, wenn sie den
+  kritischen Pfad voraussichtlich verkuerzt. Es gibt keine Pflichtauslastung,
+  Fuellauftraege, staendigen Statusrunden oder fest auszuschoepfenden Team- und
+  Modellkontingente. Nach einem Handoff bleibt ein Task ohne Anschlussauftrag
+  idle.
+- Jeder delegierte read-only Analyse-Task prueft Pool-zu-World, den Delta zur
+  zuletzt von ihm geprueften
   Generation, die aktuelle Source-/Disassembly-/Provider-Evidence,
   A/B/C-Klassifikation, kleinsten fail-closed Scope, Acceptance, Kollisionen
   und Multi-Close. Sein maschinenlesbarer Handoff bindet zusaetzlich World-
@@ -161,6 +182,8 @@ native-bringup:
   aktiver Sechserpfad, gemeinsamer Replay-Close, generischer oder
   Sonic-spezifischer Ursprung, `sad_disasm`-Beweischance, strenger
   identity-bound Titelvertrag und erwarteter neuer Produktpfad.
+  Handoffs bleiben kompakt und enthalten Beweis, exakten Diff- oder
+  Dateiscope, ausgefuehrte Checks und verbleibende Restunsicherheit.
 - `A` bedeutet: aktuelle World und Source, genaue Ursache und Implementierung,
   keine offene Evidencefrage; der Fall wird in diesem Zyklus umgesetzt.
   Aktuelle Replay-/Produkt-Reachability oder klarer Multi-Close erhoehen die
@@ -171,15 +194,16 @@ native-bringup:
   erreichter oder anderweitig blockierter Befund. `C` ist stale, duplicate,
   bereits geschlossen, falsch interpretiert, unzureichend bewiesen oder
   ausserhalb des aktuellen Produkts und wird nicht implementiert.
-- Die Egg Fleet darf weder Dateien noch Pools aendern oder erzeugen und keine
+- Read-only Analyse-Tasks duerfen weder Dateien noch Pools aendern oder
+  erzeugen und keine
   Builds, Tests, Replays, Commits oder Pushes starten. Fehlende Evidence ist
   niemals `unreachable`, und Runtime-Witnesses werden nie zu statischem Proof
   hochgestuft.
 - Replay-Sammlung, read-only Inspektion und Produktvorbereitung duerfen
-  parallel zur Egg Fleet laufen. Die Pool-Delegation startet unmittelbar
-  nach der Analyse, blockiert den Produktbuild aber nicht bis zum letzten
-  Handoff. Relevante A-Faelle, die vor Beginn des Exports eintreffen, werden
-  umgesetzt; spaetere gehen in den naechsten normalen Batch.
+  parallel zu delegierter Analyse laufen. Eggman nimmt relevante A-Faelle,
+  die vor Beginn des Exports eintreffen, in den Batch auf; spaetere gehen in
+  den naechsten normalen Batch. Ein ungenutzter Task oder ausstehender
+  irrelevanter Handoff blockiert weder Implementierung noch Produktbuild.
 
 ### Replays als Knowledge-Gap-Probes
 
@@ -251,8 +275,11 @@ Task implementieren
   -> alle durch den Task betroffenen Pfade reviewen
      und bestaetigte Fehler innerhalb desselben Reviewdurchlaufs schliessen
   -> den reviewten Stand im dirty Worktree konfigurieren und gezielt bauen
-  -> erst nach erfolgreichem Build auf main committen und pushen
-  -> naechster Task
+  -> verifizierten Dirty-Diff an Eggman uebergeben
+  -> nach Integration genau ein Sonic-NativeBringup-Produkt bauen
+     und die relevanten Produkt-/Replaypruefungen ohne Progressrueckschritt bestehen
+  -> Eggman committet den geprueften zusammengehoerigen Source-Batch
+  -> Push nur nach aktueller ausdruecklicher Nutzerfreigabe
 ```
 
 - Die Reviewstufe ist die Fehlerfindungs- und Fixstufe. Sie umfasst den
@@ -260,28 +287,53 @@ Task implementieren
   Datenfluss, Fehlerpfade, ABI-/Cache-/Versionsvertraege sowie alle weiteren
   unmittelbar betroffenen Schichten.
 - Bestaetigte Korrektheits-, Boot-, Vollstaendigkeits- und relevante
-  Performancefehler im Taskscope werden vor dem Build und Push geschlossen.
+  Performancefehler im Taskscope werden vor Build und Handoff geschlossen.
   Eine separate nachgelagerte Fix- oder Testphase wird daraus nicht erzeugt.
 - Ein Commit ist niemals Voraussetzung fuer einen lokalen Build. Nach
   Sourceaenderungen wird der bestehende Buildbaum zuerst neu konfiguriert,
   damit ein dirty Entwicklungsbinary die untrusted Source-Identity einbettet.
-  Erst der reviewte und erfolgreich gebaute Stand wird committed.
+  Reiner Compile-, Unit- oder Komponententesterfolg loest keinen Commit aus.
+  Erst ein funktionierender Sonic-NativeBringup-Produktbuild mit bestandenen
+  relevanten Produkt-/Replaypruefungen und ohne Rueckschritt gegen die
+  vorhandene Progress-Evidence autorisiert Eggman, den geprueften
+  zusammengehoerigen Source-Batch zu committen. Die stehende Nutzerfreigabe
+  fuer genau diesen produktgegateten Commit erfordert keine neue Einzelrueckfrage.
 - Der kanonische Windows-Build des dirty CLI-Targets laeuft ueber
   `tools/build-katana-cli.ps1`. Der Wrapper importiert und validiert die
   native x64-Visual-Studio-Umgebung, konfiguriert den vorgesehenen Ninja-
   Releasebaum und baut `katana-recomp` mit dem expliziten Jobbudget. Ein
   direktes `cmake --build` aus einer nicht validierten Shell ist unzulaessig.
-- Tasks werden standardmaessig direkt auf `main` bearbeitet, committed und
-  gepusht. Neue Taskbranches, Pull Requests oder parallele Integrationszweige
-  werden nur auf eine neue ausdrueckliche Nutzeranweisung angelegt.
+- Tasks werden standardmaessig als reviewte Dirty-Diffs im aktuellen Baum
+  bearbeitet. Nur Eggman integriert und erstellt den produktgegateten Commit;
+  private Retailbytes, Saves, Buildartefakte und fremde oder sachfremde
+  Aenderungen duerfen darin nicht enthalten sein. Push, neue Taskbranches,
+  Pull Requests oder parallele Integrationszweige werden nur auf eine aktuelle
+  ausdrueckliche Nutzeranweisung angelegt oder ausgefuehrt.
+- Parallele schreibende Agents teilen niemals denselben Worktree, Git-Index
+  oder Buildbaum. Der Haupttask erzeugt fuer jeden Writer einen eigenen
+  detached Worktree aus demselben aktuellen Dirty-Snapshot, weist einen
+  disjunkten Dateiscope und ein eigenes Buildverzeichnis zu und integriert
+  danach nur den reviewten Patch in den Hauptbaum. Die Writer committen,
+  pushen, staschen, resetten oder bereinigen ihre Worktrees nicht selbst.
+- Schreibende Agents wenden Hunks ausschliesslich ueber den lokalen,
+  synchronen Codex-Patch-Endpunkt
+  'codex.exe --codex-run-as-apply-patch' in ihrem isolierten Worktree an.
+  Der zentral vermittelte beziehungsweise asynchrone App-Patchdienst ist fuer
+  Repository-Edits unzulaessig, sobald er Dateischreibvorgaenge serialisiert
+  oder die 60-Sekunden-Stallgrenze erreicht; derselbe gestallte Vorgang wird
+  nicht erneut dort gestartet. Direkte Dateiueberschreibungen, Shell-
+  Umleitungen und Skript-Rewrites bleiben ebenfalls unzulaessig.
+- Read-only Reviewer duerfen den Hauptbaum weiterhin parallel inspizieren.
+  Routinemessungen verwenden dateigenaue Abfragen und `git status
+  --untracked-files=no`; eine vollstaendige Untracked-Inventur erfolgt nur
+  gezielt vor Integration. So werden grosse Build-/Analysebaeume nicht bei
+  jedem Status- oder Patchschritt erneut traversiert.
 - Ein Review darf ausserhalb des aktuellen Taskscopes liegende Beobachtungen
   knapp dokumentieren, aber daraus weder eigenmaechtig neue Tasks noch eine
   Scope-Erweiterung ableiten.
-- Die festgelegte Taskreihenfolge bleibt verbindlich. Erst der Push des
-  reviewten Tasks auf `main` gibt den naechsten Task frei.
-- Dieser Push ist zugleich die Freigabe des naechsten Tasks. Dafuer ist keine
-  weitere Nutzeranweisung erforderlich. Ausdruecklich freizugebende Laeufe
-  und bedingte Messgates bleiben davon unberuehrt.
+- Eggman legt die Taskreihenfolge und die Handoff-Grenzen fest. Ein
+  erfolgreicher gezielter Build und reviewter Dirty-Diff koennen den naechsten
+  kompatiblen Task freigeben; sie loesen weder Worker-Commit noch Push aus.
 
 ## Git-Inspektion durch externe Agents
 
@@ -303,42 +355,89 @@ Task implementieren
 - Der reale Sonic-Adventure-PAL-Port ist projektweit der massgebliche Produkt-
   und Integrationstest: echter Export, normale Discinstallation, normaler
   Programmlauf und echter sichtbarer Fortschritt.
-- Regulaere Tasks fuegen keine neuen Unit-/Regressionstestquellen,
-  Testtargets, Testmatrizen oder synthetischen Ersatzgates hinzu. Eine
-  Ausnahme braucht eine ausdrueckliche Nutzeranweisung fuer genau den
-  benannten Test. Der reale Sonic-Produktpfad bleibt der
-  Integrationsnachweis.
+- Gezielte Tests duerfen ohne weitere Einzelgenehmigung erstellt, erweitert,
+  gebaut und ausgefuehrt werden, wenn sie einen konkreten aktuellen Pfad,
+  Fehler oder Vertrag des realen Sonic-Ports direkt absichern. Das umfasst
+  vorhandene und neue fokussierte Audio-, Renderer-, AOT- und andere
+  Regressionstests fuer nachgewiesene Sonic-Probleme. Der reale
+  Sonic-Produktpfad bleibt der Integrationsnachweis.
 - Breite Testmatrizen, synthetische Stresslaeufe, allgemeine Testprojekte,
   Ersatzgates oder Konformitaetssuiten ohne unmittelbaren Sonic-Bezug werden
   weiterhin weder gebaut noch gefordert.
-- Reviews duerfen ohne diese ausdrueckliche Ausnahme keinen neuen Test als
-  Abschlussbedingung verlangen. Gefixt wird anhand der Quellpfadreviews;
-  integriert getestet wird mit Sonic.
-- Vorhandene Tests duerfen auf gebrochene Erwartungen, falsche Testzahlen,
-  widerspruechliche Semantik oder bereits vorhandene Fehler geprueft und bei
-  Bedarf repariert werden.
-- Regulaere Tasks starten keine Testmatrix. Der gezielte Compile des
-  betroffenen Produkttargets ist ein Buildnachweis, keine neue Testsuite und
-  kein Ersatz fuer den Sonic-Produktnachweis.
+- Reviews duerfen einen fokussierten Sonic-bezogenen Test als
+  Abschlussbedingung verlangen. Vorhandene Tests duerfen auf gebrochene
+  Erwartungen, falsche Testzahlen, widerspruechliche Semantik oder bereits
+  vorhandene Fehler geprueft, repariert und erweitert werden.
+- Regulaere Tasks starten keine unverbundene breite Testmatrix. Gezielte
+  Komponenten- und Regressionstests sind Quell- und Vertragsnachweise, aber
+  kein Ersatz fuer den Sonic-Produkt-, Fortschritts- oder
+  Performancenachweis.
 - Sonic-Produktlaeufe erfolgen an den in Roadmap und Tasks festgelegten
   Produktgates oder innerhalb der kleinen, reproduzierbaren Bring-up-Schleife.
   Mehrere zusammenhaengende reviewte Tasks duerfen vor dem naechsten
-  vollstaendigen Produktgurt auf `main` landen.
-- Vor jeder Implementierungsrunde der sechs Pflichtreplays werden zuerst mit
-  demselben bereits vorhandenen BringUp-Binary alle sechs ersten
-  reproduzierbaren Crash-/Typed-Stop-Befunde aufgenommen. Bis die vollstaendige
-  6er-Crashmatrix vorliegt, werden aus einzelnen Replaybefunden keine Fixes
-  implementiert und keine Zwischenbuilds erzeugt.
-- Erst danach werden die sechs Ursachen gemeinsam mit den relevanten
+  vollstaendigen Produktgurt in denselben geprueften Dirty-Batch aufgenommen
+  werden.
+- Nach dem naechsten funktionierenden Sonic-NativeBringup-Build werden mit
+  genau derselben EXE alle 32 aktuell gueltigen Level-/Charakter-Kombinationen
+  des vollstaendigen Debugkatalogs genau einmal geprueft. Sobald ein Level
+  geladen ist, erhaelt es echte Gameplay-Eingaben; jeder Szenariolauf endet
+  spaetestens nach 60 Sekunden, weil aktive Gameplaypfade frueh crashen
+  koennen. Diese Vollmatrix laeuft strikt sequenziell, unsichtbar und stumm,
+  ohne Screenshot-/Audio-Capture und mit Grafikdiagnostik `Off`.
+- Die Vollmatrix subsumiert die repraesentativen sechs Pflichtreplays; dieselbe
+  EXE durchlaeuft nicht zusaetzlich noch einmal eine getrennte Sechsermatrix.
+  Ein nachgewiesener Fehler im gemeinsamen Testprotokoll darf den Lauf
+  vorzeitig beenden: Teilbefunde bleiben erhalten, kein betroffener Fall gilt
+  als bestanden, und der korrigierte Lauf prueft die weiterhin offenen Faelle.
+  Im unsichtbaren Modus ist eine sichtbare DXGI-Presentation kein Pass-Gate.
+  Hier sichern aktive Eingaben, exakter aktueller Stage-/Owner-Nachweis und
+  nachfolgend abgeschlossene neue Renderer-Draw-Frames den Gameplayfortschritt.
+  Leere Frames, Queue-Praefixe und Bildwiederholungen zaehlen nicht dazu.
+  Renderer-Command-Abschluss ist weder GPU-Fence-Retirement noch sichtbare
+  Bildausgabe; die 144-FPS-Zielerreichung bleibt separat zu belegen.
+  Erst werden alle Crashs und Typed Stops gesammelt, dann entsteht daraus der
+  naechste begrenzte gemeinsame Fixbatch. Bestandene Kombinationen werden mit
+  Build-ID und Meilensteinen im Erfolgsprotokoll vermerkt, aus der aktiven
+  Crashmatrix entfernt und ohne relevante Regressionsevidence nicht
+  zwanghaft erneut ausgefuehrt.
+- Jeder dieser Level-Runs fordert mit dem vorhandenen Produktschalter 144 Hz
+  an. Dauerhaftes P0-Ziel ist eine nachhaltige tatsaechliche Bildausgabe von
+  mindestens 144 FPS im 144-Hz-Modus (6,94 ms Budget pro Bild), bei korrektem
+  Spieltempo sowie korrektem Audio und Input. Der Gast-Spielzeittakt darf dafuer
+  nicht naiv beschleunigt werden. Die guenstige Telemetrie weist Simulation-,
+  Presentation- und tatsaechlich gezeichnete FPS getrennt aus; wiederholte
+  Presentations werden separat berichtet. Framezeiten und Ladezeit werden
+  getrennt ausgewiesen. Partielle Messwerte bis zu einem Crash
+  oder Typed Stop bleiben erhalten. Verglichen werden nur kompatible Szenen,
+  Meilensteine und Messbedingungen. Fehlende Werte bleiben explizit offen,
+  und Performancegewinne werden weder geschaetzt noch aus inkompatiblen
+  Laeufen abgeleitet.
+- In normalen Zyklen ohne angeordnete Vollmatrix werden mit demselben bereits
+  vorhandenen BringUp-Binary zuerst die sechs repraesentativen ersten
+  Crash-/Typed-Stop-Befunde aufgenommen. Vor Abschluss der jeweils aktiven
+  Crashmatrix werden aus Einzelbefunden keine Fixes und keine Zwischenbuilds
+  erzeugt.
+- Erst danach werden die Ursachen gemeinsam mit den relevanten
   Egg-Fleet-/RuntimeOnly-Befunden als ein zusammenhaengendes Fixpaket
   umgesetzt. Fuer dieses Gesamtpaket folgt genau ein neuer NativeBringup-
   Produktbuild; ein Build pro Replay oder pro Bug ist unzulaessig.
-- Der gemeinsame Zyklusbatch umfasst die 6er-Crashmatrix sowie alle vor
+- Der gemeinsame Zyklusbatch umfasst die aktive Crashmatrix sowie alle vor
   Beginn des Exports bereits eingegangenen relevanten aktuellen und
   historischen A-Befunde. Ausstehende read-only Egg-Fleet-Handoffs blockieren
   den Produktbuild nicht; spaete A-Befunde gehen in den naechsten normalen
   Batch. Irrelevante oder nachweislich ueberholte Befunde werden mit Evidence
   begruendet ausgelassen.
+- Das Commit-Gate verlangt ein funktionierendes Produkt ohne Rueckschritt
+  gegen vorhandene Progress-Evidence, nicht die pauschale Behauptung, bereits
+  jede offene Level-/Charakter-Kombination sei spielbar. Bekannte unveraenderte
+  Typed Stops werden ehrlich im Matrixprotokoll dokumentiert und blockieren
+  den produktgegateten Commit nicht als angebliche neue Regression.
+- Eggman bestimmt aus den Matrixmessdaten die naechste begrenzte
+  Produktoptimierung; das Team setzt genau dieses konkrete Paket um.
+  Progress-/Saveerhalt, vollstaendige Exportzeit, tatsaechliche
+  Spielperformance und Kosteneffizienz bleiben gleichrangige P0-Ziele. Die
+  Messung laeuft im normalen Gurt derselben EXE und erzeugt weder einen zweiten
+  Produktbuild noch eine reine Zusatzmessrunde.
 - Automatisierte Sonic-Laeufe und gezielte Tests sind standardmaessig stumm,
   unsichtbar und ohne Screenshot-/Audio-Capture. Ein sichtbarer Lauf erfolgt
   nur auf ausdrueckliche Anforderung. Redundante Replays, die denselben
@@ -347,11 +446,22 @@ Task implementieren
 - Performance wird am realen End-to-End-Produktpfad gemessen. Synthetische
   Zeiten, gruene Testmatrizen oder technische Hilfsframes sind kein Ersatz
   fuer Kaltbuildzeit, vollstaendigen Export und sichtbaren Sonic-Lauf.
+  Vollstaendiger Export einschliesslich echter Kaltpfade und tatsaechliche
+  Spielperformance sind neben fortschreitendem Story-, Gameplay- und
+  Savezustand dauerhafte P0-Ziele. Kosteneffiziente Umsetzung ist
+  gleichrangiges P0: begrenzte disjunkte Pakete, passende Modell- und
+  Reasoningstufe, Wiederverwendung vorhandener Evidence und genau ein Produkt
+  pro sinnvollem geprueften Batch. Kosten werden durch weniger vermeidbare
+  Arbeit gespart, niemals durch Weglassen notwendiger Semantik-, Progress-
+  oder Performancepruefung. Kalt-, Warm- und inkrementelle Werte werden
+  getrennt berichtet; ein Umbau darf bekannten Spiel- oder Savefortschritt
+  niemals zuruecksetzen. Performancegewinne werden gemessen, nicht aus
+  Hilfsmetriken abgeleitet oder erfunden.
 - Jeder Analysezyklus darf genau eine kleine, isoliert reviewbare und im
   ausgefuehrten Produktpfad wirksame Runtime-Performanceoptimierung im ohnehin
   bearbeiteten Knowledge-Gap-Pfad mitnehmen. Sie ist kein eigenstaendiger
-  Arbeitsblock, wird mit dem normalen Fixpaket gebaut und mit denselben sechs
-  Replays nur akzeptiert, wenn kein Replay regressiert. Sie erzeugt weder
+  Arbeitsblock, wird mit dem normalen Fixpaket gebaut und mit der jeweils
+  aktiven Replay-/Debugmatrix nur akzeptiert, wenn kein Fall regressiert. Sie erzeugt weder
   Zusatzbuild noch reine Messrunde und darf den Bring-up-Fix nicht verdraengen.
 - Reine Instrumentierung sowie Analyzer-, Exporter-, Graph-, Cache-, Ninja-
   oder Buildsystemarbeit erfuellt diese Pflicht nicht. Solche Optimierungen
@@ -452,9 +562,12 @@ RuntimeOnly-, AICA-, PVR-, Performance- und Handoff-Beschreibungen.
   `private/run-sonic-native-export.ps1` autoritativ. Ad-hoc-Skripte duerfen
   diese Freshness- und Provenance-Gates nicht umgehen.
 
-- Kein gestarteter Prozess und keine einzelne Phase laeuft laenger als
-  20 Minuten. Nur eine ausdrueckliche Nutzerfreigabe fuer genau einen benannten
-  Lauf hebt diese Grenze voruebergehend auf.
+- Ohne weitergehende Freigabe laeuft kein gestarteter Prozess und keine
+  einzelne Phase laenger als 20 Minuten. Die aktuelle stehende Nutzerfreigabe
+  hebt diese Grenze fuer alle notwendigen begrenzten Sonic-Analyse- und
+  Gesamtexportlaeufe auf; dafuer wird keine erneute laufbezogene Ausnahme
+  erfragt. Fuer sachfremde lange Prozesse bleibt eine ausdrueckliche
+  Einzelgenehmigung erforderlich.
 - Ein abgelaufener oder abgebrochener Prozess wird mitsamt seinem Prozessbaum
   quiesziert, bevor ein Nachfolger startet.
 - Produktive Arbeit nutzt die verfuegbaren Hostressourcen parallel;
@@ -512,4 +625,7 @@ aktuelle ausdrueckliche Nutzeranweisung hat Vorrang.
   identity-bound.
 - Fuer jeden Task gilt weiterhin:
   **implementieren -> betroffene Pfade reviewen und Findings schliessen ->
-  dirty konfigurieren und gezielt bauen -> erst danach auf main pushen**.
+  dirty konfigurieren und gezielt bauen -> verifizierten Dirty-Diff an
+  Eggman uebergeben -> nach funktionierendem Sonic-Produkt ohne
+  Progressrueckschritt produktgegateter Commit durch Eggman; Push nur nach
+  aktueller ausdruecklicher Nutzerfreigabe**.

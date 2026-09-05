@@ -1189,6 +1189,7 @@ constexpr std::uint32_t draw_flag_pvr_screen_gouraud = 1u << 18u;
 constexpr std::uint32_t draw_flag_clip_homogeneous = 1u << 19u;
 constexpr std::uint32_t draw_flag_color_clamp = 1u << 20u;
 constexpr std::uint32_t draw_flag_type_two_autosort_capture = 1u << 21u;
+constexpr std::uint32_t draw_flag_flat_last_vertex = 1u << 22u;
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
 [[nodiscard]] ComPtr<ID3DBlob> compile_type_two_shader(
@@ -1764,8 +1765,6 @@ class NativePortGraphicsBackend final {
         type2_closed_batch_identity_ = 0u;
         type2_non_type2_batch_valid_ = false;
         type2_non_type2_batch_identity_ = 0u;
-        type2_fragment_count_ = 0u;
-        type2_max_fragments_per_pixel_ = 0u;
         type_two_uavs_bound_ = false;
         graphics_frame_digest_ = graphics_digest_seed ^
             (snapshot_.presented_frames + 1u);
@@ -2035,6 +2034,12 @@ class NativePortGraphicsBackend final {
             material_flags |= draw_flag_clip_homogeneous;
         if (packet.color_clamp.enabled)
             material_flags |= draw_flag_color_clamp;
+        // Persistent geometry was expanded using source_shading; validation
+        // requires the packet to retain that exact preprocessing contract.
+        if ((mesh_slot != nullptr ? mesh_slot->source_shading
+                                  : packet.rasterizer.shading) ==
+            NativePortShadingMode::FlatLastVertex)
+            material_flags |= draw_flag_flat_last_vertex;
         if (type2_gather)
             material_flags |= draw_flag_type_two_autosort_capture;
         material_flags |=
@@ -2268,8 +2273,6 @@ class NativePortGraphicsBackend final {
         type2_closed_batch_identity_ = type2_batch_identity_;
         type2_closed_batch_valid_ = true;
         type2_batch_identity_ = 0u;
-        type2_fragment_count_ = 0u;
-        type2_max_fragments_per_pixel_ = 0u;
         type2_gather_active_ = false;
         type_two_uavs_bound_ = false;
         invalidate_draw_state_shadow();
@@ -2325,8 +2328,6 @@ class NativePortGraphicsBackend final {
         type2_closed_batch_identity_ = 0u;
         type2_non_type2_batch_valid_ = false;
         type2_non_type2_batch_identity_ = 0u;
-        type2_fragment_count_ = 0u;
-        type2_max_fragments_per_pixel_ = 0u;
         type_two_uavs_bound_ = false;
         invalidate_draw_state_shadow();
     }
@@ -2550,7 +2551,8 @@ class NativePortGraphicsBackend final {
         D3D11_BUFFER_DESC status_description{};
         status_description.ByteWidth = sizeof(std::uint32_t) * 4u;
         status_description.Usage = D3D11_USAGE_DEFAULT;
-        status_description.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+        status_description.BindFlags =
+            D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
         status_description.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
         status_description.StructureByteStride = sizeof(std::uint32_t);
         result = device_->CreateBuffer(
@@ -2572,20 +2574,19 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result),
                  "type2-status-uav");
-        D3D11_BUFFER_DESC readback_description = status_description;
-        readback_description.Usage = D3D11_USAGE_STAGING;
-        readback_description.BindFlags = 0u;
-        readback_description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        readback_description.MiscFlags = 0u;
-        readback_description.StructureByteStride = 0u;
-        result = device_->CreateBuffer(
-            &readback_description,
-            nullptr,
-            type_two_status_readback_.GetAddressOf());
+        D3D11_SHADER_RESOURCE_VIEW_DESC status_view_description{};
+        status_view_description.Format = DXGI_FORMAT_UNKNOWN;
+        status_view_description.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        status_view_description.Buffer.FirstElement = 0u;
+        status_view_description.Buffer.NumElements = 4u;
+        result = device_->CreateShaderResourceView(
+            type_two_status_buffer_.Get(),
+            &status_view_description,
+            type_two_status_view_.GetAddressOf());
         if (FAILED(result))
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result),
-                 "type2-status-readback");
+                 "type2-status-view");
         type2_resources_ready_ = true;
     }
 
@@ -2640,41 +2641,7 @@ class NativePortGraphicsBackend final {
         type2_subpass_active_ = true;
         type2_gather_active_ = true;
         type2_batch_identity_ = packet.batch.identity;
-        type2_fragment_count_ = 0u;
-        type2_max_fragments_per_pixel_ = 0u;
         type2_list_draw_sequence_ = 0u;
-    }
-
-    void read_type2_status() {
-        context_->CopyResource(type_two_status_readback_.Get(),
-                               type_two_status_buffer_.Get());
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        const auto result = context_->Map(type_two_status_readback_.Get(),
-                                          0u,
-                                          D3D11_MAP_READ,
-                                          0u,
-                                          &mapped);
-        if (FAILED(result))
-            fail(NativePortGraphicsFailure::DeviceLost,
-                 static_cast<std::uint32_t>(result),
-                 "type2-status-map");
-        std::array<std::uint32_t, 4u> status{};
-        std::memcpy(status.data(), mapped.pData, sizeof(status));
-        context_->Unmap(type_two_status_readback_.Get(), 0u);
-        // The allocator count records attempted fragments, including entries
-        // discarded after the fixed node arena fills. Flycast's reference OIT
-        // path treats that condition as a bounded quality limit and continues
-        // rendering; killing the title here turned a dense cutscene into an
-        // artificial process crash. Only published nodes are addressable by
-        // the resolve pass.
-        type2_fragment_count_ = std::min(
-            status[0], config_.maximum_type2_fragment_nodes);
-        type2_max_fragments_per_pixel_ = status[2];
-        // The reference OIT implementation retains at most 32 nodes from a
-        // pixel's linked list and composites those nodes deterministically.
-        // A denser pixel is a bounded quality limit, not a process-fatal
-        // resource failure. Keep the observed maximum for diagnostics; the
-        // resolve shader applies the same fixed retention below.
     }
 
     void unbind_type2_subpass() {
@@ -2699,16 +2666,10 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::InvalidFrame,
                  0u,
                  "type2-subpass-state");
-        // End the UAV output phase before copying the status buffer to its
-        // staging readback. This keeps the status resource unbound during
-        // the synchronization point and makes the overflow gate explicit.
+        // End all UAV writes before binding the same status buffer as a
+        // shader input. The resolve reads its current live-node bound on the
+        // GPU; a CPU readback here would serialize every transparency batch.
         unbind_type2_subpass();
-        read_type2_status();
-        if (type2_fragment_count_ == 0u) {
-            context_->OMSetRenderTargets(
-                1u, render_target_.GetAddressOf(), depth_view_.Get());
-            return;
-        }
 
         context_->OMSetRenderTargets(
             1u, render_target_.GetAddressOf(), nullptr);
@@ -2734,8 +2695,8 @@ class NativePortGraphicsBackend final {
         TypeTwoResolveConstants constants;
         constants.parameters = {
             type_two_maximum_fragments_per_pixel,
-            type2_fragment_count_,
-            type2_max_fragments_per_pixel_,
+            0u,
+            0u,
             config_.maximum_type2_fragment_nodes};
         context_->UpdateSubresource(type_two_resolve_constants_.Get(),
                                     0u,
@@ -2745,12 +2706,13 @@ class NativePortGraphicsBackend final {
                                     0u);
         context_->PSSetConstantBuffers(
             2u, 1u, type_two_resolve_constants_.GetAddressOf());
-        ID3D11ShaderResourceView* resources[4u]{
+        ID3D11ShaderResourceView* resources[5u]{
             type_two_base_view_.Get(),
             type_two_head_view_.Get(),
             type_two_fragment_view_.Get(),
-            type_two_count_view_.Get()};
-        context_->PSSetShaderResources(1u, 4u, resources);
+            type_two_count_view_.Get(),
+            type_two_status_view_.Get()};
+        context_->PSSetShaderResources(1u, 5u, resources);
         context_->Draw(3u, 0u);
         std::array<ID3D11ShaderResourceView*, 6u> no_resources{};
         context_->PSSetShaderResources(
@@ -4686,6 +4648,13 @@ class NativePortGraphicsBackend final {
                     a.secondary_color = b.secondary_color =
                         c.secondary_color = flat.secondary_color;
                     a.normal = b.normal = c.normal = flat.normal;
+                    // D3D's nointerpolation value comes from the first vertex.
+                    // Rotate cyclically to preserve winding and all varying
+                    // coordinates while selecting the original last vertex.
+                    destination.push_back(c);
+                    destination.push_back(a);
+                    destination.push_back(b);
+                    return;
                 }
                 destination.push_back(a);
                 destination.push_back(b);
@@ -6432,7 +6401,7 @@ class NativePortGraphicsBackend final {
     ComPtr<ID3D11UnorderedAccessView> type_two_fragment_uav_;
     ComPtr<ID3D11Buffer> type_two_status_buffer_;
     ComPtr<ID3D11UnorderedAccessView> type_two_status_uav_;
-    ComPtr<ID3D11Buffer> type_two_status_readback_;
+    ComPtr<ID3D11ShaderResourceView> type_two_status_view_;
     ComPtr<ID3D11Buffer> vertex_buffer_;
     ComPtr<ID3D11Buffer> index_buffer_;
     UINT vertex_buffer_capacity_ = 0u;
@@ -6495,8 +6464,6 @@ class NativePortGraphicsBackend final {
     std::uint64_t type2_closed_batch_identity_ = 0u;
     bool type2_non_type2_batch_valid_ = false;
     std::uint64_t type2_non_type2_batch_identity_ = 0u;
-    std::uint32_t type2_fragment_count_ = 0u;
-    std::uint32_t type2_max_fragments_per_pixel_ = 0u;
     std::uint32_t type2_list_draw_sequence_ = 0u;
     std::vector<NativePortVertex> prepared_vertices_;
     std::vector<BlendStateSlot> blend_states_;
@@ -7040,6 +7007,11 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     [[nodiscard]] std::uint64_t
+    completed_drawn_frames_nonblocking() const noexcept {
+        return published_completed_drawn_frames_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t
     repeated_presentations_nonblocking() const noexcept {
         return published_repeated_presentations_.load(
             std::memory_order_acquire);
@@ -7527,8 +7499,10 @@ class NativePortGraphicsDevice::Impl final {
                 const auto skipped = command_count -
                     (static_cast<std::size_t>(ordinal) + 1u);
                 saturating_atomic_add(skipped_commands_, skipped);
-                if (!is_resource_command(command->kind))
+                if (!is_resource_command(command->kind)) {
+                    consumer_drawn_frame_open_ = false;
                     backend.abort_frame_after_command_failure();
+                }
                 break;
             } catch (...) {
                 first_error = facade_error("render-consumer-exception");
@@ -7542,6 +7516,7 @@ class NativePortGraphicsDevice::Impl final {
                     (static_cast<std::size_t>(ordinal) + 1u);
                 saturating_atomic_add(skipped_commands_, skipped);
                 backend.abort_frame_after_command_failure();
+                consumer_drawn_frame_open_ = false;
                 terminal = true;
                 break;
             }
@@ -7598,6 +7573,8 @@ class NativePortGraphicsDevice::Impl final {
         slot.failed_ordinal = failed_ordinal;
         published_repeated_presentations_.store(
             consumer_repeated_presentations_, std::memory_order_release);
+        published_completed_drawn_frames_.store(
+            consumer_completed_drawn_frames_, std::memory_order_release);
         published_presented_frames_.store(
             slot.snapshot.presented_frames, std::memory_order_release);
         slot.ready_sequence.store(sequence, std::memory_order_release);
@@ -8040,9 +8017,12 @@ class NativePortGraphicsDevice::Impl final {
                     .mesh);
             return false;
         case NativePortGraphicsCommandKind::BeginFrame:
+            consumer_drawn_frame_open_ = false;
             backend.begin_frame(
                 std::get<NativePortGraphicsBeginFrameView>(command.payload)
                     .config);
+            consumer_frame_start_draw_calls_ = backend.snapshot().draw_calls;
+            consumer_drawn_frame_open_ = true;
             return false;
         case NativePortGraphicsCommandKind::Draw:
             draw_backend(
@@ -8052,9 +8032,15 @@ class NativePortGraphicsDevice::Impl final {
         case NativePortGraphicsCommandKind::FlushType2:
             backend.flush_type2_translucency();
             return false;
-        case NativePortGraphicsCommandKind::Present:
+        case NativePortGraphicsCommandKind::Present: {
+            const bool frame_open = consumer_drawn_frame_open_;
+            consumer_drawn_frame_open_ = false;
             backend.present();
+            if (frame_open &&
+                backend.snapshot().draw_calls > consumer_frame_start_draw_calls_)
+                saturating_add_value(consumer_completed_drawn_frames_, 1u);
             return false;
+        }
         case NativePortGraphicsCommandKind::RepeatPresent: {
             const auto before = backend.snapshot().presented_frames;
             backend.repeat_present();
@@ -8067,7 +8053,11 @@ class NativePortGraphicsDevice::Impl final {
         case NativePortGraphicsCommandKind::PresentImage: {
             const auto& view =
                 std::get<NativePortGraphicsPresentImageView>(command.payload);
+            consumer_drawn_frame_open_ = false;
+            const auto before = backend.snapshot().draw_calls;
             backend.present_image(view.image, view.viewport, view.fit);
+            if (backend.snapshot().draw_calls > before)
+                saturating_add_value(consumer_completed_drawn_frames_, 1u);
             return false;
         }
         case NativePortGraphicsCommandKind::Shutdown:
@@ -8157,6 +8147,10 @@ class NativePortGraphicsDevice::Impl final {
         NativePortLifecycleState::Running;
     std::atomic<std::uint64_t> published_presented_frames_{0u};
     std::atomic<std::uint64_t> published_repeated_presentations_{0u};
+    std::atomic<std::uint64_t> published_completed_drawn_frames_{0u};
+    std::uint64_t consumer_completed_drawn_frames_ = 0u;
+    std::uint64_t consumer_frame_start_draw_calls_ = 0u;
+    bool consumer_drawn_frame_open_ = false;
     std::uint64_t consumer_repeated_presentations_ = 0u;
     std::atomic<std::uint64_t> recorded_commands_{0u};
     std::atomic<std::uint64_t> consumed_commands_{0u};
@@ -8315,6 +8309,11 @@ NativePortGraphicsSnapshot NativePortGraphicsDevice::snapshot() const {
 std::uint64_t
 NativePortGraphicsDevice::presented_frames_nonblocking() const noexcept {
     return impl_->presented_frames_nonblocking();
+}
+
+std::uint64_t
+NativePortGraphicsDevice::completed_drawn_frames_nonblocking() const noexcept {
+    return impl_->completed_drawn_frames_nonblocking();
 }
 
 std::uint64_t
@@ -8730,6 +8729,7 @@ struct DrawVertexOutput {
     noperspective float4 pvr_screen_secondary_color : TEXCOORD5;
     noperspective float pvr_screen_fog_coordinate : TEXCOORD6;
     float homogeneous_clip_w : TEXCOORD7;
+    nointerpolation float flat_fog_coordinate : TEXCOORD8;
 };
 
 DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
@@ -8754,6 +8754,7 @@ DrawVertexOutput draw_vertex_main(DrawVertexInput input) {
     output.color = input.color;
     output.secondary_color = input.secondary_color;
     output.fog_coordinate = input.fog_coordinate;
+    output.flat_fog_coordinate = input.fog_coordinate;
     // Pixel-stage SV_Position.w is not a portable source for the original
     // clip-space W.  Screen-space geometry therefore keeps its explicit
     // reciprocal coordinate; homogeneous geometry carries clip W separately
@@ -8908,7 +8909,8 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
 
     float fog_amount = 0.0;
     if (pipeline_flags.z == 1u) {
-        fog_amount = saturate(interpolated_fog_coordinate);
+        fog_amount = saturate((flags & 0x400000u) != 0u
+            ? input.flat_fog_coordinate : interpolated_fog_coordinate);
     } else if (pipeline_flags.z == 2u) {
         fog_amount = saturate(
             (interpolated_fog_coordinate - fog_parameters.x) /
@@ -9052,6 +9054,7 @@ struct DrawVertexOutput {
     noperspective float4 pvr_screen_secondary_color : TEXCOORD5;
     noperspective float pvr_screen_fog_coordinate : TEXCOORD6;
     float homogeneous_clip_w : TEXCOORD7;
+    nointerpolation float flat_fog_coordinate : TEXCOORD8;
 };
 
 struct DrawPixelOutput {
@@ -9210,7 +9213,8 @@ DrawPixelOutput draw_type_two_capture_main(
 
     float fog_amount = 0.0;
     if (pipeline_flags.z == 1u) {
-        fog_amount = saturate(interpolated_fog_coordinate);
+        fog_amount = saturate((flags & 0x400000u) != 0u
+            ? input.flat_fog_coordinate : interpolated_fog_coordinate);
     } else if (pipeline_flags.z == 2u) {
         fog_amount = saturate(
             (interpolated_fog_coordinate - fog_parameters.x) /
@@ -9299,6 +9303,7 @@ cbuffer TypeTwoResolveConstants : register(b2) {
 Texture2D type_two_base_texture : register(t1);
 Texture2D<uint> type_two_head_texture : register(t2);
 Texture2D<uint> type_two_count_texture : register(t4);
+StructuredBuffer<uint> type_two_status : register(t5);
 
 struct TypeTwoFragment {
     uint color;
@@ -9376,6 +9381,13 @@ float4 type_two_blend(TypeTwoFragment fragment, float4 destination) {
 }
 
 float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
+    // The allocator counts attempted nodes, including overflow. Only nodes
+    // below the same configured arena bound can have been published. Keep
+    // both linked-list checks below; no CPU synchronization is needed.
+    const uint live_count = min(type_two_status[0], type_two_parameters.w);
+    // Previously the CPU omitted resolve for an empty gather. Discard keeps
+    // the render target byte-for-byte untouched for that same empty case.
+    if (live_count == 0u) discard;
     const uint2 pixel = uint2(input.position.xy);
     const float4 base = type_two_base_texture.Load(int3(pixel, 0));
     float4 result = base;
@@ -9388,7 +9400,7 @@ float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
     [loop]
     while (retained_pixel_count < min(pixel_count, type_two_parameters.x) &&
            retained_node != 0xFFFFFFFFu) {
-        if (retained_node >= type_two_parameters.y ||
+        if (retained_node >= live_count ||
             retained_node >= type_two_parameters.w) return base;
         retained_node = type_two_fragments[retained_node].next;
         ++retained_pixel_count;
@@ -9410,7 +9422,7 @@ float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
         for (uint steps = 0u;
              steps < type_two_parameters.x && node != 0xFFFFFFFFu;
              ++steps) {
-            if (node >= type_two_parameters.y ||
+            if (node >= live_count ||
                 node >= type_two_parameters.w) return
                 base;
             const TypeTwoFragment candidate = type_two_fragments[node];

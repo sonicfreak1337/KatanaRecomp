@@ -74,6 +74,12 @@ inline constexpr std::uint64_t
     maximum_prepared_latent_aot_function_identity_bytes =
         64ull * 1024ull * 1024ull;
 
+// Source-shape schema for identity-bound references to already compiled
+// loaded-AOT blocks. This is separate from the public AOT ABI: it invalidates
+// analysis artifacts when ingress publication changes without claiming that
+// a runtime symbol or binary layout changed.
+inline constexpr std::uint32_t latent_aot_referenced_block_entry_schema = 2u;
+
 // Coverage-only entries are compile authority, never reachability evidence.
 // They are admitted only by the NativeBringup exporter and remain separate
 // from NativeBringupEvidenceStage so neither a successful preflight nor a
@@ -373,6 +379,12 @@ struct LatentAotModuleAuditResult {
     bool admitted = false;
     std::string rejection{"none"};
     std::string rejection_detail{"none"};
+    // Cold single-module audit visibility for the generic referenced-block
+    // lane. Other independently proven entry families may overlap these
+    // offsets; keeping the subset explicit lets diagnostics verify that no
+    // evidence budget silently drops the complete exact set. Keep this last
+    // so existing diagnostic fields retain their layout within source builds.
+    std::vector<std::uint32_t> referenced_block_entry_offsets;
 };
 
 [[nodiscard]] LatentAotModuleAuditResult audit_latent_aot_module(

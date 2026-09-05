@@ -3644,8 +3644,14 @@ class NativePortSoundBankEngine::Core final {
             }
             const auto length = static_cast<std::uint64_t>(
                 split.loop_end - split.loop_start);
-            position = split.loop_start + (position - split.loop_start) % length;
-            voice.phase = static_cast<double>(position);
+            const auto whole = std::floor(voice.phase);
+            const auto fraction = voice.phase - whole;
+            position = split.loop_start +
+                       (position - split.loop_start) % length;
+            // Preserve the sub-sample accumulator across the authored loop.
+            // Resetting to an integer phase-modulates short, bright SFX on
+            // every wrap even though their pitch step remains unchanged.
+            voice.phase = static_cast<double>(position) + fraction;
         }
         const auto next_position =
             position + 1u < split.loop_end

@@ -18,10 +18,14 @@ von Zieladressen.
 Der aktuelle Portstand ist M3: Intro, Menues und Character Select sind
 erreichbar, und eine idle-getriggerte Gameplay-Demo laeuft teilweise.
 Spielersteuerbares Gameplay und Sonics Story-Intro sind noch nicht erreichbar.
-Damit ist die primaere Engstelle statische Spielabdeckung: Funktionen,
-Callbacks, Overlays, Story-/Eventpfade, Providervertraege und ihre
-Reachability. Runtime-Performance und Grafiktreue sind nachgeordnet, solange
-sie nicht denselben Bring-up-Pfad beschleunigen beziehungsweise blockieren.
+Damit sind statische Spielabdeckung und der reale End-to-End-Produktpfad
+gemeinsame P0-Arbeit: Funktionen, Callbacks, Overlays, Story-/Eventpfade,
+Providervertraege und Reachability ebenso wie vollstaendiger Export mit
+echten Kaltpfaden, tatsaechliche Spielperformance und kosteneffiziente
+Umsetzung. Kosten werden durch begrenzte Arbeit und Wiederverwendung
+vorhandener Evidence gespart, nie durch ausgelassene Semantik- oder
+Progresspruefung. Grafiktreue bleibt nachgeordnet, solange sie Fortschritt,
+Diagnose oder denselben Bring-up-Pfad nicht blockiert.
 
 ## Artefaktgrenze
 
@@ -65,7 +69,24 @@ verwenden. Erst der Beginn des Exports schliesst den Batch. Spaeter
 eintreffende Arbeit gehoert in den naechsten normalen Batch; davor gibt es
 keinen zeremoniellen Freeze und keinen kuenstlichen Arbeitsstopp.
 
+Die aktuelle stehende Nutzerfreigabe deckt alle fuer den voll funktionsfaehigen
+leistungsstarken Sonic-Port notwendigen begrenzten Analyse- und
+Gesamtexportlaeufe ab, auch wenn ihre echte Laufzeit 20 Minuten ueberschreitet;
+eine erneute Zeitausnahme ist nicht erforderlich. Echte Fortschritts- und
+Stallkontrolle, genau ein Produkt pro kompatiblem Batch, produktgegatete lokale
+Commits, kein Push und keine Emulation bleiben verbindlich.
+
 ## Deterministisches Authoring-Artefakt
+
+Mit separat gebundener Complete-Disassembly-Coverage ist das
+Authoring-/Allowlist-Artefakt optional. Der Coverage-v7-Pfad prueft den
+aktuellen exakten vorkompilierten Entry, Codebytes, eindeutigen aktiven Owner,
+Generation, Transferart und Fortsetzung unabhaengig von optionalen
+Source-/Entry-/Target-Diagnosezeilen. Deren Fehlen, Reihenfolge oder veralteter
+Inhalt darf gueltige Ausfuehrung nicht sperren. Ohne Coverage bleibt die
+explizite Allowlist Pflicht. Gelieferte Authoring-Artefakte werden weiter
+vollstaendig validiert; unvollstaendige Pointer-/Identitaetsbindungen sind
+ungueltig. Diese Alternative aendert keinen Strict-Proof.
 
 Die private Allowlist wird nicht aus einem Runtime-Log gelernt. Ein
 versioniertes JSONL-Authoring-Dokument enthaelt genau einen Header und danach
@@ -158,22 +179,34 @@ nicht allein deshalb gestartet, weil eine bereits vollstaendig bekannte
 Ausfuehrung nur in Runtime, Adapter, Grafik, Audio, Movie, Eingabe, Save,
 Dateisystem, Hosttiming oder Diagnostik geaendert wurde.
 
-Jede tatsaechlich gestartete und erfolgreich publizierte grosse Analyse endet
-mit einem verpflichtenden read-only Frontier-Gate: Der Orchestrator erzeugt
-aus der neuen World einen deterministischen `next-analysis-task`-Pool. Die
-Positionen werden nach Owner, Provider, Frontierart und betroffenen Dateien
-geclustert und in exklusive Pakete von hoechstens sechs Positionen auf die
-bestehenden Egg-Fleet-Tasks verteilt. Dieselbe Ownerfamilie bleibt moeglichst
-beim selben Task; nicht zusammenhaengende Poolpositionen sind erlaubt, ihre
-Authority und Frontier-IDs bleiben aber explizit und verlustfrei. Die Fleet
-vergleicht die neue Authority mit ihrem letzten Handoff und meldet Proof-,
-Scope-, Kollisions- und Multi-Close-Befunde zurueck. Replay-Sammlung und
-Produktvorbereitung duerfen parallel laufen. Die Pool-Delegation blockiert
-den Produktbuild nicht bis zum letzten Handoff; relevante A-Fixes, die vor
-Exportbeginn eintreffen, werden aufgenommen, spaetere im naechsten Batch.
-Das Gate ersetzt weder den ersten Replay-
-Stop als konkreten Implementierungsauftrag noch erlaubt es Runtime-Evidence
-als statische Closure.
+Nach jeder tatsaechlich gestarteten und erfolgreich publizierten grossen
+Analyse entscheidet Eggman als technischer Leiter allein ueber Architektur,
+Approach, Inventur, Priorisierung, Delegation, Modellwahl und Abnahme. Aus der
+neuen World darf ein deterministischer `next-analysis-task`-Pool erzeugt
+werden; seine Groesse folgt dem konkreten Bedarf statt einer festen
+Flottenzahl. Authority und Frontier-IDs bleiben bei jeder Delegation explizit
+und verlustfrei. Nur konkrete relevante, disjunkte Pakete gehen an die
+bestehenden Cubot-, Orbot- oder Grounder-Tasks; sie liefern Befunde oder
+setzen den abgegrenzten Scope um. Sage uebernimmt unabhaengige Gegenpruefung
+und Integration, aber keine eigene Architektur-, Feature- oder
+Performance-Roadmap. Unbenutzte Tasks erhalten keinen kuenstlichen Auftrag,
+und neue Tasks entstehen nur auf ausdrueckliche Nutzeranweisung.
+Modell und Reasoning folgen der Schwierigkeit des begrenzten Pakets.
+Vorhandener Kontext und vorhandene Evidence werden wiederverwendet; doppelte
+Vollreviews, doppelte Testlaeufe und unbegrenzte Recherche ohne konkrete
+Entscheidungswirkung entfallen. Handoffs bleiben kompakt und benennen Beweis,
+Diff- oder Dateiscope, ausgefuehrte Checks und Restunsicherheit.
+Nur fuer konkrete, begrenzte und disjunkte Arbeit benoetigte Tasks werden
+aktiviert. Zusaetzliche Parallelitaet ist nur zulaessig, wenn sie den
+kritischen Pfad voraussichtlich verkuerzt. Pflichtauslastung, Fuellauftraege,
+staendige Statusrunden und fest auszuschoepfende Team- oder Modellkontingente
+gibt es nicht. Nach einem Handoff bleibt ein Task ohne Anschlussauftrag idle.
+Replay-Sammlung und Produktvorbereitung duerfen parallel laufen. Weder
+ungenutzte Tasks noch ausstehende irrelevante Handoffs blockieren
+Implementierung oder Produktbuild. Relevante A-Fixes, die vor Exportbeginn
+eintreffen, werden aufgenommen, spaetere im naechsten Batch. Die Inventur
+ersetzt weder den ersten Replay-Stop als konkreten Implementierungsauftrag
+noch erlaubt sie Runtime-Evidence als statische Closure.
 
 Der Fleet-Handoff ist maschinenlesbar und bindet World-/Pack-SHA, Task-IDs,
 Root-Cause-Key, betroffene Dateien, Collision-Key, Replay-Reachability,
@@ -226,8 +259,9 @@ Analyzer-Frontier.
 
 ### Replays als Knowledge-Gap-Probes
 
-Jeder der sechs Replays laeuft mit demselben Binary bis zum ersten Stop und
-liefert genau eine Primaerklasse:
+Jeder aktive Replay- oder Debugmatrixfall laeuft mit demselben Binary bis zum
+ersten Stop beziehungsweise bis zum vereinbarten Laufende und liefert genau
+eine Primaerklasse:
 
 | Klasse | Erste fehlende Kenntnis | Folgearbeit |
 | --- | --- | --- |
@@ -237,7 +271,29 @@ liefert genau eine Primaerklasse:
 | K4 | falsche Register-, PR-, Memory-, Delay-Slot-, Carry- oder Sign-Semantik | Decoder/IR/Codegen/Runtime |
 | K5 | reine Grafik-, Audio-, Movie-, Input- oder Pacingabweichung | kleine Hostschleife |
 
-Nach der Matrix werden nicht sechs Einzelbugs implementiert. Replay- und
+Nach dem naechsten funktionierenden Sonic-NativeBringup-Build werden alle 32
+aktuell gueltigen Level-/Charakter-Kombinationen des vollstaendigen
+Debugkatalogs mit genau dieser einen EXE einmal geprueft. Sobald ein Level
+geladen ist, erhaelt es echte Gameplay-Eingaben; jeder Szenariolauf endet
+spaetestens nach 60 Sekunden, weil aktive Gameplaypfade frueh crashen koennen.
+Die Vollmatrix laeuft strikt sequenziell, unsichtbar und stumm, ohne Screenshot-
+oder Audio-Capture und mit Grafikdiagnostik `Off`. Sie subsumiert die sechs
+repraesentativen Pflichtreplays; eine zusaetzliche doppelte 6-plus-Vollmatrix-
+Ausfuehrung ist unzulaessig. Alle Crashs und Typed Stops werden zuerst
+gemeinsam gesammelt. Bestandene Kombinationen werden mit Build-ID und
+Meilensteinen im Erfolgsprotokoll festgehalten, aus der aktiven Crashmatrix
+entfernt und ohne relevante Regressionsevidence nicht erneut erzwungen.
+Jeder Level-Run sammelt mit der bereits vorhandenen guenstigen Telemetrie,
+soweit verfuegbar, Simulation-FPS, Presentation-FPS und Framezeiten; Ladezeit
+wird getrennt berichtet. Partielle Werte bis zu Crash oder Typed Stop bleiben
+erhalten. Nur kompatible Szenen, Meilensteine und Messbedingungen werden
+verglichen. Fehlende Werte bleiben explizit offen; Gewinne werden weder
+geschaetzt noch aus inkompatiblen Laeufen abgeleitet. Eggman waehlt aus diesen
+Daten die naechste begrenzte Optimierung, die das Team als konkretes Paket
+umsetzt. Die Matrixmessung gehoert zum normalen Gurt derselben EXE und erzeugt
+weder einen zweiten Produktbuild noch eine reine Zusatzmessrunde.
+
+Nach der Matrix werden keine Einzelbugs pro Fall implementiert. Replay- und
 Fleetbefunde werden nach gemeinsamer Callback-, Overlay-, AOT-, Provider-
 oder Semantikursache geclustert; ein Cluster kann mehrere Stops und Frontiers
 schliessen. Der erste Stop bleibt autoritativ.
@@ -252,8 +308,8 @@ Jeder Analysezyklus darf genau eine kleine, isoliert reviewbare und
 ausgefuehrte Produktruntime-Performanceverbesserung im ohnehin bearbeiteten
 Knowledge-Gap-Pfad mitnehmen. Reine Instrumentierung sowie Analyzer-, Export-,
 Graph-, Cache-, Ninja- oder Buildsystemarbeit erfuellt diese Begleitpflicht
-nicht. Der Fix wird mit dem normalen Batch gebaut, mit denselben sechs Replays
-gemessen und nur angenommen, wenn kein Replay regressiert. Es gibt weder
+nicht. Der Fix wird mit dem normalen Batch gebaut, mit der jeweils aktiven
+Replay-/Debugmatrix gemessen und nur angenommen, wenn kein Fall regressiert. Es gibt weder
 Zusatzbuild noch reine Messrunde; der Bring-up-Fix bleibt autoritativ.
 
 Grafikarbeit kommt vor M4-M8 nur in den Batch, wenn sie mehrere Szenen
@@ -262,10 +318,11 @@ Fortschritt beziehungsweise seine Diagnose verdeckt oder dieselbe
 Performancearbeit mit Multi-Close erfuellt. Ein einzelner kosmetischer Fehler
 ist nachrangig.
 
-Crashsammlung nutzt hoechstens zwei parallele Produktprozesse. Frametiming-
-und Performancewerte stammen ausschliesslich aus nicht konkurrierenden
-Laeufen mit Grafikdiagnostik `Off`; Breadcrumbs werden nur fuer den ersten
-relevanten Grafikpfad aktiviert.
+Normale gezielte Crashsammlung nutzt hoechstens zwei parallele Produktprozesse;
+die vollstaendige Level-/Charakter-Debugmatrix laeuft dagegen immer
+sequenziell. Frametiming- und Performancewerte stammen ausschliesslich aus
+nicht konkurrierenden Laeufen mit Grafikdiagnostik `Off`; Breadcrumbs werden
+nur fuer den ersten relevanten Grafikpfad aktiviert.
 
 Jeder Start eines unvollstaendigen Bring-up-Produkts bewaffnet im
 `game.exe` selbst genau eine persistente Crashsession unter `user-data`.
@@ -288,7 +345,8 @@ Geometrie, Texturebinding oder Stateobjekte persistent beziehungsweise
 indexiert machen. Eine davon unabhaengige Performance-Roadmap ist kein
 Zyklusinhalt.
 
-Replays sind stille, unsichtbare, native Produktlaeufe. Redundante Szenarien,
+Replays sind stille, unsichtbare, native Produktlaeufe ohne Screenshot- oder
+Audio-Capture. Redundante Szenarien,
 die denselben frueheren Checkpoint langsamer erreichen, gehoeren nicht in den
 Standardgurt. Die Suite misst mindestens:
 
@@ -424,7 +482,9 @@ Export bleibt fail-closed.
 Ein Bring-up-Dispatch darf nur dann ausfuehren, wenn alle folgenden
 Bedingungen vor der ersten Zustandsaenderung gelten:
 
-1. Ziel und Site sind fuer genau diesen AOT-Pack in der Bring-up-Allowlist.
+1. Ziel und Site sind fuer genau diesen AOT-Pack in der Bring-up-Allowlist,
+   oder der separat gebundene Coverage-v7-Resolver bestaetigt sie gegen die
+   aktuelle vorkompilierte Welt ohne zusaetzliches Metadatenveto.
 2. Das Ziel ist ein exakter Blockanfang in der versiegelten Blocktabelle.
 3. In v1 gehoeren Source und Target zum residenten `primary`-Image; seine
    Bootidentitaet, Packgeneration und Codeidentitaeten stimmen.
@@ -611,7 +671,48 @@ implementiert nur address-agnostische Vertraege, Validierung und Formate.
 Fortschritt wird primaer gemessen als weitester Storycheckpoint, weitester
 steuerbarer Gameplaycheckpoint, Zahl der Replays jenseits ihres vorherigen
 Stops, geschlossene gemeinsame Root Causes und verbleibende K1/K2/K3-Blocker.
-Task-, Commit-, Closure- und Grafikbugzahlen sind nur Sekundaermetriken.
+Der monoton erhaltene Spiel-, Story- und Savefortschritt darf durch den Umbau
+nicht verloren gehen. Vollstaendige Exportzeit einschliesslich echter
+Kaltpfade und tatsaechliche Spielperformance sind ebenfalls P0; Kalt-, Warm-
+und inkrementelle Werte werden getrennt ausgewiesen und Gewinne nur aus realen
+Messungen berichtet. Im 144-Hz-Modus ist nachhaltige tatsaechliche Bildausgabe
+von mindestens 144 FPS bei einem Budget von 6,94 ms pro Bild das verbindliche
+P0-Ziel. Spieltempo, Audio und Input bleiben semantisch korrekt; der
+Gast-Spielzeittakt wird dafuer nicht naiv beschleunigt. Simulation,
+Presentation und tatsaechlich gezeichnete Bilder werden getrennt gemessen,
+wiederholte Presentations separat ausgewiesen. Kosteneffiziente Umsetzung ist
+gleichrangiges P0:
+begrenzte disjunkte Pakete, Modell und Reasoning nach Schwierigkeit,
+Wiederverwendung vorhandener Evidence und keine doppelten Vollreviews oder
+Testlaeufe. Notwendige Semantik-, Progress- und Performancepruefung wird nicht
+weggespart. Task-, Commit-, Closure- und Grafikbugzahlen sind nur
+Sekundaermetriken. Eggman baut nach jedem sinnvollen, quellseitig geprueften
+und gezielt verifizierten kompatiblen Fortschrittsbatch genau ein
+NativeBringup-Produkt fuer regelmaessiges echtes Sonic-Feedback. Offene
+unbelegte oder grosse Befunde gehen in den naechsten begrenzten Zyklus, statt
+den fertigen Batch endlos aufzuhalten. Dasselbe Binary dient allen Regression-,
+Progress- und Performanceproben des Batches; reine Hostaenderungen verwenden
+den unveraendert gueltigen World-/AOT-Pack. Daraus entsteht weder ein
+zeitgesteuerter automatischer Export noch ein zusaetzlicher Strictbuild.
+Nach einem funktionierenden Sonic-NativeBringup-Produktbuild und bestandenen
+relevanten Produkt-/Replaypruefungen ohne Rueckschritt gegen die vorhandene
+Progress-Evidence committet Eggman den geprueften zusammengehoerigen
+Source-Batch. Reiner Compile-, Unit- oder Komponententesterfolg loest keinen
+Commit aus. Diese stehende Nutzerfreigabe genuegt fuer genau den
+produktgegateten Commit; Worker uebergeben weiterhin nur Dirty-Diffs und
+committen nicht selbst. Private Retailbytes, Saves, Buildartefakte sowie fremde
+oder sachfremde Aenderungen bleiben aus dem Commit ausgeschlossen. Ein Push
+erfolgt weiterhin nur nach einer aktuellen ausdruecklichen Nutzerfreigabe und
+niemals automatisch.
+Das Commit-Gate verlangt ein funktionierendes Produkt ohne Rueckschritt gegen
+die vorhandene Progress-Evidence, nicht dass bereits jede offene
+Level-/Charakter-Kombination spielbar sein muss. Bekannte unveraenderte Typed
+Stops werden im Matrixprotokoll ehrlich ausgewiesen und sind keine erfundene
+neue Regression.
+Progress-/Saveerhalt, vollstaendige Exportzeit, nachhaltige tatsaechliche
+Bildausgabe von mindestens 144 FPS im 144-Hz-Modus bei korrektem Spieltempo,
+Audio und Input sowie Kosteneffizienz bleiben bei der datenbasierten Auswahl
+der naechsten Optimierung gleichrangige P0-Ziele.
 
 | ID | Produktmeilenstein |
 | --- | --- |

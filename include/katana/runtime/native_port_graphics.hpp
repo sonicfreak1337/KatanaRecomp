@@ -994,6 +994,13 @@ class NativePortGraphicsDevice final {
 
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() const;
 
+    // Renderer-command completion of successful new frames that issued draws,
+    // including offscreen/occluded completion. Not GPU-fence retirement or
+    // visible display; excludes repeats, empty frames and aborted frames.
+    // Nonblocking acquire of the last published consumer count.
+    [[nodiscard]] std::uint64_t
+    completed_drawn_frames_nonblocking() const noexcept;
+
   private:
     friend class NativePortDesktopHost;
     void configure_runtime_options(

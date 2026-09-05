@@ -336,6 +336,7 @@ using NativePortDevelopmentStateHandler = NativePortDevelopmentStateResult (*)(
 using NativePortDevelopmentStateMemoryRestore = bool (*)(
     NativePortContext& context,
     std::span<const std::uint8_t> main_memory) noexcept;
+using NativePortTitleStateCleanup = void (*)(NativePortContext&) noexcept;
 
 // Native host time and frame presentation are explicit title boundaries.
 // They are intentionally unrelated to Dreamcast CPU MHz, ASIC interrupts or
@@ -481,6 +482,9 @@ class NativePortContext final {
     // calls this only after retiring every dynamic executable mapping.
     NativePortDevelopmentStateMemoryRestore
         development_state_restore_main_memory = nullptr;
+    // Append-only title-host lifetime bridge. Generated product code consumes
+    // this exactly once while Context, host services and telemetry still live.
+    NativePortTitleStateCleanup title_state_cleanup = nullptr;
 };
 
 enum class NativePortContractFailure : std::uint8_t {

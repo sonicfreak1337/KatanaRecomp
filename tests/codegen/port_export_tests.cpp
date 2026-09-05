@@ -1744,15 +1744,29 @@ int run_test(const int argc, char* argv[]) {
                 std::string::npos &&
             explicit_static_dispatch_shards.find(
                 "entries.push_back({0x89000000u, "
-                "&fn_89000000_runtime_entry, false})") !=
+                "&fn_89000000_runtime_entry, false, false})") !=
                 std::string::npos &&
             explicit_static_dispatch_shards.find(
                 "entries.push_back({0x8C010006u, "
-                "&fn_8C010000_runtime_entry, true})") !=
+                "&fn_8C010000_runtime_entry, true, true})") !=
                 std::string::npos,
         "Expliziter identity-bound StaticEntry wird nicht materialisiert "
         "oder Hook-/RuntimeImage- und statischer Chain-Root werden nicht "
         "getrennt klassifiziert.");
+    require(
+        explicit_static_dispatch_shards.find(
+            "entries.push_back({0x8C010000u, "
+            "&fn_8C010000_runtime_entry, false, true})") != std::string::npos &&
+            explicit_static_sources.at("include/native-port-dispatch-internal.hpp")
+                    .find("bool primary_static = false;") != std::string::npos &&
+            explicit_static_sources.at("code/native-port-dispatch.cpp")
+                    .find("entry->primary_static == primary_static;") !=
+                std::string::npos &&
+            explicit_static_sources.at("code/native-port-dispatch.cpp")
+                    .find("entry->static_chainable == primary_static;") ==
+                std::string::npos,
+        "Primary Instruction-Hook verliert Original-Owner oder wird chainable; "
+        "RuntimeImage muss getrennt fail-closed bleiben.");
 
     auto proven_unknown_image = stored_unknown_image;
     proven_unknown_image.add_entry_point(stored_unknown_candidate);
@@ -2394,7 +2408,7 @@ int run_test(const int argc, char* argv[]) {
                     std::string::npos &&
                 latent_dispatch_shard.find(
                     "entries.push_back({0x80000000u, "
-                    "&fn_80000000_runtime_entry, false})") !=
+                    "&fn_80000000_runtime_entry, false, false})") !=
                     std::string::npos &&
                 latent_dispatch_shard.find(
                     "entries.push_back({0x88000000u") == std::string::npos &&
@@ -2404,12 +2418,12 @@ int run_test(const int argc, char* argv[]) {
     require(latent_dispatch.find("native_loaded_aot_module_views()") !=
                     std::string::npos &&
                 latent_dispatch.find(
-                    "class NativeLoadedAotSourceIndex final") !=
+                    "class NativeLoadedAotSourceIndex final") ==
                     std::string::npos &&
                 latent_dispatch.find(
-                    "std::vector<std::uint16_t> slots_") != std::string::npos &&
+                    "std::vector<std::uint16_t> slots_") == std::string::npos &&
                 latent_dispatch.find(
-                    "native_loaded_aot_source_index().contains(address)") !=
+                    "native_loaded_aot_source_index().contains(address)") ==
                     std::string::npos &&
                 latent_dispatch.find("source->read(") == std::string::npos &&
                 latent_dispatch.find("sha256_bytes(") == std::string::npos &&
@@ -2427,7 +2441,8 @@ int run_test(const int argc, char* argv[]) {
                 latent_dispatch.find("ENGINE_COPY.BIN") == std::string::npos &&
                 latent_dispatch.find("UNHINTED.BIN") == std::string::npos &&
                 latent_dispatch.find(latent_disc_directory.string()) == std::string::npos,
-            "Nativer Loaded-AOT-Dispatcher verlor Index, Contentbindung oder "
+            "Nativer Loaded-AOT-Dispatcher behielt den toten Source-Index, "
+            "verlor Contentbindung oder "
             "Quellpfadisolation.");
     require(latent_main.find("start_byte_transfer(") == std::string::npos &&
                 latent_main.find("0x00005400u") == std::string::npos,
@@ -2564,7 +2579,7 @@ int run_test(const int argc, char* argv[]) {
         katana::runtime::NativePortHookBinding{
             katana::platform::dreamcast_disc_boot_address,
             4u,
-            katana::runtime::NativePortHookKind::Instruction,
+            katana::runtime::NativePortHookKind::FunctionEntry,
             katana::runtime::NativePortHookRequirement::Required,
             katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal,
             "coverage_acceptance_hook",
@@ -2753,14 +2768,130 @@ int run_test(const int argc, char* argv[]) {
         },
         "StrictProduct akzeptiert Complete-Disassembly-Coverage.");
 
+    // An absent optional proof artifact cannot veto the separately bound
+    // coverage resolver. Partial authoring bindings and a missing resolver
+    // remain invalid; supplied authoring is exercised below unchanged.
+    auto no_authoring_options = coverage_options;
+    no_authoring_options.native_bringup_authoring = nullptr;
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                coverage_gdi_path,
+                fixture.root / "coverage-orphan-authoring-identity",
+                no_authoring_options));
+        },
+        "Coverage akzeptiert eine verwaiste Authoring-Identitaet.");
+    no_authoring_options.native_bringup_artifact_identity.clear();
+    auto no_resolver_options = no_authoring_options;
+    no_resolver_options.native_bringup_coverage_authority = nullptr;
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                coverage_gdi_path,
+                fixture.root / "bringup-without-bound-resolver",
+                no_resolver_options));
+        },
+        "NativeBringup akzeptiert weder Authoring noch Coverage.");
+    auto unbound_authoring_options = coverage_options;
+    unbound_authoring_options.native_bringup_artifact_identity.clear();
+    require_failure<std::invalid_argument>(
+        [&] {
+            static_cast<void>(export_dreamcast_port_project(
+                coverage_gdi_path,
+                fixture.root / "coverage-unbound-authoring",
+                unbound_authoring_options));
+        },
+        "Coverage akzeptiert gelieferte Authoringdaten ohne Identitaet.");
+    const auto no_authoring_output =
+        fixture.root / "coverage-without-authoring";
+    static_cast<void>(export_dreamcast_port_project(
+        coverage_gdi_path, no_authoring_output, no_authoring_options));
+    const auto no_authoring_generated =
+        snapshot(no_authoring_output / "generated");
+    const auto& no_authoring_dispatch =
+        no_authoring_generated.at("code/native-port-dispatch.cpp");
+    require(
+        no_authoring_dispatch.find(
+            "native_bringup_coverage_dispatch_pack") != std::string::npos &&
+            no_authoring_dispatch.find(
+                "preflight_native_bringup_coverage_dispatch") !=
+                std::string::npos,
+        "Ohne optionales Authoring ging der gebundene Coverage-Resolver "
+        "verloren.");
+
     const auto coverage_output = fixture.root / "coverage-aot-port";
     static_cast<void>(export_dreamcast_port_project(
         coverage_gdi_path, coverage_output, coverage_options));
     const auto coverage_generated = snapshot(coverage_output / "generated");
+    // Runtime-destination admission is a set predicate. Repeating an exact
+    // source-bound hint must neither create a second range owner nor perturb
+    // any emitted partition. This exercises the first-module binding and the
+    // range-index deduplication used before parallel partition generation.
+    std::vector<katana::codegen::LatentAotEntryHint>
+        duplicate_coverage_entry_hints(coverage_entry_hints.begin(),
+                                       coverage_entry_hints.end());
+    duplicate_coverage_entry_hints.push_back(coverage_entry_hints.front());
+    auto duplicate_coverage_options = coverage_options;
+    duplicate_coverage_options.latent_aot_entry_hints =
+        duplicate_coverage_entry_hints;
+    const auto duplicate_coverage_output =
+        fixture.root / "coverage-aot-port-duplicate-runtime-ranges";
+    static_cast<void>(export_dreamcast_port_project(
+        coverage_gdi_path, duplicate_coverage_output,
+        duplicate_coverage_options));
+    const auto duplicate_coverage_generated =
+        snapshot(duplicate_coverage_output / "generated");
+    const auto joined_coverage_partitions =
+        [](const std::map<std::string, std::string>& sources) {
+            std::string result;
+            for (const auto& [path, content] : sources)
+                if (path.starts_with("code/unit-") &&
+                    path.ends_with(".cpp"))
+                    result += content;
+            return result;
+        };
+    const auto normal_coverage_partitions =
+        joined_coverage_partitions(coverage_generated);
+    require(!normal_coverage_partitions.empty() &&
+                normal_coverage_partitions ==
+                    joined_coverage_partitions(duplicate_coverage_generated),
+            "Doppelte identitaetsgebundene Runtime-Hints veraendern "
+            "generierte oder leere AOT-Partitionen.");
     const auto& coverage_dispatch =
         coverage_generated.at("code/native-port-dispatch.cpp");
+    std::string coverage_dispatch_shards;
+    for (const auto& [path, content] : coverage_generated)
+        if (path.starts_with("code/native-port-dispatch-shard-"))
+            coverage_dispatch_shards += content;
+    require(
+        coverage_dispatch_shards.find(
+            "entries.push_back({0x8C010000u, "
+            "&fn_8C010000_runtime_entry, false, true})") != std::string::npos &&
+            coverage_dispatch.find("entry->primary_static == primary_static;") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "case HookAction::ContinueOriginal:\n"
+                "                    bypass_hook = target;") != std::string::npos &&
+            coverage_dispatch.find(
+                "active_loaded_aot_binder->validate_bound_entry(address)") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "if (!active_loaded_aot_binder->bind_entry(address))") !=
+                std::string::npos &&
+            coverage_dispatch_shards.find(
+                "entries.push_back({0x80000008u") == std::string::npos,
+        "Primary MayContinueOriginal-FunctionEntry verlor seinen Originalpfad "
+        "oder Loaded-AOT-/Replacement-Interior-Gates wurden aufgeweicht.");
     const auto coverage_metadata =
         coverage_generated.at("metadata/port-project.json");
+    const auto coverage_generated_contains =
+        [&coverage_generated](const std::string_view needle) {
+            return std::ranges::any_of(
+                coverage_generated, [&](const auto& generated_file) {
+                    return generated_file.second.find(needle) !=
+                           std::string::npos;
+                });
+        };
     const bool block_only_entry_was_published = std::ranges::any_of(
         coverage_generated, [](const auto& generated_file) {
             return generated_file.second.find(
@@ -2777,9 +2908,11 @@ int run_test(const int argc, char* argv[]) {
             });
     const auto proof_branch = coverage_dispatch.find("if (proof_target) {");
     const auto proof_return = coverage_dispatch.find(
-        "        return;\n    }", proof_branch);
+        "            return;\n        } catch", proof_branch);
+    const auto proof_fallback = coverage_dispatch.find(
+        "NativeBringupDispatchError&) {", proof_return);
     const auto coverage_preflight = coverage_dispatch.find(
-        "preflight_native_bringup_coverage_dispatch(", proof_return);
+        "preflight_native_bringup_coverage_dispatch(", proof_fallback);
     const auto static_table_begin = coverage_dispatch.find(
         "native_bringup_static_blocks{{");
     const auto static_table_end = coverage_dispatch.find(
@@ -2811,10 +2944,11 @@ int run_test(const int argc, char* argv[]) {
                 "         active_native_bringup_context->pack.allowlist)") ==
                 std::string::npos &&
             coverage_dispatch.find(
-                "NativeBringupCoverageTargetAuthority") !=
+                "constexpr std::array<katana::runtime::"
+                "NativeBringupCoverageTargetAuthority") ==
                 std::string::npos &&
             coverage_dispatch.find(
-                "NativeBringupCoverageTargetCapability>(6u)") !=
+                "NativeBringupCoverageTargetCapability>(6u)") ==
                 std::string::npos &&
             resident_block_only_entry_uses_exact_owner &&
             coverage_dispatch.find(
@@ -2827,18 +2961,28 @@ int run_test(const int argc, char* argv[]) {
                 "admission.generated_entry_required") !=
                 std::string::npos &&
             coverage_dispatch.find(
-                "(!admission.generated_entry_required &&") !=
+                "admission.owner_kind != katana::runtime::\n"
+                "                 NativeBringupCoverageOwnerKind::PrimaryStatic &&\n"
+                "             !admission.generated_entry_required &&") ==
                 std::string::npos &&
             coverage_dispatch.find(
                 "!selected_entry->static_chainable") ==
                 std::string::npos &&
             coverage_dispatch.find(
                 "native_loaded_aot_source_address(\n"
-                "                      admission.dispatch_source)") !=
+                "                      admission.dispatch_source)") ==
                 std::string::npos &&
-            coverage_dispatch.find("selected_entry->function !=") !=
+            coverage_dispatch.find(
+                "selected_entry->function !=\n"
+                "                 admission.execution.function") ==
                 std::string::npos &&
             coverage_dispatch.find("admission.execution.function") !=
+                std::string::npos &&
+            coverage_dispatch.find(
+                "admission.owner_kind == katana::runtime::\n"
+                "                 NativeBringupCoverageOwnerKind::PrimaryStatic &&\n"
+                "             runtime_dispatch_detail::\n"
+                "                  native_loaded_aot_source_address") ==
                 std::string::npos &&
             coverage_dispatch.find(
                 "NativeBringupCoverageOwnerKind::PrimaryStatic)\n"
@@ -2855,16 +2999,22 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch.find(
                 "runtime_dispatch_detail::find_exact_entry(source) !=") !=
                 std::string::npos,
-        "Coverage-Target-Authority verlor Block-vs-Callable-Capability oder "
-        "die direkte Primary-Static-/identity-bound movable "
+        "Der aktuelle exakte Owner-Resolver verlor die direkte "
+        "Primary-Static-/identity-bound movable "
         "Preflight-zu-Dispatch-Auswahl einschliesslich Exact-once-Verbrauch "
         "vor direkter AOT-Kettung.");
     require(
             coverage_dispatch.find(
-                "NativeBringupCoverageSourceTransfer, 1u") !=
+                "constexpr std::array<katana::runtime::"
+                "NativeBringupCoverageSourceTransfer") ==
                 std::string::npos &&
             coverage_dispatch.find(
-                "NativeBringupCoverageEntry, 2u") != std::string::npos &&
+                "constexpr std::array<katana::runtime::"
+                "NativeBringupCoverageEntry") == std::string::npos &&
+            coverage_dispatch.find(
+                "    {},\n"
+                "    {},\n"
+                "    {}};") != std::string::npos &&
             coverage_dispatch.find(
                 "active_native_context->runtime_images == nullptr") !=
                 std::string::npos &&
@@ -2877,13 +3027,11 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch.find(
                 "runtime_image_bindings,\n"
                 "            loaded_aot_binder") != std::string::npos &&
-            coverage_dispatch.find("0x8C01000Cu") != std::string::npos &&
-            coverage_dispatch.find("0x8C100000u") != std::string::npos &&
-            coverage_dispatch.find("0x8C200000u") != std::string::npos &&
-            coverage_dispatch.find(latent_block_identity) !=
-                std::string::npos &&
-            coverage_dispatch.find(refined_coverage_module_identity) !=
-                std::string::npos &&
+            coverage_generated_contains("0x8C01000Cu") &&
+            coverage_generated_contains("0x8C100000u") &&
+            coverage_generated_contains("0x8C200000u") &&
+            coverage_generated_contains(latent_block_identity) &&
+            coverage_generated_contains(refined_coverage_module_identity) &&
             coverage_dispatch.find(
                 "NativeBringupCoverageObservations\n"
                 "        native_bringup_coverage_observations") !=
@@ -2907,6 +3055,7 @@ int run_test(const int argc, char* argv[]) {
             !block_only_entry_was_published &&
             proof_branch != std::string::npos &&
             proof_return != std::string::npos &&
+            proof_fallback != std::string::npos &&
             coverage_preflight != std::string::npos &&
             coverage_dispatch.find(
                 "const auto coverage_target_hook =\n"
@@ -2918,7 +3067,8 @@ int run_test(const int argc, char* argv[]) {
             coverage_dispatch.find(
                 "TargetHook::ConflictingInstruction") !=
                 std::string::npos &&
-            proof_branch < proof_return && proof_return < coverage_preflight &&
+            proof_branch < proof_return && proof_return < proof_fallback &&
+            proof_fallback < coverage_preflight &&
             coverage_metadata.find(
                 "\"complete_disassembly_coverage_enabled\":true") !=
                 std::string::npos &&
@@ -5108,8 +5258,12 @@ int run_test(const int argc, char* argv[]) {
     const auto context_writer_binding = explicit_static_main.find(
         "context.telemetry_writer = native_performance_writer",
         context_telemetry_binding);
+    const auto terminal_runtime_telemetry_definition = explicit_static_main.find(
+        "const auto emit_terminal_runtime_telemetry = [&]() noexcept {",
+        graphics_host_construction);
     const auto terminal_performance_snapshot = explicit_static_main.find(
-        "emit_native_performance_snapshot();", context_writer_binding);
+        "emit_native_performance_snapshot();",
+        terminal_runtime_telemetry_definition);
     const auto provider_timer_guard = explicit_static_dispatch.find(
         "if (context.telemetry_writer != nullptr)\n"
         "                    provider_telemetry_timer.emplace(");
@@ -5141,6 +5295,7 @@ int run_test(const int argc, char* argv[]) {
             context_telemetry_host_binding != std::string::npos &&
             context_telemetry_binding != std::string::npos &&
             context_writer_binding != std::string::npos &&
+            terminal_runtime_telemetry_definition != std::string::npos &&
             terminal_performance_snapshot != std::string::npos &&
             provider_timer_guard != std::string::npos &&
             simulation_timer_guard != std::string::npos &&
@@ -5158,15 +5313,18 @@ int run_test(const int argc, char* argv[]) {
             frame_prefix_publications_metric < terminal_performance_json &&
             terminal_performance_json < graphics_telemetry_binding &&
             graphics_telemetry_binding < graphics_host_construction &&
-            graphics_host_construction < telemetry_host_storage &&
+            graphics_host_construction <
+                terminal_runtime_telemetry_definition &&
+            terminal_runtime_telemetry_definition <
+                terminal_performance_snapshot &&
+            terminal_performance_snapshot < telemetry_host_storage &&
             telemetry_host_storage < telemetry_binding_guard &&
             telemetry_binding_guard < simulation_writer_construction &&
             simulation_writer_construction < telemetry_host_construction &&
             telemetry_host_construction < context_direct_host_binding &&
             context_direct_host_binding < context_telemetry_host_binding &&
             context_telemetry_host_binding < context_telemetry_binding &&
-            context_telemetry_binding < context_writer_binding &&
-            context_writer_binding < terminal_performance_snapshot,
+            context_telemetry_binding < context_writer_binding,
         "Nativer Produktport verliert den exakten Performance-Opt-in, bindet "
         "ohne Opt-in einen Telemetrie-Hotpath oder verliert seine terminale "
         "Publikationsreihenfolge.");
@@ -5182,12 +5340,35 @@ int run_test(const int argc, char* argv[]) {
         native_graphics_finish);
     const auto native_product_state_capture = explicit_static_main.find(
         "capture_product_state();\n"
-        "        const auto frame_pacing_snapshot =",
+        "        emit_terminal_runtime_telemetry();",
         native_graphics_metrics_snapshot);
     const auto native_frame_pacing_snapshot = explicit_static_main.find(
         "KATANA_NATIVE_FRAME_PACING_SNAPSHOT {\\\"schema\\\":1");
+    const auto title_cleanup_class = explicit_static_main.find(
+        "class NativePortTitleStateCleanupGuard final {");
+    const auto title_cleanup_deleted_copy = explicit_static_main.find(
+        "const NativePortTitleStateCleanupGuard&) = delete;",
+        title_cleanup_class);
+    const auto title_cleanup_destructor = explicit_static_main.find(
+        "~NativePortTitleStateCleanupGuard() noexcept { release_now(); }",
+        title_cleanup_deleted_copy);
+    const auto title_cleanup_callback = explicit_static_main.find(
+        "const auto cleanup = context.title_state_cleanup;",
+        title_cleanup_destructor);
+    const auto title_cleanup_callback_clear = explicit_static_main.find(
+        "context.title_state_cleanup = nullptr;", title_cleanup_callback);
+    const auto title_cleanup_callback_call = explicit_static_main.find(
+        "if (cleanup != nullptr) cleanup(context);",
+        title_cleanup_callback_clear);
+    const auto native_context = explicit_static_main.find(
+        "katana::runtime::NativePortContext context;");
+    const auto title_cleanup_guard = explicit_static_main.find(
+        "NativePortTitleStateCleanupGuard title_state_cleanup(\n"
+        "            context);", native_context);
+    const auto title_cleanup_normal_release = explicit_static_main.find(
+        "title_state_cleanup.release_now();", native_product_state_capture);
     const auto native_product_gate = explicit_static_main.find(
-        "const bool normal_stop =", native_frame_pacing_snapshot);
+        "const bool normal_stop =", title_cleanup_normal_release);
     const auto native_clean_shutdown = explicit_static_main.find(
         "platform.finalize_clean_shutdown();", native_product_gate);
     const auto native_acceptance_success = explicit_static_main.find(
@@ -5200,6 +5381,15 @@ int run_test(const int argc, char* argv[]) {
             native_graphics_metrics_snapshot != std::string::npos &&
             native_product_state_capture != std::string::npos &&
             native_frame_pacing_snapshot != std::string::npos &&
+            title_cleanup_class != std::string::npos &&
+            title_cleanup_deleted_copy != std::string::npos &&
+            title_cleanup_destructor != std::string::npos &&
+            title_cleanup_callback != std::string::npos &&
+            title_cleanup_callback_clear != std::string::npos &&
+            title_cleanup_callback_call != std::string::npos &&
+            native_context != std::string::npos &&
+            title_cleanup_guard != std::string::npos &&
+            title_cleanup_normal_release != std::string::npos &&
             native_product_gate != std::string::npos &&
             native_clean_shutdown != std::string::npos &&
             native_acceptance_success != std::string::npos &&
@@ -5207,9 +5397,12 @@ int run_test(const int argc, char* argv[]) {
             native_bootstrap_dispatch < native_graphics_finish &&
             native_graphics_finish < native_graphics_metrics_snapshot &&
             native_graphics_metrics_snapshot < native_product_state_capture &&
-            native_product_state_capture < native_frame_pacing_snapshot &&
-            native_frame_pacing_snapshot < terminal_performance_snapshot &&
-            terminal_performance_snapshot < native_product_gate &&
+            title_cleanup_class < native_context &&
+            native_context < title_cleanup_guard &&
+            title_cleanup_guard < native_bootstrap_dispatch &&
+            native_frame_pacing_snapshot < native_product_state_capture &&
+            native_product_state_capture < title_cleanup_normal_release &&
+            title_cleanup_normal_release < native_product_gate &&
             native_product_gate < native_clean_shutdown &&
             native_clean_shutdown < native_acceptance_success &&
             occurrences(explicit_static_main,
@@ -5722,11 +5915,26 @@ int run_test(const int argc, char* argv[]) {
                 "__attribute__((noinline))") != std::string::npos &&
             generated_native_dispatch.find(
                 "extern \"C\" KATANA_NATIVE_PORT_NOINLINE void "
-                "katana_native_bootstrap_dispatch(") != std::string::npos &&
+                "katana_native_bootstrap_dispatch(\n"
+                "    katana::runtime::NativePortContext& context) noexcept(false) {") !=
+                std::string::npos &&
+            explicit_static_sources.at("include/katana_port.hpp").find(
+                "extern \"C\" void katana_native_bootstrap_dispatch(\n"
+                "    katana::runtime::NativePortContext& context) noexcept(false);") !=
+                std::string::npos &&
+            explicit_static_sources.at("include/katana_port.hpp").find(
+                "katana_native_invoke_original(\n"
+                "    katana::runtime::NativePortContext& context,\n"
+                "    std::uint32_t guest_address) noexcept;") != std::string::npos &&
+            explicit_static_sources.at("include/katana_port.hpp").find(
+                "katana_native_invoke_callback(\n"
+                "    katana::runtime::NativePortContext& context,\n"
+                "    std::uint32_t guest_address) noexcept;") != std::string::npos &&
             generated_native_dispatch.find(
                 "#undef KATANA_NATIVE_PORT_NOINLINE") != std::string::npos,
         "Full-LTO darf den autoritativen Produkt-Bootstrap nicht aus dem "
-        "Link-Audit entfernen oder die portable Retention verlieren.");
+        "Link-Audit entfernen; /EHsc muss die werfende extern-C-Bootstrap-Bridge "
+        "erkennen, ohne noexcept-Callback-/Original-Bridges zu veraendern.");
     const auto native_proof_table_begin = generated_native_dispatch.find(
         "inline constexpr std::array<StaticReturnNopCallbackProof,");
     const auto native_proof_table_end = generated_native_dispatch.find(
@@ -5792,6 +6000,22 @@ int run_test(const int argc, char* argv[]) {
                 "native_dispatch_cache_capacity = 16384u") !=
                 std::string::npos &&
             generated_native_dispatch.find(
+                "if (exact_dispatch_entry_matches_owner_class(entry, true))") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "if (!exact_dispatch_entry_matches_owner_class(\n"
+                "            entry, !loaded_aot))") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "if (!cached.loaded_aot) return cached.entry;") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "cached.binder = loaded_aot ? active_loaded_aot_binder : nullptr;") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
+                "cached.stamp = loaded_aot && active_loaded_aot_binder != nullptr") !=
+                std::string::npos &&
+            generated_native_dispatch.find(
                 "if (cached.binder == active_loaded_aot_binder)") !=
                 std::string::npos &&
             generated_native_dispatch.find(
@@ -5809,7 +6033,8 @@ int run_test(const int argc, char* argv[]) {
                 "cached.stamp ==\n") ==
                 std::string::npos &&
             generated_native_dispatch.find(
-                "if (entry == nullptr) return;") !=
+                "if (entry == nullptr || entry->function == nullptr)\n"
+                "            fail_missing_entry(target);") !=
                 std::string::npos &&
             generated_native_dispatch.find(
                 "runtime_dispatch_detail::reset_native_dispatch_cache();") !=

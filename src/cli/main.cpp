@@ -12279,10 +12279,12 @@ int export_port_project(const std::filesystem::path& source_path,
             "keinen analyze-port-Lauf veraendern.");
     if (native_execution_profile ==
             NativePortExecutionProfile::NativeBringup &&
-        !native_bringup_allowlist_path.has_value())
+        !native_bringup_allowlist_path.has_value() &&
+        !native_bringup_coverage_authority_path.has_value())
         throw std::invalid_argument(
             "--native-execution-profile native-bringup braucht eine "
-            "explizite --native-bringup-allowlist.");
+            "explizite --native-bringup-allowlist oder "
+            "--native-bringup-coverage-authority.");
     if (native_execution_profile ==
             NativePortExecutionProfile::StrictProduct &&
         (native_bringup_allowlist_path.has_value() ||
@@ -13403,9 +13405,6 @@ int export_port_project(const std::filesystem::path& source_path,
         analysis_generation_cache_binding);
     if (native_execution_profile ==
         NativePortExecutionProfile::NativeBringup) {
-        if (!verified_native_bringup_authoring)
-            throw std::logic_error(
-                "Native-Bring-up verlor sein validiertes Authoring-Artefakt.");
         // This is a post-analysis/product-glue cache dimension only. The
         // strict cache key above remains byte-for-byte independent from the
         // non-release profile and its allowlist; partition cache identities
@@ -13413,7 +13412,9 @@ int export_port_project(const std::filesystem::path& source_path,
         whole_export_cache_key = katana::io::sha256_bytes(
             std::string("katana-native-bringup-whole-export-v2:") +
             whole_export_cache_key.value() + ':' +
-            verified_native_bringup_authoring->artifact_identity() + ':' +
+            (verified_native_bringup_authoring
+                 ? verified_native_bringup_authoring->artifact_identity()
+                 : "no-authoring-proof") + ':' +
             (verified_native_bringup_coverage_authority.has_value()
                  ? verified_native_bringup_coverage_authority
                        ->authority_identity

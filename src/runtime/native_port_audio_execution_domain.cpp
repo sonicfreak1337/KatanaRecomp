@@ -242,6 +242,10 @@ class NativePortAudioExecutionDomain::Impl final {
     static constexpr std::uint8_t slot_initializing = 1u;
     static constexpr std::uint8_t slot_active = 2u;
     static constexpr std::uint8_t slot_retiring = 3u;
+    static constexpr std::uint32_t active_dispatches_closed_bit =
+        std::uint32_t{1u} << 31u;
+    static constexpr std::uint32_t active_dispatches_count_mask =
+        ~active_dispatches_closed_bit;
 
     struct TargetSlot final {
         std::atomic<std::uint8_t> state{slot_free};
@@ -256,7 +260,10 @@ class NativePortAudioExecutionDomain::Impl final {
         std::atomic<NativePortAudioExecutionDomainCleanup> cleanup{nullptr};
         std::atomic<NativePortAudioExecutionDomainConsumerService>
             consumer_service{nullptr};
-        std::atomic<std::uint32_t> active_dispatches{0u};
+        // The high bit closes acquisition while a slot is free, initializing,
+        // or retiring.  The low bits are the live dispatch references.
+        std::atomic<std::uint32_t> active_dispatches{
+            active_dispatches_closed_bit};
         std::atomic<std::uint64_t> executed_commands{0u};
         std::atomic<std::uint64_t> failed_commands{0u};
     };
@@ -346,6 +353,14 @@ class NativePortAudioExecutionDomain::Impl final {
                 0u);
             return false;
         }
+        if (shutdown_requested_.load(std::memory_order_acquire)) {
+            slot.active_dispatches.fetch_or(active_dispatches_closed_bit,
+                                            std::memory_order_acq_rel);
+            slot.state.store(slot_free, std::memory_order_release);
+            slot.state.notify_all();
+            record_failure(NativePortAudioExecutionDomainFailure::Shutdown, 0u);
+            return false;
+        }
         const auto previous_generation =
             slot.last_generation.load(std::memory_order_acquire);
         const auto expected_generation =
@@ -358,6 +373,7 @@ class NativePortAudioExecutionDomain::Impl final {
             target_generation != expected_generation ||
             previous_generation == target_generation) {
             slot.state.store(slot_free, std::memory_order_release);
+            slot.state.notify_all();
             record_failure(
                 NativePortAudioExecutionDomainFailure::TargetIdentityMismatch,
                 0u);
@@ -372,15 +388,19 @@ class NativePortAudioExecutionDomain::Impl final {
         slot.cleanup.store(cleanup, std::memory_order_relaxed);
         slot.consumer_service.store(consumer_service,
                                     std::memory_order_relaxed);
-        slot.active_dispatches.store(0u, std::memory_order_relaxed);
         slot.executed_commands.store(0u, std::memory_order_relaxed);
         slot.failed_commands.store(0u, std::memory_order_relaxed);
-        slot.state.store(slot_active, std::memory_order_release);
         if (consumer_service != nullptr)
             consumer_service_target_mask_.fetch_or(
                 std::uint64_t{1u}
                     << target_slot_index(target, target_slot),
                 std::memory_order_release);
+        // Publish an open acquisition gate only after every identity and
+        // executor field is complete.  Do not reset this counter again until
+        // retirement has closed and drained it.
+        slot.active_dispatches.store(0u, std::memory_order_release);
+        slot.state.store(slot_active, std::memory_order_release);
+        slot.state.notify_all();
         return true;
     }
 
@@ -412,12 +432,22 @@ class NativePortAudioExecutionDomain::Impl final {
                     std::memory_order_acquire))
                 continue;
 
+            if (shutdown_requested_.load(std::memory_order_acquire)) {
+                slot.active_dispatches.fetch_or(active_dispatches_closed_bit,
+                                                std::memory_order_acq_rel);
+                slot.state.store(slot_free, std::memory_order_release);
+                slot.state.notify_all();
+                record_failure(
+                    NativePortAudioExecutionDomainFailure::Shutdown, 0u);
+                return std::nullopt;
+            }
             const auto generation =
                 slot.next_generation.load(std::memory_order_relaxed);
             const auto previous_generation =
                 slot.last_generation.load(std::memory_order_acquire);
             if (generation == 0u || generation == previous_generation) {
                 slot.state.store(slot_free, std::memory_order_release);
+                slot.state.notify_all();
                 record_failure(
                     NativePortAudioExecutionDomainFailure::TargetIdentityMismatch,
                     0u);
@@ -432,15 +462,16 @@ class NativePortAudioExecutionDomain::Impl final {
             slot.cleanup.store(cleanup, std::memory_order_relaxed);
             slot.consumer_service.store(consumer_service,
                                         std::memory_order_relaxed);
-            slot.active_dispatches.store(0u, std::memory_order_relaxed);
             slot.executed_commands.store(0u, std::memory_order_relaxed);
             slot.failed_commands.store(0u, std::memory_order_relaxed);
-            slot.state.store(slot_active, std::memory_order_release);
             if (consumer_service != nullptr)
                 consumer_service_target_mask_.fetch_or(
                     std::uint64_t{1u}
                         << target_slot_index(target, target_slot),
                     std::memory_order_release);
+            slot.active_dispatches.store(0u, std::memory_order_release);
+            slot.state.store(slot_active, std::memory_order_release);
+            slot.state.notify_all();
             return NativePortAudioExecutionDomainTargetHandle{
                 target, target_slot, generation};
         }
@@ -538,20 +569,38 @@ class NativePortAudioExecutionDomain::Impl final {
                 std::memory_order_acquire))
             return false;
 
+        // The preliminary identity check is only a fast rejection.  An old
+        // unregister can lose the race to a full retire/re-register cycle and
+        // otherwise claim the new generation with its state CAS.
+        if (slot.object.load(std::memory_order_acquire) != object ||
+            slot.generation.load(std::memory_order_acquire) !=
+                target_generation) {
+            slot.state.store(slot_active, std::memory_order_release);
+            slot.state.notify_all();
+            record_failure(
+                NativePortAudioExecutionDomainFailure::TargetIdentityMismatch,
+                0u);
+            return false;
+        }
+
         // A target must never be destroyed while an executor still owns its
         // pointer.  The only consumer is the domain worker; unregister is a
         // lifecycle operation and may wait here, but never in dispatch.
         if (on_audio_thread() &&
-            slot.active_dispatches.load(std::memory_order_acquire) != 0u) {
+            (slot.active_dispatches.load(std::memory_order_acquire) &
+             active_dispatches_count_mask) != 0u) {
             slot.state.store(slot_active, std::memory_order_release);
+            slot.state.notify_all();
             return false;
         }
+        slot.active_dispatches.fetch_or(active_dispatches_closed_bit,
+                                        std::memory_order_acq_rel);
         consumer_service_target_mask_.fetch_and(
             ~(std::uint64_t{1u}
               << target_slot_index(target, target_slot)),
             std::memory_order_acq_rel);
         auto active = slot.active_dispatches.load(std::memory_order_acquire);
-        while (active != 0u) {
+        while ((active & active_dispatches_count_mask) != 0u) {
             slot.active_dispatches.wait(active, std::memory_order_acquire);
             active = slot.active_dispatches.load(std::memory_order_acquire);
         }
@@ -563,6 +612,7 @@ class NativePortAudioExecutionDomain::Impl final {
         // invalidated by its state; resetting the generation would make
         // lifecycle snapshots lose the monotone identity history.
         slot.state.store(slot_free, std::memory_order_release);
+        slot.state.notify_all();
         return true;
     }
 
@@ -1028,12 +1078,28 @@ class NativePortAudioExecutionDomain::Impl final {
                 auto& slot = slots_[target *
                                     native_port_audio_execution_domain_max_slots_per_target +
                                     target_slot];
-                if (slot.state.load(std::memory_order_acquire) == slot_free)
-                    continue;
-                slot.state.store(slot_retiring, std::memory_order_release);
+                auto state = slot.state.load(std::memory_order_acquire);
+                for (;;) {
+                    if (state == slot_free || state == slot_active) {
+                        if (slot.state.compare_exchange_weak(
+                                state, slot_retiring,
+                                std::memory_order_acq_rel,
+                                std::memory_order_acquire))
+                            break;
+                        continue;
+                    }
+                    // Registration and producer-side retirement own the slot
+                    // until they publish Active/Free.  Shutdown must never
+                    // overwrite either transition while its fields are in
+                    // flight.
+                    slot.state.wait(state, std::memory_order_acquire);
+                    state = slot.state.load(std::memory_order_acquire);
+                }
+                slot.active_dispatches.fetch_or(active_dispatches_closed_bit,
+                                                std::memory_order_acq_rel);
                 auto active =
                     slot.active_dispatches.load(std::memory_order_acquire);
-                while (active != 0u) {
+                while ((active & active_dispatches_count_mask) != 0u) {
                     slot.active_dispatches.wait(active,
                                                 std::memory_order_acquire);
                     active = slot.active_dispatches.load(
@@ -1056,6 +1122,7 @@ class NativePortAudioExecutionDomain::Impl final {
                 // Retain the last generation as an invalidated lifecycle
                 // identity.  A free slot must never reset it to zero.
                 slot.state.store(slot_free, std::memory_order_release);
+                slot.state.notify_all();
             }
         }
         active_command_ = previous_active;
@@ -1115,7 +1182,8 @@ class NativePortAudioExecutionDomain::Impl final {
                 destination.registered =
                     source.state.load(std::memory_order_acquire) == slot_active;
                 destination.active_dispatches =
-                    source.active_dispatches.load(std::memory_order_acquire);
+                    source.active_dispatches.load(std::memory_order_acquire) &
+                    active_dispatches_count_mask;
                 destination.executed_commands =
                     source.executed_commands.load(std::memory_order_acquire);
                 destination.failed_commands =
@@ -1510,19 +1578,33 @@ class NativePortAudioExecutionDomain::Impl final {
         auto& slot = slots_[target_slot_index(target, target_slot)];
         if (slot.state.load(std::memory_order_acquire) != slot_active)
             return result;
+
+        auto active = slot.active_dispatches.load(std::memory_order_acquire);
+        for (;;) {
+            if ((active & active_dispatches_closed_bit) != 0u ||
+                (active & active_dispatches_count_mask) ==
+                    active_dispatches_count_mask)
+                return result;
+            if (slot.active_dispatches.compare_exchange_weak(
+                    active, active + 1u, std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                break;
+        }
+
         const auto object = slot.object.load(std::memory_order_acquire);
         const auto executor = slot.executor.load(std::memory_order_acquire);
         const auto consumer_service =
             slot.consumer_service.load(std::memory_order_acquire);
         const auto generation = slot.generation.load(std::memory_order_acquire);
         if (object == nullptr || executor == nullptr ||
-            generation != target_generation)
-            return result;
-        slot.active_dispatches.fetch_add(1u, std::memory_order_acq_rel);
-        if (slot.state.load(std::memory_order_acquire) != slot_active ||
+            generation != target_generation ||
+            slot.state.load(std::memory_order_acquire) != slot_active ||
             slot.object.load(std::memory_order_acquire) != object ||
             slot.generation.load(std::memory_order_acquire) != generation) {
-            slot.active_dispatches.fetch_sub(1u, std::memory_order_release);
+            const auto previous = slot.active_dispatches.fetch_sub(
+                1u, std::memory_order_release);
+            if ((previous & active_dispatches_count_mask) == 1u)
+                slot.active_dispatches.notify_all();
             return result;
         }
         result.slot = &slot;
@@ -1537,7 +1619,8 @@ class NativePortAudioExecutionDomain::Impl final {
         if (target.valid && target.slot != nullptr) {
             const auto previous = target.slot->active_dispatches.fetch_sub(
                 1u, std::memory_order_release);
-            if (previous == 1u) target.slot->active_dispatches.notify_all();
+            if ((previous & active_dispatches_count_mask) == 1u)
+                target.slot->active_dispatches.notify_all();
         }
         target = {};
     }

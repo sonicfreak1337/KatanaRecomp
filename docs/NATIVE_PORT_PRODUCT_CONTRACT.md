@@ -22,8 +22,12 @@ er kann nicht beweisen, dass keine weiteren Ziele existieren.
 
 `native-bringup` darf bei noch unvollstaendigem Closure-Proof nur exakte,
 aktive und vorkompilierte Blockanfaenge des gebundenen AOT-Packs ausfuehren.
-Allowlist, Modulidentitaet, Generation, Blocktabelle, ABI und Fortsetzung
-werden vor jeder Zustandsaenderung validiert. Ein Miss endet als
+Modulidentitaet, Generation, Blocktabelle, ABI und Fortsetzung werden vor
+jeder Zustandsaenderung validiert. Mit separat gebundener
+Complete-Disassembly-Coverage ist Authoring/Allowlist optional; der aktuelle
+exakte Entry und eindeutige aktive Owner bleiben autoritativ. Ohne Coverage
+bleibt die explizite Allowlist Pflicht. Gelieferte Authoring-Artefakte werden
+weiter vollstaendig validiert. Ein echter Ausfuehrungs-Miss endet als
 `UnknownCompiledTarget`; es gibt keinen Interpreter-, JIT-, Decoder-,
 Materializer-, No-op- oder Guessing-Fallback.
 

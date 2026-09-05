@@ -961,23 +961,20 @@ void native_bringup_coverage_regression() {
             table, runtime_image_bindings, binder, wrong_runtime_pack,
             runtime_generation,
             coverage_observations);
-    auto wrong_runtime_request = request;
-    bool wrong_runtime_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+    const auto wrong_runtime_admitted =
+        preflight_native_bringup_coverage_dispatch(
             table, runtime_image_bindings, binder, wrong_runtime_context,
-            wrong_runtime_request));
-    } catch (const NativeBringupDispatchError& error) {
-        wrong_runtime_rejected =
-            error.miss() ==
-            NativeBringupDispatchMiss::LoadedModuleIdentityMismatch;
-    }
-    require(wrong_runtime_rejected &&
+            request);
+    require(!wrong_runtime_admitted.block &&
+                wrong_runtime_admitted.execution.function == nullptr &&
+                wrong_runtime_admitted.owner_kind ==
+                    CoverageOwner::NativeFunctionEntry &&
+                wrong_runtime_admitted.target == target_runtime_start &&
                 !binder.active_entry_for_address(target_runtime_start)
                      .has_value() &&
                 coverage_observations.total_occurrences() == 0u,
-            "Coverage-Preflight akzeptierte eine falsche Source-Runtimebasis "
-            "oder aktivierte vorher das Ziel.");
+            "Eine stale SourceTransfer-Runtimebasis sperrte die aktuelle "
+            "exakte Source-Authority oder aktivierte vorher das Ziel.");
 
     const auto native_hook_admitted =
         preflight_native_bringup_coverage_dispatch(
@@ -1031,24 +1028,21 @@ void native_bringup_coverage_regression() {
         make_native_bringup_coverage_dispatch_context(
             table, runtime_image_bindings, binder, internal_only_pack,
             runtime_generation, internal_only_observations);
-    request.target_hook =
-        NativeBringupCoveragePreflightRequest::TargetHook::None;
-    bool internal_call_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+    const auto stale_capability_admitted =
+        preflight_native_bringup_coverage_dispatch(
             table, runtime_image_bindings, binder, internal_only_context,
-            request));
-    } catch (const NativeBringupDispatchError& error) {
-        internal_call_rejected =
-            error.miss() ==
-            NativeBringupDispatchMiss::TargetCapabilityMismatch;
-    }
-    require(internal_call_rejected &&
+            request);
+    require(!stale_capability_admitted.block &&
+                stale_capability_admitted.execution.function == nullptr &&
+                stale_capability_admitted.owner_kind ==
+                    CoverageOwner::NativeFunctionEntry &&
+                stale_capability_admitted.capabilities ==
+                    CoverageCapability::Callable &&
                 !binder.active_entry_for_address(target_runtime_start)
                      .has_value() &&
                 internal_only_observations.total_occurrences() == 0u,
-            "CallRegister akzeptierte einen reinen InternalBlock-/Tail-Entry "
-            "oder aktivierte ihn vor der Capability-Pruefung.");
+            "Eine stale Coverage-Capability sperrte den aktuellen exakten "
+            "Native-FunctionEntry oder aktivierte vorher das AOT-Ziel.");
 
     const std::array ambiguous_target_authorities{
         target_authorities[0u],
@@ -1073,22 +1067,69 @@ void native_bringup_coverage_regression() {
         make_native_bringup_coverage_dispatch_context(
             table, runtime_image_bindings, binder, ambiguous_target_pack,
             runtime_generation, ambiguous_target_observations);
-    bool ambiguous_target_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+    const auto duplicate_metadata_admitted =
+        preflight_native_bringup_coverage_dispatch(
             table, runtime_image_bindings, binder,
-            ambiguous_target_context, request));
-    } catch (const NativeBringupDispatchError& error) {
-        ambiguous_target_rejected =
-            error.miss() ==
-            NativeBringupDispatchMiss::AmbiguousTargetOwner;
-    }
-    require(ambiguous_target_rejected && target_runtime_static_handle &&
+            ambiguous_target_context, request);
+    require(!duplicate_metadata_admitted.block &&
+                duplicate_metadata_admitted.execution.function == nullptr &&
+                duplicate_metadata_admitted.owner_kind ==
+                    CoverageOwner::NativeFunctionEntry &&
+                duplicate_metadata_admitted.capabilities ==
+                    CoverageCapability::Callable &&
+                target_runtime_static_handle &&
                 !binder.active_entry_for_address(target_runtime_start)
                      .has_value() &&
                 ambiguous_target_observations.total_occurrences() == 0u,
-            "Coverage-Preflight waehlt bei Static-/Loaded-AOT-Mehrdeutigkeit "
-            "weiterhin nach Suchreihenfolge statt fail-closed.");
+            "Eine zusaetzliche Coverage-TargetAuthority-Zeile wurde als "
+            "Live-Owner-Ambiguitaet behandelt oder aktivierte das AOT-Ziel.");
+
+    NativePortExecutableLifecycleLedger ambiguous_lifecycle_ledger(2u);
+    NativePortImmutableWriteGuard ambiguous_immutable_guard(immutable_ranges);
+    NativePortLoadedAotBinder ambiguous_binder(
+        cpu, modules, ambiguous_immutable_guard, ambiguous_lifecycle_ledger,
+        module_universe_identity, pack_identity);
+    static_cast<void>(ambiguous_binder.stage_runtime_module(
+        {module_identity,
+         source_start,
+         source_runtime_start,
+         static_cast<std::uint32_t>(bytes.size())}));
+    require(ambiguous_binder.bind_entry(source_runtime_start),
+            "Coverage-Fixture konnte den Source-Owner fuer die echte "
+            "Live-Ambiguitaet nicht aktivieren.");
+    static_cast<void>(ambiguous_binder.stage_runtime_module(
+        {module_identity,
+         target_source_start,
+         runtime_image_runtime_start,
+         static_cast<std::uint32_t>(bytes.size())}));
+    NativeBringupCoverageObservations live_ambiguity_observations;
+    const auto live_ambiguity_context =
+        make_native_bringup_coverage_dispatch_context(
+            table, runtime_image_bindings, ambiguous_binder, coverage_pack,
+            runtime_generation, live_ambiguity_observations);
+    auto live_ambiguity_request = request;
+    live_ambiguity_request.target_hook =
+        NativeBringupCoveragePreflightRequest::TargetHook::None;
+    live_ambiguity_request.target = runtime_image_runtime_start;
+    bool live_ambiguity_rejected = false;
+    try {
+        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+            table, runtime_image_bindings, ambiguous_binder,
+            live_ambiguity_context, live_ambiguity_request));
+    } catch (const NativeBringupDispatchError& error) {
+        live_ambiguity_rejected =
+            error.miss() == NativeBringupDispatchMiss::AmbiguousTargetOwner;
+    }
+    require(live_ambiguity_rejected &&
+                !ambiguous_binder
+                     .active_entry_for_address(runtime_image_runtime_start)
+                     .has_value() &&
+                live_ambiguity_observations.total_occurrences() == 0u,
+            "Coverage-Preflight akzeptierte gleichzeitig live gebundene "
+            "RuntimeImage-/Loaded-AOT-Owner.");
+
+    request.target_hook =
+        NativeBringupCoveragePreflightRequest::TargetHook::None;
 
     const std::array authority_without_loaded_target{
         target_authorities[2u]};
@@ -1368,7 +1409,13 @@ void native_bringup_coverage_regression() {
                 static_admitted.dispatch_source == target_source_start &&
                 static_events.size() == 1u &&
                 static_events.front().source_kind ==
-                    NativeBringupCoverageSourceKind::StaticAot &&
+                    NativeBringupCoverageSourceKind::LoadedAot &&
+                static_events.front().source_module_identity ==
+                    module_identity &&
+                static_events.front().source_runtime_start ==
+                    source_runtime_start &&
+                static_events.front().source_lifecycle_generation ==
+                    source_lifecycle &&
                 static_events.front().target == target_source_start &&
                 static_events.front().target_module_identity ==
                     pack_identity &&
@@ -1381,9 +1428,9 @@ void native_bringup_coverage_regression() {
                     target_source_start &&
                 static_events.front().target_module_offset == 0u &&
                 static_events.front().target_lifecycle_generation == 0u,
-            "Coverage-Preflight wies ein exakt gebundenes Static-AOT-Ziel "
-            "faelschlich als fehlendes Loaded-AOT-Modul ab oder erfand eine "
-            "Lifecycle-Generation.");
+            "Coverage-Preflight uebernahm stale Source-Metadaten, wies ein "
+            "exakt gebundenes Static-AOT-Ziel ab oder verlor die aktuelle "
+            "Source-Lifecycle-Generation.");
 
     const std::array unrelated_target_authority{target_authorities[2u]};
     const NativeBringupCoverageDispatchPack sealed_primary_fallback_pack{
@@ -1436,19 +1483,17 @@ void native_bringup_coverage_regression() {
         make_native_bringup_coverage_dispatch_context(
             table, runtime_image_bindings, binder, declared_nonprimary_pack,
             runtime_generation, declared_nonprimary_observations);
-    bool declared_nonprimary_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+    const auto declared_nonprimary_admitted =
+        preflight_native_bringup_coverage_dispatch(
             table, runtime_image_bindings, binder,
-            declared_nonprimary_context, static_target_request));
-    } catch (const NativeBringupDispatchError& error) {
-        declared_nonprimary_rejected =
-            error.miss() == NativeBringupDispatchMiss::CoverageTargetMissing;
-    }
-    require(declared_nonprimary_rejected &&
-                declared_nonprimary_observations.total_occurrences() == 0u,
-            "Der versiegelte Primary-Static-Fallback umging eine deklarierte "
-            "aber nicht aktive movable TargetAuthority.");
+            declared_nonprimary_context, static_target_request);
+    require(declared_nonprimary_admitted.block == target_handle &&
+                declared_nonprimary_admitted.owner_kind ==
+                    CoverageOwner::PrimaryStatic &&
+                declared_nonprimary_admitted.lifecycle_generation == 0u &&
+                declared_nonprimary_observations.total_occurrences() == 1u,
+            "Eine deklarierte, aber nicht aktive movable TargetAuthority "
+            "sperrte den aktuellen exakten Primary-Static-Owner.");
 
     const std::array runtime_image_source_transfers{
         NativeBringupCoverageSourceTransfer{
@@ -1525,36 +1570,37 @@ void native_bringup_coverage_regression() {
     require(runtime_image_bindings.deactivate_runtime_range(
                 runtime_image_runtime_start, bytes.size()) == 1u,
             "RuntimeImage-Fixture konnte nicht retiret werden.");
-    bool retired_runtime_image_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
+    const auto retired_runtime_image_fallback =
+        preflight_native_bringup_coverage_dispatch(
             table, runtime_image_bindings, binder, runtime_image_context,
-            runtime_image_request));
-    } catch (const NativeBringupDispatchError& error) {
-        retired_runtime_image_rejected =
-            error.miss() == NativeBringupDispatchMiss::RuntimeImageInactive;
-    }
-    require(retired_runtime_image_rejected,
+            runtime_image_request);
+    require(!retired_runtime_image_fallback.cache_hit &&
+                !retired_runtime_image_fallback.block &&
+                retired_runtime_image_fallback.execution.function == nullptr &&
+                retired_runtime_image_fallback.generated_entry_required &&
+                retired_runtime_image_fallback.owner_kind ==
+                    CoverageOwner::PrimaryStatic &&
+                retired_runtime_image_fallback.lifecycle_generation == 0u,
             "Coverage-Preflight verwendete ein retiertes RuntimeImage oder "
-            "einen stalen Cachetreffer.");
+            "einen stalen Cachetreffer, statt die finale exakte generierte "
+            "Entry-Pruefung zu verlangen.");
 
     const auto stamp_before_retirement = binder.dispatch_stamp();
     require(binder.deactivate_runtime_range(
                 target_runtime_start, bytes.size()) == 1u &&
                 binder.dispatch_stamp() != stamp_before_retirement,
             "Loaded-AOT-Retirement aenderte den Dispatch-Cache-Stamp nicht.");
-    bool retired_cache_rejected = false;
-    try {
-        static_cast<void>(preflight_native_bringup_coverage_dispatch(
-            table, runtime_image_bindings, binder, context, request));
-    } catch (const NativeBringupDispatchError& error) {
-        retired_cache_rejected =
-            error.miss() ==
-            NativeBringupDispatchMiss::CoverageTargetMissing;
-    }
-    require(retired_cache_rejected,
+    const auto retired_owner_fallback =
+        preflight_native_bringup_coverage_dispatch(
+            table, runtime_image_bindings, binder, context, request);
+    require(!retired_owner_fallback.cache_hit &&
+                retired_owner_fallback.block == target_runtime_static_handle &&
+                retired_owner_fallback.owner_kind ==
+                    CoverageOwner::PrimaryStatic &&
+                retired_owner_fallback.lifecycle_generation == 0u,
             "Coverage-Preflight verwendete nach Lifecycle-Retirement einen "
-            "stalen Cachetreffer.");
+            "stalen Cachetreffer oder sperrte den aktuellen exakten "
+            "Primary-Static-Fallback.");
 
     auto bounded_event = coverage_observations.events().front();
     coverage_observations.set_recording_enabled(false);
@@ -2075,6 +2121,18 @@ void native_bringup_allowlist_regression() {
         missing_pack_identity, allowlist};
     expect_context_rejection(
         bringup_table, missing_identity_pack, runtime_generation);
+
+    const std::array<NativeBringupDispatchEntry, 0u> empty_allowlist{};
+    const NativeBringupDispatchPack no_authoring_pack{
+        missing_pack_identity, empty_allowlist};
+    NativeBringupDispatchObservations no_authoring_observations;
+    const auto no_authoring_context = make_native_bringup_dispatch_context(
+        bringup_table, no_authoring_pack, runtime_generation,
+        no_authoring_observations);
+    require(no_authoring_context.validated_static_view_current(bringup_table) &&
+                no_authoring_observations.total_occurrences() == 0u,
+            "Ein leerer NativeBringup-Pack benoetigt weiterhin einen "
+            "historischen Authoring-Proof.");
 
     auto raw_hash_pack_identity = pack_identity;
     raw_hash_pack_identity.authoring_artifact_identity = sha_a.substr(7u);

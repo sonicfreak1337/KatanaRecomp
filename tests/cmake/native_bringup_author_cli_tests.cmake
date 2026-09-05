@@ -74,4 +74,24 @@ if(BRINGUP_RESULT EQUAL 0 OR
     message(FATAL_ERROR "NativeBringup one-pass validation did not advance to its product inputs: ${BRINGUP_ERROR}")
 endif()
 
+execute_process(
+    COMMAND "${KATANA_CLI}" port "${KATANA_TEST_ROOT}/missing.gdi" --output "${KATANA_TEST_ROOT}/coverage-only" --target-name fixture --game-project "${KATANA_TEST_ROOT}/missing-project" --native-port-definition "${KATANA_TEST_ROOT}/missing-port" --native-execution-profile native-bringup --native-bringup-coverage-authority "${KATANA_TEST_ROOT}/missing-coverage"
+    RESULT_VARIABLE COVERAGE_ONLY_RESULT
+    ERROR_VARIABLE COVERAGE_ONLY_ERROR
+)
+if(COVERAGE_ONLY_RESULT EQUAL 0 OR
+   NOT COVERAGE_ONLY_ERROR MATCHES "Native-port artifact")
+    message(FATAL_ERROR "Coverage-only bringup did not advance to its bound product inputs: ${COVERAGE_ONLY_ERROR}")
+endif()
+
+execute_process(
+    COMMAND "${KATANA_CLI}" port "${KATANA_TEST_ROOT}/missing.gdi" --output "${KATANA_TEST_ROOT}/unbound-bringup" --target-name fixture --native-execution-profile native-bringup
+    RESULT_VARIABLE UNBOUND_BRINGUP_RESULT
+    ERROR_VARIABLE UNBOUND_BRINGUP_ERROR
+)
+if(UNBOUND_BRINGUP_RESULT EQUAL 0 OR
+   NOT UNBOUND_BRINGUP_ERROR MATCHES "explizite --native-bringup-allowlist oder")
+    message(FATAL_ERROR "Bringup without either bound resolver was accepted: ${UNBOUND_BRINGUP_ERROR}")
+endif()
+
 file(REMOVE_RECURSE "${KATANA_TEST_ROOT}")

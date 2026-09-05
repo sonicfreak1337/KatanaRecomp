@@ -111,7 +111,10 @@ constexpr std::string_view latent_aot_analysis_cache_artifact{
     "module-analysis.bin"};
 constexpr std::string_view latent_aot_module_static_cache_artifact{
     "module-static.bin"};
-constexpr std::uint32_t latent_aot_module_static_cache_schema_version = 2u;
+// The static artifact includes the post-discovery root set. Bump its codec
+// whenever a source-shape family lane can add roots so an old artifact cannot
+// silently bypass the new bounded proof.
+constexpr std::uint32_t latent_aot_module_static_cache_schema_version = 4u;
 constexpr std::array<std::uint8_t, 8u> latent_aot_module_static_cache_magic{
     'K', 'L', 'A', 'T', 'S', 'T', 'A', '1'};
 
@@ -3563,6 +3566,109 @@ latent_mutual_record_table_callback_entry_offsets(
     }
     std::sort(result.begin(), result.end());
     result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+// A loaded module can already contain a fully compiled CFG block without
+// publishing that block as a legal runtime ingress. Callback and dispatch
+// tables commonly name precisely such blocks. Index immutable aligned code
+// pointers once, after CFA reaches its stable graph, then admit only targets
+// that are exact block starts in that same source-/generation-bound program.
+// No opcode prologue, source window, module name or guest address participates
+// in this proof.
+struct LatentAotReferencedBlockIndex final {
+    std::vector<std::uint32_t> local_target_offsets;
+};
+
+[[nodiscard]] LatentAotReferencedBlockIndex
+index_latent_aot_referenced_blocks(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program,
+    const LatentCodeAddressResolver& resolver) {
+    LatentAotReferencedBlockIndex index;
+    index.local_target_offsets.reserve(std::min<std::size_t>(
+        candidate.bytes.size() / 64u,
+        maximum_prepared_latent_aot_code_pointer_evidence));
+
+    // SH-4 has no inline 32-bit immediate. Exclude words occupied by decoded
+    // instructions so coincidental opcode pairs cannot masquerade as pointer
+    // cells; literal pools and immutable callback tables remain eligible.
+    std::vector<std::uint8_t> instruction_halfwords(
+        (candidate.bytes.size() + 1u) / 2u, 0u);
+    for (const auto& function : program) {
+        for (const auto& block : function.blocks) {
+            for (const auto& instruction : block.instructions) {
+                if (instruction.source_address < candidate.source_address)
+                    continue;
+                const auto instruction_offset =
+                    instruction.source_address - candidate.source_address;
+                if ((instruction_offset & 1u) != 0u ||
+                    instruction_offset >= candidate.bytes.size())
+                    continue;
+                instruction_halfwords[instruction_offset / 2u] = 1u;
+            }
+        }
+    }
+
+    for (std::size_t offset = 0u;
+         offset + sizeof(std::uint32_t) <= candidate.bytes.size();
+         offset += alignof(std::uint32_t)) {
+        if (instruction_halfwords[offset / 2u] != 0u ||
+            instruction_halfwords[offset / 2u + 1u] != 0u)
+            continue;
+        const auto raw = latent_read_u32(
+            candidate, candidate.source_address +
+                           static_cast<std::uint32_t>(offset));
+        if (!raw.has_value()) continue;
+        const auto resolved = resolver.resolve_local_with_evidence(*raw);
+        if (!resolved.has_value()) continue;
+        // A source-range spelling is exact. A relocated spelling is usable
+        // only when the bounded pointer vote or an authoritative loader
+        // binding selected one identity-consistent runtime base.
+        if (!resolved->exact &&
+            !resolver.preferred_runtime_base_identity_consistent)
+            continue;
+        if (resolved->target < candidate.source_address)
+            continue;
+        const auto target_offset =
+            resolved->target - candidate.source_address;
+        if (target_offset > candidate.bytes.size() ||
+            candidate.bytes.size() - target_offset <
+                sizeof(std::uint16_t))
+            continue;
+        index.local_target_offsets.push_back(target_offset);
+    }
+
+    std::sort(index.local_target_offsets.begin(),
+              index.local_target_offsets.end());
+    index.local_target_offsets.erase(
+        std::unique(index.local_target_offsets.begin(),
+                    index.local_target_offsets.end()),
+        index.local_target_offsets.end());
+    return index;
+}
+
+[[nodiscard]] std::vector<std::uint32_t>
+latent_referenced_block_entry_offsets(
+    const DiscFileCandidate& candidate,
+    const std::span<const katana::ir::Function> program,
+    const std::span<const std::uint32_t> external_code_targets) {
+    const auto resolver = make_latent_code_address_resolver(
+        candidate, program, external_code_targets);
+    const auto index =
+        index_latent_aot_referenced_blocks(candidate, program, resolver);
+
+    std::vector<std::uint32_t> result;
+    result.reserve(std::min(
+        index.local_target_offsets.size(),
+        maximum_prepared_latent_aot_code_pointer_evidence));
+    for (const auto offset : index.local_target_offsets) {
+        const auto target = candidate.source_address + offset;
+        if (!resolver.block_entries.contains(target) ||
+            latent_candidate_entry_is_physical_delay_slot(candidate, offset))
+            continue;
+        result.push_back(offset);
+    }
     return result;
 }
 
@@ -7106,6 +7212,71 @@ bool source_bound_unoptimized_program(
     return true;
 }
 
+std::set<std::uint32_t> latent_program_function_entries(
+    const std::span<const katana::ir::Function> program) {
+    std::set<std::uint32_t> result;
+    for (const auto& function : program)
+        result.insert(function.entry_address);
+    return result;
+}
+
+void discard_latent_heuristic_offsets_without_complete_control_flow(
+    std::vector<std::uint32_t>& offsets,
+    const DiscFileCandidate& candidate,
+    const LatentAotDiscoveryOptions& options,
+    const std::set<std::uint32_t>& known_function_entries,
+    const std::span<const std::uint32_t> rooted_explicit_tail_offsets = {},
+    const std::span<const std::uint32_t> rooted_authoritative_tail_offsets = {}) {
+    offsets.erase(
+        std::remove_if(
+            offsets.begin(), offsets.end(), [&](const auto offset) {
+                const bool source_rooted =
+                    std::binary_search(rooted_explicit_tail_offsets.begin(),
+                                       rooted_explicit_tail_offsets.end(), offset) ||
+                    std::binary_search(rooted_authoritative_tail_offsets.begin(),
+                                       rooted_authoritative_tail_offsets.end(), offset);
+                return !source_rooted &&
+                       !latent_entry_has_bounded_complete_local_control_flow(
+                           candidate, candidate.source_address + offset,
+                           options.maximum_entry_scan_instructions,
+                           known_function_entries);
+            }),
+        offsets.end());
+}
+
+void discard_latent_physical_delay_slot_offsets(
+    std::vector<std::uint32_t>& offsets,
+    const DiscFileCandidate& candidate) {
+    offsets.erase(
+        std::remove_if(offsets.begin(), offsets.end(), [&](const auto offset) {
+            return latent_candidate_entry_is_physical_delay_slot(candidate,
+                                                                 offset);
+        }),
+        offsets.end());
+}
+
+void discard_latent_known_nonroot_offsets(
+    std::vector<std::uint32_t>& offsets,
+    const DiscFileCandidate& candidate,
+    const std::span<const std::uint32_t> analysis_entry_offsets,
+    const std::span<const std::uint32_t> non_function_entry_offsets,
+    const std::span<const std::uint32_t> strict_interior_addresses) {
+    offsets.erase(
+        std::remove_if(
+            offsets.begin(), offsets.end(), [&](const auto offset) {
+                if (std::binary_search(analysis_entry_offsets.begin(),
+                                       analysis_entry_offsets.end(), offset) ||
+                    std::binary_search(non_function_entry_offsets.begin(),
+                                       non_function_entry_offsets.end(), offset))
+                    return true;
+                return std::binary_search(
+                    strict_interior_addresses.begin(),
+                    strict_interior_addresses.end(),
+                    candidate.source_address + offset);
+            }),
+        offsets.end());
+}
+
 CandidateAnalysisOutcome finalize_candidate_program(
     const DiscFileCandidate& candidate,
     const std::span<const std::uint32_t> published_entry_offsets,
@@ -8102,31 +8273,12 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
                 // families are heuristic/transitive. Keep exact roots hard,
                 // but discard an unauthenticated proposal before it can make
                 // random module data part of the authoritative CFA graph.
-                std::set<std::uint32_t> known_function_entries;
-                for (const auto& function : discovery_program)
-                    known_function_entries.insert(function.entry_address);
-                const auto source_rooted = [&](const std::uint32_t offset) {
-                    return std::binary_search(
-                               rooted_explicit_tail_offsets.begin(),
-                               rooted_explicit_tail_offsets.end(), offset) ||
-                           std::binary_search(
-                               rooted_authoritative_tail_offsets.begin(),
-                               rooted_authoritative_tail_offsets.end(),
-                               offset);
-                };
-                discovered_offsets.erase(
-                    std::remove_if(
-                        discovered_offsets.begin(),
-                        discovered_offsets.end(),
-                        [&](const auto offset) {
-                            return !source_rooted(offset) &&
-                                   !latent_entry_has_bounded_complete_local_control_flow(
-                                       candidate,
-                                       candidate.source_address + offset,
-                                       options.maximum_entry_scan_instructions,
-                                       known_function_entries);
-                        }),
-                    discovered_offsets.end());
+                const auto known_function_entries =
+                    latent_program_function_entries(discovery_program);
+                discard_latent_heuristic_offsets_without_complete_control_flow(
+                    discovered_offsets, candidate, options,
+                    known_function_entries, rooted_explicit_tail_offsets,
+                    rooted_authoritative_tail_offsets);
             }
         } catch (const std::bad_alloc&) {
             throw;
@@ -8158,18 +8310,8 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             contains_physical_delay_slot(authoritative_tail_roots))
             return reject_candidate(
                 LatentAotAnalysisRejection::ProgramInvalid);
-        const auto discard_physical_delay_slots =
-            [&](std::vector<std::uint32_t>& offsets) {
-                offsets.erase(
-                    std::remove_if(
-                        offsets.begin(), offsets.end(),
-                        [&](const auto offset) {
-                            return latent_candidate_entry_is_physical_delay_slot(
-                                candidate, offset);
-                        }),
-                    offsets.end());
-            };
-        discard_physical_delay_slots(discovered_offsets);
+        discard_latent_physical_delay_slot_offsets(discovered_offsets,
+                                                   candidate);
         if (explicit_tail_prologue_discovered ||
             authoritative_tail_discovered) {
             if (analysis_entry_offsets.size() >
@@ -8214,31 +8356,15 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
             image.replace_entry_points(retained_entry_addresses);
             continue;
         }
-        discovered_offsets.erase(
-            std::remove_if(
-                discovered_offsets.begin(), discovered_offsets.end(),
-                [&](const auto offset) {
-                    if (std::binary_search(analysis_entry_offsets.begin(),
-                                           analysis_entry_offsets.end(),
-                                           offset))
-                        return true;
-                    if (std::binary_search(non_function_entry_offsets.begin(),
-                                           non_function_entry_offsets.end(),
-                                           offset))
-                        return true;
-                    // A locally discovered callback value which names an
-                    // instruction already owned by the current reachable
-                    // program is not an independent function root. Re-seeding
-                    // it would analyze backward loops under a second ABI
-                    // context and can produce divergent IR owners. Exact
-                    // candidate entries were installed before this fixpoint;
-                    // inferred interior labels therefore remain fail-closed.
-                    return std::binary_search(
-                        strict_interior_addresses.begin(),
-                        strict_interior_addresses.end(),
-                        candidate.source_address + offset);
-                }),
-            discovered_offsets.end());
+        // A locally discovered callback value which names an instruction
+        // already owned by the current reachable program is not an independent
+        // function root. Re-seeding it would analyze backward loops under a
+        // second ABI context and can produce divergent IR owners. Exact
+        // candidate entries were installed before this fixpoint; inferred
+        // interior labels therefore remain fail-closed.
+        discard_latent_known_nonroot_offsets(
+            discovered_offsets, candidate, analysis_entry_offsets,
+            non_function_entry_offsets, strict_interior_addresses);
         if (discovered_offsets.empty()) {
             stable_discovery_program = std::move(discovery_program);
             runtime_alias_entry_fixpoint_complete = true;
@@ -8268,6 +8394,21 @@ CandidateAnalysisOutcome analyze_candidate_uncached(
     auto published_entry_offsets = candidate_public_roots(
         candidate, stable_discovery_program);
     merge_entry_offsets(published_entry_offsets, analysis_entry_offsets);
+
+    // This is an ingress-publication proof, not a new CFA-root heuristic.
+    // Scan the immutable image exactly once after the graph is stable, then
+    // expose every referenced target already materialized as an exact block.
+    // Non-code, instruction-interior and stale/uncompiled values never enter
+    // the sealed entry bitmap and retain the typed runtime-miss path.
+    const auto referenced_block_entry_offsets =
+        latent_referenced_block_entry_offsets(
+            candidate, stable_discovery_program,
+            options.external_code_targets);
+    if (module_audit != nullptr)
+        module_audit->referenced_block_entry_offsets =
+            referenced_block_entry_offsets;
+    merge_entry_offsets(published_entry_offsets,
+                        referenced_block_entry_offsets);
 
     // Positive Guarded-AOT inventory is already canonicalized, structurally
     // validated and bound to the immutable segment generation by CFA.  The
@@ -8642,6 +8783,19 @@ inspect_cached_static_candidate(
         std::unique(discovered_offsets.begin(), discovered_offsets.end()),
         discovered_offsets.end());
 
+    // Strict loader tails ran their own propagated fixpoint above. What remains
+    // here is exactly the cold path's heuristic/transitive lane, so normalize
+    // it against the same current, source-validated program before asking
+    // whether a real new CFA root is required.
+    const auto known_function_entries =
+        latent_program_function_entries(state.program);
+    discard_latent_heuristic_offsets_without_complete_control_flow(
+        discovered_offsets, candidate, options, known_function_entries);
+    discard_latent_physical_delay_slot_offsets(discovered_offsets, candidate);
+    discard_latent_known_nonroot_offsets(
+        discovered_offsets, candidate, state.analysis_entry_offsets,
+        state.non_function_entry_offsets, strict_interior_addresses);
+
     for (const auto offset : discovered_offsets) {
         const auto accepted = validate_cached_offset(offset);
         if (!accepted.has_value()) return std::nullopt;
@@ -8756,6 +8910,8 @@ LatentAotAnalysisCacheKeyInputs candidate_cache_key_inputs(
     external_contract << 'o'
                       << product_implementation_identity.size()
                       << ':' << product_implementation_identity
+                      << ';' << 'q'
+                      << latent_aot_referenced_block_entry_schema
                       << ';' << 't' << options.external_code_targets.size()
                       << ';';
     for (const auto target : options.external_code_targets)

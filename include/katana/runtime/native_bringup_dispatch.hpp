@@ -206,10 +206,11 @@ preflight_native_bringup_dispatch(
     const NativeBringupDispatchContext& context,
     const NativeBringupDispatchPreflightRequest& request);
 
-// Coverage authority deliberately remains disjoint from the proof allowlist.
-// It can compile and execution-admit an exact complete-disassembly entry in a
-// NativeBringup product, but can never promote Evidence/Product closure.
-inline constexpr std::uint32_t native_bringup_coverage_contract_version = 6u;
+// Coverage metadata deliberately remains disjoint from executable authority.
+// It can accelerate lookup and record exact complete-disassembly entries in a
+// NativeBringup product, but can neither veto an otherwise current executable
+// entry nor promote Evidence/Product closure.
+inline constexpr std::uint32_t native_bringup_coverage_contract_version = 7u;
 
 enum class NativeBringupCoverageSourceKind : std::uint8_t {
     StaticAot,
@@ -297,14 +298,13 @@ struct NativeBringupCoverageEntry final {
     NativeBringupDispatchStaticAotBinding target;
 };
 
-// Movable executable ingress authority is distinct from the optional
-// fixed-placement accelerator above. Every record names one externally
-// admissible RuntimeImage/LoadedAot entry, or an optional narrowed
-// PrimaryStatic capability. An exact sealed PrimaryStatic block with no
-// declared authority at its source address is self-authenticating for the
-// current CallRegister/TailJumpRegister transfer only. A zero runtime_start is
-// legal only for a loader-placed LoadedAot module; its live runtime address is
-// then supplied by the identity-/generation-bound binder.
+// Optional diagnostic/lookup metadata for a target seen by analysis. Runtime
+// authority comes from the exact sealed/generated entry together with the
+// current movable-owner lifecycle, never from this row. A stale, absent or
+// duplicated row and stale capability bits therefore cannot veto a current
+// exact entry. A zero runtime_start is legal only for a loader-placed
+// LoadedAot module; its live runtime address is supplied by the
+// identity-/generation-bound binder.
 struct NativeBringupCoverageTargetAuthority final {
     NativeBringupCoverageOwnerKind owner_kind =
         NativeBringupCoverageOwnerKind::PrimaryStatic;
@@ -321,18 +321,11 @@ struct NativeBringupCoverageTargetAuthority final {
 
 struct NativeBringupCoverageDispatchPack final {
     NativeBringupCoveragePackIdentity identity;
-    // Both spans are optional lookup/proof accelerators. Neither grants
-    // executable ingress authority.
+    // All three spans are optional diagnostic/lookup accelerators. They grant
+    // no executable ingress authority and cannot narrow the current exact
+    // sealed/generated entry selected by the runtime.
     std::span<const NativeBringupCoverageSourceTransfer> source_transfers;
     std::span<const NativeBringupCoverageEntry> entries;
-    // Optional narrowing evidence for movable and PrimaryStatic owners.
-    // PrimaryStatic records must match the sealed RuntimeBlockTable. Movable
-    // records instead match the complete generated dispatcher entry plus the
-    // current exact lifecycle binding; requiring them in the smaller sealed
-    // table would turn an export reachability subset into a second allowlist.
-    // Missing records never make an otherwise exact active
-    // RuntimeImage/Loaded-AOT block unavailable. Matching records can still
-    // narrow capabilities, and conflicting active owners remain fail-closed.
     std::span<const NativeBringupCoverageTargetAuthority> target_authorities;
 };
 
@@ -437,14 +430,6 @@ class NativeBringupCoverageDispatchContext final {
         std::uint64_t active_runtime_generation,
         NativeBringupCoverageObservations& active_observations) noexcept;
 
-    const NativeBringupCoverageSourceTransfer* validated_sources_data_ =
-        nullptr;
-    std::size_t validated_sources_size_ = 0u;
-    const NativeBringupCoverageEntry* validated_entries_data_ = nullptr;
-    std::size_t validated_entries_size_ = 0u;
-    const NativeBringupCoverageTargetAuthority*
-        validated_target_authorities_data_ = nullptr;
-    std::size_t validated_target_authorities_size_ = 0u;
     NativeBringupCoveragePackIdentity validated_identity_;
     const RuntimeBlockTable* validated_table_ = nullptr;
     const NativePortRuntimeImageBindings* validated_runtime_images_ = nullptr;
@@ -507,14 +492,12 @@ struct NativeBringupCoveragePreflightResult final {
     std::string_view block_identity;
     std::uint32_t dispatch_source = 0u;
     // The generated dispatcher is the complete executable-entry universe.
-    // Movable code additionally requires its active identity-bound lifecycle;
-    // primary code additionally requires an exact non-loaded-AOT generated
-    // entry. Static-chainability is irrelevant here: the dispatcher invokes
-    // the exact emitted entry directly rather than entering it through a
-    // static-chain table. When either exact entry was not duplicated into the
-    // much smaller sealed bring-up table, the generated dispatcher binds it
-    // directly after
-    // this preflight instead of treating the missing row as absent native code.
+    // Movable code additionally requires its exact active identity-bound
+    // lifecycle; primary code requires the exact generated PrimaryStatic
+    // owner class. When that entry was not duplicated into the smaller sealed
+    // bring-up table, the generated dispatcher binds it directly after this
+    // preflight instead of treating missing diagnostic metadata as absent
+    // native code.
     bool generated_entry_required = false;
 };
 
