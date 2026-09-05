@@ -384,6 +384,12 @@ Task implementieren
   spaetestens nach 60 Sekunden, weil aktive Gameplaypfade frueh crashen
   koennen. Diese Vollmatrix laeuft strikt sequenziell, unsichtbar und stumm,
   ohne Screenshot-/Audio-Capture und mit Grafikdiagnostik `Off`.
+- Dieselbe EXE prueft ausserdem den normalen Sonic-Story-Start als eigene Replayzeile
+  mit 180 Sekunden Laufzeit. Dieser ausdruecklich angeordnete Storytest ist
+  die Ausnahme vom 60-Sekunden-Limit der Debug-Leveltests. Sein vorhandener
+  Replaypfad, erreichte Story-Meilensteine, Crashes und Performance werden
+  separat gebunden; ein Debug-Levelstart ersetzt den normalen Storypfad nicht.
+  Bestandene Debug-Level behalten ihre urspruenglichen Build-Identitaeten.
 - Die Vollmatrix subsumiert die repraesentativen sechs Pflichtreplays; dieselbe
   EXE durchlaeuft nicht zusaetzlich noch einmal eine getrennte Sechsermatrix.
   Ein nachgewiesener Fehler im gemeinsamen Testprotokoll darf den Lauf

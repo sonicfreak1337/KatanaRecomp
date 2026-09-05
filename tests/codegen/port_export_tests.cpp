@@ -24,6 +24,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -608,7 +609,7 @@ std::vector<std::uint8_t> refined_coverage_module_boot_track(
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\0'), true);
     directory +=
         record(bytes, directory, data_lba + 20u, payload_size, std::string(1u, '\1'), true);
-    directory += record(bytes, directory, data_lba + 21u, 24u, "BOOT.BIN;1", false);
+    directory += record(bytes, directory, data_lba + 21u, 32u, "BOOT.BIN;1", false);
     directory += record(
         bytes,
         directory,
@@ -2317,6 +2318,23 @@ int run_test(const int argc, char* argv[]) {
         latent_generated.at("code/native-port-loaded-aot-shard-00000.cpp");
     const auto latent_metadata = latent_generated.at("metadata/port-project.json");
     const auto latent_main = read_text(latent_output / "src" / "main.cpp");
+    require(
+        latent_main.find(
+            "input_record_launch = (argc == 3 || argc == 5) &&") !=
+                std::string::npos &&
+            latent_main.find(
+                "input_replay_launch = (argc == 3 || argc == 5) &&") !=
+                std::string::npos &&
+            latent_main.find(
+                "(input_record_launch || input_replay_launch) ? 3 :\n"
+                "            (explicit_bringup ? 4 : 3)") !=
+                std::string::npos &&
+            latent_main.find(
+                "argc == optional_argument + 2 &&\n"
+                "            !has_presentation_fps") != std::string::npos &&
+            latent_main.find("parsed.ptr != value.data() + value.size()") !=
+                std::string::npos,
+        "Trace-Starts verlieren die optionale FPS-Rate oder deren strikte Argumentpruefung.");
     const auto latent_recipe =
         katana::runtime::parse_disc_install_recipe(latent_result.disc_install_recipe);
     const auto latent_template_id =
@@ -2492,11 +2510,30 @@ int run_test(const int argc, char* argv[]) {
     write_fixture(
         coverage_disc_directory,
         FixtureProgram::UnknownDynamicTargetAfterInternalBranch);
+    auto coverage_boot_track = refined_coverage_module_boot_track(
+        FixtureProgram::UnknownDynamicTargetAfterInternalBranch,
+        refined_coverage_module);
+    constexpr std::array<std::uint8_t, 4u> coverage_new_primary_entry{
+        0x02u, 0xA0u, // bra 0x8C010018, outside the existing [0,16) owner
+        0x09u, 0x00u  // delay-slot nop
+    };
+    // Replace only padding [16,20); preserve the old owner's instructions
+    // and its target literal [20,24). No existing branch reaches offset 16.
+    std::copy(coverage_new_primary_entry.begin(), coverage_new_primary_entry.end(),
+              coverage_boot_track.begin() +
+                  static_cast<std::ptrdiff_t>(payload_offset(21u, 16u)));
+    constexpr std::array<std::uint8_t, 8u> coverage_foldable_body{
+        0x01u, 0xE3u, // mov #1,r3
+        0x02u, 0x73u, // add #2,r3: Product optimization must fold to constant 3
+        0x0Bu, 0x00u, // rts
+        0x09u, 0x00u  // delay-slot nop
+    };
+    std::copy(coverage_foldable_body.begin(), coverage_foldable_body.end(),
+              coverage_boot_track.begin() +
+                  static_cast<std::ptrdiff_t>(payload_offset(21u, 24u)));
     write_binary(
         coverage_disc_directory / "high.bin",
-        refined_coverage_module_boot_track(
-            FixtureProgram::UnknownDynamicTargetAfterInternalBranch,
-            refined_coverage_module));
+        coverage_boot_track);
     const auto coverage_gdi_path = coverage_disc_directory / "disc.gdi";
     const auto coverage_gdi =
         katana::runtime::GdiDiscSource::open(coverage_gdi_path);
@@ -2530,6 +2567,11 @@ int run_test(const int argc, char* argv[]) {
         katana::io::sha256_bytes(std::string_view(
             reinterpret_cast<const char*>(coverage_boot.boot_file.data()),
             16u));
+    const auto coverage_new_primary_entry_identity =
+        std::string("sha256:") +
+        katana::io::sha256_bytes(std::string_view(
+            reinterpret_cast<const char*>(coverage_boot.boot_file.data() + 16u),
+            coverage_new_primary_entry.size()));
     constexpr std::uint32_t coverage_runtime_start = 0x8C100000u;
     constexpr std::uint32_t coverage_proof_runtime_start = 0x8C200000u;
     const std::array coverage_entry_hints{
@@ -2685,9 +2727,16 @@ int run_test(const int argc, char* argv[]) {
         4u,
         4u,
         coverage_internal_block_identity,
-        // This entry must seed decode and block materialization inside the
-        // exact owner above without becoming an independently callable root.
+        // The existing BRA already reaches this block inside the exact owner;
+        // retaining its classification must not create a callable root.
         katana::codegen::CompleteDisassemblyEntryKind::ControlFlowTarget});
+    coverage_primary_module.entries.push_back({
+        16u,
+        4u,
+        coverage_new_primary_entry_identity,
+        // Unlike offset 4, this candidate is absent from the prepared IR and
+        // forces resident coverage analysis without expanding the old owner.
+        katana::codegen::CompleteDisassemblyEntryKind::CodePointerTarget});
     coverage_authority.modules.push_back(
         std::move(coverage_primary_module));
 
@@ -2809,8 +2858,23 @@ int run_test(const int argc, char* argv[]) {
         "Coverage akzeptiert gelieferte Authoringdaten ohne Identitaet.");
     const auto no_authoring_output =
         fixture.root / "coverage-without-authoring";
+    std::vector<std::string> default_coverage_progress;
+    std::mutex default_coverage_progress_mutex;
+    auto observed_default_coverage_options = no_authoring_options;
+    observed_default_coverage_options.progress_callback =
+        [&](const std::string_view phase) {
+            std::scoped_lock lock(default_coverage_progress_mutex);
+            default_coverage_progress.emplace_back(phase);
+        };
     static_cast<void>(export_dreamcast_port_project(
-        coverage_gdi_path, no_authoring_output, no_authoring_options));
+        coverage_gdi_path, no_authoring_output, observed_default_coverage_options));
+    require(std::any_of(
+                default_coverage_progress.begin(), default_coverage_progress.end(),
+                [](const std::string& phase) {
+                    return phase.starts_with(
+                        "native-bringup-resident-coverage-control-flow-function-values-start-");
+                }),
+            "Default-Coverage verlor die residente Function-Value-Analyse.");
     const auto no_authoring_generated =
         snapshot(no_authoring_output / "generated");
     const auto& no_authoring_dispatch =
@@ -2825,8 +2889,90 @@ int run_test(const int argc, char* argv[]) {
         "verloren.");
 
     const auto coverage_output = fixture.root / "coverage-aot-port";
+    std::vector<std::string> coverage_progress;
+    std::mutex coverage_progress_mutex;
+    auto observed_coverage_options = coverage_options;
+    observed_coverage_options.progress_callback =
+        [&](const std::string_view phase) {
+            std::scoped_lock lock(coverage_progress_mutex);
+            coverage_progress.emplace_back(phase);
+        };
     static_cast<void>(export_dreamcast_port_project(
-        coverage_gdi_path, coverage_output, coverage_options));
+        coverage_boot, coverage_output, observed_coverage_options,
+        katana::codegen::PortAnalysisMode::ConservativeRuntimeOnly));
+    // Exercise the real missing resident candidate-root export, not a mirrored
+    // membership helper. Existing assertions below still require its exact
+    // original function owner and emitted primary/resume block identities.
+    constexpr std::array coverage_phases{
+        "native-bringup-coverage-prepare-begin",
+        "native-bringup-coverage-authority-begin",
+        "native-bringup-coverage-authority-end",
+        "native-bringup-coverage-primary-entry-inventory-begin",
+        "native-bringup-coverage-primary-entry-inventory-end",
+        "native-bringup-coverage-resident-bindings-begin",
+        "native-bringup-coverage-resident-bindings-end",
+        "native-bringup-coverage-image-copy-begin",
+        "native-bringup-coverage-image-copy-end",
+        "native-bringup-coverage-image-roots-begin",
+        "native-bringup-coverage-image-roots-end",
+        "native-bringup-coverage-overrides-begin",
+        "native-bringup-coverage-overrides-end",
+        "native-bringup-resident-coverage-analysis",
+        "native-bringup-resident-coverage-analysis-end",
+        "native-bringup-coverage-lowering-begin",
+        "native-bringup-coverage-lowering-end",
+        "native-bringup-coverage-optimization-begin",
+        "native-bringup-coverage-optimization-end",
+        "native-bringup-coverage-final-entry-inventory-begin",
+        "native-bringup-coverage-final-entry-inventory-end",
+        "native-bringup-coverage-resident-entry-validation-begin",
+        "native-bringup-coverage-resident-entry-validation-end",
+        "native-bringup-coverage-emitted-program-begin",
+        "native-bringup-coverage-emitted-program-end",
+        "native-bringup-coverage-prepare-end"};
+    auto coverage_phase_cursor = coverage_progress.begin();
+    for (const auto phase : coverage_phases) {
+        coverage_phase_cursor = std::find(
+            coverage_phase_cursor, coverage_progress.end(), phase);
+        require(coverage_phase_cursor != coverage_progress.end(),
+                "Resident-Coverage meldet ihre echten Unterphasen nicht in Reihenfolge.");
+        ++coverage_phase_cursor;
+    }
+    const auto coverage_analysis_begin = std::find(
+        coverage_progress.begin(), coverage_progress.end(),
+        "native-bringup-resident-coverage-analysis");
+    const auto coverage_analysis_end = std::find(
+        coverage_analysis_begin, coverage_progress.end(),
+        "native-bringup-resident-coverage-analysis-end");
+    require(std::any_of(
+                coverage_analysis_begin, coverage_analysis_end,
+                [](const std::string& phase) {
+                    return phase.starts_with(
+                        "native-bringup-resident-coverage-control-flow-");
+                }) &&
+                std::find(coverage_progress.begin(), coverage_progress.end(),
+                          "native-bringup-coverage-primary-program-copy-begin") ==
+                    coverage_progress.end(),
+            "Neue residente Roots besitzen keine CFA-Beobachtung oder kopieren alte IR.");
+    // The analyzer emits a policy-skip marker and an unconditional empty
+    // reconciliation-complete marker even when it never invokes FVA.
+    require(std::any_of(
+                coverage_analysis_begin, coverage_analysis_end,
+                [](const std::string& phase) {
+                    return phase.starts_with(
+                        "native-bringup-resident-coverage-control-flow-function-values-skipped-by-analysis-policy-");
+                }) &&
+                std::none_of(
+                    coverage_analysis_begin, coverage_analysis_end,
+                    [](const std::string& phase) {
+                        return phase.starts_with(
+                                   "native-bringup-resident-coverage-control-flow-function-values-") &&
+                               !phase.starts_with(
+                                   "native-bringup-resident-coverage-control-flow-function-values-skipped-by-analysis-policy-") &&
+                               !phase.starts_with(
+                                   "native-bringup-resident-coverage-control-flow-function-values-complete-");
+                    }),
+            "ConservativeRuntimeOnly startete residente FVA-Arbeit statt sie explizit zu ueberspringen.");
     const auto coverage_generated = snapshot(coverage_output / "generated");
     // Runtime-destination admission is a set predicate. Repeating an exact
     // source-bound hint must neither create a second range owner nor perturb
@@ -2842,8 +2988,9 @@ int run_test(const int argc, char* argv[]) {
     const auto duplicate_coverage_output =
         fixture.root / "coverage-aot-port-duplicate-runtime-ranges";
     static_cast<void>(export_dreamcast_port_project(
-        coverage_gdi_path, duplicate_coverage_output,
-        duplicate_coverage_options));
+        coverage_boot, duplicate_coverage_output,
+        duplicate_coverage_options,
+        katana::codegen::PortAnalysisMode::ConservativeRuntimeOnly));
     const auto duplicate_coverage_generated =
         snapshot(duplicate_coverage_output / "generated");
     const auto joined_coverage_partitions =
@@ -2857,6 +3004,17 @@ int run_test(const int argc, char* argv[]) {
         };
     const auto normal_coverage_partitions =
         joined_coverage_partitions(coverage_generated);
+    require((normal_coverage_partitions.find("cpu.r[3] = 0x00000003u;") !=
+                 std::string::npos ||
+             normal_coverage_partitions.find("katana_registers[3] = 0x00000003u;") !=
+                 std::string::npos) &&
+                normal_coverage_partitions.find(
+                    "cpu.r[3] += static_cast<std::uint32_t>(2);") ==
+                    std::string::npos &&
+                normal_coverage_partitions.find(
+                    "katana_registers[3] += static_cast<std::uint32_t>(2);") ==
+                    std::string::npos,
+            "Frisch abgesenkte residente Coverage verlor die Product-Konstantenfaltung.");
     require(!normal_coverage_partitions.empty() &&
                 normal_coverage_partitions ==
                     joined_coverage_partitions(duplicate_coverage_generated),
@@ -2868,6 +3026,14 @@ int run_test(const int argc, char* argv[]) {
     for (const auto& [path, content] : coverage_generated)
         if (path.starts_with("code/native-port-dispatch-shard-"))
             coverage_dispatch_shards += content;
+    require(
+        coverage_dispatch_shards.find(
+            "entries.push_back({0x8C010010u, &fn_8C010010_runtime_entry,") !=
+            std::string::npos &&
+            coverage_dispatch.find(
+                "{{0x8C010010u, 0x0C010010u}") != std::string::npos,
+        "Der neue residente CodePointerCandidate erhielt keinen separaten "
+        "Runtime-Entry und statischen Dispatcher-Eintrag.");
     require(
         coverage_dispatch_shards.find(
             "entries.push_back({0x8C010000u, "
@@ -3106,7 +3272,7 @@ int run_test(const int argc, char* argv[]) {
                 "\"complete_disassembly_coverage_modules\":3") !=
                 std::string::npos &&
             coverage_metadata.find(
-                "\"complete_disassembly_coverage_entries\":5") !=
+                "\"complete_disassembly_coverage_entries\":6") !=
                 std::string::npos &&
             coverage_dispatch.find("dynamic_interpreter.hpp") ==
                 std::string::npos,

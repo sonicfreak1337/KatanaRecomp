@@ -17190,10 +17190,10 @@ std::string native_product_main(
            "                      << snapshot_json << '\\n';\n"
            "        } catch (...) {}\n"
            "    };\n"
-           "    const bool input_record_launch = argc == 3 &&\n"
+           "    const bool input_record_launch = (argc == 3 || argc == 5) &&\n"
            "        std::string_view(argv[1]) == \"--record-input\" &&\n"
            "        std::string_view(argv[2]).size() != 0u;\n"
-           "    const bool input_replay_launch = argc == 3 &&\n"
+           "    const bool input_replay_launch = (argc == 3 || argc == 5) &&\n"
            "        std::string_view(argv[1]) == \"--replay-input\" &&\n"
            "        std::string_view(argv[2]).size() != 0u;\n"
            "    const bool automatic_input_record_launch = argc == 1;\n"
@@ -17221,7 +17221,9 @@ std::string native_product_main(
            "            (direct_launch ||\n"
            "             ((argc == 3 || argc == 5) &&\n"
            "              std::string_view(argv[1]) == \"--content-root\"));\n"
-           "        const auto optional_argument = explicit_bringup ? 4 : 3;\n"
+           "        const auto optional_argument =\n"
+           "            (input_record_launch || input_replay_launch) ? 3 :\n"
+           "            (explicit_bringup ? 4 : 3);\n"
            "        const bool has_presentation_fps =\n"
            "            (explicit_bringup || closed_product) &&\n"
            "            argc == optional_argument + 2 &&\n"
@@ -17234,8 +17236,10 @@ std::string native_product_main(
            "                              : \"--bringup-incomplete-hardware-closure \")\n"
            "                      << \"--content-root <verified-native-content> \"\n"
            "                         \"[--presentation-fps <title-supported>]\\n\"\n"
-           "                         \"       game [--record-input <trace.kat1>\"\n"
-           "                         \" | --replay-input <trace.kat1>]\\n\";\n"
+           "                         \"       game\\n\"\n"
+           "                         \"       game (--record-input <trace.kat1>\"\n"
+           "                         \" | --replay-input <trace.kat1>) \"\n"
+           "                         \"[--presentation-fps <title-supported>]\\n\";\n"
            "            return 2;\n"
            "        }\n"
            "        if (argc == optional_argument + 2 &&\n"
@@ -17685,7 +17689,7 @@ std::string native_product_main(
            "        native_product_emit_crash(\n"
            "            2u, \"NativePortGraphicsError\",\n"
            "            static_cast<std::uint32_t>(error.failure()),\n"
-           "            \"native-port-graphics\");\n"
+           "            \"native-port-graphics\", error.what());\n"
            "        try {\n"
            "        std::cerr << \"KATANA_NATIVE_GRAPHICS_CONTRACT failure=\"\n"
            "                  << static_cast<unsigned>(error.failure())\n"
@@ -32697,7 +32701,9 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     const PreparedPortProgram& prepared,
     const PortExportOptions& options,
     const DiscExportContext& disc,
-    const LatentAotDiscovery& proof_latent_aot) {
+    const LatentAotDiscovery& proof_latent_aot,
+    const bool enable_function_value_analysis) {
+    report_progress(options, "native-bringup-coverage-prepare-begin");
     if (options.native_bringup_coverage_authority == nullptr)
         throw std::invalid_argument(
             "Complete-Disassembly-Coverage fehlt ihre Authority.");
@@ -32705,6 +32711,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         throw std::invalid_argument(
             "Complete-Disassembly-Coverage braucht eine gebundene Discquelle.");
 
+    report_progress(options, "native-bringup-coverage-authority-begin");
     const auto authority = normalize_complete_disassembly_authority(
         *options.native_bringup_coverage_authority);
     const auto authority_hints =
@@ -32725,25 +32732,33 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             coverage_hints.push_back(hint);
     }
 
-    std::vector<katana::ir::Function> coverage_primary_program(
-        prepared.program.begin(), prepared.program.end());
+    report_progress(options, "native-bringup-coverage-authority-end");
+    // Classify the current IR without copying it. A fresh coverage analysis
+    // owns its lowered result; only the no-new-roots path needs the old IR.
+    std::vector<katana::ir::Function> coverage_primary_program;
     std::vector<std::uint32_t> resident_compile_roots;
     std::vector<std::uint32_t> resident_block_entries;
+    std::vector<std::uint32_t> resident_coverage_entries;
+    const auto build_entry_membership =
+        [](const std::span<const katana::ir::Function> program) {
+            std::pair<std::unordered_set<std::uint32_t>,
+                      std::unordered_set<std::uint32_t>> membership;
+            membership.first.reserve(program.size());
+            for (const auto& function : program) {
+                membership.first.insert(function.entry_address);
+                for (const auto& block : function.blocks)
+                    membership.second.insert(block.start_address);
+            }
+            return membership;
+        };
+    report_progress(options, "native-bringup-coverage-primary-entry-inventory-begin");
+    auto entry_membership = build_entry_membership(prepared.program);
+    report_progress(options, "native-bringup-coverage-primary-entry-inventory-end");
     const auto emitted_entry_shape =
-        [&](const std::span<const katana::ir::Function> program,
-            const std::uint32_t address,
+        [&](const std::uint32_t address,
             const CompleteDisassemblyEntryKind kind) {
-            const bool function_entry = std::ranges::any_of(
-                program, [&](const auto& function) {
-                    return function.entry_address == address;
-                });
-            const bool block_entry = std::ranges::any_of(
-                program, [&](const auto& function) {
-                    return std::ranges::any_of(
-                        function.blocks, [&](const auto& block) {
-                            return block.start_address == address;
-                        });
-                });
+            const bool function_entry = entry_membership.first.contains(address);
+            const bool block_entry = entry_membership.second.contains(address);
             switch (kind) {
             case CompleteDisassemblyEntryKind::DeclaredEntry:
             case CompleteDisassemblyEntryKind::FunctionEntry:
@@ -32775,6 +32790,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         }
         return match;
     };
+    report_progress(options, "native-bringup-coverage-resident-bindings-begin");
     for (const auto& module : authority.modules) {
         if (module.module_class ==
             CompleteDisassemblyModuleClass::LatentLoaded)
@@ -32839,8 +32855,10 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
                 throw std::runtime_error(
                     "Residenter Complete-Disassembly-Entry verlor seinen "
                     "exakten Byteprobe.");
-            if (emitted_entry_shape(
-                    coverage_primary_program, address, entry.kind))
+            // Already materialized interior entries still need protection
+            // when another missing root triggers a fresh optimized program.
+            resident_coverage_entries.push_back(address);
+            if (emitted_entry_shape(address, entry.kind))
                 continue;
             if (entry.kind ==
                 CompleteDisassemblyEntryKind::ControlFlowTarget) {
@@ -32886,12 +32904,26 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         std::unique(resident_compile_roots.begin(),
                     resident_compile_roots.end()),
         resident_compile_roots.end());
+    report_progress(options, "native-bringup-coverage-resident-bindings-end");
     if (!resident_compile_roots.empty()) {
+        report_progress(options, "native-bringup-coverage-image-copy-begin");
         auto coverage_image = prepared.image;
+        report_progress(options, "native-bringup-coverage-image-copy-end");
+        report_progress(options, "native-bringup-coverage-image-roots-begin");
+        const auto existing_roots = coverage_image.entry_points();
+        std::vector<std::uint32_t> coverage_roots(
+            existing_roots.begin(), existing_roots.end());
+        coverage_roots.reserve(
+            coverage_roots.size() + prepared.program.size() +
+            resident_compile_roots.size());
         for (const auto& function : prepared.program)
-            coverage_image.add_entry_point(function.entry_address);
-        for (const auto root : resident_compile_roots)
-            coverage_image.add_entry_point(root);
+            coverage_roots.push_back(function.entry_address);
+        coverage_roots.insert(coverage_roots.end(),
+                              resident_compile_roots.begin(),
+                              resident_compile_roots.end());
+        coverage_image.replace_entry_points(coverage_roots);
+        report_progress(options, "native-bringup-coverage-image-roots-end");
+        report_progress(options, "native-bringup-coverage-overrides-begin");
         const auto coverage_overrides = port_analysis_overrides(
             options.game_project,
             options.native_port_definition,
@@ -32920,19 +32952,59 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
                     return left.address == right.address;
                 }),
             resident_coverage_overrides->external_entry_hints.end());
+        report_progress(options, "native-bringup-coverage-overrides-end");
         report_progress(options, "native-bringup-resident-coverage-analysis");
+        detail::StructuredControlFlowProgress control_flow_progress(
+            options.progress, "native-bringup-resident-coverage-analysis");
+        const auto analysis_started = std::chrono::steady_clock::now();
+        katana::analysis::ControlFlowAnalysisProgressCallback
+            analysis_progress_callback;
+        if (options.progress.enabled() || options.progress_callback) {
+            analysis_progress_callback =
+                [&options, &control_flow_progress, analysis_started](
+                    const katana::analysis::ControlFlowAnalysisProgress& progress) {
+                    control_flow_progress.update(progress);
+                    if (!options.progress_callback) return;
+                    std::ostringstream marker;
+                    marker << "native-bringup-resident-coverage-control-flow-"
+                           << progress.phase << "-i" << progress.iteration
+                           << "-s" << progress.seeds
+                           << "-n" << progress.instructions
+                           << "-c" << progress.contexts
+                           << "-r" << progress.resolutions
+                           << "-ms"
+                           << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - analysis_started)
+                                  .count();
+                    report_progress(options, marker.str());
+                };
+        }
+        katana::analysis::ControlFlowAnalysisOptions coverage_analysis_options;
+        // Carry the selected discovery policy without changing the image ABI.
+        coverage_analysis_options.enable_function_value_analysis =
+            enable_function_value_analysis;
         auto coverage_analysis = katana::analysis::analyze_control_flow(
             coverage_image,
-            &*resident_coverage_overrides);
-        if (coverage_analysis.termination_reason !=
-                katana::analysis::ControlFlowAnalysisTerminationReason::None ||
-            coverage_analysis.function_budget_exhausted ||
-            std::ranges::any_of(
+            &*resident_coverage_overrides,
+            analysis_progress_callback,
+            coverage_analysis_options);
+        if (coverage_analysis.progress_callback_failed)
+            options.progress.record_observation_loss();
+        const bool coverage_compile_complete =
+            coverage_analysis.termination_reason ==
+                    katana::analysis::ControlFlowAnalysisTerminationReason::None &&
+            !coverage_analysis.function_budget_exhausted &&
+            std::ranges::none_of(
                 coverage_analysis.recursive.diagnostics,
-                katana::analysis::analysis_diagnostic_blocks_codegen))
+                katana::analysis::analysis_diagnostic_blocks_codegen);
+        control_flow_progress.complete(
+            coverage_analysis.fixpoint_iterations, coverage_compile_complete);
+        report_progress(options, "native-bringup-resident-coverage-analysis-end");
+        if (!coverage_compile_complete)
             throw std::runtime_error(
                 "Residenter Complete-Disassembly-Coverage-Compile ist "
                 "nicht vollstaendig.");
+        report_progress(options, "native-bringup-coverage-lowering-begin");
         auto architectural_safepoints =
             katana::ir::architectural_safepoint_block_leaders(
                 coverage_analysis);
@@ -32961,8 +33033,41 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             coverage_analysis,
             architectural_safepoints,
             options.progress);
+        report_progress(options, "native-bringup-coverage-lowering-end");
+        report_progress(options, "native-bringup-coverage-optimization-begin");
+        using DispatchKind = katana::ir::ExternalDispatchEntryKind;
+        std::map<std::uint32_t, DispatchKind> dispatch_kinds;
+        for (const auto& entry : native_optimization_dispatch_entries(
+                 coverage_primary_program, coverage_analysis, options))
+            dispatch_kinds.emplace(entry.address, entry.kind);
+        // BlockEntry wins over InstructionContinuation at the same address.
+        // These are execution boundaries, not additional analysis roots.
+        for (const auto& function : coverage_primary_program)
+            dispatch_kinds[function.entry_address] = DispatchKind::BlockEntry;
+        for (const auto address : resident_block_entries)
+            dispatch_kinds[address] = DispatchKind::BlockEntry;
+        for (const auto address : resident_coverage_entries)
+            dispatch_kinds[address] = DispatchKind::BlockEntry;
+        std::vector<katana::ir::ExternalDispatchEntry> dispatch_entries;
+        dispatch_entries.reserve(dispatch_kinds.size());
+        for (const auto& [address, kind] : dispatch_kinds)
+            dispatch_entries.push_back({address, kind});
+        const auto& emission_contract =
+            native_aot_emission_contract(NativeAotEmissionProfile::Product);
+        static_cast<void>(katana::ir::optimize_program(
+            coverage_primary_program, emission_contract.optimization_options,
+            options.progress, {dispatch_entries}));
         katana::ir::require_valid_program(coverage_primary_program);
+        report_progress(options, "native-bringup-coverage-optimization-end");
+        report_progress(options, "native-bringup-coverage-final-entry-inventory-begin");
+        entry_membership = build_entry_membership(coverage_primary_program);
+        report_progress(options, "native-bringup-coverage-final-entry-inventory-end");
+    } else {
+        report_progress(options, "native-bringup-coverage-primary-program-copy-begin");
+        coverage_primary_program.assign(prepared.program.begin(), prepared.program.end());
+        report_progress(options, "native-bringup-coverage-primary-program-copy-end");
     }
+    report_progress(options, "native-bringup-coverage-resident-entry-validation-begin");
     for (const auto& module : authority.modules) {
         if (module.module_class ==
             CompleteDisassemblyModuleClass::LatentLoaded)
@@ -32970,13 +33075,13 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
         for (const auto& entry : module.entries) {
             const auto address = module.source_address +
                                  entry.module_relative_offset;
-            if (!emitted_entry_shape(
-                    coverage_primary_program, address, entry.kind))
+            if (!emitted_entry_shape(address, entry.kind))
                 throw std::runtime_error(
                     "Residenter Complete-Disassembly-Entry verlor seine "
                     "klassifizierte AOT-Form.");
         }
     }
+    report_progress(options, "native-bringup-coverage-resident-entry-validation-end");
 
     std::unordered_map<std::string_view, const CompleteDisassemblyModuleAuthority*>
         authority_by_identity;
@@ -33461,13 +33566,16 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     result.entry_hints.erase(
         std::unique(result.entry_hints.begin(), result.entry_hints.end()),
         result.entry_hints.end());
+    report_progress(options, "native-bringup-coverage-emitted-program-begin");
     result.program = materialize_prepared_native_port_emitted_program(
         coverage_primary_program, result.latent_aot);
+    report_progress(options, "native-bringup-coverage-emitted-program-end");
     report_progress(
         options,
         "native-bringup-coverage-emission:modules=" +
             std::to_string(authority.modules.size()) +
             ":entries=" + std::to_string(coverage_hints.size()));
+    report_progress(options, "native-bringup-coverage-prepare-end");
     return result;
 }
 
@@ -41787,7 +41895,9 @@ static PortExportResult export_dreamcast_port_project_impl(
     std::shared_ptr<NativeDiscAnalysisState> admitted = {},
     const NativeDiscAnalysisArtifactIdentity* const
         runtime_frontier_binding = nullptr,
-    const bool game_project_image_contract_prevalidated = false) {
+    const bool game_project_image_contract_prevalidated = false,
+    // PreparedPortProgram has no selected policy: preserve its full-FVA default.
+    const bool enable_function_value_analysis = true) {
     if (output_root.empty())
         throw std::invalid_argument("Portexport braucht ein Ausgabeziel.");
     switch (options.native_execution_profile) {
@@ -41840,7 +41950,8 @@ static PortExportResult export_dreamcast_port_project_impl(
                 "Complete-Disassembly-Coverage verlor den validierten "
                 "Discexport-Kontext.");
         coverage_emission = prepare_native_bringup_coverage_emission(
-            prepared, options, *disc_context, proof_latent_aot);
+            prepared, options, *disc_context, proof_latent_aot,
+            enable_function_value_analysis);
     }
     const auto& latent_aot = coverage_emission.has_value()
                                  ? coverage_emission->latent_aot
@@ -44803,7 +44914,9 @@ PortExportResult export_dreamcast_port_project(
         true,
         analyzed.latent_external_primary_roots,
         analyzed.admitted_state,
-        &analyzed.analysis_artifact_identity);
+        &analyzed.analysis_artifact_identity,
+        false,
+        analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly);
     report.boot_analysis_cache_hit = analyzed.boot_analysis_cache_hit;
     report.boot_analysis_pipeline_runs =
         analyzed.boot_analysis_pipeline_runs;
@@ -45016,7 +45129,8 @@ PortExportResult export_dreamcast_port_project_from_boot_artifact(
         {},
         {},
         nullptr,
-        true);
+        true,
+        analysis_mode != PortAnalysisMode::ConservativeRuntimeOnly);
     report.boot_analysis_cache_hit =
         prepared_analysis.cache_hit;
     report.boot_analysis_pipeline_runs =
