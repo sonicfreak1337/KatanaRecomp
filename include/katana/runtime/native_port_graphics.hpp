@@ -734,6 +734,9 @@ struct NativePortFogState final {
     float start = 0.0f;
     float end = 1.0f;
     float density = 1.0f;
+    // Piecewise-linear authored knots; the last endpoint repeats. Providers
+    // must apply their source-format quantization before publishing these
+    // values. This is not an arbitrary pair-per-column hardware fog table.
     std::array<float, native_port_fog_table_entries> lookup_table{};
 };
 

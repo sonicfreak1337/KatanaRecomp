@@ -4808,9 +4808,35 @@ class NativePortSoundBankEngine::Core final {
             value.key_released = reader.boolean();
             value.sustained = reader.boolean();
             value.start_serial = reader.scalar<std::uint64_t>();
+            // Capture runs after the final sample's phase increment. The next
+            // render performs the loop/end transition, so retain one bounded
+            // step of overshoot (including its fractional part) verbatim.
+            // Bound both cached multipliers from the authored split instead
+            // of letting corrupt finite caches inflate the permitted phase.
+            const auto maximum_base_step = std::max(
+                pitch_step(*split, value.note, 0.0),
+                pitch_step(*split, value.note, 1.0,
+                           value.bend_high, value.bend_low) *
+                    aica_source_sample_rate / config_.output_sample_rate);
+            const auto maximum_lfo_pitch_ratio = std::pow(
+                2.0, ((127.0 / 128.0) *
+                      lfo_pitch_cents(split->lfo_pitch_depth)) / 1200.0);
+            const auto maximum_post_render_phase =
+                static_cast<double>(value.sample->size()) +
+                value.base_step * maximum_lfo_pitch_ratio;
+            const auto invalid_cached_lfo_ratio =
+                value.lfo_pitch_cache_valid &&
+                std::ranges::any_of(value.lfo_pitch_ratio,
+                    [&](const double ratio) {
+                        return !(ratio > 0.0) ||
+                               ratio > maximum_lfo_pitch_ratio;
+                    });
             if (value.channel >= maximum_midi_channels || value.note > 127u ||
                 value.velocity > 127u || value.phase < 0.0 ||
-                value.phase > value.sample->size() || value.base_step <= 0.0 ||
+                value.base_step <= 0.0 || value.base_step > maximum_base_step ||
+                !std::isfinite(maximum_post_render_phase) ||
+                value.phase > maximum_post_render_phase ||
+                invalid_cached_lfo_ratio ||
                 value.lfo_step < 0.0 || value.lfo_phase < 0.0 ||
                 value.lfo_phase >= 1.0 || value.bend_high > 24u ||
                 value.bend_low > 24u ||
