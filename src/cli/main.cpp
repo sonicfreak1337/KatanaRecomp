@@ -11977,6 +11977,7 @@ struct NativeBringupCheckpoint final {
     std::string prior_native_port_sha256;
     std::string producer_provenance_sha256;
     std::string cache_identity;
+    std::shared_ptr<katana::runtime::NativePortArtifact> prior_native_port;
 };
 
 struct NativeBringupProviderSemanticBinding final {
@@ -12134,7 +12135,7 @@ NativeBringupCheckpoint load_native_bringup_checkpoint(
         throw std::invalid_argument(
             "Native-Bring-up-Checkpoint besitzt kein revalidierbares "
             "NativeDisc-Analysearchiv.");
-    const auto prior_native_port =
+    auto prior_native_port =
         katana::runtime::NativePortArtifact::load(prior_native_port_path);
     const auto loaded_prior_native_port_bytes = read_safe_small_port_file(
         prior_native_port->canonical_path(),
@@ -12169,6 +12170,7 @@ NativeBringupCheckpoint load_native_bringup_checkpoint(
         result.manifest_sha256,
         result.prior_native_port_sha256,
         result.producer_provenance_sha256);
+    result.prior_native_port = std::move(prior_native_port);
     return result;
 }
 
@@ -13463,6 +13465,16 @@ int export_port_project(const std::filesystem::path& source_path,
                     : nullptr;
             export_options.native_port_artifact_identity =
                 native_port_artifact_identity;
+            if (native_bringup_checkpoint.has_value()) {
+                // Retain the verified prior artifact only to reconstruct its
+                // exact image-analysis key. Core still revalidates every
+                // NativePort delta; this pointer creates no authority itself.
+                export_options.resume_native_port_definition =
+                    &native_bringup_checkpoint->prior_native_port->definition();
+                export_options.resume_native_port_artifact_identity =
+                    native_bringup_checkpoint->prior_native_port
+                        ->artifact_identity();
+            }
             export_options.game_project_runtime_image_payloads =
                 runtime_image_payloads;
             export_options.native_port_bootstrap_write_payloads =

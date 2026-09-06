@@ -954,6 +954,26 @@ int main(const int argc, char** const argv) {
         katana::runtime::NativePortRuntimeImageBindings bindings(
             cpu, images, image_guard, image_ledger);
         const auto inactive_stamp = bindings.dispatch_stamp();
+        // Sonic quickload must validate the saved owner before the unrelated
+        // live level is retired. Prove exact aliases against saved RAM while
+        // this image is inactive and its live bytes deliberately differ.
+        const auto saved_image = katana::runtime::capture_native_port_main_memory(cpu);
+        cpu.memory.write_u16(0x0C910000u, 0u, katana::runtime::CodeWriteSource::Copy);
+        for (const auto entry : {0x0C910000u, 0x8C910000u, 0xAC910000u})
+            static_cast<void>(bindings.validate_development_state_image(
+                "closure-runtime-image", entry, saved_image));
+        bool saved_midblock_rejected = false;
+        try {
+            static_cast<void>(bindings.validate_development_state_image(
+                "closure-runtime-image", runtime_start + 2u, saved_image));
+        } catch (const katana::runtime::NativePortContractError&) {
+            saved_midblock_rejected = true;
+        }
+        require(saved_midblock_rejected && bindings.dispatch_stamp() == inactive_stamp &&
+                    bindings.active_images_for_development_state().empty() &&
+                    cpu.memory.read_u16(0x0C910000u) == 0u,
+                "Saved-entry preflight used live bytes, accepted a midblock, or changed ownership.");
+        cpu.memory.write_bytes(0x0C910000u, bytes, katana::runtime::CodeWriteSource::Copy);
         require(bindings.recognizes_image("closure-runtime-image") &&
                     !bindings.recognizes_image("unknown-runtime-image"),
                 "Runtime-Image-Entwicklungszustand verliert seine feste "
@@ -1045,6 +1065,12 @@ int main(const int argc, char** const argv) {
             }, katana::runtime::GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
         require(cpu.memory.direct_linear_memory_guard(true).write_bytes == nullptr,
                 "Sonic restore test must retain the production write observer.");
+        const auto before_preflight = katana::runtime::capture_native_port_main_memory(cpu);
+        katana::runtime::validate_native_port_main_memory_for_development_state(
+            cpu, saved, fixed);
+        require(observed_writes == 0u &&
+                    katana::runtime::capture_native_port_main_memory(cpu) == before_preflight,
+                "Sonic snapshot preflight modified live RAM or notified a write observer.");
         katana::runtime::restore_native_port_main_memory_for_development_state(
             cpu, saved, fixed);
         const auto restored =
@@ -1057,6 +1083,16 @@ int main(const int argc, char** const argv) {
                 "Unchanged restored RAM must not publish spurious writes.");
         auto invalid = restored;
         invalid[0x100u] = 0xA5u;
+        bool preflight_rejected = false;
+        try {
+            katana::runtime::validate_native_port_main_memory_for_development_state(
+                cpu, invalid, fixed);
+        } catch (const katana::runtime::NativePortContractError&) {
+            preflight_rejected = true;
+        }
+        require(preflight_rejected && observed_writes == initial_writes &&
+                    katana::runtime::capture_native_port_main_memory(cpu) == restored,
+                "Sonic snapshot preflight did not reject immutable drift without mutation.");
         bool rejected = false;
         try {
             katana::runtime::

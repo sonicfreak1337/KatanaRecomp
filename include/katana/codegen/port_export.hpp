@@ -162,6 +162,14 @@ struct PortExportOptions {
     // callers without an artifact may leave it empty and receive the
     // definition-derived export identity instead.
     std::string native_port_artifact_identity;
+    // Prior verified NativePort input retained by a NativeBringup checkpoint.
+    // This is only the basis for reconstructing the prior image-analysis key;
+    // the exporter revalidates every delta against the current definition, and
+    // the pointer alone grants no analysis or execution authority. The caller
+    // owns the definition and identity storage for the complete export call.
+    const katana::runtime::NativePortDefinition*
+        resume_native_port_definition = nullptr;
+    std::string_view resume_native_port_artifact_identity;
     // Exact private payloads for descriptor-only runtime images. Every
     // descriptor requires one uniquely identified payload and extra payloads
     // are rejected.

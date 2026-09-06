@@ -291,6 +291,10 @@ class NativePortRuntimeImageBindings final {
     [[nodiscard]] NativePortExecutableRange validate_development_state_image(
         std::string_view image_id,
         std::span<const std::uint8_t> main_memory) const;
+    [[nodiscard]] NativePortExecutableRange validate_development_state_image(
+        std::string_view image_id,
+        std::uint32_t entry,
+        std::span<const std::uint8_t> main_memory) const;
     [[nodiscard]] std::optional<NativePortRuntimeImageActiveEntryView>
     active_entry_for_address(std::uint32_t address) const;
     [[nodiscard]] NativePortRuntimeImageDispatchStamp
@@ -467,10 +471,16 @@ deactivate_native_port_executable_overlaps(
 [[nodiscard]] std::vector<std::uint8_t>
 capture_native_port_main_memory(const CpuState& cpu);
 
-// Restores the complete aliased main-RAM backing after verifying that every
-// fixed executable/read-only byte is identical to the current product. This
-// intentionally bypasses ordinary per-write observers only for those proven
-// identical fixed bytes; all dynamic executable owners must be retired first.
+// Read-only preflight against the product's fixed immutable ranges. No
+// observer, memory, resource or executable-lifecycle state is changed.
+void validate_native_port_main_memory_for_development_state(
+    const CpuState& cpu,
+    std::span<const std::uint8_t> bytes,
+    std::span<const NativePortImmutableRange> immutable_ranges);
+
+// Revalidates fixed bytes immediately before restoring the mutable backing.
+// Fixed bytes are not written; normal write observers remain installed.
+// All dynamic executable owners must be retired before this commit.
 void restore_native_port_main_memory_for_development_state(
     CpuState& cpu,
     std::span<const std::uint8_t> bytes,

@@ -1179,6 +1179,34 @@ NativePortRuntimeImageBindings::validate_development_state_image(
             found->byte_size};
 }
 
+NativePortExecutableRange
+NativePortRuntimeImageBindings::validate_development_state_image(
+    const std::string_view image_id,
+    const std::uint32_t entry,
+    const std::span<const std::uint8_t> main_memory) const {
+    const auto range = validate_development_state_image(image_id, main_memory);
+    const auto found = std::ranges::find_if(impl_->images,
+        [image_id](const NativePortRuntimeImageView& image) {
+            return image.image_id == image_id;
+        });
+    const auto runtime_start = canonical_native_port_runtime_alias(found->runtime_start);
+    const auto runtime_entry = canonical_native_port_runtime_alias(entry);
+    const auto runtime_end = static_cast<std::uint64_t>(runtime_start) + found->byte_size;
+    if (runtime_entry < runtime_start || runtime_entry >= runtime_end)
+        throw NativePortContractError(NativePortContractFailure::AotContractViolation,
+                                      "runtime-image-development-state-entry");
+    const auto source_offset = runtime_entry - runtime_start;
+    const auto block = std::lower_bound(
+        found->block_identities.begin(), found->block_identities.end(), source_offset,
+        [](const auto& candidate, const std::uint32_t value) {
+            return candidate.source_offset < value;
+        });
+    if (block == found->block_identities.end() || block->source_offset != source_offset)
+        throw NativePortContractError(NativePortContractFailure::AotContractViolation,
+                                      "runtime-image-development-state-entry");
+    return range;
+}
+
 std::optional<NativePortRuntimeImageActiveEntryView>
 NativePortRuntimeImageBindings::active_entry_for_address(
     const std::uint32_t address) const {
@@ -2807,15 +2835,15 @@ capture_native_port_main_memory(const CpuState& cpu) {
             guard.read_bytes + offset + native_port_main_memory_backing_size};
 }
 
-void restore_native_port_main_memory_for_development_state(
-    CpuState& cpu,
+namespace {
+std::vector<BootstrapBackingInterval> validated_development_immutable_intervals(
     const std::span<const std::uint8_t> bytes,
+    const std::span<const std::uint8_t> current,
     const std::span<const NativePortImmutableRange> immutable_ranges) {
     if (bytes.size() != native_port_main_memory_backing_size)
         throw NativePortContractError(
             NativePortContractFailure::BootstrapFailed,
             "development-state-main-memory-size");
-    const auto current = capture_native_port_main_memory(cpu);
     std::vector<BootstrapBackingInterval> immutable;
     immutable.reserve(immutable_ranges.size());
     for (const auto& range : immutable_ranges)
@@ -2831,6 +2859,26 @@ void restore_native_port_main_memory_for_development_state(
                 NativePortContractFailure::ImmutableMemoryWrite,
                 "development-state-fixed-immutable-drift");
     }
+    return immutable;
+}
+} // namespace
+
+void validate_native_port_main_memory_for_development_state(
+    const CpuState& cpu,
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const NativePortImmutableRange> immutable_ranges) {
+    const auto current = capture_native_port_main_memory(cpu);
+    static_cast<void>(validated_development_immutable_intervals(
+        bytes, current, immutable_ranges));
+}
+
+void restore_native_port_main_memory_for_development_state(
+    CpuState& cpu,
+    const std::span<const std::uint8_t> bytes,
+    const std::span<const NativePortImmutableRange> immutable_ranges) {
+    const auto current = capture_native_port_main_memory(cpu);
+    auto immutable = validated_development_immutable_intervals(
+        bytes, current, immutable_ranges);
     // The native write observer intentionally denies raw mutable pointers.
     // Preserve that observer and publish one admitted transaction instead.
     // Fixed immutable bytes were verified above and must not be written even

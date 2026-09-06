@@ -20222,6 +20222,31 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    } catch (...) {\n"
               "        return false;\n"
               "    }\n"
+              "}\n";
+    // Snapshot preflight must not reuse live owner/relocation lookups or the
+    // chainability predicate: an exact hook entry is a valid dispatch target.
+    output << "bool native_development_static_entry(const std::uint32_t address) noexcept {\n"
+              "    if ((address & 1u) != 0u || (address >> 29u) >= 6u) return false;\n"
+              "    try {\n"
+              "        const auto physical = katana::runtime::canonical_physical_address(address);\n"
+              "        const auto source = physical | 0x80000000u;\n"
+              "        for (const auto candidate : {source, source ^ 0x20000000u}) {\n"
+              "            const auto* entry = find_exact_entry(candidate);\n"
+              "            if (exact_dispatch_entry_matches_owner_class(entry, true)) return true;\n"
+              "        }\n"
+              "        switch (physical) {\n";
+    std::set<std::uint32_t> development_static_hooks;
+    for (const auto& hook : definition.hooks) {
+        if (katana::runtime::native_port_hook_is_executable(hook.requirement) &&
+            hook.code_source == katana::runtime::NativePortHookCodeSource::StaticImage)
+            development_static_hooks.insert(
+                katana::runtime::canonical_physical_address(hook.guest_address));
+    }
+    for (const auto address : development_static_hooks)
+        output << "        case 0x" << symbol(address) << "u: return true;\n";
+    output << "        default: return false;\n"
+              "        }\n"
+              "    } catch (...) { return false; }\n"
               "}\n"
               "} // namespace runtime_dispatch_detail\n\n";
 
@@ -21361,6 +21386,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        closure_probe_dispatch_pending = false;\n"
               "    }\n"
               "}\n"
+              "bool validate_native_development_state_main_memory(\n"
+              "    katana::runtime::NativePortContext& context,\n"
+              "    std::span<const std::uint8_t> bytes) noexcept;\n"
               "bool restore_native_development_state_main_memory(\n"
               "    katana::runtime::NativePortContext& context,\n"
               "    std::span<const std::uint8_t> bytes) noexcept;\n"
@@ -21393,7 +21421,9 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "            runtime_dispatch_detail::active_loaded_aot_binder != nullptr ||\n"
               "            context.runtime_images != nullptr ||\n"
               "            context.loaded_aot != nullptr ||\n"
-              "            context.development_state_restore_main_memory != nullptr"
+              "            context.development_state_restore_main_memory != nullptr ||\n"
+              "            context.development_state_validate_main_memory != nullptr ||\n"
+              "            context.development_state_static_entry != nullptr"
            << (native_bringup
                    ? " ||\n            active_native_bringup_table != nullptr ||\n"
                      "            active_native_bringup_context != nullptr ||\n"
@@ -21416,6 +21446,10 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        context.loaded_aot = &loaded_aot_binder;\n"
               "        context.development_state_restore_main_memory =\n"
               "            &restore_native_development_state_main_memory;\n"
+              "        context.development_state_validate_main_memory =\n"
+              "            &validate_native_development_state_main_memory;\n"
+              "        context.development_state_static_entry =\n"
+              "            &runtime_dispatch_detail::native_development_static_entry;\n"
            << (native_bringup
                    ? "        active_native_bringup_table = &native_bringup_table;\n"
                      "        active_native_bringup_context = &native_bringup_context;\n"
@@ -21449,6 +21483,8 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "        context_.loaded_aot = nullptr;\n"
               "        context_.runtime_images = nullptr;\n"
               "        context_.development_state_restore_main_memory = nullptr;\n"
+              "        context_.development_state_validate_main_memory = nullptr;\n"
+              "        context_.development_state_static_entry = nullptr;\n"
               "        runtime_dispatch_detail::reset_native_dispatch_cache();\n"
               "        request_native_host_boundary_poll();\n"
               "        runtime_dispatch_detail::active_loaded_aot_binder = nullptr;\n"
@@ -22295,6 +22331,25 @@ std::vector<ProjectArtifact> native_port_dispatch_artifacts(
               "    } catch (...) {\n"
               "        std::cerr << \"KATANA_DEVELOPMENT_STATE operation=load\"\n"
               "                     \" failure=memory-restore\" << '\\n';\n"
+              "        return false;\n"
+              "    }\n"
+              "}\n"
+           << "bool validate_native_development_state_main_memory(\n"
+              "    katana::runtime::NativePortContext& context,\n"
+              "    const std::span<const std::uint8_t> bytes) noexcept {\n"
+              "    try {\n"
+              "        if (context.cpu == nullptr) return false;\n"
+              "        katana::runtime::\n"
+              "            validate_native_port_main_memory_for_development_state(\n"
+              "                *context.cpu, bytes, native_immutable_ranges);\n"
+              "        return true;\n"
+              "    } catch (const std::exception& error) {\n"
+              "        std::cerr << \"KATANA_DEVELOPMENT_STATE operation=preflight\"\n"
+              "                  << \" failure=\" << error.what() << '\\n';\n"
+              "        return false;\n"
+              "    } catch (...) {\n"
+              "        std::cerr << \"KATANA_DEVELOPMENT_STATE operation=preflight\"\n"
+              "                     \" failure=memory-preflight\" << '\\n';\n"
               "        return false;\n"
               "    }\n"
               "}\n"
@@ -41234,8 +41289,95 @@ try_reuse_native_disc_analysis_artifact(
                     expected_identity.analysis_mode) !=
                     PortAnalysisMode::ConservativeRuntimeOnly),
             options.analysis_cache_implementation_identity);
-        if (image_key != artifact.identity.image_analysis_key)
-            return reject("image-analysis-key");
+        if (image_key != artifact.identity.image_analysis_key) {
+            // A newly installed non-replacing function guard can add an
+            // external-entry hint for an entry which was already a function
+            // hint. CFA unions both lanes before constructing ingress
+            // boundaries, so this one additive duplicate is semantically
+            // inert. Reconstruct the exact producer key first, then prove
+            // that removing only such duplicates explains the whole delta.
+            // Never accept a new decode root, instruction/resume boundary,
+            // function extent, callback target, or other analysis directive.
+            const auto* prior_port = options.resume_native_port_definition;
+            if (!resume_artifact_requested || !native_port_contract_changed ||
+                prior_port == nullptr || options.native_port_definition == nullptr ||
+                !current_overrides.has_value() ||
+                options.resume_native_port_artifact_identity !=
+                    artifact.identity.native_port_artifact_identity ||
+                native_port_export_identity(prior_port) !=
+                    artifact.identity.native_port_identity)
+                return reject("image-analysis-key");
+            const auto prior_overrides = port_analysis_overrides(
+                analysis_game_project, prior_port, image,
+                options.native_aot_resume_entries);
+            if (!prior_overrides.has_value())
+                return reject("image-analysis-prior-overrides");
+            const auto key_for_overrides = [&](const auto& overrides) {
+                return make_boot_analysis_cache_key(
+                    image, &overrides,
+                    boot_analysis_semantic_contract_identity(
+                        artifact_options,
+                        static_cast<PortAnalysisMode>(expected_identity.analysis_mode) !=
+                            PortAnalysisMode::ConservativeRuntimeOnly),
+                    options.analysis_cache_implementation_identity);
+            };
+            if (key_for_overrides(*prior_overrides) != artifact.identity.image_analysis_key)
+                return reject("image-analysis-prior-key");
+            const auto same_hint = [](const auto& left, const auto& right) {
+                return left.address == right.address && left.line == right.line;
+            };
+            for (const auto& hint : prior_overrides->external_entry_hints) {
+                if (std::none_of(current_overrides->external_entry_hints.begin(),
+                                 current_overrides->external_entry_hints.end(),
+                                 [&](const auto& current) { return same_hint(hint, current); }))
+                    return reject("image-analysis-entry-hint-removal");
+            }
+            std::size_t redundant_entries = 0u;
+            for (const auto& hint : current_overrides->external_entry_hints) {
+                if (std::any_of(prior_overrides->external_entry_hints.begin(),
+                                prior_overrides->external_entry_hints.end(),
+                                [&](const auto& prior) { return same_hint(hint, prior); }))
+                    continue;
+                if (hint.line != 0u ||
+                    std::none_of(prior_overrides->function_entry_hints.begin(),
+                                 prior_overrides->function_entry_hints.end(),
+                                 [&](const auto& prior) { return prior.address == hint.address; }))
+                    return reject("image-analysis-new-entry-boundary");
+                const auto& hooks = options.native_port_definition->hooks;
+                const auto hook = std::find_if(hooks.begin(), hooks.end(),
+                    [&](const auto& candidate) {
+                        return candidate.guest_address == hint.address &&
+                            candidate.kind == katana::runtime::NativePortHookKind::FunctionEntry &&
+                            candidate.requirement == katana::runtime::NativePortHookRequirement::Required &&
+                            candidate.original_policy == katana::runtime::NativePortHookOriginalPolicy::MayContinueOriginal &&
+                            candidate.code_source == katana::runtime::NativePortHookCodeSource::StaticImage;
+                    });
+                if (hook == hooks.end() ||
+                    std::any_of(prior_port->hooks.begin(), prior_port->hooks.end(),
+                        [&](const auto& prior) { return prior.guest_address == hint.address; }))
+                    return reject("image-analysis-added-hook-contract");
+                std::size_t function_entries = 0u, block_entries = 0u;
+                for (const auto& function : artifact.primary.lowered_program) {
+                    function_entries += function.entry_address == hint.address ? 1u : 0u;
+                    for (const auto& block : function.blocks)
+                        block_entries += block.start_address == hint.address ? 1u : 0u;
+                }
+                if (function_entries != 1u || block_entries != 1u)
+                    return reject("image-analysis-added-hook-not-compiled-function");
+                ++redundant_entries;
+            }
+            auto normalized = *current_overrides;
+            normalized.external_entry_hints = prior_overrides->external_entry_hints;
+            if (redundant_entries == 0u ||
+                key_for_overrides(normalized) != artifact.identity.image_analysis_key)
+                return reject("image-analysis-non-hint-delta");
+            // Exact source/IR validation and the complete current admission
+            // below still run. This preserves their original completeness
+            // facts; it neither promotes an edge nor grants a new AOT target.
+            report_progress(options,
+                "native-disc-analysis-redundant-hook-hints-revalidated:" +
+                std::to_string(redundant_entries));
+        }
         const auto primary_source_binding =
             validate_native_disc_primary_artifact(
                 artifact.primary, image);

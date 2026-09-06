@@ -336,6 +336,8 @@ using NativePortDevelopmentStateHandler = NativePortDevelopmentStateResult (*)(
 using NativePortDevelopmentStateMemoryRestore = bool (*)(
     NativePortContext& context,
     std::span<const std::uint8_t> main_memory) noexcept;
+using NativePortDevelopmentStateStaticEntryQuery = bool (*)(
+    std::uint32_t address) noexcept;
 using NativePortTitleStateCleanup = void (*)(NativePortContext&) noexcept;
 
 // Native host time and frame presentation are explicit title boundaries.
@@ -494,6 +496,13 @@ class NativePortContext final {
     // The first request is retained even while a provider finishes its frame.
     NativePortHostStopReady host_stop_ready = nullptr;
     NativePortStopReason pending_host_stop_reason = NativePortStopReason::None;
+    // Append-only, generated-owned development preflight. Neither bridge
+    // mutates memory or consults the currently loaded dynamic owner. These
+    // host pointers are never serialized and preserve all prior AOT offsets.
+    NativePortDevelopmentStateMemoryRestore
+        development_state_validate_main_memory = nullptr;
+    NativePortDevelopmentStateStaticEntryQuery
+        development_state_static_entry = nullptr;
 };
 
 // Return true only for an accepted host stop. Existing non-host failures are

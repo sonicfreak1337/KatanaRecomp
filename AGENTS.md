@@ -377,21 +377,25 @@ Task implementieren
   Mehrere zusammenhaengende reviewte Tasks duerfen vor dem naechsten
   vollstaendigen Produktgurt in denselben geprueften Dirty-Batch aufgenommen
   werden.
-- Nach dem naechsten funktionierenden Sonic-NativeBringup-Build werden mit
-  genau derselben EXE alle 32 aktuell gueltigen Level-/Charakter-Kombinationen
-  des vollstaendigen Debugkatalogs genau einmal geprueft. Sobald ein Level
-  geladen ist, erhaelt es echte Gameplay-Eingaben; jeder Szenariolauf endet
-  spaetestens nach 60 Sekunden, weil aktive Gameplaypfade frueh crashen
-  koennen. Diese Vollmatrix laeuft strikt sequenziell, unsichtbar und stumm,
-  ohne Screenshot-/Audio-Capture und mit Grafikdiagnostik `Off`.
-- Dieselbe EXE prueft ausserdem den normalen Sonic-Story-Start als eigene Replayzeile
-  mit 180 Sekunden Laufzeit. Dieser ausdruecklich angeordnete Storytest ist
+- Sonic ist der konkrete Produkt- und Fortschrittstest. Vollmatrizen sind
+  kein Standardgurt und werden nicht pro Build oder Batch wiederholt.
+  Breitere Level-/Charaktermatrizen sind nur bei echten Engineaenderungen
+  oder Grafiktests mit begruendetem Abdeckungsbedarf zulaessig. Ansonsten
+  werden der aktuelle Nutzerreplay bis ueber den bisherigen Fehler hinaus
+  und die direkt betroffenen Regressionen gezielt geprueft. Historische
+  Passes behalten ihre Buildidentitaet; unbelegte Pfade gelten nicht als Pass.
+  Debug-Gameplayproben dauern hoechstens 60 Sekunden, sequenziell,
+  unsichtbar und stumm; Grafikdiagnostik bleibt ohne konkreten Bedarf Off.
+- Dieselbe EXE prueft den aktuellen Sonic-Story-Pfad als gezielte Replayzeile
+  mit hoechstens 300 Sekunden Laufzeit. Dieser ausdruecklich angeordnete Storytest ist
   die Ausnahme vom 60-Sekunden-Limit der Debug-Leveltests. Sein vorhandener
   Replaypfad, erreichte Story-Meilensteine, Crashes und Performance werden
   separat gebunden; ein Debug-Levelstart ersetzt den normalen Storypfad nicht.
   Bestandene Debug-Level behalten ihre urspruenglichen Build-Identitaeten.
-- Die Vollmatrix subsumiert die repraesentativen sechs Pflichtreplays; dieselbe
-  EXE durchlaeuft nicht zusaetzlich noch einmal eine getrennte Sechsermatrix.
+- Wird eine begruendete Engine-/Grafikmatrix ausgefuehrt, subsumiert sie
+  gleichwertige Einzelreplays. Eine pauschale zusaetzliche Sechsermatrix
+  wird nicht ausgefuehrt; auch andere Sechsergurt-Verweise begruenden keine
+  automatische Vollmatrix gegen den aktuellen gezielten Sonic-Testscope.
   Ein nachgewiesener Fehler im gemeinsamen Testprotokoll darf den Lauf
   vorzeitig beenden: Teilbefunde bleiben erhalten, kein betroffener Fall gilt
   als bestanden, und der korrigierte Lauf prueft die weiterhin offenen Faelle.
