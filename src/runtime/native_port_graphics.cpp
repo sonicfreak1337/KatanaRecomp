@@ -90,6 +90,8 @@ constexpr UINT runtime_menu_simulation_fps = 0x7101u;
 constexpr UINT runtime_menu_performance_overlay = 0x7102u;
 constexpr UINT runtime_menu_save_state = 0x7103u;
 constexpr UINT runtime_menu_load_state = 0x7104u;
+constexpr UINT runtime_menu_quick_save_state = 0x7105u;
+constexpr UINT runtime_menu_quick_load_state = 0x7106u;
 constexpr UINT runtime_menu_rate_first = 0x7110u;
 constexpr UINT runtime_menu_rate_last =
     runtime_menu_rate_first +
@@ -3263,6 +3265,17 @@ class NativePortGraphicsBackend final {
         }
         if (self == nullptr) return DefWindowProcW(window, message, word, data);
         switch (message) {
+        case WM_KEYDOWN:
+            if (word == VK_F5 || word == VK_F9) {
+                if ((static_cast<std::uintptr_t>(data) &
+                     (std::uintptr_t{1u} << 30u)) == 0u)
+                    self->quick_development_state(
+                        word == VK_F5
+                            ? NativePortDevelopmentStateOperation::Save
+                            : NativePortDevelopmentStateOperation::Load);
+                return 0;
+            }
+            return DefWindowProcW(window, message, word, data);
         case WM_COMMAND:
             if (HIWORD(word) == 0u &&
                 self->handle_runtime_menu_command(
@@ -3293,6 +3306,14 @@ class NativePortGraphicsBackend final {
     [[nodiscard]] bool handle_runtime_menu_command(
         const UINT command) noexcept {
         if (runtime_options_ == nullptr) return false;
+        if (command == runtime_menu_quick_save_state ||
+            command == runtime_menu_quick_load_state) {
+            quick_development_state(
+                command == runtime_menu_quick_save_state
+                    ? NativePortDevelopmentStateOperation::Save
+                    : NativePortDevelopmentStateOperation::Load);
+            return true;
+        }
         if (command == runtime_menu_save_state ||
             command == runtime_menu_load_state) {
             choose_development_state_path(
@@ -3333,6 +3354,69 @@ class NativePortGraphicsBackend final {
         return true;
     }
 
+    [[nodiscard]] bool publish_development_state_request(
+        const NativePortDevelopmentStateOperation operation,
+        const std::string_view path) {
+        if (runtime_options_ == nullptr) return false;
+        const auto published = runtime_options_->state_request_publication.load(
+            std::memory_order_acquire);
+        if (runtime_options_->state_request_consumed.load(
+                std::memory_order_acquire) != published)
+            return false;
+        if (path.empty() || path.find('\0') != std::string_view::npos ||
+            path.size() >= runtime_options_->state_request_path.size())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::InvalidConfig, 0u,
+                "development-state-path-size");
+        if (published == std::numeric_limits<std::uint64_t>::max())
+            throw NativePortGraphicsError(
+                NativePortGraphicsFailure::RenderThreadContract, 0u,
+                "development-state-request-sequence");
+        std::memcpy(runtime_options_->state_request_path.data(),
+                    path.data(), path.size());
+        runtime_options_->state_request_path[path.size()] = '\0';
+        runtime_options_->state_request_path_bytes =
+            static_cast<std::uint32_t>(path.size());
+        runtime_options_->state_request_operation = operation;
+        runtime_options_->state_request_publication.store(
+            published + 1u, std::memory_order_release);
+        return true;
+    }
+
+    void quick_development_state(
+        const NativePortDevelopmentStateOperation operation) noexcept {
+        if (runtime_options_ == nullptr) return;
+        const auto published = runtime_options_->state_request_publication.load(
+            std::memory_order_acquire);
+        if (runtime_options_->state_request_consumed.load(
+                std::memory_order_acquire) != published) {
+            std::fputs("KATANA_QUICK_STATE ignored=request-pending\n", stderr);
+            return;
+        }
+        if (config_.development_state_directory.empty()) {
+            std::fputs("KATANA_QUICK_STATE rejected=directory-empty\n", stderr);
+            return;
+        }
+        try {
+            const std::filesystem::path directory(
+                utf8_to_wide(config_.development_state_directory));
+            const auto path = directory / L"quicksave.kstate";
+            const auto utf8_path = wide_to_utf8(path.native());
+            if (operation == NativePortDevelopmentStateOperation::Save) {
+                std::error_code error;
+                std::filesystem::create_directories(directory, error);
+                if (error) {
+                    std::fputs("KATANA_QUICK_STATE rejected=directory-create\n", stderr);
+                    return;
+                }
+            }
+            if (!publish_development_state_request(operation, utf8_path))
+                std::fputs("KATANA_QUICK_STATE ignored=request-pending\n", stderr);
+        } catch (...) {
+            std::fputs("KATANA_QUICK_STATE rejected=request-create\n", stderr);
+        }
+    }
+
     void choose_development_state_path(
         const NativePortDevelopmentStateOperation operation) noexcept {
         try {
@@ -3352,8 +3436,9 @@ class NativePortGraphicsBackend final {
             if (!config_.development_state_directory.empty()) {
                 std::error_code error;
                 const auto directory = std::filesystem::path(
-                    std::string(config_.development_state_directory));
-                std::filesystem::create_directories(directory, error);
+                    utf8_to_wide(config_.development_state_directory));
+                if (operation == NativePortDevelopmentStateOperation::Save)
+                    std::filesystem::create_directories(directory, error);
                 if (error)
                     throw NativePortGraphicsError(
                         NativePortGraphicsFailure::InvalidConfig,
@@ -3402,27 +3487,10 @@ class NativePortGraphicsBackend final {
             }
 
             const auto utf8_path = wide_to_utf8(path.data());
-            if (utf8_path.empty() ||
-                utf8_path.size() >=
-                    runtime_options_->state_request_path.size())
-                throw NativePortGraphicsError(
-                    NativePortGraphicsFailure::InvalidConfig,
-                    0u,
-                    "development-state-path-size");
-            std::memcpy(runtime_options_->state_request_path.data(),
-                        utf8_path.data(),
-                        utf8_path.size());
-            runtime_options_->state_request_path[utf8_path.size()] = '\0';
-            runtime_options_->state_request_path_bytes =
-                static_cast<std::uint32_t>(utf8_path.size());
-            runtime_options_->state_request_operation = operation;
-            if (published == std::numeric_limits<std::uint64_t>::max())
-                throw NativePortGraphicsError(
-                    NativePortGraphicsFailure::RenderThreadContract,
-                    0u,
-                    "development-state-request-sequence");
-            runtime_options_->state_request_publication.store(
-                published + 1u, std::memory_order_release);
+            if (!publish_development_state_request(operation, utf8_path))
+                MessageBoxW(window_,
+                            L"Der vorherige Save-State-Auftrag wird noch verarbeitet.",
+                            L"KatanaRecomp", MB_OK | MB_ICONINFORMATION);
         } catch (...) {
             MessageBoxW(window_,
                         L"Der Save-State-Auftrag konnte nicht erstellt werden.",
@@ -3480,6 +3548,12 @@ class NativePortGraphicsBackend final {
                         runtime_menu_load_state,
                         L"Load State...") == FALSE)
             fail_menu("runtime-menu-load-state");
+        if (AppendMenuW(options_menu, MF_STRING, runtime_menu_quick_save_state,
+                        L"Quick Save\tF5") == FALSE)
+            fail_menu("runtime-menu-quick-save-state");
+        if (AppendMenuW(options_menu, MF_STRING, runtime_menu_quick_load_state,
+                        L"Quick Load\tF9") == FALSE)
+            fail_menu("runtime-menu-quick-load-state");
         if (AppendMenuW(options_menu, MF_SEPARATOR, 0u, nullptr) == FALSE)
             fail_menu("runtime-menu-state-separator");
         for (std::size_t index = 0u;
@@ -6728,7 +6802,7 @@ class NativePortGraphicsDevice::Impl final {
         const auto consumed =
             runtime_options_.state_request_consumed.load(
                 std::memory_order_relaxed);
-        if (published == consumed) return std::nullopt;
+        if (published == consumed) return take_development_state_probe_request();
         const auto path_bytes = runtime_options_.state_request_path_bytes;
         if (path_bytes == 0u ||
             path_bytes >= runtime_options_.state_request_path.size()) {
@@ -6745,6 +6819,50 @@ class NativePortGraphicsDevice::Impl final {
         runtime_options_.state_request_consumed.store(
             published, std::memory_order_release);
         signal_consumer_noexcept();
+        return request;
+    }
+
+    // Producer-owned diagnostic requests exercise the same save/load handler as
+    // F5/F9 without replacing host services or publishing into the UI's SPSC slot.
+    // The simulation counter is host-monotonic and is deliberately not rewound.
+    [[nodiscard]] std::optional<NativePortDevelopmentStateRequest>
+    take_development_state_probe_request() {
+        if (!development_probe_initialized_) {
+            development_probe_initialized_ = true;
+            const auto* mode = std::getenv("KATANA_NATIVE_DEVELOPMENT_STATE_PROBE");
+            if (mode != nullptr && *mode != 0) {
+                if (std::strcmp(mode, "roundtrip") == 0) development_probe_count_ = 3u;
+                else if (std::strcmp(mode, "load") == 0) development_probe_count_ = 1u;
+                else fail_facade("development-state-probe-mode");
+                if (development_state_directory_storage_.empty())
+                    fail_facade("development-state-probe-directory");
+            }
+        }
+        if (development_probe_next_ >= development_probe_count_)
+            return std::nullopt;
+        const auto frames = runtime_options_.simulation_frames.load(
+            std::memory_order_relaxed);
+        if (frames < 600u + 180u * development_probe_next_)
+            return std::nullopt;
+        const auto operation = development_probe_count_ == 3u && development_probe_next_ == 0u
+            ? NativePortDevelopmentStateOperation::Save
+            : NativePortDevelopmentStateOperation::Load;
+        const auto directory = std::filesystem::u8path(development_state_directory_storage_);
+        if (operation == NativePortDevelopmentStateOperation::Save) {
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
+            if (error) fail_facade("development-state-probe-create-directory");
+        }
+        const auto utf8 = (directory / "quicksave.kstate").u8string();
+        NativePortDevelopmentStateRequest request;
+        request.operation = operation;
+        request.path.assign(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+        request.sequence = 0x4000000000000000ull + ++development_probe_next_;
+        std::fprintf(stderr,
+            "KATANA_NATIVE_DEVELOPMENT_PROBE operation=%s sequence=%llu simulation_frames=%llu\n",
+            operation == NativePortDevelopmentStateOperation::Save ? "save" : "load",
+            static_cast<unsigned long long>(request.sequence),
+            static_cast<unsigned long long>(frames));
         return request;
     }
 
@@ -8114,6 +8232,9 @@ class NativePortGraphicsDevice::Impl final {
         NativePortGraphicsExecutionMode::Parallel;
     NativePortGraphicsExecutionMode active_mode_ =
         NativePortGraphicsExecutionMode::Parallel;
+    bool development_probe_initialized_ = false;
+    std::uint64_t development_probe_count_ = 0u;
+    std::uint64_t development_probe_next_ = 0u;
     NativePortRuntimeOptionsBridge runtime_options_;
     std::unique_ptr<NativePortGraphicsBackend> serial_backend_;
     std::unique_ptr<NativePortFrameQueue> queue_;

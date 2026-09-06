@@ -1,4 +1,5 @@
 #include "katana/runtime/native_port_sound_bank.hpp"
+#include "katana/runtime/native_port_content.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,6 +32,11 @@ constexpr std::uint32_t maximum_sound_bank_midi_ports = 4'096u;
 constexpr std::uint32_t maximum_sound_bank_units = 65'536u;
 constexpr std::uint32_t maximum_sound_bank_events = 16u * 1024u * 1024u;
 constexpr std::uint32_t maximum_sound_bank_reference_depth = 64u;
+constexpr std::uint64_t maximum_sound_bank_development_state_bytes =
+    2ull * 1024ull * 1024ull * 1024ull;
+constexpr std::uint32_t sound_bank_development_state_version = 1u;
+constexpr std::array<std::uint8_t, 8u> sound_bank_development_state_magic{
+    'K', 'S', 'B', 'S', 'T', 'A', 'T', 'E'};
 constexpr std::uint32_t maximum_mpb_programs = 128u;
 constexpr std::uint32_t maximum_mpb_layers = 4u;
 constexpr std::uint32_t maximum_mpb_splits = 128u;
@@ -131,6 +137,10 @@ void validate_config(const NativePortSoundBankConfig& config) {
         config.maximum_midi_ports > maximum_sound_bank_midi_ports ||
         config.maximum_decoded_sample_frames == 0u ||
         config.maximum_effect_state_bytes == 0u ||
+        config.maximum_development_state_bytes <
+            config.maximum_total_collection_bytes ||
+        config.maximum_development_state_bytes >
+            maximum_sound_bank_development_state_bytes ||
         !valid_effect_provider)
         fail_sound_bank(NativePortSoundBankFailure::InvalidConfig, "config");
 }
@@ -228,6 +238,163 @@ class BoundedBytes final {
            (static_cast<std::uint64_t>(bank) << 56u);
 }
 
+template <typename T, bool = std::is_enum_v<T>> struct SoundBankStateRaw {
+    using type = T;
+};
+template <typename T> struct SoundBankStateRaw<T, true> {
+    using type = std::underlying_type_t<T>;
+};
+
+class SoundBankStateWriter final {
+  public:
+    explicit SoundBankStateWriter(const std::uint64_t limit) : limit_(limit) {}
+
+    template <typename T> void scalar(const T value) {
+        static_assert(std::is_integral_v<T> || std::is_enum_v<T>);
+        using Raw = typename SoundBankStateRaw<T>::type;
+        using Unsigned = std::make_unsigned_t<Raw>;
+        const auto bits = static_cast<Unsigned>(static_cast<Raw>(value));
+        reserve(sizeof(T));
+        for (std::size_t index = 0u; index < sizeof(T); ++index)
+            bytes_.push_back(static_cast<std::uint8_t>(
+                bits >> static_cast<unsigned>(index * 8u)));
+    }
+
+    void boolean(const bool value) { scalar<std::uint8_t>(value ? 1u : 0u); }
+    void f32(const float value) {
+        if (!std::isfinite(value)) invalid();
+        scalar(std::bit_cast<std::uint32_t>(value));
+    }
+    void f64(const double value) {
+        if (!std::isfinite(value)) invalid();
+        scalar(std::bit_cast<std::uint64_t>(value));
+    }
+    void raw(const std::span<const std::uint8_t> value) {
+        reserve(value.size());
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+    void string(const std::string_view value) {
+        if (value.size() > std::numeric_limits<std::uint32_t>::max()) limit();
+        scalar(static_cast<std::uint32_t>(value.size()));
+        raw({reinterpret_cast<const std::uint8_t*>(value.data()), value.size()});
+    }
+    template <typename Handle> void handle(const Handle value) {
+        scalar(value.slot);
+        scalar(value.generation);
+    }
+    void finalize() {
+        const auto final_size = static_cast<std::uint64_t>(bytes_.size()) + 64u;
+        if (final_size > limit_) limit();
+        if (bytes_.size() < 20u) invalid();
+        for (std::size_t index = 0u; index < 8u; ++index)
+            bytes_[12u + index] = static_cast<std::uint8_t>(
+                final_size >> static_cast<unsigned>(index * 8u));
+        const auto digest = native_port_content_sha256(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(bytes_.data()), bytes_.size()));
+        if (digest.size() != 64u) invalid();
+        raw({reinterpret_cast<const std::uint8_t*>(digest.data()), digest.size()});
+    }
+    [[nodiscard]] std::vector<std::uint8_t> take() && {
+        return std::move(bytes_);
+    }
+
+  private:
+    [[noreturn]] static void invalid() {
+        fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                        "state-encode");
+    }
+    [[noreturn]] static void limit() {
+        fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
+                        "state-size");
+    }
+    void reserve(const std::uint64_t count) {
+        if (count > limit_ || bytes_.size() > limit_ - count ||
+            count > std::numeric_limits<std::size_t>::max())
+            limit();
+        const auto required = bytes_.size() + static_cast<std::size_t>(count);
+        if (required > bytes_.capacity()) {
+            const auto growth = std::max<std::uint64_t>(4096u,
+                static_cast<std::uint64_t>(bytes_.capacity()) * 2u);
+            bytes_.reserve(static_cast<std::size_t>(
+                std::min(limit_, std::max<std::uint64_t>(required, growth))));
+        }
+    }
+    std::uint64_t limit_;
+    std::vector<std::uint8_t> bytes_;
+};
+
+class SoundBankStateReader final {
+  public:
+    SoundBankStateReader(const std::span<const std::uint8_t> bytes,
+                         const std::uint64_t limit)
+        : bytes_(bytes) {
+        if (bytes.size() < 20u + 64u || bytes.size() > limit) invalid();
+        const auto payload = bytes.first(bytes.size() - 64u);
+        const auto digest = native_port_content_sha256(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size()));
+        if (digest.size() != 64u ||
+            std::memcmp(digest.data(), bytes.data() + payload.size(), 64u) != 0)
+            invalid();
+        bytes_ = payload;
+    }
+
+    template <typename T> [[nodiscard]] T scalar() {
+        static_assert(std::is_integral_v<T> || std::is_enum_v<T>);
+        using Raw = typename SoundBankStateRaw<T>::type;
+        using Unsigned = std::make_unsigned_t<Raw>;
+        extent(sizeof(T));
+        Unsigned bits = 0u;
+        for (std::size_t index = 0u; index < sizeof(T); ++index)
+            bits |= static_cast<Unsigned>(bytes_[cursor_ + index])
+                    << static_cast<unsigned>(index * 8u);
+        cursor_ += sizeof(T);
+        return static_cast<T>(static_cast<Raw>(bits));
+    }
+    [[nodiscard]] bool boolean() {
+        const auto value = scalar<std::uint8_t>();
+        if (value > 1u) invalid();
+        return value != 0u;
+    }
+    [[nodiscard]] float f32() {
+        const auto value = std::bit_cast<float>(scalar<std::uint32_t>());
+        if (!std::isfinite(value)) invalid();
+        return value;
+    }
+    [[nodiscard]] double f64() {
+        const auto value = std::bit_cast<double>(scalar<std::uint64_t>());
+        if (!std::isfinite(value)) invalid();
+        return value;
+    }
+    [[nodiscard]] std::span<const std::uint8_t> raw(const std::uint64_t size) {
+        extent(size);
+        const auto result = bytes_.subspan(cursor_, static_cast<std::size_t>(size));
+        cursor_ += static_cast<std::size_t>(size);
+        return result;
+    }
+    [[nodiscard]] std::string string() {
+        const auto value = raw(scalar<std::uint32_t>());
+        return {reinterpret_cast<const char*>(value.data()), value.size()};
+    }
+    template <typename Handle> [[nodiscard]] Handle handle() {
+        return {scalar<std::uint32_t>(), scalar<std::uint32_t>()};
+    }
+    void finish() const {
+        if (cursor_ != bytes_.size()) invalid();
+    }
+
+  private:
+    [[noreturn]] static void invalid() {
+        fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                        "state-decode");
+    }
+    void extent(const std::uint64_t count) const {
+        if (cursor_ > bytes_.size() || count > bytes_.size() - cursor_)
+            invalid();
+    }
+    std::span<const std::uint8_t> bytes_;
+    std::size_t cursor_ = 0u;
+};
+
 enum class SoundBankOpcode : std::uint16_t {
     Construct = 1u,
     Destroy,
@@ -277,6 +444,9 @@ enum class SoundBankOpcode : std::uint16_t {
     SequenceSnapshot,
     MidiPortSnapshot,
     Snapshot,
+    CaptureDevelopmentState,
+    ValidateDevelopmentState,
+    RestoreDevelopmentState,
 };
 
 struct SoundBankCommand final {
@@ -398,6 +568,7 @@ NativePortSoundBankFailure NativePortSoundBankError::failure() const noexcept {
 }
 
 class NativePortSoundBankEngine::Core final {
+    friend class NativePortSoundBankEngine::Impl;
   private:
     enum class SampleFormat : std::uint8_t { Pcm16, Pcm8, Adpcm4 };
     enum class EventKind : std::uint8_t {
@@ -551,6 +722,10 @@ class NativePortSoundBankEngine::Core final {
     };
 
     struct Collection final {
+        std::string logical_id;
+        std::u8string content_relative_path;
+        std::string byte_identity;
+        std::uint64_t source_offset = 0u;
         std::vector<std::uint8_t> bytes;
         std::array<std::optional<ProgramBank>, maximum_mlt_banks> program_banks;
         std::array<std::optional<SequenceBank>, maximum_mlt_banks> sequence_banks;
@@ -717,6 +892,11 @@ class NativePortSoundBankEngine::Core final {
             fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
                             "collection-size");
         Collection collection;
+        collection.logical_id = binding.logical_id;
+        collection.content_relative_path =
+            binding.content_relative_path.generic_u8string();
+        collection.byte_identity = binding.byte_identity;
+        collection.source_offset = binding.source_offset;
         collection.bytes.resize(immutable_bytes.size());
         std::memcpy(collection.bytes.data(), immutable_bytes.data(),
                     immutable_bytes.size());
@@ -1871,6 +2051,18 @@ class NativePortSoundBankEngine::Core final {
             kernel != nullptr && kernel->state_alignment != 0u &&
             std::has_single_bit(kernel->state_alignment) &&
             kernel->state_alignment <= 4'096u;
+        const auto callback_count =
+            static_cast<unsigned>(kernel != nullptr &&
+                                  kernel->capture_snapshot != nullptr) +
+            static_cast<unsigned>(kernel != nullptr &&
+                                  kernel->validate_snapshot != nullptr) +
+            static_cast<unsigned>(kernel != nullptr &&
+                                  kernel->restore_snapshot != nullptr);
+        const auto valid_snapshot_callbacks =
+            callback_count == 0u ||
+            (callback_count == 3u && kernel->maximum_snapshot_bytes != 0u &&
+             kernel->maximum_snapshot_bytes <=
+                 config_.maximum_effect_state_bytes);
         if (kernel == nullptr ||
             kernel->contract_version !=
                 native_port_sound_effect_kernel_contract_version ||
@@ -1881,7 +2073,8 @@ class NativePortSoundBankEngine::Core final {
             kernel->state_size > config_.maximum_effect_state_bytes ||
             kernel->state_size > std::numeric_limits<std::size_t>::max() ||
             !valid_alignment || kernel->initialize == nullptr ||
-            kernel->destroy == nullptr || kernel->render == nullptr)
+            kernel->destroy == nullptr || kernel->render == nullptr ||
+            !valid_snapshot_callbacks)
             fail_sound_bank(NativePortSoundBankFailure::UnsupportedEffect,
                             "fpb-kernel");
 
@@ -3249,9 +3442,9 @@ class NativePortSoundBankEngine::Core final {
             break;
         }
         case EnvelopeStage::Decay1:
-            voice.amplitude_attenuation = std::min(
-                voice.decay_target,
-                voice.amplitude_attenuation + voice.stage_step);
+            // Loop-start-linked Attack may enter above the Decay1 target.
+            // A decay step must not reduce attenuation at that boundary.
+            voice.amplitude_attenuation += voice.stage_step;
             if (voice.amplitude_attenuation >= voice.decay_target)
                 configure_envelope(voice, EnvelopeStage::Decay2);
             break;
@@ -3259,6 +3452,8 @@ class NativePortSoundBankEngine::Core final {
             voice.amplitude_attenuation = std::min(
                 voice.decay_target,
                 voice.amplitude_attenuation + voice.stage_step);
+            if (voice.amplitude_attenuation >= 1023.0)
+                configure_envelope(voice, EnvelopeStage::Release);
             break;
         case EnvelopeStage::Release:
             voice.amplitude_attenuation = std::min(
@@ -3277,9 +3472,9 @@ class NativePortSoundBankEngine::Core final {
                                  const Channel& channel) const {
         if (!voice.split->filter || voice.filter_stage == EnvelopeStage::Complete)
             return;
-        if (voice.filter_stage == EnvelopeStage::Decay2 &&
-            channel.filter_level3.has_value())
-            voice.filter_target = *channel.filter_level3;
+        if (voice.filter_stage == EnvelopeStage::Decay2)
+            voice.filter_target = channel.filter_level3.value_or(
+                voice.split->filter_levels[3]);
         if (voice.filter_level < voice.filter_target)
             voice.filter_level =
                 std::min(voice.filter_target,
@@ -3662,7 +3857,16 @@ class NativePortSoundBankEngine::Core final {
         const auto second = static_cast<double>((*voice.sample)[next_position]);
         double sample = first + (second - first) * fraction;
 
-        if (split.filter) {
+        // Match the neutral FEG bypass using effective controller values.
+        // Preserve both envelope and recursive history while bypassed.
+        const bool filter_active = split.filter &&
+            (split.filter_resonance != 4u ||
+             split.filter_levels[0] < 8184u ||
+             split.filter_levels[1] < 8184u ||
+             split.filter_levels[2] < 8184u ||
+             channel.filter_level3.value_or(split.filter_levels[3]) < 8184u ||
+             split.filter_levels[4] < 8184u);
+        if (filter_active) {
             advance_filter_envelope(voice, channel);
             const auto value = static_cast<std::uint32_t>(std::clamp(
                 std::llround(voice.filter_level), 0ll, 8184ll));
@@ -3925,6 +4129,944 @@ class NativePortSoundBankEngine::Core final {
             }
         }
         saturating_add(effect_frames_, frames);
+    }
+
+    template <typename Handle>
+    static void write_optional_handle(SoundBankStateWriter& writer,
+                                      const std::optional<Handle>& value) {
+        writer.boolean(value.has_value());
+        if (value.has_value()) writer.handle(*value);
+    }
+
+    template <typename Handle>
+    [[nodiscard]] static std::optional<Handle> read_optional_handle(
+        SoundBankStateReader& reader) {
+        if (!reader.boolean()) return std::nullopt;
+        return reader.handle<Handle>();
+    }
+
+    static void write_voice_controls(SoundBankStateWriter& writer,
+                                     const VoiceControls& value) {
+        writer.f32(value.gain);
+        writer.f32(value.pan);
+        writer.scalar(value.pitch_bend);
+        writer.scalar(value.direct_level);
+        writer.scalar(value.effect_level);
+    }
+
+    [[nodiscard]] static VoiceControls read_voice_controls(
+        SoundBankStateReader& reader) {
+        VoiceControls value;
+        value.gain = reader.f32();
+        value.pan = reader.f32();
+        value.pitch_bend = reader.scalar<std::int16_t>();
+        value.direct_level = reader.scalar<std::uint8_t>();
+        value.effect_level = reader.scalar<std::uint8_t>();
+        if (!valid_gain_pan(value.gain, value.pan) ||
+            value.pitch_bend < -8192 || value.pitch_bend > 8191 ||
+            value.direct_level > 127u || value.effect_level > 127u)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-controls");
+        return value;
+    }
+
+    static void write_sequence_config(SoundBankStateWriter& writer,
+                                      const NativePortSoundSequenceConfig& value) {
+        writer.scalar(value.sequence_bank);
+        writer.scalar(value.program_bank);
+        writer.scalar(value.sequence);
+        writer.f32(value.gain);
+        writer.f32(value.pan);
+        writer.f32(value.playback_rate);
+        writer.scalar(value.pitch_bend);
+        writer.scalar(value.direct_level);
+        writer.scalar(value.effect_level);
+        writer.boolean(value.enable_authored_loops);
+    }
+
+    [[nodiscard]] static NativePortSoundSequenceConfig read_sequence_config(
+        SoundBankStateReader& reader) {
+        NativePortSoundSequenceConfig value;
+        value.sequence_bank = reader.scalar<std::uint8_t>();
+        value.program_bank = reader.scalar<std::uint8_t>();
+        value.sequence = reader.scalar<std::uint16_t>();
+        value.gain = reader.f32();
+        value.pan = reader.f32();
+        value.playback_rate = reader.f32();
+        value.pitch_bend = reader.scalar<std::int16_t>();
+        value.direct_level = reader.scalar<std::uint8_t>();
+        value.effect_level = reader.scalar<std::uint8_t>();
+        value.enable_authored_loops = reader.boolean();
+        if (!valid_gain_pan(value.gain, value.pan) ||
+            !valid_playback_rate(value.playback_rate) ||
+            value.pitch_bend < -8192 || value.pitch_bend > 8191 ||
+            value.direct_level > 127u || value.effect_level > 127u)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-sequence-config");
+        return value;
+    }
+
+    static void write_midi_config(SoundBankStateWriter& writer,
+                                  const NativePortSoundMidiPortConfig& value) {
+        writer.scalar(value.program_bank);
+        writer.scalar(value.program);
+        writer.f32(value.gain);
+        writer.f32(value.pan);
+        writer.f32(value.playback_rate);
+        writer.scalar(value.pitch_bend);
+        writer.scalar(value.direct_level);
+        writer.scalar(value.effect_level);
+    }
+
+    [[nodiscard]] static NativePortSoundMidiPortConfig read_midi_config(
+        SoundBankStateReader& reader) {
+        NativePortSoundMidiPortConfig value;
+        value.program_bank = reader.scalar<std::uint8_t>();
+        value.program = reader.scalar<std::uint8_t>();
+        value.gain = reader.f32();
+        value.pan = reader.f32();
+        value.playback_rate = reader.f32();
+        value.pitch_bend = reader.scalar<std::int16_t>();
+        value.direct_level = reader.scalar<std::uint8_t>();
+        value.effect_level = reader.scalar<std::uint8_t>();
+        if (!valid_gain_pan(value.gain, value.pan) ||
+            !valid_playback_rate(value.playback_rate) ||
+            value.pitch_bend < -8192 || value.pitch_bend > 8191 ||
+            value.direct_level > 127u || value.effect_level > 127u)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-midi-config");
+        return value;
+    }
+
+    [[nodiscard]] std::array<std::uint32_t, 4u> split_location(
+        const SynthVoice& voice) const {
+        const auto& collection = require_collection(voice.collection);
+        for (std::uint32_t bank_index = 0u; bank_index < maximum_mlt_banks;
+             ++bank_index) {
+            const auto& bank = collection.program_banks[bank_index];
+            if (!bank.has_value()) continue;
+            for (std::uint32_t program_index = 0u;
+                 program_index < bank->programs.size(); ++program_index) {
+                const auto& program = bank->programs[program_index];
+                for (std::uint32_t layer_index = 0u;
+                     layer_index < program.layers.size(); ++layer_index) {
+                    const auto& layer = program.layers[layer_index];
+                    for (std::uint32_t split_index = 0u;
+                         split_index < layer.splits.size(); ++split_index)
+                        if (&layer.splits[split_index] == voice.split)
+                            return {bank_index, program_index, layer_index,
+                                    split_index};
+                }
+            }
+        }
+        fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                        "state-split-reference");
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> capture_development_state() const {
+        require_owner_thread();
+        SoundBankStateWriter writer(config_.maximum_development_state_bytes);
+        writer.raw(sound_bank_development_state_magic);
+        writer.scalar(sound_bank_development_state_version);
+        writer.scalar<std::uint64_t>(0u);
+        writer.scalar(native_port_sound_bank_contract_version);
+        writer.scalar(native_port_sound_effect_kernel_contract_version);
+        writer.scalar(config_.output_sample_rate);
+        writer.scalar(config_.render_block_frames);
+        writer.scalar(config_.maximum_collections);
+        writer.scalar(config_.maximum_collection_bytes);
+        writer.scalar(config_.maximum_total_collection_bytes);
+        writer.scalar(config_.maximum_units_per_collection);
+        writer.scalar(config_.maximum_sequences_per_bank);
+        writer.scalar(config_.maximum_events_per_sequence);
+        writer.scalar(config_.maximum_reference_depth);
+        writer.scalar(config_.maximum_active_sequences);
+        writer.scalar(config_.maximum_synth_voices);
+        writer.scalar(config_.maximum_midi_ports);
+        writer.scalar(config_.maximum_decoded_sample_frames);
+        writer.scalar(config_.maximum_effect_state_bytes);
+
+        writer.scalar(current_render_frame_);
+        writer.scalar(voice_serial_);
+        writer.scalar(loaded_collections_);
+        writer.scalar(unloaded_collections_);
+        writer.scalar(parsed_programs_);
+        writer.scalar(parsed_splits_);
+        writer.scalar(parsed_sequences_);
+        writer.scalar(parsed_events_);
+        writer.scalar(decoded_samples_);
+        writer.scalar(decoded_pcm16_samples_);
+        writer.scalar(decoded_pcm8_samples_);
+        writer.scalar(decoded_adpcm_samples_);
+        writer.scalar(decoded_sample_frames_);
+        writer.scalar(resident_collection_bytes_);
+        writer.scalar(rendered_frames_);
+        writer.scalar(effect_frames_);
+
+        std::vector<std::shared_ptr<VoiceControls>> controls;
+        std::unordered_map<const VoiceControls*, std::uint32_t> control_ids;
+        const auto intern = [&](const std::shared_ptr<VoiceControls>& value) {
+            if (!value) return std::numeric_limits<std::uint32_t>::max();
+            const auto found = control_ids.find(value.get());
+            if (found != control_ids.end()) return found->second;
+            if (controls.size() == std::numeric_limits<std::uint32_t>::max())
+                fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
+                                "state-control-count");
+            const auto id = static_cast<std::uint32_t>(controls.size());
+            controls.push_back(value);
+            control_ids.emplace(value.get(), id);
+            return id;
+        };
+        for (const auto& slot : groups_)
+            if (slot.value.has_value()) static_cast<void>(intern(slot.value->controls));
+        for (const auto& slot : ports_)
+            if (slot.value.has_value()) static_cast<void>(intern(slot.value->controls));
+        for (const auto& slot : voices_)
+            if (slot.value.has_value()) static_cast<void>(intern(slot.value->controls));
+        writer.scalar(static_cast<std::uint32_t>(controls.size()));
+        for (const auto& value : controls) write_voice_controls(writer, *value);
+
+        writer.scalar(static_cast<std::uint32_t>(collections_.size()));
+        for (const auto& slot : collections_) {
+            writer.scalar(slot.generation);
+            writer.boolean(slot.value.has_value());
+            if (!slot.value.has_value()) continue;
+            const auto& collection = *slot.value;
+            writer.string(collection.logical_id);
+            writer.string(std::string_view(
+                reinterpret_cast<const char*>(collection.content_relative_path.data()),
+                collection.content_relative_path.size()));
+            writer.string(collection.byte_identity);
+            writer.scalar(collection.source_offset);
+            writer.scalar(static_cast<std::uint64_t>(collection.bytes.size()));
+            writer.string(native_port_content_sha256(std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(collection.bytes.data()),
+                collection.bytes.size())));
+            writer.raw(collection.bytes);
+            std::vector<std::uint64_t> sample_keys;
+            sample_keys.reserve(collection.sample_cache.size());
+            for (const auto& [key, unused] : collection.sample_cache) {
+                static_cast<void>(unused);
+                sample_keys.push_back(key);
+            }
+            std::ranges::sort(sample_keys);
+            writer.scalar(static_cast<std::uint32_t>(sample_keys.size()));
+            for (const auto key : sample_keys) writer.scalar(key);
+            writer.boolean(static_cast<bool>(collection.effect_kernel_state));
+            if (collection.effect_kernel_state) {
+                const auto* kernel = collection.effect_kernel_state.kernel;
+                if (kernel->capture_snapshot == nullptr ||
+                    kernel->validate_snapshot == nullptr ||
+                    kernel->restore_snapshot == nullptr ||
+                    kernel->maximum_snapshot_bytes == 0u ||
+                    kernel->maximum_snapshot_bytes >
+                        config_.maximum_effect_state_bytes)
+                    fail_sound_bank(NativePortSoundBankFailure::StateUnavailable,
+                                    "effect-state-capture");
+                std::vector<std::uint8_t> state(
+                    static_cast<std::size_t>(kernel->maximum_snapshot_bytes));
+                std::uint64_t written = 0u;
+                if (!kernel->capture_snapshot(collection.effect_kernel_state.storage,
+                                              state, written) ||
+                    written > state.size())
+                    fail_sound_bank(NativePortSoundBankFailure::StateUnavailable,
+                                    "effect-state-capture");
+                state.resize(static_cast<std::size_t>(written));
+                writer.scalar(written);
+                writer.raw(state);
+            }
+        }
+
+        writer.scalar(static_cast<std::uint32_t>(sequences_.size()));
+        for (const auto& slot : sequences_) {
+            writer.scalar(slot.generation);
+            writer.boolean(slot.value.has_value());
+            if (!slot.value.has_value()) continue;
+            const auto& value = *slot.value;
+            writer.handle(value.collection);
+            write_sequence_config(writer, value.config);
+            writer.scalar(value.state);
+            for (const auto& channel : value.channels) {
+                writer.scalar(channel.bank); writer.scalar(channel.program);
+                writer.scalar(channel.volume); writer.scalar(channel.expression);
+                writer.scalar(channel.pan); writer.scalar(channel.modulation);
+                writer.scalar(channel.pressure); writer.scalar(channel.effect_depth);
+                writer.scalar(channel.qsound_position); writer.scalar(channel.pitch);
+                writer.boolean(channel.filter_level3.has_value());
+                if (channel.filter_level3.has_value())
+                    writer.scalar(*channel.filter_level3);
+                writer.boolean(channel.sustain);
+            }
+            writer.scalar(static_cast<std::uint64_t>(value.next_event));
+            writer.f64(value.tick); writer.scalar(value.tempo);
+            writer.boolean(value.loop_marker_open);
+            writer.scalar(static_cast<std::uint64_t>(value.loop_event));
+            writer.scalar(value.loop_tick); writer.scalar(value.loop_tempo);
+            writer.scalar(value.rendered_frames);
+            writer.scalar(value.dispatched_events); writer.scalar(value.loop_count);
+        }
+
+        writer.scalar(static_cast<std::uint32_t>(voices_.size()));
+        for (const auto& slot : voices_) {
+            writer.scalar(slot.generation);
+            writer.boolean(slot.value.has_value());
+            if (!slot.value.has_value()) continue;
+            const auto& value = *slot.value;
+            writer.handle(value.collection);
+            write_optional_handle(writer, value.sequence);
+            for (const auto coordinate : split_location(value)) writer.scalar(coordinate);
+            writer.scalar(value.channel); writer.scalar(value.note);
+            writer.scalar(value.velocity); writer.f64(value.phase);
+            writer.f64(value.base_step); writer.f64(value.lfo_step);
+            for (const auto ratio : value.lfo_pitch_ratio) writer.f64(ratio);
+            writer.scalar(value.cached_external_pitch_bend);
+            writer.scalar(value.cached_channel_pitch);
+            writer.scalar(value.cached_modulation);
+            writer.boolean(value.pitch_cache_valid);
+            writer.boolean(value.lfo_pitch_cache_valid);
+            writer.scalar(value.bend_high); writer.scalar(value.bend_low);
+            writer.f64(value.amplitude_attenuation); writer.f64(value.stage_step);
+            writer.f64(value.decay_target); writer.scalar(value.envelope_stage);
+            writer.f64(value.lfo_phase); writer.f64(value.filter_level);
+            writer.f64(value.filter_target); writer.f64(value.filter_step);
+            writer.scalar(value.filter_stage);
+            writer.f64(value.filter_previous_1); writer.f64(value.filter_previous_2);
+            writer.f64(value.filter_a0); writer.f64(value.filter_b1);
+            writer.f64(value.filter_b2);
+            writer.scalar(value.filter_coefficient_value);
+            writer.boolean(value.filter_coefficient_cache_valid);
+            writer.scalar(value.release_tick); writer.scalar(value.delayed_until_tick);
+            writer.f32(value.velocity_gain);
+            writer.scalar(intern(value.controls));
+            writer.f32(value.cached_external_pan);
+            writer.f64(value.cached_pan_left); writer.f64(value.cached_pan_right);
+            writer.scalar(value.cached_channel_pan);
+            writer.scalar(value.cached_qsound_position);
+            writer.boolean(value.pan_cache_valid); writer.boolean(value.key_released);
+            writer.boolean(value.sustained); writer.scalar(value.start_serial);
+        }
+
+        writer.scalar(static_cast<std::uint32_t>(groups_.size()));
+        for (const auto& slot : groups_) {
+            writer.scalar(slot.generation); writer.boolean(slot.value.has_value());
+            if (!slot.value.has_value()) continue;
+            writer.handle(slot.value->collection);
+            writer.scalar(intern(slot.value->controls));
+            writer.scalar(static_cast<std::uint32_t>(slot.value->members.size()));
+            for (const auto member : slot.value->members) writer.handle(member);
+        }
+        writer.scalar(static_cast<std::uint32_t>(ports_.size()));
+        for (const auto& slot : ports_) {
+            writer.scalar(slot.generation); writer.boolean(slot.value.has_value());
+            if (!slot.value.has_value()) continue;
+            writer.handle(slot.value->collection);
+            write_midi_config(writer, slot.value->config);
+            writer.scalar(intern(slot.value->controls));
+            for (const auto& note : slot.value->notes)
+                write_optional_handle(writer, note);
+            write_optional_handle(writer, slot.value->sequence);
+        }
+        for (const auto& slot : pcm_stream_rings_) {
+            writer.scalar(slot.generation); writer.boolean(slot.value.has_value());
+            if (!slot.value.has_value()) continue;
+            writer.scalar(slot.value->bank);
+            writer.scalar(slot.value->layout_offset);
+            writer.scalar(slot.value->byte_size);
+        }
+        writer.finalize();
+        return std::move(writer).take();
+    }
+
+    [[nodiscard]] std::pair<const ProgramBank*, const Split*>
+    find_sample_split(Collection& collection, const std::uint64_t key) const {
+        const auto bank_index = static_cast<std::uint8_t>(key >> 56u);
+        const auto format = static_cast<std::uint8_t>(key >> 48u);
+        const auto frames = static_cast<std::uint16_t>(key >> 32u);
+        const auto offset = static_cast<std::uint32_t>(key);
+        if (bank_index >= maximum_mlt_banks ||
+            !collection.program_banks[bank_index].has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-sample-bank");
+        const auto& bank = *collection.program_banks[bank_index];
+        for (const auto& program : bank.programs)
+            for (const auto& layer : program.layers)
+                for (const auto& split : layer.splits)
+                    if (split.tone_offset == offset && split.loop_end == frames &&
+                        static_cast<std::uint8_t>(split.format) == format)
+                        return {&bank, &split};
+        fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                        "state-sample-reference");
+    }
+
+    [[nodiscard]] std::pair<const ProgramBank*, const Split*>
+    split_at(Collection& collection,
+             const std::array<std::uint32_t, 4u>& location) const {
+        if (location[0] >= maximum_mlt_banks ||
+            !collection.program_banks[location[0]].has_value())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-split-bank");
+        const auto& bank = *collection.program_banks[location[0]];
+        if (location[1] >= bank.programs.size() ||
+            location[2] >= bank.programs[location[1]].layers.size() ||
+            location[3] >=
+                bank.programs[location[1]].layers[location[2]].splits.size())
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-split-index");
+        return {&bank,
+                &bank.programs[location[1]].layers[location[2]].splits[location[3]]};
+    }
+
+    void restore_development_state(
+        const std::span<const std::uint8_t> bytes) {
+        require_owner_thread();
+        SoundBankStateReader reader(bytes, config_.maximum_development_state_bytes);
+        if (!std::ranges::equal(reader.raw(sound_bank_development_state_magic.size()),
+                                sound_bank_development_state_magic) ||
+            reader.scalar<std::uint32_t>() !=
+                sound_bank_development_state_version ||
+            reader.scalar<std::uint64_t>() != bytes.size() ||
+            reader.scalar<std::uint32_t>() !=
+                native_port_sound_bank_contract_version ||
+            reader.scalar<std::uint32_t>() !=
+                native_port_sound_effect_kernel_contract_version)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-header");
+        const auto exact_u32 = [&](const std::uint32_t expected) {
+            if (reader.scalar<std::uint32_t>() != expected)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-config");
+        };
+        const auto exact_u64 = [&](const std::uint64_t expected) {
+            if (reader.scalar<std::uint64_t>() != expected)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-config");
+        };
+        exact_u32(config_.output_sample_rate);
+        exact_u32(config_.render_block_frames);
+        exact_u32(config_.maximum_collections);
+        exact_u32(config_.maximum_collection_bytes);
+        exact_u64(config_.maximum_total_collection_bytes);
+        exact_u32(config_.maximum_units_per_collection);
+        exact_u32(config_.maximum_sequences_per_bank);
+        exact_u32(config_.maximum_events_per_sequence);
+        exact_u32(config_.maximum_reference_depth);
+        exact_u32(config_.maximum_active_sequences);
+        exact_u32(config_.maximum_synth_voices);
+        exact_u32(config_.maximum_midi_ports);
+        exact_u32(config_.maximum_decoded_sample_frames);
+        exact_u32(config_.maximum_effect_state_bytes);
+
+        const auto saved_current_render_frame = reader.scalar<std::uint64_t>();
+        const auto saved_voice_serial = reader.scalar<std::uint64_t>();
+        const auto saved_loaded_collections = reader.scalar<std::uint64_t>();
+        const auto saved_unloaded_collections = reader.scalar<std::uint64_t>();
+        const auto saved_parsed_programs = reader.scalar<std::uint64_t>();
+        const auto saved_parsed_splits = reader.scalar<std::uint64_t>();
+        const auto saved_parsed_sequences = reader.scalar<std::uint64_t>();
+        const auto saved_parsed_events = reader.scalar<std::uint64_t>();
+        const auto saved_decoded_samples = reader.scalar<std::uint64_t>();
+        const auto saved_decoded_pcm16_samples = reader.scalar<std::uint64_t>();
+        const auto saved_decoded_pcm8_samples = reader.scalar<std::uint64_t>();
+        const auto saved_decoded_adpcm_samples = reader.scalar<std::uint64_t>();
+        const auto saved_decoded_sample_frames = reader.scalar<std::uint64_t>();
+        const auto saved_resident_collection_bytes = reader.scalar<std::uint64_t>();
+        const auto saved_rendered_frames = reader.scalar<std::uint64_t>();
+        const auto saved_effect_frames = reader.scalar<std::uint64_t>();
+
+        const auto control_count = reader.scalar<std::uint32_t>();
+        if (control_count > config_.maximum_synth_voices +
+                                config_.maximum_midi_ports)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-control-count");
+        std::vector<std::shared_ptr<VoiceControls>> controls;
+        controls.reserve(control_count);
+        for (std::uint32_t index = 0u; index < control_count; ++index)
+            controls.push_back(
+                std::make_shared<VoiceControls>(read_voice_controls(reader)));
+        const auto control = [&](const std::uint32_t id,
+                                 const bool nullable) {
+            if (id == std::numeric_limits<std::uint32_t>::max() && nullable)
+                return std::shared_ptr<VoiceControls>{};
+            if (id >= controls.size())
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-control-reference");
+            return controls[id];
+        };
+
+        const auto collection_count = reader.scalar<std::uint32_t>();
+        if (collection_count > config_.maximum_collections)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-collection-count");
+        collections_.clear();
+        collections_.resize(collection_count);
+        std::uint64_t resident_bytes = 0u;
+        for (auto& slot : collections_) {
+            slot.generation = reader.scalar<std::uint32_t>();
+            if (slot.generation == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-generation");
+            if (!reader.boolean()) continue;
+            Collection collection;
+            collection.logical_id = reader.string();
+            const auto path = reader.string();
+            collection.content_relative_path.assign(
+                reinterpret_cast<const char8_t*>(path.data()), path.size());
+            collection.byte_identity = reader.string();
+            collection.source_offset = reader.scalar<std::uint64_t>();
+            const auto byte_count = reader.scalar<std::uint64_t>();
+            if (byte_count < 32u || byte_count > config_.maximum_collection_bytes ||
+                byte_count > config_.maximum_total_collection_bytes - resident_bytes)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-collection-size");
+            const auto digest = reader.string();
+            if (digest.size() != 64u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-collection-identity");
+            const auto raw = reader.raw(byte_count);
+            if (native_port_content_sha256(std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(raw.data()), raw.size())) != digest)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-collection-identity");
+            collection.bytes.assign(raw.begin(), raw.end());
+            parse_collection(collection);
+            resident_bytes += byte_count;
+
+            const auto sample_count = reader.scalar<std::uint32_t>();
+            if (sample_count > config_.maximum_decoded_sample_frames)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-sample-count");
+            std::uint64_t last_key = 0u;
+            bool first_key = true;
+            for (std::uint32_t index = 0u; index < sample_count; ++index) {
+                const auto key = reader.scalar<std::uint64_t>();
+                if (!first_key && key <= last_key)
+                    fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                    "state-sample-order");
+                first_key = false;
+                last_key = key;
+                const auto [bank, split] = find_sample_split(collection, key);
+                static_cast<void>(decode_sample(collection, *bank, *split));
+            }
+            const auto saved_effect = reader.boolean();
+            if (saved_effect != static_cast<bool>(collection.effect_kernel_state))
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-effect-presence");
+            if (saved_effect) {
+                const auto effect_bytes = reader.raw(reader.scalar<std::uint64_t>());
+                const auto* kernel = collection.effect_kernel_state.kernel;
+                if (kernel->capture_snapshot == nullptr ||
+                    kernel->validate_snapshot == nullptr ||
+                    kernel->restore_snapshot == nullptr ||
+                    effect_bytes.size() > kernel->maximum_snapshot_bytes)
+                    fail_sound_bank(NativePortSoundBankFailure::StateUnavailable,
+                                    "effect-state-restore");
+                if (!kernel->validate_snapshot(effect_bytes))
+                    fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                    "effect-state-validate");
+                if (!kernel->restore_snapshot(collection.effect_kernel_state.storage,
+                                              effect_bytes))
+                    fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                    "effect-state-restore");
+            }
+            slot.value.emplace(std::move(collection));
+        }
+
+        const auto sequence_count = reader.scalar<std::uint32_t>();
+        if (sequence_count > config_.maximum_active_sequences)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-sequence-count");
+        sequences_.clear(); sequences_.resize(sequence_count);
+        active_sequence_indices_.clear();
+        active_sequence_positions_.assign(sequence_count, invalid_active_position);
+        for (std::uint32_t index = 0u; index < sequence_count; ++index) {
+            auto& slot = sequences_[index];
+            slot.generation = reader.scalar<std::uint32_t>();
+            if (slot.generation == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-generation");
+            if (!reader.boolean()) continue;
+            ActiveSequence value;
+            value.collection = reader.handle<NativePortSoundCollectionHandle>();
+            value.config = read_sequence_config(reader);
+            value.state = reader.scalar<NativePortSoundSequenceState>();
+            if (value.state > NativePortSoundSequenceState::Stopped)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-sequence-state");
+            for (auto& channel : value.channels) {
+                channel.bank = reader.scalar<std::uint8_t>();
+                channel.program = reader.scalar<std::uint8_t>();
+                channel.volume = reader.scalar<std::uint8_t>();
+                channel.expression = reader.scalar<std::uint8_t>();
+                channel.pan = reader.scalar<std::uint8_t>();
+                channel.modulation = reader.scalar<std::uint8_t>();
+                channel.pressure = reader.scalar<std::uint8_t>();
+                channel.effect_depth = reader.scalar<std::uint8_t>();
+                channel.qsound_position = reader.scalar<std::uint8_t>();
+                channel.pitch = reader.scalar<std::int8_t>();
+                if (reader.boolean())
+                    channel.filter_level3 = reader.scalar<std::uint16_t>();
+                channel.sustain = reader.boolean();
+                if (channel.bank >= maximum_mlt_banks || channel.program > 127u ||
+                    channel.volume > 127u || channel.expression > 127u ||
+                    channel.pan > 127u || channel.modulation > 127u ||
+                    channel.pressure > 127u || channel.effect_depth > 127u ||
+                    channel.qsound_position > 127u || channel.pitch < -64 ||
+                    channel.pitch > 63 ||
+                    (channel.filter_level3.has_value() &&
+                     *channel.filter_level3 > 8128u))
+                    fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                    "state-channel");
+            }
+            const auto next_event = reader.scalar<std::uint64_t>();
+            const auto loop_event = [&] {
+                value.tick = reader.f64();
+                value.tempo = reader.scalar<std::uint32_t>();
+                value.loop_marker_open = reader.boolean();
+                return reader.scalar<std::uint64_t>();
+            }();
+            if (next_event > std::numeric_limits<std::size_t>::max() ||
+                loop_event > std::numeric_limits<std::size_t>::max() ||
+                value.tick < 0.0 || value.tempo == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-sequence-cursor");
+            value.next_event = static_cast<std::size_t>(next_event);
+            value.loop_event = static_cast<std::size_t>(loop_event);
+            value.loop_tick = reader.scalar<std::uint64_t>();
+            value.loop_tempo = reader.scalar<std::uint32_t>();
+            value.rendered_frames = reader.scalar<std::uint64_t>();
+            value.dispatched_events = reader.scalar<std::uint64_t>();
+            value.loop_count = reader.scalar<std::uint64_t>();
+            slot.value.emplace(std::move(value));
+            activate_slot(active_sequence_indices_, active_sequence_positions_, index);
+        }
+
+        const auto voice_count = reader.scalar<std::uint32_t>();
+        if (voice_count > config_.maximum_synth_voices)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-voice-count");
+        voices_.clear(); voices_.resize(voice_count);
+        active_voice_indices_.clear();
+        active_voice_positions_.assign(voice_count, invalid_active_position);
+        for (std::uint32_t index = 0u; index < voice_count; ++index) {
+            auto& slot = voices_[index];
+            slot.generation = reader.scalar<std::uint32_t>();
+            if (slot.generation == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-generation");
+            if (!reader.boolean()) continue;
+            SynthVoice value;
+            value.collection = reader.handle<NativePortSoundCollectionHandle>();
+            value.sequence = read_optional_handle<NativePortSoundSequenceHandle>(reader);
+            std::array<std::uint32_t, 4u> location{};
+            for (auto& coordinate : location)
+                coordinate = reader.scalar<std::uint32_t>();
+            auto& collection = require_collection(value.collection);
+            const auto [bank, split] = split_at(collection, location);
+            const auto key = sample_key(split->tone_offset, split->loop_end,
+                                        static_cast<std::uint8_t>(split->format),
+                                        bank->bank);
+            const auto sample = collection.sample_cache.find(key);
+            if (sample == collection.sample_cache.end())
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-voice-sample");
+            value.sample = sample->second; value.split = split;
+            value.channel = reader.scalar<std::uint8_t>();
+            value.note = reader.scalar<std::uint8_t>();
+            value.velocity = reader.scalar<std::uint8_t>();
+            value.phase = reader.f64(); value.base_step = reader.f64();
+            value.lfo_step = reader.f64();
+            for (auto& ratio : value.lfo_pitch_ratio) ratio = reader.f64();
+            value.cached_external_pitch_bend = reader.scalar<std::int16_t>();
+            value.cached_channel_pitch = reader.scalar<std::int8_t>();
+            value.cached_modulation = reader.scalar<std::uint8_t>();
+            value.pitch_cache_valid = reader.boolean();
+            value.lfo_pitch_cache_valid = reader.boolean();
+            value.bend_high = reader.scalar<std::uint8_t>();
+            value.bend_low = reader.scalar<std::uint8_t>();
+            value.amplitude_attenuation = reader.f64();
+            value.stage_step = reader.f64(); value.decay_target = reader.f64();
+            value.envelope_stage = reader.scalar<EnvelopeStage>();
+            value.lfo_phase = reader.f64(); value.filter_level = reader.f64();
+            value.filter_target = reader.f64(); value.filter_step = reader.f64();
+            value.filter_stage = reader.scalar<EnvelopeStage>();
+            value.filter_previous_1 = reader.f64();
+            value.filter_previous_2 = reader.f64();
+            value.filter_a0 = reader.f64(); value.filter_b1 = reader.f64();
+            value.filter_b2 = reader.f64();
+            value.filter_coefficient_value = reader.scalar<std::uint32_t>();
+            value.filter_coefficient_cache_valid = reader.boolean();
+            value.release_tick = reader.scalar<std::uint64_t>();
+            value.delayed_until_tick = reader.scalar<std::uint64_t>();
+            value.velocity_gain = reader.f32();
+            value.controls = control(reader.scalar<std::uint32_t>(), true);
+            value.cached_external_pan = reader.f32();
+            value.cached_pan_left = reader.f64();
+            value.cached_pan_right = reader.f64();
+            value.cached_channel_pan = reader.scalar<std::uint8_t>();
+            value.cached_qsound_position = reader.scalar<std::uint8_t>();
+            value.pan_cache_valid = reader.boolean();
+            value.key_released = reader.boolean();
+            value.sustained = reader.boolean();
+            value.start_serial = reader.scalar<std::uint64_t>();
+            if (value.channel >= maximum_midi_channels || value.note > 127u ||
+                value.velocity > 127u || value.phase < 0.0 ||
+                value.phase > value.sample->size() || value.base_step <= 0.0 ||
+                value.lfo_step < 0.0 || value.lfo_phase < 0.0 ||
+                value.lfo_phase >= 1.0 || value.bend_high > 24u ||
+                value.bend_low > 24u ||
+                value.envelope_stage > EnvelopeStage::Complete ||
+                value.filter_stage > EnvelopeStage::Complete ||
+                value.cached_external_pitch_bend < -8192 ||
+                value.cached_external_pitch_bend > 8191 ||
+                value.cached_channel_pitch < -64 ||
+                value.cached_channel_pitch > 63 ||
+                value.cached_modulation > 127u ||
+                value.cached_external_pan < -1.0f ||
+                value.cached_external_pan > 1.0f ||
+                value.cached_channel_pan > 127u ||
+                value.cached_qsound_position > 127u ||
+                value.velocity_gain < 0.0f)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-voice");
+            slot.value.emplace(std::move(value));
+            activate_slot(active_voice_indices_, active_voice_positions_, index);
+        }
+
+        const auto group_count = reader.scalar<std::uint32_t>();
+        if (group_count > config_.maximum_synth_voices)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-group-count");
+        groups_.clear(); groups_.resize(group_count);
+        for (auto& slot : groups_) {
+            slot.generation = reader.scalar<std::uint32_t>();
+            if (slot.generation == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-generation");
+            if (!reader.boolean()) continue;
+            VoiceGroup value;
+            value.collection = reader.handle<NativePortSoundCollectionHandle>();
+            value.controls = control(reader.scalar<std::uint32_t>(), false);
+            const auto count = reader.scalar<std::uint32_t>();
+            if (count > config_.maximum_synth_voices)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-group-members");
+            value.members.reserve(count);
+            for (std::uint32_t index = 0u; index < count; ++index)
+                value.members.push_back(
+                    reader.handle<NativePortSoundVoiceHandle>());
+            slot.value.emplace(std::move(value));
+        }
+
+        const auto port_count = reader.scalar<std::uint32_t>();
+        if (port_count > config_.maximum_midi_ports)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-port-count");
+        ports_.clear(); ports_.resize(port_count);
+        for (auto& slot : ports_) {
+            slot.generation = reader.scalar<std::uint32_t>();
+            if (slot.generation == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-generation");
+            if (!reader.boolean()) continue;
+            MidiPort value;
+            value.collection = reader.handle<NativePortSoundCollectionHandle>();
+            value.config = read_midi_config(reader);
+            value.controls = control(reader.scalar<std::uint32_t>(), false);
+            for (auto& note : value.notes)
+                note = read_optional_handle<NativePortSoundVoiceHandle>(reader);
+            value.sequence =
+                read_optional_handle<NativePortSoundSequenceHandle>(reader);
+            slot.value.emplace(std::move(value));
+        }
+        for (std::uint32_t index = 0u; index < maximum_mlt_banks; ++index) {
+            auto& slot = pcm_stream_rings_[index];
+            slot.generation = reader.scalar<std::uint32_t>();
+            if (slot.generation == 0u)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-generation");
+            slot.value.reset();
+            if (!reader.boolean()) continue;
+            NativePortSoundPcmStreamRingConfig value;
+            value.bank = reader.scalar<std::uint8_t>();
+            value.layout_offset = reader.scalar<std::uint32_t>();
+            value.byte_size = reader.scalar<std::uint32_t>();
+            if (value.bank != index || value.byte_size == 0u ||
+                (value.layout_offset & 3u) != 0u ||
+                (value.byte_size & 3u) != 0u ||
+                value.layout_offset > native_port_manatee_sound_layout_bytes ||
+                value.byte_size > native_port_manatee_sound_layout_bytes -
+                                      value.layout_offset)
+                fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                                "state-ring");
+            slot.value = value;
+        }
+        reader.finish();
+        validate_restored_state();
+        if (resident_bytes != saved_resident_collection_bytes)
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState,
+                            "state-resident-bytes");
+
+        current_render_frame_ = saved_current_render_frame;
+        voice_serial_ = saved_voice_serial;
+        loaded_collections_ = saved_loaded_collections;
+        unloaded_collections_ = saved_unloaded_collections;
+        parsed_programs_ = saved_parsed_programs;
+        parsed_splits_ = saved_parsed_splits;
+        parsed_sequences_ = saved_parsed_sequences;
+        parsed_events_ = saved_parsed_events;
+        decoded_samples_ = saved_decoded_samples;
+        decoded_pcm16_samples_ = saved_decoded_pcm16_samples;
+        decoded_pcm8_samples_ = saved_decoded_pcm8_samples;
+        decoded_adpcm_samples_ = saved_decoded_adpcm_samples;
+        decoded_sample_frames_ = saved_decoded_sample_frames;
+        resident_collection_bytes_ = saved_resident_collection_bytes;
+        rendered_frames_ = saved_rendered_frames;
+        effect_frames_ = saved_effect_frames;
+    }
+
+    void validate_restored_state() const {
+        const auto invalid = [](const std::string_view operation) {
+            fail_sound_bank(NativePortSoundBankFailure::InvalidState, operation);
+        };
+        const auto collection_live = [&](const NativePortSoundCollectionHandle h) {
+            return h && h.slot < collections_.size() &&
+                   collections_[h.slot].generation == h.generation &&
+                   collections_[h.slot].value.has_value();
+        };
+        const auto sequence_live = [&](const NativePortSoundSequenceHandle h) {
+            return h && h.slot < sequences_.size() &&
+                   sequences_[h.slot].generation == h.generation &&
+                   sequences_[h.slot].value.has_value();
+        };
+        const auto voice_live = [&](const NativePortSoundVoiceHandle h) {
+            return h && h.slot < voices_.size() &&
+                   voices_[h.slot].generation == h.generation &&
+                   voices_[h.slot].value.has_value();
+        };
+        const auto group_live = [&](const NativePortSoundVoiceHandle h) {
+            return h && h.slot < groups_.size() &&
+                   groups_[h.slot].generation == h.generation &&
+                   groups_[h.slot].value.has_value();
+        };
+
+        for (const auto& slot : sequences_) {
+            if (!slot.value.has_value()) continue;
+            const auto& value = *slot.value;
+            if (!collection_live(value.collection)) invalid("state-sequence-collection");
+            const auto& collection = *collections_[value.collection.slot].value;
+            if (value.config.sequence_bank >= maximum_mlt_banks ||
+                !collection.sequence_banks[value.config.sequence_bank].has_value() ||
+                value.config.sequence >=
+                    collection.sequence_banks[value.config.sequence_bank]->sequences.size() ||
+                !collection.sequence_banks[value.config.sequence_bank]
+                     ->sequences[value.config.sequence].has_value() ||
+                value.config.program_bank >= maximum_mlt_banks ||
+                !collection.program_banks[value.config.program_bank].has_value())
+                invalid("state-sequence-definition");
+            const auto& definition = *collection
+                .sequence_banks[value.config.sequence_bank]
+                ->sequences[value.config.sequence];
+            if (value.next_event > definition.events.size() ||
+                value.loop_event > definition.events.size() ||
+                (value.loop_marker_open && value.loop_tempo == 0u))
+                invalid("state-sequence-cursor");
+            for (const auto& channel : value.channels)
+                if (channel.bank >= maximum_mlt_banks ||
+                    !collection.program_banks[channel.bank].has_value() ||
+                    channel.program >=
+                        collection.program_banks[channel.bank]->programs.size())
+                    invalid("state-channel-program");
+        }
+        for (const auto& slot : voices_) {
+            if (!slot.value.has_value()) continue;
+            const auto& value = *slot.value;
+            if (!collection_live(value.collection)) invalid("state-voice-collection");
+            if (value.sequence.has_value() && !sequence_live(*value.sequence))
+                invalid("state-voice-sequence");
+            if (value.sample == nullptr || value.split == nullptr)
+                invalid("state-voice-binding");
+        }
+        for (const auto& slot : groups_) {
+            if (!slot.value.has_value()) continue;
+            const auto& value = *slot.value;
+            if (!collection_live(value.collection) || value.controls == nullptr)
+                invalid("state-group");
+            for (const auto member : value.members) {
+                if (!member || member.slot >= voices_.size())
+                    invalid("state-group-member");
+                if (!voice_live(member)) continue;
+                const auto& voice = *voices_[member.slot].value;
+                if (voice.collection.slot != value.collection.slot ||
+                    voice.collection.generation != value.collection.generation ||
+                    voice.controls != value.controls)
+                    invalid("state-group-sharing");
+            }
+        }
+        for (const auto& slot : ports_) {
+            if (!slot.value.has_value()) continue;
+            const auto& value = *slot.value;
+            if (!collection_live(value.collection) || value.controls == nullptr)
+                invalid("state-port");
+            const auto& collection = *collections_[value.collection.slot].value;
+            if (value.config.program_bank >= maximum_mlt_banks ||
+                !collection.program_banks[value.config.program_bank].has_value() ||
+                value.config.program >=
+                    collection.program_banks[value.config.program_bank]->programs.size())
+                invalid("state-port-program");
+            for (const auto& note : value.notes) {
+                if (!note.has_value()) continue;
+                if (!*note || note->slot >= groups_.size())
+                    invalid("state-port-note");
+                if (group_live(*note) &&
+                    groups_[note->slot].value->controls != value.controls)
+                    invalid("state-port-note-sharing");
+            }
+            if (value.sequence.has_value()) {
+                if (!*value.sequence || value.sequence->slot >= sequences_.size())
+                    invalid("state-port-sequence");
+                if (sequence_live(*value.sequence)) {
+                    const auto& sequence = *sequences_[value.sequence->slot].value;
+                    if (sequence.collection.slot != value.collection.slot ||
+                        sequence.collection.generation !=
+                            value.collection.generation)
+                        invalid("state-port-sequence-sharing");
+                }
+            }
+        }
+        for (std::size_t index = 0u; index < pcm_stream_rings_.size(); ++index) {
+            const auto& left = pcm_stream_rings_[index];
+            if (!left.value.has_value()) continue;
+            const auto left_begin =
+                static_cast<std::uint64_t>(left.value->layout_offset);
+            const auto left_end = left_begin + left.value->byte_size;
+            for (std::size_t other = index + 1u;
+                 other < pcm_stream_rings_.size(); ++other) {
+                const auto& right = pcm_stream_rings_[other];
+                if (!right.value.has_value()) continue;
+                const auto right_begin =
+                    static_cast<std::uint64_t>(right.value->layout_offset);
+                const auto right_end = right_begin + right.value->byte_size;
+                if (left_begin < right_end && right_begin < left_end)
+                    invalid("state-ring-overlap");
+            }
+        }
+    }
+
+    [[nodiscard]] NativePortSoundBankDevelopmentStateInventory
+    development_state_inventory() const {
+        require_owner_thread();
+        NativePortSoundBankDevelopmentStateInventory result;
+        for (std::uint32_t index = 0u; index < collections_.size(); ++index)
+            if (collections_[index].value.has_value())
+                result.collections.push_back({index, collections_[index].generation});
+        for (std::uint32_t index = 0u; index < ports_.size(); ++index)
+            if (ports_[index].value.has_value())
+                result.midi_ports.push_back({index, ports_[index].generation});
+        for (std::uint32_t index = 0u; index < pcm_stream_rings_.size(); ++index)
+            if (pcm_stream_rings_[index].value.has_value())
+                result.pcm_stream_rings.push_back(
+                    {index, pcm_stream_rings_[index].generation});
+        return result;
     }
 
     NativePortAudioEngine& audio_;
@@ -4312,6 +5454,42 @@ class NativePortSoundBankEngine::Impl final {
         return call_payload<NativePortSoundBankSnapshot>(
             SoundBankOpcode::Snapshot, {});
     }
+    [[nodiscard]] std::vector<std::uint8_t> capture_development_state() const {
+        require_owner_thread();
+        staged_development_state_.clear();
+        try {
+            call_void(SoundBankOpcode::CaptureDevelopmentState);
+            return std::move(staged_development_state_);
+        } catch (...) {
+            staged_development_state_.clear();
+            throw;
+        }
+    }
+    [[nodiscard]] NativePortSoundBankDevelopmentStateInventory
+    validate_development_state(
+        const std::span<const std::uint8_t> state) const {
+        stage_development_state(state);
+        try {
+            call_void(SoundBankOpcode::ValidateDevelopmentState);
+            staged_development_state_.clear();
+            return std::move(staged_development_state_inventory_);
+        } catch (...) {
+            staged_development_state_.clear();
+            staged_development_state_inventory_ = {};
+            throw;
+        }
+    }
+    void restore_development_state(
+        const std::span<const std::uint8_t> state) {
+        stage_development_state(state);
+        try {
+            call_void(SoundBankOpcode::RestoreDevelopmentState);
+            staged_development_state_.clear();
+        } catch (...) {
+            staged_development_state_.clear();
+            throw;
+        }
+    }
 
     static void execute_worker_command(
         void* const target,
@@ -4360,6 +5538,16 @@ class NativePortSoundBankEngine::Impl final {
     }
 
   private:
+    void stage_development_state(
+        const std::span<const std::uint8_t> state) const {
+        require_owner_thread();
+        if (state.size() > config_.maximum_development_state_bytes)
+            fail_sound_bank(NativePortSoundBankFailure::ResourceLimit,
+                            "state-size");
+        staged_development_state_.assign(state.begin(), state.end());
+        staged_development_state_inventory_ = {};
+    }
+
     void require_owner_thread() const {
         if (!audio_.on_audio_thread() &&
             std::this_thread::get_id() != owner_thread_)
@@ -4501,7 +5689,10 @@ class NativePortSoundBankEngine::Impl final {
             opcode == SoundBankOpcode::StopAll ||
             opcode == SoundBankOpcode::Reset ||
             opcode == SoundBankOpcode::Pump ||
-            opcode == SoundBankOpcode::Snapshot) {
+            opcode == SoundBankOpcode::Snapshot ||
+            opcode == SoundBankOpcode::CaptureDevelopmentState ||
+            opcode == SoundBankOpcode::ValidateDevelopmentState ||
+            opcode == SoundBankOpcode::RestoreDevelopmentState) {
             require_empty(payload);
             switch (opcode) {
             case SoundBankOpcode::CloseAllMidiPorts:
@@ -4525,6 +5716,22 @@ class NativePortSoundBankEngine::Impl final {
             case SoundBankOpcode::Snapshot:
                 write_sound_ack(result, core_->snapshot());
                 return;
+            case SoundBankOpcode::CaptureDevelopmentState:
+                staged_development_state_ = core_->capture_development_state();
+                return;
+            case SoundBankOpcode::ValidateDevelopmentState: {
+                auto candidate = std::make_unique<Core>(audio_, config_);
+                candidate->restore_development_state(staged_development_state_);
+                staged_development_state_inventory_ =
+                    candidate->development_state_inventory();
+                return;
+            }
+            case SoundBankOpcode::RestoreDevelopmentState: {
+                auto candidate = std::make_unique<Core>(audio_, config_);
+                candidate->restore_development_state(staged_development_state_);
+                core_.swap(candidate);
+                return;
+            }
             default:
                 break;
             }
@@ -4676,6 +5883,11 @@ class NativePortSoundBankEngine::Impl final {
     NativePortSoundBankConfig config_;
     std::thread::id owner_thread_;
     std::unique_ptr<Core> core_;
+    // Producer/worker handoff is serialized by synchronous queue commands;
+    // no address crosses the pointer-free command ABI.
+    mutable std::vector<std::uint8_t> staged_development_state_;
+    mutable NativePortSoundBankDevelopmentStateInventory
+        staged_development_state_inventory_;
 };
 
 void NativePortSoundBankEngine::execute_worker_command(
@@ -4946,6 +6158,22 @@ NativePortSoundMidiPortSnapshot NativePortSoundBankEngine::midi_port_snapshot(
 
 NativePortSoundBankSnapshot NativePortSoundBankEngine::snapshot() const {
     return impl_->snapshot();
+}
+
+std::vector<std::uint8_t>
+NativePortSoundBankEngine::capture_development_state() const {
+    return impl_->capture_development_state();
+}
+
+NativePortSoundBankDevelopmentStateInventory
+NativePortSoundBankEngine::validate_development_state(
+    const std::span<const std::uint8_t> state) const {
+    return impl_->validate_development_state(state);
+}
+
+void NativePortSoundBankEngine::restore_development_state(
+    const std::span<const std::uint8_t> state) {
+    impl_->restore_development_state(state);
 }
 
 } // namespace katana::runtime

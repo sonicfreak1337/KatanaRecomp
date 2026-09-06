@@ -14,6 +14,11 @@
 
 namespace katana::runtime {
 
+// SHA-256 as 64 lowercase hex digits, using the native content verifier.
+// Runtime snapshots do not depend on analyzer or historical-device libraries.
+[[nodiscard]] std::string native_port_content_sha256(
+    std::span<const std::uint8_t> bytes);
+
 class NativePortImmutableWriteGuard;
 struct CrashCapsule;
 
@@ -280,6 +285,12 @@ class NativePortRuntimeImageBindings final {
     [[nodiscard]] bool active(std::string_view image_id) const noexcept;
     [[nodiscard]] bool recognizes_image(
         std::string_view image_id) const noexcept;
+    // Read-only preflight for a development-state RAM snapshot. Verifies the
+    // same generated block identities that activate() will require without
+    // acquiring lifecycle authority or mutating dispatch state.
+    [[nodiscard]] NativePortExecutableRange validate_development_state_image(
+        std::string_view image_id,
+        std::span<const std::uint8_t> main_memory) const;
     [[nodiscard]] std::optional<NativePortRuntimeImageActiveEntryView>
     active_entry_for_address(std::uint32_t address) const;
     [[nodiscard]] NativePortRuntimeImageDispatchStamp
@@ -383,6 +394,10 @@ class NativePortLoadedAotBinder final {
     void validate_development_state_module(
         const NativePortLoadedAotModuleActivation& activation,
         std::uint32_t activation_entry) const;
+    void validate_development_state_module(
+        const NativePortLoadedAotModuleActivation& activation,
+        std::uint32_t activation_entry,
+        std::span<const std::uint8_t> main_memory) const;
     // Installs one unambiguous exact executable-closure mapping for target.
     // False means no analyzed module matches; ambiguous, malformed, or stale
     // generated-code state fails closed.

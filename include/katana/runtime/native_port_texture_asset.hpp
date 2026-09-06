@@ -83,6 +83,8 @@ struct NativePortDecodedTextureAsset final {
     std::string name;
     std::optional<std::uint32_t> global_index;
     std::uint32_t archive_ordinal = 0u;
+    // Raw PVM provenance; archive_ordinal retains the validated directory u16.
+    std::optional<std::uint16_t> pvm_header_flags;
     NativePortTextureAssetPixelFormat source_pixel_format =
         NativePortTextureAssetPixelFormat::Rgb565;
     NativePortTextureAssetDataFormat source_data_format =
@@ -109,6 +111,7 @@ struct NativePortEncodedTextureAsset final {
     std::string name;
     std::optional<std::uint32_t> global_index;
     std::uint32_t archive_ordinal = 0u;
+    std::optional<std::uint16_t> pvm_header_flags;
     NativePortTextureAssetPixelFormat source_pixel_format =
         NativePortTextureAssetPixelFormat::Rgb565;
     NativePortTextureAssetDataFormat source_data_format =
@@ -248,6 +251,7 @@ struct NativePortMaterializedTextureAsset final {
     std::string name;
     std::optional<std::uint32_t> global_index;
     std::uint32_t archive_ordinal = 0u;
+    std::optional<std::uint16_t> pvm_header_flags;
     NativePortTextureAssetPixelFormat source_pixel_format =
         NativePortTextureAssetPixelFormat::Rgb565;
     NativePortTextureAssetDataFormat source_data_format =

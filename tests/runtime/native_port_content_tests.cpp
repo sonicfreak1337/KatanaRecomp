@@ -997,6 +997,8 @@ int main(const int argc, char** const argv) {
     // Development-state restore validates every fixed immutable byte before
     // publishing the all-RAM copy. Mutable bytes may move backwards; a stale
     // executable byte rejects the complete transaction without partial RAM.
+    // Sonic r276 exposed the missing production write observer here: it denies
+    // raw mutable pointers even after dynamic executable owners retire.
     try {
         katana::runtime::NativePortMemory memory;
         auto& cpu = memory.cpu();
@@ -1010,18 +1012,49 @@ int main(const int argc, char** const argv) {
             katana::runtime::CodeWriteSource::Copy);
         auto saved = katana::runtime::capture_native_port_main_memory(cpu);
         saved[0x200u] = 0x77u;
+        saved[0xFEu] = 0x33u;
+        saved[0x102u] = 0x44u;
         const std::array fixed{
             katana::runtime::NativePortImmutableRange{
                 immutable_address, 1u,
                 katana::runtime::native_port_immutable_range_mask(
                     katana::runtime::
-                        NativePortImmutableRangeKind::Executable)}};
+                        NativePortImmutableRangeKind::ReadOnlyImage)},
+            // Unsorted, overlapping and mirrored ranges share one backing.
+            katana::runtime::NativePortImmutableRange{
+                0x0D000100u, 2u,
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::NativePortImmutableRangeKind::Executable)},
+            katana::runtime::NativePortImmutableRange{
+                0x0C0000FFu, 3u,
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::NativePortImmutableRangeKind::Executable)}};
+        // The production guard consumes a sorted canonical union. The restore
+        // metadata above deliberately describes the same backing via aliases.
+        const std::array guard_ranges{
+            katana::runtime::NativePortImmutableRange{
+                0x0C0000FFu, 3u,
+                katana::runtime::native_port_immutable_range_mask(
+                    katana::runtime::NativePortImmutableRangeKind::ReadOnlyImage)}};
+        katana::runtime::NativePortImmutableWriteGuard restore_guard(guard_ranges);
+        std::size_t observed_writes = 0u;
+        cpu.memory.set_guest_write_observer(
+            [&](const katana::runtime::GuestWriteEvent& event) {
+                ++observed_writes;
+                restore_guard.observe_write(event);
+            }, katana::runtime::GuestWriteObserverContract::StableForPrevalidatedLinearWrites);
+        require(cpu.memory.direct_linear_memory_guard(true).write_bytes == nullptr,
+                "Sonic restore test must retain the production write observer.");
         katana::runtime::restore_native_port_main_memory_for_development_state(
             cpu, saved, fixed);
         const auto restored =
             katana::runtime::capture_native_port_main_memory(cpu);
-        require(restored[0x100u] == 0x5Au && restored[0x200u] == 0x77u,
-                "Development-State-Restore verlor mutable RAM-Bytes.");
+        require(restored == saved && observed_writes > 0u && !restore_guard.write_detected(),
+                "Sonic restore lost RAM bytes, bypassed its observer, or wrote fixed code.");
+        const auto initial_writes = observed_writes;
+        katana::runtime::restore_native_port_main_memory_for_development_state(cpu, saved, fixed);
+        require(observed_writes == initial_writes && !restore_guard.write_detected(),
+                "Unchanged restored RAM must not publish spurious writes.");
         auto invalid = restored;
         invalid[0x100u] = 0xA5u;
         bool rejected = false;
@@ -1034,7 +1067,7 @@ int main(const int argc, char** const argv) {
         }
         require(rejected &&
                     katana::runtime::capture_native_port_main_memory(cpu) ==
-                        restored,
+                        restored && observed_writes == initial_writes && !restore_guard.write_detected(),
                 "Development-State-Restore akzeptierte Immutable-Drift oder "
                 "schrieb RAM teilweise.");
     } catch (const std::exception& error) {

@@ -28,9 +28,11 @@ constexpr std::uint16_t pvm_pixel_data_format_flag = 0x0002u;
 constexpr std::uint16_t pvm_texture_dimensions_flag = 0x0004u;
 constexpr std::uint16_t pvm_global_index_flag = 0x0008u;
 constexpr std::uint16_t pvm_pvrt_flag = 0x0100u;
+constexpr std::uint16_t pvm_sdk_control_flag = 0x0400u;
 constexpr std::uint16_t supported_pvm_flags =
     pvm_filename_flag | pvm_pixel_data_format_flag |
-    pvm_texture_dimensions_flag | pvm_global_index_flag | pvm_pvrt_flag;
+    pvm_texture_dimensions_flag | pvm_global_index_flag | pvm_pvrt_flag |
+    pvm_sdk_control_flag;
 constexpr std::size_t pvm_name_bytes = 28u;
 constexpr std::uint32_t maximum_pvr_dimension = 1'024u;
 constexpr std::uint32_t minimum_pvr_dimension = 8u;
@@ -1023,6 +1025,7 @@ void decode_pixels(const std::span<const std::uint8_t> source,
         texture.name = metadata[index].name;
         texture.global_index = metadata[index].global_index;
         texture.archive_ordinal = static_cast<std::uint32_t>(index);
+        texture.pvm_header_flags = flags;
         texture.source_pixel_format =
             parse_pixel_format(source[chunk_offset + 8u], chunk_offset + 8u);
         texture.source_data_format =
@@ -1106,6 +1109,7 @@ void decode_pixels(const std::span<const std::uint8_t> source,
             captured_texture->name = texture.name;
             captured_texture->global_index = texture.global_index;
             captured_texture->archive_ordinal = texture.archive_ordinal;
+            captured_texture->pvm_header_flags = texture.pvm_header_flags;
             captured_texture->source_pixel_format =
                 texture.source_pixel_format;
             captured_texture->source_data_format =
@@ -2061,6 +2065,7 @@ namespace {
                 texture.name,
                 texture.global_index,
                 texture.archive_ordinal,
+                texture.pvm_header_flags,
                 texture.source_pixel_format,
                 texture.source_data_format,
                 static_cast<std::uint64_t>(

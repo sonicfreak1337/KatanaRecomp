@@ -7,7 +7,7 @@
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_codec_provider_contract_version = 2u;
+inline constexpr std::uint32_t native_port_codec_provider_contract_version = 3u;
 
 // Read-only random access to the exact content object whose complete SHA-256
 // identity was verified by the native runtime. Provider callbacks must not
@@ -121,6 +121,12 @@ struct NativePortCodecProvider final {
                  NativePortCodecOpenResult* result) noexcept = nullptr;
     void (*read_next)(void* decoder, NativePortCodecReadResult* result) noexcept = nullptr;
     void (*close)(void* decoder) noexcept = nullptr;
+    // Explicit opt-in for audio-only development replay. With the identical
+    // provider/dependency build, immutable bytes and OpenRequest, reopening
+    // and reading from the start yields the same PCM chunks and continuation
+    // (including demux/resampler state). Never authorizes cross-build restore.
+    // Zero is the fail-closed default; only 0 and 1 are valid.
+    std::uint32_t deterministic_audio_replay = 0u;
 };
 
 inline constexpr std::uint32_t native_port_codec_provider_structure_size =

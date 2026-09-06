@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
+#include <type_traits>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -49,6 +51,11 @@ class AudioEngineFrameCursor final {
         return true;
     }
 
+    constexpr void reset_source_epoch() noexcept {
+        has_source_frame_index_ = false;
+        last_source_frame_index_ = 0u;
+    }
+
     [[nodiscard]] constexpr std::uint64_t effective() const noexcept {
         return last_effective_frame_index_;
     }
@@ -90,6 +97,180 @@ static_assert(audio_engine_frame_cursor_contract());
     throw NativePortAudioEngineError(
         failure, provider_error_code, operation);
 }
+
+
+constexpr std::size_t development_audio_limit = 512u * 1024u * 1024u;
+
+void require_development_audio(const bool valid) {
+    if (!valid)
+        fail_audio_engine(NativePortAudioEngineFailure::InvalidAudioBuffer,
+                          0u, "development-audio-state");
+}
+
+struct DevelopmentAudioWriter {
+    std::vector<std::uint8_t> data;
+    void number(std::uint64_t& value) {
+        require_development_audio(data.size() <= development_audio_limit - 8u);
+        for (unsigned shift = 0u; shift < 64u; shift += 8u)
+            data.push_back(static_cast<std::uint8_t>(value >> shift));
+    }
+    void text(std::string& value) {
+        std::uint64_t size = value.size();
+        number(size);
+        require_development_audio(size <= 32768u &&
+                                  size <= development_audio_limit - data.size());
+        data.insert(data.end(), value.begin(), value.end());
+    }
+    template<class T> void scalar(T& value) {
+        std::uint64_t encoded;
+        if constexpr (std::is_same_v<T, float>)
+            encoded = std::bit_cast<std::uint32_t>(value);
+        else if constexpr (std::is_same_v<T, std::int16_t>)
+            encoded = std::bit_cast<std::uint16_t>(value);
+        else
+            encoded = static_cast<std::uint64_t>(value);
+        number(encoded);
+    }
+};
+
+struct DevelopmentAudioReader {
+    std::span<const std::uint8_t> data;
+    std::size_t cursor = 0u;
+    void number(std::uint64_t& value) {
+        require_development_audio(cursor <= data.size() &&
+                                  data.size() - cursor >= 8u);
+        value = 0u;
+        for (unsigned shift = 0u; shift < 64u; shift += 8u)
+            value |= std::uint64_t{data[cursor++]} << shift;
+    }
+    void text(std::string& value) {
+        std::uint64_t size = 0u;
+        number(size);
+        require_development_audio(size <= 32768u && size <= data.size() - cursor);
+        value.assign(reinterpret_cast<const char*>(data.data() + cursor),
+                     static_cast<std::size_t>(size));
+        require_development_audio(value.find('\0') == std::string::npos);
+        cursor += static_cast<std::size_t>(size);
+    }
+    template<class T> void scalar(T& value) {
+        std::uint64_t encoded = 0u;
+        number(encoded);
+        if constexpr (std::is_same_v<T, float>) {
+            require_development_audio(encoded <= UINT32_MAX);
+            value = std::bit_cast<float>(static_cast<std::uint32_t>(encoded));
+        } else if constexpr (std::is_same_v<T, std::int16_t>) {
+            require_development_audio(encoded <= UINT16_MAX);
+            value = std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(encoded));
+        } else if constexpr (std::is_same_v<T, bool>) {
+            require_development_audio(encoded == 0u || encoded == 1u);
+            value = encoded != 0u;
+        } else if constexpr (std::is_enum_v<T>) {
+            require_development_audio(encoded <=
+                std::numeric_limits<std::underlying_type_t<T>>::max());
+            value = static_cast<T>(encoded);
+        } else {
+            require_development_audio(encoded <= std::numeric_limits<T>::max());
+            value = static_cast<T>(encoded);
+        }
+    }
+};
+
+template<class Archive, class T>
+void development_audio_vector(Archive& ar, std::vector<T>& values,
+                              const std::size_t limit) {
+    std::uint64_t size = values.size();
+    ar.number(size);
+    require_development_audio(size <= limit);
+    if constexpr (std::is_same_v<Archive, DevelopmentAudioReader>) {
+        require_development_audio(size <= (ar.data.size() - ar.cursor) / 8u);
+        values.resize(static_cast<std::size_t>(size));
+    }
+    for (auto& value : values) ar.scalar(value);
+}
+
+struct DevelopmentAudioVoice {
+    std::uint32_t generation = 1u;
+    bool live = false;
+    NativePortAudioVoiceSource source = NativePortAudioVoiceSource::Codec;
+    NativePortAudioVoiceState state = NativePortAudioVoiceState::Ready;
+    NativePortAudioEngineFailure failure = NativePortAudioEngineFailure::None;
+    std::uint32_t provider_error_code = 0u, channels = 0u;
+    std::string logical_id, path, identity;
+    std::uint64_t source_offset = 0u, byte_size = 0u;
+    NativePortAudioVoiceConfig config{};
+    // duration, source, discard, decoded, mixed, played, loops, since-restart.
+    std::array<std::uint64_t, 8u> counters{};
+    std::uint32_t empty_loops = 0u;
+    bool feed_finished = false, decoder_open = false;
+    std::vector<std::int16_t> pcm; // Only unread frames, canonical read_frame=0.
+    std::vector<std::byte> content; // Materialized/verified by the owner, not wire data.
+};
+
+struct DevelopmentAudioState {
+    std::string provider;
+    std::array<std::uint64_t, 9u> config{};
+    // created, released, reads, decoded, feed, mixed, submitted,
+    // nonzero, clipped, peak, pending-nonzero, pending-clipped, pending-peak.
+    std::array<std::uint64_t, 13u> counters{};
+    bool paused = false;
+    std::vector<DevelopmentAudioVoice> slots;
+    std::vector<std::int16_t> pending;
+    struct Contribution {
+        NativePortAudioVoiceHandle voice;
+        std::uint32_t frames = 0u;
+    };
+    std::vector<Contribution> contributions;
+};
+
+std::array<std::uint64_t, 9u> development_audio_config(
+    const NativePortAudioEngineConfig& c) {
+    return {c.output_format.sample_rate, c.output_format.channels,
+            c.maximum_voices, c.maximum_output_queue_frames,
+            c.target_output_queue_frames, c.mix_block_frames,
+            c.maximum_buffered_frames_per_voice, c.maximum_decoder_reads_per_pump,
+            c.maximum_codec_source_bytes_per_voice};
+}
+
+template<class Archive>
+void development_audio_wire(Archive& ar, DevelopmentAudioState& s) {
+    std::uint64_t magic = 0x314455414E54414Bull, version = 1u;
+    ar.number(magic); ar.number(version);
+    require_development_audio(magic == 0x314455414E54414Bull && version == 1u);
+    ar.text(s.provider);
+    for (auto& value : s.config) ar.number(value);
+    for (auto& value : s.counters) ar.number(value);
+    ar.scalar(s.paused);
+    std::uint64_t count = s.slots.size();
+    ar.number(count);
+    require_development_audio(count <= maximum_native_audio_voices);
+    if constexpr (std::is_same_v<Archive, DevelopmentAudioReader>)
+        s.slots.resize(static_cast<std::size_t>(count));
+    for (auto& v : s.slots) {
+        ar.scalar(v.generation); ar.scalar(v.live);
+        require_development_audio(v.generation != 0u);
+        if (!v.live) continue;
+        ar.scalar(v.source); ar.scalar(v.state); ar.scalar(v.failure);
+        ar.scalar(v.provider_error_code); ar.scalar(v.channels);
+        ar.text(v.logical_id); ar.text(v.path); ar.text(v.identity);
+        ar.number(v.source_offset); ar.number(v.byte_size);
+        ar.scalar(v.config.gain); ar.scalar(v.config.pan);
+        ar.scalar(v.config.loop); ar.number(v.config.start_frame);
+        ar.number(v.config.loop_start_frame); ar.number(v.config.loop_end_frame);
+        for (auto& value : v.counters) ar.number(value);
+        ar.scalar(v.empty_loops); ar.scalar(v.feed_finished); ar.scalar(v.decoder_open);
+        development_audio_vector(ar, v.pcm, development_audio_limit / 8u);
+    }
+    development_audio_vector(ar, s.pending, maximum_mix_block_frames * 2u);
+    count = s.contributions.size();
+    ar.number(count);
+    require_development_audio(count <= maximum_native_audio_voices);
+    if constexpr (std::is_same_v<Archive, DevelopmentAudioReader>)
+        s.contributions.resize(static_cast<std::size_t>(count));
+    for (auto& c : s.contributions) {
+        ar.scalar(c.voice.slot); ar.scalar(c.voice.generation); ar.scalar(c.frames);
+    }
+}
+
 
 void saturating_add(std::uint64_t& destination,
                     const std::uint64_t value) noexcept {
@@ -273,6 +454,9 @@ enum class AudioEngineOpcode : std::uint16_t {
     PumpCached,
     VoiceSnapshot,
     Snapshot,
+    CaptureDevelopmentState,
+    ValidateDevelopmentState,
+    RestoreDevelopmentState,
 };
 
 struct AudioHandleCommand final {
@@ -1578,6 +1762,215 @@ class NativePortAudioEngine::Core final {
         return frames;
     }
 
+
+  public:
+    DevelopmentAudioState capture_development_state() const {
+        require_owner_thread();
+        require_development_audio(output_paused_);
+        DevelopmentAudioState s;
+        s.provider = codec_provider_.provider_name;
+        s.config = development_audio_config(config_);
+        s.paused = output_paused_;
+        s.counters = {created_voices_, released_voices_, decoder_reads_,
+            decoded_source_frames_, submitted_feed_frames_, mixed_output_frames_,
+            submitted_output_frames_, submitted_nonzero_samples_,
+            submitted_clipped_samples_, submitted_peak_sample_,
+            pending_nonzero_samples_, pending_clipped_samples_, pending_peak_sample_};
+        s.slots.resize(slots_.size());
+        for (std::size_t i = 0u; i < slots_.size(); ++i) {
+            const auto& slot = slots_[i];
+            auto& d = s.slots[i];
+            d.generation = slot.generation;
+            d.live = bool(slot.voice);
+            if (!d.live) continue;
+            const auto& v = *slot.voice;
+            d.source = v.source; d.state = v.state; d.failure = v.failure;
+            d.provider_error_code = v.provider_error_code; d.channels = v.channels;
+            d.logical_id = v.logical_id;
+            const auto path = v.content_relative_path.generic_u8string();
+            d.path.assign(reinterpret_cast<const char*>(path.data()), path.size());
+            d.identity = v.byte_identity; d.source_offset = v.source_offset;
+            d.byte_size = v.byte_size; d.config = v.config;
+            d.counters = {v.duration_nanoseconds, v.source_frame,
+                v.discard_before_frame, v.decoded_source_frames,
+                v.mixed_output_frames, v.played_output_frames,
+                v.loop_count, v.frames_since_restart};
+            d.empty_loops = v.consecutive_empty_loops;
+            d.feed_finished = v.feed_finished;
+            d.decoder_open = v.decoder != nullptr;
+            require_development_audio(!d.decoder_open ||
+                codec_provider_.deterministic_audio_replay == 1u);
+            require_development_audio(v.read_frame <= v.pcm.size() / 2u);
+            d.pcm.assign(v.pcm.begin() + static_cast<std::ptrdiff_t>(v.read_frame * 2u),
+                         v.pcm.end());
+        }
+        s.pending.assign(mixed_samples_.begin(),
+                         mixed_samples_.begin() + pending_output_frames_ * 2u);
+        for (const auto& c : pending_contributions_) {
+            require_development_audio(!c.staged);
+            s.contributions.push_back({c.voice, c.frames});
+        }
+        return s;
+    }
+
+    // All decoder reconstruction and allocations are staged. Validation
+    // destroys only these temporary decoders, never a live voice/endpoint.
+    struct DevelopmentStage {
+        Core* owner;
+        std::vector<Slot> slots;
+        std::vector<PendingContribution> contributions;
+        ~DevelopmentStage() {
+            for (auto& slot : slots)
+                if (slot.voice) owner->close_decoder(*slot.voice);
+        }
+    };
+
+    std::unique_ptr<DevelopmentStage> stage_development_state(
+        const DevelopmentAudioState& s) {
+        require_owner_thread();
+        require_development_audio(output_paused_ && s.paused &&
+            s.config == development_audio_config(config_) &&
+            s.provider == codec_provider_.provider_name &&
+            s.slots.size() <= config_.maximum_voices &&
+            s.pending.size() % 2u == 0u &&
+            s.pending.size() / 2u <= config_.mix_block_frames &&
+            s.counters[9] <= 32768u && s.counters[12] <= 32768u);
+        auto staged = std::make_unique<DevelopmentStage>();
+        staged->owner = this;
+        staged->slots.resize(s.slots.size());
+        for (std::size_t i = 0u; i < s.slots.size(); ++i) {
+            const auto& d = s.slots[i];
+            auto& slot = staged->slots[i];
+            slot.generation = d.generation;
+            require_development_audio(d.generation != 0u);
+            if (!d.live) continue;
+            require_development_audio(
+                d.source <= NativePortAudioVoiceSource::PcmFeed &&
+                d.state <= NativePortAudioVoiceState::Failed &&
+                d.failure <= NativePortAudioEngineFailure::ThreadViolation &&
+                (d.channels == 1u || d.channels == 2u) &&
+                d.pcm.size() % 2u == 0u &&
+                d.pcm.size() / 2u <= config_.maximum_buffered_frames_per_voice &&
+                d.counters[5] <= d.counters[4] && d.empty_loops <= 2u);
+            validate_voice_config(d.config);
+            slot.voice = std::make_unique<Voice>();
+            auto& v = *slot.voice;
+            v.owner = this; v.source = d.source; v.config = d.config;
+            v.logical_id = d.logical_id;
+            v.content_relative_path = std::filesystem::u8path(d.path);
+            v.byte_identity = d.identity; v.source_offset = d.source_offset;
+            v.byte_size = d.byte_size; v.content = d.content;
+            reserve_voice_storage(v);
+            if (d.source == NativePortAudioVoiceSource::PcmFeed) {
+                require_development_audio(!d.decoder_open && d.content.empty() &&
+                    d.logical_id.empty() && d.path.empty() && d.identity.empty() &&
+                    d.byte_size == 0u && d.source_offset == 0u &&
+                    d.channels == 2u && !d.config.loop &&
+                    d.config.start_frame == 0u && d.config.loop_start_frame == 0u &&
+                    d.config.loop_end_frame == 0u);
+            } else {
+                require_development_audio(!d.feed_finished &&
+                    !d.logical_id.empty() && !d.path.empty() && !d.identity.empty() &&
+                    d.content.size() == d.byte_size &&
+                    d.byte_size <= config_.maximum_codec_source_bytes_per_voice);
+                if (d.decoder_open) {
+                    require_development_audio(codec_provider_.deterministic_audio_replay == 1u &&
+                        d.state != NativePortAudioVoiceState::Stopped &&
+                        d.state != NativePortAudioVoiceState::Completed &&
+                        d.state != NativePortAudioVoiceState::Failed);
+                    open_decoder(v, d.counters[2]);
+                    require_development_audio(v.channels == d.channels &&
+                        v.duration_nanoseconds == d.counters[0]);
+                    std::uint64_t position = 0u, reads = 0u;
+                    // Explicit bounded offline replay, not a runtime decoder fallback.
+                    require_development_audio(d.counters[1] <= (1ull << 32u));
+                    while (position < d.counters[1]) {
+                        require_development_audio(++reads <= (1ull << 24u));
+                        NativePortCodecReadResult result;
+                        codec_provider_.read_next(v.decoder, &result);
+                        require_development_audio(
+                            result.status == NativePortCodecReadStatus::Sample &&
+                            result.failure == NativePortCodecFailure::None &&
+                            result.sample.kind == NativePortCodecSampleKind::Audio &&
+                            result.sample.audio_channels == d.channels &&
+                            result.sample.audio_sample_rate == config_.output_format.sample_rate &&
+                            result.sample.audio_samples != nullptr &&
+                            result.sample.audio_sample_count != 0u &&
+                            result.sample.audio_sample_count % d.channels == 0u);
+                        const auto frames = result.sample.audio_sample_count / d.channels;
+                        require_development_audio(
+                            frames <= config_.maximum_buffered_frames_per_voice &&
+                            frames <= d.counters[1] - position);
+                        position += frames;
+                    }
+                } else {
+                    require_development_audio(d.state == NativePortAudioVoiceState::Stopped ||
+                        d.state == NativePortAudioVoiceState::Completed ||
+                        d.state == NativePortAudioVoiceState::Failed);
+                }
+            }
+            v.state = d.state; v.failure = d.failure;
+            v.provider_error_code = d.provider_error_code; v.channels = d.channels;
+            v.duration_nanoseconds = d.counters[0]; v.source_frame = d.counters[1];
+            v.discard_before_frame = d.counters[2];
+            v.decoded_source_frames = d.counters[3];
+            v.mixed_output_frames = d.counters[4];
+            v.played_output_frames = d.counters[4]; // Dropped host horizon is committed.
+            v.loop_count = d.counters[6]; v.frames_since_restart = d.counters[7];
+            v.consecutive_empty_loops = d.empty_loops;
+            v.feed_finished = d.feed_finished; v.pcm = d.pcm;
+            v.read_frame = 0u;
+        }
+        require_development_audio(!s.pending.empty() || s.contributions.empty());
+        for (const auto& c : s.contributions) {
+            require_development_audio(c.voice.generation != 0u &&
+                c.frames != 0u && c.frames <= s.pending.size() / 2u);
+            require_development_audio(std::none_of(staged->contributions.begin(),
+                staged->contributions.end(), [&](const auto& old) {
+                    return old.voice.slot == c.voice.slot &&
+                           old.voice.generation == c.voice.generation;
+                }));
+            // Already-mixed output may outlive release/reuse of a contributing
+            // handle. Submission already ignores precisely these stale credits.
+            if (c.voice.slot < staged->slots.size()) {
+                auto& slot = staged->slots[c.voice.slot];
+                if (slot.voice && slot.generation == c.voice.generation) {
+                    require_development_audio(slot.voice->played_output_frames >= c.frames);
+                    slot.voice->played_output_frames -= c.frames;
+                }
+            }
+            staged->contributions.push_back({c.voice, c.frames, false});
+        }
+        return staged;
+    }
+
+    void restore_development_state(const DevelopmentAudioState& s) {
+        auto staged = stage_development_state(s);
+        auto next_output = std::make_unique<NativePortAudioStream>(
+            NativePortAudioConfig{config_.output_format,
+                                  config_.maximum_output_queue_frames,
+                                  config_.command_queue});
+        next_output->pause();
+        // Host failures here propagate; do not claim a successful logical commit.
+        output_->stop();
+        output_.swap(next_output);
+        slots_.swap(staged->slots);
+        pending_contributions_.swap(staged->contributions);
+        std::copy(s.pending.begin(), s.pending.end(), mixed_samples_.begin());
+        pending_output_frames_ = static_cast<std::uint32_t>(s.pending.size() / 2u);
+        created_voices_ = s.counters[0]; released_voices_ = s.counters[1];
+        decoder_reads_ = s.counters[2]; decoded_source_frames_ = s.counters[3];
+        submitted_feed_frames_ = s.counters[4]; mixed_output_frames_ = s.counters[5];
+        submitted_output_frames_ = s.counters[6];
+        submitted_nonzero_samples_ = s.counters[7]; submitted_clipped_samples_ = s.counters[8];
+        submitted_peak_sample_ = static_cast<std::uint32_t>(s.counters[9]);
+        pending_nonzero_samples_ = s.counters[10]; pending_clipped_samples_ = s.counters[11];
+        pending_peak_sample_ = static_cast<std::uint32_t>(s.counters[12]);
+        output_paused_ = true; // Root restores the pre-transaction policy after Bank+Audio.
+    }
+
+  private:
+
     const NativePortCodecProvider& codec_provider_;
     NativePortAudioEngineConfig config_;
     std::thread::id owner_thread_;
@@ -1796,6 +2189,92 @@ class NativePortAudioEngine::Impl final {
                               0u, "voice-control-opcode");
         }
     }
+
+
+    [[nodiscard]] std::vector<std::uint8_t> capture_development_state() {
+        require_producer_thread();
+        require_development_audio(!on_audio_thread());
+        dispatch_development_state(AudioEngineOpcode::CaptureDevelopmentState);
+        return std::move(development_output_);
+    }
+
+    NativePortAudioDevelopmentStateInventory apply_development_state(
+        const std::span<const std::uint8_t> bytes, const bool restore) {
+        require_producer_thread();
+        require_development_audio(!on_audio_thread() &&
+            bytes.size() <= development_audio_limit);
+        DevelopmentAudioState saved;
+        DevelopmentAudioReader reader{bytes};
+        development_audio_wire(reader, saved);
+        require_development_audio(reader.cursor == bytes.size() &&
+            saved.config == development_audio_config(config_) &&
+            saved.provider == codec_provider_.provider_name);
+        // Platform file verification stays on the simulation owner. A state
+        // carries exact immutable bindings, never raw decoder pointers or a
+        // bypass around the installed content's SHA/extent checks.
+        std::uint64_t materialized = 0u;
+        for (auto& v : saved.slots) {
+            if (!v.live || v.source != NativePortAudioVoiceSource::Codec) continue;
+            require_development_audio(v.byte_size <=
+                config_.maximum_codec_source_bytes_per_voice &&
+                v.byte_size <= development_audio_limit - materialized);
+            materialized += v.byte_size;
+            NativePortContentFileBinding binding{
+                v.logical_id, std::filesystem::u8path(v.path), v.identity,
+                v.source_offset, v.byte_size};
+            v.content = materialize_audio_content(
+                platform_, binding, config_.maximum_codec_source_bytes_per_voice);
+        }
+        NativePortAudioDevelopmentStateInventory inventory;
+        if (!restore) {
+            // Allocate before dispatch; never expose this candidate inventory
+            // until the synchronous worker validation has succeeded.
+            inventory.voices.reserve(saved.slots.size());
+            for (std::size_t index = 0u; index < saved.slots.size(); ++index) {
+                const auto& slot = saved.slots[index];
+                if (slot.live)
+                    inventory.voices.push_back({
+                        static_cast<std::uint32_t>(index), slot.generation});
+            }
+        }
+        development_input_ = std::move(saved);
+        try {
+            dispatch_development_state(restore
+                ? AudioEngineOpcode::RestoreDevelopmentState
+                : AudioEngineOpcode::ValidateDevelopmentState);
+        } catch (...) {
+            development_input_.reset();
+            throw;
+        }
+        development_input_.reset();
+        if (restore) frame_cursor_.reset_source_epoch();
+        return inventory;
+    }
+
+    void rebase_development_state_epoch() {
+        require_producer_thread();
+        require_development_audio(!on_audio_thread());
+        // Synchronous pause acknowledgement also fences automatic mixing.
+        AudioPauseOutputCommand command{};
+        command.paused = 1u;
+        const auto ack = checked_domain_ack(domain_->dispatch_sync(
+            handle_, static_cast<std::uint16_t>(AudioEngineOpcode::SetOutputPaused),
+            object_bytes(command), current_frame_index_noexcept()),
+            "development-audio-pause");
+        require_ack_success(ack, "development-audio-pause");
+        frame_cursor_.reset_source_epoch();
+    }
+
+    void dispatch_development_state(const AudioEngineOpcode opcode) {
+        // Development restores deliberately do not feed the rewound guest
+        // stamp into the ordinary monotone source-frame admission check.
+        const auto ack = checked_domain_ack(domain_->dispatch_sync(
+            handle_, static_cast<std::uint16_t>(opcode), {},
+            current_frame_index_noexcept()), "development-audio-command");
+        require_ack_success(ack, "development-audio-command");
+        require_development_audio(ack.result_size == 0u);
+    }
+
 
     void set_gain_pan(const NativePortAudioVoiceHandle voice,
                       const float gain,
@@ -2285,6 +2764,23 @@ class NativePortAudioEngine::Impl final {
                         sound_bank_mix_target_.load(std::memory_order_acquire),
                         sound_bank_mix_source_.load(std::memory_order_acquire));
             return;
+        case AudioEngineOpcode::CaptureDevelopmentState: {
+            if (!payload.empty()) return invalid_payload(result);
+            auto saved = core_->capture_development_state();
+            DevelopmentAudioWriter writer;
+            development_audio_wire(writer, saved);
+            development_output_ = std::move(writer.data);
+            return;
+        }
+        case AudioEngineOpcode::ValidateDevelopmentState:
+        case AudioEngineOpcode::RestoreDevelopmentState:
+            if (!payload.empty() || !development_input_)
+                return invalid_payload(result);
+            if (opcode == AudioEngineOpcode::RestoreDevelopmentState)
+                core_->restore_development_state(*development_input_);
+            else
+                static_cast<void>(core_->stage_development_state(*development_input_));
+            return;
         case AudioEngineOpcode::VoiceSnapshot: {
             AudioHandleCommand command;
             if (!read_object(payload, command))
@@ -2380,6 +2876,11 @@ class NativePortAudioEngine::Impl final {
     NativePortAudioExecutionDomainTargetHandle handle_{};
     NativePortAudioExecutionDomainTargetHandle sound_bank_handle_{};
     mutable std::unique_ptr<Core> core_;
+    // Owner populates immutable input before a synchronous empty command;
+    // only that worker command reads it. Ack fences output ownership back.
+    // No pointers are placed in a command packet or serialized state.
+    mutable std::optional<DevelopmentAudioState> development_input_;
+    mutable std::vector<std::uint8_t> development_output_;
     mutable NativePortAudioCommandStamp bound_stamp_{};
     mutable AudioEngineFrameCursor frame_cursor_;
     void* sound_bank_target_ = nullptr;
@@ -2395,6 +2896,27 @@ NativePortAudioEngine::NativePortAudioEngine(
     : impl_(std::make_unique<Impl>(platform, codec_provider, config)) {}
 
 NativePortAudioEngine::~NativePortAudioEngine() = default;
+
+std::vector<std::uint8_t> NativePortAudioEngine::capture_development_state() {
+    return impl_->capture_development_state();
+}
+
+NativePortAudioDevelopmentStateInventory
+NativePortAudioEngine::validate_development_state(
+    const std::span<const std::uint8_t> bytes) {
+    return impl_->apply_development_state(bytes, false);
+}
+
+void NativePortAudioEngine::restore_development_state(
+    const std::span<const std::uint8_t> bytes) {
+    impl_->apply_development_state(bytes, true);
+}
+
+void NativePortAudioEngine::rebase_development_state_epoch() {
+    impl_->rebase_development_state_epoch();
+}
+
+
 
 NativePortAudioVoiceHandle NativePortAudioEngine::create_voice(
     const NativePortContentFileBinding& binding,

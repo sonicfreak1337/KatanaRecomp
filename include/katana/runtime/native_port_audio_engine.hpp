@@ -10,13 +10,14 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace katana::runtime {
 
 class NativePortSoundBankEngine;
 class NativePortTelemetry;
 
-inline constexpr std::uint32_t native_port_audio_engine_contract_version = 7u;
+inline constexpr std::uint32_t native_port_audio_engine_contract_version = 8u;
 
 enum class NativePortAudioEngineFailure : std::uint8_t {
     None,
@@ -127,6 +128,13 @@ struct NativePortAudioVoiceHandle final {
     }
 };
 
+// Returned only after complete development-state validation. Includes every
+// saved live slot, even when its decoder is closed/stopped/completed/failed.
+// These are candidate-state handles, not an inventory of the current engine.
+struct NativePortAudioDevelopmentStateInventory final {
+    std::vector<NativePortAudioVoiceHandle> voices;
+};
+
 enum class NativePortAudioVoiceSource : std::uint8_t {
     Codec,
     PcmFeed,
@@ -223,6 +231,20 @@ class NativePortAudioEngine final {
     void set_output_paused(bool paused);
     void stop_all();
     void pump();
+
+    // Development-only, exact-build-bound logical render-cursor state.
+    // Pause/quiesce before capture, validation and restore. The caller owns
+    // the Bank+Audio transaction and restores its saved output-pause policy.
+    // Validation is nonmutating; restore stages all decoders before commit.
+    // The host playback horizon is discarded, not replayed. Installed,
+    // identity-verified codec content remains a restore prerequisite.
+    [[nodiscard]] std::vector<std::uint8_t> capture_development_state();
+    NativePortAudioDevelopmentStateInventory
+    validate_development_state(std::span<const std::uint8_t> bytes);
+    void restore_development_state(std::span<const std::uint8_t> bytes);
+    // Synchronously pause service and admit a new guest frame epoch while
+    // retaining monotone domain/command sequences. Call before Bank restore.
+    void rebase_development_state_epoch();
 
     // Explicit tests and non-title clients may bind a stamp directly. Native
     // title adapters should provide command_stamp_source in the constructor

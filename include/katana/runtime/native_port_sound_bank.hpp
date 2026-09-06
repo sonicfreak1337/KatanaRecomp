@@ -10,12 +10,13 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 namespace katana::runtime {
 
-inline constexpr std::uint32_t native_port_sound_bank_contract_version = 9u;
+inline constexpr std::uint32_t native_port_sound_bank_contract_version = 10u;
 inline constexpr std::uint32_t native_port_sound_effect_kernel_contract_version =
-    1u;
+    2u;
 inline constexpr std::uint32_t native_port_manatee_sound_layout_bytes =
     2u * 1024u * 1024u;
 
@@ -39,6 +40,8 @@ enum class NativePortSoundBankFailure : std::uint8_t {
     CommandQueue,
     WorkerFailure,
     ThreadViolation,
+    InvalidState,
+    StateUnavailable,
 };
 
 class NativePortSoundBankError final : public std::runtime_error {
@@ -84,6 +87,18 @@ struct NativePortSoundEffectKernel final {
                    std::span<const std::int32_t> signed_20bit_input_buses,
                    std::span<std::int32_t> signed_16bit_output_buses,
                    std::uint32_t frame_count) noexcept = nullptr;
+    // Opaque kernel state is persisted only through this explicit all-or-none
+    // callback group. The SoundBank never copies an implementation object.
+    std::uint64_t maximum_snapshot_bytes = 0u;
+    bool (*capture_snapshot)(
+        const void* state,
+        std::span<std::uint8_t> destination,
+        std::uint64_t& bytes_written) noexcept = nullptr;
+    bool (*validate_snapshot)(
+        std::span<const std::uint8_t> snapshot) noexcept = nullptr;
+    bool (*restore_snapshot)(
+        void* initialized_state,
+        std::span<const std::uint8_t> snapshot) noexcept = nullptr;
 };
 
 struct NativePortSoundEffectKernelProvider final {
@@ -109,6 +124,10 @@ struct NativePortSoundBankConfig final {
     std::uint32_t maximum_midi_ports = 64u;
     std::uint32_t maximum_decoded_sample_frames = 16u * 1024u * 1024u;
     std::uint32_t maximum_effect_state_bytes = 1u * 1024u * 1024u;
+    // Development-state blobs include immutable collection bytes so an older
+    // inventory can be rebuilt exactly after a title-level reset.
+    std::uint64_t maximum_development_state_bytes =
+        320ull * 1024ull * 1024ull;
     NativePortSoundEffectKernelProvider effect_kernel_provider{};
 };
 
@@ -275,6 +294,12 @@ struct NativePortSoundBankSnapshot final {
     std::uint64_t feed_buffered_frames = 0u;
 };
 
+struct NativePortSoundBankDevelopmentStateInventory final {
+    std::vector<NativePortSoundCollectionHandle> collections;
+    std::vector<NativePortSoundMidiPortHandle> midi_ports;
+    std::vector<NativePortSoundPcmStreamRingHandle> pcm_stream_rings;
+};
+
 // Native semantic provider for Manatee title sound banks. MLT/SMPB/SMSB
 // describe instruments and musical intent; this service parses those bounded
 // assets and renders directly to host PCM. It never exposes sound RAM, AICA
@@ -406,6 +431,15 @@ class NativePortSoundBankEngine final {
     [[nodiscard]] NativePortSoundMidiPortSnapshot midi_port_snapshot(
         NativePortSoundMidiPortHandle port) const;
     [[nodiscard]] NativePortSoundBankSnapshot snapshot() const;
+
+    // Quicksave-oriented state is a versioned, bounded, pointer-free byte
+    // stream. All three operations synchronously fence the audio owner worker.
+    [[nodiscard]] std::vector<std::uint8_t>
+    capture_development_state() const;
+    [[nodiscard]] NativePortSoundBankDevelopmentStateInventory
+    validate_development_state(
+        std::span<const std::uint8_t> state) const;
+    void restore_development_state(std::span<const std::uint8_t> state);
 
   private:
     static void execute_worker_command(

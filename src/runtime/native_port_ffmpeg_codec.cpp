@@ -457,6 +457,10 @@ class FfmpegDecoder final {
         auto result = avcodec_parameters_to_context(context, parameters);
         if (result < 0) return fail(map_error(result), result);
         context->pkt_timebase = format_->streams[stream_index]->time_base;
+        // Audio replay binds exact provider/library builds and immutable input.
+        // Keep decoder scheduling independent of the host's worker count.
+        if (parameters->codec_type == AVMEDIA_TYPE_AUDIO)
+            context->thread_count = 1;
         result = avcodec_open2(context, decoder, nullptr);
         if (result < 0) return fail(map_error(result), result);
         return true;
@@ -911,6 +915,7 @@ const NativePortCodecProvider& native_port_ffmpeg_codec_provider() noexcept {
         value.open = &open_ffmpeg;
         value.read_next = &read_ffmpeg;
         value.close = &close_ffmpeg;
+        value.deterministic_audio_replay = 1u;
         return value;
     }();
     return provider;

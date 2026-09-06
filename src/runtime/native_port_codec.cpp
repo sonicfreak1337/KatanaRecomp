@@ -7,7 +7,8 @@ namespace katana::runtime {
 bool valid_native_port_codec_provider(const NativePortCodecProvider& provider) noexcept {
     if (provider.contract_version != native_port_codec_provider_contract_version ||
         provider.structure_size < native_port_codec_provider_structure_size ||
-        provider.open == nullptr || provider.read_next == nullptr || provider.close == nullptr)
+        provider.open == nullptr || provider.read_next == nullptr || provider.close == nullptr ||
+        provider.deterministic_audio_replay > 1u)
         return false;
     const auto end =
         std::find(std::begin(provider.provider_name), std::end(provider.provider_name), '\0');

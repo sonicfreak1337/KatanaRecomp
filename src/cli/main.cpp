@@ -11969,6 +11969,209 @@ struct CommittedAgentGeneration final {
     std::string cache_identity;
 };
 
+struct NativeBringupCheckpoint final {
+    std::string archive;
+    std::string archive_key;
+    std::string archive_sha256;
+    std::string manifest_sha256;
+    std::string prior_native_port_sha256;
+    std::string producer_provenance_sha256;
+    std::string cache_identity;
+};
+
+struct NativeBringupProviderSemanticBinding final {
+    std::uint32_t hook_guest_address = 0u;
+    std::string provider_symbol;
+    std::string declared_semantic_identity;
+
+    bool operator==(const NativeBringupProviderSemanticBinding&) const =
+        default;
+};
+
+std::filesystem::path native_bringup_checkpoint_file_path(
+    const std::filesystem::path& manifest_path,
+    const std::string_view value,
+    const std::string_view description) {
+    auto path = std::filesystem::path(value);
+    if (path.empty())
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint besitzt einen leeren " +
+            std::string(description) + "-Pfad.");
+    if (path.is_relative()) path = manifest_path.parent_path() / path;
+    path = std::filesystem::absolute(path).lexically_normal();
+    if (!safe_regular_port_file_exists(path, description))
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint vermisst " +
+            std::string(description) + ".");
+    return path;
+}
+
+std::vector<NativeBringupProviderSemanticBinding>
+native_bringup_provider_semantic_bindings(
+    const katana::runtime::NativePortDefinition& definition,
+    const std::string_view description) {
+    katana::runtime::validate_native_port_definition(definition);
+    std::vector<NativeBringupProviderSemanticBinding> result;
+    result.reserve(definition.provider_semantic_contracts.size());
+    for (const auto& contract : definition.provider_semantic_contracts) {
+        const auto computed =
+            katana::analysis::native_provider_semantic_identity(contract);
+        if (computed.empty() || computed != contract.semantic_identity)
+            throw std::invalid_argument(
+                std::string(description) +
+                " besitzt keinen vollstaendig kanonischen "
+                "Provider-Semantikvertrag.");
+        result.push_back({contract.hook_guest_address,
+                          std::string(contract.provider_symbol),
+                          std::string(contract.semantic_identity)});
+    }
+    std::ranges::sort(result, [](const auto& left, const auto& right) {
+        return std::tie(left.hook_guest_address,
+                        left.provider_symbol,
+                        left.declared_semantic_identity) <
+               std::tie(right.hook_guest_address,
+                        right.provider_symbol,
+                        right.declared_semantic_identity);
+    });
+    return result;
+}
+
+std::string native_bringup_checkpoint_cache_identity(
+    const std::string_view manifest_sha256,
+    const std::string_view prior_native_port_sha256,
+    const std::string_view producer_provenance_sha256) {
+    std::ostringstream material;
+    append_port_export_cache_field(
+        material, "katana.native-bringup-checkpoint-cache-v1");
+    append_port_export_cache_field(material, manifest_sha256);
+    append_port_export_cache_field(material, prior_native_port_sha256);
+    append_port_export_cache_field(material, producer_provenance_sha256);
+    return katana::io::sha256_bytes(material.str());
+}
+
+NativeBringupCheckpoint load_native_bringup_checkpoint(
+    const std::filesystem::path& path,
+    const katana::runtime::NativePortArtifact& current_native_port) {
+    constexpr std::size_t maximum_manifest_bytes = 64u * 1024u;
+    constexpr std::size_t maximum_provenance_bytes = 64u * 1024u;
+    const auto manifest_path =
+        std::filesystem::absolute(path).lexically_normal();
+    if (!safe_regular_port_file_exists(
+            manifest_path, "Native-Bring-up-Checkpointmanifest"))
+        throw std::invalid_argument(
+            "--native-bringup-checkpoint braucht ein vorhandenes, sicheres "
+            "Manifest.");
+    const auto manifest = read_safe_small_port_file(
+        manifest_path, maximum_manifest_bytes, "Native-Bring-up-Checkpointmanifest");
+    StrictJsonObject object;
+    parse_strict_json_object(manifest, object);
+    constexpr std::array<std::string_view, 8u> expected_keys{
+        "schema",
+        "archive_path",
+        "archive_key",
+        "archive_sha256",
+        "prior_native_port_path",
+        "prior_native_port_sha256",
+        "producer_provenance_path",
+        "producer_provenance_sha256"};
+    require_strict_json_keys(object, expected_keys);
+    if (strict_json_text(object, "schema", 64u) !=
+        "katana-native-bringup-checkpoint-v1")
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint besitzt kein bekanntes Schema.");
+    const auto archive_key = strict_json_text(object, "archive_key", 64u);
+    const auto archive_sha256 =
+        strict_json_text(object, "archive_sha256", 64u);
+    const auto prior_native_port_sha256 =
+        strict_json_text(object, "prior_native_port_sha256", 64u);
+    const auto producer_provenance_sha256 =
+        strict_json_text(object, "producer_provenance_sha256", 64u);
+    if (!valid_cache_digest(archive_key) ||
+        !valid_cache_digest(archive_sha256) ||
+        !valid_cache_digest(prior_native_port_sha256) ||
+        !valid_cache_digest(producer_provenance_sha256))
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint besitzt keinen kanonischen "
+            "SHA-256-Wert.");
+    const auto archive_path = native_bringup_checkpoint_file_path(
+        manifest_path,
+        strict_json_text(object, "archive_path", 4096u),
+        "Native-Bring-up-Checkpointarchiv");
+    const auto prior_native_port_path = native_bringup_checkpoint_file_path(
+        manifest_path,
+        strict_json_text(object, "prior_native_port_path", 4096u),
+        "Vorheriger Native-Port");
+    const auto provenance_path = native_bringup_checkpoint_file_path(
+        manifest_path,
+        strict_json_text(object, "producer_provenance_path", 4096u),
+        "Native-Bring-up-Checkpoint-Provenance");
+    const auto archive = read_safe_small_port_file(
+        archive_path,
+        katana::codegen::maximum_native_disc_analysis_artifact_bytes,
+        "Native-Bring-up-Checkpointarchiv");
+    const auto prior_native_port_bytes = read_safe_small_port_file(
+        prior_native_port_path,
+        static_cast<std::size_t>(
+            katana::runtime::native_port_artifact_maximum_size),
+        "Vorheriger Native-Port");
+    const auto provenance = read_safe_small_port_file(
+        provenance_path,
+        maximum_provenance_bytes,
+        "Native-Bring-up-Checkpoint-Provenance");
+    if (katana::io::sha256_bytes(archive) != archive_sha256 ||
+        katana::io::sha256_bytes(prior_native_port_bytes) !=
+            prior_native_port_sha256 ||
+        katana::io::sha256_bytes(provenance) !=
+            producer_provenance_sha256)
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint verweigert eine "
+            "SHA-256-Abweichung.");
+    const auto parsed = katana::codegen::parse_native_disc_analysis_artifact(
+        archive_key,
+        std::span(reinterpret_cast<const std::uint8_t*>(archive.data()),
+                  archive.size()));
+    if (parsed.state != katana::codegen::NativeDiscAnalysisArtifactState::Hit)
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint besitzt kein revalidierbares "
+            "NativeDisc-Analysearchiv.");
+    const auto prior_native_port =
+        katana::runtime::NativePortArtifact::load(prior_native_port_path);
+    const auto loaded_prior_native_port_bytes = read_safe_small_port_file(
+        prior_native_port->canonical_path(),
+        static_cast<std::size_t>(
+            katana::runtime::native_port_artifact_maximum_size),
+        "Vorheriger Native-Port");
+    if (katana::io::sha256_bytes(loaded_prior_native_port_bytes) !=
+        prior_native_port_sha256)
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint verweigert einen waehrend des "
+            "Native-Port-Ladens geaenderten Eingang.");
+    if (parsed.artifact.identity.native_port_artifact_identity !=
+        prior_native_port->artifact_identity())
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint bindet das Analysearchiv nicht an "
+            "den verifizierten vorherigen Native-Port.");
+    if (native_bringup_provider_semantic_bindings(
+            prior_native_port->definition(), "Vorheriger Native-Port") !=
+        native_bringup_provider_semantic_bindings(
+            current_native_port.definition(), "Aktueller Native-Port"))
+        throw std::invalid_argument(
+            "Native-Bring-up-Checkpoint verweigert unterschiedliche "
+            "Provider-Semantikvertraege.");
+    NativeBringupCheckpoint result;
+    result.archive = archive;
+    result.archive_key = archive_key;
+    result.archive_sha256 = archive_sha256;
+    result.manifest_sha256 = katana::io::sha256_bytes(manifest);
+    result.prior_native_port_sha256 = prior_native_port_sha256;
+    result.producer_provenance_sha256 = producer_provenance_sha256;
+    result.cache_identity = native_bringup_checkpoint_cache_identity(
+        result.manifest_sha256,
+        result.prior_native_port_sha256,
+        result.producer_provenance_sha256);
+    return result;
+}
+
 std::string committed_agent_generation_cache_identity(
     const AgentSessionLedgerState& state) {
     std::ostringstream identity;
@@ -12238,7 +12441,9 @@ int export_port_project(const std::filesystem::path& source_path,
                             native_bringup_allowlist_path = std::nullopt,
                         const std::optional<std::filesystem::path>&
                             native_bringup_coverage_authority_path =
-                                std::nullopt) {
+                                std::nullopt,
+                        const std::optional<std::filesystem::path>&
+                            native_bringup_checkpoint_path = std::nullopt) {
     if (!valid_port_target_name(target_name))
         throw std::invalid_argument(
             "--target-name ist kein sicherer CMake-Targetname.");
@@ -12269,6 +12474,21 @@ int export_port_project(const std::filesystem::path& source_path,
         throw std::invalid_argument(
             "--analysis-generation-game-project braucht eine gebundene "
             "--analysis-generation.");
+    if (native_bringup_checkpoint_path.has_value() &&
+        (analysis_generation_path.has_value() ||
+         analysis_generation_game_project_path.has_value()))
+        throw std::invalid_argument(
+            "--native-bringup-checkpoint ist nicht mit "
+            "--analysis-generation vereinbar.");
+    if (native_bringup_checkpoint_path.has_value() &&
+        (analysis_only || diagnostic_partial || boot_executable_artifact ||
+         native_execution_profile !=
+             NativePortExecutionProfile::NativeBringup ||
+         !game_project_path.has_value() ||
+         !native_port_definition_path.has_value()))
+        throw std::invalid_argument(
+            "--native-bringup-checkpoint braucht einen vollstaendigen "
+            "NativeDisc-Port mit NativeBringup, GameProject und NativePort.");
     if (analysis_only &&
         (native_execution_profile !=
              NativePortExecutionProfile::StrictProduct ||
@@ -13148,6 +13368,26 @@ int export_port_project(const std::filesystem::path& source_path,
                 << std::flush;
         }
     }
+    std::optional<NativeBringupCheckpoint> native_bringup_checkpoint;
+    if (native_bringup_checkpoint_path.has_value()) {
+        if (!verified_native_port)
+            throw std::logic_error(
+                "Native-Bring-up-Checkpoint besitzt keinen verifizierten "
+                "aktuellen Native-Port.");
+        native_bringup_checkpoint = load_native_bringup_checkpoint(
+            *native_bringup_checkpoint_path, *verified_native_port);
+        // The provenance file is an opaque audit input.  It never creates a
+        // committed World/session or bypasses the strict restore contract.
+        std::cout
+            << "KATANA_NATIVE_BRINGUP_CHECKPOINT_VERIFIED "
+            << "checkpoint_verified=1 "
+            << "archive_key=" << native_bringup_checkpoint->archive_key
+            << " archive_sha256=" << native_bringup_checkpoint->archive_sha256
+            << " manifest_sha256=" << native_bringup_checkpoint->manifest_sha256
+            << " cache_identity=" << native_bringup_checkpoint->cache_identity
+            << '\n'
+            << std::flush;
+    }
     const auto latent_aot_hint_identity =
         latent_aot_entry_hint_identity(normalized_latent_aot_entry_hints,
                                        latent_aot_discovery_mode);
@@ -13253,14 +13493,18 @@ int export_port_project(const std::filesystem::path& source_path,
                 verified_native_bringup_authoring
                     ? verified_native_bringup_authoring->artifact_identity()
                     : std::string{};
-            if (committed_analysis_generation.has_value()) {
-                const auto& archive =
-                    committed_analysis_generation->analysis_archive;
+            if (committed_analysis_generation.has_value() ||
+                native_bringup_checkpoint.has_value()) {
+                const auto& archive = committed_analysis_generation.has_value()
+                    ? committed_analysis_generation->analysis_archive
+                    : native_bringup_checkpoint->archive;
                 export_options.resume_analysis_artifact = std::span(
                     reinterpret_cast<const std::uint8_t*>(archive.data()),
                     archive.size());
                 export_options.resume_analysis_artifact_key =
-                    committed_analysis_generation->analysis_artifact_id;
+                    committed_analysis_generation.has_value()
+                        ? committed_analysis_generation->analysis_artifact_id
+                        : native_bringup_checkpoint->archive_key;
                 export_options.product_analysis_generation_reuse_requested =
                     true;
             }
@@ -13375,16 +13619,21 @@ int export_port_project(const std::filesystem::path& source_path,
             << '\n'
             << std::flush;
     }
-    // The cache is considered only after the complete ledger, archive,
-    // World, current resume manifest and session contract have been
-    // validated above. The three generation fields keep a prior unbound
-    // whole-export state from satisfying a newly selected authority.
+    // The cache is considered only after its selected authority is fully
+    // validated. A checkpoint is not a committed World/session: its third
+    // field binds only the checkpoint manifest, prior NativePort and opaque
+    // provenance hashes so an old whole-export state cannot satisfy it.
     const auto analysis_generation_cache_binding =
         committed_analysis_generation.has_value()
             ? katana::cli::PortExportAnalysisGenerationCacheBinding{
                   committed_analysis_generation->analysis_artifact_id,
                   committed_analysis_generation->analysis_archive_sha256,
                   committed_analysis_generation->cache_identity}
+            : native_bringup_checkpoint.has_value()
+            ? katana::cli::PortExportAnalysisGenerationCacheBinding{
+                  native_bringup_checkpoint->archive_key,
+                  native_bringup_checkpoint->archive_sha256,
+                  native_bringup_checkpoint->cache_identity}
             : katana::cli::PortExportAnalysisGenerationCacheBinding{};
     whole_export_cache_key = port_export_cache_key(
         whole_export_source_kind,
@@ -13419,6 +13668,14 @@ int export_port_project(const std::filesystem::path& source_path,
                  ? verified_native_bringup_coverage_authority
                        ->authority_identity
                  : "no-complete-disassembly-coverage"));
+    }
+    if (native_bringup_checkpoint.has_value()) {
+        // A whole-export hit would bypass PortExporter::try_restore. The
+        // checkpoint is therefore deliberately excluded: the strict loader
+        // must accept this invocation's current Source/Root/ABI and
+        // admission contract, and this mode does not publish a bypassable
+        // whole-export cache entry.
+        whole_export_cache_key.reset();
     }
     if (analysis_only) {
         if (!verified_native_disc)
@@ -15849,6 +16106,7 @@ void print_usage(std::ostream& output) {
               "[--native-port-definition <private .katana-native-port>] "
               "[--analysis-generation <committed analyze-port-Ordner>] "
               "[--analysis-generation-game-project <gebundenes Analyse-GameProject>] "
+              "[--native-bringup-checkpoint <Manifest.json>] "
                "[--analysis-mode <platform|runtime-only>] "
                "[--native-execution-profile <strict-product|native-bringup>] "
                "[--native-bringup-allowlist <private .katana-native-bringup>] "
@@ -16676,6 +16934,8 @@ int main(const int argc, char* argv[]) {
                 analysis_generation_path;
             std::optional<std::filesystem::path>
                 analysis_generation_game_project_path;
+            std::optional<std::filesystem::path>
+                native_bringup_checkpoint_path;
             std::vector<std::string_view> paired_arguments;
             paired_arguments.reserve(static_cast<std::size_t>(argc) - 3u);
             for (std::size_t argument = 3u;
@@ -16763,6 +17023,12 @@ int main(const int argc, char* argv[]) {
                     port_command == "port" &&
                     !analysis_generation_game_project_path.has_value()) {
                     analysis_generation_game_project_path =
+                        std::filesystem::path(value);
+                } else if (
+                    option == "--native-bringup-checkpoint" &&
+                    port_command == "port" &&
+                    !native_bringup_checkpoint_path.has_value()) {
+                    native_bringup_checkpoint_path =
                         std::filesystem::path(value);
                 } else if (
                     option == "--runtime-image-payload" &&
@@ -16914,7 +17180,8 @@ int main(const int argc, char* argv[]) {
                                        analysis_generation_game_project_path,
                                        native_execution_profile,
                                        native_bringup_allowlist_path,
-                                       native_bringup_coverage_authority_path);
+                                       native_bringup_coverage_authority_path,
+                                       native_bringup_checkpoint_path);
         }
 
         if ((argc == 3 || argc == 4) &&

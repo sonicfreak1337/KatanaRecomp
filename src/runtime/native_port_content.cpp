@@ -370,6 +370,30 @@ native_port_direct_bytes(const CpuState& cpu,
         guard.read_bytes + backing_offset, size);
 }
 
+[[nodiscard]] std::optional<std::span<const std::uint8_t>>
+native_port_development_state_bytes(
+    const std::span<const std::uint8_t> main_memory,
+    const std::uint32_t address,
+    const std::uint32_t size) noexcept {
+    const auto segment = address >> 29u;
+    if (main_memory.size() != native_port_main_memory_backing_size ||
+        size == 0u || segment >= 6u)
+        return std::nullopt;
+
+    const auto physical = canonical_physical_address(address);
+    if (physical < native_port_main_memory_physical_base)
+        return std::nullopt;
+    const auto relative = physical - native_port_main_memory_physical_base;
+    if (relative >= native_port_main_memory_physical_span ||
+        size > native_port_main_memory_physical_span - relative)
+        return std::nullopt;
+    const auto backing_offset =
+        relative & (native_port_main_memory_backing_size - 1u);
+    if (size > main_memory.size() - backing_offset)
+        return std::nullopt;
+    return main_memory.subspan(backing_offset, size);
+}
+
 [[nodiscard]] std::uint32_t canonical_native_port_runtime_alias(
     const std::uint32_t address) noexcept {
     // The native no-MMU product admits P0, P1 and P2 as aliases of the same
@@ -484,6 +508,13 @@ void append_bootstrap_immutable_backing_intervals(
 }
 
 } // namespace
+
+std::string native_port_content_sha256(
+    const std::span<const std::uint8_t> bytes) {
+    Sha256 hash;
+    hash.update(bytes);
+    return hash.finish();
+}
 
 std::string native_port_loaded_aot_module_universe_identity(
     const std::span<const NativePortLoadedAotModuleView> modules) {
@@ -1109,6 +1140,43 @@ bool NativePortRuntimeImageBindings::recognizes_image(
         [&](const NativePortRuntimeImageView& image) {
             return image.image_id == image_id;
         });
+}
+
+NativePortExecutableRange
+NativePortRuntimeImageBindings::validate_development_state_image(
+    const std::string_view image_id,
+    const std::span<const std::uint8_t> main_memory) const {
+    if (!impl_ ||
+        main_memory.size() != native_port_main_memory_backing_size)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "runtime-image-development-state-definition");
+    const auto found = std::ranges::find_if(
+        impl_->images,
+        [image_id](const NativePortRuntimeImageView& image) {
+            return image.image_id == image_id;
+        });
+    if (found == impl_->images.end())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "runtime-image-development-state-unknown");
+    if (!native_port_development_state_bytes(
+             main_memory, found->runtime_start, found->byte_size)
+             .has_value())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "runtime-image-development-state-range");
+    for (const auto& block : found->block_identities) {
+        const auto bytes = native_port_development_state_bytes(
+            main_memory, found->runtime_start + block.source_offset,
+            block.byte_size);
+        if (!bytes.has_value() || sha256_identity(*bytes) != block.sha256)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "runtime-image-development-state-block-identity-mismatch");
+    }
+    return {canonical_physical_address(found->runtime_start),
+            found->byte_size};
 }
 
 std::optional<NativePortRuntimeImageActiveEntryView>
@@ -1933,6 +2001,53 @@ void NativePortLoadedAotBinder::validate_development_state_module(
             "loaded-aot-development-state-entry");
 }
 
+void NativePortLoadedAotBinder::validate_development_state_module(
+    const NativePortLoadedAotModuleActivation& activation,
+    const std::uint32_t activation_entry,
+    const std::span<const std::uint8_t> main_memory) const {
+    validate_development_state_module(activation, activation_entry);
+    constexpr std::uint32_t maximum_module_bytes = 4u * 1024u * 1024u;
+    const auto runtime_start =
+        canonical_native_port_runtime_alias(activation.runtime_start);
+    if ((activation.source_start & 3u) != 0u ||
+        (runtime_start & 3u) != 0u || activation.byte_size < 2u ||
+        activation.byte_size > maximum_module_bytes ||
+        static_cast<std::uint64_t>(activation.source_start) +
+                activation.byte_size >
+            0x1'0000'0000ull ||
+        static_cast<std::uint64_t>(runtime_start) +
+                activation.byte_size >
+            0x1'0000'0000ull ||
+        main_memory.size() != native_port_main_memory_backing_size)
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-development-state-definition");
+
+    const auto module = std::ranges::find_if(
+        impl_->modules,
+        [&](const NativePortLoadedAotModuleView& candidate) {
+            return candidate.sha256 == activation.sha256 &&
+                   candidate.source_start == activation.source_start &&
+                   candidate.byte_size == activation.byte_size;
+        });
+    const auto module_bytes = native_port_development_state_bytes(
+        main_memory, runtime_start, activation.byte_size);
+    if (module == impl_->modules.end() || !module_bytes.has_value())
+        throw NativePortContractError(
+            NativePortContractFailure::AotContractViolation,
+            "loaded-aot-development-state-range");
+    if (sha256_identity(*module_bytes) == module->sha256) return;
+    for (const auto& block : module->block_identities) {
+        const auto bytes = native_port_development_state_bytes(
+            main_memory, runtime_start + block.source_offset,
+            block.byte_size);
+        if (!bytes.has_value() || sha256_identity(*bytes) != block.sha256)
+            throw NativePortContractError(
+                NativePortContractFailure::AotContractViolation,
+                "loaded-aot-development-state-block-identity-mismatch");
+    }
+}
+
 bool NativePortLoadedAotBinder::bind_entry(
     const std::uint32_t target) {
     if (validate_bound_entry(target)) return true;
@@ -2716,15 +2831,30 @@ void restore_native_port_main_memory_for_development_state(
                 NativePortContractFailure::ImmutableMemoryWrite,
                 "development-state-fixed-immutable-drift");
     }
-    const auto guard = cpu.memory.direct_linear_memory_guard(true);
-    std::uint32_t offset = 0u;
-    if (guard.write_bytes == nullptr ||
-        !direct_linear_guard_offset(
-            guard, 0x8C000000u, bytes.size(), offset))
+    // The native write observer intentionally denies raw mutable pointers.
+    // Preserve that observer and publish one admitted transaction instead.
+    // Fixed immutable bytes were verified above and must not be written even
+    // identically: ReadOnlyImage ownership rejects the write itself.
+    std::sort(immutable.begin(), immutable.end(), [](const auto& left, const auto& right) {
+        return std::tie(left.begin, left.end) < std::tie(right.begin, right.end);
+    });
+    std::vector<LinearMemoryTransactionWrite> writes;
+    writes.reserve(immutable.size() + 1u);
+    const auto append_changed = [&](const std::uint32_t begin, const std::uint32_t end) {
+        if (begin >= end || std::equal(bytes.begin() + begin, bytes.begin() + end,
+                                      current.begin() + begin)) return;
+        writes.push_back({0x8C000000u + begin, bytes.subspan(begin, end - begin)});
+    };
+    std::uint32_t cursor = 0u;
+    for (const auto& interval : immutable) {
+        append_changed(cursor, interval.begin);
+        cursor = std::max(cursor, interval.end);
+    }
+    append_changed(cursor, native_port_main_memory_backing_size);
+    if (!cpu.memory.commit_linear_transaction_batch(writes, CodeWriteSource::Copy))
         throw NativePortContractError(
             NativePortContractFailure::BootstrapFailed,
-            "development-state-main-memory-window");
-    std::memcpy(guard.write_bytes + offset, bytes.data(), bytes.size());
+            "development-state-main-memory-transaction");
 }
 
 void validate_native_port_bootstrap_memory_transition(
