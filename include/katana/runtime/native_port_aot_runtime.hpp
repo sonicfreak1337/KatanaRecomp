@@ -1,7 +1,7 @@
 #pragma once
 
 #include "katana/runtime/native_aot_state.hpp"
-#include "katana/runtime/native_port.hpp"
+#include "katana/runtime/native_port_aot_types.hpp"
 
 #include <cstddef>
 #include <cstdint>

@@ -1,4 +1,5 @@
 #include "katana/runtime/native_port_aot_runtime.hpp"
+#include "katana/runtime/native_port.hpp"
 #include "katana/runtime/native_port_content.hpp"
 
 #include <algorithm>

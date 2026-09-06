@@ -1,6 +1,7 @@
 #pragma once
 
 #include "katana/abi_contract.hpp"
+#include "katana/runtime/native_port_aot_types.hpp"
 #include "katana/runtime/native_port_semantics.hpp"
 
 #include <cstddef>
@@ -368,25 +369,6 @@ class NativePortHostServices {
         const noexcept = 0;
 };
 
-enum class NativePortImmutableRangeKind : std::uint8_t {
-    Executable = 1u << 0u,
-    ReadOnlyImage = 1u << 1u,
-};
-
-[[nodiscard]] constexpr std::uint8_t native_port_immutable_range_mask(
-    const NativePortImmutableRangeKind kind) noexcept {
-    return static_cast<std::uint8_t>(kind);
-}
-
-struct NativePortImmutableRange final {
-    std::uint32_t physical_address = 0u;
-    std::uint32_t byte_size = 0u;
-    std::uint8_t kind_mask = 0u;
-
-    [[nodiscard]] bool operator==(
-        const NativePortImmutableRange&) const = default;
-};
-
 // The generated product owns these two bridges. Native title hooks can invoke
 // the exact displaced original entry or re-enter an identity-bound external
 // callback root which participated in static analysis, without a runtime
@@ -411,20 +393,6 @@ struct NativePortBootstrapResult final {
 
 using NativePortBootstrapFunction = NativePortBootstrapResult (*)(
     NativePortContext& context) noexcept;
-
-enum class NativePortStopReason : std::uint8_t {
-    None,
-    HostRequested,
-    HostDeadline,
-    HookAbort,
-    MissingStaticEntry,
-    ExecutableCodeWrite,
-    ReadOnlyImageWrite,
-    GuestExceptionOrSleep,
-    AotContractViolation,
-    UnresolvedHardwareAccess,
-    ForbiddenHardwareOperation,
-};
 
 enum class NativePortBootstrapPhase : std::uint8_t {
     NotStarted,

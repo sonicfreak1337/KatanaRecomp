@@ -873,6 +873,7 @@ set(KATANA_PRODUCT_RUNTIME_HEADERS
     include/katana/runtime/native_bringup_artifact.hpp
     include/katana/runtime/native_bringup_dispatch.hpp
     include/katana/runtime/native_port.hpp
+    include/katana/runtime/native_port_aot_types.hpp
     include/katana/runtime/native_port_semantics.hpp
     include/katana/runtime/native_port_audio.hpp
     include/katana/runtime/native_port_audio_command_queue.hpp
