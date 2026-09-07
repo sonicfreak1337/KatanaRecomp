@@ -33325,6 +33325,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
     }
     report_progress(options, "native-bringup-coverage-resident-entry-validation-end");
 
+    report_progress(options, "native-bringup-coverage-module-preparation");
     std::unordered_map<std::string_view, const CompleteDisassemblyModuleAuthority*>
         authority_by_identity;
     authority_by_identity.reserve(authority.modules.size());
@@ -33472,6 +33473,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             coverage_hints);
         report_latent_aot_analysis_durations(options, coverage_latent_aot);
     }
+    report_progress(options, "native-bringup-coverage-module-merge");
     if (coverage_latent_aot.modules.size() !=
         latent_authority_module_count)
         throw std::runtime_error(
@@ -33797,6 +33799,7 @@ NativeBringupCoverageEmission prepare_native_bringup_coverage_emission(
             std::to_string(coverage_function_identities) +
         ":function-identity-bytes=" +
             std::to_string(coverage_function_identity_bytes);
+    report_progress(options, "native-bringup-coverage-validation-begin");
     report_progress(
         options,
         "native-bringup-coverage-validation" + coverage_validation_totals);
@@ -36349,6 +36352,7 @@ prepare_dreamcast_port_project_impl(
     if (precomputed_program_index != nullptr)
         rehydrate_native_disc_program_index_checkpoint(
             native_port_program_index, *precomputed_program_index);
+    report_progress(options, "game-project-validation:program-admission");
     if (native_port_definition != nullptr) {
         for (const auto& hook : native_port_definition->hooks) {
             if (!katana::runtime::native_port_hook_is_executable(
@@ -42295,6 +42299,9 @@ static PortExportResult export_dreamcast_port_project_impl(
             prepared, options, *disc_context, proof_latent_aot,
             enable_function_value_analysis);
     }
+    // End coverage after its temporaries have been destroyed, not at the
+    // helper's pre-return notification. Also bound the non-coverage path.
+    report_progress(options, "native-port-emission-prepare");
     const auto& latent_aot = coverage_emission.has_value()
                                  ? coverage_emission->latent_aot
                                  : proof_latent_aot;
