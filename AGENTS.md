@@ -230,13 +230,30 @@ native-bringup:
 
 ### Global-first und Family-first sind Pflicht
 
+- Aktuelle Bring-up-Vorgabe: Bereits belegte Sonic-Adressfamilien duerfen
+  vorerst vollstaendig als private, image-/byte-/generationgebundene
+  Candidate-Vertraege erschlossen werden. Eine neue generische Analyzerregel
+  ist dafuer keine Voraussetzung. Die spaetere Verallgemeinerung erfolgt mit
+  mehr Spielevidence; bestehende generische Erkennung bleibt erhalten.
+  Der Scope bleibt die gesamte belegte Familie, niemals nur der Crash-PC.
+  Builds verwenden vorhandene Caches und kompilieren geaenderte AOT-
+  Partitionen inkrementell; fehlende Ziele erlauben keinen Runtime-Fallback.
+- Vor dem Compilerstart eines kleinen Sonic-Adressfamilienbatches wird der
+  tatsaechliche Ninja-Dry-Run mit Dirty-Edge-Begruendungen geprueft.
+  `KATANA_MAX_AOT_UNIT_COMPILES` begrenzt die erneut kompilierten `unit-*`-
+  Dateien; der Sonic-Wrapper setzt standardmaessig 32. Ein ueberschrittener
+  Plan startet keinen Compiler. Eggman behebt zuerst die Wiederverwendung
+  vorhandener Objektdateien. Ein nachweislich notwendiger Kalt-/ABI-Rebuild
+  bekommt ein explizit begruendetes passendes Budget, keine neue Nutzerfreigabe.
+  Compiler-Cachetreffer ersetzen den direkten inkrementellen Build nicht.
 - Eine Guestadresse, Crash-PC, Callsite oder ein einzelner Frontier ist immer
   nur Witness und niemals automatisch die Implementierungseinheit. Vor jedem
   Sourceedit wird das vollstaendige verifizierte Primary Image sowie jedes
   gebundene Overlay-, Loaded-AOT- und sonstige Modul derselben Lifecycle-
   Generation nach demselben Producer-, Consumer-, Owner-, Provider-, Tabellen-,
   Callback-, VTable-, CFG- oder Datenflussmuster durchsucht.
-- Wiederholt sich das Muster address- und titelunabhaengig, wird genau eine
+- Bei einer beauftragten Verallgemeinerung eines address- und
+  titelunabhaengigen Musters wird genau eine
   generische, fail-closed Katana-Regel implementiert. Ist nur die Bedeutung
   titelspezifisch, wird genau ein privater identity- und generationgebundener
   Familienvertrag fuer alle bewiesenen Mitglieder implementiert. Einzelne
@@ -411,10 +428,15 @@ Task implementieren
   Crashmatrix entfernt und ohne relevante Regressionsevidence nicht
   zwanghaft erneut ausgefuehrt.
 - Jeder dieser Level-Runs fordert mit dem vorhandenen Produktschalter 144 Hz
-  an. Dauerhaftes P0-Ziel ist eine nachhaltige tatsaechliche Bildausgabe von
-  mindestens 144 FPS im 144-Hz-Modus (6,94 ms Budget pro Bild), bei korrektem
-  Spieltempo sowie korrektem Audio und Input. Der Gast-Spielzeittakt darf dafuer
-  nicht naiv beschleunigt werden. Die guenstige Telemetrie weist Simulation-,
+  an. Dauerhaftes P0-Ziel ist eine unabhaengig getaktete Bildpraesentation bis
+  144 FPS im 144-Hz-Modus (6,94 ms pro Praesentation), bei korrektem Spieltempo,
+  Audio und Input. Sonic behaelt seine originale 30-Hz-Game-Clock; deren
+  Bildproduktion muss stabil erreicht werden. Wiederholungen des letzten
+  vollstaendigen Bildes sind fuer das Praesentationsziel ausdruecklich erlaubt.
+  144 unterschiedliche Bewegungsbilder beziehungsweise Renderinterpolation
+  sind ein separater Ausbau und keine Voraussetzung dieses Ziels. Weder der
+  Gast-Spielzeittakt noch generische Host-Servicegrenzen werden dafuer pauschal
+  beschleunigt oder umgestellt. Die guenstige Telemetrie weist Simulation-,
   Presentation- und tatsaechlich gezeichnete FPS getrennt aus; wiederholte
   Presentations werden separat berichtet. Framezeiten und Ladezeit werden
   getrennt ausgewiesen. Partielle Messwerte bis zu einem Crash

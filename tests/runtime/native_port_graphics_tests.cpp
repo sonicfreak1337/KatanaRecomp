@@ -734,6 +734,11 @@ void require_runtime_options_menu(
     pacing.maximum_presentation_rate_hz = 144u;
     NativePortDesktopHost host(config, pacing);
     static_cast<void>(host.poll_lifecycle());
+    require(throws_graphics(
+                [&] { host.graphics().repeat_present(); },
+                NativePortGraphicsFailure::InvalidFrame,
+                "repeat-without-completed-frame"),
+            "Die autonome Uhr akzeptierte einen expliziten Repeat ohne Bild.");
 
     const auto window = FindWindowW(
         nullptr, L"Katana Runtime Options Contract Test");
@@ -743,9 +748,9 @@ void require_runtime_options_menu(
     require(menu_bar != nullptr && GetMenuItemCount(menu_bar) >= 1,
             "Das Runtime-Options-Menue fehlt unter der Titelleiste.");
     const auto options = GetSubMenu(menu_bar, 0);
-    require(options != nullptr && GetMenuItemCount(options) == 11,
+    require(options != nullptr && GetMenuItemCount(options) == 13,
             "Das Optionen-Untermenue besitzt nicht exakt Counter, "
-            "Ingame-Toggle, Save/Load State und Hz-Auswahl.");
+            "Ingame-Toggle, Save/Load State, Quicksave/Quickload und Hz-Auswahl.");
     wchar_t output_label[96]{};
     wchar_t simulation_label[96]{};
     static_cast<void>(GetMenuStringW(
@@ -816,7 +821,7 @@ void require_runtime_options_menu(
                  MF_CHECKED) == 0u,
             "Der Ingame-FPS-Toggle liess sich nicht wieder ausschalten.");
 
-    const auto rate_144_command = GetMenuItemID(options, 10);
+    const auto rate_144_command = GetMenuItemID(options, 12);
     require(rate_144_command != static_cast<UINT>(-1),
             "Die 144-Hz-Auswahl besitzt keine klickbare Command-ID.");
     command_result = 0u;
@@ -834,7 +839,51 @@ void require_runtime_options_menu(
                 selected.presentation_rate_hz == 144u,
             "Die Hz-Auswahl veraenderte die 30-Hz-Simulation oder erreichte "
             "die Praesentationsuhr nicht.");
+    if (host.graphics().snapshot().active_execution_mode ==
+        NativePortGraphicsExecutionMode::SerialReference) {
+        const auto before = host.frame_pacing_snapshot().presentation_frames;
+        std::this_thread::sleep_for(std::chrono::milliseconds(35));
+        require(host.frame_pacing_snapshot().presentation_frames == before,
+                "SerialReference praesentierte ohne Produzentenaufruf.");
+        return;
+    }
+    // Sonic's slow title thread must not stop output of its last completed
+    // image. No host calls or new simulation boundary drive these repeats.
+    host.begin_frame(0u);
+    host.present_frame(0u);
+    static_cast<void>(host.graphics().snapshot());
+    const auto idle_before = host.frame_pacing_snapshot();
+    const auto draws_before = host.graphics().completed_drawn_frames_nonblocking();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const auto idle_after = host.frame_pacing_snapshot();
+    require(idle_after.simulation_frames == idle_before.simulation_frames &&
+                host.graphics().completed_drawn_frames_nonblocking() == draws_before,
+            "Autonome Praesentation veraenderte Titel- oder Draw-Fortschritt.");
+    require(idle_after.presentation_frames >= idle_before.presentation_frames + 2u &&
+                idle_after.repeated_presentations >= idle_before.repeated_presentations + 2u,
+            "Der Renderthread wartet weiterhin auf den Spielproduzenten.");
+
+    // A synchronous resource operation can leave the backend inside a partial
+    // title frame. Do not present that working image or resolve its Type-2 list.
+    host.begin_frame(1u);
+    NativePortTextureConfig prefix_texture_config;
+    prefix_texture_config.extent = {1u, 1u};
+    prefix_texture_config.dynamic = true;
+    const auto prefix_texture = host.graphics().create_texture(prefix_texture_config);
+    const auto prefix_before = host.frame_pacing_snapshot();
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    const auto prefix_after = host.frame_pacing_snapshot();
+    require(prefix_after.presentation_frames == prefix_before.presentation_frames &&
+                prefix_after.missed_presentation_deadlines >
+                    prefix_before.missed_presentation_deadlines,
+            "Ein offener Ressourcenpraefix wurde als komplettes Bild ausgegeben.");
+    host.present_frame(1u);
+    host.graphics().destroy_texture(prefix_texture);
     host.graphics().finish();
+    const auto finished = host.frame_pacing_snapshot();
+    std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    require(host.frame_pacing_snapshot().presentation_frames > finished.presentation_frames,
+            "Der fuer Sonic-Quicksaves verwendete Drain stoppte die Ausgabeeuhr dauerhaft.");
 }
 
 #endif
@@ -846,8 +895,8 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 21u);
-    static_assert(native_port_frame_pacing_contract_version == 2u);
+    static_assert(native_port_graphics_contract_version == 22u);
+    static_assert(native_port_frame_pacing_contract_version == 3u);
     static_assert(native_port_type2_autosort_contract_version == 3u);
 
     // The backend caches this gate on its first construction. Bind it before

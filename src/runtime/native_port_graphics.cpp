@@ -69,6 +69,7 @@ struct NativePortRuntimeOptionsBridge final {
     std::atomic<std::uint32_t> requested_presentation_rate_hz{60u};
     std::atomic<std::uint64_t> simulation_frames{0u};
     std::atomic<bool> frame_pacing_enabled{true};
+    std::atomic<bool> independent_presentation_enabled{false};
     std::atomic<bool> performance_overlay_enabled{false};
     // One consumer-to-producer SPSC mailbox. The render/window owner writes
     // the payload before release-publishing `state_request_publication`; the
@@ -2282,25 +2283,43 @@ class NativePortGraphicsBackend final {
         invalidate_draw_state_shadow();
     }
 
-    void present() {
+    void complete_frame() {
         require_owner_thread();
         if (!frame_open_)
             fail(NativePortGraphicsFailure::InvalidFrame, 0u, "present-without-frame");
-        // Once a new frame enters the composite/present attempt, the previous
-        // completed surface is no longer a valid repeat candidate. Keep the
-        // frame open until DXGI (including minimized/occluded completion)
-        // succeeds so the shared rollback can clear every frame/Type-2 state.
-        completed_frame_available_ = false;
         try {
             flush_type2_translucency();
-            present_completed_frame("present");
+            end_gpu_timing_frame();
+            stop_render_submit_telemetry();
+            flush_render_telemetry();
         } catch (...) {
             abort_frame_after_command_failure();
             throw;
         }
+        // Both resources belong to this immediate context. Its ordered GPU
+        // stream finishes the working image before a subsequent composite;
+        // no CPU fence or full-image copy is required.
+        render_texture_.Swap(completed_texture_);
+        render_target_.Swap(completed_target_);
+        render_view_.Swap(completed_view_);
         frame_open_ = false;
         snapshot_.frame_open = false;
         completed_frame_available_ = true;
+    }
+
+    void present() {
+        complete_frame();
+        try {
+            repeat_present("present");
+        } catch (...) {
+            completed_frame_available_ = false;
+            abort_frame_after_command_failure();
+            throw;
+        }
+    }
+
+    [[nodiscard]] bool completed_frame_ready() const noexcept {
+        return completed_frame_available_ && !frame_open_;
     }
 
     // A batched parallel frame is atomic at the facade boundary. Once one
@@ -2312,6 +2331,7 @@ class NativePortGraphicsBackend final {
         abandon_gpu_timing_frame();
         stop_render_submit_telemetry();
         flush_render_telemetry();
+        completed_frame_available_ = false;
         if (!frame_open_) return;
         unbind_type2_subpass();
         if (context_)
@@ -2336,7 +2356,7 @@ class NativePortGraphicsBackend final {
         invalidate_draw_state_shadow();
     }
 
-    void repeat_present() {
+    void repeat_present(const char* const operation = "repeat-present") {
         require_owner_thread();
         if (frame_open_ || !completed_frame_available_)
             fail(NativePortGraphicsFailure::InvalidFrame,
@@ -2344,7 +2364,7 @@ class NativePortGraphicsBackend final {
                  "repeat-without-completed-frame");
         start_render_submit_telemetry();
         begin_gpu_timing_frame();
-        present_completed_frame("repeat-present");
+        present_completed_frame(operation);
     }
 
   private:
@@ -3016,7 +3036,7 @@ class NativePortGraphicsBackend final {
         auto* const sampler = resolve_sampler_state(composite_sampler);
         context_->PSSetSamplers(0u, 1u, &sampler);
         context_->PSSetShaderResources(
-            0u, 1u, render_view_.GetAddressOf());
+            0u, 1u, completed_view_.GetAddressOf());
         context_->Draw(3u, 0u);
         ID3D11ShaderResourceView* no_view = nullptr;
         context_->PSSetShaderResources(0u, 1u, &no_view);
@@ -3063,7 +3083,8 @@ class NativePortGraphicsBackend final {
 
     void present_image(const NativePortImageView& image,
                        const NativePortViewportTarget viewport,
-                       const NativePortImageFit fit) {
+                       const NativePortImageFit fit,
+                       const bool defer_presentation = false) {
         require_owner_thread();
         if (!valid_viewport_target(viewport) || !valid_image_fit(fit))
             fail(NativePortGraphicsFailure::InvalidFrame,
@@ -3155,7 +3176,8 @@ class NativePortGraphicsBackend final {
         packet.depth.write_enabled = false;
         packet.rasterizer.cull = NativePortCullMode::None;
         draw(packet);
-        present();
+        if (defer_presentation) complete_frame();
+        else present();
     }
 
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() const {
@@ -4224,6 +4246,22 @@ class NativePortGraphicsBackend final {
             fail(NativePortGraphicsFailure::ResourceCreation,
                  static_cast<std::uint32_t>(result),
                  "render-view");
+
+        result = device_->CreateTexture2D(
+            &color_description, nullptr, completed_texture_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "completed-texture");
+        result = device_->CreateRenderTargetView(
+            completed_texture_.Get(), nullptr, completed_target_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "completed-target");
+        result = device_->CreateShaderResourceView(
+            completed_texture_.Get(), nullptr, completed_view_.GetAddressOf());
+        if (FAILED(result))
+            fail(NativePortGraphicsFailure::ResourceCreation,
+                 static_cast<std::uint32_t>(result), "completed-view");
 
         D3D11_TEXTURE2D_DESC depth_description{};
         depth_description.Width = config_.render_extent.width;
@@ -6260,7 +6298,7 @@ class NativePortGraphicsBackend final {
         if (!should_capture_frame(frame)) return;
         if (!capture_readback_) {
             D3D11_TEXTURE2D_DESC description{};
-            render_texture_->GetDesc(&description);
+            completed_texture_->GetDesc(&description);
             description.Usage = D3D11_USAGE_STAGING;
             description.BindFlags = 0u;
             description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -6273,7 +6311,7 @@ class NativePortGraphicsBackend final {
                      "graphics-capture-readback");
         }
 
-        context_->CopyResource(capture_readback_.Get(), render_texture_.Get());
+        context_->CopyResource(capture_readback_.Get(), completed_texture_.Get());
         D3D11_MAPPED_SUBRESOURCE mapped{};
         const auto map_result = context_->Map(
             capture_readback_.Get(), 0u, D3D11_MAP_READ, 0u, &mapped);
@@ -6474,6 +6512,9 @@ class NativePortGraphicsBackend final {
     ComPtr<ID3D11Texture2D> render_texture_;
     ComPtr<ID3D11RenderTargetView> render_target_;
     ComPtr<ID3D11ShaderResourceView> render_view_;
+    ComPtr<ID3D11Texture2D> completed_texture_;
+    ComPtr<ID3D11RenderTargetView> completed_target_;
+    ComPtr<ID3D11ShaderResourceView> completed_view_;
     ComPtr<ID3D11Texture2D> capture_readback_;
     ComPtr<ID3D11Texture2D> depth_texture_;
     ComPtr<ID3D11DepthStencilView> depth_view_;
@@ -6663,12 +6704,14 @@ class NativePortGraphicsBackend final {
     void draw(const NativePortDrawPacket&) {}
     void flush_type2_translucency() {}
     void present() {}
+    void complete_frame() {}
+    [[nodiscard]] bool completed_frame_ready() const noexcept { return false; }
     void abort_frame_after_command_failure() noexcept {}
     void publish_telemetry() noexcept {}
-    void repeat_present() {}
+    void repeat_present(const char* = "repeat-present") {}
     void present_image(const NativePortImageView&,
                        NativePortViewportTarget,
-                       NativePortImageFit) {}
+                       NativePortImageFit, bool = false) {}
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() const {
         return {};
     }
@@ -6737,6 +6780,7 @@ class NativePortGraphicsDevice::Impl final {
 
     ~Impl() noexcept {
         if (std::this_thread::get_id() != producer_thread_) std::terminate();
+        presentation_shutdown_.store(true, std::memory_order_release);
         abort_open_batch();
         producer_frame_open_ = false;
         try {
@@ -6802,7 +6846,18 @@ class NativePortGraphicsDevice::Impl final {
             presentation_rate_hz, std::memory_order_release);
         runtime_options_.frame_pacing_enabled.store(
             frame_pacing_enabled, std::memory_order_release);
+        runtime_options_.independent_presentation_enabled.store(
+            frame_pacing_enabled && !serial(), std::memory_order_release);
         signal_consumer_noexcept();
+    }
+
+    [[nodiscard]] bool independent_presentation_enabled() const noexcept {
+        return runtime_options_.independent_presentation_enabled.load(
+            std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint64_t missed_presentation_deadlines() const noexcept {
+        return published_missed_presentations_.load(std::memory_order_acquire);
     }
 
     void record_simulation_frame_nonblocking() noexcept {
@@ -7127,6 +7182,10 @@ class NativePortGraphicsDevice::Impl final {
                 NativePortGraphicsFailure::InvalidFrame,
                 1u,
                 "render-finish-open-frame");
+        // Quicksave/restore also use this reusable drain. Pause idle repeats
+        // only until the ordered fence completes; do not terminate the clock.
+        presentation_paused_.store(true, std::memory_order_release);
+        signal_consumer_noexcept();
         wait_for_all_replies();
         acquire_consumer_state_mailbox();
         require_queue_healthy();
@@ -7141,6 +7200,8 @@ class NativePortGraphicsDevice::Impl final {
             "render-finish-encode");
         acquire_consumer_state_mailbox();
         require_queue_healthy();
+        presentation_paused_.store(false, std::memory_order_release);
+        signal_consumer_noexcept();
     }
 
     [[nodiscard]] NativePortGraphicsSnapshot snapshot() {
@@ -7573,6 +7634,7 @@ class NativePortGraphicsDevice::Impl final {
         for (;;) {
             if (auto lease = queue_->try_begin_consume(); lease.has_value()) {
                 if (consume_lease(*backend, *lease)) break;
+                if (!service_idle_presentation(*backend)) break;
                 continue;
             }
             // ShowWindow/DispatchMessage can deliver resize state
@@ -7585,10 +7647,13 @@ class NativePortGraphicsDevice::Impl final {
                 lifecycle == NativePortFrameQueueLifecycle::Stopped ||
                 lifecycle == NativePortFrameQueueLifecycle::Failed)
                 break;
+            if (!service_idle_presentation(*backend)) break;
 #ifdef _WIN32
             const HANDLE handles[]{consumer_wake_event_};
             const auto wait_result = MsgWaitForMultipleObjectsEx(
-                1u, handles, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                1u, handles, presentation_wait_milliseconds(*backend),
+                QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if (wait_result == WAIT_TIMEOUT) continue;
             if (wait_result == WAIT_OBJECT_0) continue;
             if (wait_result == WAIT_OBJECT_0 + 1u) {
                 if (!pump_consumer_events(*backend)) break;
@@ -7612,6 +7677,117 @@ class NativePortGraphicsDevice::Impl final {
         }
         request_consumer_shutdown();
         backend.reset();
+    }
+
+    [[nodiscard]] static std::uint64_t presentation_now() noexcept {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    void update_presentation_deadline() noexcept {
+        const auto rate = runtime_options_.presentation_rate_hz.load(
+            std::memory_order_acquire);
+        if (consumer_presentation_rate_ == rate &&
+            consumer_presentation_deadline_ != 0u) return;
+        consumer_presentation_rate_ = rate;
+        consumer_presentation_remainder_ = 0u;
+        // The first available complete image is output immediately. A later
+        // rate change starts a fresh output epoch without touching title time.
+        const bool started = consumer_presentation_deadline_ != 0u;
+        consumer_presentation_deadline_ = presentation_now();
+        if (started)
+            advance_frame_deadline(consumer_presentation_deadline_,
+                consumer_presentation_remainder_, rate);
+    }
+
+    void advance_presentation_deadline(const std::uint64_t now) noexcept {
+        advance_frame_deadline(consumer_presentation_deadline_,
+            consumer_presentation_remainder_, consumer_presentation_rate_);
+        while (consumer_presentation_deadline_ <= now) {
+            saturating_atomic_add(published_missed_presentations_);
+            advance_frame_deadline(consumer_presentation_deadline_,
+                consumer_presentation_remainder_, consumer_presentation_rate_);
+        }
+    }
+
+    void present_on_consumer_deadline(NativePortGraphicsBackend& backend,
+                                      const bool wait,
+                                      const char* const operation = "repeat-present") {
+        update_presentation_deadline();
+        auto now = presentation_now();
+        if (wait && now < consumer_presentation_deadline_) {
+            wait_until_monotonic_nanoseconds(consumer_presentation_deadline_);
+            now = presentation_now();
+        }
+        if (now < consumer_presentation_deadline_) return;
+        if (!backend.completed_frame_ready()) {
+            // An open resource prefix may own Type-2 UAVs and an unfinished
+            // GPU query. Never flush or composite that partial title frame.
+            saturating_atomic_add(published_missed_presentations_);
+            advance_presentation_deadline(now);
+            return;
+        }
+        const auto before = backend.snapshot().presented_frames;
+        backend.repeat_present(operation);
+        const auto after = backend.snapshot().presented_frames;
+        if (after > before) {
+            if (consumer_completed_image_presented_)
+                saturating_add_value(consumer_repeated_presentations_, after - before);
+            consumer_completed_image_presented_ = true;
+        }
+        backend.publish_telemetry();
+        published_repeated_presentations_.store(
+            consumer_repeated_presentations_, std::memory_order_release);
+        published_presented_frames_.store(after, std::memory_order_release);
+        advance_presentation_deadline(presentation_now());
+    }
+
+    [[nodiscard]] bool service_idle_presentation(
+        NativePortGraphicsBackend& backend) noexcept {
+        if (backend.lifecycle_state() != NativePortLifecycleState::Running) {
+            // A paused/closed window cannot authorize autonomous output.
+            // Resume starts a new epoch; window downtime is not a missed frame.
+            consumer_presentation_deadline_ = 0u;
+            consumer_presentation_remainder_ = 0u;
+            return true;
+        }
+        if (!independent_presentation_enabled() ||
+            presentation_shutdown_.load(std::memory_order_acquire) ||
+            presentation_paused_.load(std::memory_order_acquire) ||
+            consumer_presentation_faulted_ ||
+            queue_->snapshot().lifecycle != NativePortFrameQueueLifecycle::Running)
+            return true;
+        // No output epoch before the first completed image. Once running,
+        // blocked prefix deadlines are still accounted without busy waiting.
+        if (consumer_presentation_deadline_ == 0u &&
+            !backend.completed_frame_ready()) return true;
+        try {
+            present_on_consumer_deadline(backend, false);
+            return true;
+        } catch (const NativePortGraphicsError& error) {
+            publish_consumer_error_mailbox(capture_backend_error(error));
+        } catch (...) {
+            publish_consumer_error_mailbox(facade_error("render-idle-presentation"));
+        }
+        queue_->report_consumer_error(
+            NativePortFrameQueueError::ConsumerException, 0u);
+        return false;
+    }
+
+    [[nodiscard]] std::uint32_t presentation_wait_milliseconds(
+        const NativePortGraphicsBackend& backend) const noexcept {
+        if (backend.lifecycle_state() != NativePortLifecycleState::Running ||
+            !independent_presentation_enabled() ||
+            presentation_shutdown_.load(std::memory_order_acquire) ||
+            presentation_paused_.load(std::memory_order_acquire) ||
+            consumer_presentation_faulted_ || consumer_presentation_deadline_ == 0u)
+            return std::numeric_limits<std::uint32_t>::max();
+        const auto now = presentation_now();
+        if (now >= consumer_presentation_deadline_) return 0u;
+        return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            (consumer_presentation_deadline_ - now + 999'999u) / 1'000'000u,
+            1'000u));
     }
 
     [[nodiscard]] bool consume_lease(
@@ -7678,6 +7854,7 @@ class NativePortGraphicsDevice::Impl final {
             }
         }
 
+        if (first_error.valid) consumer_presentation_faulted_ = true;
         if (terminal) {
             lease.fail(NativePortFrameQueueError::ConsumerException);
             observe_render_queue_depth();
@@ -8191,13 +8368,25 @@ class NativePortGraphicsDevice::Impl final {
         case NativePortGraphicsCommandKind::Present: {
             const bool frame_open = consumer_drawn_frame_open_;
             consumer_drawn_frame_open_ = false;
-            backend.present();
+            if (independent_presentation_enabled()) {
+                backend.complete_frame();
+                consumer_completed_image_presented_ = false;
+                present_on_consumer_deadline(backend, true, "present");
+                consumer_presentation_faulted_ = false;
+            } else backend.present();
             if (frame_open &&
                 backend.snapshot().draw_calls > consumer_frame_start_draw_calls_)
                 saturating_add_value(consumer_completed_drawn_frames_, 1u);
             return false;
         }
         case NativePortGraphicsCommandKind::RepeatPresent: {
+            if (independent_presentation_enabled()) {
+                // Explicit commands retain the backend's strict InvalidFrame
+                // contract. Only the autonomous idle timer may skip a prefix.
+                if (!backend.completed_frame_ready()) backend.repeat_present();
+                present_on_consumer_deadline(backend, true);
+                return false;
+            }
             const auto before = backend.snapshot().presented_frames;
             backend.repeat_present();
             const auto after = backend.snapshot().presented_frames;
@@ -8211,7 +8400,13 @@ class NativePortGraphicsDevice::Impl final {
                 std::get<NativePortGraphicsPresentImageView>(command.payload);
             consumer_drawn_frame_open_ = false;
             const auto before = backend.snapshot().draw_calls;
-            backend.present_image(view.image, view.viewport, view.fit);
+            backend.present_image(view.image, view.viewport, view.fit,
+                                  independent_presentation_enabled());
+            if (independent_presentation_enabled()) {
+                consumer_completed_image_presented_ = false;
+                present_on_consumer_deadline(backend, true, "present");
+                consumer_presentation_faulted_ = false;
+            }
             if (backend.snapshot().draw_calls > before)
                 saturating_add_value(consumer_completed_drawn_frames_, 1u);
             return false;
@@ -8223,6 +8418,10 @@ class NativePortGraphicsDevice::Impl final {
     }
 
     void decorate_snapshot(NativePortGraphicsSnapshot& result) const noexcept {
+        // Autonomous output is not accompanied by a command reply. Its
+        // monotonic completion count must not be hidden by an older reply.
+        result.presented_frames = published_presented_frames_.load(
+            std::memory_order_acquire);
         result.requested_execution_mode = requested_mode_;
         result.active_execution_mode = active_mode_;
         result.recorded_commands =
@@ -8308,6 +8507,14 @@ class NativePortGraphicsDevice::Impl final {
     std::atomic<std::uint64_t> published_presented_frames_{0u};
     std::atomic<std::uint64_t> published_repeated_presentations_{0u};
     std::atomic<std::uint64_t> published_completed_drawn_frames_{0u};
+    std::atomic<std::uint64_t> published_missed_presentations_{0u};
+    std::atomic<bool> presentation_shutdown_{false};
+    std::atomic<bool> presentation_paused_{false};
+    std::uint64_t consumer_presentation_deadline_ = 0u;
+    std::uint64_t consumer_presentation_remainder_ = 0u;
+    std::uint32_t consumer_presentation_rate_ = 0u;
+    bool consumer_completed_image_presented_ = false;
+    bool consumer_presentation_faulted_ = false;
     std::uint64_t consumer_completed_drawn_frames_ = 0u;
     std::uint64_t consumer_frame_start_draw_calls_ = 0u;
     bool consumer_drawn_frame_open_ = false;
@@ -8451,6 +8658,14 @@ void NativePortGraphicsDevice::repeat_present_async() {
     impl_->repeat_present_async();
 }
 
+bool NativePortGraphicsDevice::independent_presentation_enabled() const noexcept {
+    return impl_->independent_presentation_enabled();
+}
+
+std::uint64_t NativePortGraphicsDevice::missed_presentation_deadlines() const noexcept {
+    return impl_->missed_presentation_deadlines();
+}
+
 void NativePortGraphicsDevice::present_image(
     const NativePortImageView& image,
     const NativePortViewportTarget viewport,
@@ -8578,6 +8793,9 @@ NativePortDesktopHost::frame_pacing_snapshot() const noexcept {
 }
 
 void NativePortDesktopHost::reconcile_presentations() const noexcept {
+    if (graphics_.independent_presentation_enabled())
+        frame_pacing_snapshot_.missed_presentation_deadlines =
+            graphics_.missed_presentation_deadlines();
     const auto completed = graphics_.presented_frames_nonblocking();
     if (completed <= accounted_presented_frames_) return;
     const auto delta = completed - accounted_presented_frames_;
@@ -8621,6 +8839,35 @@ void NativePortDesktopHost::apply_runtime_presentation_rate() {
 
 void NativePortDesktopHost::paced_present() {
     apply_runtime_presentation_rate();
+    if (graphics_.independent_presentation_enabled()) {
+        // Only the original simulation clock belongs to the title thread.
+        // The render owner presents completed images and repeats on its own
+        // output deadlines, including while this producer computes a frame.
+        auto now = monotonic_time_nanoseconds();
+        if (frame_pacing_started_ && now < next_simulation_deadline_nanoseconds_)
+            wait_until_monotonic_nanoseconds(next_simulation_deadline_nanoseconds_);
+        if (graphics_.frame_recording_open_nonblocking()) graphics_.present();
+        saturating_increment(frame_pacing_snapshot_.simulation_frames);
+        now = monotonic_time_nanoseconds();
+        if (!frame_pacing_started_) {
+            next_simulation_deadline_nanoseconds_ = now;
+            simulation_deadline_remainder_ = 0u;
+            frame_pacing_started_ = true;
+        } else if (now > next_simulation_deadline_nanoseconds_) {
+            saturating_increment(frame_pacing_snapshot_.late_simulation_frames);
+        }
+        advance_frame_deadline(next_simulation_deadline_nanoseconds_,
+            simulation_deadline_remainder_, frame_pacing_config_.simulation_rate_hz);
+        if (next_simulation_deadline_nanoseconds_ <= now) {
+            // Missed title updates are never replayed to catch up.
+            next_simulation_deadline_nanoseconds_ = now;
+            simulation_deadline_remainder_ = 0u;
+            advance_frame_deadline(next_simulation_deadline_nanoseconds_,
+                simulation_deadline_remainder_, frame_pacing_config_.simulation_rate_hz);
+        }
+        reconcile_presentations();
+        return;
+    }
     const auto present_and_record = [this](const bool repeated) {
         const bool repeat_completed_frame =
             repeated || !graphics_.frame_recording_open_nonblocking();

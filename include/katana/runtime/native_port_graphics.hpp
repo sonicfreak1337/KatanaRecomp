@@ -15,8 +15,8 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 21u;
-inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 2u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 22u;
+inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 3u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
 // per-pixel ordering subpass, including the fixed-function blend factors of
@@ -1022,6 +1022,8 @@ class NativePortGraphicsDevice final {
     void acknowledge_presentation_rate_nonblocking(
         std::uint32_t presentation_rate_hz) noexcept;
     void repeat_present_async();
+    [[nodiscard]] bool independent_presentation_enabled() const noexcept;
+    [[nodiscard]] std::uint64_t missed_presentation_deadlines() const noexcept;
     [[nodiscard]] std::uint64_t
     presented_frames_nonblocking() const noexcept;
     [[nodiscard]] std::uint64_t

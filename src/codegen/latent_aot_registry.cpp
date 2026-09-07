@@ -3187,8 +3187,13 @@ latent_block_record_receiver_inputs(
     std::deque<std::size_t> pending{entry->second};
     std::vector<bool> queued(function.blocks.size(), false);
     queued[entry->second] = true;
+    // A reachable input can lose each exact receiver and argument alias once,
+    // plus each of the four published argument bits. Charge only real lattice
+    // transitions; merging unknown with a known predecessor is not a change.
+    const auto changes_per_block = 1u + inputs.front().state.receivers.size() +
+        inputs.front().state.input_aliases.size() + 4u;
     const auto evaluation_budget =
-        std::max<std::size_t>(1u, function.blocks.size() * 17u);
+        std::max<std::size_t>(1u, function.blocks.size() * changes_per_block);
     std::size_t evaluations = 0u;
     while (!pending.empty()) {
         const auto index = pending.front();
@@ -3225,8 +3230,9 @@ latent_block_record_receiver_inputs(
                         destination.state.receivers[reg].reset();
                         changed = true;
                     }
-                    if (destination.state.input_aliases[reg] !=
-                        receiver_trace.continuation.input_aliases[reg]) {
+                    if (destination.state.input_aliases[reg] != 0u &&
+                        destination.state.input_aliases[reg] !=
+                            receiver_trace.continuation.input_aliases[reg]) {
                         destination.state.input_aliases[reg] = 0u;
                         changed = true;
                     }

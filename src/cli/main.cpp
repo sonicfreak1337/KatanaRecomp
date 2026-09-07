@@ -15117,6 +15117,65 @@ int export_port_project(const std::filesystem::path& source_path,
                 "konnte nicht vollstaendig gebunden werden.");
         reset_host_build_event_root(
             report.output_root, host_build_event_root);
+        // Inspect Ninja's actual dirty edges before allowing an address-family
+        // update to turn into a full generated-code rebuild. Compiler-cache
+        // hits are not a substitute for retaining unchanged object files.
+        if (const auto configured_limit = configured_environment_value(
+                "KATANA_MAX_AOT_UNIT_COMPILES")) {
+            std::uint64_t limit = 0u;
+            const auto parsed = std::from_chars(
+                configured_limit->data(),
+                configured_limit->data() + configured_limit->size(), limit);
+            if (!use_ninja || parsed.ec != std::errc{} ||
+                parsed.ptr != configured_limit->data() + configured_limit->size() ||
+                limit == 0u || limit > 100000u)
+                throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                    "AOT compile budget requires Ninja and a limit of 1..100000.");
+            const auto plan_path = host_build_event_root / "incremental-plan.log";
+            const auto plan = std::string("cmake --build ") +
+                shell_quote(build_path) + " --target " + target_name +
+                " -- -n -d explain > " + shell_quote(plan_path) + " 2>&1";
+            const auto plan_command =
+#ifdef _WIN32
+                prepare_windows_host_command(plan, true);
+#else
+                normalized_host_command(plan);
+#endif
+            const auto plan_result = run_supervised_host_command(
+                plan_command, std::chrono::milliseconds(60000),
+                &build_telemetry, "host-build-plan", std::size_t{0u});
+            if (plan_result.exit_code != 0 || !plan_result.process_tree_quiescent)
+                throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                    "Ninja incremental plan failed; no compilation was started.");
+            const auto plan_text = read_safe_small_port_file(
+                plan_path, 16u * 1024u * 1024u, "Ninja incremental plan");
+            std::istringstream plan_lines(plan_text);
+            std::string plan_line;
+            std::uint64_t dirty_units = 0u;
+            bool recognized_plan = false;
+            while (std::getline(plan_lines, plan_line)) {
+                std::replace(plan_line.begin(), plan_line.end(), '\\', '/');
+                if (plan_line.find("ninja: no work to do.") != std::string::npos ||
+                    (plan_line.starts_with('[') &&
+                     plan_line.find("] ") != std::string::npos))
+                    recognized_plan = true;
+                if (plan_line.find("Building CXX object ") != std::string::npos &&
+                    plan_line.find("katana_generated.dir/code/unit-") !=
+                        std::string::npos)
+                    ++dirty_units;
+            }
+            if (!recognized_plan)
+                throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                    "Unrecognized Ninja plan; refusing an unmeasured rebuild.");
+            std::cout << "KATANA_AOT_INCREMENTAL_PLAN dirty_units=" << dirty_units
+                      << " limit=" << limit << " evidence=" << plan_path.string()
+                      << '\n' << std::flush;
+            if (dirty_units > limit)
+                throw katana::cli::Error(katana::cli::ExitCode::BuildFailure,
+                    "AOT incremental compile budget exceeded. Inspect the Ninja "
+                    "explanations and repair object reuse before retrying; "
+                    "increase the explicit budget only for a justified rebuild.");
+        }
         const auto generated_artifacts =
             validated_generated_artifact_files(report.output_root);
         const auto generated_sources =

@@ -1321,7 +1321,7 @@ void registered_callback_receiver_candidate_regressions() {
     // Sonic's external registrar knows the callback argument, while its no-op
     // default cannot prove the callback's receiver ABI. Bringup may discover
     // initializer stores, but must not turn that search into a Strict proof.
-    for (unsigned variant = 0u; variant < 6u; ++variant) {
+    for (unsigned variant = 0u; variant < 7u; ++variant) {
         constexpr auto runtime_base = 0x8C300000u;
         constexpr auto source_base = 0x85000000u;
         constexpr auto registrar = 0x8C120000u;
@@ -1343,6 +1343,21 @@ void registered_callback_receiver_candidate_regressions() {
         word(0x36u, 0xBu); word(0x38u, 9u);
         pointer(0x40u, runtime_base + 0x50u);
         word(0x50u, 0xBu); word(0x52u, 9u);
+        if (variant == 6u) {
+            // Sonic's boss analysis hit this loop-join shape: an initially
+            // unknown alias meets a known backedge repeatedly. It must reach
+            // a fixed point without turning the lost alias back into proof.
+            bytes.resize(0x80u, 0u);
+            word(0x30u, 0x6E43u); // preserve the actual callback receiver
+            word(0x32u, 0xE100u); // no argument alias on the first ingress
+            word(0x34u, 0x1E16u); // observable use before the loop overwrites r1
+            word(0x36u, 0x6143u); // backedge carries the incoming r4 alias
+            word(0x38u, 0x2668u); word(0x3Au, 0x8BFBu); // unknown loop exit
+            word(0x3Cu, 0xD309u); word(0x3Eu, 0x1E34u);
+            word(0x40u, 0xBu); word(0x42u, 9u);
+            pointer(0x64u, runtime_base + 0x70u);
+            word(0x70u, 0xBu); word(0x72u, 9u);
+        }
         const std::array roots{0u};
         const std::array external{registrar};
         const std::array callbacks{katana::codegen::LatentAotExternalCallbackSink{registrar, 2u, 0u}};
@@ -1369,10 +1384,11 @@ void registered_callback_receiver_candidate_regressions() {
                     "Strict discovery must not seed receiver candidates");
         } else {
             require(audit.admitted &&
-                        contains(audit.emitted_function_offsets, 0x50u) == (variant == 0u),
+                        contains(audit.emitted_function_offsets, variant == 6u ? 0x70u : 0x50u) ==
+                            (variant == 0u || variant == 6u),
                     "Registered callback receiver candidate regression, variant=" + std::to_string(variant));
             require(contains(audit.registered_callback_receiver_candidate_offsets, 0x30u) ==
-                        (variant == 0u || variant == 4u || variant == 5u),
+                        (variant == 0u || variant == 4u || variant == 5u || variant == 6u),
                     "Receiver candidate requires an exact outgoing callback registration");
         }
     }
@@ -1808,7 +1824,7 @@ int main(int argc, char** argv) {
         }
         if (argc == 2 && std::string_view(argv[1]) == "--registered-callback-receiver") {
             registered_callback_receiver_candidate_regressions();
-            std::cout << "registered-callback-receiver: 6 focused regressions passed\n";
+            std::cout << "registered-callback-receiver: 7 focused regressions passed\n";
             return 0;
         }
         record_store_join_regressions();
