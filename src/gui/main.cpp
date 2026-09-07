@@ -34,7 +34,16 @@ bool native_qol_failed = false;
 namespace {
 
 constexpr UINT job_finished_message = WM_APP + 1u;
+constexpr UINT file_dialog_finished_message = WM_APP + 2u;
 std::jthread job_thread;
+std::jthread file_dialog_thread;
+bool file_dialog_pending = false;
+struct FileDialogResult {
+    std::filesystem::path selected;
+    std::string error;
+    bool source = false;
+};
+FileDialogResult file_dialog_result;
 HWND content_label = nullptr;
 HWND progress_label = nullptr;
 HWND overall_progress = nullptr;
@@ -113,7 +122,8 @@ void refresh() {
     SetWindowTextW(selected_output_view,
                    selected_output.empty() ? L"Kein Ausgabeordner gewaehlt"
                                            : selected_output.c_str());
-    const auto busy = preparing_job.load() || state.job_active;
+    const auto job_busy = preparing_job.load() || state.job_active;
+    const auto busy = job_busy || file_dialog_pending;
     auto progress_text = preparing_job.load() ? std::string("GDI wird eingelesen und geprueft ...")
                          : state.job_active   ? "Aktiver Job: " + state.job_stage + " (gesamt " +
                                                   std::to_string(state.job_progress) + " %)"
@@ -148,7 +158,7 @@ void refresh() {
     SetWindowTextW(log_view, widen(log).c_str());
     for (const int control : {1001, 1003, 1006})
         EnableWindow(GetDlgItem(main_window, control), busy ? FALSE : TRUE);
-    EnableWindow(GetDlgItem(main_window, 1004), busy ? TRUE : FALSE);
+    EnableWindow(GetDlgItem(main_window, 1004), job_busy ? TRUE : FALSE);
 }
 
 void show_error(const std::exception& error) {
@@ -157,7 +167,8 @@ void show_error(const std::exception& error) {
         nullptr, message.c_str(), L"KatanaRecomp - Wiederherstellung", MB_OK | MB_ICONERROR);
 }
 
-std::filesystem::path run_file_dialog(const std::wstring& mode) {
+std::filesystem::path run_file_dialog(const std::wstring& mode,
+                                      const std::stop_token stop) {
     std::vector<wchar_t> executable_path(32768u);
     const auto executable_length = GetModuleFileNameW(
         nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
@@ -186,11 +197,31 @@ std::filesystem::path run_file_dialog(const std::wstring& mode) {
                         &process)) {
         throw std::runtime_error("Isolierter nativer Dateidialog konnte nicht gestartet werden.");
     }
-    WaitForSingleObject(process.hProcess, INFINITE);
+    struct ProcessOwner {
+        PROCESS_INFORMATION& process;
+        ~ProcessOwner() {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    } process_owner{process};
+    for (;;) {
+        const auto wait = WaitForSingleObject(process.hProcess, 100u);
+        if (wait == WAIT_OBJECT_0) break;
+        if (stop.stop_requested() || wait == WAIT_FAILED) {
+            // The worker owns only this dialog helper. Closing the main GUI
+            // cancels that helper rather than joining an unbounded wait.
+            static_cast<void>(TerminateProcess(process.hProcess, ERROR_CANCELLED));
+            static_cast<void>(WaitForSingleObject(process.hProcess, 2'000u));
+            std::error_code cleanup_error;
+            std::filesystem::remove(result_path, cleanup_error);
+            if (wait == WAIT_FAILED)
+                throw std::runtime_error("Warten auf den Dateidialog ist fehlgeschlagen.");
+            return {};
+        }
+    }
     DWORD exit_code = 0u;
-    GetExitCodeProcess(process.hProcess, &exit_code);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
+    if (!GetExitCodeProcess(process.hProcess, &exit_code))
+        throw std::runtime_error("Dateidialog-Status konnte nicht gelesen werden.");
     if (exit_code != 0u) throw std::runtime_error("Nativer Dateidialog ist fehlgeschlagen.");
     std::ifstream input(result_path, std::ios::binary);
     if (!input) throw std::runtime_error("Dateidialog-Ergebnis konnte nicht gelesen werden.");
@@ -201,25 +232,35 @@ std::filesystem::path run_file_dialog(const std::wstring& mode) {
     return selected.empty() ? std::filesystem::path{} : std::filesystem::path(widen(selected));
 }
 
-std::filesystem::path select_source(HWND) {
-    return run_file_dialog(L"open-source");
-}
-
-std::filesystem::path select_output(HWND) {
-    return run_file_dialog(L"select-folder");
-}
-
-void select_gdi(HWND window) {
-    const auto source = select_source(window);
-    if (source.empty()) return;
-    auto extension = source.extension().wstring();
-    std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
-    if (extension != L".gdi") throw std::invalid_argument("Die GUI akzeptiert nur .gdi-Quellen.");
-    selected_gdi = source;
+void start_file_dialog(HWND window, const bool source) {
+    if (file_dialog_pending || preparing_job.load() || model->snapshot().job_active)
+        return;
+    if (file_dialog_thread.joinable()) file_dialog_thread.join();
+    file_dialog_result = {};
+    file_dialog_result.source = source;
+    file_dialog_thread = std::jthread([window, source](const std::stop_token stop) {
+        try {
+            file_dialog_result.selected = run_file_dialog(
+                source ? L"open-source" : L"select-folder", stop);
+            if (source && !file_dialog_result.selected.empty()) {
+                auto extension = file_dialog_result.selected.extension().wstring();
+                std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
+                if (extension != L".gdi")
+                    throw std::invalid_argument("Die GUI akzeptiert nur .gdi-Quellen.");
+            }
+        } catch (const std::exception& error) {
+            file_dialog_result.error = error.what();
+        } catch (...) {
+            file_dialog_result.error = "Unbekannter Dateidialogfehler.";
+        }
+        if (!stop.stop_requested())
+            PostMessageW(window, file_dialog_finished_message, 0u, 0u);
+    });
+    file_dialog_pending = true;
 }
 
 void start_job(HWND window, const katana::app::JobKind kind) {
-    if (job_thread.joinable()) return;
+    if (job_thread.joinable() || file_dialog_pending) return;
     if (selected_gdi.empty()) throw std::logic_error("Zuerst eine .gdi-Quelle waehlen.");
     if (selected_output.empty()) throw std::logic_error("Zuerst einen Ausgabeordner waehlen.");
     const auto source = selected_gdi;
@@ -476,11 +517,11 @@ LRESULT window_proc_impl(HWND window, const UINT message, WPARAM wparam, LPARAM 
         try {
             switch (LOWORD(wparam)) {
             case 1001: {
-                select_gdi(window);
+                start_file_dialog(window, true);
                 break;
             }
             case 1003:
-                selected_output = select_output(window);
+                start_file_dialog(window, false);
                 break;
             case 1006:
                 start_job(window, katana::app::JobKind::Build);
@@ -594,6 +635,17 @@ LRESULT window_proc_impl(HWND window, const UINT message, WPARAM wparam, LPARAM 
     case WM_TIMER:
         refresh();
         return 0;
+    case file_dialog_finished_message:
+        if (file_dialog_thread.joinable()) file_dialog_thread.join();
+        file_dialog_pending = false;
+        if (!file_dialog_result.error.empty()) {
+            show_error(std::runtime_error(file_dialog_result.error));
+        } else if (!file_dialog_result.selected.empty()) {
+            (file_dialog_result.source ? selected_gdi : selected_output) =
+                std::move(file_dialog_result.selected);
+        }
+        refresh();
+        return 0;
     case job_finished_message:
         if (job_thread.joinable()) job_thread.join();
         preparation_cancellation.reset();
@@ -625,6 +677,11 @@ LRESULT window_proc_impl(HWND window, const UINT message, WPARAM wparam, LPARAM 
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:
+        if (file_dialog_thread.joinable()) {
+            file_dialog_thread.request_stop();
+            file_dialog_thread.join();
+        }
+        file_dialog_pending = false;
         if (dark_background != nullptr) DeleteObject(dark_background);
         if (dark_control != nullptr) DeleteObject(dark_control);
         dark_background = nullptr;

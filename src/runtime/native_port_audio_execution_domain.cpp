@@ -1724,6 +1724,12 @@ class NativePortAudioExecutionDomain::Impl final {
         auto mask = consumer_service_target_mask_.load(std::memory_order_acquire);
         if (mask == 0u) return true;
 
+        ensure_worker_telemetry();
+        std::optional<NativePortTelemetryTimer> service_timer;
+        if (telemetry_writer_.has_value())
+            service_timer.emplace(*telemetry_writer_,
+                                  NativePortTelemetryStage::AudioServiceTotal);
+
         const bool previous_active = active_command_;
         const auto previous_sequence = active_command_sequence_;
         const auto previous_stamp = active_command_stamp_;
@@ -1759,11 +1765,6 @@ class NativePortAudioExecutionDomain::Impl final {
                 pinned.slot->failed_commands.fetch_add(
                     1u, std::memory_order_relaxed);
                 unpin_target(pinned);
-                record_failure(
-                    NativePortAudioExecutionDomainFailure::TargetExecutionFailed,
-                    0u);
-                queue_.fail_terminal(
-                    NativePortAudioCommandQueueFailure::WorkerFailure, 0u);
                 succeeded = false;
                 break;
             }
@@ -1773,6 +1774,19 @@ class NativePortAudioExecutionDomain::Impl final {
         active_command_ = previous_active;
         active_command_sequence_ = previous_sequence;
         active_command_stamp_ = previous_stamp;
+        // Completion-driven refill has no following command/ACK to publish
+        // it. Finish this single outer timer before exposing either its
+        // completed measurements or a terminal service failure.
+        service_timer.reset();
+        observe_queue_depth();
+        publish_worker_telemetry();
+        if (!succeeded) {
+            record_failure(
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed,
+                0u);
+            queue_.fail_terminal(
+                NativePortAudioCommandQueueFailure::WorkerFailure, 0u);
+        }
         return succeeded;
     }
 

@@ -747,16 +747,27 @@ StepResult execute_one(CpuState& cpu,
     case Kind::Flds: cpu.fpul = cpu.fr[m]; return {};
     case Kind::Fsts: cpu.fr[n] = cpu.fpul; return {};
     case Kind::Fabs: fpu_absolute(cpu, n); return {};
-    case Kind::Fadd: fpu_binary(cpu, FpuBinaryOperation::Add, m, n); return {};
-    case Kind::Fsub: fpu_binary(cpu, FpuBinaryOperation::Subtract, m, n); return {};
-    case Kind::Fmul: fpu_binary(cpu, FpuBinaryOperation::Multiply, m, n); return {};
-    case Kind::Fdiv: fpu_binary(cpu, FpuBinaryOperation::Divide, m, n); return {};
+    case Kind::Fadd:
+    case Kind::Fsub:
+    case Kind::Fmul:
+    case Kind::Fdiv: {
+        const auto operation = instruction.kind == Kind::Fadd ? FpuBinaryOperation::Add :
+                               instruction.kind == Kind::Fsub ? FpuBinaryOperation::Subtract :
+                               instruction.kind == Kind::Fmul ? FpuBinaryOperation::Multiply :
+                                                          FpuBinaryOperation::Divide;
+        if (fpu_binary(cpu, operation, m, n, delay_owner))
+            return {true, BlockEndKind::Exception, 1u};
+        return {};
+    }
     case Kind::FcmpEqual: fpu_compare_equal(cpu, m, n); return {};
     case Kind::FcmpGreater: fpu_compare_greater(cpu, m, n); return {};
     case Kind::FloatFromFpul: fpu_float_from_fpul(cpu, n); return {};
     case Kind::Fmac: fpu_multiply_accumulate(cpu, m, n); return {};
     case Kind::Fneg: fpu_negate(cpu, n); return {};
-    case Kind::Fsqrt: fpu_square_root(cpu, n); return {};
+    case Kind::Fsqrt:
+        if (fpu_square_root(cpu, n, delay_owner))
+            return {true, BlockEndKind::Exception, 1u};
+        return {};
     case Kind::Fsrra:
         if (fpu_reciprocal_square_root(cpu, n, delay_owner))
             return {true, BlockEndKind::Exception, 1u};

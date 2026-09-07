@@ -334,6 +334,13 @@ inline constexpr std::uint32_t native_port_development_state_restart_error =
 using NativePortDevelopmentStateHandler = NativePortDevelopmentStateResult (*)(
     NativePortContext& context,
     const NativePortDevelopmentStateRequest& request) noexcept;
+// Simulation-thread restore boundary. Deferred/Rejected never release input;
+// Loaded means every title/CPU/resource restore has committed successfully.
+// While platform input awaits its initial state, the provider must validate
+// the exact bytes it decodes with validate_input_initial_state before commit.
+// File I/O and validation remain inside the provider's quiesced transaction.
+[[nodiscard]] NativePortDevelopmentStateResult dispatch_native_port_development_state(
+    NativePortContext& context, const NativePortDevelopmentStateRequest& request);
 using NativePortDevelopmentStateMemoryRestore = bool (*)(
     NativePortContext& context,
     std::span<const std::uint8_t> main_memory) noexcept;

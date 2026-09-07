@@ -3008,6 +3008,16 @@ class NativePortPlatformServices::Impl final {
             static_cast<unsigned long long>(telemetry_->snapshot.input_polls));
     }
 
+    void begin_input_initial_state_restore() {
+        require_owner_thread();
+        input_initial_state_validated_ = false;
+    }
+
+    [[nodiscard]] bool input_initial_state_pending() const {
+        require_owner_thread();
+        return input_initial_state_pending_;
+    }
+
     void finalize_clean_shutdown() {
         require_owner_thread();
         if (input_trace_ != nullptr && !input_replay_mode_ &&
@@ -3339,6 +3349,8 @@ class NativePortPlatformServices::Impl final {
     [[nodiscard]] NativePortInputSnapshot poll_gamepads() { return {}; }
     void validate_input_initial_state(std::span<const std::byte>) {}
     void start_input_after_initial_state_load() {}
+    void begin_input_initial_state_restore() {}
+    bool input_initial_state_pending() const { return false; }
     [[nodiscard]] bool set_gamepad_vibration(
         std::uint32_t, const NativePortGamepadVibration&) { return false; }
     [[nodiscard]] NativePortSaveLoadResult load_save(
@@ -3488,6 +3500,48 @@ void NativePortPlatformServices::validate_input_initial_state(
 
 void NativePortPlatformServices::start_input_after_initial_state_load() {
     impl_->start_input_after_initial_state_load();
+}
+
+void NativePortPlatformServices::begin_input_initial_state_restore() {
+    impl_->begin_input_initial_state_restore();
+}
+
+bool NativePortPlatformServices::input_initial_state_pending() const {
+    return impl_->input_initial_state_pending();
+}
+
+NativePortDevelopmentStateResult dispatch_native_port_development_state(
+    NativePortContext& context, const NativePortDevelopmentStateRequest& request) {
+    bool initial_pending = false;
+    bool restore_loaded = false;
+    try {
+        initial_pending = context.platform != nullptr && context.platform->input_initial_state_pending();
+        if (initial_pending)
+            context.platform->begin_input_initial_state_restore();
+        if (context.development_state_handler == nullptr) {
+            if (initial_pending)
+                throw std::runtime_error("development-state-handler-missing");
+            return NativePortDevelopmentStateResult::Rejected;
+        }
+        const auto outcome = context.development_state_handler(context, request);
+        if (outcome == NativePortDevelopmentStateResult::Loaded) {
+            restore_loaded = true;
+            if (request.operation != NativePortDevelopmentStateOperation::Load)
+                throw std::runtime_error("development-state-invalid-loaded-result");
+            if (initial_pending && context.platform != nullptr)
+                context.platform->start_input_after_initial_state_load();
+        } else if (outcome != NativePortDevelopmentStateResult::Deferred &&
+                   context.platform != nullptr && context.platform->input_initial_state_pending()) {
+            // A failed initial restore must end with a typed stop, not leave a
+            // seemingly running product permanently on neutral replay input.
+            throw std::runtime_error("input-initial-state-restore-rejected");
+        }
+        return outcome;
+    } catch (...) {
+        if (initial_pending || restore_loaded)
+            context.stop_reason = NativePortStopReason::AotContractViolation;
+        throw;
+    }
 }
 
 void NativePortPlatformServices::finalize_clean_shutdown() {

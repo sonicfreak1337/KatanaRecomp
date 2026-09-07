@@ -2,7 +2,7 @@
 
 Status: Pre-Alpha
 
-Aktuelle Phase: `v0.49.2` - Sonic-Adventure-Native-Port,
+Aktuelle Phase: `v0.49.3` - Sonic-Adventure-Native-Port,
 statisches SH-4-AOT und native PC-Plattformdienste
 
 Naechster regulaerer Release: `v0.5.0`
@@ -16,22 +16,26 @@ Naechster regulaerer Release: `v0.5.0`
 
 ## Entwicklungs- und Release-Status
 
-`v0.49.2` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
-Fuer `v0.49.2` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
+`v0.49.3` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
+Fuer `v0.49.3` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
 bleibt `v0.5.0`; er darf erst freigegeben und getaggt werden, wenn die
 vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
 Produktpfad nachgewiesen ist.
 
 ## Aktueller Produktmeilenstein
 
-Der letzte atomar publizierte Whole-Game-Produktstand ist `r178`. Seine
+Der aktuelle Sourcevertrag ist Analyzer-ABI `72`, Product-Runtime-ABI `139`,
+AOT-Runtime-ABI `128` und Backend-Interface-ABI `27`. `r292` ist der letzte
+vor diesem Review-Batch gebaute Performance-Export. Ein bestandener
+Zuguebergang ist damit noch nicht nachgewiesen. Produkt-, Replay- und
+Performancebelege bleiben an die jeweilige Buildidentitaet gebunden.
+
+Der folgende historische Whole-Game-Meilenstein beschreibt `r178`. Seine
 Authority umfasst `16.374` kombinierte Funktionen, `961` externe Primary-
 Roots, `248` identitaetsgebundene Latent-AOT-Module und `975` Codegen-
 Partitionen. Guarded Inventory und Backend-Admission sind geschlossen; die
 native Hardware-Closure bleibt mit `245` bekannten Sites und `100` offenen
-Gaps bewusst fail-closed. Der aktuelle Sourcevertrag ist Analyzer-ABI `71`,
-Product-Runtime-ABI `128`, AOT-Runtime-ABI `126` und Backend-Interface-ABI
-`26`. Die aktive Produktarbeit betrifft die noch reproduzierbaren
+Gaps bewusst fail-closed. Die aktive Produktarbeit betrifft die noch reproduzierbaren
 identitaetsgebundenen Crashfamilien, nicht eine pauschale Hardware- oder
 Runtime-Emulation.
 
@@ -157,13 +161,16 @@ nie als Sonic-Sonderfall in generischem Runtime- oder Recompilercode landen.
 
 ## Projektweiter Arbeitsvertrag
 
-Fuer jeden Task und jeden Projektbereich gilt ab sofort exakt:
+Massgeblich ist der aktuelle Vertrag in [`AGENTS.md`](AGENTS.md):
 
 ```text
 Task implementieren
   -> alle durch den Task betroffenen Pfade reviewen
      und bestaetigte Fehler innerhalb dieses Reviews schliessen
-  -> den reviewten Task direkt auf main committen und pushen
+  -> dirty konfigurieren und die betroffenen Komponenten gezielt bauen
+  -> zusammengehoerigen Batch in genau einem Sonic-NativeBringup-Produkt pruefen
+  -> Eggman committet den geprueften Batch lokal
+  -> Push nur nach aktueller ausdruecklicher Nutzerfreigabe
   -> naechster Task
 ```
 
@@ -171,13 +178,12 @@ Die Reviewstufe ist die Fehlerfindungs- und Fixstufe. Sie umfasst den
 implementierten Pfad, Aufrufer, Verbraucher, Datenfluss, Verdrahtung,
 Fehlerpfade, ABI-, Cache-, Versions-, AOT- und Runtimevertraege sowie alle
 unmittelbar betroffenen Schichten. Bestaetigte P0-, P1- und andere fuer den
-Task relevante Fehler werden vor dem Push geschlossen.
+Task relevante Fehler werden vor Build und Handoff geschlossen.
 
-Es gibt keine zusaetzliche standardmaessige Test-, Verifikations-,
-Integrations- oder Fixrunde zwischen Review und Push. Tasks werden direkt auf
-`main` bearbeitet und veroeffentlicht. Branches, Pull Requests oder
-parallele Integrationszweige entstehen nur auf eine neue ausdrueckliche
-Nutzeranweisung.
+Gezielte Quellpruefungen ersetzen keine Produktabnahme. Zusammengehoerige
+Arbeiten werden vor dem Export im Dirty-Batch integriert. Parallele Writer
+verwenden isolierte Worktrees nach `AGENTS.md`; read-only Reviews mutieren
+keine Dateien. Ein Commit ist keine Voraussetzung fuer einen lokalen Build.
 
 ## Sonic ist der Test
 
@@ -193,19 +199,16 @@ realer Export
 
 Daraus folgen verbindlich:
 
-- keine neuen Unit-Tests, Regressionstests, Testmatrizen, synthetischen
-  Fixtures, Stresslaeufe, Testprojekte, Ersatzgates oder
-  Konformitaetssuiten als Bestandteil eines Tasks;
-- Reviews melden das Fehlen neuer Tests nicht als Finding und verlangen keine
-  neue Testabdeckung als Abschlussbedingung;
-- vorhandene Tests duerfen auf gebrochene Erwartungen, widerspruechliche
-  Semantik oder falsche Testzahlen geprueft und bei Bedarf repariert werden,
-  ihr Bestand wird fuer neue Tasks aber nicht erweitert;
-- ein Task besitzt keinen eigenen Testbuild als Pushgate;
+- neue oder erweiterte fokussierte Komponenten- und Regressionstests sind
+  fuer nachgewiesene Sonic-Probleme erlaubt und duerfen im Review verlangt werden;
+- breite synthetische Testmatrizen, Stress- und Konformitaetssuiten ohne
+  unmittelbaren Sonic-Bezug bleiben ausgeschlossen;
+- vorhandene fehlerhafte Erwartungen und Tests werden korrigiert;
+- Komponentenchecks belegen Quellvertraege, niemals Spielbarkeit oder FPS;
 - Sonic-Laeufe erfolgen an den in dieser Roadmap festgelegten Produktgates
   oder nach ausdruecklicher Nutzeranweisung, nicht nach jedem einzelnen Task;
-- mehrere zusammenhaengende, reviewte Tasks duerfen vor dem naechsten
-  Sonic-Produktlauf auf `main` landen;
+- mehrere zusammenhaengende, reviewte Tasks werden im Dirty-Batch integriert;
+  der lokale Commit folgt nach dem funktionierenden Sonic-Produktlauf;
 - Performance wird am echten End-to-End-Port gemessen, nicht an einer
   synthetischen Matrix oder einer schoenen CPU-Auslastungszahl.
 
@@ -239,7 +242,7 @@ Der vollstaendige native Produktvertrag in
 hat Vorrang vor allen aelteren RuntimeOnly-, AICA-, PVR- und
 Performancebeschreibungen.
 
-## Aktueller v0.49.2-Native-Portpfad
+## Aktueller v0.49.3-Native-Portpfad
 
 Die neue verbindliche Reihenfolge lautet:
 
@@ -699,7 +702,7 @@ PlatformAbi-Optimierungsbefunde bleiben deferred. KR-4981 ist historische
 RuntimeOnly-Evidenz und durch KR-5005 abgeloest. KR-4982 und KR-4983 bleiben
 als alte optionale Offload-Aufgaben gestrichen.
 
-## v0.49.2-Kritischer Pfad
+## v0.49.3-Kritischer Pfad
 
 1. **[x] Native Produktlinkgrenze**
    - eigenes `native-port`-Produktprofil;
@@ -766,13 +769,10 @@ als alte optionale Offload-Aufgaben gestrichen.
 
 ## Arbeitsregeln
 
-- Jeder Task folgt dem Dreischritt Implementierung, Review der betroffenen
-  Pfade mit unmittelbarer Findingschliessung, Push auf `main`.
-- Fehlende neue Tests sind kein Finding.
-- Keine neue breite oder schmale Testsuite, keine Matrix und kein
-  synthetisches Ersatzgate.
-- Vorhandene Tests werden nur repariert, wenn sie selbst konkret falsch oder
-  gebrochen sind.
+- Jeder Task folgt `AGENTS.md`: Implementierung, Review und gezielter
+  Dirty-Build; lokaler Commit durch Eggman nach funktionierendem Produkt.
+- Fokussierte Tests fuer nachgewiesene Sonic-Probleme sind erlaubt;
+  breite synthetische Ersatzgates bleiben ausgeschlossen.
 - Sonic-Produktlaeufe folgen an den dokumentierten Gates oder nach
   ausdruecklicher Nutzeranweisung.
 - Keine Controller-, GUI-, Paketierungs- oder Komfortarbeit vor B2.
@@ -791,9 +791,9 @@ als alte optionale Offload-Aufgaben gestrichen.
 - neue Test-, Konformitaets- oder Threadmatrizen;
 - weitere Controller-Haertung.
 
-## v0.49.2 Definition of Done
+## v0.49.3 Definition of Done
 
-`v0.49.2` erhaelt kein Git-Tag und gibt den naechsten regulaeren Release
+`v0.49.3` erhaelt kein Git-Tag und gibt den naechsten regulaeren Release
 `v0.5.0` erst frei, wenn:
 
 - Recompiler, Runtime und externes Spielprojekt getrennt gebaut werden

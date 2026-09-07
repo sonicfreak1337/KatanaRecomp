@@ -1,6 +1,6 @@
 # KatanaRecomp Task-Katalog
 
-Dieses Dokument enthaelt die aktiven `v0.49.2`-Produktaufgaben. Historische
+Dieses Dokument enthaelt die aktiven `v0.49.3`-Produktaufgaben. Historische
 Aufgaben und fruehere Detailstaende bleiben in Git und in
 `TASK_ID_REGISTRY.md` nachvollziehbar.
 
@@ -12,39 +12,40 @@ Aufgaben und fruehere Detailstaende bleiben in Git und in
 
 ## Aktueller Entwicklungs- und Release-Status
 
-`v0.49.2` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
-Fuer `v0.49.2` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
+`v0.49.3` ist der aktuelle Entwicklungsstand und kein regulaerer Release.
+Fuer `v0.49.3` wird bewusst kein Git-Tag gesetzt. Der naechste echte Release
 bleibt `v0.5.0`; er darf erst freigegeben und getaggt werden, wenn die
 vollstaendige Spielbarkeit von Sonic Adventure PAL ueber den rein nativen
 Produktpfad nachgewiesen ist.
 
 ## Repositoryweiter Taskvertrag
 
-Fuer jeden Task gilt ohne zusaetzliche Zwischenstufe:
+Massgeblich ist [`AGENTS.md`](../AGENTS.md). Fuer jeden Task gilt:
 
 ```text
 Task implementieren
   -> alle betroffenen Pfade reviewen
      und bestaetigte Fehler innerhalb des Reviews schliessen
-  -> den reviewten Task direkt auf main committen und pushen
+  -> dirty konfigurieren und die betroffenen Komponenten gezielt bauen
+  -> zusammengehoerigen Batch in genau einem Sonic-NativeBringup-Produkt pruefen
+  -> Eggman committet den geprueften Batch lokal
+  -> Push nur nach aktueller ausdruecklicher Nutzerfreigabe
   -> naechster Task
 ```
 
 Verbindlich ist dabei:
 
 - `AGENTS.md` gilt fuer jeden Task und jeden automatisierten Bearbeiter;
-- ein Task wird direkt auf `main` bearbeitet und gepusht;
-- Branches oder Pull Requests entstehen nur auf ausdrueckliche
-  Nutzeranweisung;
+- Eggman integriert den Dirty-Batch; parallele Writer arbeiten nach
+  `AGENTS.md` in isolierten Worktrees, read-only Reviewer mutieren nichts;
 - die Reviewstufe umfasst Implementierung, Aufrufer, Verbraucher, Datenfluss,
   Verdrahtung, Fehlerpfade, ABI-, Cache-, Versions-, AOT-, Runtime- und
   Produktvertraege der Aenderung;
-- bestaetigte Fehler im Taskscope werden vor dem Push geschlossen;
-- es gibt keine separate standardmaessige Test-, Verifikations-, Fix- oder
-  Integrationsrunde zwischen Review und Push;
-- erst der Push des reviewten Tasks gibt den naechsten Task frei;
-- der Push ist die Freigabe; der naechste ungegatete Task benoetigt keine
-  weitere Nutzeranweisung;
+- bestaetigte Fehler im Taskscope werden vor Build und Handoff geschlossen;
+- gezielte Komponentenchecks ersetzen keinen Sonic-Produktnachweis;
+- ein Commit ist keine Voraussetzung fuer einen lokalen Build;
+- zusammengehoerige Arbeiten werden vor dem Produktlauf integriert;
+- weder Commit noch Push werden durch einen einzelnen Unit-Test autorisiert;
 - ein Review darf ausserhalb des Taskscopes liegende Beobachtungen notieren,
   daraus aber nicht eigenmaechtig neue Tasks oder Scope ableiten.
 
@@ -60,19 +61,16 @@ sichtbarer Fortschritt
 
 Daher gilt projektweit:
 
-- keine neuen Unit-Tests, Regressionstests, Testmatrizen, synthetischen
-  Fixtures, Stresslaeufe, Testprojekte, Ersatzgates oder
-  Konformitaetssuiten;
-- das Fehlen neuer Tests ist kein Review-Befund;
-- Reviews verlangen keine neue Testabdeckung als Abschlussbedingung;
-- vorhandene Tests duerfen auf gebrochene Erwartungen, falsche Testzahlen
-  oder widerspruechliche Semantik geprueft und bei Bedarf repariert werden,
-  ihr Bestand wird aber nicht erweitert;
-- ein Task startet keinen eigenen Testbuild und keine Matrix als Pushgate;
+- neue und erweiterte fokussierte Tests fuer nachgewiesene Sonic-Probleme
+  sind erlaubt und duerfen als Quellnachweis verlangt werden;
+- breite synthetische Matrizengates, Stress- und Konformitaetssuiten ohne
+  unmittelbaren Sonic-Bezug bleiben ausgeschlossen;
+- fehlerhafte bestehende Erwartungen und Tests werden korrigiert;
+- Komponentenchecks ersetzen weder Sonic-Fortschritt noch Performancemessung;
 - Sonic-Laeufe erfolgen an den unten festgelegten Produktgates oder auf eine
   ausdrueckliche Nutzeranweisung, nicht nach jedem Task;
-- mehrere zusammenhaengende, reviewte Tasks duerfen vor dem naechsten
-  Produktlauf auf `main` landen;
+- mehrere zusammenhaengende, reviewte Tasks werden im Dirty-Batch integriert;
+  der lokale Commit folgt nach dem funktionierenden Sonic-Produktlauf;
 - DirectBoot besitzt keinen Sega-Screen als Pflichtmeilenstein, weil dieses
   Bild zu IP.BIN gehoert;
 - kein Interpreter, JIT oder Emulationsfallback im normalen Produktpfad;
@@ -81,8 +79,8 @@ Daher gilt projektweit:
 
 ## Lauf- und Ressourcenvertrag
 
-- Kein Prozess und keine einzelne Phase laeuft laenger als 20 Minuten, ausser
-  der Nutzer hebt die Grenze fuer genau einen benannten Lauf auf.
+- Die Zeitgrenzen und stehenden Freigaben fuer begrenzte Sonic-Analyse- und
+  Gesamtexportlaeufe stehen in `AGENTS.md`; diese erfordern keine neue Rueckfrage.
 - Jeder potenziell lange Prozess besitzt spaetestens alle zehn Sekunden einen
   belastbaren Fortschrittsindikator.
 - Liveness ohne kanonischen Fortschritt ist kein Erfolg. Stalls und
@@ -91,7 +89,7 @@ Daher gilt projektweit:
   nicht als Performancefix erhoeht. Der aktuelle P0 muss durch weniger
   notwendige Arbeit geschlossen werden.
 
-## Verbindlicher v0.49.2-Native-Portpfad
+## Verbindlicher v0.49.3-Native-Portpfad
 
 Der Produktport ist kein Emulator. Statisches SH-4-AOT wird an validierten
 Spiel-/SDK-Grenzen mit nativer PC-Grafik, -Audio/-Movie, -Datei-, -Eingabe-
@@ -1285,8 +1283,8 @@ sonst ungenutzter Kerne fuer verwerfbare spaetere Rootarbeit einsetzen.
 | KR-4964 | v0.49-Produktabnahme bis sichtbarem Spielbild und Echtzeit offen |
 | KR-4966 bis KR-4970 | relatives Gate, atomarer Handoff sowie AICA/PVR/Maple-Vertraege quellseitig vorhanden; PVR-RenderDone-Fanout und resetfeste TA-Metrik abgeschlossen, sichtbarer Produktnachweis offen |
 
-Auch diese Aufgaben folgen dem repositoryweiten Dreischritt und erzeugen
-keine neuen Tests oder Testmatrizen.
+Auch diese Aufgaben folgen dem aktuellen Arbeits- und Testvertrag in
+`AGENTS.md`; historische Prozessbeschreibungen ersetzen ihn nicht.
 
 ## Historisch geplante RuntimeOnly-Produktlaeufe
 
@@ -1313,5 +1311,5 @@ keine neuen Tests oder Testmatrizen.
 - Controller und stabiler mehrminuetiger Lauf folgen erst nach sichtbarem
   Spielfortschritt.
 
-Zwischen diesen Produktgates werden keine neuen Tests, Vollsuiten oder
-Matrizen gebaut. Gefixt wird durch Reviews, getestet wird mit Sonic.
+Diese Laufplanung ist historisch. Fuer heutige Komponentenchecks und
+Sonic-Produktgates gilt ausschliesslich der aktuelle Vertrag in `AGENTS.md`.

@@ -309,7 +309,10 @@ class NativePortPlatformServices final {
 
     [[nodiscard]] NativePortInputSnapshot poll_gamepads();
     void validate_input_initial_state(std::span<const std::byte> bytes);
+    // Starts a restore attempt; validation from a Deferred attempt cannot arm it.
+    void begin_input_initial_state_restore();
     void start_input_after_initial_state_load();
+    [[nodiscard]] bool input_initial_state_pending() const;
     // Compacts an opt-in input journal at a known clean shutdown boundary.
     // Recording itself is a preallocated mapped journal, so the committed
     // prefix remains replayable even when a hard process failure bypasses C++

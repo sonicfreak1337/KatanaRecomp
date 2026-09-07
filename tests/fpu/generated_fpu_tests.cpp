@@ -146,6 +146,28 @@ class GeneratedFpuServices final : public katana::runtime::PlatformServices {
 int main() {
     using katana::runtime::read_dr_double;
 
+    for (const auto entry : {0x176u, 0x17Eu, 0x188u}) {
+        auto cpu_storage = std::make_unique<katana_generated::CpuState>();
+        auto& cpu = *cpu_storage;
+        cpu.write_sr(0u);
+        cpu.vbr = 0x8000u;
+        cpu.pc = entry;
+        cpu.fpscr = entry == 0x188u ? katana::runtime::fpscr_enable_inexact_mask :
+                                      katana::runtime::fpscr_enable_divide_by_zero_mask;
+        cpu.fr[0] = 0u;
+        cpu.fr[2] = 0x40800000u;
+        cpu.r[0] = 0x1234u;
+        const auto before = cpu.fr;
+        if (entry == 0x176u) katana_generated::fn_00000176(cpu);
+        else if (entry == 0x17Eu) katana_generated::fn_0000017E(cpu);
+        else katana_generated::fn_00000188(cpu);
+        require(cpu.trap_pending && cpu.fr == before && cpu.spc == entry &&
+                    cpu.r_bank[0] == 0x1234u &&
+                    cpu.last_exception_instruction_pc == (entry == 0x17Eu ? 0x180u : entry) &&
+                    cpu.exception_in_delay_slot == (entry == 0x17Eu),
+                "Generated arithmetic continued after exception or lost delay owner.");
+    }
+
     {
         auto cpu_storage = std::make_unique<katana_generated::CpuState>();
         auto& cpu = *cpu_storage;

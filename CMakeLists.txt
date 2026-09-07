@@ -2400,6 +2400,15 @@ add_test(
     COMMAND katana-native-port-audio-command-queue-tests
 )
 
+if(WIN32)
+    add_executable(katana-native-port-checkpoint-input-tests
+        tests/runtime/native_port_checkpoint_input_tests.cpp)
+    target_link_libraries(katana-native-port-checkpoint-input-tests PRIVATE katana_native_port_runtime)
+    katana_enable_warnings(katana-native-port-checkpoint-input-tests)
+    add_test(NAME katana-native-port-checkpoint-input-tests
+        COMMAND katana-native-port-checkpoint-input-tests)
+endif()
+
 add_executable(
     katana-native-port-frame-queue-tests
     tests/runtime/native_port_frame_queue_tests.cpp

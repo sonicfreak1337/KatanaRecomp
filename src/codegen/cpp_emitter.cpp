@@ -3065,7 +3065,12 @@ void emit_deferred_post_instruction_safepoint(
 [[nodiscard]] bool can_raise_precise_fpu_exception(
     const katana::ir::Instruction& instruction) noexcept {
     return instruction.operation == katana::ir::Operation::Fsrra ||
-           instruction.operation == katana::ir::Operation::Fsca;
+           instruction.operation == katana::ir::Operation::Fsca ||
+           instruction.operation == katana::ir::Operation::Fadd ||
+           instruction.operation == katana::ir::Operation::Fsub ||
+           instruction.operation == katana::ir::Operation::Fmul ||
+           instruction.operation == katana::ir::Operation::Fdiv ||
+           instruction.operation == katana::ir::Operation::Fsqrt;
 }
 
 void emit_precise_fpu_instruction(std::ostringstream& output,
@@ -3074,12 +3079,21 @@ void emit_precise_fpu_instruction(std::ostringstream& output,
                                   const bool single_block,
                                   const NativeRegisterEmission& registers) {
     emit_indent(output, indent);
-    output << "if (katana::runtime::"
-           << (instruction.operation == katana::ir::Operation::Fsrra
-                   ? "fpu_reciprocal_square_root"
-                   : "fpu_sine_cosine")
-           << "(cpu, "
-           << static_cast<unsigned>(instruction.destination_register) << "u, ";
+    using katana::ir::Operation;
+    output << "if (katana::runtime::";
+    if (instruction.operation == Operation::Fadd || instruction.operation == Operation::Fsub ||
+        instruction.operation == Operation::Fmul || instruction.operation == Operation::Fdiv) {
+        const auto operation = instruction.operation == Operation::Fadd ? "Add" :
+                               instruction.operation == Operation::Fsub ? "Subtract" :
+                               instruction.operation == Operation::Fmul ? "Multiply" : "Divide";
+        output << "fpu_binary(cpu, katana::runtime::FpuBinaryOperation::" << operation << ", "
+               << static_cast<unsigned>(instruction.source_register) << "u, ";
+    } else {
+        output << (instruction.operation == Operation::Fsrra ? "fpu_reciprocal_square_root" :
+                   instruction.operation == Operation::Fsqrt ? "fpu_square_root" : "fpu_sine_cosine")
+               << "(cpu, ";
+    }
+    output << static_cast<unsigned>(instruction.destination_register) << "u, ";
     if (instruction.delay_slot.role == katana::ir::DelaySlotRole::Slot &&
         instruction.delay_slot.counterpart_address.has_value()) {
         output << "std::optional<std::uint32_t>{"

@@ -1,10 +1,10 @@
 # Analyzer-ABI
 
 Der aktuelle oeffentliche Analyzervertrag ist Version `72`. Der aktuelle
-Source-Stand verwendet Product-Runtime-ABI 129, AOT-Runtime-ABI 126,
-Block-ABI 5, PlatformServices-ABI 14, Backend-Interface-ABI 26,
-Portprojektvertrag 104 und Native-Port-Profilvertrag 26. GameProject-Vertrag
-9, Analysis-Directives-Version 5, Native-AOT-Emissionsprofil 44,
+Source-Stand verwendet Product-Runtime-ABI 139, AOT-Runtime-ABI 128,
+Block-ABI 5, PlatformServices-ABI 14, Backend-Interface-ABI 27,
+Portprojektvertrag 104 und Native-Port-Profilvertrag 34. GameProject-Vertrag
+10, Analysis-Directives-Version 5, Native-AOT-Emissionsprofil 46,
 AOT-Partitionsschema 11 und Port-Metadata-Cache-Schema 13 gehoeren zum
 aktuellen Exportvertrag; sie ersetzen nicht den Analyzer-ABI-Zaehler.
 Der bestehende Function-Value-Sanitylauf ist mit `463/463` Checks gruen, und
@@ -14,7 +14,7 @@ ist abgeschlossen. Der historische Candidate-Resolution-Checkpoint
 ABI-34-Referenz erhalten.
 
 Der aktuelle Native-Port-Vertrag verwendet
-`NativePortDefinition` `13` und `NativePortArtifact` `15`. Seine fail-closed
+`NativePortDefinition` `14` und `NativePortArtifact` `15`. Seine fail-closed
 Beweisschicht bildet
 `OwnerSemanticSummary` auf der Analyzer-Seite und den
 `NativeProviderSemanticContract` (Runtime-Typ

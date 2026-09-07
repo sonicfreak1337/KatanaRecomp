@@ -42,8 +42,109 @@ constexpr double sh4_approximation_error_bound = 2.0e-7;
 
 } // namespace
 
+void test_precise_arithmetic() {
+    using namespace katana::runtime;
+    struct BinaryCase {
+        FpuBinaryOperation operation;
+        std::uint32_t n, m, fpscr, cause, result;
+        bool trap;
+    };
+    using Op = FpuBinaryOperation;
+    const BinaryCase cases[] = {
+        {Op::Divide, 0x3f800000u, 0u, fpscr_enable_divide_by_zero_mask, fpscr_cause_divide_by_zero_mask, 0u, true},
+        {Op::Divide, 0x3f800000u, 0x80000000u, 0u, fpscr_cause_divide_by_zero_mask, 0xff800000u, false},
+        {Op::Divide, 1u, 0u, 0u, fpscr_cause_divide_by_zero_mask, 0x7f800000u, false},
+        {Op::Divide, 0x3f800000u, 1u, 0u, fpscr_cause_fpu_error_mask, 0u, true},
+        {Op::Multiply, 1u, 0u, 0u, fpscr_cause_fpu_error_mask, 0u, true},
+        {Op::Add, 0x7fbfffffu, 1u, 0u, 0u, 0x7fbfffffu, false},
+        {Op::Add, 0x7fc00000u, 0x3f800000u, fpscr_enable_invalid_mask, fpscr_cause_invalid_mask, 0u, true},
+        {Op::Add, 0x7f800000u, 0xff800000u, 0u, fpscr_cause_invalid_mask, 0x7fbfffffu, false},
+        {Op::Subtract, 0x7f800000u, 0x7f800000u, 0u, fpscr_cause_invalid_mask, 0x7fbfffffu, false},
+        {Op::Multiply, 0u, 0x7f800000u, 0u, fpscr_cause_invalid_mask, 0x7fbfffffu, false},
+        {Op::Divide, 0u, 0u, 0u, fpscr_cause_invalid_mask, 0x7fbfffffu, false},
+        {Op::Divide, 0x7f800000u, 0u, 0u, 0u, 0x7f800000u, false},
+        {Op::Multiply, 0x80000001u, 0x3f800000u, fpscr_dn_mask, 0u, 0x80000000u, false},
+        {Op::Multiply, 0x7f7fffffu, 0x40000000u, 0u, fpscr_cause_overflow_mask | fpscr_cause_inexact_mask, 0x7f800000u, false},
+        {Op::Multiply, 0x7f7fffffu, 0x40000000u, 1u, fpscr_cause_overflow_mask | fpscr_cause_inexact_mask, 0x7f7fffffu, false},
+        {Op::Multiply, 0x00800000u, 0x3f000000u, 0u, 0u, 0x00400000u, false},
+        {Op::Multiply, 0x00800000u, 0x3f000000u, fpscr_dn_mask, fpscr_cause_underflow_mask | fpscr_cause_inexact_mask, 0u, false},
+        {Op::Divide, 0x00800000u, 0x40400000u, 0u, fpscr_cause_underflow_mask | fpscr_cause_inexact_mask, 0x002aaaabu, false},
+        {Op::Add, 0x3f800000u, 0x3f800000u, fpscr_enable_overflow_mask, 0u, 0u, true},
+        {Op::Add, 0x3f800000u, 0x3f800000u, fpscr_enable_underflow_mask, 0u, 0u, true},
+        {Op::Subtract, 0x3f800000u, 0x3f800000u, fpscr_enable_inexact_mask, 0u, 0u, true},
+    };
+    for (const auto& test : cases) {
+        CpuState cpu;
+        cpu.pc = cpu.active_instruction_pc = 0x8c001002u;
+        cpu.vbr = 0x8c010000u;
+        cpu.fpscr = test.fpscr | fpscr_cause_mask | fpscr_flag_invalid_mask;
+        cpu.fr[0] = test.m;
+        cpu.fr[2] = test.n;
+        const auto before = cpu.fr;
+        const bool trapped = fpu_binary(cpu, test.operation, 0u, 2u, 0x8c001000u);
+        require(trapped == test.trap &&
+                    (cpu.fpscr & fpscr_cause_mask) == test.cause &&
+                    (cpu.fpscr & fpscr_flag_mask) ==
+                        (((test.cause >> 10u) & fpscr_flag_mask) | fpscr_flag_invalid_mask) &&
+                    (trapped ? cpu.fr == before : cpu.fr[2] == test.result),
+                "Binary FPSCR/atomic commit case n=" + std::to_string(test.n) +
+                " m=" + std::to_string(test.m) + " fpscr=" + std::to_string(test.fpscr));
+        if (trapped)
+            require(cpu.trap_pending && cpu.spc == 0x8c001000u &&
+                        cpu.last_exception_instruction_pc == 0x8c001002u && cpu.exception_in_delay_slot,
+                    "Binary exception lost delay-slot origin.");
+    }
+    for (const bool wide : {false, true}) {
+        CpuState cpu;
+        const auto mode = wide ? fpscr_pr_mask : 0u;
+        const auto set = [&](unsigned reg, double value) {
+            if (wide) write_dr_double(cpu, static_cast<std::uint8_t>(reg), value);
+            else write_fr_single(cpu, static_cast<std::uint8_t>(reg), static_cast<float>(value));
+        };
+        cpu.fpscr = mode | fpscr_enable_divide_by_zero_mask;
+        set(0u, 0.0); set(2u, 1.0);
+        const auto before = cpu.fr;
+        require(fpu_binary(cpu, Op::Divide, 0u, 2u, std::nullopt) && cpu.fr == before &&
+                    (cpu.fpscr & fpscr_cause_mask) == fpscr_cause_divide_by_zero_mask,
+                "Single/double FDIV did not preserve trapping destination.");
+        for (double value : {0.0, -0.0, 4.0, std::numeric_limits<double>::infinity()}) {
+            cpu.write_sr(0u);
+            cpu.fpscr = mode | fpscr_enable_inexact_mask;
+            set(2u, value);
+            const auto sqrt_before = cpu.fr;
+            const bool sqrt_trap = fpu_square_root(cpu, 2u, std::nullopt);
+            require(sqrt_trap && cpu.fr == sqrt_before &&
+                        (cpu.fpscr & fpscr_cause_mask) == 0u,
+                    "Exact FSQRT conservative trap: wide=" + std::to_string(wide) +
+                    " value=" + std::to_string(value) + " trap=" + std::to_string(sqrt_trap) +
+                    " fpscr=" + std::to_string(cpu.fpscr) +
+                    " same=" + std::to_string(cpu.fr == sqrt_before));
+        }
+        cpu.fpscr = mode;
+        set(2u, 2.0);
+        require(!fpu_square_root(cpu, 2u, std::nullopt) &&
+                    (cpu.fpscr & fpscr_cause_mask) == fpscr_cause_inexact_mask,
+                "Inexact FSQRT did not report rounding.");
+    }
+    for (const auto bits : {1u, 0x80000001u}) {
+        CpuState cpu;
+        cpu.fpscr = 0u;
+        cpu.fr[2] = bits;
+        const bool trapped = fpu_square_root(cpu, 2u, std::nullopt);
+        require(trapped == (bits == 1u) &&
+                    (cpu.fpscr & fpscr_cause_mask) ==
+                        (bits == 1u ? fpscr_cause_fpu_error_mask : fpscr_cause_invalid_mask),
+                "FSQRT denormal sign precedence differs from SH-4.");
+        cpu.fpscr = fpscr_dn_mask;
+        cpu.fr[2] = bits;
+        require(!fpu_square_root(cpu, 2u, std::nullopt) && cpu.fr[2] == (bits & 0x80000000u),
+                "FSQRT DN flush lost signed zero.");
+    }
+}
+
 int main() {
     using namespace katana::runtime;
+    test_precise_arithmetic();
 
     CpuState cpu;
     write_fr_single(cpu, 0u, 2.0f);
@@ -206,8 +307,8 @@ int main() {
     require(read_fr_single(cpu, 0u) == 6.0f, "FMAC scheitert bei FR0 == FRm == FRn.");
 
     cpu.write_fpscr(0u);
-    cpu.fr[0] = 0x00000001u;
-    cpu.fr[1] = 0x3F800000u;
+    cpu.fr[0] = 0x00800000u;
+    write_fr_single(cpu, 1u, std::ldexp(1.0f, -23));
     fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 1u);
     require(cpu.fr[1] == 0x00000001u, "DN=0 erhaelt ein Single-Denormalergebnis nicht.");
 #if KATANA_TEST_HAS_SSE_MXCSR
@@ -294,9 +395,8 @@ int main() {
     require(cpu.fr[2] == 0x80000001u, "FNEG darf Denormalwerte bei DN=1 nicht spuellen.");
 
     cpu.write_fpscr(fpscr_pr_mask);
-    cpu.fr[0] = 0u;
-    cpu.fr[1] = 1u;
-    write_dr_double(cpu, 2u, 1.0);
+    write_dr_double(cpu, 0u, std::numeric_limits<double>::min());
+    write_dr_double(cpu, 2u, std::ldexp(1.0, -52));
     fpu_binary(cpu, FpuBinaryOperation::Multiply, 0u, 2u);
     require(cpu.fr[2] == 0u && cpu.fr[3] == 1u, "DN=0 erhaelt ein Double-Denormalergebnis nicht.");
     cpu.write_fpscr(fpscr_pr_mask | fpscr_dn_mask);

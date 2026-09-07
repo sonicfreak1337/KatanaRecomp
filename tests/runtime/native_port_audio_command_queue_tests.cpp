@@ -90,9 +90,9 @@ std::uint64_t publish(
 }
 
 void test_pod_contract_and_defaults() {
-    static_assert(native_port_audio_engine_contract_version == 7u);
-    static_assert(native_port_sound_bank_contract_version == 9u);
-    static_assert(native_port_sound_effect_kernel_contract_version == 1u);
+    static_assert(native_port_audio_engine_contract_version == 8u);
+    static_assert(native_port_sound_bank_contract_version == 10u);
+    static_assert(native_port_sound_effect_kernel_contract_version == 2u);
     static_assert(std::is_standard_layout_v<NativePortSoundEffectKernel>);
     static_assert(std::is_trivially_copyable_v<NativePortSoundEffectKernel>);
     static_assert(std::is_standard_layout_v<NativePortSoundEffectKernelProvider>);
@@ -677,6 +677,7 @@ struct CompletionServiceFixture final {
     std::uint32_t drained_blocks = 0u;
     std::uint32_t controls = 0u;
     std::uint32_t services = 0u;
+    bool fail_service = false;
 
     static void execute(
         void* const object,
@@ -714,7 +715,7 @@ struct CompletionServiceFixture final {
         self.pending_blocks = 0u;
         ++self.services;
         self.event.notify_all();
-        return 0u;
+        return self.fail_service ? 7u : 0u;
     }
 };
 
@@ -724,6 +725,9 @@ void test_completion_wake_drains_pending_without_new_command() {
     config.command_queue.mode =
         NativePortAudioCommandQueueMode::DedicatedThread;
     auto domain = NativePortAudioExecutionDomain::acquire(config);
+    NativePortTelemetry telemetry;
+    require(domain->bind_telemetry(&telemetry),
+            "Completion-Service konnte Telemetrie nicht binden.");
     CompletionServiceFixture fixture;
     fixture.domain = domain.get();
     const auto handle = domain->register_target(
@@ -753,12 +757,58 @@ void test_completion_wake_drains_pending_without_new_command() {
                     fixture.service_on_consumer,
                 "Completion-Retry verlor Tail, blockierte Control oder lief fremd.");
     }
+    const auto service_index = static_cast<std::size_t>(
+        NativePortTelemetryStage::AudioServiceTotal);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(2);
+    while (telemetry.snapshot().stages[service_index].calls == 0u &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    const auto measured = telemetry.snapshot();
+    require(measured.stages[service_index].available &&
+                measured.stages[service_index].calls == 1u &&
+                measured.stages[static_cast<std::size_t>(
+                    NativePortTelemetryStage::AudioDecode)].calls == 0u &&
+                measured.stages[static_cast<std::size_t>(
+                    NativePortTelemetryStage::AudioMix)].calls == 0u,
+            "Autonomer Service wurde ohne Folgecommand nicht einmalig publiziert.");
     const auto snapshot = domain->snapshot();
     require(snapshot.queue.submitted_commands == 2u &&
                 snapshot.queue.completed_commands == 2u &&
                 snapshot.next_guest_sequence == 2u &&
                 domain->unregister_target(*handle, &fixture),
             "Completion-Wake konsumierte eine Sequenz oder verlor Lifecycle.");
+    domain->shutdown();
+}
+
+void test_completion_failure_publishes_finished_service() {
+    NativePortAudioExecutionDomainConfig config;
+    config.command_queue = test_config(8u, 64u, 4u);
+    config.command_queue.mode = NativePortAudioCommandQueueMode::DedicatedThread;
+    auto domain = NativePortAudioExecutionDomain::acquire(config);
+    NativePortTelemetry telemetry;
+    require(domain->bind_telemetry(&telemetry), "Service failure telemetry bind.");
+    CompletionServiceFixture fixture;
+    fixture.domain = domain.get();
+    fixture.fail_service = true;
+    const auto handle = domain->register_target(
+        NativePortAudioExecutionDomainTarget::HostOutput, &fixture,
+        &CompletionServiceFixture::execute, nullptr,
+        &CompletionServiceFixture::service);
+    require(handle.has_value(), "Service failure target registration.");
+    domain->request_consumer_service();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(2);
+    while (domain->snapshot().first_error ==
+               NativePortAudioExecutionDomainFailure::None &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    const auto measured = telemetry.snapshot();
+    require(domain->snapshot().first_error ==
+                NativePortAudioExecutionDomainFailure::TargetExecutionFailed &&
+                measured.stages[static_cast<std::size_t>(
+                    NativePortTelemetryStage::AudioServiceTotal)].calls == 1u,
+            "Terminaler Servicefehler wurde vor abgeschlossener Messung sichtbar.");
     domain->shutdown();
 }
 
@@ -1119,6 +1169,7 @@ int main() {
     test_async_target_failure_is_sticky_and_cancels_later_commands();
     test_worker_side_last_telemetry_unbind_is_rejected();
     test_completion_wake_drains_pending_without_new_command();
+    test_completion_failure_publishes_finished_service();
     test_resultless_async_controls_preserve_sync_fence_order();
     test_movie_target_shares_domain_and_retires();
     std::cout << "native_port_audio_command_queue_tests: OK\n";

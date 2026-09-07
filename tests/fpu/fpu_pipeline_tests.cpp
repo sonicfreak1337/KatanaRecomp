@@ -37,8 +37,13 @@ std::vector<katana::ir::Function> build_program() {
         0x00u, 0x7Du, 0xF4u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0xEDu, 0xF1u, 0x0Bu, 0x00u, 0x09u, 0x00u,
         0xFDu, 0xF9u, 0x0Bu, 0x00u, 0x09u, 0x00u, 0x83u, 0x03u, 0x0Bu, 0x00u, 0x09u, 0x00u};
     bytes.insert(bytes.end(), tail.begin(), tail.end());
+    const std::array<std::uint8_t, 26> precise_arithmetic = {
+        0x03u, 0xF2u, 0x01u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x00u, 0xA0u, 0x03u, 0xF2u, 0x01u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u,
+        0x6Du, 0xF2u, 0x01u, 0xE0u, 0x0Bu, 0x00u, 0x09u, 0x00u};
+    bytes.insert(bytes.end(), precise_arithmetic.begin(), precise_arithmetic.end());
     const auto lines = katana::sh4::disassemble(bytes, base_address);
-    constexpr std::array<std::uint32_t, 14> seeds = {0x100u,
+    constexpr std::array<std::uint32_t, 17> seeds = {0x100u,
                                                      0x110u,
                                                      0x118u,
                                                      0x122u,
@@ -51,7 +56,8 @@ std::vector<katana::ir::Function> build_program() {
                                                      0x15Eu,
                                                      0x164u,
                                                      0x16Au,
-                                                     0x170u};
+                                                     0x170u,
+                                                     0x176u, 0x17Eu, 0x188u};
     const auto functions = katana::analysis::discover_functions(lines, seeds);
     return katana::ir::lower_program(lines, functions);
 }

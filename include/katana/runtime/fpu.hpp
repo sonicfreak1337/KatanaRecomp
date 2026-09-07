@@ -49,8 +49,13 @@ void fpu_binary(CpuState& cpu,
                 std::uint8_t source,
                 std::uint8_t destination) noexcept;
 void fpu_absolute(CpuState& cpu, std::uint8_t destination) noexcept;
+[[nodiscard]] bool fpu_binary(CpuState& cpu, FpuBinaryOperation operation,
+                              std::uint8_t source, std::uint8_t destination,
+                              std::optional<std::uint32_t> delay_slot_owner) noexcept;
 void fpu_negate(CpuState& cpu, std::uint8_t destination) noexcept;
 void fpu_square_root(CpuState& cpu, std::uint8_t destination) noexcept;
+[[nodiscard]] bool fpu_square_root(CpuState& cpu, std::uint8_t destination,
+                                   std::optional<std::uint32_t> delay_slot_owner) noexcept;
 void fpu_reciprocal_square_root(CpuState& cpu, std::uint8_t destination) noexcept;
 [[nodiscard]] bool fpu_reciprocal_square_root(
     CpuState& cpu,

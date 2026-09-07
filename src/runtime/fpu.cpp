@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <type_traits>
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || \
     defined(__i386__)
@@ -259,6 +260,113 @@ Float binary_result(const FpuBinaryOperation operation,
     return std::numeric_limits<Float>::quiet_NaN();
 }
 
+template <typename Float> struct ArithmeticOperand {
+    using Bits = std::conditional_t<sizeof(Float) == 4u, std::uint32_t, std::uint64_t>;
+    static constexpr unsigned fraction_bits = sizeof(Float) == 4u ? 23u : 52u;
+    static constexpr Bits sign_mask = Bits{1} << (sizeof(Float) * 8u - 1u);
+    static constexpr Bits fraction_mask = (Bits{1} << fraction_bits) - 1u;
+    static constexpr Bits exponent_mask = ~(sign_mask | fraction_mask);
+    Bits bits;
+    ArithmeticOperand(const Float value, const bool dn) noexcept
+        : bits(std::bit_cast<Bits>(value)) {
+        if (dn && denormal()) bits &= sign_mask;
+    }
+    bool nan() const noexcept {
+        return (bits & exponent_mask) == exponent_mask && (bits & fraction_mask) != 0u;
+    }
+    bool signaling_nan() const noexcept {
+        // SH-4's signaling bit is the inverse of the host IEEE quiet bit.
+        return nan() && (bits & (Bits{1} << (fraction_bits - 1u))) != 0u;
+    }
+    bool denormal() const noexcept {
+        return (bits & exponent_mask) == 0u && (bits & fraction_mask) != 0u;
+    }
+    bool zero() const noexcept { return (bits & ~sign_mask) == 0u; }
+    bool infinity() const noexcept { return (bits & ~sign_mask) == exponent_mask; }
+    bool negative() const noexcept { return (bits & sign_mask) != 0u; }
+    Float value() const noexcept { return std::bit_cast<Float>(bits); }
+};
+
+void clear_host_arithmetic_exceptions() noexcept {
+#if KATANA_RUNTIME_HAS_SSE_ROUNDING
+    _mm_setcsr(_mm_getcsr() & ~host_exception_status_mask);
+#else
+    static_cast<void>(std::feclearexcept(FE_ALL_EXCEPT));
+#endif
+}
+
+[[nodiscard]] std::uint32_t host_arithmetic_causes() noexcept {
+#if KATANA_RUNTIME_HAS_SSE_ROUNDING
+    const auto status = _mm_getcsr();
+    return ((status & _MM_EXCEPT_OVERFLOW) ? fpscr_cause_overflow_mask : 0u) |
+           ((status & _MM_EXCEPT_UNDERFLOW) ? fpscr_cause_underflow_mask : 0u) |
+           ((status & _MM_EXCEPT_INEXACT) ? fpscr_cause_inexact_mask : 0u);
+#else
+    const auto status = std::fetestexcept(FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT);
+    return ((status & FE_OVERFLOW) ? fpscr_cause_overflow_mask : 0u) |
+           ((status & FE_UNDERFLOW) ? fpscr_cause_underflow_mask : 0u) |
+           ((status & FE_INEXACT) ? fpscr_cause_inexact_mask : 0u);
+#endif
+}
+
+template <typename Float> struct ArithmeticResult {
+    Float value = std::numeric_limits<Float>::quiet_NaN();
+    std::uint32_t causes = 0u;
+};
+
+template <typename Float>
+ArithmeticResult<Float> calculate_binary(const CpuState& cpu,
+                                        const FpuBinaryOperation operation,
+                                        const Float destination,
+                                        const Float source) noexcept {
+    const ArithmeticOperand<Float> n(destination, flush_denormals(cpu));
+    const ArithmeticOperand<Float> m(source, flush_denormals(cpu));
+    ArithmeticResult<Float> result;
+    const bool invalid = n.signaling_nan() || m.signaling_nan() ||
+        ((operation == FpuBinaryOperation::Add || operation == FpuBinaryOperation::Subtract) &&
+         n.infinity() && m.infinity() &&
+         ((n.negative() != m.negative()) == (operation == FpuBinaryOperation::Add))) ||
+        (operation == FpuBinaryOperation::Multiply &&
+         ((n.zero() && m.infinity()) || (n.infinity() && m.zero()))) ||
+        (operation == FpuBinaryOperation::Divide &&
+         ((n.zero() && m.zero()) || (n.infinity() && m.infinity())));
+    if (invalid) {
+        result.causes = fpscr_cause_invalid_mask;
+    } else if (n.nan() || m.nan()) {
+        // Never feed SH-4 NaNs to host arithmetic: its quiet bit is inverted.
+    } else if (operation == FpuBinaryOperation::Divide && m.zero() && !n.infinity()) {
+        result.causes = fpscr_cause_divide_by_zero_mask;
+        result.value = std::copysign(std::numeric_limits<Float>::infinity(),
+                                    n.negative() != m.negative() ? Float{-1} : Float{1});
+    } else if (n.denormal() || m.denormal()) {
+        result.causes = fpscr_cause_fpu_error_mask;
+    } else {
+        clear_host_arithmetic_exceptions();
+        // Strict FP plus volatile operands prevents folding across the status
+        // boundary, including inside an already active host rounding epoch.
+        volatile Float left = n.value();
+        volatile Float right = m.value();
+        result.value = binary_result(operation, Float(left), Float(right));
+        result.causes = host_arithmetic_causes();
+        if (flush_denormals(cpu) && ArithmeticOperand<Float>(result.value, false).denormal())
+            result.causes |= fpscr_cause_underflow_mask | fpscr_cause_inexact_mask;
+        if ((result.causes & (fpscr_cause_overflow_mask | fpscr_cause_underflow_mask)) != 0u)
+            result.causes |= fpscr_cause_inexact_mask;
+    }
+    return result;
+}
+
+[[nodiscard]] bool finish_arithmetic(CpuState& cpu, const std::uint32_t causes,
+                                    const std::uint32_t conservative_enables,
+                                    const std::optional<std::uint32_t> delay_owner) noexcept {
+    // SH-4 CPU Core Architecture (ADCS 7182230F), instruction wrappers:
+    // O/U/I enables can trap even with Cause=0. They do not fabricate flags.
+    return signal_fpu_exception(cpu, causes, (causes >> 10u) & fpscr_flag_mask,
+                                (causes >> 5u) | conservative_enables,
+                                (causes & fpscr_cause_fpu_error_mask) != 0u,
+                                delay_owner);
+}
+
 template <typename Float> std::uint32_t truncate_to_integer_bits(const Float value) noexcept {
     if (std::isnan(value) ||
         value <= static_cast<Float>(std::numeric_limits<std::int32_t>::min())) {
@@ -473,21 +581,28 @@ void fpu_binary(CpuState& cpu,
                 const FpuBinaryOperation operation,
                 const std::uint8_t source,
                 const std::uint8_t destination) noexcept {
+    static_cast<void>(fpu_binary(cpu, operation, source, destination, std::nullopt));
+}
+
+bool fpu_binary(CpuState& cpu, const FpuBinaryOperation operation,
+                const std::uint8_t source, const std::uint8_t destination,
+                const std::optional<std::uint32_t> delay_owner) noexcept {
     const ScopedHostRounding rounding(cpu);
     clear_fpu_causes(cpu);
+    constexpr auto conservative = fpscr_enable_overflow_mask |
+                                  fpscr_enable_underflow_mask | fpscr_enable_inexact_mask;
     if (double_precision(cpu)) {
-        write_double_result(cpu,
-                            destination,
-                            binary_result(operation,
-                                          read_double_operand(cpu, destination),
-                                          read_double_operand(cpu, source)));
-        return;
+        const auto result = calculate_binary(cpu, operation, read_dr_double(cpu, destination),
+                                              read_dr_double(cpu, source));
+        if (finish_arithmetic(cpu, result.causes, conservative, delay_owner)) return true;
+        write_double_result(cpu, destination, result.value);
+    } else {
+        const auto result = calculate_binary(cpu, operation, read_fr_single(cpu, destination),
+                                              read_fr_single(cpu, source));
+        if (finish_arithmetic(cpu, result.causes, conservative, delay_owner)) return true;
+        write_single_result(cpu, destination, result.value);
     }
-    write_single_result(cpu,
-                        destination,
-                        binary_result(operation,
-                                      read_single_operand(cpu, destination),
-                                      read_single_operand(cpu, source)));
+    return false;
 }
 
 void fpu_absolute(CpuState& cpu, const std::uint8_t destination) noexcept {
@@ -504,13 +619,40 @@ void fpu_negate(CpuState& cpu, const std::uint8_t destination) noexcept {
 }
 
 void fpu_square_root(CpuState& cpu, const std::uint8_t destination) noexcept {
+    static_cast<void>(fpu_square_root(cpu, destination, std::nullopt));
+}
+
+bool fpu_square_root(CpuState& cpu, const std::uint8_t destination,
+                     const std::optional<std::uint32_t> delay_owner) noexcept {
     const ScopedHostRounding rounding(cpu);
     clear_fpu_causes(cpu);
+    const auto calculate = [&cpu]<typename Float>(const Float value) {
+        const ArithmeticOperand<Float> operand(value, flush_denormals(cpu));
+        ArithmeticResult<Float> result;
+        if (operand.signaling_nan() ||
+            (!operand.nan() && operand.negative() && !operand.zero())) {
+            result.causes = fpscr_cause_invalid_mask;
+        } else if (operand.nan()) {
+        } else if (operand.denormal()) {
+            result.causes = fpscr_cause_fpu_error_mask;
+        } else {
+            clear_host_arithmetic_exceptions();
+            volatile Float source_value = operand.value();
+            result.value = std::sqrt(Float(source_value));
+            result.causes = host_arithmetic_causes() & fpscr_cause_inexact_mask;
+        }
+        return result;
+    };
     if (double_precision(cpu)) {
-        write_double_result(cpu, destination, std::sqrt(read_double_operand(cpu, destination)));
+        const auto result = calculate(read_dr_double(cpu, destination));
+        if (finish_arithmetic(cpu, result.causes, fpscr_enable_inexact_mask, delay_owner)) return true;
+        write_double_result(cpu, destination, result.value);
     } else {
-        write_single_result(cpu, destination, std::sqrt(read_single_operand(cpu, destination)));
+        const auto result = calculate(read_fr_single(cpu, destination));
+        if (finish_arithmetic(cpu, result.causes, fpscr_enable_inexact_mask, delay_owner)) return true;
+        write_single_result(cpu, destination, result.value);
     }
+    return false;
 }
 
 bool fpu_reciprocal_square_root(

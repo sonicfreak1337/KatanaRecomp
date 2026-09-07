@@ -6,7 +6,8 @@ param(
     [string] $BuildDirectory = 'build-contextual-dirty',
     [ValidatePattern(
         '^[A-Za-z0-9][A-Za-z0-9._+-]*(,[A-Za-z0-9][A-Za-z0-9._+-]*)*$')]
-    [string] $Targets = 'katana-recomp'
+    [string] $Targets = 'katana-recomp',
+    [switch] $DesktopGui
 )
 
 $ErrorActionPreference = 'Stop'
@@ -163,7 +164,7 @@ try {
         '-B', $buildRoot,
         '-G', 'Ninja',
         '-DCMAKE_BUILD_TYPE=Release',
-        '-DKATANA_BUILD_DESKTOP_GUI=OFF',
+        ('-DKATANA_BUILD_DESKTOP_GUI=' + $(if ($DesktopGui) { 'ON' } else { 'OFF' })),
         '-DKATANA_BUILD_FUZZERS=OFF',
         '-DKATANA_ENABLE_COVERAGE=OFF',
         '-DKATANA_ENABLE_SANITIZERS=OFF',
