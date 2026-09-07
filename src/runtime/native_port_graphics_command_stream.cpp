@@ -134,6 +134,7 @@ template <typename T>
                   provenance.decoded_mip_levels != config.mip_levels
             : !zero_decoded || provenance.source_pixel_format != 0u ||
                   provenance.source_data_format != 0u ||
+                  provenance.source_memory_layout ||
                   provenance.decoded_extent != NativePortExtent{} ||
                   provenance.decoded_mip_levels != 0u) {
         return false;
@@ -192,6 +193,18 @@ template <std::size_t Size>
     return false;
 }
 
+[[nodiscard]] bool valid_blend_source(
+    const NativePortBlendSource source) noexcept {
+    return source == NativePortBlendSource::Fragment ||
+           source == NativePortBlendSource::SecondaryAccumulation;
+}
+
+[[nodiscard]] bool valid_blend_destination(
+    const NativePortBlendDestination destination) noexcept {
+    return destination == NativePortBlendDestination::Framebuffer ||
+           destination == NativePortBlendDestination::SecondaryAccumulation;
+}
+
 [[nodiscard]] bool valid_blend(const NativePortBlendState& blend) noexcept {
     return valid_blend_factor(blend.source_color) &&
            valid_blend_factor(blend.destination_color) &&
@@ -199,7 +212,26 @@ template <std::size_t Size>
            valid_blend_factor(blend.source_alpha) &&
            valid_blend_factor(blend.destination_alpha) &&
            valid_blend_operation(blend.alpha_operation) &&
+           valid_blend_source(blend.source_buffer) &&
+           valid_blend_destination(blend.destination_buffer) &&
            (blend.color_write_mask & 0xF0u) == 0u;
+}
+
+[[nodiscard]] bool valid_logical_clip(
+    const NativePortLogicalClipState& clip) noexcept {
+    const bool valid_mode =
+        clip.mode == NativePortLogicalClipMode::Disabled ||
+        clip.mode == NativePortLogicalClipMode::Inside ||
+        clip.mode == NativePortLogicalClipMode::Outside;
+    if (!valid_mode || !finite_array(clip.bounds)) return false;
+    if (clip.mode == NativePortLogicalClipMode::Disabled)
+        return clip.logical_extent == NativePortExtent{} &&
+               clip.bounds == std::array<float, 4u>{};
+    return valid_extent(clip.logical_extent) && clip.bounds[0] >= 0.0f &&
+           clip.bounds[1] >= 0.0f &&
+           clip.bounds[2] <= static_cast<float>(clip.logical_extent.width) &&
+           clip.bounds[3] <= static_cast<float>(clip.logical_extent.height) &&
+           clip.bounds[0] < clip.bounds[2] && clip.bounds[1] < clip.bounds[3];
 }
 
 [[nodiscard]] bool valid_compare(
@@ -304,6 +336,9 @@ template <std::size_t Size>
            std::isfinite(material.specular_power) &&
            material.specular_power >= 0.0f &&
            material.specular_power <= 65'536.0f &&
+           std::isfinite(material.mipmapped_pass_weight) &&
+           material.mipmapped_pass_weight >= 0.0f &&
+           material.mipmapped_pass_weight <= 1.0f &&
            valid_texture_combine(material.texture_combine) &&
            valid_texture_coordinates(material.texture_coordinates) &&
            (!material.specular_enabled || material.lighting_enabled);
@@ -549,6 +584,11 @@ template <std::size_t Size>
     default:
         return false;
     }
+    if (state.translucency != NativePortTranslucencyPolicy::Type2AutoSorted &&
+        (state.blend.source_buffer != NativePortBlendSource::Fragment ||
+         state.blend.destination_buffer !=
+             NativePortBlendDestination::Framebuffer))
+        return false;
     if (state.interpolation != NativePortInterpolationMode::PerspectiveCorrect &&
         state.interpolation != NativePortInterpolationMode::PvrScreenGouraud)
         return false;
@@ -580,6 +620,7 @@ template <std::size_t Size>
         state.rasterizer.small_triangle_area_threshold != 0.0f &&
         !valid_extent(state.rasterizer.small_triangle_reference_extent))
         return false;
+    if (!valid_logical_clip(state.rasterizer.logical_clip)) return false;
     if (!finite_array(state.material.diffuse) ||
         !finite_array(state.material.ambient) ||
         !finite_array(state.material.specular) ||

@@ -421,6 +421,29 @@ decoded_texture_payload_sha256(const NativePortDecodedTextureAsset& texture) {
         update_pixels(level.rgba8);
     }
 
+    if (texture.source_memory_pixel_format.has_value()) {
+        constexpr std::string_view memory_domain =
+            "katana-native-texture-memory-source-v1";
+        accumulator.update(memory_domain);
+        update_u32(static_cast<std::uint32_t>(
+            *texture.source_memory_pixel_format));
+        update_u32(static_cast<std::uint32_t>(texture.source_memory_storage));
+        update_u32(texture.source_row_stride_bytes);
+        update_u32(texture.source_memory_mipmapped ? 1u : 0u);
+        update_u32(texture.source_memory_vector_quantized ? 1u : 0u);
+        update_u32(texture.source_memory_codebook_entries);
+        accumulator.update(std::string_view(
+            reinterpret_cast<const char*>(
+                texture.source_memory_encoded_sha256.data()),
+            texture.source_memory_encoded_sha256.size()));
+        update_u32(texture.source_memory_identity_bound ? 1u : 0u);
+        accumulator.update(std::string_view(
+            reinterpret_cast<const char*>(
+                texture.source_palette_rgba8_sha256.data()),
+            texture.source_palette_rgba8_sha256.size()));
+        update_u32(texture.source_palette_identity_bound ? 1u : 0u);
+    }
+
     return accumulator.finish();
 }
 
@@ -876,6 +899,656 @@ void decode_pixels(const std::span<const std::uint8_t> source,
                          rgba8.data() + destination_offset);
         }
     }
+}
+
+[[nodiscard]] NativePortTexturePayloadSha256 sha256_bytes(
+    const std::span<const std::uint8_t> bytes) {
+    TexturePayloadSha256Accumulator accumulator;
+    if (!bytes.empty())
+        accumulator.update(std::string_view(
+            reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    return accumulator.finish();
+}
+
+[[nodiscard]] bool zero_sha256(
+    const NativePortTexturePayloadSha256& identity) noexcept {
+    return std::ranges::all_of(identity,
+                               [](const std::uint8_t value) {
+                                   return value == 0u;
+                               });
+}
+
+[[nodiscard]] NativePortTexturePayloadSha256 palette_sha256(
+    const std::span<const NativePortTexturePaletteColor> palette) {
+    TexturePayloadSha256Accumulator accumulator;
+    for (const auto& color : palette)
+        accumulator.update(std::string_view(
+            reinterpret_cast<const char*>(color.data()), color.size()));
+    return accumulator.finish();
+}
+
+[[nodiscard]] std::size_t rectangular_twiddled_index(
+    std::uint32_t x,
+    std::uint32_t y,
+    std::uint32_t width,
+    std::uint32_t height) noexcept {
+    std::size_t result = 0u;
+    std::uint32_t shift = 0u;
+    while (width > 1u || height > 1u) {
+        if (height > 1u) {
+            result |= static_cast<std::size_t>(y & 1u) << shift++;
+            y >>= 1u;
+            height >>= 1u;
+        }
+        if (width > 1u) {
+            result |= static_cast<std::size_t>(x & 1u) << shift++;
+            x >>= 1u;
+            width >>= 1u;
+        }
+    }
+    return result;
+}
+
+[[nodiscard]] std::uint8_t clamp_u8(const int value) noexcept {
+    return static_cast<std::uint8_t>(std::clamp(value, 0, 255));
+}
+
+void decode_yuv422_pair(const std::uint8_t u,
+                        const std::uint8_t y0,
+                        const std::uint8_t v,
+                        const std::uint8_t y1,
+                        std::uint8_t* const destination0,
+                        std::uint8_t* const destination1) noexcept {
+    const auto emit = [u, v](const std::uint8_t y,
+                             std::uint8_t* const destination) {
+        const auto signed_u = static_cast<int>(u) - 128;
+        const auto signed_v = static_cast<int>(v) - 128;
+        destination[0] = clamp_u8(static_cast<int>(y) + signed_v * 11 / 8);
+        destination[1] = clamp_u8(
+            static_cast<int>(y) - (signed_u * 11 + signed_v * 22) / 32);
+        destination[2] =
+            clamp_u8(static_cast<int>(y) + signed_u * 110 / 64);
+        destination[3] = 255u;
+    };
+    emit(y0, destination0);
+    emit(y1, destination1);
+}
+
+[[nodiscard]] NativePortDecodedTextureAsset
+decode_authored_memory_chain_impl(
+    std::span<const std::uint8_t> source,
+    const NativePortTextureMemoryLayout& memory,
+    const NativePortTextureAssetLimits& limits);
+
+[[nodiscard]] NativePortDecodedTextureAsset decode_memory_surface_impl(
+    const std::span<const std::uint8_t> source,
+    const NativePortTextureMemoryLayout& memory,
+    const NativePortTextureAssetLimits& limits,
+    const bool authored_sublevel = false) {
+    validate_limits(limits);
+    if (source.size() > limits.maximum_decompressed_bytes)
+        fail(NativePortTextureAssetFailure::DecompressedOutputLimit, 0u,
+             "memory-source-limit");
+    switch (memory.pixel_format) {
+    case NativePortTextureMemoryPixelFormat::Argb1555:
+    case NativePortTextureMemoryPixelFormat::Rgb565:
+    case NativePortTextureMemoryPixelFormat::Argb4444:
+    case NativePortTextureMemoryPixelFormat::Yuv422:
+    case NativePortTextureMemoryPixelFormat::Bump:
+    case NativePortTextureMemoryPixelFormat::Palette4:
+    case NativePortTextureMemoryPixelFormat::Palette8:
+    case NativePortTextureMemoryPixelFormat::Reserved1555:
+        break;
+    default:
+        fail(NativePortTextureAssetFailure::UnsupportedPixelFormat, 0u,
+             "memory-pixel-format");
+    }
+    if (authored_sublevel) {
+        if (memory.extent.width == 0u || memory.extent.height == 0u ||
+            memory.extent.width > limits.maximum_dimension ||
+            memory.extent.height > limits.maximum_dimension ||
+            !std::has_single_bit(memory.extent.width) ||
+            !std::has_single_bit(memory.extent.height))
+            fail(NativePortTextureAssetFailure::InvalidDimensions, 0u,
+                 "memory-mipmap-dimensions");
+    } else {
+        validate_dimensions(memory.extent,
+                            NativePortTextureAssetDataFormat::Rectangle,
+                            limits, 0u);
+    }
+    if (memory.mipmapped || memory.vector_quantized)
+        return decode_authored_memory_chain_impl(source, memory, limits);
+    if (memory.codebook_entries != 0u)
+        fail(NativePortTextureAssetFailure::InvalidPayload, 0u,
+             "memory-unexpected-codebook");
+    const auto width = memory.extent.width;
+    const auto height = memory.extent.height;
+    const auto paletted =
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4 ||
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette8;
+    const auto palette_entries =
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4
+            ? std::size_t{16u}
+            : memory.pixel_format ==
+                      NativePortTextureMemoryPixelFormat::Palette8
+                  ? std::size_t{256u}
+                  : std::size_t{0u};
+    if (paletted) {
+        if (memory.palette_rgba8.empty() ||
+            zero_sha256(memory.palette_rgba8_sha256))
+            fail(NativePortTextureAssetFailure::MissingPalette, 0u,
+                 "memory-palette");
+        if (memory.palette_rgba8.size() != palette_entries ||
+            palette_sha256(memory.palette_rgba8) !=
+                memory.palette_rgba8_sha256)
+            fail(NativePortTextureAssetFailure::InvalidPalette, 0u,
+                 "memory-palette-identity");
+        if (memory.storage != NativePortTextureMemoryStorage::Twiddled)
+            fail(NativePortTextureAssetFailure::UnsupportedDataFormat, 0u,
+                 "memory-palette-storage");
+    } else if (!memory.palette_rgba8.empty() ||
+               !zero_sha256(memory.palette_rgba8_sha256)) {
+        fail(NativePortTextureAssetFailure::InvalidPalette, 0u,
+             "memory-unexpected-palette");
+    }
+
+    const auto bits_per_pixel =
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4
+            ? std::size_t{4u}
+        : memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette8
+            ? std::size_t{8u}
+            : std::size_t{16u};
+    const auto packed_row = checked_add(
+        checked_multiply(width, bits_per_pixel,
+                         NativePortTextureAssetFailure::InvalidDimensions, 0u,
+                         "memory-row-bits"),
+        std::size_t{7u}, NativePortTextureAssetFailure::InvalidDimensions, 0u,
+        "memory-row-rounding") /
+                            8u;
+    std::size_t source_bytes = 0u;
+    std::size_t stride = packed_row;
+    if (memory.storage == NativePortTextureMemoryStorage::Linear) {
+        if (memory.stride_bytes != 0u) stride = memory.stride_bytes;
+        // TCW TEXT_CONTROL expresses stride in groups of 32 pixels. Every
+        // linear raw format accepted here is 16 bpp, hence 64-byte steps.
+        // A shorter stride would leave part of the declared output surface
+        // undefined, so this bounded decoder intentionally rejects it.
+        if (stride < packed_row ||
+            (memory.stride_bytes != 0u &&
+             ((stride & 63u) != 0u || stride > 1'984u)))
+            fail(NativePortTextureAssetFailure::InvalidStride, 0u,
+                 "memory-linear-stride");
+        source_bytes = checked_multiply(
+            stride, height, NativePortTextureAssetFailure::InvalidDimensions,
+            0u, "memory-linear-bytes");
+    } else if (memory.storage == NativePortTextureMemoryStorage::Twiddled) {
+        if (memory.stride_bytes != 0u)
+            fail(NativePortTextureAssetFailure::InvalidStride, 0u,
+                 "memory-twiddled-stride");
+        source_bytes = checked_multiply(
+            packed_row, height,
+            NativePortTextureAssetFailure::InvalidDimensions, 0u,
+            "memory-twiddled-bytes");
+    } else {
+        fail(NativePortTextureAssetFailure::UnsupportedDataFormat, 0u,
+             "memory-storage");
+    }
+    if (source.size() != source_bytes)
+        fail(NativePortTextureAssetFailure::InvalidPayload, source.size(),
+             "memory-source-size");
+
+    const auto output_bytes = checked_multiply(
+        checked_multiply(width, height,
+                         NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+                         "memory-output-pixels"),
+        std::size_t{4u}, NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+        "memory-output-bytes");
+    if (output_bytes > limits.maximum_rgba_bytes)
+        fail(NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+             "memory-output-limit");
+
+    NativePortDecodedTextureAsset texture;
+    texture.extent = memory.extent;
+    texture.source_data_format = NativePortTextureAssetDataFormat::Rectangle;
+    texture.source_memory_pixel_format = memory.pixel_format;
+    texture.source_memory_storage = memory.storage;
+    texture.source_row_stride_bytes =
+        memory.storage == NativePortTextureMemoryStorage::Linear
+            ? static_cast<std::uint32_t>(stride)
+            : 0u;
+    texture.source_memory_encoded_sha256 = sha256_bytes(source);
+    texture.source_memory_identity_bound = true;
+    if (paletted) {
+        texture.source_palette_rgba8_sha256 = memory.palette_rgba8_sha256;
+        texture.source_palette_identity_bound = true;
+    }
+    texture.rgba8.resize(output_bytes);
+
+    const auto destination = [&](const std::uint32_t x,
+                                 const std::uint32_t y) {
+        return texture.rgba8.data() +
+               (static_cast<std::size_t>(y) * width + x) * 4u;
+    };
+    if (memory.pixel_format == NativePortTextureMemoryPixelFormat::Yuv422) {
+        for (std::uint32_t y = 0u; y < height; ++y) {
+            for (std::uint32_t x = 0u; x < width; x += 2u) {
+                if (memory.storage == NativePortTextureMemoryStorage::Linear) {
+                    const auto offset = static_cast<std::size_t>(y) * stride +
+                                        static_cast<std::size_t>(x) * 2u;
+                    decode_yuv422_pair(source[offset], source[offset + 1u],
+                                       source[offset + 2u], source[offset + 3u],
+                                       destination(x, y), destination(x + 1u, y));
+                } else {
+                    const auto base = rectangular_twiddled_index(
+                                          x, y & ~1u, width, height) *
+                                      2u;
+                    const auto row = y & 1u;
+                    decode_yuv422_pair(
+                        source[base + row * 2u],
+                        source[base + row * 2u + 1u],
+                        source[base + 4u + row * 2u],
+                        source[base + 5u + row * 2u], destination(x, y),
+                        destination(x + 1u, y));
+                }
+            }
+        }
+    } else {
+        for (std::uint32_t y = 0u; y < height; ++y) {
+            for (std::uint32_t x = 0u; x < width; ++x) {
+                const auto pixel =
+                    memory.storage == NativePortTextureMemoryStorage::Linear
+                        ? static_cast<std::size_t>(y) * stride * 8u /
+                                  bits_per_pixel +
+                              x
+                        : rectangular_twiddled_index(x, y, width, height);
+                auto* const output = destination(x, y);
+                if (memory.pixel_format ==
+                    NativePortTextureMemoryPixelFormat::Palette4) {
+                    const auto packed = source[pixel / 2u];
+                    const auto index = (pixel & 1u) == 0u
+                                           ? packed & 0x0Fu
+                                           : packed >> 4u;
+                    std::ranges::copy(memory.palette_rgba8[index], output);
+                } else if (memory.pixel_format ==
+                           NativePortTextureMemoryPixelFormat::Palette8) {
+                    std::ranges::copy(memory.palette_rgba8[source[pixel]],
+                                      output);
+                } else {
+                    const auto offset = pixel * 2u;
+                    const auto value = static_cast<std::uint16_t>(
+                        source[offset] |
+                        (static_cast<std::uint16_t>(source[offset + 1u]) <<
+                         8u));
+                    const auto format =
+                        memory.pixel_format ==
+                                    NativePortTextureMemoryPixelFormat::Rgb565
+                            ? NativePortTextureAssetPixelFormat::Rgb565
+                        : memory.pixel_format ==
+                                  NativePortTextureMemoryPixelFormat::Argb4444 ||
+                              memory.pixel_format ==
+                                  NativePortTextureMemoryPixelFormat::Bump
+                            ? NativePortTextureAssetPixelFormat::Argb4444
+                            : NativePortTextureAssetPixelFormat::Argb1555;
+                    decode_pixel(value, format, output);
+                }
+            }
+        }
+    }
+    bind_decoded_texture_payload_identity(texture);
+    return texture;
+}
+
+[[nodiscard]] NativePortDecodedTextureAsset
+decode_authored_memory_chain_impl(
+    const std::span<const std::uint8_t> source,
+    const NativePortTextureMemoryLayout& memory,
+    const NativePortTextureAssetLimits& limits) {
+    constexpr std::array<std::size_t, 11u> other_mip_points{
+        0x00003u, 0x00004u, 0x00008u, 0x00018u, 0x00058u, 0x00158u,
+        0x00558u, 0x01558u, 0x05558u, 0x15558u, 0x55558u};
+    constexpr std::array<std::size_t, 11u> vq_mip_points{
+        2'048u + 0x00000u, 2'048u + 0x00001u,
+        2'048u + 0x00002u, 2'048u + 0x00006u,
+        2'048u + 0x00016u, 2'048u + 0x00056u,
+        2'048u + 0x00156u, 2'048u + 0x00556u,
+        2'048u + 0x01556u, 2'048u + 0x05556u,
+        2'048u + 0x15556u};
+
+    const auto paletted =
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4 ||
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette8;
+    if (paletted && memory.storage != NativePortTextureMemoryStorage::Twiddled)
+        fail(NativePortTextureAssetFailure::UnsupportedDataFormat, 0u,
+             "memory-palette-storage");
+    if (memory.storage != NativePortTextureMemoryStorage::Linear &&
+        memory.storage != NativePortTextureMemoryStorage::Twiddled)
+        fail(NativePortTextureAssetFailure::UnsupportedDataFormat, 0u,
+             "memory-storage");
+    if (paletted) {
+        const auto expected =
+            memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4
+                ? std::size_t{16u}
+                : std::size_t{256u};
+        if (memory.palette_rgba8.empty() ||
+            zero_sha256(memory.palette_rgba8_sha256))
+            fail(NativePortTextureAssetFailure::MissingPalette, 0u,
+                 "memory-palette");
+        if (memory.palette_rgba8.size() != expected ||
+            palette_sha256(memory.palette_rgba8) !=
+                memory.palette_rgba8_sha256)
+            fail(NativePortTextureAssetFailure::InvalidPalette, 0u,
+                 "memory-palette-identity");
+    } else if (!memory.palette_rgba8.empty() ||
+               !zero_sha256(memory.palette_rgba8_sha256)) {
+        fail(NativePortTextureAssetFailure::InvalidPalette, 0u,
+             "memory-unexpected-palette");
+    }
+    if (memory.mipmapped &&
+        (memory.storage != NativePortTextureMemoryStorage::Twiddled ||
+         memory.extent.width != memory.extent.height))
+        fail(NativePortTextureAssetFailure::UnsupportedDataFormat, 0u,
+             "memory-mipmap-layout");
+    if (memory.vector_quantized) {
+        if (memory.codebook_entries != 256u)
+            fail(NativePortTextureAssetFailure::InvalidPayload, 0u,
+                 "memory-vq-codebook-entries");
+    } else if (memory.codebook_entries != 0u) {
+        fail(NativePortTextureAssetFailure::InvalidPayload, 0u,
+             "memory-unexpected-codebook");
+    }
+
+    std::size_t stride = static_cast<std::size_t>(memory.extent.width) * 2u;
+    if (memory.storage == NativePortTextureMemoryStorage::Linear) {
+        if (memory.stride_bytes != 0u) stride = memory.stride_bytes;
+        if (stride < static_cast<std::size_t>(memory.extent.width) * 2u ||
+            (memory.stride_bytes != 0u &&
+             ((stride & 63u) != 0u || stride > 1'984u)))
+            fail(NativePortTextureAssetFailure::InvalidStride, 0u,
+                 "memory-linear-stride");
+    } else if (memory.stride_bytes != 0u) {
+        fail(NativePortTextureAssetFailure::InvalidStride, 0u,
+             "memory-twiddled-stride");
+    }
+
+    const auto source_bits_per_pixel =
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4
+            ? std::size_t{4u}
+        : memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette8
+            ? std::size_t{8u}
+            : std::size_t{16u};
+    const auto level_bytes = [&](const std::uint32_t dimension) {
+        return (static_cast<std::size_t>(dimension) * dimension *
+                    source_bits_per_pixel +
+                7u) /
+               8u;
+    };
+    auto aggregate_output_bytes = checked_multiply(
+        checked_multiply(memory.extent.width, memory.extent.height,
+                         NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+                         "memory-chain-pixels"),
+        std::size_t{4u}, NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+        "memory-chain-output");
+    if (memory.mipmapped) {
+        for (auto dimension = memory.extent.width / 2u;; dimension >>= 1u) {
+            aggregate_output_bytes = checked_add(
+                aggregate_output_bytes,
+                static_cast<std::size_t>(dimension) * dimension * 4u,
+                NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+                "memory-chain-output");
+            if (dimension == 1u) break;
+        }
+    }
+    if (aggregate_output_bytes > limits.maximum_rgba_bytes)
+        fail(NativePortTextureAssetFailure::RgbaOutputLimit, 0u,
+             "memory-chain-output-limit");
+    const auto level_offset = [&](const std::uint32_t dimension) {
+        const auto index = std::countr_zero(dimension);
+        return memory.vector_quantized
+                   ? vq_mip_points[index]
+                   : other_mip_points[index] * source_bits_per_pixel / 8u;
+    };
+    const auto top_offset = memory.mipmapped
+                                ? level_offset(memory.extent.width)
+                                : memory.vector_quantized ? std::size_t{2'048u}
+                                                          : std::size_t{0u};
+    const auto vq_block_pixels =
+        memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4
+            ? std::size_t{16u}
+        : memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette8
+            ? std::size_t{8u}
+            : std::size_t{4u};
+    const auto top_payload_bytes = memory.vector_quantized
+                                       ? memory.storage ==
+                                                 NativePortTextureMemoryStorage::Linear
+                                             ? stride * memory.extent.height / 8u
+                                             : static_cast<std::size_t>(
+                                                   memory.extent.width) *
+                                                   memory.extent.height /
+                                                   vq_block_pixels
+                                       : memory.storage ==
+                                                 NativePortTextureMemoryStorage::Linear
+                                             ? stride * memory.extent.height
+                                             : level_bytes(memory.extent.width);
+    const auto required = checked_add(
+        top_offset, top_payload_bytes,
+        NativePortTextureAssetFailure::InvalidPayload, 0u,
+        "memory-authored-chain-bytes");
+    if (source.size() != required)
+        fail(NativePortTextureAssetFailure::InvalidPayload, source.size(),
+             "memory-authored-chain-size");
+
+    const auto decode_level = [&](const NativePortExtent level_extent,
+                                  const std::size_t offset) {
+        const auto level_width = level_extent.width;
+        const auto level_height = level_extent.height;
+        NativePortTextureMemoryLayout level_layout = memory;
+        level_layout.extent = level_extent;
+        level_layout.mipmapped = false;
+        level_layout.vector_quantized = false;
+        level_layout.codebook_entries = 0u;
+        level_layout.stride_bytes = 0u;
+
+        if (!memory.vector_quantized) {
+            const auto bits = static_cast<std::size_t>(level_width) *
+                              level_height * source_bits_per_pixel;
+            const auto bytes = (bits + 7u) / 8u;
+            if (offset > source.size() || bytes > source.size() - offset)
+                fail(NativePortTextureAssetFailure::InvalidPayload, offset,
+                     "memory-mipmap-level");
+            if (level_width == 2u && level_height == 2u &&
+                memory.pixel_format ==
+                    NativePortTextureMemoryPixelFormat::Palette4) {
+                // Flycast's PAL4 converter always emits a 4x4 block. With a
+                // two-pixel PixelBuffer row, its later x=2/3 stores alias the
+                // logical second row. Preserve the final logical 2x2 values
+                // (indices 0,2,8,10) without reproducing the out-of-level
+                // writes into the shared mip-chain buffer.
+                if (offset > source.size() || 6u > source.size() - offset)
+                    fail(NativePortTextureAssetFailure::InvalidPayload,
+                         offset, "memory-palette4-2x2-projection");
+                const std::array<std::uint8_t, 2u> projected{
+                    static_cast<std::uint8_t>((source[offset] & 0x0Fu) |
+                                              ((source[offset + 4u] & 0x0Fu)
+                                               << 4u)),
+                    static_cast<std::uint8_t>((source[offset + 1u] & 0x0Fu) |
+                                              ((source[offset + 5u] & 0x0Fu)
+                                               << 4u))};
+                return decode_memory_surface_impl(projected, level_layout,
+                                                  limits, true);
+            }
+            // PowerVR stores the non-VQ YUV 1x1 level as one RGB565 word.
+            if (level_width == 1u && level_height == 1u &&
+                memory.pixel_format ==
+                    NativePortTextureMemoryPixelFormat::Yuv422)
+                level_layout.pixel_format =
+                    NativePortTextureMemoryPixelFormat::Rgb565;
+            return decode_memory_surface_impl(source.subspan(offset, bytes),
+                                              level_layout, limits, true);
+        }
+
+        const auto linear =
+            memory.storage == NativePortTextureMemoryStorage::Linear;
+        if (level_width == 1u && level_height == 1u &&
+            memory.pixel_format ==
+                NativePortTextureMemoryPixelFormat::Yuv422) {
+            const auto index_address = vq_mip_points[1u];
+            if (index_address >= source.size())
+                fail(NativePortTextureAssetFailure::InvalidPayload,
+                     index_address, "memory-vq-yuv-1x1-index");
+            const auto codebook =
+                static_cast<std::size_t>(source[index_address]) * 8u;
+            std::array<std::uint8_t, 8u> pair{};
+            decode_yuv422_pair(
+                source[codebook + 2u], source[codebook + 3u],
+                source[codebook + 6u], source[codebook + 7u], pair.data(),
+                pair.data() + 4u);
+            NativePortDecodedTextureAsset decoded;
+            decoded.extent = {1u, 1u};
+            decoded.source_memory_pixel_format = memory.pixel_format;
+            decoded.source_memory_storage = memory.storage;
+            decoded.source_memory_encoded_sha256 = sha256_bytes(source);
+            decoded.source_memory_identity_bound = true;
+            decoded.rgba8.assign(pair.begin() + 4u, pair.end());
+            bind_decoded_texture_payload_identity(decoded);
+            return decoded;
+        }
+        const auto block_width =
+            memory.pixel_format == NativePortTextureMemoryPixelFormat::Palette4
+                ? 4u
+            : memory.pixel_format ==
+                      NativePortTextureMemoryPixelFormat::Palette8
+                ? 2u
+                : linear ? 4u : 2u;
+        const auto block_height = paletted ? 4u : linear ? 1u : 2u;
+        const auto block_pixels = block_width * block_height;
+        const auto expanded_stride =
+            linear ? stride
+            : memory.pixel_format ==
+                      NativePortTextureMemoryPixelFormat::Palette4
+                ? (static_cast<std::size_t>(level_width) + 1u) / 2u
+            : memory.pixel_format ==
+                      NativePortTextureMemoryPixelFormat::Palette8
+                ? static_cast<std::size_t>(level_width)
+                : static_cast<std::size_t>(level_width) * 2u;
+        std::vector<std::uint8_t> expanded(expanded_stride * level_height, 0u);
+        const auto index_stride_pixels = linear ? stride / 2u : level_width;
+        for (std::uint32_t y = 0u; y < level_height; ++y) {
+            for (std::uint32_t x = 0u; x < level_width; ++x) {
+                std::uint32_t block_x = x;
+                std::uint32_t block_y = y;
+                std::uint32_t local_x = x % block_width;
+                std::uint32_t local_y = y % block_height;
+                std::size_t index_address = 0u;
+                if (level_width == 1u && level_height == 1u) {
+                    local_x = 1u;
+                    local_y = 1u;
+                    index_address =
+                        memory.pixel_format ==
+                                NativePortTextureMemoryPixelFormat::Yuv422
+                            ? vq_mip_points[1u]
+                            : vq_mip_points[0u];
+                } else if (linear) {
+                    block_x = x - local_x;
+                    block_y = y;
+                    local_x = x & 3u;
+                    local_y = 0u;
+                    index_address = offset +
+                                    static_cast<std::size_t>(block_y) *
+                                        (index_stride_pixels / block_width) +
+                                    block_x / block_width;
+                } else {
+                    block_x = x - local_x;
+                    block_y = y - local_y;
+                    index_address = offset +
+                                    rectangular_twiddled_index(
+                                        block_x, block_y, level_width,
+                                        level_height) /
+                                        block_pixels;
+                }
+                if (index_address >= source.size())
+                    fail(NativePortTextureAssetFailure::InvalidPayload,
+                         index_address, "memory-vq-index");
+                const auto vector = source[index_address];
+                const auto destination_pixel =
+                    linear ? static_cast<std::size_t>(y) * (stride / 2u) + x
+                           : rectangular_twiddled_index(x, y, level_width,
+                                                       level_height);
+                const auto codebook_base =
+                    static_cast<std::size_t>(vector) * 8u;
+                if (memory.pixel_format ==
+                    NativePortTextureMemoryPixelFormat::Palette4) {
+                    // ConvertTwiddlePal4 emits 4x4 even for the 2x2 and 1x1
+                    // VQ temporary buffers. Its final logical second row is
+                    // overwritten by codebook indices 8 and 10; the 1x1 VQ
+                    // path reads temporary pixel (1,1), likewise index 10.
+                    const auto local =
+                        level_width == 1u && level_height == 1u
+                            ? std::size_t{10u}
+                        : level_width == 2u && level_height == 2u
+                            ? static_cast<std::size_t>(x) * 2u +
+                                  static_cast<std::size_t>(y) * 8u
+                            : rectangular_twiddled_index(
+                                  local_x, local_y, block_width,
+                                  block_height);
+                    const auto packed = source[codebook_base + local / 2u];
+                    const auto palette_index =
+                        (local & 1u) == 0u ? packed & 0x0Fu : packed >> 4u;
+                    auto& destination = expanded[destination_pixel / 2u];
+                    if ((destination_pixel & 1u) == 0u)
+                        destination = static_cast<std::uint8_t>(
+                            (destination & 0xF0u) | palette_index);
+                    else
+                        destination = static_cast<std::uint8_t>(
+                            (destination & 0x0Fu) | (palette_index << 4u));
+                } else if (memory.pixel_format ==
+                           NativePortTextureMemoryPixelFormat::Palette8) {
+                    const auto local = rectangular_twiddled_index(
+                        local_x, local_y, block_width, block_height);
+                    expanded[destination_pixel] = source[codebook_base + local];
+                } else {
+                    const auto word =
+                        linear ? local_x : local_x * 2u + local_y;
+                    const auto codebook = codebook_base + word * 2u;
+                    if (codebook + 2u > 2'048u)
+                        fail(NativePortTextureAssetFailure::InvalidPayload,
+                             codebook, "memory-vq-codebook");
+                    expanded[destination_pixel * 2u] = source[codebook];
+                    expanded[destination_pixel * 2u + 1u] =
+                        source[codebook + 1u];
+                }
+            }
+        }
+        level_layout.stride_bytes =
+            linear ? memory.stride_bytes : 0u;
+        return decode_memory_surface_impl(expanded, level_layout, limits,
+                                          true);
+    };
+
+    auto texture = decode_level(memory.extent, top_offset);
+    if (memory.mipmapped) {
+        for (auto dimension = memory.extent.width / 2u;; dimension >>= 1u) {
+            auto decoded = decode_level({dimension, dimension},
+                                        level_offset(dimension));
+            texture.lower_mip_levels.push_back(
+                NativePortDecodedTextureMipLevel{decoded.extent,
+                                                 std::move(decoded.rgba8)});
+            if (dimension == 1u) break;
+        }
+    }
+    texture.source_memory_pixel_format = memory.pixel_format;
+    texture.source_memory_storage = memory.storage;
+    texture.source_row_stride_bytes =
+        memory.storage == NativePortTextureMemoryStorage::Linear
+            ? static_cast<std::uint32_t>(stride)
+            : 0u;
+    texture.source_memory_mipmapped = memory.mipmapped;
+    texture.source_memory_vector_quantized = memory.vector_quantized;
+    texture.source_memory_codebook_entries = memory.codebook_entries;
+    texture.source_memory_encoded_sha256 = sha256_bytes(source);
+    texture.source_memory_identity_bound = true;
+    texture.decoded_payload_identity_bound = false;
+    bind_decoded_texture_payload_identity(texture);
+    return texture;
 }
 
 [[nodiscard]] std::vector<NativePortDecodedTextureAsset> decode_pvm_impl(
@@ -1457,10 +2130,16 @@ class NativePortTextureRegistry::Impl final {
         config.provenance.global_index = identity.global_index.value_or(0u);
         config.provenance.global_index_bound = identity.global_index.has_value();
         config.provenance.decoded_rgba8_sha256 = decoded_payload_sha256;
-        config.provenance.source_pixel_format = static_cast<std::uint8_t>(
-            texture.source_pixel_format);
-        config.provenance.source_data_format = static_cast<std::uint8_t>(
-            texture.source_data_format);
+        config.provenance.source_memory_layout =
+            texture.source_memory_pixel_format.has_value();
+        config.provenance.source_pixel_format =
+            texture.source_memory_pixel_format.has_value()
+                ? static_cast<std::uint8_t>(*texture.source_memory_pixel_format)
+                : static_cast<std::uint8_t>(texture.source_pixel_format);
+        config.provenance.source_data_format =
+            texture.source_memory_pixel_format.has_value()
+                ? static_cast<std::uint8_t>(texture.source_memory_storage)
+                : static_cast<std::uint8_t>(texture.source_data_format);
         config.provenance.decoded_extent = texture.extent;
         config.provenance.decoded_mip_levels = config.mip_levels;
         config.provenance.decoded_payload_identity_bound = true;
@@ -1657,14 +2336,84 @@ class NativePortTextureRegistry::Impl final {
             texture.extent.height > maximum_pvr_dimension)
             registry_fail(NativePortTextureRegistryFailure::InvalidTexture, 0u,
                           "texture-extent");
-        switch (texture.source_pixel_format) {
-        case NativePortTextureAssetPixelFormat::Argb1555:
-        case NativePortTextureAssetPixelFormat::Rgb565:
-        case NativePortTextureAssetPixelFormat::Argb4444:
-            break;
-        default:
-            registry_fail(NativePortTextureRegistryFailure::InvalidTexture, 0u,
-                          "texture-pixel-format");
+        if (texture.source_memory_pixel_format.has_value()) {
+            switch (*texture.source_memory_pixel_format) {
+            case NativePortTextureMemoryPixelFormat::Argb1555:
+            case NativePortTextureMemoryPixelFormat::Rgb565:
+            case NativePortTextureMemoryPixelFormat::Argb4444:
+            case NativePortTextureMemoryPixelFormat::Yuv422:
+            case NativePortTextureMemoryPixelFormat::Bump:
+            case NativePortTextureMemoryPixelFormat::Palette4:
+            case NativePortTextureMemoryPixelFormat::Palette8:
+            case NativePortTextureMemoryPixelFormat::Reserved1555:
+                break;
+            default:
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-memory-pixel-format");
+            }
+            if (!texture.source_memory_identity_bound ||
+                zero_sha256(texture.source_memory_encoded_sha256) ||
+                (texture.source_memory_storage !=
+                     NativePortTextureMemoryStorage::Linear &&
+                 texture.source_memory_storage !=
+                     NativePortTextureMemoryStorage::Twiddled) ||
+                (texture.source_memory_storage ==
+                         NativePortTextureMemoryStorage::Twiddled
+                     ? texture.source_row_stride_bytes != 0u
+                     : texture.source_row_stride_bytes == 0u) ||
+                texture.source_data_format !=
+                    NativePortTextureAssetDataFormat::Rectangle)
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-memory-source");
+            if (texture.source_memory_vector_quantized
+                    ? texture.source_memory_codebook_entries != 256u
+                    : texture.source_memory_codebook_entries != 0u)
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-memory-codebook");
+            if (texture.source_memory_mipmapped &&
+                (texture.source_memory_storage !=
+                     NativePortTextureMemoryStorage::Twiddled ||
+                 texture.extent.width != texture.extent.height))
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-memory-mip-layout");
+            const auto paletted =
+                *texture.source_memory_pixel_format ==
+                    NativePortTextureMemoryPixelFormat::Palette4 ||
+                *texture.source_memory_pixel_format ==
+                    NativePortTextureMemoryPixelFormat::Palette8;
+            if (paletted != texture.source_palette_identity_bound ||
+                (paletted
+                     ? zero_sha256(texture.source_palette_rgba8_sha256)
+                     : !zero_sha256(texture.source_palette_rgba8_sha256)))
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-palette-source");
+        } else {
+            if (texture.source_memory_identity_bound ||
+                !zero_sha256(texture.source_memory_encoded_sha256) ||
+                texture.source_row_stride_bytes != 0u ||
+                texture.source_memory_mipmapped ||
+                texture.source_memory_vector_quantized ||
+                texture.source_memory_codebook_entries != 0u ||
+                texture.source_palette_identity_bound ||
+                !zero_sha256(texture.source_palette_rgba8_sha256))
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-unexpected-memory-source");
+            switch (texture.source_pixel_format) {
+            case NativePortTextureAssetPixelFormat::Argb1555:
+            case NativePortTextureAssetPixelFormat::Rgb565:
+            case NativePortTextureAssetPixelFormat::Argb4444:
+                break;
+            default:
+                registry_fail(
+                    NativePortTextureRegistryFailure::InvalidTexture, 0u,
+                    "texture-pixel-format");
+            }
         }
         switch (texture.source_data_format) {
         case NativePortTextureAssetDataFormat::SquareTwiddled:
@@ -1685,12 +2434,14 @@ class NativePortTextureRegistry::Impl final {
         if (bytes != texture.rgba8.size())
             registry_fail(NativePortTextureRegistryFailure::InvalidTexture, 0u,
                           "texture-rgba-size");
-        const auto expected_lower_levels = has_mipmaps(
-            texture.source_data_format)
-                                               ? std::bit_width(
-                                                     texture.extent.width) -
-                                                     1u
-                                               : 0u;
+        const auto expected_lower_levels =
+            texture.source_memory_pixel_format.has_value()
+                ? texture.source_memory_mipmapped
+                      ? std::bit_width(texture.extent.width) - 1u
+                      : 0u
+            : has_mipmaps(texture.source_data_format)
+                ? std::bit_width(texture.extent.width) - 1u
+                : 0u;
         if (texture.lower_mip_levels.size() != expected_lower_levels)
             registry_fail(NativePortTextureRegistryFailure::InvalidTexture,
                           0u, "texture-mip-count");
@@ -2027,6 +2778,15 @@ NativePortDecodedTextureAsset decode_native_port_texture_surface(
             return texture;
         },
         "surface-allocation");
+}
+
+NativePortDecodedTextureAsset decode_native_port_texture_memory_surface(
+    const std::span<const std::uint8_t> source,
+    const NativePortTextureMemoryLayout& layout,
+    const NativePortTextureAssetLimits& limits) {
+    return translate_resource_failures(
+        [&] { return decode_memory_surface_impl(source, layout, limits); },
+        "memory-surface-allocation");
 }
 
 namespace {

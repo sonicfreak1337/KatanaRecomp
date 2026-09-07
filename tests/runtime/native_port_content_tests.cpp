@@ -97,6 +97,115 @@ void test_non_vq_twiddled_mipmap_layout() {
     }
 }
 
+void test_flycast_texture_memory_contracts() {
+    using namespace katana::runtime;
+    using Format = NativePortTextureMemoryPixelFormat;
+    using Storage = NativePortTextureMemoryStorage;
+    const auto hash = [](const std::string_view hex) {
+        NativePortTexturePayloadSha256 result{};
+        for (std::size_t i = 0; i < result.size(); ++i) {
+            unsigned byte = 0u;
+            const auto parsed = std::from_chars(
+                hex.data() + i * 2u, hex.data() + i * 2u + 2u, byte, 16);
+            require(parsed.ec == std::errc{}, "Invalid fixture palette SHA");
+            result[i] = static_cast<std::uint8_t>(byte);
+        }
+        return result;
+    };
+    NativePortTextureMemoryLayout layout;
+    layout.extent = {8u, 8u};
+    layout.storage = Storage::Twiddled;
+    layout.pixel_format = Format::Palette4;
+    layout.mipmapped = true;
+    std::array<NativePortTexturePaletteColor, 16u> palette{};
+    for (std::uint32_t i = 0u; i < palette.size(); ++i)
+        palette[i] = {static_cast<std::uint8_t>(i * 17u),
+                      static_cast<std::uint8_t>(i * 17u),
+                      static_cast<std::uint8_t>(i * 17u), 255u};
+    layout.palette_rgba8 = palette;
+    layout.palette_rgba8_sha256 =
+        hash("a0d6d56263b270be4e975f86f8ac6c4e81b3e34f9804055891951d234c813aae");
+    // Flycast's PAL4 converter aliases writes at the 2x2 mip: the final
+    // logical pixels use nibbles 0,2,8,10 relative to that level, including
+    // bytes of the next authored level. Pin those visible results safely.
+    std::vector<std::uint8_t> pal4(44u);
+    for (std::size_t i = 0; i < pal4.size(); ++i)
+        pal4[i] = static_cast<std::uint8_t>(
+            ((i * 2u) & 15u) | (((i * 2u + 1u) & 15u) << 4u));
+    const auto decoded = decode_native_port_texture_memory_surface(pal4, layout);
+    require(decoded.lower_mip_levels.size() == 3u, "Raw PAL4 mip count");
+    const auto& tiny = decoded.lower_mip_levels[1u].rgba8;
+    require(tiny[0] == 4u * 17u && tiny[4] == 6u * 17u &&
+                tiny[8] == 12u * 17u && tiny[12] == 14u * 17u &&
+                decoded.lower_mip_levels[2u].rgba8[0] == 2u * 17u,
+            "Raw PAL4 tiny mip differs from final Flycast pixels");
+
+    layout.vector_quantized = true;
+    layout.codebook_entries = 256u;
+    std::vector<std::uint8_t> pal4_vq(2'058u, 0u);
+    std::copy_n(pal4.begin(), 8u, pal4_vq.begin());
+    const auto vq = decode_native_port_texture_memory_surface(pal4_vq, layout);
+    const auto& vq_tiny = vq.lower_mip_levels[1u].rgba8;
+    require(vq_tiny[0] == 0u && vq_tiny[4] == 2u * 17u &&
+                vq_tiny[8] == 8u * 17u && vq_tiny[12] == 10u * 17u &&
+                vq.lower_mip_levels[2u].rgba8[0] == 10u * 17u,
+            "Raw PAL4 VQ tiny-level selector changed");
+    auto changed = pal4_vq;
+    changed[100u] = 1u; // An unused codebook byte still belongs to this source.
+    const auto rebound = decode_native_port_texture_memory_surface(changed, layout);
+    require(rebound.rgba8 == vq.rgba8 &&
+                rebound.decoded_rgba8_sha256 != vq.decoded_rgba8_sha256,
+            "Unused codebook source bytes escaped payload identity");
+
+    layout = {};
+    layout.extent = {8u, 8u};
+    layout.storage = Storage::Linear;
+    layout.pixel_format = Format::Rgb565;
+    layout.vector_quantized = true;
+    layout.codebook_entries = 256u;
+    std::vector<std::uint8_t> linear_vq(2'064u, 0u);
+    constexpr std::array<std::uint16_t, 4u> colors{
+        0xF800u, 0x07E0u, 0x001Fu, 0xFFFFu};
+    for (std::size_t i = 0; i < colors.size(); ++i) {
+        linear_vq[i * 2u] = static_cast<std::uint8_t>(colors[i]);
+        linear_vq[i * 2u + 1u] = static_cast<std::uint8_t>(colors[i] >> 8u);
+    }
+    const auto planar = decode_native_port_texture_memory_surface(linear_vq, layout);
+    require(planar.rgba8[0] == 255u && planar.rgba8[5] == 255u &&
+                planar.rgba8[10] == 255u && planar.rgba8[12] == 255u,
+            "Planar VQ lost its 4x1 block or packed-stride default");
+
+    layout = {};
+    layout.extent = {8u, 8u};
+    layout.pixel_format = Format::Yuv422;
+    std::vector<std::uint8_t> yuv(128u);
+    for (std::size_t i = 0; i < yuv.size(); i += 4u) {
+        yuv[i] = yuv[i + 2u] = 128u;
+        yuv[i + 1u] = 10u;
+        yuv[i + 3u] = 20u;
+    }
+    const auto gray = decode_native_port_texture_memory_surface(yuv, layout);
+    require(gray.rgba8[0] == 10u && gray.rgba8[1] == 10u &&
+                gray.rgba8[4] == 20u && gray.rgba8[7] == 255u,
+            "YUV422 pair ordering or neutral chroma changed");
+    layout.pixel_format = Format::Bump;
+    for (std::size_t i = 0; i < yuv.size(); i += 2u) {
+        yuv[i] = 0x34u; yuv[i + 1u] = 0x12u;
+    }
+    const auto bump = decode_native_port_texture_memory_surface(yuv, layout);
+    require(bump.rgba8[0] == 0x22u && bump.rgba8[1] == 0x33u &&
+                bump.rgba8[2] == 0x44u && bump.rgba8[3] == 0x11u,
+            "Bump angles lost ARGB4444 channel order");
+    layout.stride_bytes = 32u;
+    bool rejected_stride = false;
+    try {
+        static_cast<void>(decode_native_port_texture_memory_surface(yuv, layout));
+    } catch (const NativePortTextureAssetError& error) {
+        rejected_stride = error.failure() == NativePortTextureAssetFailure::InvalidStride;
+    }
+    require(rejected_stride, "TCW stride admitted a half hardware pixel group");
+}
+
 class ChainGuardHost final
     : public katana::runtime::NativePortHostServices {
   public:
@@ -480,6 +589,7 @@ int main(const int argc, char** const argv) {
     test_host_stop_rendezvous();
     test_aot_services_host_stop_rendezvous();
     test_non_vq_twiddled_mipmap_layout();
+    test_flycast_texture_memory_contracts();
     const std::array immutable_ranges{
         katana::runtime::NativePortImmutableRange{
             0x0C000000u, 2u,

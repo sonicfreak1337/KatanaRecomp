@@ -15,7 +15,7 @@ namespace katana::runtime {
 // The texture provenance record carries the decoded-payload identity used by
 // the cheap graphics diagnostics.  Keep this ABI version in lockstep with
 // that public record so older producers cannot silently omit the identity.
-inline constexpr std::uint32_t native_port_graphics_contract_version = 22u;
+inline constexpr std::uint32_t native_port_graphics_contract_version = 24u;
 inline constexpr std::uint32_t native_port_frame_pacing_contract_version = 3u;
 // Type-2 translucent packets are admitted only when the adapter and renderer
 // agree on this small, address-agnostic contract.  The renderer owns the
@@ -101,6 +101,9 @@ struct NativePortGraphicsConfig final {
     // bounded quality limit: later fragments are discarded, never promoted to
     // a process-fatal graphics error.
     std::uint32_t maximum_type2_fragment_nodes = 22'369'621u;
+    // Per-pixel retained layers are independent of the total arena budget.
+    // 32 matches the reference default; values through 256 are supported.
+    std::uint32_t maximum_type2_fragments_per_pixel = 32u;
     // The render-thread command stream is atomic at command boundaries: an
     // upload or draw is never split, redirected through a host pointer, or
     // silently executed on the producer. These explicit budgets size both
@@ -251,6 +254,10 @@ struct NativePortTextureProvenance final {
     std::uint32_t global_index = 0u;
     std::uint8_t source_pixel_format = 0u;
     std::uint8_t source_data_format = 0u;
+    // Selects the namespace of source_pixel_format/source_data_format:
+    // false = archive/PVRT metadata, true = explicit texture-memory layout.
+    // A raw YUV/palette/bump surface must never masquerade as archive RGB565.
+    bool source_memory_layout = false;
     NativePortExtent decoded_extent;
     std::uint32_t decoded_mip_levels = 0u;
     bool content_identity_bound = false;
@@ -313,12 +320,31 @@ enum class NativePortBlendFactor : std::uint8_t {
     InverseDestinationAlpha,
 };
 
+static_assert(static_cast<std::uint8_t>(
+                  NativePortBlendFactor::InverseDestinationAlpha) < 16u,
+              "Type-2 blend factors must fit in four bits");
+
 enum class NativePortBlendOperation : std::uint8_t {
     Add,
     Subtract,
     ReverseSubtract,
     Minimum,
     Maximum,
+};
+
+// Type-2 OIT evaluates a fragment after depth ordering.  These selectors are
+// part of the packet's public blend contract: they choose the value used by
+// the source/destination term and the destination where the resulting RGBA is
+// accumulated.  Ordinary framebuffer blending must keep the defaults; a
+// secondary selector is admitted only by the Type-2 resolve path.
+enum class NativePortBlendSource : std::uint8_t {
+    Fragment,
+    SecondaryAccumulation,
+};
+
+enum class NativePortBlendDestination : std::uint8_t {
+    Framebuffer,
+    SecondaryAccumulation,
 };
 
 struct NativePortBlendState final {
@@ -328,6 +354,9 @@ struct NativePortBlendState final {
     NativePortBlendFactor source_alpha = NativePortBlendFactor::One;
     NativePortBlendFactor destination_alpha = NativePortBlendFactor::Zero;
     NativePortBlendOperation alpha_operation = NativePortBlendOperation::Add;
+    NativePortBlendSource source_buffer = NativePortBlendSource::Fragment;
+    NativePortBlendDestination destination_buffer =
+        NativePortBlendDestination::Framebuffer;
     // RGBA bits 0..3. Other bits are invalid.
     std::uint8_t color_write_mask = 0x0Fu;
     bool enabled = false;
@@ -607,6 +636,24 @@ enum class NativePortShadingMode : std::uint8_t {
     FlatLastVertex,
 };
 
+enum class NativePortLogicalClipMode : std::uint8_t {
+    Disabled,
+    // Discard fragments inside bounds; preserve the outside region.
+    Inside,
+    // Preserve fragments inside bounds; discard the outside region.
+    Outside,
+};
+
+struct NativePortLogicalClipState final {
+    NativePortLogicalClipMode mode = NativePortLogicalClipMode::Disabled;
+    NativePortExtent logical_extent;
+    // left, top, right, bottom in logical raster pixels. The upper/right
+    // edges are exclusive, matching a raster rectangle.
+    std::array<float, 4u> bounds{};
+    friend bool operator==(const NativePortLogicalClipState&,
+                           const NativePortLogicalClipState&) = default;
+};
+
 enum class NativePortTriangleAreaSpace : std::uint8_t {
     // The submitted vertex X/Y values already use the coordinate system in
     // which the threshold was defined.
@@ -634,6 +681,13 @@ struct NativePortRasterizerState final {
     NativePortExtent small_triangle_reference_extent;
     bool front_counter_clockwise = false;
     bool depth_clip_enabled = true;
+
+    // Fixed-function clipping is expressed in logical raster coordinates and
+    // converted against the selected native viewport for every draw.  It is
+    // deliberately structured renderer state rather than a TA packet bit so
+    // queued commands retain the complete contract and can validate it before
+    // execution.
+    NativePortLogicalClipState logical_clip;
     friend bool operator==(const NativePortRasterizerState&,
                            const NativePortRasterizerState&) = default;
 };
@@ -697,6 +751,15 @@ struct NativePortMaterialState final {
     bool use_secondary_color = false;
     bool lighting_enabled = false;
     bool specular_enabled = false;
+    // A source-authored mip pass weights the complete shaded RGBA result,
+    // after fog and before alpha test. It applies only to a resolved texture
+    // with source-authored mip levels, and never to punch-through draws.
+    // Keep this separate from diffuse alpha and the host sampler filter.
+    float mipmapped_pass_weight = 1.0f;
+    // The sampled ARGB4444 channels carry two packed angular coordinates.
+    // Secondary color supplies the four lighting coefficients; its RGB is
+    // not an additive offset in this mode.
+    bool bump_mapping = false;
 };
 
 struct NativePortDirectionalLight final {

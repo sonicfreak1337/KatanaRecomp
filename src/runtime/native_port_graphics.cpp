@@ -55,7 +55,6 @@ constexpr std::uint32_t minimum_dynamic_index_buffer_bytes = 1u << 18u;
 // Match the bounded per-pixel OIT depth used by the validated Flycast oracle
 // profile.  Sixteen is insufficient for Sonic Adventure's Character Select
 // model, whose overlapping translucent strips legitimately exceed that depth.
-constexpr std::uint32_t type_two_maximum_fragments_per_pixel = 32u;
 constexpr std::uint64_t graphics_digest_seed = 0xCBF29CE484222325ull;
 constexpr std::size_t maximum_development_state_path_bytes = 32'768u;
 
@@ -325,6 +324,18 @@ template <std::size_t Size>
            operation == NativePortBlendOperation::Maximum;
 }
 
+[[nodiscard]] bool valid_blend_source(
+    const NativePortBlendSource source) noexcept {
+    return source == NativePortBlendSource::Fragment ||
+           source == NativePortBlendSource::SecondaryAccumulation;
+}
+
+[[nodiscard]] bool valid_blend_destination(
+    const NativePortBlendDestination destination) noexcept {
+    return destination == NativePortBlendDestination::Framebuffer ||
+           destination == NativePortBlendDestination::SecondaryAccumulation;
+}
+
 [[nodiscard]] bool valid_blend(
     const NativePortBlendState& blend) noexcept {
     return valid_blend_factor(blend.source_color) &&
@@ -333,15 +344,28 @@ template <std::size_t Size>
            valid_blend_factor(blend.source_alpha) &&
            valid_blend_factor(blend.destination_alpha) &&
            valid_blend_operation(blend.alpha_operation) &&
+           valid_blend_source(blend.source_buffer) &&
+           valid_blend_destination(blend.destination_buffer) &&
            (blend.color_write_mask & 0xF0u) == 0u;
 }
 
 [[nodiscard]] constexpr std::uint32_t pack_type2_blend_factors(
     const NativePortBlendState& blend) noexcept {
     return static_cast<std::uint32_t>(blend.source_color) |
-           (static_cast<std::uint32_t>(blend.destination_color) << 8u) |
-           (static_cast<std::uint32_t>(blend.source_alpha) << 16u) |
-           (static_cast<std::uint32_t>(blend.destination_alpha) << 24u);
+           (static_cast<std::uint32_t>(blend.destination_color) << 4u) |
+           (static_cast<std::uint32_t>(blend.source_alpha) << 8u) |
+           (static_cast<std::uint32_t>(blend.destination_alpha) << 12u);
+}
+
+[[nodiscard]] constexpr std::uint32_t pack_type2_blend_buffers(
+    const NativePortBlendState& blend) noexcept {
+    return (blend.source_buffer == NativePortBlendSource::SecondaryAccumulation
+                ? 1u
+                : 0u) |
+           (blend.destination_buffer ==
+                    NativePortBlendDestination::SecondaryAccumulation
+                ? 2u
+                : 0u);
 }
 
 [[nodiscard]] bool valid_compare(
@@ -591,15 +615,34 @@ template <std::size_t Size>
 
 [[nodiscard]] bool valid_rasterizer(
     const NativePortRasterizerState& rasterizer) noexcept {
+    const auto& clip = rasterizer.logical_clip;
+    const bool valid_clip_mode =
+        clip.mode == NativePortLogicalClipMode::Disabled ||
+        clip.mode == NativePortLogicalClipMode::Inside ||
+        clip.mode == NativePortLogicalClipMode::Outside;
+    const bool valid_clip =
+        valid_clip_mode && finite_array(clip.bounds) &&
+        (clip.mode == NativePortLogicalClipMode::Disabled
+             ? clip.logical_extent == NativePortExtent{} &&
+                   clip.bounds == std::array<float, 4u>{}
+             : valid_extent(clip.logical_extent) &&
+                   clip.bounds[0] >= 0.0f && clip.bounds[1] >= 0.0f &&
+                   clip.bounds[2] <=
+                       static_cast<float>(clip.logical_extent.width) &&
+                   clip.bounds[3] <=
+                       static_cast<float>(clip.logical_extent.height) &&
+                   clip.bounds[0] < clip.bounds[2] &&
+                   clip.bounds[1] < clip.bounds[3]);
     return valid_cull(rasterizer.cull) && valid_fill(rasterizer.fill) &&
            valid_shading(rasterizer.shading) &&
            valid_triangle_area_space(rasterizer.small_triangle_area_space) &&
            std::isfinite(rasterizer.small_triangle_area_threshold) &&
            rasterizer.small_triangle_area_threshold >= 0.0f &&
-           (rasterizer.small_triangle_area_threshold == 0.0f ||
-            rasterizer.small_triangle_area_space ==
-                NativePortTriangleAreaSpace::Submitted ||
-            valid_extent(rasterizer.small_triangle_reference_extent));
+            (rasterizer.small_triangle_area_threshold == 0.0f ||
+             rasterizer.small_triangle_area_space ==
+                 NativePortTriangleAreaSpace::Submitted ||
+             valid_extent(rasterizer.small_triangle_reference_extent)) &&
+           valid_clip;
 }
 
 [[nodiscard]] bool valid_filter(const NativePortTextureFilter filter) noexcept {
@@ -662,6 +705,9 @@ template <std::size_t Size>
            std::isfinite(material.specular_power) &&
            material.specular_power >= 0.0f &&
            material.specular_power <= 65'536.0f &&
+           std::isfinite(material.mipmapped_pass_weight) &&
+           material.mipmapped_pass_weight >= 0.0f &&
+           material.mipmapped_pass_weight <= 1.0f &&
            valid_texture_combine(material.texture_combine) &&
            valid_texture_coordinates(material.texture_coordinates) &&
            (!material.specular_enabled || material.lighting_enabled);
@@ -798,13 +844,19 @@ template <std::size_t Size>
     using AlphaMode = NativePortAlphaTestState::Mode;
     const bool quantized_punch =
         packet.alpha_test.mode == AlphaMode::Quantized8BitForceOpaque;
+    const bool ordinary_blend_targets =
+        packet.blend.source_buffer == NativePortBlendSource::Fragment &&
+        packet.blend.destination_buffer ==
+            NativePortBlendDestination::Framebuffer;
     switch (packet.draw_class) {
     case NativePortDrawClass::Opaque:
         return !quantized_punch &&
+               ordinary_blend_targets &&
                packet.translucency ==
                    NativePortTranslucencyPolicy::NotApplicable;
     case NativePortDrawClass::PunchThrough:
-        return quantized_punch && packet.alpha_test.enabled &&
+        return ordinary_blend_targets && quantized_punch &&
+               packet.alpha_test.enabled &&
                packet.alpha_test.compare ==
                    NativePortCompareOperation::GreaterEqual &&
                packet.depth.test_enabled && packet.depth.write_enabled &&
@@ -837,14 +889,15 @@ template <std::size_t Size>
         }
         if (packet.translucency ==
             NativePortTranslucencyPolicy::StableDepthSorted)
-            return packet.depth.test_enabled &&
+            return ordinary_blend_targets && packet.depth.test_enabled &&
                    !packet.depth.write_enabled &&
                    packet.depth.compare ==
                        NativePortCompareOperation::GreaterEqual &&
                    reciprocal_depth_mode(packet.depth_mapping.mode);
-        return true;
+        return ordinary_blend_targets;
     case NativePortDrawClass::Overlay:
-        return !quantized_punch && !packet.depth.test_enabled &&
+        return ordinary_blend_targets && !quantized_punch &&
+               !packet.depth.test_enabled &&
                !packet.depth.write_enabled &&
                packet.translucency ==
                    NativePortTranslucencyPolicy::NotApplicable &&
@@ -892,6 +945,8 @@ void validate_graphics_config(const NativePortGraphicsConfig& config) {
         config.maximum_pipeline_states > 65'536u ||
         config.maximum_type2_fragment_nodes == 0u ||
         config.maximum_type2_fragment_nodes > 67'108'864u ||
+        config.maximum_type2_fragments_per_pixel == 0u ||
+        config.maximum_type2_fragments_per_pixel > 256u ||
         config.maximum_render_commands_per_frame < 2u ||
         config.maximum_render_commands_per_frame > 1'048'576u ||
         config.maximum_render_payload_bytes_per_frame == 0u ||
@@ -1087,6 +1142,7 @@ void release_frame_pacing_timer_resolution(
             : !zero_decoded_payload_identity ||
                   config.provenance.source_pixel_format != 0u ||
                   config.provenance.source_data_format != 0u ||
+                  config.provenance.source_memory_layout ||
                   config.provenance.decoded_extent != NativePortExtent{} ||
                   config.provenance.decoded_mip_levels != 0u)
         throw NativePortGraphicsError(
@@ -1195,11 +1251,13 @@ constexpr std::uint32_t draw_flag_clip_homogeneous = 1u << 19u;
 constexpr std::uint32_t draw_flag_color_clamp = 1u << 20u;
 constexpr std::uint32_t draw_flag_type_two_autosort_capture = 1u << 21u;
 constexpr std::uint32_t draw_flag_flat_last_vertex = 1u << 22u;
+constexpr std::uint32_t draw_flag_bump_mapping = 1u << 23u;
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader(const char* entry,
                                                const char* target);
 [[nodiscard]] ComPtr<ID3DBlob> compile_type_two_shader(
     const char* entry,
-    const char* target);
+    const char* target,
+    std::uint32_t maximum_type2_fragments_per_pixel);
 [[nodiscard]] ComPtr<ID3DBlob> compile_shader_source(
     const char* source,
     std::size_t source_size,
@@ -1965,6 +2023,11 @@ class NativePortGraphicsBackend final {
             }
         }
 
+        const auto& current_layout = cached_layout_;
+        const auto viewport_rect =
+            packet.viewport == NativePortViewportTarget::Ui
+                ? current_layout.ui_viewport
+                : current_layout.game_viewport;
         DrawConstants constants{};
         constants.transform = packet.transform.values;
         constants.normal_transform = packet.normal_transform.values;
@@ -2003,8 +2066,27 @@ class NativePortGraphicsBackend final {
         constants.material_parameters = {
             packet.material.specular_power,
             packet.alpha_test.reference,
-            0.0f,
+            texture_slot != nullptr && texture_slot->config.mip_levels > 1u &&
+                    packet.draw_class != NativePortDrawClass::PunchThrough
+                ? packet.material.mipmapped_pass_weight : 1.0f,
             0.0f};
+        const auto& logical_clip = packet.rasterizer.logical_clip;
+        if (logical_clip.mode !=
+            NativePortLogicalClipMode::Disabled) {
+            constants.logical_clip_transform = {
+                static_cast<float>(viewport_rect.width) /
+                    static_cast<float>(logical_clip.logical_extent.width),
+                static_cast<float>(viewport_rect.height) /
+                    static_cast<float>(logical_clip.logical_extent.height),
+                static_cast<float>(viewport_rect.x),
+                static_cast<float>(viewport_rect.y)};
+            constants.logical_clip_bounds = logical_clip.bounds;
+            constants.logical_clip_parameters = {
+                static_cast<std::uint32_t>(logical_clip.mode),
+                logical_clip.logical_extent.width,
+                logical_clip.logical_extent.height,
+                0u};
+        }
         std::uint32_t material_flags = 0u;
         if (packet.material.use_vertex_color)
             material_flags |= draw_flag_vertex_color;
@@ -2029,6 +2111,8 @@ class NativePortGraphicsBackend final {
             material_flags |= draw_flag_primary_alpha;
         if (packet.material.use_texture_alpha)
             material_flags |= draw_flag_texture_alpha;
+        if (packet.material.bump_mapping)
+            material_flags |= draw_flag_bump_mapping;
         if (packet.texture)
             material_flags |= draw_flag_texture_present;
         if (packet.interpolation ==
@@ -2075,7 +2159,7 @@ class NativePortGraphicsBackend final {
             // authenticated Type-2 list, including semantic transitions.
             constants.type_two_parameters = {
                 pack_type2_blend_factors(packet.blend),
-                0u,
+                pack_type2_blend_buffers(packet.blend),
                 type2_draw_sequence,
                 config_.maximum_type2_fragment_nodes};
         }
@@ -2107,11 +2191,6 @@ class NativePortGraphicsBackend final {
             draw_constants_valid_ = true;
         }
 
-        const auto& current_layout = cached_layout_;
-        const auto viewport_rect =
-            packet.viewport == NativePortViewportTarget::Ui
-                ? current_layout.ui_viewport
-                : current_layout.game_viewport;
         if (graphics_diagnostic_mode_ !=
             NativePortGraphicsDiagnosticMode::Off)
             record_graphics_diagnostic(packet, texture_slot, true, false);
@@ -2152,6 +2231,10 @@ class NativePortGraphicsBackend final {
         host_rasterizer.small_triangle_area_space =
             NativePortTriangleAreaSpace::Submitted;
         host_rasterizer.small_triangle_reference_extent = {};
+        // Logical clipping is a pixel-stage contract.  It must not multiply
+        // identical native rasterizer objects or consume the pipeline-state
+        // budget as clip rectangles vary between draws.
+        host_rasterizer.logical_clip = {};
         auto* const rasterizer = resolve_rasterizer_state(host_rasterizer);
         auto* const sampler = resolve_sampler_state(packet.sampler);
         constexpr std::array blend_factor{0.0f, 0.0f, 0.0f, 0.0f};
@@ -2718,7 +2801,7 @@ class NativePortGraphicsBackend final {
         context_->PSSetShader(type_two_resolve_pixel_shader_.Get(), nullptr, 0u);
         TypeTwoResolveConstants constants;
         constants.parameters = {
-            type_two_maximum_fragments_per_pixel,
+            config_.maximum_type2_fragments_per_pixel,
             0u,
             0u,
             config_.maximum_type2_fragment_nodes};
@@ -3211,11 +3294,19 @@ class NativePortGraphicsBackend final {
         std::array<float, 4u> depth_parameters{};
         std::array<float, 4u> material_parameters{};
         std::array<std::uint32_t, 4u> pipeline_flags{};
-        // x stores the packet's four fixed-function blend factors, y is
-        // reserved, z is the stable packet submission sequence and w is the
-        // bounded allocator capacity. These values are consumed only by the
-        // Type-2 capture shader; ordinary draws keep them zero.
+        // x stores the packet's four fixed-function blend factors, y stores
+        // source/destination secondary selectors, z is the stable packet
+        // submission sequence and w is the bounded allocator capacity. These
+        // values are consumed only by the Type-2 capture shader; ordinary
+        // draws keep them zero.
         std::array<std::uint32_t, 4u> type_two_parameters{};
+        // Pixel-stage logical clipping maps the selected viewport back to the
+        // packet's logical raster extent.  x/y are viewport pixels per logical
+        // pixel and z/w are the viewport origin; the bounds are left/top/right/
+        // bottom logical pixels and the mode lives in logical_clip_parameters.x.
+        std::array<float, 4u> logical_clip_transform{};
+        std::array<float, 4u> logical_clip_bounds{};
+        std::array<std::uint32_t, 4u> logical_clip_parameters{};
     };
 
     static_assert(sizeof(DrawConstants) % 16u == 0u);
@@ -3925,9 +4016,13 @@ class NativePortGraphicsBackend final {
         ComPtr<ID3DBlob> type_two_resolve_bytecode;
         if (feature_level_ >= D3D_FEATURE_LEVEL_11_0) {
             type_two_capture_bytecode = compile_type_two_shader(
-                "draw_type_two_capture_main", "ps_5_0");
+                "draw_type_two_capture_main",
+                "ps_5_0",
+                config_.maximum_type2_fragments_per_pixel);
             type_two_resolve_bytecode = compile_type_two_shader(
-                "type_two_resolve_pixel_main", "ps_5_0");
+                "type_two_resolve_pixel_main",
+                "ps_5_0",
+                config_.maximum_type2_fragments_per_pixel);
         }
         auto check = [&](const HRESULT result, const char* operation) {
             if (FAILED(result))
@@ -5326,6 +5421,9 @@ class NativePortGraphicsBackend final {
             texture->config.provenance.decoded_payload_identity_bound)
             record_flags |= 1u << 14u;
         if (contract_failure.has_value()) record_flags |= 1u << 15u;
+        if (texture != nullptr &&
+            texture->config.provenance.source_memory_layout)
+            record_flags |= 1u << 16u;
         auto digest = graphics_digest_;
         auto frame_digest = graphics_frame_digest_;
         const auto mix = [&](const std::uint64_t value) {
@@ -5340,6 +5438,16 @@ class NativePortGraphicsBackend final {
         mix(static_cast<std::uint64_t>(packet.draw_class));
         mix(packet.texture.value);
         mix(static_cast<std::uint64_t>(packet.texture_stage));
+        mix(static_cast<std::uint64_t>(packet.blend.source_buffer));
+        mix(static_cast<std::uint64_t>(packet.blend.destination_buffer));
+        mix(static_cast<std::uint64_t>(
+            packet.rasterizer.logical_clip.mode));
+        mix(packet.rasterizer.logical_clip.logical_extent.width);
+        mix(packet.rasterizer.logical_clip.logical_extent.height);
+        for (const auto value : packet.rasterizer.logical_clip.bounds)
+            mix(std::bit_cast<std::uint32_t>(value));
+        mix(std::bit_cast<std::uint32_t>(packet.material.mipmapped_pass_weight));
+        mix(packet.material.bump_mapping);
         mix(diagnostics.material_identity);
         mix(diagnostics.origin_identity);
         mix(diagnostics.model_identity);
@@ -6124,6 +6232,17 @@ class NativePortGraphicsBackend final {
                                                               : "false")
                << ",\"depth_clip\":"
                << (packet.rasterizer.depth_clip_enabled ? "true" : "false")
+               << ",\"logical_clip\":{\"mode\":"
+               << static_cast<unsigned>(packet.rasterizer.logical_clip.mode)
+               << ",\"logical_width\":"
+               << packet.rasterizer.logical_clip.logical_extent.width
+               << ",\"logical_height\":"
+               << packet.rasterizer.logical_clip.logical_extent.height
+               << ",\"bounds\":["
+               << packet.rasterizer.logical_clip.bounds[0] << ','
+               << packet.rasterizer.logical_clip.bounds[1] << ','
+               << packet.rasterizer.logical_clip.bounds[2] << ','
+               << packet.rasterizer.logical_clip.bounds[3] << "]}"
                << ",\"depth_test\":"
                << (packet.depth.test_enabled ? "true" : "false")
                << ",\"depth_write\":"
@@ -6142,6 +6261,10 @@ class NativePortGraphicsBackend final {
                << static_cast<unsigned>(packet.blend.source_alpha)
                << ",\"blend_destination_alpha\":"
                << static_cast<unsigned>(packet.blend.destination_alpha)
+               << ",\"blend_source_buffer\":"
+               << static_cast<unsigned>(packet.blend.source_buffer)
+               << ",\"blend_destination_buffer\":"
+               << static_cast<unsigned>(packet.blend.destination_buffer)
                << ",\"blend_color_operation\":"
                << static_cast<unsigned>(packet.blend.color_operation)
                << ",\"blend_alpha_operation\":"
@@ -6183,6 +6306,10 @@ class NativePortGraphicsBackend final {
                << (packet.material.lighting_enabled ? "true" : "false")
                << ",\"specular_enabled\":"
                << (packet.material.specular_enabled ? "true" : "false")
+               << ",\"mipmapped_pass_weight\":"
+               << packet.material.mipmapped_pass_weight
+               << ",\"bump_mapping\":"
+               << (packet.material.bump_mapping ? "true" : "false")
                << "}";
         output << ",\"lighting\":{\"ambient\":";
         write_array(packet.lighting.ambient);
@@ -6272,6 +6399,9 @@ class NativePortGraphicsBackend final {
                    << texture.config.provenance.decoded_extent.width
                    << ",\"decoded_height\":"
                    << texture.config.provenance.decoded_extent.height
+                   << ",\"source_memory_layout\":"
+                   << (texture.config.provenance.source_memory_layout
+                           ? "true" : "false")
                    << ",\"decoded_mip_levels\":"
                    << texture.config.provenance.decoded_mip_levels;
             if (texture.config.provenance.decoded_payload_identity_bound) {
@@ -9106,6 +9236,9 @@ cbuffer DrawConstants : register(b0) {
     float4 material_parameters;
     uint4 pipeline_flags;
     uint4 type_two_parameters;
+    float4 logical_clip_transform;
+    float4 logical_clip_bounds;
+    uint4 logical_clip_parameters;
 };
 
 cbuffer FogTableConstants : register(b1) {
@@ -9219,7 +9352,21 @@ struct DrawPixelOutput {
     float depth : SV_Depth;
 };
 
+bool native_logical_clip_pass(float2 pixel_position) {
+    const uint mode = logical_clip_parameters.x;
+    if (mode == 0u) return true;
+    const float2 logical_position =
+        (pixel_position - logical_clip_transform.zw) /
+        max(logical_clip_transform.xy, float2(0.000001, 0.000001));
+    const bool inside = logical_position.x >= logical_clip_bounds.x &&
+                        logical_position.y >= logical_clip_bounds.y &&
+                        logical_position.x < logical_clip_bounds.z &&
+                        logical_position.y < logical_clip_bounds.w;
+    return mode == 1u ? !inside : inside;
+}
+
 DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
+    if (!native_logical_clip_pass(input.position.xy)) discard;
     const uint flags = pipeline_flags.x;
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
     const bool screen_space_reciprocal =
@@ -9293,7 +9440,25 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
             : input.texcoord;
         float4 texture_color =
             draw_texture.Sample(draw_sampler, texture_coordinate);
-        if (!texture_alpha_enabled) texture_color.a = 1.0;
+        if ((flags & 0x800000u) != 0u) {
+            // Two eight-bit angles are packed into ARGB4444. This is a
+            // material response, not RGB normal-map modulation.
+            const float altitude = (texture_color.a * 240.0 +
+                                    texture_color.r * 15.0) *
+                                   (1.5707963267948966 / 255.0);
+            const float azimuth = (texture_color.g * 240.0 +
+                                   texture_color.b * 15.0) *
+                                  (6.283185307179586 / 255.0);
+            texture_color.a = saturate(
+                interpolated_secondary_color.a +
+                interpolated_secondary_color.r * sin(altitude) +
+                interpolated_secondary_color.g * cos(altitude) *
+                cos(azimuth - 6.283185307179586 *
+                              interpolated_secondary_color.b));
+            texture_color.rgb = 1.0;
+        } else if (!texture_alpha_enabled) {
+            texture_color.a = 1.0;
+        }
         const uint texture_combine = (flags >> 8u) & 0xffu;
         result = primary * texture_color;
         if (texture_combine == 1u) {
@@ -9309,13 +9474,14 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
         }
     }
     result.rgb += post_color;
-    if (secondary_color_enabled)
+    if (texture_present && secondary_color_enabled &&
+        (flags & 0x800000u) == 0u)
         result.rgb += interpolated_secondary_color.rgb;
     if ((flags & 0x100000u) != 0u)
         result = clamp(result, color_clamp_minimum, color_clamp_maximum);
 
     float fog_amount = 0.0;
-    if (pipeline_flags.z == 1u) {
+    if (pipeline_flags.z == 1u && (flags & 0x800000u) == 0u) {
         fog_amount = saturate((flags & 0x400000u) != 0u
             ? input.flat_fog_coordinate : interpolated_fog_coordinate);
     } else if (pipeline_flags.z == 2u) {
@@ -9338,6 +9504,7 @@ DrawPixelOutput draw_pixel_main(DrawVertexOutput input) {
     }
     result.rgb = lerp(result.rgb, fog_color.rgb, fog_amount);
 
+    result *= material_parameters.z;
     const uint alpha_test = pipeline_flags.w;
     if ((alpha_test & 0x100u) != 0u) {
         if ((alpha_test & 0x200u) != 0u) {
@@ -9442,6 +9609,9 @@ cbuffer DrawConstants : register(b0) {
     float4 material_parameters;
     uint4 pipeline_flags;
     uint4 type_two_parameters;
+    float4 logical_clip_transform;
+    float4 logical_clip_bounds;
+    uint4 logical_clip_parameters;
 };
 
 cbuffer FogTableConstants : register(b1) {
@@ -9468,6 +9638,19 @@ struct DrawPixelOutput {
     float4 color : SV_Target;
     float depth : SV_Depth;
 };
+
+bool native_logical_clip_pass(float2 pixel_position) {
+    const uint mode = logical_clip_parameters.x;
+    if (mode == 0u) return true;
+    const float2 logical_position =
+        (pixel_position - logical_clip_transform.zw) /
+        max(logical_clip_transform.xy, float2(0.000001, 0.000001));
+    const bool inside = logical_position.x >= logical_clip_bounds.x &&
+                        logical_position.y >= logical_clip_bounds.y &&
+                        logical_position.x < logical_clip_bounds.z &&
+                        logical_position.y < logical_clip_bounds.w;
+    return mode == 1u ? !inside : inside;
+}
 
 struct TypeTwoFragment {
     uint color;
@@ -9528,6 +9711,7 @@ float lookup_table_fog(float coordinate, float density) {
 DrawPixelOutput draw_type_two_capture_main(
     DrawVertexOutput input,
     uint primitive_id : SV_PrimitiveID) {
+    if (!native_logical_clip_pass(input.position.xy)) discard;
     const uint flags = pipeline_flags.x;
     const bool homogeneous_reciprocal_clip = (flags & 0x10000u) != 0u;
     const bool screen_space_reciprocal =
@@ -9597,7 +9781,25 @@ DrawPixelOutput draw_type_two_capture_main(
             : input.texcoord;
         float4 texture_color =
             draw_texture.Sample(draw_sampler, texture_coordinate);
-        if (!texture_alpha_enabled) texture_color.a = 1.0;
+        if ((flags & 0x800000u) != 0u) {
+            // Two eight-bit angles are packed into ARGB4444. This is a
+            // material response, not RGB normal-map modulation.
+            const float altitude = (texture_color.a * 240.0 +
+                                    texture_color.r * 15.0) *
+                                   (1.5707963267948966 / 255.0);
+            const float azimuth = (texture_color.g * 240.0 +
+                                   texture_color.b * 15.0) *
+                                  (6.283185307179586 / 255.0);
+            texture_color.a = saturate(
+                interpolated_secondary_color.a +
+                interpolated_secondary_color.r * sin(altitude) +
+                interpolated_secondary_color.g * cos(altitude) *
+                cos(azimuth - 6.283185307179586 *
+                              interpolated_secondary_color.b));
+            texture_color.rgb = 1.0;
+        } else if (!texture_alpha_enabled) {
+            texture_color.a = 1.0;
+        }
         const uint texture_combine = (flags >> 8u) & 0xffu;
         result = primary * texture_color;
         if (texture_combine == 1u) {
@@ -9613,13 +9815,14 @@ DrawPixelOutput draw_type_two_capture_main(
         }
     }
     result.rgb += post_color;
-    if (secondary_color_enabled)
+    if (texture_present && secondary_color_enabled &&
+        (flags & 0x800000u) == 0u)
         result.rgb += interpolated_secondary_color.rgb;
     if ((flags & 0x100000u) != 0u)
         result = clamp(result, color_clamp_minimum, color_clamp_maximum);
 
     float fog_amount = 0.0;
-    if (pipeline_flags.z == 1u) {
+    if (pipeline_flags.z == 1u && (flags & 0x800000u) == 0u) {
         fog_amount = saturate((flags & 0x400000u) != 0u
             ? input.flat_fog_coordinate : interpolated_fog_coordinate);
     } else if (pipeline_flags.z == 2u) {
@@ -9642,6 +9845,7 @@ DrawPixelOutput draw_type_two_capture_main(
     }
     result.rgb = lerp(result.rgb, fog_color.rgb, fog_amount);
 
+    result *= material_parameters.z;
     const uint alpha_test = pipeline_flags.w;
     if ((alpha_test & 0x100u) != 0u) {
         if ((alpha_test & 0x200u) != 0u) {
@@ -9686,7 +9890,8 @@ DrawPixelOutput draw_type_two_capture_main(
     fragment.sequence = type_two_parameters.z;
     fragment.primitive = primitive_id;
     fragment.next = 0xFFFFFFFFu;
-    fragment.blend_factors = type_two_parameters.x;
+    fragment.blend_factors = type_two_parameters.x |
+                             ((type_two_parameters.y & 0x3u) << 16u);
     uint previous;
     InterlockedExchange(type_two_heads[pixel], fragment_index, previous);
     fragment.next = previous;
@@ -9721,6 +9926,7 @@ struct TypeTwoFragment {
     uint blend_factors;
 };
 StructuredBuffer<TypeTwoFragment> type_two_fragments : register(t3);
+static const uint type_two_sort_capacity = NATIVE_TYPE_TWO_SORT_CAPACITY;
 
 float4 type_two_unpack_color(uint packed) {
     return float4(float((packed >> 24u) & 0xffu),
@@ -9733,17 +9939,6 @@ struct CompositeVertexOutput {
     float4 position : SV_Position;
     float2 texcoord : TEXCOORD0;
 };
-
-bool type_two_key_after(TypeTwoFragment candidate,
-                        float depth,
-                        uint sequence,
-                        uint primitive) {
-    return candidate.depth > depth ||
-           (candidate.depth == depth &&
-            (candidate.sequence > sequence ||
-             (candidate.sequence == sequence &&
-              candidate.primitive > primitive)));
-}
 
 bool type_two_key_before(TypeTwoFragment candidate,
                          TypeTwoFragment selected) {
@@ -9769,17 +9964,27 @@ float4 type_two_blend_factor(uint factor,
     return 1.0 - destination.aaaa;
 }
 
-float4 type_two_blend(TypeTwoFragment fragment, float4 destination) {
+float4 type_two_blend(TypeTwoFragment fragment,
+                      float4 framebuffer,
+                      float4 secondary,
+                      out bool destination_is_secondary) {
     const uint packed = fragment.blend_factors;
-    const float4 source = type_two_unpack_color(fragment.color);
+    const bool source_is_secondary = ((packed >> 16u) & 1u) != 0u;
+    destination_is_secondary = ((packed >> 17u) & 1u) != 0u;
+    const float4 source = source_is_secondary
+        ? secondary
+        : type_two_unpack_color(fragment.color);
+    const float4 destination = destination_is_secondary
+        ? secondary
+        : framebuffer;
     const float4 source_color_factor = type_two_blend_factor(
-        packed & 0xffu, source, destination);
+        packed & 0xFu, source, destination);
     const float4 destination_color_factor = type_two_blend_factor(
-        (packed >> 8u) & 0xffu, source, destination);
+        (packed >> 4u) & 0xFu, source, destination);
     const float4 source_alpha_factor = type_two_blend_factor(
-        (packed >> 16u) & 0xffu, source, destination);
+        (packed >> 8u) & 0xFu, source, destination);
     const float4 destination_alpha_factor = type_two_blend_factor(
-        (packed >> 24u) & 0xffu, source, destination);
+        (packed >> 12u) & 0xFu, source, destination);
     return float4(
         saturate(source.rgb * source_color_factor.rgb +
                  destination.rgb * destination_color_factor.rgb),
@@ -9798,66 +10003,59 @@ float4 type_two_resolve_pixel_main(CompositeVertexOutput input) : SV_Target {
     const uint2 pixel = uint2(input.position.xy);
     const float4 base = type_two_base_texture.Load(int3(pixel, 0));
     float4 result = base;
+    float4 secondary = 0.0;
     const uint pixel_count = type_two_count_texture.Load(int3(pixel, 0));
+    const uint retain_limit = min(
+        pixel_count, min(type_two_parameters.x, type_two_sort_capacity));
+    TypeTwoFragment sorted_fragments[NATIVE_TYPE_TWO_SORT_CAPACITY];
     uint retained_pixel_count = 0u;
     uint retained_node = type_two_head_texture.Load(int3(pixel, 0));
-    // The per-pixel counter includes globally discarded fragments. Derive the
-    // retained count from the actual bounded linked list so an exhausted
-    // arena cannot make an otherwise valid pixel fall back to its opaque base.
+    // The per-pixel counter includes globally discarded fragments. Load the
+    // first configured nodes from the head once; an exhausted arena cannot
+    // make an otherwise valid pixel fall back to its opaque base.
     [loop]
-    while (retained_pixel_count < min(pixel_count, type_two_parameters.x) &&
+    while (retained_pixel_count < retain_limit &&
            retained_node != 0xFFFFFFFFu) {
         if (retained_node >= live_count ||
             retained_node >= type_two_parameters.w) return base;
-        retained_node = type_two_fragments[retained_node].next;
+        sorted_fragments[retained_pixel_count] =
+            type_two_fragments[retained_node];
+        retained_node = sorted_fragments[retained_pixel_count].next;
         ++retained_pixel_count;
     }
-    uint processed = 0u;
-    float previous_depth = 0.0;
-    uint previous_sequence = 0u;
-    uint previous_primitive = 0u;
-    bool has_previous = false;
-    // Match the bounded reference OIT list: retain the first 32 nodes reached
-    // from the per-pixel head (the most recently submitted fragments), sort
-    // that retained set, and ignore any older tail nodes.
+    // Insertion sort is stable because equal depth/sequence/primitive keys do
+    // not move past one another. The input order is the authenticated linked
+    // list order from the head, matching the previous resolver's tie choice.
     [loop]
-    while (processed < retained_pixel_count) {
-        uint node = type_two_head_texture.Load(int3(pixel, 0));
-        bool found = false;
-        TypeTwoFragment selected;
+    for (uint index = 1u; index < retained_pixel_count; ++index) {
+        const TypeTwoFragment candidate = sorted_fragments[index];
+        uint insertion = index;
         [loop]
-        for (uint steps = 0u;
-             steps < type_two_parameters.x && node != 0xFFFFFFFFu;
-             ++steps) {
-            if (node >= live_count ||
-                node >= type_two_parameters.w) return
-                base;
-            const TypeTwoFragment candidate = type_two_fragments[node];
-            const bool after_previous =
-                !has_previous ||
-                type_two_key_after(candidate,
-                                   previous_depth,
-                                   previous_sequence,
-                                   previous_primitive);
-            if (after_previous) {
-                if (!found) {
-                    selected = candidate;
-                    found = true;
-                } else if (type_two_key_before(candidate, selected)) {
-                    selected = candidate;
-                }
-            }
-            node = candidate.next;
+        while (insertion > 0u) {
+            // SM5 boolean operators do not guarantee short-circuit loads.
+            // Establish the lower bound before indexing the predecessor.
+            if (!type_two_key_before(
+                    candidate, sorted_fragments[insertion - 1u])) break;
+            sorted_fragments[insertion] =
+                sorted_fragments[insertion - 1u];
+            --insertion;
         }
-        if (!found) return base;
-        result = type_two_blend(selected, result);
-        previous_depth = selected.depth;
-        previous_sequence = selected.sequence;
-        previous_primitive = selected.primitive;
-        has_previous = true;
-        ++processed;
+        sorted_fragments[insertion] = candidate;
     }
-    if (processed != retained_pixel_count) return base;
+
+    [loop]
+    for (uint processed = 0u;
+         processed < retained_pixel_count;
+         ++processed) {
+        const TypeTwoFragment selected = sorted_fragments[processed];
+        bool destination_is_secondary = false;
+        const float4 blended = type_two_blend(
+            selected, result, secondary, destination_is_secondary);
+        if (destination_is_secondary)
+            secondary = blended;
+        else
+            result = blended;
+    }
     return result;
 }
 )";
@@ -9900,7 +10098,8 @@ struct ShaderCompilerApi final {
 
 [[nodiscard]] ComPtr<ID3DBlob> compile_type_two_shader(
     const char* const entry,
-    const char* const target) {
+    const char* const target,
+    const std::uint32_t maximum_type2_fragments_per_pixel) {
     const bool resolve = std::strcmp(entry, "type_two_resolve_pixel_main") == 0;
     const auto* const source = resolve
         ? native_graphics_type_two_resolve_shader_source
@@ -9908,6 +10107,20 @@ struct ShaderCompilerApi final {
     const auto source_size = resolve
         ? sizeof(native_graphics_type_two_resolve_shader_source) - 1u
         : sizeof(native_graphics_type_two_capture_shader_source) - 1u;
+    if (resolve) {
+        // Both the declared constant and the array bound use this macro.
+        // Replacing only the first token would leave an unbound HLSL symbol.
+        std::string specialized_source =
+            "#define NATIVE_TYPE_TWO_SORT_CAPACITY " +
+            std::to_string(maximum_type2_fragments_per_pixel) + "\n";
+        specialized_source.append(source, source_size);
+        return compile_shader_source(
+            specialized_source.data(),
+            specialized_source.size(),
+            entry,
+            target,
+            "katana-native-port-graphics-type-two");
+    }
     return compile_shader_source(
         source,
         source_size,

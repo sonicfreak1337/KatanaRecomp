@@ -267,6 +267,239 @@ type_two_pixel_triangle(const float center_x, const float center_y) {
     return vertices;
 }
 
+void run_flycast_material_capture(
+    const katana::runtime::NativePortGraphicsConfig& source_config) {
+    using namespace katana::runtime;
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("katana-material-parity-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    ScopedEnvironmentOverride background("KATANA_PORT_BACKGROUND_TEST", "0");
+    ScopedEnvironmentOverride capture(
+        "KATANA_NATIVE_GRAPHICS_CAPTURE_DIRECTORY", directory.string());
+    ScopedEnvironmentOverride start("KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME", "1");
+    ScopedEnvironmentOverride end("KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME", "8");
+    ScopedEnvironmentOverride interval("KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL", "1");
+    {
+        auto config = source_config;
+        config.telemetry = nullptr;
+        NativePortGraphicsDevice graphics(config);
+        std::array<std::byte, 16u> white;
+        white.fill(std::byte{255u});
+        std::array<std::byte, 16u> zero{};
+        NativePortImageView top{{2u, 2u}, NativePortTextureFormat::Rgba8Unorm,
+                                8u, false, white};
+        NativePortImageView bottom{{1u, 1u}, NativePortTextureFormat::Rgba8Unorm,
+                                   4u, false, std::span(white).first(4u)};
+        NativePortTextureConfig texture_config;
+        texture_config.extent = {2u, 2u};
+        const auto single = graphics.create_texture(texture_config, &top);
+        texture_config.mip_levels = 2u;
+        const std::array mip_images{top, bottom};
+        const auto mipped = graphics.create_texture(texture_config, mip_images);
+        texture_config.mip_levels = 1u;
+        top.pixels = zero;
+        const auto bump = graphics.create_texture(texture_config, &top);
+        std::uint32_t frame = 0u;
+        for (const bool type2 : {false, true}) {
+            for (std::uint32_t mode = 0u; mode < 4u; ++mode) {
+                auto vertices = type_two_pixel_triangle(32.5f, 32.5f);
+                for (auto& vertex : vertices) {
+                    vertex.color = {1.0f, 1.0f, 1.0f, 1.0f};
+                    vertex.secondary_color = {0.125f, 0.5f, 0.0f, 0.25f};
+                    vertex.fog_coordinate = 1.0f;
+                }
+                auto packet = type2 ? type_two_packet(vertices, 1u, 1u)
+                                    : screen_packet(vertices, 1u, 1u);
+                packet.blend.enabled = true;
+                packet.blend.source_color = NativePortBlendFactor::One;
+                packet.blend.destination_color = NativePortBlendFactor::Zero;
+                packet.blend.source_alpha = NativePortBlendFactor::One;
+                packet.blend.destination_alpha = NativePortBlendFactor::Zero;
+                packet.material.use_secondary_color = mode == 0u || mode == 3u;
+                std::array<unsigned, 3u> expected{};
+                if (mode == 0u) {
+                    // Offset RGB only applies inside the source texture stage.
+                    packet.material.diffuse = {0.2f, 0.4f, 0.6f, 1.0f};
+                    expected = {51u, 102u, 153u};
+                } else {
+                    packet.texture_stage = NativePortTextureStage::RequiredResolved;
+                    packet.texture = mode == 1u ? mipped : mode == 2u ? single : bump;
+                    packet.material.mipmapped_pass_weight = 0.25f;
+                    expected = mode == 1u ? std::array{64u, 64u, 64u}
+                                         : std::array{255u, 255u, 255u};
+                    if (mode == 3u) {
+                        packet.material.bump_mapping = true;
+                        packet.material.use_texture_alpha = false;
+                        packet.material.mipmapped_pass_weight = 1.0f;
+                        packet.blend.source_color = NativePortBlendFactor::SourceAlpha;
+                        packet.fog.mode = NativePortFogMode::VertexFactor;
+                        packet.fog.color = {1.0f, 0.0f, 0.0f, 1.0f};
+                        // Zero angles: alpha = K1 + K3 = .25 + .5. Neither
+                        // IgnoreTexA, offset RGB nor vertex fog may replace it.
+                        expected = {191u, 191u, 191u};
+                    }
+                }
+                graphics.begin_frame(reciprocal_frame());
+                graphics.draw(packet);
+                graphics.present();
+                graphics.finish();
+                std::ifstream bitmap(directory /
+                    ("frame-" + std::to_string(++frame) + ".bmp"),
+                    std::ios::binary | std::ios::ate);
+                require(bitmap.is_open(), "Material parity missing GPU capture");
+                const auto size = static_cast<std::streamoff>(bitmap.tellg());
+                require(size >= 54 + 64 * 64 * 4, "Material parity truncated BMP");
+                std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
+                bitmap.seekg(0);
+                bitmap.read(reinterpret_cast<char*>(bytes.data()),
+                            static_cast<std::streamsize>(bytes.size()));
+                const auto offset = 54u + ((63u - 32u) * 64u + 32u) * 4u;
+                for (unsigned channel = 0u; channel < 3u; ++channel) {
+                    const auto actual = bytes[offset + 2u - channel];
+                    require(std::abs(static_cast<int>(actual) -
+                                     static_cast<int>(expected[channel])) <= 2,
+                            "Flycast material pixel mismatch: mode " +
+                            std::to_string(mode) + " Type2 " + std::to_string(type2));
+                }
+            }
+        }
+    }
+    std::error_code cleanup;
+    std::filesystem::remove_all(directory, cleanup);
+    require(!cleanup, "Material parity capture cleanup failed");
+}
+
+void run_accumulation_and_clip_capture(
+    const katana::runtime::NativePortGraphicsConfig& source_config) {
+    using namespace katana::runtime;
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("katana-accumulation-clip-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    ScopedEnvironmentOverride background("KATANA_PORT_BACKGROUND_TEST", "0");
+    ScopedEnvironmentOverride capture(
+        "KATANA_NATIVE_GRAPHICS_CAPTURE_DIRECTORY", directory.string());
+    ScopedEnvironmentOverride start("KATANA_NATIVE_GRAPHICS_CAPTURE_START_FRAME", "1");
+    ScopedEnvironmentOverride end("KATANA_NATIVE_GRAPHICS_CAPTURE_END_FRAME", "8");
+    ScopedEnvironmentOverride interval("KATANA_NATIVE_GRAPHICS_CAPTURE_INTERVAL", "1");
+    {
+        auto config = source_config;
+        config.telemetry = nullptr;
+        config.game_viewport = {NativePortViewportPolicy::FitAspect, {2u, 1u}};
+        // Also compile a nondefault bound: shader storage follows the device,
+        // while the separate overflow regression covers default-32 retention.
+        config.maximum_type2_fragments_per_pixel = 4u;
+        NativePortGraphicsDevice graphics(config);
+        unsigned frame_number = 0u;
+        const auto pixels = [&] {
+            graphics.present();
+            graphics.finish();
+            std::ifstream bitmap(directory /
+                ("frame-" + std::to_string(++frame_number) + ".bmp"),
+                std::ios::binary | std::ios::ate);
+            require(bitmap.is_open(), "Accumulation/clip GPU capture missing");
+            const auto size = static_cast<std::streamoff>(bitmap.tellg());
+            require(size >= 54 + 64 * 64 * 4, "Accumulation/clip BMP truncated");
+            std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
+            bitmap.seekg(0);
+            bitmap.read(reinterpret_cast<char*>(bytes.data()),
+                        static_cast<std::streamsize>(bytes.size()));
+            require(bitmap.good(), "Accumulation/clip BMP read failed");
+            return bytes;
+        };
+        const auto expect = [&](const std::vector<unsigned char>& bytes,
+                                unsigned x, unsigned y,
+                                std::array<unsigned, 3u> rgb) {
+            const auto offset = 54u + ((63u - y) * 64u + x) * 4u;
+            for (unsigned channel = 0u; channel < 3u; ++channel) {
+                const auto actual = bytes[offset + 2u - channel];
+                require(std::abs(static_cast<int>(actual) -
+                                 static_cast<int>(rgb[channel])) <= 2,
+                        "Accumulation/clip pixel mismatch at frame " +
+                        std::to_string(frame_number) + " pixel " +
+                        std::to_string(x) + "," + std::to_string(y));
+            }
+        };
+        std::array<NativePortVertex, 6u> quad{};
+        constexpr std::array<std::array<float, 3u>, 6u> positions{{
+            {-1.0f, -1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {-1.0f, 1.0f, 0.0f},
+            {-1.0f, 1.0f, 0.0f}, {1.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}}};
+        for (unsigned i = 0u; i < quad.size(); ++i) {
+            quad[i].position = positions[i];
+            quad[i].depth_coordinate = 1.0f;
+            quad[i].color = {1.0f, 0.0f, 0.0f, 1.0f};
+        }
+        for (const bool type2 : {false, true}) {
+            for (const auto mode : {NativePortLogicalClipMode::Disabled,
+                                    NativePortLogicalClipMode::Inside,
+                                    NativePortLogicalClipMode::Outside}) {
+                auto packet = type2 ? type_two_packet(quad, 1u, 1u)
+                                    : screen_packet(quad, 1u, 1u);
+                if (mode != NativePortLogicalClipMode::Disabled)
+                    packet.rasterizer.logical_clip = {
+                        mode, {128u, 64u}, {32.0f, 16.0f, 96.0f, 48.0f}};
+                graphics.begin_frame(reciprocal_frame());
+                graphics.draw(packet);
+                const auto bytes = pixels();
+                const std::array<unsigned, 3u> red{255u, 0u, 0u}, black{};
+                expect(bytes, 32u, 32u,
+                       mode == NativePortLogicalClipMode::Inside ? black : red);
+                expect(bytes, 8u, 32u,
+                       mode == NativePortLogicalClipMode::Outside ? black : red);
+                expect(bytes, 32u, 20u,
+                       mode == NativePortLogicalClipMode::Outside ? black : red);
+                expect(bytes, 32u, 8u, black); // Letterbox origin is respected.
+            }
+        }
+        const auto layer = [&](float x, float depth, std::array<float, 4u> color,
+                               unsigned submission, bool source_secondary,
+                               bool destination_secondary, bool add) {
+            auto vertices = type_two_pixel_triangle(x, 32.5f);
+            for (auto& vertex : vertices) {
+                vertex.color = color;
+                vertex.depth_coordinate = depth;
+            }
+            auto packet = type_two_packet(vertices, 1u, submission);
+            packet.viewport = NativePortViewportTarget::Ui;
+            packet.batch.semantic = NativePortDrawBatchClass::UiOverlay;
+            packet.blend.source_buffer = source_secondary
+                ? NativePortBlendSource::SecondaryAccumulation
+                : NativePortBlendSource::Fragment;
+            packet.blend.destination_buffer = destination_secondary
+                ? NativePortBlendDestination::SecondaryAccumulation
+                : NativePortBlendDestination::Framebuffer;
+            if (destination_secondary) {
+                packet.blend.source_color = NativePortBlendFactor::One;
+                packet.blend.source_alpha = NativePortBlendFactor::One;
+                packet.blend.destination_color = add ? NativePortBlendFactor::One
+                                                    : NativePortBlendFactor::Zero;
+                packet.blend.destination_alpha = packet.blend.destination_color;
+            }
+            graphics.draw(packet);
+        };
+        auto frame = reciprocal_frame();
+        frame.clear_color = {0.0f, 0.0f, 0.25f, 1.0f};
+        graphics.begin_frame(frame);
+        // Submission is deliberately different from depth order. A/B first
+        // produce secondary RGBA (.8,.4,0,.5), then C samples that value.
+        layer(32.5f, 3.0f, {0.0f, 0.0f, 1.0f, 1.0f}, 1u, true, false, false);
+        layer(32.5f, 1.0f, {0.8f, 0.0f, 0.0f, 0.25f}, 2u, false, true, false);
+        layer(32.5f, 2.0f, {0.0f, 0.4f, 0.0f, 0.25f}, 3u, false, true, true);
+        layer(12.5f, 3.0f, {0.0f, 0.0f, 1.0f, 1.0f}, 4u, true, false, false);
+        layer(52.5f, 1.0f, {0.8f, 0.0f, 0.0f, 0.25f}, 5u, false, true, false);
+        auto bytes = pixels();
+        expect(bytes, 32u, 32u, {102u, 51u, 32u});
+        expect(bytes, 12u, 32u, {0u, 0u, 64u}); // Secondary is per pixel.
+        expect(bytes, 52u, 32u, {0u, 0u, 64u}); // Secondary-only writes stay hidden.
+        graphics.begin_frame(frame);
+        layer(32.5f, 3.0f, {0.0f, 0.0f, 1.0f, 1.0f}, 1u, true, false, false);
+        bytes = pixels();
+        expect(bytes, 32u, 32u, {0u, 0u, 64u}); // No cross-frame secondary state.
+    }
+    std::error_code cleanup;
+    std::filesystem::remove_all(directory, cleanup);
+    require(!cleanup, "Accumulation/clip capture cleanup failed");
+}
+
 void run_flat_vertex_fog_capture(
     const katana::runtime::NativePortGraphicsConfig& source_config) {
     using namespace katana::runtime;
@@ -895,7 +1128,7 @@ int main(const int argc, char** const argv) {
     return EXIT_SUCCESS;
 #else
     using namespace katana::runtime;
-    static_assert(native_port_graphics_contract_version == 22u);
+    static_assert(native_port_graphics_contract_version == 24u);
     static_assert(native_port_frame_pacing_contract_version == 3u);
     static_assert(native_port_type2_autosort_contract_version == 3u);
 
@@ -1287,6 +1520,8 @@ int main(const int argc, char** const argv) {
     // This GPU/readback regression deliberately precedes the Parallel-only
     // facade branch below so both CTest modes execute the same Type-2 proof.
     run_type_two_global_fragment_capture(config);
+    run_accumulation_and_clip_capture(config);
+    run_flycast_material_capture(config);
     run_flat_vertex_fog_capture(config);
 
     // SerialReference and Parallel share the exact same sealed ordinary-frame

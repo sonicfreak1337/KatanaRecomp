@@ -34,6 +34,49 @@ enum class NativePortTextureAssetDataFormat : std::uint8_t {
     SmallVectorQuantizedMipmaps = 0x11u,
 };
 
+// Pixel interpretation for a headerless PowerVR texture-memory payload.
+// These values describe TCW PixelFmt, not a PVRT header byte. Keeping the
+// type separate prevents an adapter from accidentally admitting a new PVM
+// encoding merely because its numeric value resembles a TCW field.
+enum class NativePortTextureMemoryPixelFormat : std::uint8_t {
+    Argb1555 = 0u,
+    Rgb565 = 1u,
+    Argb4444 = 2u,
+    Yuv422 = 3u,
+    Bump = 4u,
+    Palette4 = 5u,
+    Palette8 = 6u,
+    Reserved1555 = 7u,
+};
+
+enum class NativePortTextureMemoryStorage : std::uint8_t {
+    Linear,
+    Twiddled,
+};
+
+using NativePortTexturePaletteColor = std::array<std::uint8_t, 4u>;
+
+struct NativePortTextureMemoryLayout final {
+    NativePortTextureMemoryPixelFormat pixel_format =
+        NativePortTextureMemoryPixelFormat::Rgb565;
+    NativePortTextureMemoryStorage storage =
+        NativePortTextureMemoryStorage::Linear;
+    NativePortExtent extent;
+    // These are authored TCW facts. They are never inferred from source size.
+    // VQ payloads begin with the declared codebook followed by index data.
+    bool mipmapped = false;
+    bool vector_quantized = false;
+    std::uint32_t codebook_entries = 0u;
+    // Zero selects the packed row size. A nonzero stride is valid only for
+    // linear storage and includes any source padding at the end of each row.
+    std::uint32_t stride_bytes = 0u;
+    // Palette4 requires exactly 16 colors and Palette8 exactly 256. Palette
+    // identity is the SHA-256 of the canonical RGBA byte sequence and is
+    // required for paletted payloads; other formats require both to be empty.
+    std::span<const NativePortTexturePaletteColor> palette_rgba8;
+    NativePortTexturePayloadSha256 palette_rgba8_sha256{};
+};
+
 enum class NativePortTextureAssetFailure : std::uint8_t {
     InvalidLimits,
     CompressedInputLimit,
@@ -48,6 +91,10 @@ enum class NativePortTextureAssetFailure : std::uint8_t {
     InvalidDimensions,
     RgbaOutputLimit,
     ResourceExhausted,
+    MissingPalette,
+    InvalidPalette,
+    InvalidStride,
+    InvalidPayload,
 };
 
 class NativePortTextureAssetError final : public std::runtime_error {
@@ -89,6 +136,22 @@ struct NativePortDecodedTextureAsset final {
         NativePortTextureAssetPixelFormat::Rgb565;
     NativePortTextureAssetDataFormat source_data_format =
         NativePortTextureAssetDataFormat::Rectangle;
+    // Present only for decode_native_port_texture_memory_surface(). Archive
+    // formats retain their PVRT metadata above and leave these fields empty;
+    // raw surfaces leave source_pixel_format/source_data_format at their
+    // compatibility defaults instead of inventing PVRT header codes.
+    std::optional<NativePortTextureMemoryPixelFormat>
+        source_memory_pixel_format;
+    NativePortTextureMemoryStorage source_memory_storage =
+        NativePortTextureMemoryStorage::Linear;
+    std::uint32_t source_row_stride_bytes = 0u;
+    bool source_memory_mipmapped = false;
+    bool source_memory_vector_quantized = false;
+    std::uint32_t source_memory_codebook_entries = 0u;
+    NativePortTexturePayloadSha256 source_memory_encoded_sha256{};
+    bool source_memory_identity_bound = false;
+    NativePortTexturePayloadSha256 source_palette_rgba8_sha256{};
+    bool source_palette_identity_bound = false;
     NativePortExtent extent;
     // Top level followed by every source-authored lower level. The top level
     // stays in rgba8 for source compatibility; lower_mip_levels is ordered
@@ -389,6 +452,18 @@ decode_native_port_texture_surface(
     NativePortExtent extent,
     NativePortTextureAssetPixelFormat pixel_format,
     NativePortTextureAssetDataFormat data_format,
+    const NativePortTextureAssetLimits& limits = {});
+
+// Decodes one bounded, headerless texture-memory surface. This is the TCW
+// counterpart to decode_native_port_texture_surface(): it supports planar
+// stride, rectangular twiddling, YUV422, bump data channels, and explicitly
+// supplied palette colors. Mip and VQ layout are accepted only through the
+// authored fields above; palette state, codebooks, and level presence are
+// never inferred from payload size. Address wrapping remains adapter-owned.
+[[nodiscard]] NativePortDecodedTextureAsset
+decode_native_port_texture_memory_surface(
+    std::span<const std::uint8_t> source,
+    const NativePortTextureMemoryLayout& layout,
     const NativePortTextureAssetLimits& limits = {});
 
 // Opens one exact content binding through the native platform boundary,
